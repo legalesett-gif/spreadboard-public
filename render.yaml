@@ -12,11 +12,11 @@ services:
       - key: SPREADBOARD_PUBLIC_MODE
         value: "1"
       - key: SPREADBOARD_REFRESH_SECONDS
-        value: "300"
+        value: "600"
       - key: SPREADBOARD_FAST_QUOTE_SECONDS
         value: "30"
       - key: SPREADBOARD_FAST_QUOTE_ROUTES
-        value: "30"
+        value: "12"
       - key: SPREADBOARD_DATA_DIR
         value: /app/runtime
       - key: SPREADBOARD_LIGHTWEIGHT_MODE

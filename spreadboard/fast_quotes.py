@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import gc
 import json
 from pathlib import Path
 import time
@@ -109,6 +110,7 @@ class FastQuoteRefresher:
                 except Exception:
                     pass
         self._clients.clear()
+        gc.collect()
 
     def _leg_quote(
         self,
