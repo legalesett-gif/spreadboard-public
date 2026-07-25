@@ -1016,6 +1016,7 @@ def _quote_identity_note(quote: MarketQuote) -> dict[str, Any]:
 def _quote_route_note(quote: MarketQuote) -> dict[str, Any]:
     note: dict[str, Any] = {
         "source_name": quote.source_name,
+        "symbol": quote.symbol,
         "bid": quote.bid,
         "ask": quote.ask,
         "bid_vwap": quote.bid_vwap,

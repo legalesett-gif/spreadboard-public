@@ -36,12 +36,30 @@ DEFAULT_SOURCE_FILES = {
 DEFAULT_WINDOW_HOURS = 12.0
 DEFAULT_LIMIT = 12
 ALERT_EVENT_FRESH_MAX_AGE_MIN = 60.0
+INTEL_ALLOWED_TOPIC_IDS = frozenset({None, 14})
 MAX_TEXT = 220
 SCOREBOARD_PATTERN = re.compile(r"\b([A-Z][A-Z0-9_-]{1,23})\s+([+-]?\d+(?:\.\d+)?)\b")
 SECRET_TEXT_PATTERNS = (
     re.compile(r"(?i)\b(api[_-]?key|secret|password|private[_-]?key|token)\s*[:=]\s*([^\s,;]+)"),
     re.compile(r"(?i)\b(authorization\s*:\s*bearer)\s+([^\s,;]+)"),
 )
+CHART_SYMBOL_PATTERN = re.compile(r"(?i)[?&]charts=([A-Z0-9_-]{2,24})~")
+TAGGED_SYMBOL_PATTERN = re.compile(r"[$#]([A-Z][A-Z0-9_-]{1,23})\b")
+UPPER_SYMBOL_PATTERN = re.compile(r"\b([A-Z][A-Z0-9_-]{2,15})\b")
+SYMBOL_STOPWORDS = {
+    "API",
+    "APR",
+    "DEX",
+    "FUND",
+    "FUNDING",
+    "FUTURES",
+    "LONG",
+    "PNL",
+    "SHORT",
+    "SPOT",
+    "USDC",
+    "USDT",
+}
 
 QUESTION_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Pushover / alerts", ("pushover", "alert", "увед", "звонок", "уведом")),
@@ -80,7 +98,7 @@ def build_intel(
     events = []
     for row in rows:
         event = _normal_event(row, now=now)
-        if event is not None:
+        if event is not None and _intel_topic_allowed(event):
             events.append(event)
     filtered_events = [
         event
@@ -846,13 +864,24 @@ def _tail_lines(path: Path, *, max_rows: int, chunk_size: int = 256 * 1024) -> l
 
 def _normal_event(row: dict[str, Any], *, now: float) -> dict[str, Any] | None:
     parsed = row.get("parsed") if isinstance(row.get("parsed"), dict) else {}
-    if not parsed:
-        return None
-    symbol = _clean_symbol(parsed.get("symbol"))
-    kind = str(parsed.get("kind") or "").upper() or None
-    event = str(parsed.get("event") or "event")
-    at_us = _event_at_us(row, parsed)
     text = str(row.get("text") or parsed.get("first_line") or "")
+    topic_id = parsed.get("topic_id") or row.get("topic_id")
+    source_role = (
+        "lead_analyst"
+        if row.get("source_role") == "lead_analyst"
+        else "community"
+    )
+    symbol = _clean_symbol(parsed.get("symbol")) or _infer_discussion_symbol(text)
+    kind = str(parsed.get("kind") or "").upper() or None
+    event = str(parsed.get("event") or "")
+    if not event:
+        if topic_id == 14:
+            event = "community_signal"
+        elif topic_id is None and (symbol or source_role == "lead_analyst"):
+            event = "chat_signal"
+        else:
+            return None
+    at_us = _event_at_us(row, parsed)
     return {
         "symbol": symbol,
         "kind": kind,
@@ -866,7 +895,7 @@ def _normal_event(row: dict[str, Any], *, now: float) -> dict[str, Any] | None:
         "side": parsed.get("side"),
         "is_new": bool(parsed.get("is_new")),
         "is_recycle": bool(parsed.get("is_recycle")),
-        "topic_id": parsed.get("topic_id") or row.get("topic_id"),
+        "topic_id": topic_id,
         "topic_title": parsed.get("topic_title") or row.get("topic_title"),
         "message_id": row.get("message_id") or parsed.get("message_id"),
         "at_us": at_us,
@@ -882,6 +911,7 @@ def _normal_event(row: dict[str, Any], *, now: float) -> dict[str, Any] | None:
         "max_volume_usd": _float_or_none(parsed.get("max_volume_usd")),
         "liquidity_usd": _float_or_none(parsed.get("liquidity_usd")),
         "mcap_usd": _float_or_none(parsed.get("mcap_usd")),
+        "source_role": source_role,
         "question_categories": _categorize_question(text),
     }
 
@@ -904,6 +934,13 @@ def _event_matches(
     if topic and str(event.get("topic_id") or "") != str(topic):
         return False
     return True
+
+
+def _intel_topic_allowed(event: dict[str, Any]) -> bool:
+    """Only surface the main chat and Community Calls forum topics."""
+
+    topic_id = _int_or_none(event.get("topic_id"))
+    return topic_id in INTEL_ALLOWED_TOPIC_IDS
 
 
 def _hot_symbols(
@@ -952,6 +989,9 @@ def _hot_symbols(
                 "momentum_count": event_counter.get("momentum", 0),
                 "funding_count": event_counter.get("funding_alert", 0),
                 "community_count": event_counter.get("community_signal", 0),
+                "lead_analyst_count": sum(
+                    1 for item in rows if item.get("source_role") == "lead_analyst"
+                ),
                 "kinds": dict(kind_counter.most_common(5)),
                 "exchanges": exchanges,
                 "chains": chains,
@@ -973,6 +1013,8 @@ def _recent_events(events: list[dict[str, Any]], *, limit: int) -> dict[str, lis
         "closes": {"close"},
         "momentum": {"momentum"},
         "funding": {"funding_alert"},
+        "chat": {"chat_signal"},
+        "community": {"community_signal"},
     }
     output: dict[str, list[dict[str, Any]]] = {}
     recent = sorted(events, key=lambda item: item.get("at_us") or 0, reverse=True)
@@ -1389,6 +1431,7 @@ def _compact_event(item: dict[str, Any]) -> dict[str, Any]:
         "exchanges": item.get("exchanges", [])[:8],
         "chains": item.get("chains", []),
         "contract_count": len(item.get("contracts") or []),
+        "source_role": item.get("source_role"),
         "liquidity_usd": item.get("liquidity_usd"),
         "max_volume_usd": item.get("max_volume_usd"),
     }
@@ -1417,6 +1460,10 @@ def _event_score(item: dict[str, Any]) -> float:
         score += 5
     if event == "community_signal":
         score += 7
+    if event == "chat_signal":
+        score += 4
+    if item.get("source_role") == "lead_analyst":
+        score += 8
     if "DEX" in kind:
         score += 4
     if item.get("is_new"):
@@ -1425,6 +1472,15 @@ def _event_score(item: dict[str, Any]) -> float:
         score += 3
     score += min(abs(_float_or_none(item.get("spread_pct")) or 0.0) / 5.0, 6.0)
     return score
+
+
+def _infer_discussion_symbol(text: str) -> str | None:
+    for pattern in (CHART_SYMBOL_PATTERN, TAGGED_SYMBOL_PATTERN, UPPER_SYMBOL_PATTERN):
+        for match in pattern.finditer(text):
+            symbol = _clean_symbol(match.group(1))
+            if symbol and symbol not in SYMBOL_STOPWORDS:
+                return symbol
+    return None
 
 
 def _alert_route_example(hot: dict[str, Any], best: dict[str, Any]) -> dict[str, Any]:

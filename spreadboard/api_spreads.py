@@ -54,6 +54,8 @@ class SpreadTerminalRow:
     long_funding_pct: float | None = None
     short_funding_pct: float | None = None
     funding_24h_pct: float | None = None
+    funding_projected_24h_pct: float | None = None
+    funding_24h_source: str | None = None
     long_funding_interval_hours: float | None = None
     short_funding_interval_hours: float | None = None
     long_funding_interval_assumed: bool = False
@@ -312,6 +314,12 @@ def _row_from_api(
         else raw.get("funding_apr_pct")
     )
     funding_daily = _float_or_none(raw.get("funding_daily_pct"))
+    funding_24h = _float_or_none(raw.get("funding_24h_pct"))
+    funding_projected_24h = _float_or_none(
+        raw.get("funding_projected_24h_pct"),
+        funding_daily,
+        funding_apr / 365.0 if funding_apr is not None else None,
+    )
     route_key = "|".join(
         [token or "?", long_venue or "?", long_market_type or "?", short_venue or "?", short_market_type or "?"]
     )
@@ -373,18 +381,18 @@ def _row_from_api(
         long_funding_pct=_float_or_none(
             raw.get("long_funding_pct"),
             raw.get("long_funding"),
+            long_funding.get("current_funding_pct"),
             long_funding.get("rate_pct"),
         ),
         short_funding_pct=_float_or_none(
             raw.get("short_funding_pct"),
             raw.get("short_funding"),
+            short_funding.get("current_funding_pct"),
             short_funding.get("rate_pct"),
         ),
-        funding_24h_pct=(
-            funding_daily
-            if funding_daily is not None
-            else (funding_apr / 365.0 if funding_apr is not None else None)
-        ),
+        funding_24h_pct=funding_24h,
+        funding_projected_24h_pct=funding_projected_24h,
+        funding_24h_source=_str_or_none(raw.get("funding_24h_source")),
         long_funding_interval_hours=_float_or_none(long_funding.get("interval_hours")),
         short_funding_interval_hours=_float_or_none(short_funding.get("interval_hours")),
         long_funding_interval_assumed=bool(long_funding.get("interval_assumed", False)),
@@ -604,10 +612,12 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
             token_rows,
             key=lambda row: _float_or_none(row.executable_spread_pct) or -999999.0,
         )
-        funding_rows = [row for row in token_rows if row.funding_24h_pct is not None]
+        funding_rows = [
+            row for row in token_rows if _effective_funding_24h(row) is not None
+        ]
         best_funding = max(
             funding_rows,
-            key=lambda row: row.funding_24h_pct or -999999.0,
+            key=lambda row: _effective_funding_24h(row) or -999999.0,
             default=None,
         )
         output.append(
@@ -634,7 +644,9 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
                     best_funding.funding_apr_pct if best_funding is not None else None
                 ),
                 "best_funding_24h_pct": (
-                    best_funding.funding_24h_pct if best_funding is not None else None
+                    _effective_funding_24h(best_funding)
+                    if best_funding is not None
+                    else None
                 ),
                 "age_min": min(
                     (row.age_min for row in token_rows if row.age_min is not None),
@@ -677,9 +689,9 @@ def _route_dict_sort_value(row: dict[str, Any], sort_by: str) -> Any:
     if sort_by == "edge":
         return _float_or_none(row.get("executable_spread_pct")) or 0.0
     if sort_by == "funding":
-        return _float_or_none(row.get("funding_24h_pct")) or -999999.0
+        return _effective_funding_24h_dict(row) or -999999.0
     if sort_by == "funding_abs":
-        return abs(_float_or_none(row.get("funding_24h_pct")) or 0.0)
+        return abs(_effective_funding_24h_dict(row) or 0.0)
     if sort_by == "depth":
         return _float_or_none(row.get("depth_usd")) or 0.0
     if sort_by == "age":
@@ -732,9 +744,9 @@ def _sort_value(row: SpreadTerminalRow, sort_by: str) -> Any:
     if sort_by == "edge":
         return _float_or_none(row.executable_spread_pct) or 0.0
     if sort_by == "funding":
-        return _float_or_none(row.funding_24h_pct) or -999999.0
+        return _effective_funding_24h(row) or -999999.0
     if sort_by == "funding_abs":
-        return abs(_float_or_none(row.funding_24h_pct) or 0.0)
+        return abs(_effective_funding_24h(row) or 0.0)
     if sort_by == "depth":
         return _float_or_none(row.depth_usd) or 0.0
     if sort_by == "age":
@@ -742,6 +754,16 @@ def _sort_value(row: SpreadTerminalRow, sort_by: str) -> Any:
     if sort_by == "token":
         return row.token
     return _row_sort_key(row)
+
+
+def _effective_funding_24h(row: SpreadTerminalRow) -> float | None:
+    settled = _float_or_none(row.funding_24h_pct)
+    return settled if settled is not None else _float_or_none(row.funding_projected_24h_pct)
+
+
+def _effective_funding_24h_dict(row: dict[str, Any]) -> float | None:
+    settled = _float_or_none(row.get("funding_24h_pct"))
+    return settled if settled is not None else _float_or_none(row.get("funding_projected_24h_pct"))
 
 
 def _exchange_counts(rows: list[SpreadTerminalRow]) -> dict[str, int]:
@@ -772,8 +794,15 @@ def _route_kind(
     source_kind: str | None,
 ) -> str:
     venues = f"{long_venue or ''} {short_venue or ''}".casefold()
-    if source_kind == "dex_discovered" or any(token in venues for token in ("jupiter", "zerox", "0x", "dex")):
-        if long_market_type == "Futures" or short_market_type == "Futures":
+    market_types = {
+        str(long_market_type or "").casefold(),
+        str(short_market_type or "").casefold(),
+    }
+    is_dex = "dex" in market_types or any(
+        token in venues for token in ("jupiter", "zerox", "0x", "okx dex")
+    )
+    if is_dex:
+        if "futures" in market_types:
             return "DEX-FUTURES"
         return "DEX-SPOT"
     if long_market_type == "Futures" and short_market_type == "Futures":

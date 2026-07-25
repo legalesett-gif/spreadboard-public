@@ -1421,7 +1421,18 @@ def render_market_token_group(group: dict[str, Any]) -> str:
     name = group.get("token_name") or "Metadata pending"
     venues = group.get("venues") or []
     kinds = group.get("route_kinds") or []
-    funding = best.get("funding_24h_pct")
+    funding = (
+        best.get("funding_24h_pct")
+        if best.get("funding_24h_pct") is not None
+        else best.get("funding_projected_24h_pct")
+    )
+    funding_basis = (
+        "settled 24h"
+        if best.get("funding_24h_pct") is not None
+        else "24h at current"
+        if best.get("funding_projected_24h_pct") is not None
+        else "history unavailable"
+    )
     funding_route = best
     funding_pair = " → ".join(
         venue
@@ -1451,7 +1462,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         <div class="group-number">
           <span>Best-route funding</span>
           <strong>{fmt_signed_pct(funding, digits=3) if funding is not None else '—'}</strong>
-          <em>{h(funding_economic_label(funding, best))} · {h(funding_pair) if funding_pair else 'not applicable'}</em>
+          <em>{h(funding_basis)} · {h(funding_economic_label(funding, best))} · {h(funding_pair) if funding_pair else 'not applicable'}</em>
         </div>
         <div class="group-routes">
           <span>Routes</span>
@@ -1481,6 +1492,19 @@ def render_market_token_group(group: dict[str, Any]) -> str:
 
 
 def render_market_group_route(row: dict[str, Any]) -> str:
+    settled_funding = row.get("funding_24h_pct")
+    shown_funding = (
+        settled_funding
+        if settled_funding is not None
+        else row.get("funding_projected_24h_pct")
+    )
+    funding_basis = (
+        "settled 24h"
+        if settled_funding is not None
+        else "24h at current"
+        if shown_funding is not None
+        else "history unavailable"
+    )
     return f"""
     <article class="route-detail-row">
       <div class="route-leg buy">
@@ -1497,8 +1521,8 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         <span>{fmt_pct(row.get('depth_weighted_spread_pct'))} VWAP</span>
       </div>
       <div class="route-funding">
-        <strong>{fmt_signed_pct(row.get('funding_24h_pct'), digits=3) if row.get('funding_24h_pct') is not None else '—'}</strong>
-        <b>{h(funding_economic_label(row.get('funding_24h_pct'), row))}</b>
+        <strong>{fmt_signed_pct(shown_funding, digits=3) if shown_funding is not None else '—'}</strong>
+        <b>{h(funding_basis)} · {h(funding_economic_label(shown_funding, row))}</b>
         <span>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)} / {fmt_signed_pct(row.get('short_funding_pct'), digits=4)}</span>
         <em>{h(funding_cadence_pair(row))}</em>
       </div>
@@ -1693,9 +1717,13 @@ def render_market_leg_line(row: dict[str, Any], side: str) -> str:
 def render_market_funding(row: dict[str, Any]) -> str:
     funding_24h = row.get("funding_24h_pct")
     if funding_24h is None:
-        funding_24h = row.get("funding_daily_pct")
-    if funding_24h is None:
-        return '<strong class="muted">?</strong><span>not reported</span>'
+        projected = row.get("funding_projected_24h_pct")
+        if projected is None:
+            return '<strong class="muted">?</strong><span>history unavailable</span>'
+        return (
+            f"<strong>{fmt_signed_pct(projected, digits=3)}</strong>"
+            f"<span>24h at current · {h(funding_cadence_pair(row))}</span>"
+        )
     direction = "▲" if (_float_or_none(funding_24h) or 0.0) >= 0 else "▼"
     return (
         f"<strong>{h(direction)} {fmt_signed_pct(funding_24h, digits=3)}</strong>"
@@ -1726,14 +1754,7 @@ def funding_cadence_pair(row: dict[str, Any]) -> str:
 
 
 def funding_24h_value(row: dict[str, Any]) -> float | None:
-    value = _float_or_none(row.get("funding_24h_pct"))
-    if value is not None:
-        return value
-    value = _float_or_none(row.get("funding_daily_pct"))
-    if value is not None:
-        return value
-    apr = _float_or_none(row.get("funding_apr_pct"))
-    return apr / 365.0 if apr is not None else None
+    return _float_or_none(row.get("funding_24h_pct"))
 
 
 def funding_economic_label(value: Any, row: dict[str, Any]) -> str:

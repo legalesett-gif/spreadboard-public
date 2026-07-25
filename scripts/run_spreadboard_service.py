@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from spreadboard import alerts, board, market_history, public_rails, token_metadata  # noqa: E402
+from spreadboard import alerts, board, live, market_history, public_rails, token_metadata  # noqa: E402
 from spreadboard.server import SpreadBoardHandler, SpreadBoardServer  # noqa: E402
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
@@ -88,12 +88,17 @@ class RefreshLoop:
         except (OSError, json.JSONDecodeError) as exc:
             _log(f"snapshot unavailable after refresh: {exc}")
             return
+        funding_summary = live.enrich_snapshot_funding_24h(
+            snapshot,
+            max_workers=int(os.environ.get("SPREADBOARD_FUNDING_HISTORY_WORKERS", "12")),
+        )
+        _atomic_write_snapshot(snapshot)
         inserted = market_history.record_snapshot(snapshot)
         refresh = snapshot.get("source_refresh") or {}
         _log(
             "refresh complete "
             f"routes={len(snapshot.get('api_discovered_rows') or []) + len(snapshot.get('dex_discovered_rows') or [])} "
-            f"history_inserted={inserted} status={refresh.get('status')}"
+            f"history_inserted={inserted} funding={funding_summary} status={refresh.get('status')}"
         )
         if lightweight_mode:
             _refresh_enrichment_subprocess()
@@ -183,6 +188,12 @@ def _seed_public_caches() -> None:
 
 def _env_bool(name: str) -> bool:
     return os.environ.get(name, "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def _atomic_write_snapshot(snapshot: dict[str, Any]) -> None:
+    temporary = SNAPSHOT_PATH.with_suffix(".funding.tmp")
+    temporary.write_text(json.dumps(snapshot, separators=(",", ":")), encoding="utf-8")
+    temporary.replace(SNAPSHOT_PATH)
 
 
 if __name__ == "__main__":

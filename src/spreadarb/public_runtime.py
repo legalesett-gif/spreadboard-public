@@ -33,6 +33,6 @@ def keychain(service: str) -> str | None:
 
 def discovery_max_spread_pct() -> float:
     try:
-        return float(os.environ.get("SPREADARB_MAX_ENTRY_SPREAD_PCT", "70"))
+        return float(os.environ.get("SPREADARB_MAX_ENTRY_SPREAD_PCT", "100"))
     except ValueError:
-        return 70.0
+        return 100.0

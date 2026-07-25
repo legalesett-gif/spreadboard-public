@@ -508,6 +508,135 @@ def fetch_funding_24h(exchange_id: str | None, symbol: str | None) -> dict[str, 
     return data
 
 
+def enrich_snapshot_funding_24h(
+    snapshot: dict[str, Any],
+    *,
+    max_workers: int = 12,
+) -> dict[str, int]:
+    """Attach settled 24h funding to every unique futures leg in a snapshot."""
+
+    rows = [
+        row
+        for bucket in ("api_discovered_rows", "dex_discovered_rows")
+        for row in snapshot.get(bucket) or []
+        if isinstance(row, dict)
+    ]
+    leg_keys: dict[tuple[str, str], tuple[str, str]] = {}
+    for row in rows:
+        token = str(row.get("token") or "").upper()
+        notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+        route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+        for side in ("long", "short"):
+            if row.get(f"{side}_market_type") != "Futures":
+                continue
+            venue = str(row.get(f"{side}_venue") or "")
+            exchange_id = venue_exchange_id(venue, "Futures")
+            leg_input = route_inputs.get(side) if isinstance(route_inputs.get(side), dict) else {}
+            market_symbol = str(leg_input.get("symbol") or "") or market_symbol_for(
+                token,
+                "Futures",
+                exchange_id,
+            )
+            if exchange_id and market_symbol:
+                leg_keys[(exchange_id, market_symbol)] = (exchange_id, market_symbol)
+
+    results: dict[tuple[str, str], dict[str, Any]] = {}
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=max(1, min(max_workers, len(leg_keys) or 1))
+    ) as pool:
+        futures = {
+            pool.submit(fetch_funding_24h, exchange_id, market_symbol): key
+            for key, (exchange_id, market_symbol) in leg_keys.items()
+        }
+        for future in concurrent.futures.as_completed(futures):
+            key = futures[future]
+            try:
+                value = future.result()
+            except Exception as exc:  # noqa: BLE001 - one venue must not stop the cycle.
+                value = {"status": "unavailable", "reason": type(exc).__name__}
+            results[key] = value if isinstance(value, dict) else {"status": "unavailable"}
+
+    settled_routes = 0
+    projected_routes = 0
+    for row in rows:
+        has_futures_leg = any(
+            row.get(f"{side}_market_type") == "Futures"
+            for side in ("long", "short")
+        )
+        token = str(row.get("token") or "").upper()
+        notes = row.setdefault("notes", {})
+        if not isinstance(notes, dict):
+            notes = {}
+            row["notes"] = notes
+        route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+        funding = notes.setdefault("funding", {})
+        if not isinstance(funding, dict):
+            funding = {}
+            notes["funding"] = funding
+        settled: dict[str, float | None] = {}
+        projected: dict[str, float | None] = {}
+        for side in ("long", "short"):
+            market_type = row.get(f"{side}_market_type")
+            if market_type != "Futures":
+                settled[side] = 0.0
+                projected[side] = 0.0
+                continue
+            venue = str(row.get(f"{side}_venue") or "")
+            exchange_id = venue_exchange_id(venue, "Futures")
+            leg_input = route_inputs.get(side) if isinstance(route_inputs.get(side), dict) else {}
+            market_symbol = str(leg_input.get("symbol") or "") or market_symbol_for(
+                token,
+                "Futures",
+                exchange_id,
+            )
+            result = results.get((str(exchange_id), str(market_symbol)), {})
+            leg_funding = funding.setdefault(side, {})
+            if not isinstance(leg_funding, dict):
+                leg_funding = {}
+                funding[side] = leg_funding
+            for key in (
+                "status",
+                "reason",
+                "current_funding_pct",
+                "funding_24h_pct",
+                "projected_24h_pct",
+                "funding_interval_hours",
+                "funding_interval_assumed",
+                "next_funding_ts_us",
+                "samples",
+            ):
+                if result.get(key) is not None:
+                    leg_funding[key] = result[key]
+            settled[side] = _float_or_none(result.get("funding_24h_pct"))
+            projected[side] = _float_or_none(result.get("projected_24h_pct"))
+
+        if (
+            has_futures_leg
+            and settled.get("long") is not None
+            and settled.get("short") is not None
+        ):
+            row["funding_24h_pct"] = settled["short"] - settled["long"]
+            row["funding_24h_source"] = "settled_public_events"
+            settled_routes += 1
+        else:
+            row.pop("funding_24h_pct", None)
+            row.pop("funding_24h_source", None)
+        if (
+            has_futures_leg
+            and projected.get("long") is not None
+            and projected.get("short") is not None
+        ):
+            row["funding_projected_24h_pct"] = projected["short"] - projected["long"]
+            projected_routes += 1
+        else:
+            row.pop("funding_projected_24h_pct", None)
+    return {
+        "unique_futures_legs": len(leg_keys),
+        "settled_routes": settled_routes,
+        "projected_routes": projected_routes,
+    }
+
+
 def _fetch_funding_24h_uncached(exchange_id: str, symbol: str) -> dict[str, Any]:
     native = _fetch_native_funding_24h(exchange_id, symbol)
     if native is not None:
