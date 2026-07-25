@@ -1508,10 +1508,10 @@ def render_market_group_route(row: dict[str, Any]) -> str:
     return f"""
     <article class="route-detail-row">
       <div class="route-leg buy">
-        <span>Buy</span><strong>{h(row.get('long_venue'))}</strong><em>{h(row.get('long_market_type'))}</em>
+        <span>Buy</span>{render_exchange_link(row, 'long')}<em>{h(row.get('long_market_type'))}</em>
       </div>
       <div class="route-leg sell">
-        <span>Sell</span><strong>{h(row.get('short_venue'))}</strong><em>{h(row.get('short_market_type'))}</em>
+        <span>Sell</span>{render_exchange_link(row, 'short')}<em>{h(row.get('short_market_type'))}</em>
       </div>
       <div class="route-prices">
         <strong>{fmt_price(row.get('long_price'))}</strong><span>→</span><strong>{fmt_price(row.get('short_price'))}</strong>
@@ -2231,8 +2231,8 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
 def render_funding_pair(row: dict[str, Any]) -> str:
     return f"""
     <article class="funding-pair-row">
-      <div><span>Long</span><strong>{h(row.get('long_venue'))} · {h(row.get('long_market_type'))}</strong><em>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)} · {h(funding_interval_label(row.get('long_funding_interval_hours'), row.get('long_funding_interval_assumed')))}</em></div>
-      <div><span>Short</span><strong>{h(row.get('short_venue'))} · {h(row.get('short_market_type'))}</strong><em>{fmt_signed_pct(row.get('short_funding_pct'), digits=4)} · {h(funding_interval_label(row.get('short_funding_interval_hours'), row.get('short_funding_interval_assumed')))}</em></div>
+      <div><span>Long</span>{render_exchange_link(row, 'long', include_market_type=True)}<em>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)} · {h(funding_interval_label(row.get('long_funding_interval_hours'), row.get('long_funding_interval_assumed')))}</em></div>
+      <div><span>Short</span>{render_exchange_link(row, 'short', include_market_type=True)}<em>{fmt_signed_pct(row.get('short_funding_pct'), digits=4)} · {h(funding_interval_label(row.get('short_funding_interval_hours'), row.get('short_funding_interval_assumed')))}</em></div>
       <div><span>Net 24h</span><strong>{fmt_signed_pct(row.get('funding_24h_pct'), digits=3)}</strong><em>{h(funding_cadence_pair(row))}</em></div>
       <div><span>Basis / VWAP</span><strong>{fmt_pct(row.get('executable_spread_pct'))}</strong><em>{fmt_pct(row.get('depth_weighted_spread_pct'))}</em></div>
       <div><span>Updated</span><strong>{fmt_age(row.get('age_min'))}</strong></div>
@@ -2828,7 +2828,7 @@ def render_chart_leg_stats(label: str, leg: dict[str, Any]) -> str:
     funding_24h = settled if settled is not None else leg.get("projected_funding_24h_pct")
     return f"""
     <article>
-      <header><span>{h(label)}</span><strong>{h(leg.get('venue'))}</strong><em>{h(leg.get('market_type'))}</em></header>
+      <header><span>{h(label)}</span>{render_venue_link(leg.get('venue'), leg.get('market_type'), leg.get('exchange_url'))}<em>{h(leg.get('market_type'))}</em></header>
       <div><span>Volume 24h</span><strong>{fmt_money(leg.get('volume_24h_usd'))}</strong></div>
       <div><span>Live funding</span><strong>{fmt_signed_pct(leg.get('current_funding_pct'), digits=4) if has_funding else 'not applicable'}</strong></div>
       <div><span>{'Settled 24h' if settled is not None else '24h at current' if has_funding else 'Funding 24h'}</span><strong>{fmt_signed_pct(funding_24h, digits=4) if has_funding else 'not applicable'}</strong></div>
@@ -5244,10 +5244,47 @@ def render_leg_compact(row: dict[str, Any], side: str) -> str:
         f'<div class="market-leg {h(side_class)}">'
         f'<span class="direction-dot" aria-hidden="true"></span>'
         f'<span class="venue-dot" aria-hidden="true"></span>'
-        f'<strong>{h(row.get(f"{side}_venue") or "?")}</strong>'
+        f'{render_exchange_link(row, side)}'
         f'<em>{fmt_money(row.get(f"{side}_depth_usd"))}</em>'
         f'<b>{fmt_price(row.get(f"{side}_price"))}</b>'
         f'</div>'
+    )
+
+
+def render_exchange_link(
+    row: dict[str, Any],
+    side: str,
+    *,
+    include_market_type: bool = False,
+) -> str:
+    venue = row.get(f"{side}_venue")
+    market_type = row.get(f"{side}_market_type")
+    label = (
+        f"{venue or '?'} · {market_type or '?'}"
+        if include_market_type
+        else str(venue or "?")
+    )
+    return render_venue_link(
+        label,
+        market_type,
+        row.get(f"{side}_exchange_url"),
+    )
+
+
+def render_venue_link(
+    venue: Any,
+    market_type: Any,
+    exchange_url: Any,
+) -> str:
+    label = str(venue or "?")
+    url = str(exchange_url or "").strip()
+    if not url.startswith("https://"):
+        return f"<strong>{h(label)}</strong>"
+    title = f"Open {label} {market_type or 'market'} chart"
+    return (
+        f'<a class="exchange-market-link" href="{h(url)}" target="_blank" '
+        f'rel="noopener noreferrer" title="{h(title)}">'
+        f"<strong>{h(label)}</strong><span aria-hidden=\"true\">&#8599;</span></a>"
     )
 
 
@@ -5283,13 +5320,13 @@ def render_pair_route_diagram(row: dict[str, Any], legs: dict[str, Any]) -> str:
     <div class="pair-diagram" aria-label="Route legs">
       <div class="pair-leg-pill buy">
         <span>Buy</span>
-        <strong>{h(long_leg.get('venue') or row.get('long_venue'))}</strong>
+        {render_venue_link(long_leg.get('venue') or row.get('long_venue'), long_leg.get('market_type') or row.get('long_market_type'), long_leg.get('exchange_url') or row.get('long_exchange_url'))}
         <em>{h(long_leg.get('market_type') or row.get('long_market_type'))} {fmt_price(long_leg.get('price') or row.get('long_price'))}</em>
       </div>
       <div class="pair-connector"><span></span><b>spread</b><span></span></div>
       <div class="pair-leg-pill sell">
         <span>Sell</span>
-        <strong>{h(short_leg.get('venue') or row.get('short_venue'))}</strong>
+        {render_venue_link(short_leg.get('venue') or row.get('short_venue'), short_leg.get('market_type') or row.get('short_market_type'), short_leg.get('exchange_url') or row.get('short_exchange_url'))}
         <em>{h(short_leg.get('market_type') or row.get('short_market_type'))} {fmt_price(short_leg.get('price') or row.get('short_price'))}</em>
       </div>
     </div>
@@ -5395,7 +5432,7 @@ def render_pair_cockpit(
           <div class="ticket-legs">
             <article class="ticket-leg buy">
               <span>Buy leg</span>
-              <strong>{h(long_leg.get('venue') or row.get('long_venue'))}</strong>
+              {render_venue_link(long_leg.get('venue') or row.get('long_venue'), long_leg.get('market_type') or row.get('long_market_type'), long_leg.get('exchange_url') or row.get('long_exchange_url'))}
               <em>{h(long_leg.get('market_type') or row.get('long_market_type'))}</em>
               <b>{fmt_price(long_leg.get('price') or row.get('long_price'))}</b>
               <small>{fmt_money(long_leg.get('depth_usd') or row.get('long_depth_usd'))} visible depth</small>
@@ -5407,7 +5444,7 @@ def render_pair_cockpit(
             </div>
             <article class="ticket-leg sell">
               <span>Sell leg</span>
-              <strong>{h(short_leg.get('venue') or row.get('short_venue'))}</strong>
+              {render_venue_link(short_leg.get('venue') or row.get('short_venue'), short_leg.get('market_type') or row.get('short_market_type'), short_leg.get('exchange_url') or row.get('short_exchange_url'))}
               <em>{h(short_leg.get('market_type') or row.get('short_market_type'))}</em>
               <b>{fmt_price(short_leg.get('price') or row.get('short_price'))}</b>
               <small>{fmt_money(short_leg.get('depth_usd') or row.get('short_depth_usd'))} visible depth</small>
@@ -5613,13 +5650,13 @@ def render_spread_lens(row: dict[str, Any], detail: dict[str, Any]) -> str:
       <div class="spread-equation">
         <article class="equation-leg buy">
           <span>Buy</span>
-          <strong>{h(row.get('long_venue'))}</strong>
+          {render_exchange_link(row, 'long')}
           <em>{h(row.get('long_market_type'))} {fmt_price(long_price)}</em>
         </article>
         <div class="equation-operator">to</div>
         <article class="equation-leg sell">
           <span>Sell</span>
-          <strong>{h(row.get('short_venue'))}</strong>
+          {render_exchange_link(row, 'short')}
           <em>{h(row.get('short_market_type'))} {fmt_price(short_price)}</em>
         </article>
         <div class="equation-operator">=</div>
@@ -5877,7 +5914,7 @@ def render_leg_card(title: str, leg: dict[str, Any]) -> str:
     <article class="leg-card">
       <div class="leg-card-head">
         <span>{h(title)}</span>
-        <strong>{h(leg.get('venue'))}</strong>
+        {render_venue_link(leg.get('venue'), leg.get('market_type'), leg.get('exchange_url'))}
       </div>
       <p>{h(leg.get('market_type'))} <span>{h(leg.get('market_symbol'))}</span></p>
       <div class="facts">
@@ -7623,6 +7660,11 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 .route-leg, .route-edge, .route-funding {{ display: grid; gap: 2px; min-width: 0; }}
 .route-leg span, .route-edge span, .route-funding span, .route-funding em {{ color: var(--terminal-muted); font-size: 9px; font-style: normal; }}
 .route-leg strong {{ font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.exchange-market-link {{ display: inline-flex; align-items: center; gap: 5px; width: fit-content; max-width: 100%; color: inherit; text-decoration: none; }}
+.exchange-market-link strong {{ min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.exchange-market-link > span {{ flex: 0 0 auto; color: var(--terminal-accent); font-size: 10px; font-weight: 900; line-height: 1; }}
+.exchange-market-link:hover strong, .exchange-market-link:focus-visible strong {{ color: var(--terminal-accent); text-decoration: underline; text-underline-offset: 2px; }}
+.exchange-market-link:focus-visible {{ border-radius: 3px; outline: 2px solid var(--terminal-accent); outline-offset: 2px; }}
 .route-leg em {{ width: fit-content; padding: 2px 5px; border-radius: 4px; background: var(--terminal-panel-2); color: var(--terminal-muted); font-size: 9px; font-style: normal; }}
 .route-prices {{ display: flex; gap: 6px; align-items: center; font-size: 11px; }}
 .route-prices span {{ color: var(--terminal-muted); }}

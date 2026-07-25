@@ -14,6 +14,8 @@ import urllib.request
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from spreadboard import exchange_links
+
 PUBLIC_EXCHANGE_IDS = (
     "binance",
     "bybit",
@@ -192,7 +194,10 @@ def _leg_detail(board_row: dict[str, Any], *, side: str) -> dict[str, Any]:
     market_type = board_row.get(f"{side}_market_type")
     symbol = str(board_row.get("symbol") or "").upper()
     exchange_id = venue_exchange_id(str(venue or ""), str(market_type or ""))
-    market_symbol = market_symbol_for(symbol, str(market_type or ""), exchange_id)
+    market_symbol = (
+        board_row.get(f"{side}_market_symbol")
+        or market_symbol_for(symbol, str(market_type or ""), exchange_id)
+    )
     volatility, funding, market_stats = _leg_public_enrichment(
         exchange_id,
         market_symbol,
@@ -292,7 +297,8 @@ def _leg_detail_from_board(
     market_symbol = (
         market_symbol
         if market_symbol is not None
-        else market_symbol_for(symbol, str(market_type or ""), exchange_id)
+        else board_row.get(f"{side}_market_symbol")
+        or market_symbol_for(symbol, str(market_type or ""), exchange_id)
     )
     volatility = volatility or {
         "status": "unavailable",
@@ -316,6 +322,15 @@ def _leg_detail_from_board(
         "venue": venue,
         "market_type": market_type,
         "market_symbol": market_symbol,
+        "exchange_url": (
+            board_row.get(f"{side}_exchange_url")
+            or exchange_links.exchange_market_url(
+                venue=str(venue or ""),
+                market_type=str(market_type or ""),
+                market_symbol=market_symbol,
+                token=symbol,
+            )
+        ),
         "price": price,
         "mark": board_row.get(f"{side}_mark"),
         "depth_usd": board_row.get(f"{side}_depth_usd"),

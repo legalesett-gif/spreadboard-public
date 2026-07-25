@@ -11,7 +11,7 @@ import os
 import time
 from typing import Any
 
-from spreadboard import board, public_rails, token_metadata
+from spreadboard import board, exchange_links, public_rails, token_metadata
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
@@ -72,6 +72,10 @@ class SpreadTerminalRow:
     long_withdraw_enabled: bool | None = None
     short_deposit_enabled: bool | None = None
     short_withdraw_enabled: bool | None = None
+    long_market_symbol: str | None = None
+    short_market_symbol: str | None = None
+    long_exchange_url: str | None = None
+    short_exchange_url: str | None = None
     raw_source_kind: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -328,6 +332,16 @@ def _row_from_api(
     funding = notes.get("funding") if isinstance(notes.get("funding"), dict) else {}
     long_funding = funding.get("long") if isinstance(funding.get("long"), dict) else {}
     short_funding = funding.get("short") if isinstance(funding.get("short"), dict) else {}
+    long_market_symbol = _str_or_none(
+        (route_inputs.get("long") or {}).get("symbol")
+        if isinstance(route_inputs.get("long"), dict)
+        else None
+    )
+    short_market_symbol = _str_or_none(
+        (route_inputs.get("short") or {}).get("symbol")
+        if isinstance(route_inputs.get("short"), dict)
+        else None
+    )
     long_rails = public_rails.rail_state(rails or {}, long_venue, token)
     short_rails = public_rails.rail_state(rails or {}, short_venue, token)
     return SpreadTerminalRow(
@@ -425,6 +439,20 @@ def _row_from_api(
         long_withdraw_enabled=_bool_or_none(long_rails.get("withdraw")),
         short_deposit_enabled=_bool_or_none(short_rails.get("deposit")),
         short_withdraw_enabled=_bool_or_none(short_rails.get("withdraw")),
+        long_market_symbol=long_market_symbol,
+        short_market_symbol=short_market_symbol,
+        long_exchange_url=exchange_links.exchange_market_url(
+            venue=long_venue,
+            market_type=long_market_type,
+            market_symbol=long_market_symbol,
+            token=token,
+        ),
+        short_exchange_url=exchange_links.exchange_market_url(
+            venue=short_venue,
+            market_type=short_market_type,
+            market_symbol=short_market_symbol,
+            token=token,
+        ),
         raw_source_kind=source_kind,
     )
 
@@ -491,6 +519,20 @@ def _row_from_board(row: board.BoardRow) -> SpreadTerminalRow:
         long_withdraw_enabled=row.long_withdraw_enabled,
         short_deposit_enabled=row.short_deposit_enabled,
         short_withdraw_enabled=row.short_withdraw_enabled,
+        long_market_symbol=None,
+        short_market_symbol=None,
+        long_exchange_url=exchange_links.exchange_market_url(
+            venue=row.long_venue,
+            market_type=row.long_market_type,
+            market_symbol=None,
+            token=row.symbol,
+        ),
+        short_exchange_url=exchange_links.exchange_market_url(
+            venue=row.short_venue,
+            market_type=row.short_market_type,
+            market_symbol=None,
+            token=row.symbol,
+        ),
         raw_source_kind="website_verified",
     )
 
