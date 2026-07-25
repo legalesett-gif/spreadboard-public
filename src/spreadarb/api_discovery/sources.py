@@ -157,10 +157,7 @@ class OkxDexQuoteSource:
         )
         if buy.get("status") != "ok":
             raise RuntimeError(
-                ";".join(
-                    str(item)
-                    for item in buy.get("blockers") or ["buy_quote_unavailable"]
-                )
+                ";".join(str(item) for item in buy.get("blockers") or ["buy_quote_unavailable"])
             )
         quantity = Decimal(str(buy.get("out_qty") or "0"))
         if quantity <= 0:
@@ -175,10 +172,7 @@ class OkxDexQuoteSource:
         )
         if sell.get("status") != "ok":
             raise RuntimeError(
-                ";".join(
-                    str(item)
-                    for item in sell.get("blockers") or ["sell_quote_unavailable"]
-                )
+                ";".join(str(item) for item in sell.get("blockers") or ["sell_quote_unavailable"])
             )
         bid = as_float(sell.get("dex_sell_price_usd"))
         ask = as_float(buy.get("dex_buy_price_usd"))
@@ -209,8 +203,7 @@ class DiscoverySource(Protocol):
     name: str
     kind: str
 
-    def collect(self, context: "DiscoveryContext") -> SourceResult:
-        ...
+    def collect(self, context: "DiscoveryContext") -> SourceResult: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,7 +285,9 @@ class CexCcxtSource:
                 errors.append("time_budget_exhausted")
                 break
             try:
-                exchange = _build_ccxt_exchange(exchange_id, self.market_type, context.remaining_timeout(10.0))
+                exchange = _build_ccxt_exchange(
+                    exchange_id, self.market_type, context.remaining_timeout(10.0)
+                )
                 markets = exchange.load_markets()
             except Exception as exc:
                 errors.append(f"{venue}:market:{clean_error(exc)}")
@@ -361,7 +356,9 @@ class CexCcxtSource:
                     errors.append(f"{venue}:{token}:order_book:{clean_error(exc)}")
             _release_ccxt_exchange(exchange)
             del markets
-        candidate_quotes = [*context.reference_quotes, *quotes] if self.include_reference_quotes else quotes
+        candidate_quotes = (
+            [*context.reference_quotes, *quotes] if self.include_reference_quotes else quotes
+        )
         if context.all_platform_tokens and quotes:
             quotes = _verify_top_candidate_books(
                 quotes,
@@ -393,10 +390,7 @@ class CexCcxtSource:
                 row
                 for row in rows
                 if self.market_type in {row.get("long_market_type"), row.get("short_market_type")}
-                and (
-                    row.get("long_venue") in self.venues
-                    or row.get("short_venue") in self.venues
-                )
+                and (row.get("long_venue") in self.venues or row.get("short_venue") in self.venues)
             ]
         status = SourceStatus(
             name=self.name,
@@ -561,7 +555,9 @@ class ZeroxQuoteSource:
             route_plan=_zerox_route_plan(buy),
         )
 
-    def _request(self, params: Mapping[str, str], headers: Mapping[str, str], timeout: float) -> dict[str, Any]:
+    def _request(
+        self, params: Mapping[str, str], headers: Mapping[str, str], timeout: float
+    ) -> dict[str, Any]:
         url = f"{self.base_url}?{urlencode(params)}"
         payload = self.http_get_json(url, headers, timeout)
         return payload if isinstance(payload, dict) else {}
@@ -947,9 +943,7 @@ def dex_candidates(
     max_spread_pct: float = 90.0,
     min_net_funding_apr_pct: float = 25.0,
 ) -> list[dict[str, Any]]:
-    quotes = [
-        quote for quote in reference_quotes if quote.market_type in {"Spot", "Futures"}
-    ]
+    quotes = [quote for quote in reference_quotes if quote.market_type in {"Spot", "Futures"}]
     rows: list[dict[str, Any]] = []
     for dex_quote in dex_quotes:
         token_refs = [quote for quote in quotes if quote.token.upper() == dex_quote.token.upper()]
@@ -1177,11 +1171,7 @@ def _quote_from_book(
         source_name=source_name,
     )
     funding = dict(funding or {})
-    contract_size = as_float(
-        market_identity.contract_size
-        if market_identity is not None
-        else None
-    )
+    contract_size = as_float(market_identity.contract_size if market_identity is not None else None)
     if contract_size is None:
         contract_size = as_float(source_quote.contract_size)
     if contract_size is None:
@@ -1212,16 +1202,20 @@ def _quote_from_book(
         decimals=market_identity.decimals if market_identity is not None else source_quote.decimals,
         chain_id=market_identity.chain_id if market_identity is not None else source_quote.chain_id,
         settle_asset=(
-            market_identity.settle_asset if market_identity is not None else source_quote.settle_asset
+            market_identity.settle_asset
+            if market_identity is not None
+            else source_quote.settle_asset
         ),
         contract_size=(
-            market_identity.contract_size if market_identity is not None else source_quote.contract_size
+            market_identity.contract_size
+            if market_identity is not None
+            else source_quote.contract_size
         ),
-        funding_rate_pct=_coalesce(as_float(funding.get("rate_pct")), source_quote.funding_rate_pct),
+        funding_rate_pct=_coalesce(
+            as_float(funding.get("rate_pct")), source_quote.funding_rate_pct
+        ),
         funding_interval_hours=(
-            _coalesce(
-                as_float(funding.get("interval_hours")), source_quote.funding_interval_hours
-            )
+            _coalesce(as_float(funding.get("interval_hours")), source_quote.funding_interval_hours)
         ),
         funding_apr_pct=_coalesce(as_float(funding.get("apr_pct")), source_quote.funding_apr_pct),
         next_funding_ts_us=(
@@ -1326,7 +1320,9 @@ def _find_symbol(token: str, markets: Mapping[str, Any], market_type: str) -> st
             return candidate
     prefix = f"{token}/"
     for symbol, market in markets.items():
-        if str(symbol).startswith(prefix) and _market_matches_type(market, str(symbol), market_type):
+        if str(symbol).startswith(prefix) and _market_matches_type(
+            market, str(symbol), market_type
+        ):
             return str(symbol)
     for symbol, market in markets.items():
         if not _market_matches_type(market, str(symbol), market_type):
@@ -1447,8 +1443,10 @@ def _ticker_quotes_for_symbols(
         bid = as_float(ticker.get("bid"))
         ask = as_float(ticker.get("ask"))
         if bid is None or ask is None:
-            midpoint = as_float(ticker.get("markPrice")) or as_float(ticker.get("last")) or as_float(
-                ticker.get("close")
+            midpoint = (
+                as_float(ticker.get("markPrice"))
+                or as_float(ticker.get("last"))
+                or as_float(ticker.get("close"))
             )
             bid = bid if bid is not None else midpoint
             ask = ask if ask is not None else midpoint
@@ -1772,9 +1770,7 @@ def _verify_top_candidate_books(
                     if book_quote.bid is not None and book_quote.ask is not None:
                         verified[key] = book_quote
                 except Exception as exc:
-                    errors.append(
-                        f"{quote.venue}:{quote.token}:order_book:{clean_error(exc)}"
-                    )
+                    errors.append(f"{quote.venue}:{quote.token}:order_book:{clean_error(exc)}")
         finally:
             _release_ccxt_exchange(exchange)
     return list(verified.values())

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import json
 import os
 from pathlib import Path
@@ -18,7 +20,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from spreadboard import alerts, board, live, market_history, public_rails, token_metadata  # noqa: E402
+from spreadboard import (
+    alerts,
+    board,
+    fast_quotes,
+    live,
+    market_history,
+    public_rails,
+    token_metadata,
+)  # noqa: E402
 from spreadboard.server import SpreadBoardHandler, SpreadBoardServer  # noqa: E402
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
@@ -29,14 +39,26 @@ class RefreshLoop:
     def __init__(self, interval_seconds: float) -> None:
         self.interval_seconds = max(30.0, interval_seconds)
         self.stop_event = threading.Event()
-        self.thread = threading.Thread(target=self.run, name="spreadboard-public-refresh", daemon=True)
+        self.snapshot_lock = threading.Lock()
+        self.fast_refresher = fast_quotes.FastQuoteRefresher()
+        self.thread = threading.Thread(
+            target=self.run, name="spreadboard-public-refresh", daemon=True
+        )
+        self.fast_thread = threading.Thread(
+            target=self.run_fast_quotes,
+            name="spreadboard-fast-quotes",
+            daemon=True,
+        )
 
     def start(self) -> None:
         self.thread.start()
+        self.fast_thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
         self.thread.join(timeout=5.0)
+        self.fast_thread.join(timeout=5.0)
+        self.fast_refresher.close()
 
     def run(self) -> None:
         while not self.stop_event.is_set():
@@ -83,16 +105,17 @@ class RefreshLoop:
         if result.returncode != 0:
             _log(f"refresh failed ({result.returncode}): {(result.stderr or '')[-500:]}")
             return
-        try:
-            snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            _log(f"snapshot unavailable after refresh: {exc}")
-            return
-        funding_summary = live.enrich_snapshot_funding_24h(
-            snapshot,
-            max_workers=int(os.environ.get("SPREADBOARD_FUNDING_HISTORY_WORKERS", "12")),
-        )
-        _atomic_write_snapshot(snapshot)
+        with self.snapshot_lock:
+            try:
+                snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                _log(f"snapshot unavailable after refresh: {exc}")
+                return
+            funding_summary = live.enrich_snapshot_funding_24h(
+                snapshot,
+                max_workers=int(os.environ.get("SPREADBOARD_FUNDING_HISTORY_WORKERS", "12")),
+            )
+            _atomic_write_snapshot(snapshot)
         inserted = market_history.record_snapshot(snapshot)
         refresh = snapshot.get("source_refresh") or {}
         _log(
@@ -117,6 +140,29 @@ class RefreshLoop:
                 public_rails.refresh_public_rails(snapshot)
             except Exception as exc:  # noqa: BLE001 - rail coverage can be partial.
                 _log(f"transfer-rail refresh unavailable: {type(exc).__name__}: {exc}")
+
+    def run_fast_quotes(self) -> None:
+        interval = max(
+            20.0,
+            float(os.environ.get("SPREADBOARD_FAST_QUOTE_SECONDS", "30")),
+        )
+        while not self.stop_event.wait(5.0):
+            started = time.monotonic()
+            with self.snapshot_lock:
+                summary = self.fast_refresher.refresh(
+                    SNAPSHOT_PATH,
+                    route_limit=int(os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "30")),
+                )
+                if summary.get("updated_routes"):
+                    try:
+                        snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+                        inserted = market_history.record_snapshot(snapshot)
+                    except (OSError, json.JSONDecodeError):
+                        inserted = 0
+                else:
+                    inserted = 0
+            _log(f"fast quotes {summary} history_inserted={inserted}")
+            self.stop_event.wait(max(1.0, interval - (time.monotonic() - started)))
 
 
 def _refresh_enrichment_subprocess() -> None:
