@@ -17,6 +17,7 @@ data/*
 !data/api_discovery_watchlist.json
 !data/api_discovery_identity_registry.json
 !data/api_discovery_executor_attestations.json
+!data/token_metadata_seed.json
 vault
 graphify-out
 node_modules

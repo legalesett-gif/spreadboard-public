@@ -16,7 +16,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY spreadboard ./spreadboard
 COPY src ./src
 COPY scripts ./scripts
-COPY data/api_discovery_watchlist.json data/api_discovery_identity_registry.json data/api_discovery_executor_attestations.json ./data/
+COPY data/api_discovery_watchlist.json data/api_discovery_identity_registry.json data/api_discovery_executor_attestations.json data/token_metadata_seed.json ./data/
 
 RUN uv sync --frozen --no-dev \
     && groupadd --system spreadboard \

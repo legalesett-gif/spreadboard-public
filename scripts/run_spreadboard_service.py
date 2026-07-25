@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -88,8 +89,14 @@ class RefreshLoop:
             _log(f"snapshot unavailable after refresh: {exc}")
             return
         inserted = market_history.record_snapshot(snapshot)
+        refresh = snapshot.get("source_refresh") or {}
+        _log(
+            "refresh complete "
+            f"routes={len(snapshot.get('api_discovered_rows') or []) + len(snapshot.get('dex_discovered_rows') or [])} "
+            f"history_inserted={inserted} status={refresh.get('status')}"
+        )
         if lightweight_mode:
-            _log("lightweight mode: deferred token-name and transfer-rail enrichment")
+            _refresh_enrichment_subprocess()
         else:
             symbols = {
                 str(row.get("token") or "").upper()
@@ -105,12 +112,31 @@ class RefreshLoop:
                 public_rails.refresh_public_rails(snapshot)
             except Exception as exc:  # noqa: BLE001 - rail coverage can be partial.
                 _log(f"transfer-rail refresh unavailable: {type(exc).__name__}: {exc}")
-        refresh = snapshot.get("source_refresh") or {}
-        _log(
-            "refresh complete "
-            f"routes={len(snapshot.get('api_discovered_rows') or []) + len(snapshot.get('dex_discovered_rows') or [])} "
-            f"history_inserted={inserted} status={refresh.get('status')}"
+
+
+def _refresh_enrichment_subprocess() -> None:
+    command = [
+        sys.executable,
+        str(ROOT / "scripts/refresh_spreadboard_enrichment.py"),
+        "--snapshot-path",
+        str(SNAPSHOT_PATH),
+        "--rail-workers",
+        "1",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=float(os.environ.get("SPREADBOARD_ENRICHMENT_TIMEOUT_SECONDS", "240")),
+            check=False,
         )
+    except subprocess.TimeoutExpired as exc:
+        _log(f"isolated enrichment timeout: {exc}")
+        return
+    summary = (result.stdout or result.stderr or "").strip()[-500:]
+    _log(f"isolated enrichment exit={result.returncode} {summary}")
 
 
 def main() -> int:
@@ -118,6 +144,7 @@ def main() -> int:
     port = int(os.environ.get("PORT", "8200"))
     interval = float(os.environ.get("SPREADBOARD_REFRESH_SECONDS", "300"))
     board_path = Path(os.environ.get("SPREADBOARD_BOARD_PATH", str(board.DEFAULT_BOARD_PATH)))
+    _seed_public_caches()
     refresh_loop = RefreshLoop(interval)
     server = SpreadBoardServer(
         (host, port),
@@ -143,6 +170,15 @@ def main() -> int:
 
 def _log(message: str) -> None:
     print(f"spreadboard-service: {message}", flush=True)
+
+
+def _seed_public_caches() -> None:
+    seed_path = ROOT / "data/token_metadata_seed.json"
+    target_path = token_metadata.DEFAULT_CACHE_PATH
+    if target_path.exists() or not seed_path.exists():
+        return
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(seed_path, target_path)
 
 
 def _env_bool(name: str) -> bool:

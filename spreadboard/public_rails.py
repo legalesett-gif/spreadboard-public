@@ -58,6 +58,7 @@ def refresh_public_rails(
     path: Path | str = DEFAULT_CACHE_PATH,
     force: bool = False,
     now: float | None = None,
+    max_workers: int = 8,
 ) -> dict[str, Any]:
     current_time = time.time() if now is None else now
     path = Path(path)
@@ -72,7 +73,8 @@ def refresh_public_rails(
 
     rails: dict[str, dict[str, Any]] = {}
     errors: dict[str, str] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(tokens_by_venue) or 1)) as pool:
+    worker_count = max(1, min(max_workers, len(tokens_by_venue) or 1))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as pool:
         futures = {
             pool.submit(_fetch_venue_rails, venue, tokens): venue
             for venue, tokens in tokens_by_venue.items()
@@ -121,7 +123,10 @@ def _tokens_by_venue(snapshot: dict[str, Any]) -> dict[str, set[str]]:
 
 
 def _fetch_venue_rails(venue: str, tokens: set[str]) -> dict[str, Any]:
-    exchange_class = getattr(ccxt, VENUE_IDS[venue])
+    exchange_id = VENUE_IDS[venue]
+    if exchange_id == "gateio" and not hasattr(ccxt, exchange_id):
+        exchange_id = "gate"
+    exchange_class = getattr(ccxt, exchange_id)
     exchange = exchange_class(
         {
             "enableRateLimit": True,

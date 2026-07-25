@@ -1,0 +1,273 @@
+{
+  "schema": "spreadboard.token_metadata.v1",
+  "source": "CoinGecko public coins list",
+  "tokens": {
+    "ABT": {
+      "candidate_count": 1,
+      "coin_id": "arcblock",
+      "name": "Arcblock",
+      "status": "unique_symbol"
+    },
+    "ACE": {
+      "candidate_count": 2,
+      "coin_id": "endurance",
+      "name": "Fusionist",
+      "status": "known_asset"
+    },
+    "AFC": {
+      "candidate_count": 2,
+      "coin_id": "arsenal-fan-token",
+      "name": "Arsenal Fan Token",
+      "status": "known_asset"
+    },
+    "AO": {
+      "candidate_count": 1,
+      "coin_id": "ao-computer",
+      "name": "ao Computer",
+      "status": "unique_symbol"
+    },
+    "ASM": {
+      "candidate_count": 3,
+      "name": null,
+      "status": "unresolved"
+    },
+    "BDX": {
+      "candidate_count": 2,
+      "coin_id": "beldex",
+      "name": "Beldex",
+      "status": "known_asset"
+    },
+    "BDXN": {
+      "candidate_count": 1,
+      "coin_id": "bondex",
+      "name": "Bondex",
+      "status": "unique_symbol"
+    },
+    "BOS": {
+      "candidate_count": 2,
+      "name": null,
+      "status": "unresolved"
+    },
+    "BP": {
+      "candidate_count": 4,
+      "coin_id": "backpack",
+      "name": "Backpack",
+      "status": "known_asset"
+    },
+    "CFG": {
+      "candidate_count": 2,
+      "name": null,
+      "status": "unresolved"
+    },
+    "CREDI": {
+      "candidate_count": 1,
+      "coin_id": "credefi",
+      "name": "Credefi",
+      "status": "unique_symbol"
+    },
+    "DEXE": {
+      "candidate_count": 1,
+      "coin_id": "dexe",
+      "name": "DeXe",
+      "status": "unique_symbol"
+    },
+    "ELX": {
+      "candidate_count": 1,
+      "coin_id": "elixir-finance",
+      "name": "Elixir",
+      "status": "unique_symbol"
+    },
+    "EMYC": {
+      "candidate_count": 1,
+      "coin_id": "emoneytoken",
+      "name": "E Money Network",
+      "status": "unique_symbol"
+    },
+    "ERA": {
+      "candidate_count": 2,
+      "coin_id": "caldera",
+      "name": "Caldera",
+      "status": "known_asset"
+    },
+    "ESPORTS": {
+      "candidate_count": 1,
+      "coin_id": "yooldo-games",
+      "name": "Yooldo Games",
+      "status": "unique_symbol"
+    },
+    "HONEY": {
+      "candidate_count": 2,
+      "coin_id": "honey-3",
+      "name": "Honey",
+      "status": "exact_name"
+    },
+    "HOPR": {
+      "candidate_count": 1,
+      "coin_id": "hopr",
+      "name": "HOPR",
+      "status": "unique_symbol"
+    },
+    "HOUSE": {
+      "candidate_count": 2,
+      "coin_id": "housecoin-2",
+      "name": "Housecoin",
+      "status": "known_asset"
+    },
+    "HPP": {
+      "candidate_count": 1,
+      "coin_id": "aergo-2",
+      "name": "House Party Protocol",
+      "status": "unique_symbol"
+    },
+    "INTER": {
+      "candidate_count": 1,
+      "coin_id": "inter-milan-fan-token",
+      "name": "Inter Milan Fan Token",
+      "status": "unique_symbol"
+    },
+    "MDT": {
+      "candidate_count": 1,
+      "coin_id": "measurable-data-token",
+      "name": "Measurable Data",
+      "status": "unique_symbol"
+    },
+    "MNT": {
+      "candidate_count": 2,
+      "coin_id": "mantle",
+      "name": "Mantle",
+      "status": "known_asset"
+    },
+    "ON": {
+      "candidate_count": 1,
+      "coin_id": "orochi-network",
+      "name": "Orochi Network",
+      "status": "unique_symbol"
+    },
+    "PROM": {
+      "candidate_count": 1,
+      "coin_id": "prometeus",
+      "name": "Prom",
+      "status": "unique_symbol"
+    },
+    "PYBOBO": {
+      "candidate_count": 1,
+      "coin_id": "capybobo",
+      "name": "Capybobo",
+      "status": "unique_symbol"
+    },
+    "QNT": {
+      "candidate_count": 1,
+      "coin_id": "quant-network",
+      "name": "Quant",
+      "status": "unique_symbol"
+    },
+    "RAVE": {
+      "candidate_count": 1,
+      "coin_id": "ravedao",
+      "name": "RaveDAO",
+      "status": "unique_symbol"
+    },
+    "REN": {
+      "candidate_count": 1,
+      "coin_id": "republic-protocol",
+      "name": "Ren",
+      "status": "unique_symbol"
+    },
+    "RVV": {
+      "candidate_count": 1,
+      "coin_id": "astra-nova",
+      "name": "Astra Nova",
+      "status": "unique_symbol"
+    },
+    "SIREN": {
+      "candidate_count": 1,
+      "coin_id": "siren-2",
+      "name": "Siren",
+      "status": "unique_symbol"
+    },
+    "SWEAT": {
+      "candidate_count": 1,
+      "coin_id": "sweatcoin",
+      "name": "SWEAT",
+      "status": "unique_symbol"
+    },
+    "SYN": {
+      "candidate_count": 2,
+      "name": null,
+      "status": "unresolved"
+    },
+    "SYS": {
+      "candidate_count": 1,
+      "coin_id": "syscoin",
+      "name": "Syscoin",
+      "status": "unique_symbol"
+    },
+    "TBC": {
+      "candidate_count": 4,
+      "coin_id": "turingbitchain",
+      "name": "Turingbitchain",
+      "status": "known_asset"
+    },
+    "TLM": {
+      "candidate_count": 1,
+      "coin_id": "alien-worlds",
+      "name": "Alien Worlds",
+      "status": "unique_symbol"
+    },
+    "UMXM": {
+      "candidate_count": 1,
+      "coin_id": "manadia",
+      "name": "Manadia",
+      "status": "unique_symbol"
+    },
+    "UNA": {
+      "candidate_count": 1,
+      "coin_id": "unagi-token",
+      "name": "Unagi Token",
+      "status": "unique_symbol"
+    },
+    "UPC": {
+      "candidate_count": 1,
+      "coin_id": "upcx",
+      "name": "UPCX",
+      "status": "unique_symbol"
+    },
+    "VANRY": {
+      "candidate_count": 1,
+      "coin_id": "vanar-chain",
+      "name": "Vanar Chain",
+      "status": "unique_symbol"
+    },
+    "VENOM": {
+      "candidate_count": 2,
+      "coin_id": "venom",
+      "name": "Venom",
+      "status": "exact_id"
+    },
+    "XAVA": {
+      "candidate_count": 1,
+      "coin_id": "avalaunch",
+      "name": "Avalaunch",
+      "status": "unique_symbol"
+    },
+    "ZEREBRO": {
+      "candidate_count": 1,
+      "coin_id": "zerebro",
+      "name": "Zerebro",
+      "status": "unique_symbol"
+    },
+    "ZEX": {
+      "candidate_count": 1,
+      "coin_id": "zeta",
+      "name": "Zeta",
+      "status": "unique_symbol"
+    },
+    "ZIL": {
+      "candidate_count": 1,
+      "coin_id": "zilliqa",
+      "name": "Zilliqa",
+      "status": "unique_symbol"
+    }
+  },
+  "updated_at": "2026-07-25T12:34:22Z"
+}
