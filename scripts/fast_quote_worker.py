@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -23,8 +24,8 @@ def main() -> int:
 
     refresher = FastQuoteRefresher()
     summary = refresher.refresh(args.snapshot_path, route_limit=args.route_limit)
-    print(json.dumps(summary, sort_keys=True))
-    return 0 if summary.get("status") == "ok" else 1
+    print(json.dumps(summary, sort_keys=True), flush=True)
+    os._exit(0 if summary.get("status") == "ok" else 1)
 
 
 if __name__ == "__main__":
