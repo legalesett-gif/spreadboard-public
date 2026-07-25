@@ -169,7 +169,7 @@ class RefreshLoop:
             "--snapshot-path",
             str(SNAPSHOT_PATH),
             "--route-limit",
-            os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "6"),
+            str(min(6, int(os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "6")))),
         ]
         try:
             result = subprocess.run(
@@ -221,6 +221,8 @@ def main() -> int:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8200"))
     interval = float(os.environ.get("SPREADBOARD_REFRESH_SECONDS", "300"))
+    if _env_bool("SPREADBOARD_PUBLIC_MODE") or _env_bool("SPREADBOARD_LIGHTWEIGHT_MODE"):
+        interval = max(600.0, interval)
     board_path = Path(os.environ.get("SPREADBOARD_BOARD_PATH", str(board.DEFAULT_BOARD_PATH)))
     _seed_public_caches()
     refresh_loop = RefreshLoop(interval)
