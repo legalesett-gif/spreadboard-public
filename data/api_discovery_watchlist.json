@@ -1,0 +1,46 @@
+{
+  "schema": "spreadarb.api_discovery.watchlist.v1",
+  "updated_at": "2026-05-23T00:00:00Z",
+  "tokens": [
+    {
+      "symbol": "ETH",
+      "identity_key": "asset:eth",
+      "decimals": 18,
+      "cex_enabled": true,
+      "dex_enabled": true,
+      "evm_contracts": {
+        "1": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+      },
+      "solana_mint": "So11111111111111111111111111111111111111112",
+      "solana_decimals": 9
+    },
+    {
+      "symbol": "BTC",
+      "identity_key": "asset:btc",
+      "decimals": 8,
+      "cex_enabled": true,
+      "dex_enabled": true,
+      "evm_contracts": {
+        "1": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"
+      }
+    },
+    {
+      "symbol": "SOL",
+      "identity_key": "asset:sol",
+      "decimals": 9,
+      "cex_enabled": true,
+      "dex_enabled": true,
+      "solana_mint": "So11111111111111111111111111111111111111112",
+      "solana_decimals": 9
+    },
+    {
+      "symbol": "JUP",
+      "identity_key": "asset:jup",
+      "decimals": 6,
+      "cex_enabled": true,
+      "dex_enabled": true,
+      "solana_mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+      "solana_decimals": 6
+    }
+  ]
+}

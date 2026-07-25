@@ -1,0 +1,165 @@
+{
+  "attestations": [
+    {
+      "blockers": [
+        "short_market_not_margin_capable"
+      ],
+      "checked_at": "2026-06-20T19:06:01Z",
+      "checks": [
+        "fresh_quote_depth",
+        "identity_verified",
+        "market_precision_checked",
+        "order_size_limits_checked"
+      ],
+      "details": {
+        "base_qty": "0",
+        "current_entry_spread_pct": "",
+        "identity": {
+          "checks": [
+            "long:Mexc:base_matches:BULLA",
+            "long:Mexc:quote_sane:USDT",
+            "long:Mexc:symbol_id_matches:BULLA/USDT:BULLAUSDT",
+            "short:Kucoin:base_matches:BULLA",
+            "short:Kucoin:quote_sane:USDT",
+            "short:Kucoin:symbol_id_matches:BULLA/USDT:BULLA-USDT",
+            "shared_contract:0x595e21b20e78674f8a64c1566a20b2b316bc3511"
+          ],
+          "long_contracts": [
+            "0x595e21b20e78674f8a64c1566a20b2b316bc3511"
+          ],
+          "short_contracts": [
+            "0x595e21b20e78674f8a64c1566a20b2b316bc3511"
+          ],
+          "status": "verified"
+        },
+        "long_symbol": "BULLA/USDT",
+        "max_leg_usd": "30",
+        "short_symbol": "BULLA/USDT"
+      },
+      "executor": "live_auto_entry_spot_isolated_margin_v1",
+      "expires_at": "2026-06-20T19:10:01Z",
+      "identity_key": "contract:0x595e21b20e78674f8a64c1566a20b2b316bc3511",
+      "long_market_type": "Spot",
+      "long_venue": "Mexc",
+      "route_key": "BULLA|Mexc|Spot|Kucoin|Spot",
+      "short_market_type": "Spot",
+      "short_venue": "Kucoin",
+      "status": "blocked",
+      "token": "BULLA"
+    },
+    {
+      "blockers": [
+        "short_market_not_margin_capable"
+      ],
+      "checked_at": "2026-06-20T19:06:33Z",
+      "checks": [
+        "fresh_quote_depth",
+        "identity_verified",
+        "market_precision_checked",
+        "order_size_limits_checked"
+      ],
+      "details": {
+        "base_qty": "0",
+        "current_entry_spread_pct": "",
+        "identity": {
+          "checks": [
+            "long:Bitget:base_matches:MAPO",
+            "long:Bitget:quote_sane:USDT",
+            "long:Bitget:symbol_id_matches:MAPO/USDT:MAPOUSDT",
+            "short:Kucoin:base_matches:MAPO",
+            "short:Kucoin:quote_sane:USDT",
+            "short:Kucoin:symbol_id_matches:MAPO/USDT:MAPO-USDT",
+            "operator_identity_allowlist"
+          ],
+          "long_contracts": [],
+          "short_contracts": [],
+          "status": "verified"
+        },
+        "long_symbol": "MAPO/USDT",
+        "max_leg_usd": "30",
+        "short_symbol": "MAPO/USDT"
+      },
+      "executor": "live_auto_entry_spot_isolated_margin_v1",
+      "expires_at": "2026-06-20T19:10:33Z",
+      "identity_key": "operator_allowlist:MAPO",
+      "long_market_type": "Spot",
+      "long_venue": "Bitget",
+      "route_key": "MAPO|Bitget|Spot|Kucoin|Spot",
+      "short_market_type": "Spot",
+      "short_venue": "Kucoin",
+      "status": "blocked",
+      "token": "MAPO"
+    },
+    {
+      "blockers": [
+        "short_market_not_margin_capable"
+      ],
+      "checked_at": "2026-06-20T19:06:51Z",
+      "checks": [
+        "fresh_quote_depth",
+        "identity_verified",
+        "market_precision_checked",
+        "order_size_limits_checked"
+      ],
+      "details": {
+        "base_qty": "0",
+        "current_entry_spread_pct": "",
+        "identity": {
+          "checks": [
+            "long:Mexc:base_matches:MAPO",
+            "long:Mexc:quote_sane:USDT",
+            "long:Mexc:symbol_id_matches:MAPO/USDT:MAPOUSDT",
+            "short:Kucoin:base_matches:MAPO",
+            "short:Kucoin:quote_sane:USDT",
+            "short:Kucoin:symbol_id_matches:MAPO/USDT:MAPO-USDT",
+            "operator_identity_allowlist"
+          ],
+          "long_contracts": [],
+          "short_contracts": [],
+          "status": "verified"
+        },
+        "long_symbol": "MAPO/USDT",
+        "max_leg_usd": "30",
+        "short_symbol": "MAPO/USDT"
+      },
+      "executor": "live_auto_entry_spot_isolated_margin_v1",
+      "expires_at": "2026-06-20T19:10:51Z",
+      "identity_key": "operator_allowlist:MAPO",
+      "long_market_type": "Spot",
+      "long_venue": "Mexc",
+      "route_key": "MAPO|Mexc|Spot|Kucoin|Spot",
+      "short_market_type": "Spot",
+      "short_venue": "Kucoin",
+      "status": "blocked",
+      "token": "MAPO"
+    },
+    {
+      "blockers": [
+        "preflight_failed:ExchangeUnavailable:symbol_not_found:Bitget:TOWN"
+      ],
+      "checked_at": "2026-06-20T19:06:51Z",
+      "checks": [],
+      "executor": "live_auto_entry_spot_isolated_margin_v1",
+      "expires_at": "2026-06-20T19:10:51Z",
+      "identity_key": null,
+      "long_market_type": "Spot",
+      "long_venue": "Gate",
+      "route_key": "TOWN|Gate|Spot|Bitget|Spot",
+      "short_market_type": "Spot",
+      "short_venue": "Bitget",
+      "status": "failed",
+      "token": "TOWN"
+    }
+  ],
+  "filters": {
+    "allowed_short_venues_only": true,
+    "limit": 25,
+    "min_depth_weighted_spread_pct": "10",
+    "min_executable_spread_pct": "10",
+    "spot_spot_only": true
+  },
+  "input_row_count": 65,
+  "schema": "spreadarb.api_discovery.executor_attestations.v1",
+  "selected_row_count": 4,
+  "updated_at": "2026-06-20T19:07:12Z"
+}

@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: spreadboard-public
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile.spreadboard
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: SPREADBOARD_PUBLIC_MODE
+        value: "1"
+      - key: SPREADBOARD_REFRESH_SECONDS
+        value: "300"
+      - key: SPREADBOARD_DATA_DIR
+        value: /app/runtime
