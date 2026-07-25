@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlencode, urlparse
+import urllib.request
 
 import click
 
@@ -29,6 +30,12 @@ _MARKET_CACHE_TTL_SECONDS = 20.0
 _MARKET_CACHE_LOCK = threading.Lock()
 _MARKET_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 _MARKET_CACHE_INFLIGHT: dict[tuple[Any, ...], threading.Event] = {}
+_PUBLIC_INTEL_FEED_URL = os.environ.get(
+    "SPREADBOARD_PUBLIC_INTEL_URL",
+    "https://gist.githubusercontent.com/legalesett-gif/"
+    "b348e50f10b0ad7de8b71fd619ea7151/raw/spreadboard-community-feed.json",
+)
+_PUBLIC_INTEL_FEED_CACHE: tuple[float, dict[str, Any]] | None = None
 
 DISPLAY_LABELS = {
     "available_on_pair_page": "Available on pair page",
@@ -617,36 +624,184 @@ def _public_mode() -> bool:
 
 
 def _public_intel_payload(data: dict[str, Any], board_path: Path) -> dict[str, Any]:
-    """Exclude operator-local community artifacts from an internet-facing demo."""
+    """Join anonymous community facts to the current canonical market board."""
 
+    feed = _load_public_intel_feed()
+    if not feed:
+        result = dict(data)
+        for key in (
+            "action_queue",
+            "community",
+            "community_insights",
+            "hot_symbols",
+            "question_patterns",
+            "recent_events",
+            "route_reality",
+        ):
+            result[key] = [] if isinstance(result.get(key), list) else {}
+        result["latest_brief"] = {
+            "status": "unavailable",
+            "title": "Anonymous feed unavailable",
+            "body": "The market board remains live while the community bridge reconnects.",
+        }
+        result["source_freshness"] = {
+            "canonical_api": api_source_health(board_path, {}).get("canonical_api") or {},
+            "telegram": {"status": "unavailable", "detail": "Anonymous bridge reconnecting."},
+        }
+        result["mode"] = "public_anonymous_intel"
+        return result
+
+    market = api_spreads.load_spreads(board_path=board_path, limit=None, include_stale=False)
+    groups = {
+        str(group.get("token") or ""): group
+        for group in market.get("groups") or []
+    }
+    feed_age = max(
+        0.0,
+        (time.time() * 1_000_000 - (_float_or_none(feed.get("generated_at_us")) or 0.0))
+        / 60_000_000.0,
+    )
+    hot = []
+    reality = []
+    for item in feed.get("hot_symbols") or []:
+        if not isinstance(item, dict) or not item.get("symbol"):
+            continue
+        symbol = str(item.get("symbol"))
+        group = groups.get(symbol)
+        best = _public_intel_best_route(group)
+        hot.append({**item, "best_board": best})
+        reality.append(_public_intel_route_reality(symbol, group))
+    recent = {}
+    for bucket, rows in (feed.get("recent_events") or {}).items():
+        recent[bucket] = [
+            {**row, "age_min": (_float_or_none(row.get("age_min")) or 0.0) + feed_age}
+            for row in rows
+            if isinstance(row, dict)
+        ]
+    action_queue = []
+    for item in hot[:8]:
+        best = item.get("best_board") or {}
+        action_queue.append(
+            {
+                "symbol": item.get("symbol"),
+                "status": "inspect_pair" if best else "watch",
+                "href": best.get("pair_url") or f"/token/{item.get('symbol')}",
+                "board_href": "/markets",
+                "route_line": best.get("route_line") or "Community signal; no live route match",
+                "reason": (
+                    "Lead analyst signal joined to live markets"
+                    if item.get("lead_analyst_count")
+                    else "Anonymous community activity joined to live markets"
+                ),
+                "spread_pct": best.get("open_spread_pct"),
+                "funding_24h_pct": best.get("funding_24h_pct"),
+                "freshness": best.get("freshness") or "community_only",
+                "next_action": "inspect_pair" if best else "watch",
+                "badges": ["lead analyst"] if item.get("lead_analyst_count") else ["community"],
+                "blockers": [],
+            }
+        )
     result = dict(data)
-    for key in (
-        "action_queue",
-        "change_digest",
-        "community",
-        "community_insights",
-        "hot_symbols",
-        "question_patterns",
-        "recent_events",
-        "route_reality",
-    ):
-        result[key] = [] if isinstance(result.get(key), list) else {}
-    result["latest_brief"] = {
-        "status": "unavailable",
-        "title": "No public community brief",
-        "summary": "Private community messages are not published.",
-    }
-    result["signal_lifecycle"] = {
-        "status": "unavailable",
-        "rows": [],
-        "reason": "Private Telegram activity is not published.",
-    }
-    result["source_freshness"] = {
-        "canonical_api": api_source_health(board_path, {}).get("canonical_api") or {},
-        "telegram": {"status": "not_connected", "detail": "Private messages are not published."},
-    }
-    result["mode"] = "public_read_only_market_demo"
+    result.update(
+        {
+            "mode": "public_anonymous_intel",
+            "hot_symbols": hot,
+            "recent_events": recent,
+            "route_reality": reality,
+            "action_queue": action_queue,
+            "question_patterns": [],
+            "community": {},
+            "community_insights": {},
+            "latest_brief": {
+                "status": "fresh" if feed_age <= 10 else "stale",
+                "title": "Anonymous community feed",
+                "age_min": feed_age,
+                "body": (
+                    "Structured symbols, routes, spreads, funding and venue context only. "
+                    "Message text and identities are never published."
+                ),
+            },
+            "profile_shell": intel.build_profile_shell(hot, reality),
+            "source_freshness": {
+                "canonical_api": (market.get("source_health") or {}).get("canonical_api") or {},
+                "telegram": {
+                    "status": "fresh" if feed_age <= 10 else "stale",
+                    "age_min": feed_age,
+                    "detail": "Anonymous structured feed; no messages or identities.",
+                },
+            },
+        }
+    )
     return result
+
+
+def _load_public_intel_feed() -> dict[str, Any] | None:
+    global _PUBLIC_INTEL_FEED_CACHE
+    now = time.monotonic()
+    if _PUBLIC_INTEL_FEED_CACHE and now - _PUBLIC_INTEL_FEED_CACHE[0] <= 30:
+        return _PUBLIC_INTEL_FEED_CACHE[1]
+    try:
+        request = urllib.request.Request(
+            _PUBLIC_INTEL_FEED_URL,
+            headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"},
+        )
+        with urllib.request.urlopen(request, timeout=3) as response:
+            feed = json.load(response)
+    except Exception:  # noqa: BLE001
+        return _PUBLIC_INTEL_FEED_CACHE[1] if _PUBLIC_INTEL_FEED_CACHE else None
+    if not isinstance(feed, dict) or not (feed.get("privacy") or {}).get("anonymous"):
+        return None
+    _PUBLIC_INTEL_FEED_CACHE = (now, feed)
+    return feed
+
+
+def _public_intel_best_route(group: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not group:
+        return None
+    row = group.get("best_route") or {}
+    route_key = str(row.get("route_key") or "")
+    return {
+        "kind": row.get("route_kind"),
+        "route_line": (
+            f"{row.get('long_venue') or '?'} {row.get('long_market_type') or '?'} "
+            f"→ {row.get('short_venue') or '?'} {row.get('short_market_type') or '?'}"
+        ),
+        "pair_url": f"/pair/{board.route_key_url(route_key)}",
+        "open_spread_pct": row.get("executable_spread_pct"),
+        "funding_24h_pct": row.get("funding_24h_pct"),
+        "freshness": row.get("freshness") or "fresh",
+    }
+
+
+def _public_intel_route_reality(
+    symbol: str,
+    group: dict[str, Any] | None,
+) -> dict[str, Any]:
+    routes = []
+    for row in (group or {}).get("routes") or []:
+        route_key = str(row.get("route_key") or "")
+        routes.append(
+            {
+                "kind": row.get("route_kind"),
+                "pair_url": f"/pair/{board.route_key_url(route_key)}",
+                "open_spread_pct": row.get("executable_spread_pct"),
+                "funding_24h_pct": row.get("funding_24h_pct"),
+                "freshness": row.get("freshness") or "fresh",
+            }
+        )
+    return {
+        "symbol": symbol,
+        "status": "live_match" if routes else "community_only",
+        "routes": routes[:3],
+        "top_blockers": [],
+        "next_actions": ["inspect pair"] if routes else ["watch for route"],
+        "volatility": "available on pair page" if routes else "not enough data",
+        "okx_dex_identity": (
+            "route available"
+            if any("DEX" in str(row.get("kind") or "") for row in routes)
+            else "not applicable"
+        ),
+    }
 
 
 def _intel_params(query: dict[str, list[str]]) -> dict[str, Any]:
@@ -1262,8 +1417,8 @@ def render_market_token_group(group: dict[str, Any]) -> str:
     name = group.get("token_name") or "Metadata pending"
     venues = group.get("venues") or []
     kinds = group.get("route_kinds") or []
-    funding = group.get("best_funding_24h_pct")
-    funding_route = group.get("best_funding_route") or {}
+    funding = best.get("funding_24h_pct")
+    funding_route = best
     funding_pair = " → ".join(
         venue
         for venue in (
@@ -1290,9 +1445,9 @@ def render_market_token_group(group: dict[str, Any]) -> str:
           <em>{fmt_pct(best.get('depth_weighted_spread_pct'))} VWAP</em>
         </div>
         <div class="group-number">
-          <span>Funding 24h</span>
+          <span>Best-route funding</span>
           <strong>{fmt_signed_pct(funding, digits=3) if funding is not None else '—'}</strong>
-          <em>{h(funding_pair) if funding_pair else 'not applicable'}</em>
+          <em>{h(funding_economic_label(funding, best))} · {h(funding_pair) if funding_pair else 'not applicable'}</em>
         </div>
         <div class="group-routes">
           <span>Routes</span>
@@ -1339,6 +1494,7 @@ def render_market_group_route(row: dict[str, Any]) -> str:
       </div>
       <div class="route-funding">
         <strong>{fmt_signed_pct(row.get('funding_24h_pct'), digits=3) if row.get('funding_24h_pct') is not None else '—'}</strong>
+        <b>{h(funding_economic_label(row.get('funding_24h_pct'), row))}</b>
         <span>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)} / {fmt_signed_pct(row.get('short_funding_pct'), digits=4)}</span>
         <em>{h(funding_cadence_pair(row))}</em>
       </div>
@@ -1372,7 +1528,7 @@ def render_market_filter_bar(data: dict[str, Any], query: dict[str, list[str]]) 
     selected_limit = str(int(_query_float(query, "limit", api_spreads.DEFAULT_LIMIT) or api_spreads.DEFAULT_LIMIT))
     summary = data.get("summary") or {}
     kind_counts = data.get("route_kind_counts") or {}
-    kind_tabs = [("", "All routes")] + [(item.kind, item.label) for item in board.ROUTE_KINDS]
+    kind_tabs = [(item.kind, item.label) for item in board.ROUTE_KINDS] + [("", "All routes")]
     exchange_options = data.get("exchange_options") or []
     return f"""
     <section class="market-filter-panel terminal-filter-panel">
@@ -1487,7 +1643,7 @@ def render_market_row(row: dict[str, Any]) -> str:
 
 def render_source_count_chip(row: dict[str, Any]) -> str:
     source_name = str(row.get("source_name") or "")
-    if source_name and source_name != "community_verification":
+    if source_name and source_name != "legacy_public_verification":
         return f"<em>{h(source_name[:12])}</em>"
     return ""
 
@@ -1574,6 +1730,22 @@ def funding_24h_value(row: dict[str, Any]) -> float | None:
         return value
     apr = _float_or_none(row.get("funding_apr_pct"))
     return apr / 365.0 if apr is not None else None
+
+
+def funding_economic_label(value: Any, row: dict[str, Any]) -> str:
+    if not any(
+        row.get(f"{side}_market_type") == "Futures"
+        for side in ("long", "short")
+    ):
+        return "no futures funding"
+    amount = _float_or_none(value)
+    if amount is None:
+        return "funding pending"
+    if amount > 0:
+        return "receive at current direction"
+    if amount < 0:
+        return "pay at current direction"
+    return "neutral at current direction"
 
 
 def render_market_dw(row: dict[str, Any]) -> str:
@@ -2646,7 +2818,11 @@ def render_spread_history_chart(history: list[dict[str, Any]]) -> str:
         ("Entry", "entry", _chart_points(history, "quote_ts_us", "executable_spread_pct", 1_000)),
         ("Exit", "exit", _chart_points(history, "quote_ts_us", "exit_spread_pct", 1_000)),
     ]
-    return render_dual_chart_svg(series, "Entry and exit spread history")
+    return render_dual_chart_svg(
+        series,
+        "Entry and exit spread history",
+        independent_lanes=True,
+    )
 
 
 def render_funding_history_chart(
@@ -2688,41 +2864,69 @@ def render_dual_chart_svg(
     label: str,
     *,
     compact: bool = False,
+    independent_lanes: bool = False,
 ) -> str:
     available = [(name, class_name, points) for name, class_name, points in series if points]
-    if not available or max((len(points) for _, _, points in available), default=0) < 2:
-        return '<div class="chart-data-empty">Not enough captured history yet.</div>'
+    captured = max((len(points) for _, _, points in available), default=0)
+    if not available or captured < 2:
+        return (
+            '<div class="chart-data-empty">'
+            f"Collecting history: {captured} of 2 observations captured."
+            "</div>"
+        )
     all_points = [point for _, _, points in available for point in points]
     min_ts = min(point[0] for point in all_points)
     max_ts = max(point[0] for point in all_points)
-    values = [point[1] for point in all_points]
-    low = min(values)
-    high = max(values)
     if max_ts == min_ts:
         max_ts += 1
-    if high == low:
-        high += 1
-        low -= 1
     width = 900.0
     height = 170.0 if compact else 330.0
     left, right, top, bottom = 54.0, 18.0, 18.0, 28.0
     usable_w = width - left - right
     usable_h = height - top - bottom
     grid = []
-    for index in range(5):
-        y = top + (usable_h * index / 4)
-        value = high - ((high - low) * index / 4)
-        grid.append(
-            f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}"></line>'
-            f'<text x="{left - 7}" y="{y + 4:.1f}">{value:.3f}%</text>'
-        )
     lines = []
     legend = []
-    for name, class_name, points in available:
+    lane_ranges: list[tuple[float, float, float, float]] = []
+    if independent_lanes:
+        lane_height = usable_h / len(available)
+        for lane_index, (_, _, points) in enumerate(available):
+            values = [point[1] for point in points]
+            low, high = min(values), max(values)
+            if high == low:
+                padding = max(abs(high) * 0.002, 0.001)
+                low -= padding
+                high += padding
+            lane_top = top + lane_index * lane_height + 7
+            lane_bottom = top + (lane_index + 1) * lane_height - 7
+            lane_ranges.append((low, high, lane_top, lane_bottom))
+            for grid_index in range(3):
+                y = lane_top + (lane_bottom - lane_top) * grid_index / 2
+                value = high - (high - low) * grid_index / 2
+                grid.append(
+                    f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}"></line>'
+                    f'<text x="{left - 7}" y="{y + 4:.1f}">{value:.3f}%</text>'
+                )
+    else:
+        values = [point[1] for point in all_points]
+        low, high = min(values), max(values)
+        if high == low:
+            high += 1
+            low -= 1
+        lane_ranges = [(low, high, top, top + usable_h) for _ in available]
+        for index in range(5):
+            y = top + (usable_h * index / 4)
+            value = high - ((high - low) * index / 4)
+            grid.append(
+                f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}"></line>'
+                f'<text x="{left - 7}" y="{y + 4:.1f}">{value:.3f}%</text>'
+            )
+    for series_index, (name, class_name, points) in enumerate(available):
+        low, high, lane_top, lane_bottom = lane_ranges[series_index]
         coordinates = []
         for timestamp, value in points:
             x = left + ((timestamp - min_ts) / (max_ts - min_ts)) * usable_w
-            y = top + ((high - value) / (high - low)) * usable_h
+            y = lane_top + ((high - value) / (high - low)) * (lane_bottom - lane_top)
             coordinates.append(f"{x:.1f},{y:.1f}")
         lines.append(
             f'<polyline class="{h(class_name)}" points="{" ".join(coordinates)}"></polyline>'
@@ -4444,6 +4648,8 @@ def render_hot_symbol(item: dict[str, Any]) -> str:
         tags.append(f"<span>{h(', '.join(item.get('chains') or []))}</span>")
     if item.get("contract_count"):
         tags.append(f"<span>{h(item.get('contract_count'))} contract</span>")
+    if item.get("lead_analyst_count"):
+        tags.append(f"<span>Lead analyst {h(item.get('lead_analyst_count'))}</span>")
     href = best.get("pair_url") or f"/token/{h(item.get('symbol'))}"
     return f"""
     <article class="hot-card">
@@ -4453,7 +4659,7 @@ def render_hot_symbol(item: dict[str, Any]) -> str:
       </a>
       <div class="hot-score">
         <b>{fmt_pct(best.get('open_spread_pct'))}</b>
-        <em>{fmt_signed_pct(best.get('funding_apr_pct'), digits=0)} APR</em>
+        <em>{fmt_signed_pct(best.get('funding_24h_pct') if best.get('funding_24h_pct') is not None else ((_float_or_none(best.get('funding_apr_pct')) or 0.0) / 365.0), digits=3)} funding 24h</em>
       </div>
       <p>{h(route)}</p>
       <div class="tag-row">{''.join(tags) or '<span>telegram only</span>'}</div>
@@ -4485,7 +4691,7 @@ def render_action_queue(rows: list[dict[str, Any]]) -> str:
               </div>
               <div class="action-metrics">
                 <span>Spread <strong>{fmt_pct(item.get('spread_pct'))}</strong></span>
-                <span>Funding <strong>{fmt_signed_pct(item.get('funding_apr_pct'), digits=0)} APR</strong></span>
+                <span>Funding <strong>{fmt_signed_pct(item.get('funding_24h_pct') if item.get('funding_24h_pct') is not None else ((_float_or_none(item.get('funding_apr_pct')) or 0.0) / 365.0), digits=3)} / 24h</strong></span>
                 <span>Fresh <strong>{label_text(item.get('freshness'))}</strong></span>
               </div>
               <div class="action-next">
@@ -5743,9 +5949,15 @@ def render_funding_history_dialog(detail: dict[str, Any]) -> str:
             </tr>
             """
         )
-    empty = (
-        '<tr><td colspan="5">Funding history is not available for this route yet.</td></tr>'
-    )
+    statuses = {
+        str(long_leg.get("funding_history_status") or ""),
+        str(short_leg.get("funding_history_status") or ""),
+    }
+    if "current_only" in statuses:
+        empty_text = "Current funding is available, but the venue returned no settled history."
+    else:
+        empty_text = "Historical funding is temporarily unavailable; current and projected 24h funding remain shown above."
+    empty = f'<tr><td colspan="5">{h(empty_text)}</td></tr>'
     return f"""
     <dialog class="funding-history-dialog" data-funding-dialog>
       <div class="funding-history-head">

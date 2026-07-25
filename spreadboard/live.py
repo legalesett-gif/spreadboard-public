@@ -509,6 +509,9 @@ def fetch_funding_24h(exchange_id: str | None, symbol: str | None) -> dict[str, 
 
 
 def _fetch_funding_24h_uncached(exchange_id: str, symbol: str) -> dict[str, Any]:
+    native = _fetch_native_funding_24h(exchange_id, symbol)
+    if native is not None:
+        return native
     try:
         import ccxt
 
@@ -560,6 +563,122 @@ def _fetch_funding_24h_uncached(exchange_id: str, symbol: str) -> dict[str, Any]
         "funding_interval_assumed": interval is None,
         "next_funding_ts_us": next_funding_ts_us,
         "projected_24h_pct": _project_funding_24h(current_rate, interval),
+        "history": history,
+        "samples": len(history),
+    }
+
+
+def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] | None:
+    """Use lightweight public endpoints for venues whose CCXT bootstrap is slow."""
+
+    base = str(symbol).split("/", 1)[0].upper()
+    now_ms = int(time.time() * 1000)
+    if exchange_id == "okx":
+        url = (
+            "https://www.okx.com/api/v5/public/funding-rate-history?"
+            + urllib.parse.urlencode({"instId": f"{base}-USDT-SWAP", "limit": "100"})
+        )
+        data = _public_json(url)
+        if data is None:
+            return None
+        if str(data.get("code")) != "0":
+            return {"status": "unavailable", "reason": "okx_funding_history_error"}
+        raw_rows = data.get("data") or []
+        history = _normalize_native_funding_rows(
+            raw_rows,
+            timestamp_key="fundingTime",
+            rate_key="realizedRate",
+            since_ms=now_ms - 24 * 3600 * 1000,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "bybit":
+        url = (
+            "https://api.bybit.com/v5/market/funding/history?"
+            + urllib.parse.urlencode(
+                {"category": "linear", "symbol": f"{base}USDT", "limit": "100"}
+            )
+        )
+        data = _public_json(url)
+        if data is None:
+            return None
+        if int(data.get("retCode") or 0) != 0:
+            return {"status": "unavailable", "reason": "bybit_funding_history_error"}
+        raw_rows = ((data.get("result") or {}).get("list") or [])
+        history = _normalize_native_funding_rows(
+            raw_rows,
+            timestamp_key="fundingRateTimestamp",
+            rate_key="fundingRate",
+            since_ms=now_ms - 24 * 3600 * 1000,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    return None
+
+
+def _public_json(url: str) -> dict[str, Any] | None:
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=max(2.0, ROUTE_PUBLIC_TIMEOUT_MS / 1000.0),
+        ) as response:
+            value = json.load(response)
+    except Exception:  # noqa: BLE001 - CCXT remains the fallback.
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _normalize_native_funding_rows(
+    rows: list[dict[str, Any]],
+    *,
+    timestamp_key: str,
+    rate_key: str,
+    since_ms: int,
+) -> list[dict[str, Any]]:
+    history = []
+    for row in rows:
+        timestamp_ms = _int_or_none(row.get(timestamp_key))
+        rate = _float_or_none(row.get(rate_key))
+        if timestamp_ms is None or rate is None or timestamp_ms < since_ms:
+            continue
+        history.append({"timestamp_ms": timestamp_ms, "rate_pct": rate * 100.0})
+    history.sort(key=lambda item: item["timestamp_ms"])
+    cumulative = 0.0
+    for item in history:
+        cumulative += item["rate_pct"]
+        item["cumulative_pct"] = cumulative
+    return history
+
+
+def _native_funding_result(
+    history: list[dict[str, Any]],
+    *,
+    exchange_id: str,
+) -> dict[str, Any]:
+    if not history:
+        return {
+            "status": "current_only",
+            "reason": f"no_recent_funding_history_rows:{exchange_id}",
+            "history": [],
+            "samples": 0,
+        }
+    interval = _infer_funding_interval_hours(history)
+    latest = history[-1]
+    next_funding_ts_us = None
+    if interval:
+        next_funding_ts_us = int(
+            (latest["timestamp_ms"] + interval * 3600 * 1000) * 1000
+        )
+    return {
+        "status": "ok",
+        "funding_24h_pct": sum(item["rate_pct"] for item in history),
+        "current_funding_pct": latest["rate_pct"],
+        "funding_interval_hours": interval,
+        "funding_interval_assumed": interval is None,
+        "next_funding_ts_us": next_funding_ts_us,
+        "projected_24h_pct": _project_funding_24h(latest["rate_pct"], interval),
         "history": history,
         "samples": len(history),
     }

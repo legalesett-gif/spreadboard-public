@@ -436,7 +436,7 @@ def _row_from_board(row: board.BoardRow) -> SpreadTerminalRow:
         route_kind=row.kind,
         source_group=source_group,
         source_label="Website verified",
-        source_name=row.source_tab or "community_verification",
+        source_name=row.source_tab or "legacy_public_verification",
         long_venue=row.long_venue,
         long_market_type=row.long_market_type,
         short_venue=row.short_venue,
@@ -587,7 +587,18 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
         grouped.setdefault(row.token, []).append(row)
     output: list[dict[str, Any]] = []
     for token, token_rows in grouped.items():
-        token_rows.sort(key=_row_sort_key, reverse=True)
+        # Expanded token routes are a spread comparison surface. Keep the
+        # ordering literal so a negative route can never outrank a positive one
+        # because of funding or depth.
+        token_rows.sort(
+            key=lambda row: (
+                _float_or_none(row.executable_spread_pct) or -999999.0,
+                _float_or_none(row.depth_weighted_spread_pct) or -999999.0,
+                _float_or_none(row.depth_usd) or 0.0,
+                -(row.age_min or 999999.0),
+            ),
+            reverse=True,
+        )
         routes = [_public_row(row) for row in token_rows]
         best = max(
             token_rows,
@@ -664,7 +675,7 @@ def _row_sort_key_dict(row: dict[str, Any]) -> tuple[float, float, float, float]
 
 def _route_dict_sort_value(row: dict[str, Any], sort_by: str) -> Any:
     if sort_by == "edge":
-        return abs(_float_or_none(row.get("executable_spread_pct")) or 0.0)
+        return _float_or_none(row.get("executable_spread_pct")) or 0.0
     if sort_by == "funding":
         return _float_or_none(row.get("funding_24h_pct")) or -999999.0
     if sort_by == "funding_abs":
@@ -719,7 +730,7 @@ def _normalize_sort(value: str | None) -> str:
 
 def _sort_value(row: SpreadTerminalRow, sort_by: str) -> Any:
     if sort_by == "edge":
-        return abs(_float_or_none(row.executable_spread_pct) or 0.0)
+        return _float_or_none(row.executable_spread_pct) or 0.0
     if sort_by == "funding":
         return _float_or_none(row.funding_24h_pct) or -999999.0
     if sort_by == "funding_abs":
