@@ -1659,6 +1659,7 @@ def render_market_row(row: dict[str, Any]) -> str:
       <div class="market-token-cell">
         <div class="market-token-head">
           <a class="market-row-link" href="{h(row.get('href') or '/markets')}"><strong>{h(row.get('token'))}</strong>{render_source_count_chip(row)}</a>
+          {render_mirage_badge(row)}
           {render_alert_draft_button(row, alert_type='token_spread', compact=True)}
         </div>
         <span>{h(source)} · {h(route_kind_display(row.get('route_kind')))}</span>
@@ -1680,6 +1681,26 @@ def render_market_row(row: dict[str, Any]) -> str:
       </div>
     </article>
     """
+
+
+def render_mirage_badge(row: dict[str, Any]) -> str:
+    """Badge rows whose route feasibility or identity is unproven.
+
+    These rows used to be hidden outright, which silently removed real
+    opportunities (all MEXC routes and most Futures-Spot routes). They are now
+    shown and flagged instead, so the spread is visible but clearly marked as
+    not-yet-verified.
+    """
+
+    if not row.get("mirage_guarded"):
+        return ""
+    reasons = [
+        str(item).split("mirage_guard:", 1)[-1].replace("_", " ")
+        for item in row.get("blockers") or []
+        if str(item).startswith("mirage_guard:")
+    ]
+    title = "; ".join(reasons) or "route feasibility unproven"
+    return f'<span class="mirage-badge" title="{h(title)}">unproven</span>'
 
 
 def render_source_count_chip(row: dict[str, Any]) -> str:
@@ -6636,6 +6657,7 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .market-funding-cell {{ gap: 2px; }}
 .market-funding-cell strong {{ font-size: 13px; }}
 .market-funding-cell span {{ color: #52635e; font-size: 10px; white-space: nowrap; }}
+.mirage-badge {{ display: inline-flex; align-items: center; margin-left: 6px; padding: 0 6px; border-radius: 5px; background: var(--yellow-chip, #ffe89a); color: var(--dark, #1c1c1c); font-size: 10px; font-weight: 900; letter-spacing: 0.02em; text-transform: uppercase; cursor: help; }}
 .market-status {{ width: fit-content; min-height: 26px; display: inline-flex; align-items: center; padding: 0 7px; border-radius: 5px; background: white; color: #52635e; font-size: 11px; font-weight: 900; }}
 .market-status.watch_only, .market-status.executor_ready {{ background: var(--accent-soft); color: var(--accent-ink); }}
 .market-status.setup_needed {{ background: var(--yellow-chip); color: var(--dark); }}

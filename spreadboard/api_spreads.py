@@ -83,6 +83,7 @@ class SpreadTerminalRow:
     long_exchange_url: str | None = None
     short_exchange_url: str | None = None
     raw_source_kind: str | None = None
+    mirage_guarded: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -127,11 +128,27 @@ def load_spreads(
     )
     board_rows, board_meta = _load_board_rows(board_path, now=current_time)
     all_rows = _dedupe_rows(api_rows)
+    # Diagnostic: how DEX-sourced rows classify BEFORE retirement is applied.
+    # Futures-DEX is currently empty on the public board while discovery still
+    # reports DEX rows, so surface the raw distribution to pinpoint the loss.
+    dex_raw_kind_counts = dict(
+        sorted(
+            Counter(
+                row.route_kind
+                for row in all_rows
+                if row.route_kind.startswith("DEX-")
+            ).items()
+        )
+    )
     all_rows = [row for row in all_rows if row.route_kind not in RETIRED_ROUTE_KINDS]
     held_out = [row for row in all_rows if _is_mirage_guarded(row)]
-    ranked_rows = all_rows if include_unverified else [
-        row for row in all_rows if not _is_mirage_guarded(row)
-    ]
+    # Mirage-guarded rows are no longer hidden. They stay in the ranked set and
+    # carry a `mirage_guarded` flag so the UI can badge them as unproven rather
+    # than silently dropping real opportunities (MEXC and most Futures-Spot
+    # routes were being suppressed entirely). `include_unverified` is retained
+    # for API compatibility but no longer gates visibility.
+    _ = include_unverified
+    ranked_rows = all_rows
     public_universe = (
         ranked_rows
         if include_stale
@@ -219,6 +236,7 @@ def load_spreads(
             "canonical_api": {
                 **_public_source_health(api_meta),
                 "mirage_guarded_count": len(held_out),
+                "dex_raw_kind_counts": dex_raw_kind_counts,
             },
         },
         "exchange_options": _exchange_options(public_universe),
@@ -385,7 +403,11 @@ def _row_from_api(
         short_market_type=short_market_type,
         executable_spread_pct=_float_or_none(raw.get("executable_spread_pct")),
         depth_weighted_spread_pct=_float_or_none(raw.get("depth_weighted_spread_pct")),
-        displayed_open_spread_pct=None,
+        displayed_open_spread_pct=(
+            _float_or_none(raw.get("executable_spread_pct"))
+            if _float_or_none(raw.get("executable_spread_pct")) is not None
+            else _float_or_none(raw.get("depth_weighted_spread_pct"))
+        ),
         funding_apr_pct=funding_apr,
         funding_daily_pct=(
             funding_daily
@@ -481,6 +503,7 @@ def _row_from_api(
             token=token,
         ),
         raw_source_kind=source_kind,
+        mirage_guarded=any(str(item).startswith("mirage_guard:") for item in blockers),
     )
 
 
