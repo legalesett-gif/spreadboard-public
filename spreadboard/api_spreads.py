@@ -275,6 +275,7 @@ def _load_api_discovery_rows(
         "executor_ready_count": len(payload.get("executor_ready_rows") or []),
         "expires_at": payload.get("expires_at"),
         "worker_status": ((payload.get("source_refresh") or {}).get("status")),
+        "fast_quote_refresh": payload.get("fast_quote_refresh"),
     }
 
 
@@ -289,6 +290,7 @@ def _public_source_health(meta: dict[str, Any]) -> dict[str, Any]:
             "api_discovered_count",
             "dex_discovered_count",
             "expires_at",
+            "fast_quote_refresh",
         )
         if meta.get(key) is not None
     }
