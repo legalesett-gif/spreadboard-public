@@ -602,14 +602,14 @@ def _route_mirage_reasons(
         abs(_float_or_none(raw.get("executable_spread_pct")) or 0.0),
         abs(_float_or_none(raw.get("depth_weighted_spread_pct")) or 0.0),
     )
-    if spread < 1.0:
-        return []
     reasons: list[str] = []
+    if short_market_type == "Spot" and long_market_type != "Spot":
+        reasons.append("mirage_guard:spot_short_inventory_unproven")
+    if spread < 1.0:
+        return reasons
     raw_blockers = {str(item) for item in raw.get("blockers") or []}
     if spread >= 5.0 and "identity_unverified" in raw_blockers:
         reasons.append("mirage_guard:high_dislocation_identity_unverified")
-    if short_market_type == "Spot" and long_market_type != "Spot":
-        reasons.append("mirage_guard:spot_short_inventory_unproven")
     if long_market_type == "Spot" and short_market_type == "Spot":
         compatibility = public_rails.transfer_compatibility(long_rails, short_rails)
         if compatibility.get("status") != "compatible":
