@@ -1458,7 +1458,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         <div class="group-number">
           <span>Best spread</span>
           <strong class="{spread_class(group.get('best_edge_pct'))}">{fmt_pct(group.get('best_edge_pct'))}</strong>
-          <em>{fmt_pct(best.get('depth_weighted_spread_pct'))} VWAP</em>
+          <em>{fmt_pct(best.get('executable_spread_pct'))} top book · $50 VWAP ranked</em>
         </div>
         <div class="group-number">
           <span>Best-route funding</span>
@@ -1518,8 +1518,8 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         <strong>{fmt_price(row.get('long_price'))}</strong><span>→</span><strong>{fmt_price(row.get('short_price'))}</strong>
       </div>
       <div class="route-edge">
-        <strong class="{spread_class(row.get('executable_spread_pct'))}">{fmt_pct(row.get('executable_spread_pct'))}</strong>
-        <span>{fmt_pct(row.get('depth_weighted_spread_pct'))} VWAP</span>
+        <strong class="{spread_class(row.get('depth_weighted_spread_pct'))}">{fmt_pct(row.get('depth_weighted_spread_pct'))}</strong>
+        <span>{fmt_pct(row.get('executable_spread_pct'))} top book</span>
       </div>
       <div class="route-funding">
         <strong>{fmt_signed_pct(shown_funding, digits=3) if shown_funding is not None else '—'}</strong>

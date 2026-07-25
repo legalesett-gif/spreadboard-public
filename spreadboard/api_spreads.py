@@ -664,6 +664,10 @@ def _summary(
             (_float_or_none(row.executable_spread_pct) or 0.0 for row in filtered),
             default=None,
         ),
+        "max_depth_weighted_spread_pct": max(
+            (_entrance_spread(row) for row in filtered),
+            default=None,
+        ),
         "max_abs_funding_apr_pct": max(
             (abs(_float_or_none(row.funding_apr_pct) or 0.0) for row in filtered),
             default=None,
@@ -706,13 +710,12 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
         grouped.setdefault(row.token, []).append(row)
     output: list[dict[str, Any]] = []
     for token, token_rows in grouped.items():
-        # Expanded token routes are a spread comparison surface. Keep the
-        # ordering literal so a negative route can never outrank a positive one
-        # because of funding or depth.
+        # The public entrance is the matched-size VWAP. A thin first level can
+        # remain visible as context, but it must never select or rank a route.
         token_rows.sort(
             key=lambda row: (
+                _entrance_spread(row),
                 _float_or_none(row.executable_spread_pct) or -999999.0,
-                _float_or_none(row.depth_weighted_spread_pct) or -999999.0,
                 _float_or_none(row.depth_usd) or 0.0,
                 -(row.age_min or 999999.0),
             ),
@@ -721,7 +724,7 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
         routes = [_public_row(row) for row in token_rows]
         best = max(
             token_rows,
-            key=lambda row: _float_or_none(row.executable_spread_pct) or -999999.0,
+            key=_entrance_spread,
         )
         funding_rows = [
             row for row in token_rows if _effective_funding_24h(row) is not None
@@ -747,7 +750,7 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
                 ),
                 "route_kinds": sorted({row.route_kind for row in token_rows}),
                 "best_route": _public_row(best),
-                "best_edge_pct": best.executable_spread_pct,
+                "best_edge_pct": _entrance_spread(best),
                 "best_funding_route": (
                     _public_row(best_funding) if best_funding is not None else None
                 ),
@@ -790,7 +793,7 @@ def _group_sort_value(group: dict[str, Any], sort_by: str) -> Any:
 
 
 def _row_sort_key_dict(row: dict[str, Any]) -> tuple[float, float, float, float]:
-    spread = max(0.0, _float_or_none(row.get("executable_spread_pct")) or 0.0)
+    spread = max(0.0, _entrance_spread_dict(row))
     funding = max(0.0, _float_or_none(row.get("funding_apr_pct")) or 0.0) / 10.0
     depth = min(_float_or_none(row.get("depth_usd")) or 0.0, 250_000.0) / 10_000.0
     return (spread + funding + depth, funding, spread, -(_float_or_none(row.get("age_min")) or 999999.0))
@@ -798,7 +801,7 @@ def _row_sort_key_dict(row: dict[str, Any]) -> tuple[float, float, float, float]
 
 def _route_dict_sort_value(row: dict[str, Any], sort_by: str) -> Any:
     if sort_by == "edge":
-        return _float_or_none(row.get("executable_spread_pct")) or 0.0
+        return _entrance_spread_dict(row)
     if sort_by == "funding":
         return _effective_funding_24h_dict(row) or -999999.0
     if sort_by == "funding_abs":
@@ -823,7 +826,7 @@ def _dedupe_rows(rows: list[SpreadTerminalRow]) -> list[SpreadTerminalRow]:
 
 def _row_sort_key(row: SpreadTerminalRow) -> tuple[float, float, float, float]:
     fresh_bonus = 10_000.0 if row.freshness == "fresh" else 0.0
-    spread = max(0.0, _float_or_none(row.executable_spread_pct) or 0.0)
+    spread = max(0.0, _entrance_spread(row))
     funding = max(0.0, _float_or_none(row.funding_apr_pct) or 0.0) / 10.0
     depth = min(_float_or_none(row.depth_usd) or 0.0, 250_000.0) / 10_000.0
     return (fresh_bonus + spread + funding + depth, funding, spread, -(row.age_min or 999999.0))
@@ -853,7 +856,7 @@ def _normalize_sort(value: str | None) -> str:
 
 def _sort_value(row: SpreadTerminalRow, sort_by: str) -> Any:
     if sort_by == "edge":
-        return _float_or_none(row.executable_spread_pct) or 0.0
+        return _entrance_spread(row)
     if sort_by == "funding":
         return _effective_funding_24h(row) or -999999.0
     if sort_by == "funding_abs":
@@ -865,6 +868,20 @@ def _sort_value(row: SpreadTerminalRow, sort_by: str) -> Any:
     if sort_by == "token":
         return row.token
     return _row_sort_key(row)
+
+
+def _entrance_spread(row: SpreadTerminalRow) -> float:
+    depth_spread = _float_or_none(row.depth_weighted_spread_pct)
+    if depth_spread is not None:
+        return depth_spread
+    return _float_or_none(row.executable_spread_pct) or -999999.0
+
+
+def _entrance_spread_dict(row: dict[str, Any]) -> float:
+    depth_spread = _float_or_none(row.get("depth_weighted_spread_pct"))
+    if depth_spread is not None:
+        return depth_spread
+    return _float_or_none(row.get("executable_spread_pct")) or -999999.0
 
 
 def _effective_funding_24h(row: SpreadTerminalRow) -> float | None:
