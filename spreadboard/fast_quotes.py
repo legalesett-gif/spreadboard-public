@@ -63,6 +63,13 @@ class FastQuoteRefresher:
                     str(item).startswith("mirage_guard:") for item in row.get("blockers") or []
                 ):
                     continue
+                if (
+                    row.get("long_market_type") != "Futures"
+                    or row.get("short_market_type") != "Futures"
+                    or row.get("long_venue") not in NATIVE_FUTURES_VENUES
+                    or row.get("short_venue") not in NATIVE_FUTURES_VENUES
+                ):
+                    continue
                 spread = _number(row.get("depth_weighted_spread_pct"), -999999.0)
                 if 0.0 <= spread <= 5.0:
                     rows.append(row)
