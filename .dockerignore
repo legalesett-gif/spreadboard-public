@@ -18,6 +18,7 @@ data/*
 !data/api_discovery_identity_registry.json
 !data/api_discovery_executor_attestations.json
 !data/token_metadata_seed.json
+!data/spreadboard_market_history.seed
 vault
 graphify-out
 node_modules
