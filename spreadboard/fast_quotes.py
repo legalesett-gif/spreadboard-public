@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 import time
 from typing import Any
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 import ccxt
 
@@ -29,6 +31,17 @@ VENUE_IDS = {
     "Kucoin Futures": "kucoinfutures",
     "Mexc": "mexc",
     "OKX": "okx",
+}
+
+NATIVE_FUTURES_VENUES = {
+    "Aster",
+    "Binance",
+    "Bingx",
+    "Bitget",
+    "Bybit",
+    "Gate",
+    "Kraken Futures",
+    "OKX",
 }
 
 
@@ -134,14 +147,19 @@ class FastQuoteRefresher:
         if key in cache:
             return cache[key]
         try:
-            client = self._client(venue, market_type)
-            market = client.market(symbol)
-            book = client.fetch_order_book(symbol, limit=20)
-            contract_size = (
-                _number(market.get("contractSize"), 1.0) if market_type == "Futures" else 1.0
-            )
-            bids = _levels(book.get("bids"))
-            asks = _levels(book.get("asks"))
+            native_book = _native_order_book(venue, market_type, symbol)
+            if native_book is None:
+                client = self._client(venue, market_type)
+                market = client.market(symbol)
+                book = client.fetch_order_book(symbol, limit=20)
+                contract_size = (
+                    _number(market.get("contractSize"), 1.0) if market_type == "Futures" else 1.0
+                )
+                bids = _levels(book.get("bids"))
+                asks = _levels(book.get("asks"))
+            else:
+                bids, asks = native_book
+                contract_size = _number(leg.get("contract_size"), 1.0)
             bid_vwap = depth_weighted_price(bids, target_notional_usd, contract_size=contract_size)
             ask_vwap = depth_weighted_price(asks, target_notional_usd, contract_size=contract_size)
             if not bids or not asks or bid_vwap is None or ask_vwap is None:
@@ -160,7 +178,8 @@ class FastQuoteRefresher:
             value = None
         finally:
             self._discard_client(venue, market_type)
-        cache[key] = value
+        if value is not None:
+            cache[key] = value
         return value
 
     def _client(self, venue: str, market_type: str) -> Any:
@@ -201,6 +220,77 @@ def _levels(value: Any) -> list[list[float]]:
         if price > 0 and amount > 0:
             output.append([price, amount])
     return output
+
+
+def _native_order_book(
+    venue: str,
+    market_type: str,
+    symbol: str,
+) -> tuple[list[list[float]], list[list[float]]] | None:
+    if market_type != "Futures" or venue not in NATIVE_FUTURES_VENUES:
+        return None
+    base = symbol.split("/", 1)[0].upper()
+    compact = f"{base}USDT"
+    if venue == "Aster":
+        url = (
+            f"https://fapi.asterdex.com/fapi/v1/depth?{urlencode({'symbol': compact, 'limit': 20})}"
+        )
+    elif venue == "Binance":
+        url = (
+            f"https://fapi.binance.com/fapi/v1/depth?{urlencode({'symbol': compact, 'limit': 20})}"
+        )
+    elif venue == "Bingx":
+        url = "https://open-api.bingx.com/openApi/swap/v2/quote/depth?" + urlencode(
+            {"symbol": f"{base}-USDT", "limit": 20}
+        )
+    elif venue == "Bitget":
+        url = "https://api.bitget.com/api/v2/mix/market/merge-depth?" + urlencode(
+            {
+                "symbol": compact,
+                "productType": "USDT-FUTURES",
+                "precision": "scale0",
+                "limit": 20,
+            }
+        )
+    elif venue == "Bybit":
+        url = "https://api.bybit.com/v5/market/orderbook?" + urlencode(
+            {"category": "linear", "symbol": compact, "limit": 20}
+        )
+    elif venue == "Gate":
+        url = "https://api.gateio.ws/api/v4/futures/usdt/order_book?" + urlencode(
+            {"contract": f"{base}_USDT", "limit": 20}
+        )
+    elif venue == "Kraken Futures":
+        url = "https://futures.kraken.com/derivatives/api/v3/orderbook?" + urlencode(
+            {"symbol": f"pf_{base.lower()}usd"}
+        )
+    else:
+        url = "https://www.okx.com/api/v5/market/books?" + urlencode(
+            {"instId": f"{base}-USDT-SWAP", "sz": 20}
+        )
+    request = Request(url, headers={"User-Agent": "SpreadBoard/1.0"})
+    with urlopen(request, timeout=8.0) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if venue == "Bybit":
+        raw_bids = (payload.get("result") or {}).get("b")
+        raw_asks = (payload.get("result") or {}).get("a")
+    elif venue in {"Bingx", "Bitget"}:
+        raw_bids = (payload.get("data") or {}).get("bids")
+        raw_asks = (payload.get("data") or {}).get("asks")
+    elif venue == "Gate":
+        raw_bids = [[item.get("p"), item.get("s")] for item in payload.get("bids") or []]
+        raw_asks = [[item.get("p"), item.get("s")] for item in payload.get("asks") or []]
+    elif venue == "Kraken Futures":
+        raw_bids = (payload.get("orderBook") or {}).get("bids")
+        raw_asks = (payload.get("orderBook") or {}).get("asks")
+    elif venue == "OKX":
+        books = payload.get("data") or []
+        raw_bids = books[0].get("bids") if books else []
+        raw_asks = books[0].get("asks") if books else []
+    else:
+        raw_bids = payload.get("bids")
+        raw_asks = payload.get("asks")
+    return _levels(raw_bids), _levels(raw_asks)
 
 
 def _number(value: Any, default: float) -> float:
