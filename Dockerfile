@@ -17,6 +17,7 @@ COPY spreadboard ./spreadboard
 COPY src ./src
 COPY scripts ./scripts
 COPY data/api_discovery_watchlist.json data/api_discovery_identity_registry.json data/api_discovery_executor_attestations.json data/token_metadata_seed.json ./data/
+COPY data/spreadboard_market_history.seed /app/runtime/spreadboard_market_history.sqlite3
 
 RUN uv sync --frozen --no-dev \
     && groupadd --system spreadboard \
