@@ -198,6 +198,24 @@ def _leg_detail(board_row: dict[str, Any], *, side: str) -> dict[str, Any]:
         board_row.get(f"{side}_market_symbol")
         or market_symbol_for(symbol, str(market_type or ""), exchange_id)
     )
+    if _env_bool("SPREADBOARD_LIGHTWEIGHT_MODE"):
+        funding = (
+            fetch_funding_24h(exchange_id, market_symbol)
+            if market_type == "Futures"
+            else {}
+        )
+        return _leg_detail_from_board(
+            board_row,
+            side=side,
+            exchange_id=exchange_id,
+            market_symbol=market_symbol,
+            volatility={
+                "status": "unavailable",
+                "reason": "hosted_lightweight_mode",
+            },
+            funding=funding,
+            market_stats={},
+        )
     volatility, funding, market_stats = _leg_public_enrichment(
         exchange_id,
         market_symbol,
@@ -212,6 +230,10 @@ def _leg_detail(board_row: dict[str, Any], *, side: str) -> dict[str, Any]:
         funding=funding,
         market_stats=market_stats,
     )
+
+
+def _env_bool(name: str) -> bool:
+    return os.environ.get(name, "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
 def _leg_public_enrichment(
