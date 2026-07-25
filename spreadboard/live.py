@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import math
+import os
 import statistics
 import threading
 import time
@@ -641,6 +642,16 @@ def _fetch_funding_24h_uncached(exchange_id: str, symbol: str) -> dict[str, Any]
     native = _fetch_native_funding_24h(exchange_id, symbol)
     if native is not None:
         return native
+    if os.environ.get("SPREADBOARD_NATIVE_FUNDING_ONLY", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return {
+            "status": "unavailable",
+            "reason": f"native_funding_history_not_supported:{exchange_id}",
+        }
     try:
         import ccxt
 
@@ -702,6 +713,134 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
 
     base = str(symbol).split("/", 1)[0].upper()
     now_ms = int(time.time() * 1000)
+    since_ms = now_ms - 24 * 3600 * 1000
+    if exchange_id in {"binance", "aster"}:
+        host = (
+            "https://fapi.binance.com/fapi/v1"
+            if exchange_id == "binance"
+            else "https://fapi.asterdex.com/fapi/v3"
+        )
+        url = host + "/fundingRate?" + urllib.parse.urlencode(
+            {"symbol": f"{base}USDT", "startTime": since_ms, "limit": "100"}
+        )
+        data = _public_json(url)
+        if not isinstance(data, list):
+            return None
+        history = _normalize_native_funding_rows(
+            data,
+            timestamp_key="fundingTime",
+            rate_key="fundingRate",
+            since_ms=since_ms,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "bingx":
+        url = (
+            "https://open-api.bingx.com/openApi/swap/v2/quote/fundingRate?"
+            + urllib.parse.urlencode(
+                {"symbol": f"{base}-USDT", "startTime": since_ms, "limit": "100"}
+            )
+        )
+        data = _public_json(url)
+        if not isinstance(data, dict):
+            return None
+        history = _normalize_native_funding_rows(
+            data.get("data") or [],
+            timestamp_key="fundingTime",
+            rate_key="fundingRate",
+            since_ms=since_ms,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "bitget":
+        url = (
+            "https://api.bitget.com/api/v2/mix/market/history-fund-rate?"
+            + urllib.parse.urlencode(
+                {
+                    "symbol": f"{base}USDT",
+                    "productType": "USDT-FUTURES",
+                    "pageSize": "100",
+                }
+            )
+        )
+        data = _public_json(url)
+        if not isinstance(data, dict):
+            return None
+        history = _normalize_native_funding_rows(
+            data.get("data") or [],
+            timestamp_key="fundingTime",
+            rate_key="fundingRate",
+            since_ms=since_ms,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "gateio":
+        url = (
+            "https://api.gateio.ws/api/v4/futures/usdt/funding_rate?"
+            + urllib.parse.urlencode(
+                {"contract": f"{base}_USDT", "from": since_ms // 1000, "limit": "100"}
+            )
+        )
+        data = _public_json(url)
+        if not isinstance(data, list):
+            return None
+        history = _normalize_native_funding_rows(
+            data,
+            timestamp_key="t",
+            rate_key="r",
+            since_ms=since_ms,
+            timestamp_multiplier=1000,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "mexc":
+        url = (
+            "https://contract.mexc.com/api/v1/contract/funding_rate/history?"
+            + urllib.parse.urlencode(
+                {"symbol": f"{base}_USDT", "page_num": "1", "page_size": "100"}
+            )
+        )
+        data = _public_json(url)
+        if not isinstance(data, dict):
+            return None
+        history = _normalize_native_funding_rows(
+            ((data.get("data") or {}).get("resultList") or []),
+            timestamp_key="settleTime",
+            rate_key="fundingRate",
+            since_ms=since_ms,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "kucoinfutures":
+        url = (
+            "https://api-futures.kucoin.com/api/v1/contract/funding-rates?"
+            + urllib.parse.urlencode(
+                {
+                    "symbol": f"{base}USDTM",
+                    "from": since_ms,
+                    "to": now_ms,
+                }
+            )
+        )
+        data = _public_json(url)
+        if not isinstance(data, dict):
+            return None
+        history = _normalize_native_funding_rows(
+            data.get("data") or [],
+            timestamp_key="timepoint",
+            rate_key="fundingRate",
+            since_ms=since_ms,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "hyperliquid":
+        data = _public_json(
+            "https://api.hyperliquid.xyz/info",
+            payload={"type": "fundingHistory", "coin": base, "startTime": since_ms},
+        )
+        if not isinstance(data, list):
+            return None
+        history = _normalize_native_funding_rows(
+            data,
+            timestamp_key="time",
+            rate_key="fundingRate",
+            since_ms=since_ms,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
     if exchange_id == "okx":
         url = (
             "https://www.okx.com/api/v5/public/funding-rate-history?"
@@ -743,10 +882,17 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
     return None
 
 
-def _public_json(url: str) -> dict[str, Any] | None:
+def _public_json(url: str, *, payload: dict[str, Any] | None = None) -> Any:
+    body = None
+    headers = {"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"}
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
     request = urllib.request.Request(
         url,
-        headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"},
+        data=body,
+        headers=headers,
+        method="POST" if payload is not None else "GET",
     )
     try:
         with urllib.request.urlopen(
@@ -756,7 +902,7 @@ def _public_json(url: str) -> dict[str, Any] | None:
             value = json.load(response)
     except Exception:  # noqa: BLE001 - CCXT remains the fallback.
         return None
-    return value if isinstance(value, dict) else None
+    return value
 
 
 def _normalize_native_funding_rows(
@@ -765,11 +911,14 @@ def _normalize_native_funding_rows(
     timestamp_key: str,
     rate_key: str,
     since_ms: int,
+    timestamp_multiplier: int = 1,
 ) -> list[dict[str, Any]]:
     history = []
     for row in rows:
         timestamp_ms = _int_or_none(row.get(timestamp_key))
         rate = _float_or_none(row.get(rate_key))
+        if timestamp_ms is not None:
+            timestamp_ms *= timestamp_multiplier
         if timestamp_ms is None or rate is None or timestamp_ms < since_ms:
             continue
         history.append({"timestamp_ms": timestamp_ms, "rate_pct": rate * 100.0})

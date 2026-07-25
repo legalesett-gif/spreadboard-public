@@ -25,3 +25,5 @@ services:
         value: "4"
       - key: SPREADBOARD_REFRESH_TIMEOUT_SECONDS
         value: "900"
+      - key: SPREADBOARD_NATIVE_FUNDING_ONLY
+        value: "1"
