@@ -661,9 +661,13 @@ def _public_intel_payload(data: dict[str, Any], board_path: Path) -> dict[str, A
         (time.time() * 1_000_000 - (_float_or_none(feed.get("generated_at_us")) or 0.0))
         / 60_000_000.0,
     )
+    requested_limit = max(
+        1,
+        min(int(_float_or_none((data.get("filters") or {}).get("limit")) or 12), 50),
+    )
     hot = []
     reality = []
-    for item in feed.get("hot_symbols") or []:
+    for item in (feed.get("hot_symbols") or [])[:requested_limit]:
         if not isinstance(item, dict) or not item.get("symbol"):
             continue
         symbol = str(item.get("symbol"))
@@ -675,7 +679,7 @@ def _public_intel_payload(data: dict[str, Any], board_path: Path) -> dict[str, A
     for bucket, rows in (feed.get("recent_events") or {}).items():
         recent[bucket] = [
             {**row, "age_min": (_float_or_none(row.get("age_min")) or 0.0) + feed_age}
-            for row in rows
+            for row in rows[:requested_limit]
             if isinstance(row, dict)
         ]
     action_queue = []
