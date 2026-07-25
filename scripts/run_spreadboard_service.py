@@ -23,7 +23,6 @@ if str(ROOT) not in sys.path:
 from spreadboard import (
     alerts,
     board,
-    fast_quotes,
     live,
     market_history,
     public_rails,
@@ -41,7 +40,6 @@ class RefreshLoop:
         self.stop_event = threading.Event()
         self.snapshot_lock = threading.Lock()
         self.quote_cycle_lock = threading.Lock()
-        self.fast_refresher = fast_quotes.FastQuoteRefresher()
         self.thread = threading.Thread(
             target=self.run, name="spreadboard-public-refresh", daemon=True
         )
@@ -59,13 +57,11 @@ class RefreshLoop:
         self.stop_event.set()
         self.thread.join(timeout=5.0)
         self.fast_thread.join(timeout=5.0)
-        self.fast_refresher.close()
 
     def run(self) -> None:
         while not self.stop_event.is_set():
             started = time.monotonic()
             with self.quote_cycle_lock:
-                self.fast_refresher.close()
                 self.refresh_once()
             elapsed = time.monotonic() - started
             self.stop_event.wait(max(15.0, self.interval_seconds - elapsed))
@@ -152,11 +148,8 @@ class RefreshLoop:
         while not self.stop_event.wait(5.0):
             started = time.monotonic()
             with self.quote_cycle_lock:
+                summary = self._refresh_fast_quotes()
                 with self.snapshot_lock:
-                    summary = self.fast_refresher.refresh(
-                        SNAPSHOT_PATH,
-                        route_limit=int(os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "6")),
-                    )
                     if summary.get("updated_routes"):
                         try:
                             snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
@@ -167,6 +160,35 @@ class RefreshLoop:
                         inserted = 0
             _log(f"fast quotes {summary} history_inserted={inserted}")
             self.stop_event.wait(max(1.0, interval - (time.monotonic() - started)))
+
+    def _refresh_fast_quotes(self) -> dict[str, Any]:
+        command = [
+            sys.executable,
+            str(ROOT / "scripts/fast_quote_worker.py"),
+            "--snapshot-path",
+            str(SNAPSHOT_PATH),
+            "--route-limit",
+            os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "6"),
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=float(os.environ.get("SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS", "120")),
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return {"status": "timeout", "updated_routes": 0}
+        try:
+            return json.loads((result.stdout or "").strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError):
+            return {
+                "status": "failed",
+                "updated_routes": 0,
+                "exit_code": result.returncode,
+            }
 
 
 def _refresh_enrichment_subprocess() -> None:
