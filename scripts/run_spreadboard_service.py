@@ -155,7 +155,7 @@ class RefreshLoop:
                 with self.snapshot_lock:
                     summary = self.fast_refresher.refresh(
                         SNAPSHOT_PATH,
-                        route_limit=int(os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "12")),
+                        route_limit=int(os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "6")),
                     )
                     if summary.get("updated_routes"):
                         try:

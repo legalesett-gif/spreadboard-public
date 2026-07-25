@@ -158,6 +158,7 @@ class FastQuoteRefresher:
             }
         except Exception:
             value = None
+        finally:
             self._discard_client(venue, market_type)
         cache[key] = value
         return value
@@ -187,6 +188,7 @@ class FastQuoteRefresher:
                 close()
             except Exception:
                 pass
+        gc.collect()
 
 
 def _levels(value: Any) -> list[list[float]]:
