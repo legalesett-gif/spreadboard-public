@@ -17,3 +17,11 @@ services:
         value: /app/runtime
       - key: SPREADBOARD_LIGHTWEIGHT_MODE
         value: "1"
+      - key: SPREADBOARD_CEX_CANDIDATES
+        value: "80"
+      - key: SPREADBOARD_DEX_CANDIDATES
+        value: "40"
+      - key: SPREADBOARD_FUNDING_HISTORY_WORKERS
+        value: "4"
+      - key: SPREADBOARD_REFRESH_TIMEOUT_SECONDS
+        value: "900"
