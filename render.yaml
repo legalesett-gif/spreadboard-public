@@ -15,3 +15,5 @@ services:
         value: "300"
       - key: SPREADBOARD_DATA_DIR
         value: /app/runtime
+      - key: SPREADBOARD_LIGHTWEIGHT_MODE
+        value: "1"

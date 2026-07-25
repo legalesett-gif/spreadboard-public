@@ -7,7 +7,8 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8200 \
     SPREADBOARD_REFRESH_SECONDS=300 \
     SPREADBOARD_DATA_DIR=/app/runtime \
-    SPREADBOARD_PUBLIC_MODE=1
+    SPREADBOARD_PUBLIC_MODE=1 \
+    SPREADBOARD_LIGHTWEIGHT_MODE=1
 
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project

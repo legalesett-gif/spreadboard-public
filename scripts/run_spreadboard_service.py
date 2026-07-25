@@ -45,6 +45,7 @@ class RefreshLoop:
             self.stop_event.wait(max(15.0, self.interval_seconds - elapsed))
 
     def refresh_once(self) -> None:
+        lightweight_mode = _env_bool("SPREADBOARD_LIGHTWEIGHT_MODE")
         command = [
             sys.executable,
             str(ROOT / "scripts/api_discovery_worker.py"),
@@ -87,20 +88,23 @@ class RefreshLoop:
             _log(f"snapshot unavailable after refresh: {exc}")
             return
         inserted = market_history.record_snapshot(snapshot)
-        symbols = {
-            str(row.get("token") or "").upper()
-            for bucket in ("api_discovered_rows", "dex_discovered_rows")
-            for row in snapshot.get(bucket) or []
-            if isinstance(row, dict) and row.get("token")
-        }
-        try:
-            token_metadata.refresh_token_metadata(symbols)
-        except Exception as exc:  # noqa: BLE001 - metadata must not stop market refresh.
-            _log(f"token-name refresh unavailable: {type(exc).__name__}: {exc}")
-        try:
-            public_rails.refresh_public_rails(snapshot)
-        except Exception as exc:  # noqa: BLE001 - rail coverage can be partial.
-            _log(f"transfer-rail refresh unavailable: {type(exc).__name__}: {exc}")
+        if lightweight_mode:
+            _log("lightweight mode: deferred token-name and transfer-rail enrichment")
+        else:
+            symbols = {
+                str(row.get("token") or "").upper()
+                for bucket in ("api_discovered_rows", "dex_discovered_rows")
+                for row in snapshot.get(bucket) or []
+                if isinstance(row, dict) and row.get("token")
+            }
+            try:
+                token_metadata.refresh_token_metadata(symbols)
+            except Exception as exc:  # noqa: BLE001 - metadata must not stop market refresh.
+                _log(f"token-name refresh unavailable: {type(exc).__name__}: {exc}")
+            try:
+                public_rails.refresh_public_rails(snapshot)
+            except Exception as exc:  # noqa: BLE001 - rail coverage can be partial.
+                _log(f"transfer-rail refresh unavailable: {type(exc).__name__}: {exc}")
         refresh = snapshot.get("source_refresh") or {}
         _log(
             "refresh complete "
@@ -139,6 +143,10 @@ def main() -> int:
 
 def _log(message: str) -> None:
     print(f"spreadboard-service: {message}", flush=True)
+
+
+def _env_bool(name: str) -> bool:
+    return os.environ.get(name, "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
 if __name__ == "__main__":

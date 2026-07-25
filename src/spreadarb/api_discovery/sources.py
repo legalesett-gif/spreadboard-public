@@ -6,6 +6,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+import gc
 import json
 import os
 from time import monotonic
@@ -278,7 +279,6 @@ class CexCcxtSource:
         started = monotonic()
         errors: list[str] = []
         quotes: list[MarketQuote] = []
-        exchanges: dict[str, Any] = {}
         symbols_by_venue_token: dict[tuple[str, str], str] = {}
         market_token_counts: dict[str, int] = {}
         funding_market_counts: dict[str, int] = {}
@@ -292,7 +292,6 @@ class CexCcxtSource:
             except Exception as exc:
                 errors.append(f"{venue}:market:{clean_error(exc)}")
                 continue
-            exchanges[venue] = exchange
             symbol_map = _canonicalize_symbol_map(
                 venue,
                 _symbols_for_context(markets, self.market_type, context),
@@ -325,6 +324,8 @@ class CexCcxtSource:
                         context=context,
                     )
                 )
+                _release_ccxt_exchange(exchange)
+                del markets
                 continue
             for token, symbol in _symbol_items(symbol_map):
                 if context.timed_out():
@@ -353,12 +354,14 @@ class CexCcxtSource:
                         quotes.append(quote)
                 except Exception as exc:
                     errors.append(f"{venue}:{token}:order_book:{clean_error(exc)}")
+            _release_ccxt_exchange(exchange)
+            del markets
         candidate_quotes = [*context.reference_quotes, *quotes] if self.include_reference_quotes else quotes
         if context.all_platform_tokens and quotes:
             quotes = _verify_top_candidate_books(
                 quotes,
                 candidate_quotes=candidate_quotes,
-                exchanges=exchanges,
+                exchange_ids=self.venues,
                 symbols_by_venue_token=symbols_by_venue_token,
                 source_name=self.name,
                 market_type=self.market_type,
@@ -1269,6 +1272,16 @@ def _build_ccxt_exchange(exchange_id: str, market_type: str, timeout_s: float) -
     return klass(params)
 
 
+def _release_ccxt_exchange(exchange: Any) -> None:
+    close = getattr(exchange, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:  # noqa: BLE001 - cleanup must not hide market results.
+            pass
+    gc.collect()
+
+
 def _find_symbol(token: str, markets: Mapping[str, Any], market_type: str) -> str | None:
     token = token.upper()
     if market_type == "Spot":
@@ -1625,7 +1638,7 @@ def _verify_top_candidate_books(
     quotes: list[MarketQuote],
     *,
     candidate_quotes: list[MarketQuote] | None = None,
-    exchanges: Mapping[str, Any],
+    exchange_ids: Mapping[str, str],
     symbols_by_venue_token: Mapping[tuple[str, str], str],
     source_name: str,
     market_type: str,
@@ -1668,38 +1681,62 @@ def _verify_top_candidate_books(
                 for pair in [*spread_pairs, *funding_pairs]
             }.values()
         )
-    verified: dict[tuple[str, str, str], MarketQuote] = {}
+    selected_by_venue: dict[str, list[MarketQuote]] = defaultdict(list)
     for pair in selected_pairs:
-        if context.timed_out():
-            errors.append("time_budget_exhausted")
-            break
         for quote in (pair.long_quote, pair.short_quote):
             if quote.market_type != market_type or quote.source_name != source_name:
                 continue
-            key = (quote.venue, quote.market_type, quote.token.upper())
-            if key in verified:
-                continue
-            exchange = exchanges.get(quote.venue)
-            symbol = quote.symbol or symbols_by_venue_token.get((quote.venue, quote.token.upper()))
-            if exchange is None or symbol is None:
-                continue
-            try:
-                book = exchange.fetch_order_book(symbol, limit=20)
-                book_quote = _quote_from_book(
-                    token=quote.token,
-                    venue=quote.venue,
-                    market_type=quote.market_type,
-                    source_name=source_name,
-                    book=book,
-                    target_notional_usd=target_notional_usd,
-                    symbol=symbol,
-                    identity_key=quote.identity_key,
-                    source_quote=quote,
+            selected_by_venue[quote.venue].append(quote)
+
+    verified: dict[tuple[str, str, str], MarketQuote] = {}
+    for venue, venue_quotes in selected_by_venue.items():
+        if context.timed_out():
+            errors.append("time_budget_exhausted")
+            break
+        exchange_id = exchange_ids.get(venue)
+        if exchange_id is None:
+            continue
+        try:
+            exchange = _build_ccxt_exchange(
+                exchange_id,
+                market_type,
+                context.remaining_timeout(10.0),
+            )
+            exchange.load_markets()
+        except Exception as exc:
+            errors.append(f"{venue}:depth_market:{clean_error(exc)}")
+            continue
+        try:
+            for quote in venue_quotes:
+                key = (quote.venue, quote.market_type, quote.token.upper())
+                if key in verified:
+                    continue
+                symbol = quote.symbol or symbols_by_venue_token.get(
+                    (quote.venue, quote.token.upper())
                 )
-                if book_quote.bid is not None and book_quote.ask is not None:
-                    verified[key] = book_quote
-            except Exception as exc:
-                errors.append(f"{quote.venue}:{quote.token}:order_book:{clean_error(exc)}")
+                if symbol is None:
+                    continue
+                try:
+                    book = exchange.fetch_order_book(symbol, limit=20)
+                    book_quote = _quote_from_book(
+                        token=quote.token,
+                        venue=quote.venue,
+                        market_type=quote.market_type,
+                        source_name=source_name,
+                        book=book,
+                        target_notional_usd=target_notional_usd,
+                        symbol=symbol,
+                        identity_key=quote.identity_key,
+                        source_quote=quote,
+                    )
+                    if book_quote.bid is not None and book_quote.ask is not None:
+                        verified[key] = book_quote
+                except Exception as exc:
+                    errors.append(
+                        f"{quote.venue}:{quote.token}:order_book:{clean_error(exc)}"
+                    )
+        finally:
+            _release_ccxt_exchange(exchange)
     return list(verified.values())
 
 
