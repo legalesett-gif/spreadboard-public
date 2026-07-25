@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import gc
 import json
@@ -79,6 +80,25 @@ class FastQuoteRefresher:
             reverse=True,
         )[: max(0, route_limit)]
         leg_cache: dict[tuple[str, str, str], dict[str, Any] | None] = {}
+        leg_jobs: dict[tuple[str, str, str], tuple[dict[str, Any], str]] = {}
+        for row in selected:
+            for side in ("long", "short"):
+                key = _route_leg_key(row, side)
+                if key is not None:
+                    leg_jobs.setdefault(key, (row, side))
+        with ThreadPoolExecutor(max_workers=max(1, min(6, len(leg_jobs)))) as pool:
+            futures = {
+                key: pool.submit(
+                    self._leg_quote,
+                    row,
+                    side,
+                    target_notional_usd=target_notional_usd,
+                    cache={},
+                )
+                for key, (row, side) in leg_jobs.items()
+            }
+            for key, future in futures.items():
+                leg_cache[key] = future.result()
         updated = failed = 0
         for row in selected:
             blockers = [
@@ -229,6 +249,19 @@ def _levels(value: Any) -> list[list[float]]:
         if price > 0 and amount > 0:
             output.append([price, amount])
     return output
+
+
+def _route_leg_key(
+    row: dict[str, Any],
+    side: str,
+) -> tuple[str, str, str] | None:
+    venue = str(row.get(f"{side}_venue") or "")
+    market_type = str(row.get(f"{side}_market_type") or "")
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+    leg = route_inputs.get(side) if isinstance(route_inputs.get(side), dict) else {}
+    symbol = str(leg.get("symbol") or "")
+    return (venue, market_type, symbol) if venue and market_type and symbol else None
 
 
 def _native_order_book(
