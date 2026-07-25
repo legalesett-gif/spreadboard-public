@@ -148,6 +148,7 @@ class RefreshLoop:
         while not self.stop_event.wait(5.0):
             started = time.monotonic()
             with self.quote_cycle_lock:
+                _log("fast quote cycle starting")
                 summary = self._refresh_fast_quotes()
                 with self.snapshot_lock:
                     if summary.get("updated_routes"):
@@ -176,7 +177,7 @@ class RefreshLoop:
                 cwd=ROOT,
                 capture_output=True,
                 text=True,
-                timeout=float(os.environ.get("SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS", "120")),
+                timeout=float(os.environ.get("SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS", "20")),
                 check=False,
             )
         except subprocess.TimeoutExpired:

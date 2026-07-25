@@ -188,8 +188,7 @@ class FastQuoteRefresher:
             value = None
         finally:
             self._discard_client(venue, market_type)
-        if value is not None:
-            cache[key] = value
+        cache[key] = value
         return value
 
     def _client(self, venue: str, market_type: str) -> Any:
