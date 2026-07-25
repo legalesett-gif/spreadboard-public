@@ -595,12 +595,13 @@ def enrich_snapshot_funding_24h(
             if not isinstance(leg_funding, dict):
                 leg_funding = {}
                 funding[side] = leg_funding
+            live_current = _float_or_none(leg_funding.get("current_funding_pct"))
+            if live_current is None:
+                live_current = _float_or_none(leg_funding.get("rate_pct"))
             for key in (
                 "status",
                 "reason",
-                "current_funding_pct",
                 "funding_24h_pct",
-                "projected_24h_pct",
                 "funding_interval_hours",
                 "funding_interval_assumed",
                 "next_funding_ts_us",
@@ -608,8 +609,20 @@ def enrich_snapshot_funding_24h(
             ):
                 if result.get(key) is not None:
                     leg_funding[key] = result[key]
+            if live_current is None and result.get("current_funding_pct") is not None:
+                live_current = _float_or_none(result.get("current_funding_pct"))
+            if live_current is not None:
+                leg_funding["current_funding_pct"] = live_current
+            interval = _float_or_none(result.get("funding_interval_hours"))
+            if interval is None:
+                interval = _float_or_none(leg_funding.get("interval_hours"))
+            live_projection = _project_funding_24h(live_current, interval)
+            if live_projection is None:
+                live_projection = _float_or_none(result.get("projected_24h_pct"))
+            if live_projection is not None:
+                leg_funding["projected_24h_pct"] = live_projection
             settled[side] = _float_or_none(result.get("funding_24h_pct"))
-            projected[side] = _float_or_none(result.get("projected_24h_pct"))
+            projected[side] = live_projection
 
         if (
             has_futures_leg

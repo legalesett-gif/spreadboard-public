@@ -393,10 +393,26 @@ def _row_from_api(
         funding_24h_pct=funding_24h,
         funding_projected_24h_pct=funding_projected_24h,
         funding_24h_source=_str_or_none(raw.get("funding_24h_source")),
-        long_funding_interval_hours=_float_or_none(long_funding.get("interval_hours")),
-        short_funding_interval_hours=_float_or_none(short_funding.get("interval_hours")),
-        long_funding_interval_assumed=bool(long_funding.get("interval_assumed", False)),
-        short_funding_interval_assumed=bool(short_funding.get("interval_assumed", False)),
+        long_funding_interval_hours=_float_or_none(
+            long_funding.get("funding_interval_hours"),
+            long_funding.get("interval_hours"),
+        ),
+        short_funding_interval_hours=_float_or_none(
+            short_funding.get("funding_interval_hours"),
+            short_funding.get("interval_hours"),
+        ),
+        long_funding_interval_assumed=bool(
+            long_funding.get(
+                "funding_interval_assumed",
+                long_funding.get("interval_assumed", False),
+            )
+        ),
+        short_funding_interval_assumed=bool(
+            short_funding.get(
+                "funding_interval_assumed",
+                short_funding.get("interval_assumed", False),
+            )
+        ),
         long_next_funding_ts_us=_int_or_none(long_funding.get("next_funding_ts_us")),
         short_next_funding_ts_us=_int_or_none(short_funding.get("next_funding_ts_us")),
         long_volume_24h_usd=_nested_float(route_inputs, "long", "volume_24h_usd"),
