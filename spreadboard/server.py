@@ -1735,6 +1735,9 @@ def funding_interval_label(hours: Any, assumed: Any = False) -> str:
     value = _float_or_none(hours)
     if value is None or value <= 0:
         return "cadence unknown"
+    nearest_hour = round(value)
+    if nearest_hour > 0 and abs(value - nearest_hour) <= 0.02:
+        value = float(nearest_hour)
     shown = str(int(value)) if value.is_integer() else f"{value:g}"
     return f"{shown}h estimated" if assumed else f"every {shown}h"
 

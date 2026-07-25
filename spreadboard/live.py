@@ -1071,7 +1071,12 @@ def _infer_funding_interval_hours(history: list[dict[str, Any]]) -> float | None
     if not deltas:
         return None
     interval = statistics.median(deltas)
-    return round(interval, 4) if interval > 0 else None
+    if interval <= 0:
+        return None
+    nearest_hour = round(interval)
+    if nearest_hour > 0 and abs(interval - nearest_hour) <= 0.02:
+        return float(nearest_hour)
+    return round(interval, 4)
 
 
 def _safe_fetch_funding_rate(exchange: Any, symbol: str) -> dict[str, Any]:
