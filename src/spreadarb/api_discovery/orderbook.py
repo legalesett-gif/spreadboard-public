@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 
-def depth_weighted_price(levels: list[list[float]], notional_usd: float) -> float | None:
-    if not levels or notional_usd <= 0:
+def depth_weighted_price(
+    levels: list[list[float]],
+    notional_usd: float,
+    *,
+    contract_size: float = 1.0,
+) -> float | None:
+    if not levels or notional_usd <= 0 or contract_size <= 0:
         return None
     remaining = notional_usd
     quantity = 0.0
@@ -12,7 +17,7 @@ def depth_weighted_price(levels: list[list[float]], notional_usd: float) -> floa
     for price, amount in levels:
         if price <= 0 or amount <= 0:
             continue
-        level_notional = price * amount
+        level_notional = price * amount * contract_size
         take_notional = min(remaining, level_notional)
         take_quantity = take_notional / price
         quantity += take_quantity

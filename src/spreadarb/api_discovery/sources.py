@@ -1177,14 +1177,31 @@ def _quote_from_book(
         source_name=source_name,
     )
     funding = dict(funding or {})
+    contract_size = as_float(
+        market_identity.contract_size
+        if market_identity is not None
+        else None
+    )
+    if contract_size is None:
+        contract_size = as_float(source_quote.contract_size)
+    if contract_size is None:
+        contract_size = 1.0
     return MarketQuote(
         token=token,
         venue=venue,
         market_type=market_type,
         bid=bids[0][0] if bids else None,
         ask=asks[0][0] if asks else None,
-        bid_vwap=depth_weighted_price(bids, target_notional_usd),
-        ask_vwap=depth_weighted_price(asks, target_notional_usd),
+        bid_vwap=depth_weighted_price(
+            bids,
+            target_notional_usd,
+            contract_size=contract_size,
+        ),
+        ask_vwap=depth_weighted_price(
+            asks,
+            target_notional_usd,
+            contract_size=contract_size,
+        ),
         quote_ts_us=now_us(),
         source_name=source_name,
         symbol=symbol,
@@ -1445,6 +1462,12 @@ def _ticker_quotes_for_symbols(
             context=context,
         )
         market_identity = identity.market_identity
+        market = getattr(exchange, "markets", {}).get(str(symbol)) or {}
+        market_contract_size = (
+            str(market.get("contractSize"))
+            if market_type == "Futures" and market.get("contractSize") is not None
+            else None
+        )
         funding = _funding_values((funding_rates or {}).get(str(symbol)))
         volume_24h_usd = _ticker_volume_24h_usd(ticker)
         quotes.append(
@@ -1464,7 +1487,11 @@ def _ticker_quotes_for_symbols(
                 decimals=market_identity.decimals if market_identity is not None else None,
                 chain_id=market_identity.chain_id if market_identity is not None else None,
                 settle_asset=market_identity.settle_asset if market_identity is not None else None,
-                contract_size=market_identity.contract_size if market_identity is not None else None,
+                contract_size=(
+                    market_identity.contract_size
+                    if market_identity is not None and market_identity.contract_size is not None
+                    else market_contract_size
+                ),
                 funding_rate_pct=as_float(funding.get("rate_pct")),
                 funding_interval_hours=as_float(funding.get("interval_hours")),
                 funding_apr_pct=as_float(funding.get("apr_pct")),
