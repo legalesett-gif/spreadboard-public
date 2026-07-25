@@ -16,7 +16,7 @@ services:
       - key: SPREADBOARD_FAST_QUOTE_SECONDS
         value: "30"
       - key: SPREADBOARD_FAST_QUOTE_ROUTES
-        value: "6"
+        value: "2"
       - key: SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS
         value: "20"
       - key: SPREADBOARD_DATA_DIR

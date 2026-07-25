@@ -169,7 +169,7 @@ class RefreshLoop:
             "--snapshot-path",
             str(SNAPSHOT_PATH),
             "--route-limit",
-            str(min(6, int(os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "6")))),
+            str(min(2, int(os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "2")))),
         ]
         try:
             result = subprocess.run(
