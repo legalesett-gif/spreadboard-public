@@ -1417,6 +1417,43 @@ def render_live_market_empty(health: dict[str, Any]) -> str:
     """
 
 
+def render_funding_farm_empty(selected_farm: str, health: dict[str, Any]) -> str:
+    """Explain an empty farm tab instead of rendering a blank list.
+
+    Futures-DEX in particular stays empty whenever the OKX DEX quote source is
+    skipped, which happens when its API credentials are absent. Silently showing
+    nothing made that look like "no opportunities" rather than "not configured".
+    """
+
+    if selected_farm != "futures-dex":
+        return render_live_market_empty(health)
+    source = health.get("dex_spot_source") or {}
+    status = str(source.get("status") or "absent")
+    blockers = [str(item) for item in source.get("blockers") or []]
+    if status in {"ok", "partial"}:
+        return (
+            '<p class="empty market-empty">OKX DEX quoting ran but no DEX route matched a '
+            'futures leg this cycle.</p>'
+        )
+    if "api_credentials_missing" in blockers or status in {"skipped", "absent"}:
+        return """
+    <article class="live-market-empty">
+      <strong>OKX DEX quoting is not configured</strong>
+      <p>Futures-DEX needs OKX DEX API credentials. Set SPREADARB_OKX_DEX_API_KEY,
+      SPREADARB_OKX_DEX_SECRET and SPREADARB_OKX_DEX_PASSPHRASE on the service,
+      then add DEX-enabled tokens with exact chain and contract to the watchlist.</p>
+      <span>Source status: skipped</span>
+    </article>
+    """
+    return f"""
+    <article class="live-market-empty">
+      <strong>OKX DEX quoting is unavailable</strong>
+      <p>{h("; ".join(blockers) or "The DEX quote source did not return rows this cycle.")}</p>
+      <span>Source status: {h(status)}</span>
+    </article>
+    """
+
+
 def render_market_token_group(group: dict[str, Any]) -> str:
     best = group.get("best_route") or {}
     name = group.get("token_name") or "Metadata pending"
@@ -2233,7 +2270,7 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
           <a class="mini-action primary-link" href="/api/spreads?{h(urlencode(_query_with(funding_query, limit=500, offset=0)))}">JSON</a>
         </div>
         <div class="funding-group-list">
-          {''.join(render_funding_token_group(group) for group in funding_groups) or render_live_market_empty(api_health_data)}
+          {''.join(render_funding_token_group(group) for group in funding_groups) or render_funding_farm_empty(selected_farm, api_health_data)}
         </div>
       </section>
     </section>

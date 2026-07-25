@@ -301,8 +301,31 @@ def _load_api_discovery_rows(
         "executor_ready_count": len(payload.get("executor_ready_rows") or []),
         "expires_at": payload.get("expires_at"),
         "worker_status": ((payload.get("source_refresh") or {}).get("status")),
+        "dex_spot_source": _dex_spot_source_status(payload),
         "fast_quote_refresh": payload.get("fast_quote_refresh"),
     }
+
+
+def _dex_spot_source_status(payload: dict[str, Any]) -> dict[str, Any]:
+    """Report whether the OKX DEX spot quote source actually ran.
+
+    Futures-DEX renders empty whenever this source is skipped. The rows counted
+    by `dex_discovered_count` are Hyperliquid/Aster perpetuals, which classify as
+    Futures-Futures, so that number is not evidence that DEX quoting works.
+    """
+
+    sources = ((payload.get("source_refresh") or {}).get("sources")) or []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        if source.get("name") == "okx_dex_quote":
+            return {
+                "name": "okx_dex_quote",
+                "status": source.get("status"),
+                "rows": source.get("rows"),
+                "blockers": list(source.get("blockers") or []),
+            }
+    return {"name": "okx_dex_quote", "status": "absent", "rows": 0, "blockers": []}
 
 
 def _public_source_health(meta: dict[str, Any]) -> dict[str, Any]:
@@ -315,6 +338,7 @@ def _public_source_health(meta: dict[str, Any]) -> dict[str, Any]:
             "row_count",
             "api_discovered_count",
             "dex_discovered_count",
+            "dex_spot_source",
             "expires_at",
             "fast_quote_refresh",
         )
