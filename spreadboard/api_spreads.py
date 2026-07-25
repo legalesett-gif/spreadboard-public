@@ -137,6 +137,7 @@ def load_spreads(
                 row.route_kind
                 for row in all_rows
                 if row.route_kind.startswith("DEX-")
+                or row.raw_source_kind == "dex_discovered_rows"
             ).items()
         )
     )
@@ -502,7 +503,7 @@ def _row_from_api(
             market_symbol=short_market_symbol,
             token=token,
         ),
-        raw_source_kind=source_kind,
+        raw_source_kind=source_kind or bucket,
         mirage_guarded=any(str(item).startswith("mirage_guard:") for item in blockers),
     )
 
