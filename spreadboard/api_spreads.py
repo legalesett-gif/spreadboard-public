@@ -17,7 +17,13 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_API_DISCOVERY_PATH = RUNTIME_DIR / "api_discovery_latest.json"
 DEFAULT_MAX_AGE_MIN = 15.0
-DEFAULT_LIMIT = 50
+DEFAULT_LIMIT = 25
+
+# Spot-Spot and Spot-DEX carry farms have been retired from the public board.
+# Rows in these route kinds are dropped at load time so they never surface in
+# groups, JSON output, top-edge/top-funding lanes, or kind counts anywhere in
+# the app, regardless of any kind filter a caller passes.
+RETIRED_ROUTE_KINDS = frozenset({"SPOT", "DEX-SPOT"})
 
 
 @dataclass(frozen=True)
@@ -121,6 +127,7 @@ def load_spreads(
     )
     board_rows, board_meta = _load_board_rows(board_path, now=current_time)
     all_rows = _dedupe_rows(api_rows)
+    all_rows = [row for row in all_rows if row.route_kind not in RETIRED_ROUTE_KINDS]
     held_out = [row for row in all_rows if _is_mirage_guarded(row)]
     ranked_rows = all_rows if include_unverified else [
         row for row in all_rows if not _is_mirage_guarded(row)

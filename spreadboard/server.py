@@ -1557,7 +1557,15 @@ def render_market_filter_bar(data: dict[str, Any], query: dict[str, list[str]]) 
     selected_limit = str(int(_query_float(query, "limit", api_spreads.DEFAULT_LIMIT) or api_spreads.DEFAULT_LIMIT))
     summary = data.get("summary") or {}
     kind_counts = data.get("route_kind_counts") or {}
-    kind_tabs = [(item.kind, item.label) for item in board.ROUTE_KINDS] + [("", "All routes")]
+    # Spot-Spot and Spot-DEX farms are retired from the public board (their rows
+    # are dropped before they ever reach this page). Futures-Spot and Spot-Futures
+    # are shown as a single merged tab, same as the Funding page's Futures-Spot farm.
+    kind_tabs = [
+        ("FUTURES", "Futures-Futures"),
+        ("FUTURES-SPOT-PAIR", "Futures-Spot"),
+        ("DEX-FUTURES", "Futures-DEX"),
+        ("", "All routes"),
+    ]
     exchange_options = data.get("exchange_options") or []
     return f"""
     <section class="market-filter-panel terminal-filter-panel">
@@ -1596,7 +1604,11 @@ def render_market_filter_bar(data: dict[str, Any], query: dict[str, list[str]]) 
 
 
 def market_kind_count(value: str, counts: dict[str, Any], summary: dict[str, Any]) -> Any:
-    return summary.get("total_tokens") if not value else counts.get(value, 0)
+    if not value:
+        return summary.get("total_tokens")
+    if value == "FUTURES-SPOT-PAIR":
+        return int(counts.get("FUTURES-SPOT", 0) or 0) + int(counts.get("SPOT-FUTURES", 0) or 0)
+    return counts.get(value, 0)
 
 
 def render_market_tab(label: str, query: dict[str, str], active: bool, count: Any = None) -> str:
@@ -2157,7 +2169,7 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
         kind=farm_kinds[selected_farm],
         sort="funding_abs",
         direction=_query_first(query, "direction") or "desc",
-        limit=_query_first(query, "limit") or "50",
+        limit=_query_first(query, "limit") or "25",
     )
     market_data = api_market_spreads(board_path, funding_query)
     funding_groups = market_data.get("groups") or []
