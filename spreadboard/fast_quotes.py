@@ -300,7 +300,9 @@ def _native_order_book(
     else:
         raw_bids = payload.get("bids")
         raw_asks = payload.get("asks")
-    return _levels(raw_bids), _levels(raw_asks)
+    bids = sorted(_levels(raw_bids), key=lambda level: level[0], reverse=True)
+    asks = sorted(_levels(raw_asks), key=lambda level: level[0])
+    return bids, asks
 
 
 def _number(value: Any, default: float) -> float:
