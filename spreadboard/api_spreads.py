@@ -94,6 +94,7 @@ def load_spreads(
     min_abs_funding_apr_pct: float | None = None,
     funding_only: bool = False,
     include_stale: bool = False,
+    include_unverified: bool = False,
     max_age_min: float | None = DEFAULT_MAX_AGE_MIN,
     sort_by: str = "edge",
     direction: str = "desc",
@@ -120,13 +121,17 @@ def load_spreads(
     )
     board_rows, board_meta = _load_board_rows(board_path, now=current_time)
     all_rows = _dedupe_rows(api_rows)
+    held_out = [row for row in all_rows if _is_mirage_guarded(row)]
+    ranked_rows = all_rows if include_unverified else [
+        row for row in all_rows if not _is_mirage_guarded(row)
+    ]
     public_universe = (
-        all_rows
+        ranked_rows
         if include_stale
-        else [row for row in all_rows if row.freshness == "fresh"]
+        else [row for row in ranked_rows if row.freshness == "fresh"]
     )
     filtered = _filter_rows(
-        all_rows,
+        ranked_rows,
         q=q,
         exchange=exchange,
         kind=kind,
@@ -187,6 +192,7 @@ def load_spreads(
             "min_abs_funding_apr_pct": min_abs_funding_apr_pct,
             "funding_only": funding_only,
             "include_stale": include_stale,
+            "include_unverified": include_unverified,
             "max_age_min": max_age_min,
             "sort": normalized_sort,
             "direction": normalized_direction,
@@ -203,7 +209,10 @@ def load_spreads(
             "has_more": normalized_offset + len(visible_groups) < len(groups),
         },
         "source_health": {
-            "canonical_api": _public_source_health(api_meta),
+            "canonical_api": {
+                **_public_source_health(api_meta),
+                "mirage_guarded_count": len(held_out),
+            },
         },
         "exchange_options": _exchange_options(public_universe),
         "route_kind_counts": dict(
@@ -344,6 +353,15 @@ def _row_from_api(
     )
     long_rails = public_rails.rail_state(rails or {}, long_venue, token)
     short_rails = public_rails.rail_state(rails or {}, short_venue, token)
+    blockers.extend(
+        _route_mirage_reasons(
+            raw=raw,
+            long_market_type=long_market_type,
+            short_market_type=short_market_type,
+            long_rails=long_rails,
+            short_rails=short_rails,
+        )
+    )
     return SpreadTerminalRow(
         token=token,
         token_name=token_metadata.token_name(token, metadata or {}),
@@ -570,6 +588,39 @@ def _filter_rows(rows: list[SpreadTerminalRow], **filters: Any) -> list[SpreadTe
             continue
         output.append(row)
     return output
+
+
+def _route_mirage_reasons(
+    *,
+    raw: dict[str, Any],
+    long_market_type: str | None,
+    short_market_type: str | None,
+    long_rails: dict[str, Any],
+    short_rails: dict[str, Any],
+) -> list[str]:
+    spread = max(
+        abs(_float_or_none(raw.get("executable_spread_pct")) or 0.0),
+        abs(_float_or_none(raw.get("depth_weighted_spread_pct")) or 0.0),
+    )
+    if spread < 1.0:
+        return []
+    reasons: list[str] = []
+    raw_blockers = {str(item) for item in raw.get("blockers") or []}
+    if spread >= 5.0 and "identity_unverified" in raw_blockers:
+        reasons.append("mirage_guard:high_dislocation_identity_unverified")
+    if short_market_type == "Spot" and long_market_type != "Spot":
+        reasons.append("mirage_guard:spot_short_inventory_unproven")
+    if long_market_type == "Spot" and short_market_type == "Spot":
+        compatibility = public_rails.transfer_compatibility(long_rails, short_rails)
+        if compatibility.get("status") != "compatible":
+            reasons.append(
+                f"mirage_guard:spot_transfer_{compatibility.get('status') or 'unknown'}"
+            )
+    return reasons
+
+
+def _is_mirage_guarded(row: SpreadTerminalRow) -> bool:
+    return any(str(item).startswith("mirage_guard:") for item in row.blockers)
 
 
 def _normalize_kind_filter(value: Any) -> str:

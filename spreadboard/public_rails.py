@@ -52,6 +52,58 @@ def rail_state(
     return state if isinstance(state, dict) else {}
 
 
+def transfer_compatibility(
+    long_state: dict[str, Any],
+    short_state: dict[str, Any],
+) -> dict[str, Any]:
+    """Evaluate whether a spot asset can move from buy venue to sell venue."""
+
+    long_networks = _usable_networks(long_state, "withdraw")
+    short_networks = _usable_networks(short_state, "deposit")
+    if not long_networks or not short_networks:
+        return {"status": "unknown", "shared_networks": []}
+
+    shared: list[str] = []
+    for network in sorted(set(long_networks) & set(short_networks)):
+        long_contract = long_networks[network]
+        short_contract = short_networks[network]
+        if long_contract and short_contract and long_contract.casefold() != short_contract.casefold():
+            continue
+        shared.append(network)
+    return {
+        "status": "compatible" if shared else "incompatible",
+        "shared_networks": shared,
+    }
+
+
+def _usable_networks(state: dict[str, Any], direction: str) -> dict[str, str | None]:
+    networks = state.get("networks") if isinstance(state, dict) else None
+    if not isinstance(networks, list):
+        return {}
+    output: dict[str, str | None] = {}
+    for item in networks:
+        if not isinstance(item, dict) or item.get(direction) is not True:
+            continue
+        network = _normalize_network(item.get("network"))
+        if network:
+            output[network] = str(item.get("contract") or "").strip() or None
+    return output
+
+
+def _normalize_network(value: Any) -> str:
+    text = "".join(ch for ch in str(value or "").casefold() if ch.isalnum())
+    return {
+        "eth": "ethereum",
+        "erc20": "ethereum",
+        "ethereum": "ethereum",
+        "bep20": "bsc",
+        "bep20bsc": "bsc",
+        "binancesmartchain": "bsc",
+        "trx": "tron",
+        "trc20": "tron",
+    }.get(text, text)
+
+
 def refresh_public_rails(
     snapshot: dict[str, Any],
     *,

@@ -64,7 +64,12 @@ CEX_INSTRUMENT_ALIASES = {
     ("Binance", "ALL"): "BINANCE_ALL_INDEX",
     ("Gate", "ALL"): "GATE_ALL_INDEX",
     ("Mexc", "ALL"): "MEXC_ALL_INDEX",
+    # QNTX is a tokenized-equity instrument. Some venue adapters expose it as
+    # QNT, which otherwise collides with the unrelated Quant crypto asset.
+    ("OKX", "QNT"): "QNTX",
+    ("Hyperliquid", "XYZ-QNT"): "QNTX",
 }
+HIGH_DISLOCATION_IDENTITY_THRESHOLD_PCT = 5.0
 
 
 class OkxDexQuoteSource:
@@ -792,6 +797,15 @@ def pairwise_candidates(
                 identity_registry,
             ),
         ]
+        if (
+            identity is None
+            and max(
+                abs(pair.executable_spread_pct),
+                abs(pair.depth_weighted_spread_pct),
+            )
+            >= HIGH_DISLOCATION_IDENTITY_THRESHOLD_PCT
+        ):
+            blockers.append("mirage_guard:high_dislocation_identity_unverified")
         if source_kind == SOURCE_DEX_DISCOVERED and long_quote.market_type == "Futures":
             blockers.append("dex_derivative_executor_missing")
         attestation_note = None
@@ -1380,8 +1394,6 @@ def _symbol_items(symbol_map: Mapping[str, str]) -> Iterable[tuple[str, str]]:
 
 def _market_token(market: Mapping[str, Any], symbol: str) -> str:
     base = str(market.get("base") or symbol.split("/", 1)[0]).upper()
-    if "-" in base:
-        return base.rsplit("-", 1)[-1].upper()
     return base
 
 

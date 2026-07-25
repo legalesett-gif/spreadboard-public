@@ -454,6 +454,7 @@ def api_market_spreads(board_path: Path, query: dict[str, list[str]] | None = No
             min_abs_funding_apr_pct=min_funding_apr,
             funding_only=_query_bool(query, "funding_only"),
             include_stale=_market_include_stale(query),
+            include_unverified=_query_bool(query, "include_unverified"),
             sort_by=_query_first(query, "sort") or "edge",
             direction=_query_first(query, "direction") or "desc",
             offset=offset,
