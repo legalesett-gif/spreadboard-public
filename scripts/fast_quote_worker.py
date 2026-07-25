@@ -22,10 +22,7 @@ def main() -> int:
     args = parser.parse_args()
 
     refresher = FastQuoteRefresher()
-    try:
-        summary = refresher.refresh(args.snapshot_path, route_limit=args.route_limit)
-    finally:
-        refresher.close()
+    summary = refresher.refresh(args.snapshot_path, route_limit=args.route_limit)
     print(json.dumps(summary, sort_keys=True))
     return 0 if summary.get("status") == "ok" else 1
 
