@@ -179,6 +179,30 @@ class SpreadBoardServer(ThreadingHTTPServer):
 class SpreadBoardHandler(BaseHTTPRequestHandler):
     server: SpreadBoardServer
 
+    def do_HEAD(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        public_paths = {
+            "/",
+            "/markets",
+            "/intel",
+            "/triage",
+            "/arbitrage",
+            "/charts",
+            "/signals",
+            "/funding",
+            "/community",
+            "/playbook",
+            "/learn",
+            "/profile",
+            "/alerts",
+            "/watchlist",
+            "/favicon.ico",
+        }
+        if parsed.path in public_paths or parsed.path.startswith(("/pair/", "/token/", "/api/")):
+            self._send_empty(HTTPStatus.OK)
+            return
+        self.send_error(HTTPStatus.NOT_FOUND, "not found")
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
