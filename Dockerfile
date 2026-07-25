@@ -27,4 +27,4 @@ EXPOSE 8200
 USER spreadboard
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
     CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('PORT', '8200')}/api/health\", timeout=4)"]
-CMD ["uv", "run", "python", "scripts/run_spreadboard_service.py"]
+CMD ["/app/.venv/bin/python", "scripts/run_spreadboard_service.py"]
