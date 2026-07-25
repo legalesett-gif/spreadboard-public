@@ -56,13 +56,16 @@ class FastQuoteRefresher:
             payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             return {"status": "unavailable", "updated": 0, "error": type(exc).__name__}
-        rows = [
-            row
-            for bucket in ("api_discovered_rows", "dex_discovered_rows")
-            for row in payload.get(bucket) or []
-            if isinstance(row, dict)
-            and not any(str(item).startswith("mirage_guard:") for item in row.get("blockers") or [])
-        ]
+        rows = []
+        for bucket in ("api_discovered_rows", "dex_discovered_rows"):
+            for row in payload.get(bucket) or []:
+                if not isinstance(row, dict) or any(
+                    str(item).startswith("mirage_guard:") for item in row.get("blockers") or []
+                ):
+                    continue
+                spread = _number(row.get("depth_weighted_spread_pct"), -999999.0)
+                if 0.0 <= spread <= 5.0:
+                    rows.append(row)
         selected = sorted(
             rows,
             key=lambda row: _number(row.get("depth_weighted_spread_pct"), -999999.0),
