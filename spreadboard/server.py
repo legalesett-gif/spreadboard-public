@@ -1385,7 +1385,7 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
         {render_market_metric('Assets', summary.get('matching_tokens'), 'grouped, no duplicates')}
         {render_market_metric('Venue pairs', summary.get('matching_rows'), 'expandable routes')}
         {render_market_metric('Funding pairs', summary.get('funding_rows'), 'paired carry')}
-        {render_market_metric('Largest edge', fmt_pct(summary.get('max_executable_spread_pct')), 'matched $50 VWAP')}
+        {render_market_metric('Largest edge', fmt_pct(summary.get('max_depth_weighted_spread_pct')), 'matched $50 VWAP')}
       </section>
       {render_market_filter_bar(data, query)}
       <section class="market-layout terminal-layout grouped-layout">
@@ -1541,7 +1541,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         <div class="group-number">
           <span>Best spread</span>
           <strong class="{spread_class(group.get('best_edge_pct'))}">{fmt_pct(group.get('best_edge_pct'))}</strong>
-          <em>{fmt_pct(best.get('executable_spread_pct'))} top book · $50 VWAP ranked</em>
+          <em>{fmt_pct(best.get('depth_weighted_spread_pct'))} matched $50 VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book</em>
         </div>
         <div class="group-number">
           <span>Best-route funding</span>
