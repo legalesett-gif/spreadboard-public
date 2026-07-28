@@ -12,8 +12,6 @@ from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-import ccxt
-
 from spreadarb.api_discovery.models import spread_pct
 from spreadarb.api_discovery.orderbook import depth_weighted_price
 
@@ -284,6 +282,8 @@ class FastQuoteRefresher:
         return value
 
     def _client(self, venue: str, market_type: str) -> Any:
+        import ccxt
+
         key = (venue, market_type)
         client = self._clients.get(key)
         if client is not None:
