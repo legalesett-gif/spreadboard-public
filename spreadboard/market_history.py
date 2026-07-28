@@ -18,6 +18,7 @@ def record_snapshot(
     *,
     db_path: Path | str = DEFAULT_DB_PATH,
     retention_days: int = 30,
+    sample_source: str = "board_snapshot",
 ) -> int:
     rows = [
         row
@@ -38,10 +39,10 @@ def record_snapshot(
             notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
             route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
             funding = notes.get("funding") if isinstance(notes.get("funding"), dict) else {}
-            long_bid = _route_price(route_inputs, "long", "bid_vwap", "bid")
-            long_ask = _route_price(route_inputs, "long", "ask_vwap", "ask")
-            short_bid = _route_price(route_inputs, "short", "bid_vwap", "bid")
-            short_ask = _route_price(route_inputs, "short", "ask_vwap", "ask")
+            long_bid = _route_price(route_inputs, "long", "bid", "bid_vwap")
+            long_ask = _route_price(route_inputs, "long", "ask", "ask_vwap")
+            short_bid = _route_price(route_inputs, "short", "bid", "bid_vwap")
+            short_ask = _route_price(route_inputs, "short", "ask", "ask_vwap")
             connection.execute(
                 """
                 INSERT OR IGNORE INTO route_points (
@@ -49,8 +50,12 @@ def record_snapshot(
                     short_venue, short_market_type, executable_spread_pct,
                     depth_weighted_spread_pct, funding_apr_pct, funding_daily_pct,
                     long_price, short_price, long_bid_price, long_ask_price,
-                    short_bid_price, short_ask_price, exit_spread_pct
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    short_bid_price, short_ask_price, exit_spread_pct,
+                    sample_source, target_notional_usd,
+                    long_current_funding_pct, short_current_funding_pct,
+                    long_funding_interval_hours, short_funding_interval_hours,
+                    long_next_funding_ts_us, short_next_funding_ts_us
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     route_key,
@@ -72,6 +77,14 @@ def record_snapshot(
                     short_bid,
                     short_ask,
                     _exit_spread_pct(long_bid, short_ask),
+                    sample_source,
+                    _float_or_none(row.get("target_notional_usd")) or 50.0,
+                    _route_price(route_inputs, "long", "current_funding_pct"),
+                    _route_price(route_inputs, "short", "current_funding_pct"),
+                    _route_price(route_inputs, "long", "funding_interval_hours"),
+                    _route_price(route_inputs, "short", "funding_interval_hours"),
+                    _route_int(route_inputs, "long", "next_funding_ts_us"),
+                    _route_int(route_inputs, "short", "next_funding_ts_us"),
                 ),
             )
             inserted += int(connection.execute("SELECT changes()").fetchone()[0] > 0)
@@ -86,12 +99,26 @@ def record_snapshot(
     return inserted
 
 
+def record_route(
+    row: dict[str, Any],
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+    sample_source: str = "live_chart_exact_route",
+) -> int:
+    return record_snapshot(
+        {"api_discovered_rows": [row]},
+        db_path=db_path,
+        sample_source=sample_source,
+    )
+
+
 def load_history(
     *,
     route_key: str | None = None,
     token: str | None = None,
     route_kind: str | None = None,
     max_points: int = 240,
+    since_us: int | None = None,
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> list[dict[str, Any]]:
     connection = _connect(db_path)
@@ -106,6 +133,9 @@ def load_history(
     if route_kind:
         clauses.append("route_kind = ?")
         params.append(str(route_kind).upper())
+    if since_us is not None:
+        clauses.append("quote_ts_us >= ?")
+        params.append(int(since_us))
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     params.append(max(1, min(5000, int(max_points))))
     try:
@@ -115,7 +145,11 @@ def load_history(
                    short_venue, short_market_type, executable_spread_pct,
                    depth_weighted_spread_pct, funding_apr_pct, funding_daily_pct,
                    long_price, short_price, long_bid_price, long_ask_price,
-                   short_bid_price, short_ask_price, exit_spread_pct
+                   short_bid_price, short_ask_price, exit_spread_pct,
+                   sample_source, target_notional_usd,
+                   long_current_funding_pct, short_current_funding_pct,
+                   long_funding_interval_hours, short_funding_interval_hours,
+                   long_next_funding_ts_us, short_next_funding_ts_us
             FROM route_points
             {where}
             ORDER BY quote_ts_us DESC
@@ -143,11 +177,8 @@ def route_key_for(row: dict[str, Any]) -> str:
 def route_kind_for(row: dict[str, Any]) -> str:
     long_type = str(row.get("long_market_type") or "")
     short_type = str(row.get("short_market_type") or "")
-    venues = f"{row.get('long_venue') or ''} {row.get('short_venue') or ''}".casefold()
     source_kind = str(row.get("source_kind") or "")
-    is_dex = source_kind == "dex_discovered" or any(
-        item in venues for item in ("dex", "jupiter", "0x", "hyperliquid", "aster")
-    )
+    is_dex = source_kind == "dex_discovered" or "DEX" in {long_type, short_type}
     if is_dex and "Futures" in {long_type, short_type}:
         return "DEX-FUTURES"
     if is_dex:
@@ -168,6 +199,7 @@ def _connect(path: Path | str) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout=5000")
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute(
         """
@@ -191,6 +223,14 @@ def _connect(path: Path | str) -> sqlite3.Connection:
             short_bid_price REAL,
             short_ask_price REAL,
             exit_spread_pct REAL,
+            sample_source TEXT,
+            target_notional_usd REAL,
+            long_current_funding_pct REAL,
+            short_current_funding_pct REAL,
+            long_funding_interval_hours REAL,
+            short_funding_interval_hours REAL,
+            long_next_funding_ts_us INTEGER,
+            short_next_funding_ts_us INTEGER,
             PRIMARY KEY (route_key, quote_ts_us)
         )
         """
@@ -203,6 +243,14 @@ def _connect(path: Path | str) -> sqlite3.Connection:
             "short_bid_price": "REAL",
             "short_ask_price": "REAL",
             "exit_spread_pct": "REAL",
+            "sample_source": "TEXT",
+            "target_notional_usd": "REAL",
+            "long_current_funding_pct": "REAL",
+            "short_current_funding_pct": "REAL",
+            "long_funding_interval_hours": "REAL",
+            "short_funding_interval_hours": "REAL",
+            "long_next_funding_ts_us": "INTEGER",
+            "short_next_funding_ts_us": "INTEGER",
         },
     )
     connection.execute(
@@ -226,6 +274,13 @@ def _route_price(route_inputs: Any, side: str, *keys: str) -> float | None:
     if not isinstance(value, dict):
         return None
     return _float_or_none(*(value.get(key) for key in keys))
+
+
+def _route_int(route_inputs: Any, side: str, key: str) -> int | None:
+    value = route_inputs.get(side) if isinstance(route_inputs, dict) else {}
+    if not isinstance(value, dict):
+        return None
+    return _int_or_none(value.get(key))
 
 
 def _exit_spread_pct(long_bid: float | None, short_ask: float | None) -> float | None:

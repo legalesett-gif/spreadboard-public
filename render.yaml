@@ -19,6 +19,12 @@ services:
         value: "12"
       - key: SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS
         value: "60"
+      - key: SPREADBOARD_CHART_SAMPLE_SECONDS
+        value: "15"
+      - key: SPREADBOARD_CHART_SAMPLE_TIMEOUT_SECONDS
+        value: "22"
+      - key: SPREADBOARD_CHART_SAMPLE_CONCURRENCY
+        value: "2"
       - key: SPREADBOARD_DATA_DIR
         value: /app/runtime
       - key: SPREADBOARD_LIGHTWEIGHT_MODE

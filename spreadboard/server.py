@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -30,6 +31,12 @@ _MARKET_CACHE_TTL_SECONDS = 20.0
 _MARKET_CACHE_LOCK = threading.Lock()
 _MARKET_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 _MARKET_CACHE_INFLIGHT: dict[tuple[Any, ...], threading.Event] = {}
+_CHART_SAMPLE_LOCK = threading.Lock()
+_CHART_SAMPLE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_CHART_SAMPLE_INFLIGHT: dict[str, threading.Event] = {}
+_CHART_SAMPLE_SLOTS = threading.BoundedSemaphore(
+    max(1, int(os.environ.get("SPREADBOARD_CHART_SAMPLE_CONCURRENCY", "2")))
+)
 _PUBLIC_INTEL_FEED_URL = os.environ.get(
     "SPREADBOARD_PUBLIC_INTEL_URL",
     "https://gist.githubusercontent.com/legalesett-gif/"
@@ -1198,20 +1205,58 @@ def _canonical_pair_row(row: dict[str, Any]) -> dict[str, Any]:
 def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
     query = query or {}
     points = int(_query_float(query, "max_points", 240) or 240)
-    public_rows = market_history.load_history(route_key=route_key, max_points=points)
+    hours = max(1.0, min(_query_float(query, "hours", 24) or 24, 24 * 30))
+    since_us = int((time.time() - hours * 3600) * 1_000_000)
+    current = _find_canonical_route(route_key, board_path)
+    sample = (
+        _refresh_chart_route(current)
+        if current is not None and _query_bool(query, "live")
+        else {"status": "idle"}
+    )
+    public_rows = market_history.load_history(
+        route_key=route_key,
+        max_points=points,
+        since_us=since_us,
+    )
     if public_rows:
         return {
             "ok": True,
             "mode": "canonical_public_api_history",
             "route_key": route_key,
             "count": len(public_rows),
+            "sample": sample,
+            "meta": _history_meta(public_rows),
             "rows": public_rows,
         }
+    if current is not None:
+        rows = [_current_history_point(current)]
+        return {
+            "ok": True,
+            "mode": "canonical_public_api_current_snapshot",
+            "route_key": route_key,
+            "count": 1,
+            "collecting": True,
+            "sample": sample,
+            "meta": _history_meta(rows),
+            "rows": rows,
+        }
+    rows = board.load_history(board_path, route_key=route_key, max_points=points)
+    return {
+        "ok": bool(rows),
+        "route_key": route_key,
+        "count": len(rows),
+        "sample": sample,
+        "meta": _history_meta(rows),
+        "rows": [_decorate_history_row(row) for row in rows],
+    }
+
+
+def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | None:
     market = api_market_spreads(
         board_path,
         {"limit": ["500"], "include_stale": ["0"]},
     )
-    current = next(
+    return next(
         (
             row
             for row in market.get("rows") or []
@@ -1219,25 +1264,126 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
         ),
         None,
     )
-    if current is not None:
-        return {
-            "ok": True,
-            "mode": "canonical_public_api_current_snapshot",
-            "route_key": route_key,
-            "count": 1,
-            "collecting": True,
-            "rows": [_current_history_point(current)],
+
+
+def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
+    route_key = str(row.get("route_key") or "")
+    min_interval = max(
+        8.0,
+        float(os.environ.get("SPREADBOARD_CHART_SAMPLE_SECONDS", "15")),
+    )
+    now = time.monotonic()
+    with _CHART_SAMPLE_LOCK:
+        cached = _CHART_SAMPLE_CACHE.get(route_key)
+        if cached and now - cached[0] < min_interval:
+            return {**cached[1], "cached": True}
+        inflight = _CHART_SAMPLE_INFLIGHT.get(route_key)
+        if inflight is None:
+            inflight = threading.Event()
+            _CHART_SAMPLE_INFLIGHT[route_key] = inflight
+            leader = True
+        else:
+            leader = False
+    if not leader:
+        inflight.wait(timeout=25.0)
+        with _CHART_SAMPLE_LOCK:
+            cached = _CHART_SAMPLE_CACHE.get(route_key)
+        return {**(cached[1] if cached else {"status": "timeout"}), "cached": True}
+
+    result: dict[str, Any]
+    if not _CHART_SAMPLE_SLOTS.acquire(timeout=1.5):
+        result = {"status": "busy", "error": "chart_sampler_capacity"}
+        with _CHART_SAMPLE_LOCK:
+            _CHART_SAMPLE_CACHE[route_key] = (time.monotonic(), result)
+            event = _CHART_SAMPLE_INFLIGHT.pop(route_key, None)
+            if event is not None:
+                event.set()
+        return result
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve().parents[1] / "scripts/route_quote_worker.py"),
+    ]
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=Path(__file__).resolve().parents[1],
+            input=json.dumps(row, separators=(",", ":"), default=str),
+            capture_output=True,
+            text=True,
+            timeout=float(os.environ.get("SPREADBOARD_CHART_SAMPLE_TIMEOUT_SECONDS", "22")),
+            check=False,
+        )
+        worker = json.loads((completed.stdout or "").strip().splitlines()[-1])
+        quoted_row = worker.get("row") if isinstance(worker, dict) else None
+        if completed.returncode == 0 and isinstance(quoted_row, dict):
+            inserted = market_history.record_route(
+                quoted_row,
+                sample_source="live_chart_exact_route",
+            )
+            result = {
+                "status": "ok",
+                "inserted": inserted,
+                "quote_ts_us": quoted_row.get("quote_ts_us"),
+                "target_notional_usd": worker.get("target_notional_usd") or 50.0,
+                "duration_ms": round((time.monotonic() - started) * 1000),
+            }
+        else:
+            result = {
+                "status": "unavailable",
+                "error": str((worker or {}).get("error") or "route_quote_failed")[:120],
+                "duration_ms": round((time.monotonic() - started) * 1000),
+            }
+    except subprocess.TimeoutExpired:
+        result = {"status": "timeout", "error": "route_quote_timeout"}
+    except (IndexError, json.JSONDecodeError, OSError) as exc:
+        result = {
+            "status": "unavailable",
+            "error": f"{type(exc).__name__}:chart_sampler_failed"[:120],
         }
-    rows = board.load_history(board_path, route_key=route_key, max_points=points)
+    finally:
+        _CHART_SAMPLE_SLOTS.release()
+    with _CHART_SAMPLE_LOCK:
+        _CHART_SAMPLE_CACHE[route_key] = (time.monotonic(), result)
+        event = _CHART_SAMPLE_INFLIGHT.pop(route_key, None)
+        if event is not None:
+            event.set()
+    return result
+
+
+def _history_meta(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    timestamps = sorted(
+        int(value)
+        for row in rows
+        if (value := _float_or_none(row.get("quote_ts_us"))) is not None
+    )
+    intervals = [
+        (later - earlier) / 1_000_000.0
+        for earlier, later in zip(timestamps, timestamps[1:])
+        if later > earlier
+    ]
+    cadence = sorted(intervals)[len(intervals) // 2] if intervals else None
+    latest = timestamps[-1] if timestamps else None
     return {
-        "ok": bool(rows),
-        "route_key": route_key,
-        "count": len(rows),
-        "rows": [_decorate_history_row(row) for row in rows],
+        "first_quote_ts_us": timestamps[0] if timestamps else None,
+        "last_quote_ts_us": latest,
+        "age_seconds": max(0.0, time.time() - latest / 1_000_000.0) if latest else None,
+        "median_interval_seconds": cadence,
+        "gap_threshold_seconds": max(90.0, cadence * 3.0) if cadence else 90.0,
+        "target_notional_usd": next(
+            (
+                _float_or_none(row.get("target_notional_usd"))
+                for row in reversed(rows)
+                if _float_or_none(row.get("target_notional_usd")) is not None
+            ),
+            50.0,
+        ),
     }
 
 
 def _current_history_point(row: dict[str, Any]) -> dict[str, Any]:
+    long_bid = _float_or_none(row.get("long_bid"))
+    short_ask = _float_or_none(row.get("short_ask"))
     return {
         "route_key": row.get("route_key"),
         "quote_ts_us": row.get("quote_ts_us"),
@@ -1257,7 +1403,13 @@ def _current_history_point(row: dict[str, Any]) -> dict[str, Any]:
         "long_ask_price": row.get("long_ask"),
         "short_bid_price": row.get("short_bid"),
         "short_ask_price": row.get("short_ask"),
-        "exit_spread_pct": None,
+        "exit_spread_pct": (
+            (long_bid - short_ask) / short_ask * 100.0
+            if long_bid is not None and short_ask is not None and short_ask > 0
+            else None
+        ),
+        "sample_source": "current_board_snapshot",
+        "target_notional_usd": 50.0,
     }
 
 
@@ -2701,7 +2853,7 @@ def render_charts_page(board_path: Path, config: dict[str, Any], query: dict[str
         if selected_row is not None
         else []
     )
-    window = (_query_first(query, "window") or "1d").casefold()
+    window = (_query_first(query, "window") or "1h").casefold()
     history = filter_chart_history(history, window)
     body = f"""
     <section class="charts-page">
@@ -2901,7 +3053,7 @@ def render_chart_blank_state() -> str:
 
 
 def filter_chart_history(history: list[dict[str, Any]], window: str) -> list[dict[str, Any]]:
-    hours = {"1h": 1, "1d": 24, "7d": 168, "30d": 720}.get(window, 24)
+    hours = {"1h": 1, "6h": 6, "1d": 24, "7d": 168, "30d": 720}.get(window, 1)
     cutoff_us = int((time.time() - hours * 3600) * 1_000_000)
     return [
         row
@@ -2920,7 +3072,7 @@ def render_selected_chart(
     long_leg = legs.get("long") or {}
     short_leg = legs.get("short") or {}
     route_key = board.route_key_url(str(row.get("route_key") or ""))
-    windows = [("1h", "1H"), ("1d", "1D"), ("7d", "7D"), ("30d", "30D")]
+    windows = [("1h", "1H"), ("6h", "6H"), ("1d", "1D"), ("7d", "7D"), ("30d", "30D")]
     return f"""
     <section class="selected-chart">
       <header class="selected-chart-head">
@@ -2936,8 +3088,12 @@ def render_selected_chart(
         </aside>
         <div class="chart-plot-stack">
           <section class="chart-plot-panel">
-            <div class="chart-plot-title"><span>Spread</span><strong>Entry {fmt_pct(row.get('executable_spread_pct'))}</strong><em>Exit uses sell-long / buy-short quotes</em></div>
-            {render_spread_history_chart(history)}
+            <div class="chart-plot-title">
+              <span>Spread progression</span>
+              <strong data-chart-headline>In $50 {fmt_pct(row.get('depth_weighted_spread_pct'))}</strong>
+              <em data-chart-live-state>Connecting to exact route...</em>
+            </div>
+            {render_live_spread_chart(str(row.get('route_key') or ''), history, window)}
           </section>
           <section class="chart-plot-panel funding-plot">
             <div class="chart-plot-title"><span>Funding events</span><button type="button" data-funding-open>History</button></div>
@@ -2947,7 +3103,7 @@ def render_selected_chart(
       </div>
       <footer class="selected-chart-foot">
         <a href="/pair/{h(route_key)}">Open full pair details</a>
-        <span>{h(len(history))} spread observations in this window</span>
+        <span data-chart-observation-count>{h(len(history))} observations in this window</span>
       </footer>
     </section>
     """
@@ -2961,10 +3117,10 @@ def render_chart_leg_stats(label: str, leg: dict[str, Any]) -> str:
     <article>
       <header><span>{h(label)}</span>{render_venue_link(leg.get('venue'), leg.get('market_type'), leg.get('exchange_url'))}<em>{h(leg.get('market_type'))}</em></header>
       <div><span>Volume 24h</span><strong>{fmt_money(leg.get('volume_24h_usd'))}</strong></div>
-      <div><span>Live funding</span><strong>{fmt_signed_pct(leg.get('current_funding_pct'), digits=4) if has_funding else 'not applicable'}</strong></div>
+      <div><span>Live funding</span><strong data-live-funding="{h(leg.get('side'))}">{fmt_signed_pct(leg.get('current_funding_pct'), digits=4) if has_funding else 'not applicable'}</strong></div>
       <div><span>{'Settled 24h' if settled is not None else '24h at current' if has_funding else 'Funding 24h'}</span><strong>{fmt_signed_pct(funding_24h, digits=4) if has_funding else 'not applicable'}</strong></div>
-      <div><span>Payout</span><strong>{h(funding_interval_label(leg.get('funding_interval_hours'), leg.get('funding_interval_assumed'))) if has_funding else 'not applicable'}</strong></div>
-      <div><span>Next</span><strong>{h(fmt_next_funding(leg.get('next_funding_ts_us'))) if has_funding else 'not applicable'}</strong></div>
+      <div><span>Payout</span><strong data-live-cadence="{h(leg.get('side'))}">{h(funding_interval_label(leg.get('funding_interval_hours'), leg.get('funding_interval_assumed'))) if has_funding else 'not applicable'}</strong></div>
+      <div><span>Next</span><strong data-live-next="{h(leg.get('side'))}">{h(fmt_next_funding(leg.get('next_funding_ts_us'))) if has_funding else 'not applicable'}</strong></div>
     </article>
     """
 
@@ -2979,6 +3135,205 @@ def render_spread_history_chart(history: list[dict[str, Any]]) -> str:
         "Entry and exit spread history",
         independent_lanes=True,
     )
+
+
+def render_live_spread_chart(
+    route_key: str,
+    history: list[dict[str, Any]],
+    window: str,
+) -> str:
+    hours = {"1h": 1, "6h": 6, "1d": 24, "7d": 168, "30d": 720}.get(window, 1)
+    initial = {
+        "ok": True,
+        "rows": history,
+        "meta": _history_meta(history),
+        "count": len(history),
+        "sample": {"status": "idle"},
+    }
+    return f"""
+    <div class="live-spread-chart" data-live-spread-chart>
+      <div class="live-chart-legend" aria-label="Chart series">
+        <span class="matched"><i></i>In $50 VWAP <strong data-latest-matched>—</strong></span>
+        <span class="entry"><i></i>In top book <strong data-latest-entry>—</strong></span>
+        <span class="exit"><i></i>Out top book <strong data-latest-exit>—</strong></span>
+      </div>
+      <div class="live-chart-canvas" data-live-chart-canvas aria-live="polite"></div>
+      <div class="live-chart-note">
+        <span>In = buy long ask, sell short bid. Out = sell long bid, buy short ask.</span>
+        <strong data-live-chart-age>Waiting for sample</strong>
+      </div>
+    </div>
+    <script type="application/json" id="live-chart-initial">{json_script_data(initial)}</script>
+    <script>
+    (() => {{
+      const root = document.querySelector('[data-live-spread-chart]');
+      if (!root) return;
+      const routeKey = {json.dumps(route_key)};
+      const hours = {hours};
+      const canvas = root.querySelector('[data-live-chart-canvas]');
+      const state = document.querySelector('[data-chart-live-state]');
+      const headline = document.querySelector('[data-chart-headline]');
+      const count = document.querySelector('[data-chart-observation-count]');
+      const age = root.querySelector('[data-live-chart-age]');
+      let timer = null;
+      let controller = null;
+      let refreshing = false;
+      const pct = (value) => Number.isFinite(Number(value))
+        ? `${{Number(value) >= 0 ? '+' : ''}}${{Number(value).toFixed(3)}}%`
+        : '—';
+      const num = (value) => value === null || value === undefined || value === ''
+        ? null
+        : (Number.isFinite(Number(value)) ? Number(value) : null);
+      const esc = (value) => String(value).replace(/[&<>"']/g, (char) =>
+        ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}})[char]);
+      const timeLabel = (timestamp, long = false) => new Intl.DateTimeFormat(undefined, {{
+        month: long ? 'short' : undefined,
+        day: long ? '2-digit' : undefined,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: hours <= 1 ? '2-digit' : undefined,
+      }}).format(new Date(timestamp));
+
+      function render(payload) {{
+        const rows = (payload.rows || []).map((row) => ({{
+          ts: (num(row.quote_ts_us) ?? Number.NaN) / 1000,
+          matched: num(row.depth_weighted_spread_pct),
+          entry: num(row.executable_spread_pct),
+          exit: num(row.exit_spread_pct),
+          longFunding: num(row.long_current_funding_pct),
+          shortFunding: num(row.short_current_funding_pct),
+          longInterval: num(row.long_funding_interval_hours),
+          shortInterval: num(row.short_funding_interval_hours),
+          longNext: num(row.long_next_funding_ts_us),
+          shortNext: num(row.short_next_funding_ts_us),
+        }})).filter((row) => Number.isFinite(row.ts)).sort((a, b) => a.ts - b.ts);
+        if (count) count.textContent = `${{rows.length}} observations in this window`;
+        if (!rows.length) {{
+          canvas.innerHTML = '<div class="chart-data-empty">Collecting the first exact-route observation.</div>';
+          return;
+        }}
+        const latest = rows[rows.length - 1];
+        root.querySelector('[data-latest-matched]').textContent = pct(latest.matched);
+        root.querySelector('[data-latest-entry]').textContent = pct(latest.entry);
+        root.querySelector('[data-latest-exit]').textContent = pct(latest.exit);
+        headline.textContent = `In $50 ${{pct(latest.matched)}}`;
+        for (const side of ['long', 'short']) {{
+          const funding = latest[`${{side}}Funding`];
+          const interval = latest[`${{side}}Interval`];
+          const next = latest[`${{side}}Next`];
+          const fundingNode = document.querySelector(`[data-live-funding="${{side}}"]`);
+          const cadenceNode = document.querySelector(`[data-live-cadence="${{side}}"]`);
+          const nextNode = document.querySelector(`[data-live-next="${{side}}"]`);
+          if (fundingNode && Number.isFinite(funding)) fundingNode.textContent = pct(funding);
+          if (cadenceNode && Number.isFinite(interval)) cadenceNode.textContent = `every ${{interval}}h`;
+          if (nextNode && Number.isFinite(next) && next > 0) {{
+            const nextMs = next / 1000;
+            const remaining = Math.max(0, Math.round((nextMs - Date.now()) / 60000));
+            nextNode.textContent = `${{new Date(nextMs).toLocaleTimeString([], {{hour:'2-digit',minute:'2-digit',timeZone:'UTC'}})}} UTC (${{Math.floor(remaining/60)}}h ${{String(remaining%60).padStart(2,'0')}}m)`;
+          }}
+        }}
+        const width = 1000, height = 350, left = 72, right = 22, top = 22, bottom = 40;
+        const values = rows.flatMap((row) => [row.matched, row.entry, row.exit]).filter(Number.isFinite);
+        if (!values.length) {{
+          canvas.innerHTML = '<div class="chart-data-empty">Quotes arrived without enough book depth to calculate spreads.</div>';
+          return;
+        }}
+        let low = Math.min(...values), high = Math.max(...values);
+        const padding = Math.max((high - low) * .1, .02);
+        low -= padding; high += padding;
+        const minTs = rows[0].ts, maxTs = Math.max(rows[rows.length - 1].ts, minTs + 1000);
+        const x = (ts) => left + (ts - minTs) / (maxTs - minTs) * (width - left - right);
+        const y = (value) => top + (high - value) / (high - low) * (height - top - bottom);
+        const gapMs = Math.max(90000, Number(payload.meta?.gap_threshold_seconds || 90) * 1000);
+        function paths(key, className) {{
+          const segments = []; let current = []; let previous = null;
+          rows.forEach((row) => {{
+            const value = row[key];
+            if (!Number.isFinite(value) || (previous !== null && row.ts - previous > gapMs)) {{
+              if (current.length) segments.push(current);
+              current = [];
+            }}
+            if (Number.isFinite(value)) {{
+              current.push(`${{x(row.ts).toFixed(1)}},${{y(value).toFixed(1)}}`);
+              previous = row.ts;
+            }}
+          }});
+          if (current.length) segments.push(current);
+          return segments.map((points) =>
+            `<polyline class="${{className}}" points="${{points.join(' ')}}"></polyline>`
+          ).join('');
+        }}
+        const grid = Array.from({{length: 5}}, (_, index) => {{
+          const value = high - (high - low) * index / 4;
+          const py = top + (height - top - bottom) * index / 4;
+          return `<line x1="${{left}}" y1="${{py}}" x2="${{width-right}}" y2="${{py}}"></line>
+            <text x="${{left-9}}" y="${{py+4}}">${{pct(value)}}</text>`;
+        }}).join('');
+        const ticks = Array.from({{length: 5}}, (_, index) => {{
+          const ts = minTs + (maxTs - minTs) * index / 4;
+          const px = left + (width - left - right) * index / 4;
+          return `<text class="x-label" x="${{px}}" y="${{height-12}}">${{esc(timeLabel(ts, hours >= 24))}}</text>`;
+        }}).join('');
+        const markers = rows.map((row, index) => {{
+          if (rows.length > 250 && index % Math.ceil(rows.length / 250) !== 0 && index !== rows.length - 1) return '';
+          const title = esc(`${{timeLabel(row.ts, true)}} | In $50 ${{pct(row.matched)}} | In top ${{pct(row.entry)}} | Out ${{pct(row.exit)}}`);
+          return `<circle cx="${{x(row.ts)}}" cy="${{y(row.matched)}}" r="7" class="chart-hit"><title>${{title}}</title></circle>`;
+        }}).join('');
+        canvas.innerHTML = `<svg class="live-chart-svg" viewBox="0 0 ${{width}} ${{height}}" role="img" aria-label="Live entry, matched-size and exit spread progression">
+          <g class="live-chart-grid">${{grid}}${{ticks}}</g>
+          <line class="zero-line" x1="${{left}}" y1="${{y(0)}}" x2="${{width-right}}" y2="${{y(0)}}"></line>
+          <g class="live-chart-lines">${{paths('entry','entry')}}${{paths('matched','matched')}}${{paths('exit','exit')}}</g>
+          <g class="live-chart-hits">${{markers}}</g>
+        </svg>`;
+        const ageSeconds = Number(payload.meta?.age_seconds);
+        age.textContent = Number.isFinite(ageSeconds)
+          ? `Latest sample ${{Math.round(ageSeconds)}}s ago`
+          : 'Sample time unavailable';
+        age.classList.toggle('stale', Number.isFinite(ageSeconds) && ageSeconds > 60);
+      }}
+
+      async function refresh() {{
+        if (document.hidden || refreshing) return;
+        refreshing = true;
+        controller = new AbortController();
+        state.textContent = 'Sampling exact public order books...';
+        try {{
+          const response = await fetch(`/api/history/${{encodeURIComponent(routeKey)}}?live=1&hours=${{hours}}&max_points=5000`, {{
+            cache: 'no-store',
+            signal: controller.signal,
+          }});
+          if (!response.ok) throw new Error(`HTTP ${{response.status}}`);
+          const payload = await response.json();
+          render(payload);
+          const sample = payload.sample || {{}};
+          state.textContent = sample.status === 'ok'
+            ? `Live · exact books · ${{sample.duration_ms || 0}}ms`
+            : sample.cached && payload.meta?.age_seconds <= 60
+              ? 'Live · recent exact sample'
+              : `Sampler ${{sample.status || 'unavailable'}}`;
+          state.classList.toggle('stale', !['ok','idle'].includes(sample.status) && !(sample.cached && payload.meta?.age_seconds <= 60));
+        }} catch (error) {{
+          if (error.name !== 'AbortError') {{
+            state.textContent = 'Live sample unavailable; retained history shown';
+            state.classList.add('stale');
+          }}
+        }} finally {{
+          refreshing = false;
+        }}
+      }}
+      render(JSON.parse(document.getElementById('live-chart-initial').textContent || '{{}}'));
+      refresh();
+      timer = window.setInterval(refresh, 15000);
+      document.addEventListener('visibilitychange', () => {{
+        if (!document.hidden) refresh();
+      }});
+      window.addEventListener('pagehide', () => {{
+        window.clearInterval(timer);
+        controller?.abort();
+      }}, {{once: true}});
+    }})();
+    </script>
+    """
 
 
 def render_funding_history_chart(
@@ -7623,7 +7978,29 @@ body.alert-modal-open {{ overflow: hidden; }}
 .chart-plot-title {{ display: flex; align-items: center; gap: 12px; min-height: 34px; color: var(--terminal-muted); font-size: 10px; }}
 .chart-plot-title strong {{ color: var(--terminal-text); }}
 .chart-plot-title em {{ margin-left: auto; font-style: normal; }}
+.chart-plot-title em.stale {{ color: var(--terminal-danger); }}
 .chart-plot-title button, .funding-history-open {{ margin-left: auto; min-height: 30px; padding: 0 9px; border: 1px solid var(--terminal-line); border-radius: 5px; background: var(--terminal-row); color: var(--terminal-text); cursor: pointer; font: inherit; font-size: 10px; font-weight: 900; }}
+.live-spread-chart {{ min-width: 0; display: grid; grid-template-rows: auto minmax(280px,1fr) auto; }}
+.live-chart-legend {{ min-height: 30px; display: flex; justify-content: flex-end; align-items: center; gap: 14px; flex-wrap: wrap; color: var(--terminal-muted); font-size: 9px; font-weight: 900; }}
+.live-chart-legend span {{ display: inline-flex; align-items: center; gap: 5px; }}
+.live-chart-legend i {{ width: 15px; height: 3px; border-radius: 1px; background: currentColor; }}
+.live-chart-legend .matched {{ color: var(--terminal-accent); }}
+.live-chart-legend .entry {{ color: #4f8cff; }}
+.live-chart-legend .exit {{ color: var(--terminal-danger); }}
+.live-chart-canvas {{ min-width: 0; min-height: 280px; }}
+.live-chart-svg {{ width: 100%; height: 100%; min-height: 280px; overflow: visible; }}
+.live-chart-grid line {{ stroke: var(--terminal-line); stroke-width: 1; }}
+.live-chart-grid text {{ fill: var(--terminal-muted); font-size: 10px; text-anchor: end; }}
+.live-chart-grid text.x-label {{ text-anchor: middle; }}
+.live-chart-lines polyline {{ fill: none; stroke-width: 1.7; vector-effect: non-scaling-stroke; }}
+.live-chart-lines polyline.matched {{ stroke: var(--terminal-accent); stroke-width: 2.7; }}
+.live-chart-lines polyline.entry {{ stroke: #4f8cff; stroke-dasharray: 5 4; }}
+.live-chart-lines polyline.exit {{ stroke: var(--terminal-danger); stroke-width: 2.2; }}
+.live-chart-svg .zero-line {{ stroke: var(--terminal-muted); stroke-width: 1; stroke-dasharray: 3 4; opacity: .65; }}
+.live-chart-hits .chart-hit {{ fill: transparent; cursor: crosshair; }}
+.live-chart-note {{ min-height: 30px; display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--terminal-muted); font-size: 9px; }}
+.live-chart-note strong {{ color: var(--terminal-text); white-space: nowrap; }}
+.live-chart-note strong.stale {{ color: var(--terminal-danger); }}
 .dual-chart-wrap {{ min-width: 0; display: grid; grid-template-rows: auto minmax(0,1fr); }}
 .dual-chart-legend {{ display: flex; justify-content: flex-end; gap: 12px; min-height: 24px; }}
 .dual-chart-legend span {{ font-size: 10px; font-weight: 900; }}

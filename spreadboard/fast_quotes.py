@@ -24,7 +24,9 @@ VENUE_IDS = {
     "Bitget": "bitget",
     "Bybit": "bybit",
     "Coinbase": "coinbaseexchange",
+    "CoinEx": "coinex",
     "Gate": "gateio",
+    "HTX": "htx",
     "Hyperliquid": "hyperliquid",
     "Kraken": "kraken",
     "Kraken Futures": "krakenfutures",
@@ -32,6 +34,8 @@ VENUE_IDS = {
     "Kucoin Futures": "kucoinfutures",
     "Mexc": "mexc",
     "OKX": "okx",
+    "Phemex": "phemex",
+    "WhiteBIT": "whitebit",
 }
 
 NATIVE_FUTURES_VENUES = {
@@ -144,6 +148,59 @@ class FastQuoteRefresher:
         _atomic_write(snapshot_path, payload)
         return payload["fast_quote_refresh"]
 
+    def quote_route(
+        self,
+        row: dict[str, Any],
+        *,
+        target_notional_usd: float = 50.0,
+    ) -> dict[str, Any]:
+        """Reprice one exact route without changing the broad-board snapshot."""
+
+        quoted = json.loads(json.dumps(row))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            long_future = pool.submit(
+                self._leg_quote,
+                quoted,
+                "long",
+                target_notional_usd=target_notional_usd,
+                cache={},
+            )
+            short_future = pool.submit(
+                self._leg_quote,
+                quoted,
+                "short",
+                target_notional_usd=target_notional_usd,
+                cache={},
+            )
+            long_quote = long_future.result()
+            short_quote = short_future.result()
+        if long_quote is None or short_quote is None:
+            return {
+                "status": "unavailable",
+                "error": "exact_route_order_book_unavailable",
+            }
+        executable = spread_pct(long_quote["ask"], short_quote["bid"])
+        depth = spread_pct(long_quote["ask_vwap"], short_quote["bid_vwap"])
+        if executable is None or depth is None:
+            return {
+                "status": "unavailable",
+                "error": "exact_route_target_depth_unavailable",
+            }
+        notes = quoted.setdefault("notes", {})
+        route_inputs = notes.setdefault("route_inputs", {})
+        route_inputs["long"] = {**(route_inputs.get("long") or {}), **long_quote}
+        route_inputs["short"] = {**(route_inputs.get("short") or {}), **short_quote}
+        quoted["executable_spread_pct"] = executable
+        quoted["depth_weighted_spread_pct"] = depth
+        quoted["quote_ts_us"] = min(long_quote["quote_ts_us"], short_quote["quote_ts_us"])
+        quoted["target_notional_usd"] = target_notional_usd
+        return {
+            "status": "ok",
+            "sample_source": "live_chart_exact_route",
+            "target_notional_usd": target_notional_usd,
+            "row": quoted,
+        }
+
     def close(self) -> None:
         for client in self._clients.values():
             close = getattr(client, "close", None)
@@ -170,7 +227,12 @@ class FastQuoteRefresher:
             notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
         )
         leg = route_inputs.get(side) if isinstance(route_inputs.get(side), dict) else {}
-        symbol = str(leg.get("symbol") or "")
+        symbol = str(
+            leg.get("symbol")
+            or row.get(f"{side}_market_symbol")
+            or row.get(f"{side}_symbol")
+            or ""
+        )
         key = (venue, market_type, symbol)
         if not venue or not symbol or venue not in VENUE_IDS:
             return None
@@ -182,6 +244,11 @@ class FastQuoteRefresher:
                 client = self._client(venue, market_type)
                 market = client.market(symbol)
                 book = client.fetch_order_book(symbol, limit=20)
+                funding = (
+                    _ccxt_current_funding(client, symbol)
+                    if market_type == "Futures"
+                    else {}
+                )
                 contract_size = (
                     _number(market.get("contractSize"), 1.0) if market_type == "Futures" else 1.0
                 )
@@ -189,7 +256,11 @@ class FastQuoteRefresher:
                 asks = _levels(book.get("asks"))
             else:
                 bids, asks = native_book
-                contract_size = _number(leg.get("contract_size"), 1.0)
+                funding = _native_current_funding(venue, symbol)
+                contract_size = _number(
+                    leg.get("contract_size") or row.get(f"{side}_contract_size"),
+                    1.0,
+                )
             bid_vwap = depth_weighted_price(bids, target_notional_usd, contract_size=contract_size)
             ask_vwap = depth_weighted_price(asks, target_notional_usd, contract_size=contract_size)
             if not bids or not asks or bid_vwap is None or ask_vwap is None:
@@ -203,6 +274,7 @@ class FastQuoteRefresher:
                 "ask_vwap": ask_vwap,
                 "contract_size": contract_size,
                 "quote_ts_us": int(time.time() * 1_000_000),
+                **funding,
             }
         except Exception:
             value = None
@@ -260,7 +332,12 @@ def _route_leg_key(
     notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
     route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
     leg = route_inputs.get(side) if isinstance(route_inputs.get(side), dict) else {}
-    symbol = str(leg.get("symbol") or "")
+    symbol = str(
+        leg.get("symbol")
+        or row.get(f"{side}_market_symbol")
+        or row.get(f"{side}_symbol")
+        or ""
+    )
     return (venue, market_type, symbol) if venue and market_type and symbol else None
 
 
@@ -335,6 +412,147 @@ def _native_order_book(
     bids = sorted(_levels(raw_bids), key=lambda level: level[0], reverse=True)
     asks = sorted(_levels(raw_asks), key=lambda level: level[0])
     return bids, asks
+
+
+def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
+    base = symbol.split("/", 1)[0].upper()
+    compact = f"{base}USDT"
+    try:
+        if venue in {"Aster", "Binance"}:
+            host = "fapi.asterdex.com" if venue == "Aster" else "fapi.binance.com"
+            payload = _json_url(
+                f"https://{host}/fapi/v1/premiumIndex?"
+                + urlencode({"symbol": compact})
+            )
+            return _funding_fields(
+                payload.get("lastFundingRate"),
+                next_funding_ms=payload.get("nextFundingTime"),
+            )
+        if venue == "Bybit":
+            payload = _json_url(
+                "https://api.bybit.com/v5/market/tickers?"
+                + urlencode({"category": "linear", "symbol": compact})
+            )
+            rows = ((payload.get("result") or {}).get("list") or [])
+            item = rows[0] if rows else {}
+            return _funding_fields(
+                item.get("fundingRate"),
+                interval_hours=item.get("fundingIntervalHour"),
+                next_funding_ms=item.get("nextFundingTime"),
+            )
+        if venue == "OKX":
+            payload = _json_url(
+                "https://www.okx.com/api/v5/public/funding-rate?"
+                + urlencode({"instId": f"{base}-USDT-SWAP"})
+            )
+            rows = payload.get("data") or []
+            item = rows[0] if rows else {}
+            interval = _interval_hours(item.get("fundingTime"), item.get("nextFundingTime"))
+            return _funding_fields(
+                item.get("fundingRate"),
+                interval_hours=interval,
+                next_funding_ms=item.get("nextFundingTime"),
+            )
+        if venue == "Gate":
+            payload = _json_url(
+                f"https://api.gateio.ws/api/v4/futures/usdt/contracts/{base}_USDT"
+            )
+            return _funding_fields(
+                payload.get("funding_rate"),
+                interval_hours=_seconds_to_hours(payload.get("funding_interval")),
+                next_funding_seconds=payload.get("funding_next_apply"),
+            )
+        if venue == "Bitget":
+            payload = _json_url(
+                "https://api.bitget.com/api/v2/mix/market/current-fund-rate?"
+                + urlencode({"symbol": compact, "productType": "USDT-FUTURES"})
+            )
+            rows = payload.get("data") or []
+            item = rows[0] if rows else {}
+            return _funding_fields(
+                item.get("fundingRate"),
+                interval_hours=item.get("fundingRateInterval"),
+                next_funding_ms=item.get("nextUpdate"),
+            )
+        if venue == "Bingx":
+            payload = _json_url(
+                "https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex?"
+                + urlencode({"symbol": f"{base}-USDT"})
+            )
+            item = payload.get("data") or {}
+            return _funding_fields(
+                item.get("lastFundingRate"),
+                next_funding_ms=item.get("nextFundingTime"),
+            )
+    except Exception:
+        return {}
+    return {}
+
+
+def _ccxt_current_funding(client: Any, symbol: str) -> dict[str, Any]:
+    try:
+        if not getattr(client, "has", {}).get("fetchFundingRate"):
+            return {}
+        payload = client.fetch_funding_rate(symbol) or {}
+        interval = payload.get("interval")
+        if isinstance(interval, str) and interval.casefold().endswith("h"):
+            interval = interval[:-1]
+        return _funding_fields(
+            payload.get("fundingRate"),
+            interval_hours=interval,
+            next_funding_ms=payload.get("fundingTimestamp"),
+        )
+    except Exception:
+        return {}
+
+
+def _funding_fields(
+    rate: Any,
+    *,
+    interval_hours: Any = None,
+    next_funding_ms: Any = None,
+    next_funding_seconds: Any = None,
+) -> dict[str, Any]:
+    parsed = _optional_number(rate)
+    if parsed is None:
+        return {}
+    interval = _optional_number(interval_hours)
+    next_ms = _optional_number(next_funding_ms)
+    if next_ms is None:
+        next_seconds = _optional_number(next_funding_seconds)
+        next_ms = next_seconds * 1000 if next_seconds is not None else None
+    return {
+        "current_funding_pct": parsed * 100.0,
+        "funding_interval_hours": interval,
+        "next_funding_ts_us": int(next_ms * 1000) if next_ms is not None else None,
+    }
+
+
+def _json_url(url: str) -> dict[str, Any]:
+    request = Request(url, headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"})
+    with urlopen(request, timeout=6.0) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+def _interval_hours(current_ms: Any, next_ms: Any) -> float | None:
+    current = _optional_number(current_ms)
+    upcoming = _optional_number(next_ms)
+    if current is None or upcoming is None or upcoming <= current:
+        return None
+    return (upcoming - current) / 3_600_000.0
+
+
+def _seconds_to_hours(value: Any) -> float | None:
+    parsed = _optional_number(value)
+    return parsed / 3600.0 if parsed is not None else None
+
+
+def _optional_number(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _number(value: Any, default: float) -> float:
