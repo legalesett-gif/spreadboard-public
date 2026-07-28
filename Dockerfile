@@ -3,6 +3,7 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app:/app/src \
     HOST=0.0.0.0 \
     PORT=8200 \
     SPREADBOARD_REFRESH_SECONDS=300 \
