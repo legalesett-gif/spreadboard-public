@@ -171,7 +171,7 @@ class RefreshLoop:
             "--snapshot-path",
             str(SNAPSHOT_PATH),
             "--route-limit",
-            str(min(12, int(os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "12")))),
+            "12",
         ]
         try:
             result = subprocess.run(
@@ -179,7 +179,10 @@ class RefreshLoop:
                 cwd=ROOT,
                 capture_output=True,
                 text=True,
-                timeout=float(os.environ.get("SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS", "20")),
+                timeout=max(
+                    60.0,
+                    float(os.environ.get("SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS", "60")),
+                ),
                 check=False,
             )
         except subprocess.TimeoutExpired:
