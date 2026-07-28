@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import time
 
 from spreadboard import api_spreads, live, server
 from spreadarb.api_discovery import sources
@@ -135,19 +136,26 @@ def test_native_settled_history_is_not_mislabeled_as_current_funding() -> None:
 
 
 def test_okx_dex_uses_usd_network_fee_not_raw_gas_units() -> None:
+    captured: dict[str, object] = {}
+
+    def sell_quote(**kwargs: object) -> dict[str, str]:
+        captured.update(kwargs)
+        return {
+            "status": "ok",
+            "dex_sell_price_usd": "2.49",
+        }
+
     okx = SimpleNamespace(
         quote_usdc_to_token=lambda **_kwargs: {
             "status": "ok",
             "out_qty": "20",
+            "to_token_decimals": 9,
             "dex_buy_price_usd": "2.5",
             "trade_fee_usd": "0.42",
             "estimate_gas_fee": "123456",
             "router": "Uniswap",
         },
-        quote_token_to_usdc=lambda **_kwargs: {
-            "status": "ok",
-            "dex_sell_price_usd": "2.49",
-        },
+        quote_token_to_usdc=sell_quote,
     )
 
     quote = sources.OkxDexQuoteSource()._quote_asset(
@@ -166,14 +174,51 @@ def test_okx_dex_uses_usd_network_fee_not_raw_gas_units() -> None:
 
     assert quote is not None
     assert quote.gas_estimate_usd == 0.42
+    assert captured["token_decimals"] == 9
+
+
+def test_spread_ceiling_can_be_disabled_without_hiding_large_exact_routes() -> None:
+    assert not sources._spread_ceiling_exceeded(102.2, max_spread_pct=0)
+    assert sources._spread_ceiling_exceeded(102.2, max_spread_pct=100)
+
+
+def test_open_spread_selects_route_before_depth_vwap() -> None:
+    first = SimpleNamespace(
+        displayed_open_spread_pct=4.4,
+        executable_spread_pct=4.4,
+        depth_weighted_spread_pct=1.1,
+    )
+    second = SimpleNamespace(
+        displayed_open_spread_pct=2.0,
+        executable_spread_pct=2.0,
+        depth_weighted_spread_pct=1.8,
+    )
+
+    assert api_spreads._entrance_spread(first) == 4.4
+    assert api_spreads._entrance_spread(first) > api_spreads._entrance_spread(second)
+
+
+def test_short_chart_windows_filter_exact_elapsed_time() -> None:
+    now_us = int(time.time() * 1_000_000)
+    history = [
+        {"quote_ts_us": now_us - 30 * 1_000_000},
+        {"quote_ts_us": now_us - 4 * 60 * 1_000_000},
+        {"quote_ts_us": now_us - 20 * 60 * 1_000_000},
+        {"quote_ts_us": now_us - 50 * 60 * 1_000_000},
+    ]
+
+    assert len(server.filter_chart_history(history, "1m")) == 1
+    assert len(server.filter_chart_history(history, "5m")) == 2
+    assert len(server.filter_chart_history(history, "30m")) == 3
+    assert len(server.filter_chart_history(history, "1h")) == 4
 
 
 def test_validated_reference_venues_are_enabled() -> None:
     spot = sources.default_enabled_cex_source().venues
     futures = sources.default_enabled_cex_futures_source().venues
 
-    assert {"HTX", "Phemex", "CoinEx", "WhiteBIT"} <= set(spot)
-    assert {"HTX", "Phemex", "CoinEx", "WhiteBIT"} <= set(futures)
+    assert {"HTX", "Phemex", "CoinEx", "WhiteBIT", "BitMart", "XT"} <= set(spot)
+    assert {"HTX", "Phemex", "CoinEx", "WhiteBIT", "BitMart", "XT"} <= set(futures)
     assert "Upbit" not in spot
 
 

@@ -211,8 +211,8 @@ def test_aster_and_hyperliquid_futures_are_not_mislabeled_as_dex() -> None:
 def test_live_chart_surface_explains_series_and_polls_exact_route() -> None:
     html = server.render_live_spread_chart(_route()["route_key"], [], "1h")
 
-    assert "In $50 VWAP" in html
-    assert "In top book" in html
+    assert "$50 VWAP" in html
+    assert "Open ask → bid" in html
     assert "Out top book" in html
     assert "?live=1&amp;" not in html
     assert "?live=1&hours=" in html

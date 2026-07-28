@@ -150,7 +150,7 @@ def load_spreads(
         else [
             row
             for row in all_rows
-            if not _is_mirage_guarded(row) and not _is_non_crypto_contract(row)
+            if not _is_mirage_guarded(row)
         ]
     )
     public_universe = (
@@ -725,11 +725,6 @@ def _is_mirage_guarded(row: SpreadTerminalRow) -> bool:
     return any(str(item).startswith("mirage_guard:") for item in row.blockers)
 
 
-def _is_non_crypto_contract(row: SpreadTerminalRow) -> bool:
-    name = str(row.token_name or "").casefold()
-    return "prestocks" in name or row.token in {"ANTHROPIC", "OPENAI"}
-
-
 def _normalize_kind_filter(value: Any) -> str:
     kind = str(value or "").upper().strip()
     return {
@@ -819,8 +814,8 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
         grouped.setdefault(row.token, []).append(row)
     output: list[dict[str, Any]] = []
     for token, token_rows in grouped.items():
-        # The public entrance is the matched-size VWAP. A thin first level can
-        # remain visible as context, but it must never select or rank a route.
+        # The headline matches the board convention: buy at the current ask and
+        # sell at the current bid. Matched-size VWAP remains execution context.
         token_rows.sort(
             key=lambda row: (
                 _entrance_spread(row),
@@ -987,17 +982,29 @@ def _sort_value(row: SpreadTerminalRow, sort_by: str) -> Any:
 
 
 def _entrance_spread(row: SpreadTerminalRow) -> float:
+    open_spread = _float_or_none(row.displayed_open_spread_pct)
+    if open_spread is not None:
+        return open_spread
+    executable = _float_or_none(row.executable_spread_pct)
+    if executable is not None:
+        return executable
     depth_spread = _float_or_none(row.depth_weighted_spread_pct)
     if depth_spread is not None:
         return depth_spread
-    return _float_or_none(row.executable_spread_pct) or -999999.0
+    return -999999.0
 
 
 def _entrance_spread_dict(row: dict[str, Any]) -> float:
+    open_spread = _float_or_none(row.get("displayed_open_spread_pct"))
+    if open_spread is not None:
+        return open_spread
+    executable = _float_or_none(row.get("executable_spread_pct"))
+    if executable is not None:
+        return executable
     depth_spread = _float_or_none(row.get("depth_weighted_spread_pct"))
     if depth_spread is not None:
         return depth_spread
-    return _float_or_none(row.get("executable_spread_pct")) or -999999.0
+    return -999999.0
 
 
 def _effective_funding_24h(row: SpreadTerminalRow) -> float | None:

@@ -33,6 +33,8 @@ def keychain(service: str) -> str | None:
 
 def discovery_max_spread_pct() -> float:
     try:
-        return float(os.environ.get("SPREADARB_MAX_ENTRY_SPREAD_PCT", "100"))
+        # A large dislocation is a reason to require exact identity and fresh
+        # books, not a reason to silently remove the market from discovery.
+        return float(os.environ.get("SPREADARB_MAX_ENTRY_SPREAD_PCT", "0"))
     except ValueError:
-        return 100.0
+        return 0.0

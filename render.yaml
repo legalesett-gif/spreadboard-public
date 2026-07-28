@@ -39,6 +39,8 @@ services:
         value: "900"
       - key: SPREADBOARD_NATIVE_FUNDING_ONLY
         value: "1"
+      - key: SPREADARB_MAX_ENTRY_SPREAD_PCT
+        value: "0"
       - key: SPREADARB_OKX_DEX_API_KEY
         sync: false
       - key: SPREADARB_OKX_DEX_SECRET

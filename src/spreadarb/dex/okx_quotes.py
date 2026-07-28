@@ -165,6 +165,7 @@ def quote_usdc_to_token(
         "to_token": normalized_token,
         "notional_usd": str(notional_usd),
         "out_qty": str(out_qty) if out_qty is not None else None,
+        "to_token_decimals": decimals,
         "dex_buy_price_usd": str(price) if price is not None else None,
         "trade_fee_usd": quote.get("tradeFee"),
         "estimate_gas_fee": quote.get("estimateGasFee"),

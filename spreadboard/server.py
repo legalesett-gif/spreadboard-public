@@ -1221,7 +1221,7 @@ def _canonical_pair_row(row: dict[str, Any]) -> dict[str, Any]:
 def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
     query = query or {}
     points = int(_query_float(query, "max_points", 240) or 240)
-    hours = max(1.0, min(_query_float(query, "hours", 24) or 24, 24 * 30))
+    hours = max(1 / 60, min(_query_float(query, "hours", 24) or 24, 24 * 30))
     since_us = int((time.time() - hours * 3600) * 1_000_000)
     current = _find_canonical_route(route_key, board_path)
     sample = (
@@ -1539,7 +1539,6 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
     source_health = data.get("source_health") or {}
     api_health_data = source_health.get("canonical_api") or {}
     pagination = data.get("pagination") or {}
-    token_total = pagination.get("matching_rows") or summary.get("matching_tokens") or 0
     source_ready = data.get("ok") and api_health_data.get("status") == "fresh"
     refresh_seconds = 30 if source_ready else 5
     heading = f"""
@@ -1569,10 +1568,10 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
     <section class="markets-page terminal-page" data-refresh="{refresh_seconds}">
       {heading}
       <section class="terminal-kpis compact-kpis" aria-label="Market summary">
-        {render_market_metric('Assets', summary.get('matching_tokens'), 'grouped, no duplicates')}
+        {render_market_metric('Assets', min(int(summary.get('matching_tokens') or 0), api_spreads.DEFAULT_LIMIT), 'top 25, grouped')}
         {render_market_metric('Venue pairs', summary.get('matching_rows'), 'expandable routes')}
         {render_market_metric('Funding pairs', summary.get('funding_rows'), 'paired carry')}
-        {render_market_metric('Largest edge', fmt_pct(summary.get('max_depth_weighted_spread_pct')), 'matched $50 VWAP')}
+        {render_market_metric('Largest edge', fmt_pct(summary.get('max_executable_spread_pct')), 'live ask → bid')}
       </section>
       {render_market_filter_bar(data, query)}
       <section class="market-layout terminal-layout grouped-layout">
@@ -1580,7 +1579,7 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
           <div class="panel-head flat token-board-title">
             <div>
               <h2>Live Assets</h2>
-              <p>{h(pagination.get('returned_rows') or 0)} of {h(token_total)} assets. Select a token to reveal its venue routes.</p>
+              <p>Top {h(min(int(pagination.get('returned_rows') or 0), api_spreads.DEFAULT_LIMIT))} assets by live open spread. Select a token to reveal every venue route.</p>
             </div>
             <a class="mini-action primary-link" href="/api/spreads?{h(urlencode(_query_with(query, limit=500, offset=0)))}">JSON</a>
           </div>
@@ -1829,7 +1828,6 @@ def render_market_filter_bar(data: dict[str, Any], query: dict[str, list[str]]) 
     exchange = _query_first(query, "exchange") or ""
     selected_sort = _query_first(query, "sort") or "edge"
     selected_direction = _query_first(query, "direction") or "desc"
-    selected_limit = str(int(_query_float(query, "limit", api_spreads.DEFAULT_LIMIT) or api_spreads.DEFAULT_LIMIT))
     summary = data.get("summary") or {}
     kind_counts = data.get("route_kind_token_counts") or {}
     lane_counts = data.get("lane_token_counts") or {}
@@ -1866,9 +1864,7 @@ def render_market_filter_bar(data: dict[str, Any], query: dict[str, list[str]]) 
           <option value="desc" {'selected' if selected_direction == 'desc' else ''}>High to low</option>
           <option value="asc" {'selected' if selected_direction == 'asc' else ''}>Low to high</option>
         </select></label>
-        <label><span>Assets</span><select name="limit">
-          {''.join(f'<option value="{value}" {"selected" if value == selected_limit else ""}>{value}</option>' for value in ('25', '50', '100', '250'))}
-        </select></label>
+        <input type="hidden" name="limit" value="25">
         <input type="hidden" name="kind" value="{h(selected_kind)}">
         <label class="market-check"><input type="checkbox" name="funding_only" value="1" {'checked' if _query_bool(query, 'funding_only') else ''}> Funding</label>
         <button class="sheet-button primary" type="submit">Apply</button>
@@ -1886,10 +1882,12 @@ def market_kind_count(
     lane_counts: dict[str, Any] | None = None,
 ) -> Any:
     if not value:
-        return summary.get("matching_tokens")
+        return min(int(summary.get("matching_tokens") or 0), api_spreads.DEFAULT_LIMIT)
     if value == "FUTURES-SPOT-PAIR":
-        return (lane_counts or {}).get("FUTURES-SPOT", 0)
-    return counts.get(value, 0)
+        count = (lane_counts or {}).get("FUTURES-SPOT", 0)
+    else:
+        count = counts.get(value, 0)
+    return min(int(count or 0), api_spreads.DEFAULT_LIMIT)
 
 
 def render_market_tab(label: str, query: dict[str, str], active: bool, count: Any = None) -> str:
@@ -2831,7 +2829,7 @@ def render_pair_page(route_key: str, board_path: Path, config: dict[str, Any]) -
     row = detail["board_row"]
     legs = detail.get("legs") or {}
     pair_intel = api_intel(board_path, {"symbol": [str(row.get("symbol") or "")], "limit": ["6"]})
-    history = api_history(route_key, board_path, {"max_points": ["180"]}).get("rows") or []
+    history = api_history(route_key, board_path, {"max_points": ["1440"]}).get("rows") or []
     body = f"""
     <section class="pair-page">
       {render_pair_snapshot_banner(row)}
@@ -3098,7 +3096,12 @@ def render_chart_blank_state() -> str:
 
 
 def filter_chart_history(history: list[dict[str, Any]], window: str) -> list[dict[str, Any]]:
-    hours = {"1h": 1, "6h": 6, "1d": 24, "7d": 168, "30d": 720}.get(window, 1)
+    hours = {
+        "1m": 1 / 60,
+        "5m": 5 / 60,
+        "30m": 0.5,
+        "1h": 1,
+    }.get(window, 1)
     cutoff_us = int((time.time() - hours * 3600) * 1_000_000)
     return [
         row
@@ -3117,7 +3120,7 @@ def render_selected_chart(
     long_leg = legs.get("long") or {}
     short_leg = legs.get("short") or {}
     route_key = board.route_key_url(str(row.get("route_key") or ""))
-    windows = [("1h", "1H"), ("6h", "6H"), ("1d", "1D"), ("7d", "7D"), ("30d", "30D")]
+    windows = [("1m", "1M"), ("5m", "5M"), ("30m", "30M"), ("1h", "1H")]
     return f"""
     <section class="selected-chart">
       <header class="selected-chart-head">
@@ -3135,7 +3138,7 @@ def render_selected_chart(
           <section class="chart-plot-panel">
             <div class="chart-plot-title">
               <span>Spread progression</span>
-              <strong data-chart-headline>In $50 {fmt_pct(row.get('depth_weighted_spread_pct'))}</strong>
+              <strong data-chart-headline>Open {fmt_pct(row.get('displayed_open_spread_pct'))}</strong>
               <button type="button" data-funding-open>Funding history</button>
               <em data-chart-live-state>Connecting to exact route...</em>
             </div>
@@ -3184,7 +3187,12 @@ def render_live_spread_chart(
     history: list[dict[str, Any]],
     window: str,
 ) -> str:
-    hours = {"1h": 1, "6h": 6, "1d": 24, "7d": 168, "30d": 720}.get(window, 1)
+    hours = {
+        "1m": 1 / 60,
+        "5m": 5 / 60,
+        "30m": 0.5,
+        "1h": 1,
+    }.get(window, 1)
     initial = {
         "ok": True,
         "rows": history,
@@ -3196,8 +3204,8 @@ def render_live_spread_chart(
     <script src="/assets/lightweight-charts.js"></script>
     <div class="live-spread-chart" data-live-spread-chart>
       <div class="live-chart-legend" aria-label="Chart series">
-        <button class="matched active" type="button" data-series-toggle="matched"><i></i>In $50 VWAP <strong data-latest-matched>—</strong></button>
-        <button class="entry" type="button" data-series-toggle="entry"><i></i>In top book <strong data-latest-entry>—</strong></button>
+        <button class="entry active" type="button" data-series-toggle="entry"><i></i>Open ask → bid <strong data-latest-entry>—</strong></button>
+        <button class="matched" type="button" data-series-toggle="matched"><i></i>$50 VWAP <strong data-latest-matched>—</strong></button>
         <button class="exit active" type="button" data-series-toggle="exit"><i></i>Out top book <strong data-latest-exit>—</strong></button>
         <span class="funding-a"><i></i>Long fund <strong data-latest-long-funding>—</strong></span>
         <span class="funding-b"><i></i>Short fund <strong data-latest-short-funding>—</strong></span>
@@ -3314,14 +3322,14 @@ def render_live_spread_chart(
             priceLineVisible: true,
           }},
         );
-        chartSeries.matched = addLine(colors.matched, 'In $50 VWAP', 3);
-        chartSeries.entry = addLine('#4f8cff', 'In top book', 1);
+        chartSeries.entry = addLine(colors.matched, 'Open ask → bid', 3);
+        chartSeries.matched = addLine('#4f8cff', '$50 VWAP', 1);
         chartSeries.exit = addLine(colors.exit, 'Out top book', 2);
         chartSeries.longFunding = addLine('#1ebf8f', 'Long funding', 2);
         chartSeries.shortFunding = addLine('#ff7a82', 'Short funding', 2);
         chartSeries.longFunding.moveToPane(1);
         chartSeries.shortFunding.moveToPane(1);
-        chartSeries.entry.applyOptions({{ visible: false }});
+        chartSeries.matched.applyOptions({{ visible: false }});
         sizeChartPanes();
         chart.subscribeCrosshairMove(showTooltip);
         resizeObserver = new ResizeObserver(() => {{
@@ -3362,7 +3370,7 @@ def render_live_spread_chart(
           rightPriceScale: {{ borderColor: colors.grid }},
           timeScale: {{ borderColor: colors.grid }},
         }});
-        chartSeries.matched?.applyOptions({{ color: colors.matched }});
+        chartSeries.entry?.applyOptions({{ color: colors.matched }});
         chartSeries.exit?.applyOptions({{ color: colors.exit }});
       }}
 
@@ -3412,8 +3420,8 @@ def render_live_spread_chart(
         }}
         tooltip.innerHTML = `
           <time>${{timeLabel(row.ts, true)}}</time>
-          <span>Spread $50<strong>${{pct(row.matched)}}</strong></span>
-          <span>In top book<strong>${{pct(row.entry)}}</strong></span>
+          <span>Open ask → bid<strong>${{pct(row.entry)}}</strong></span>
+          <span>$50 VWAP<strong>${{pct(row.matched)}}</strong></span>
           <span>Out top book<strong>${{pct(row.exit)}}</strong></span>
           <span>Long funding<strong>${{pct(row.longFunding)}}</strong></span>
           <span>Short funding<strong>${{pct(row.shortFunding)}}</strong></span>`;
@@ -3458,7 +3466,7 @@ def render_live_spread_chart(
         root.querySelector('[data-latest-exit]').textContent = pct(latest.exit);
         root.querySelector('[data-latest-long-funding]').textContent = pct(latest.longFunding);
         root.querySelector('[data-latest-short-funding]').textContent = pct(latest.shortFunding);
-        if (headline) headline.textContent = `In $50 ${{pct(latest.matched)}} · Out ${{pct(latest.exit)}}`;
+        if (headline) headline.textContent = `Open ${{pct(latest.entry)}} · $50 VWAP ${{pct(latest.matched)}}`;
         for (const side of ['long', 'short']) {{
           const funding = latest[`${{side}}Funding`];
           const interval = latest[`${{side}}Interval`];

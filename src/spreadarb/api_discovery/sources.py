@@ -162,7 +162,9 @@ class OkxDexQuoteSource:
         quantity = Decimal(str(buy.get("out_qty") or "0"))
         if quantity <= 0:
             return None
-        decimals = asset.solana_decimals if chain_id == 501 else asset.decimals
+        decimals = _as_int(buy.get("to_token_decimals"))
+        if decimals is None:
+            decimals = asset.solana_decimals if chain_id == 501 else asset.decimals
         sell = okx_dex.quote_token_to_usdc(
             chain=str(chain_id),
             token_address=contract,
@@ -213,7 +215,7 @@ class DiscoveryContext:
     deadline_monotonic: float | None
     target_notional_usd: float = 50.0
     min_spread_pct: float = 1.0
-    max_spread_pct: float = 90.0
+    max_spread_pct: float = 0.0
     reference_quotes: tuple[MarketQuote, ...] = ()
     all_platform_tokens: bool = False
     max_orderbook_candidates: int = 100
@@ -704,6 +706,8 @@ def default_enabled_cex_source() -> CexCcxtSource:
             "Phemex": "phemex",
             "CoinEx": "coinex",
             "WhiteBIT": "whitebit",
+            "BitMart": "bitmart",
+            "XT": "xt",
         }
     )
 
@@ -725,6 +729,8 @@ def default_enabled_cex_futures_source() -> CexCcxtSource:
             "Phemex": "phemex",
             "CoinEx": "coinex",
             "WhiteBIT": "whitebit",
+            "BitMart": "bitmart",
+            "XT": "xt",
         },
         name="cex_futures_ccxt",
         market_type="Futures",
@@ -750,9 +756,7 @@ def default_sources(
     disabled_specs = [
         ("Crypto.com", "cex", "disabled_connector_spec_until_validated"),
         ("Bitfinex", "cex", "disabled_connector_spec_until_validated"),
-        ("BitMart", "cex", "disabled_connector_spec_until_validated"),
         ("LBank", "cex", "disabled_connector_spec_until_validated"),
-        ("XT", "cex", "disabled_connector_spec_until_validated"),
         ("Bitstamp", "cex", "disabled_connector_spec_until_validated"),
         ("dYdX", "dex_derivative", "disabled_read_only_research_spec"),
         ("Lighter", "dex_derivative", "disabled_read_only_research_spec"),
@@ -772,7 +776,7 @@ def pairwise_candidates(
     source_kind: str,
     source_name: str,
     min_spread_pct: float,
-    max_spread_pct: float = 90.0,
+    max_spread_pct: float = 0.0,
     identity_registry: IdentityRegistry | None = None,
     executor_attestations: ExecutorAttestationRegistry | None = None,
     min_net_funding_apr_pct: float = 25.0,
