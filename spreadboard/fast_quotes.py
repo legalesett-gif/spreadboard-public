@@ -56,7 +56,7 @@ class FastQuoteRefresher:
         self._client_request_locks: dict[tuple[str, str], Lock] = {}
 
     def refresh(
-        self, snapshot_path: Path, *, route_limit: int = 30, target_notional_usd: float = 50.0
+        self, snapshot_path: Path, *, route_limit: int = 16, target_notional_usd: float = 50.0
     ) -> dict[str, Any]:
         try:
             payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
@@ -72,33 +72,44 @@ class FastQuoteRefresher:
                     continue
                 long_type = str(row.get("long_market_type") or "")
                 short_type = str(row.get("short_market_type") or "")
-                if {long_type, short_type} == {"Futures"}:
+                if (
+                    {long_type, short_type} == {"Futures"}
+                    and row.get("long_venue") in NATIVE_FUTURES_VENUES
+                    and row.get("short_venue") in NATIVE_FUTURES_VENUES
+                ):
                     lane = "FUTURES"
-                elif long_type == "Spot" and short_type == "Futures":
+                elif (
+                    long_type == "Spot"
+                    and short_type == "Futures"
+                    and row.get("short_venue") in NATIVE_FUTURES_VENUES
+                ):
                     lane = "FUTURES-SPOT"
                 else:
                     continue
                 spread = _number(row.get("depth_weighted_spread_pct"), -999999.0)
                 if 0.0 <= spread <= 90.0:
                     rows_by_lane[lane].append(row)
-        lane_limit = max(1, route_limit // 2)
+        spot_limit = min(
+            len(rows_by_lane["FUTURES-SPOT"]),
+            max(1, route_limit // 4),
+        )
+        futures_limit = max(1, route_limit - spot_limit)
         selected = [
             *(
                 _expanded_token_rows(
                     rows_by_lane["FUTURES"],
-                    token_limit=min(25, lane_limit),
-                    route_limit=lane_limit,
+                    token_limit=min(25, futures_limit),
+                    route_limit=futures_limit,
                 )
             ),
             *(
                 _expanded_token_rows(
                     rows_by_lane["FUTURES-SPOT"],
-                    token_limit=min(25, lane_limit),
-                    route_limit=lane_limit,
+                    token_limit=min(25, spot_limit),
+                    route_limit=spot_limit,
                 )
             ),
         ]
-        selected_ids = {id(row) for row in selected}
         for lane_rows in rows_by_lane.values():
             for row in lane_rows:
                 blockers = [
@@ -106,8 +117,6 @@ class FastQuoteRefresher:
                     for item in row.get("blockers") or []
                     if not str(item).startswith("mirage_guard:fast_")
                 ]
-                if id(row) not in selected_ids:
-                    blockers.append("mirage_guard:fast_requote_pending")
                 row["blockers"] = list(dict.fromkeys(blockers))
         leg_cache: dict[tuple[str, str, str], dict[str, Any] | None] = {}
         leg_jobs: dict[tuple[str, str, str], tuple[dict[str, Any], str]] = {}
@@ -116,7 +125,7 @@ class FastQuoteRefresher:
                 key = _route_leg_key(row, side)
                 if key is not None:
                     leg_jobs.setdefault(key, (row, side))
-        with ThreadPoolExecutor(max_workers=max(1, min(10, len(leg_jobs)))) as pool:
+        with ThreadPoolExecutor(max_workers=max(1, min(6, len(leg_jobs)))) as pool:
             futures = {
                 key: pool.submit(
                     self._leg_quote,
