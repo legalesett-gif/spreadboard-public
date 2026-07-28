@@ -148,7 +148,6 @@ class RefreshLoop:
             float(os.environ.get("SPREADBOARD_FAST_QUOTE_SECONDS", "30")),
         )
         while not self.stop_event.wait(5.0):
-            started = time.monotonic()
             with self.quote_cycle_lock:
                 _log("fast quote cycle starting")
                 summary = self._refresh_fast_quotes()
@@ -162,7 +161,7 @@ class RefreshLoop:
                     else:
                         inserted = 0
             _log(f"fast quotes {summary} history_inserted={inserted}")
-            self.stop_event.wait(max(1.0, interval - (time.monotonic() - started)))
+            self.stop_event.wait(interval)
 
     def _refresh_fast_quotes(self) -> dict[str, Any]:
         command = [
