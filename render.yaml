@@ -16,11 +16,11 @@ services:
       - key: SPREADBOARD_FAST_QUOTE_SECONDS
         value: "30"
       - key: SPREADBOARD_FAST_QUOTE_ROUTES
-        value: "12"
-      - key: SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS
         value: "60"
+      - key: SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS
+        value: "180"
       - key: SPREADBOARD_CHART_SAMPLE_SECONDS
-        value: "15"
+        value: "5"
       - key: SPREADBOARD_CHART_SAMPLE_TIMEOUT_SECONDS
         value: "22"
       - key: SPREADBOARD_CHART_SAMPLE_CONCURRENCY
@@ -39,3 +39,11 @@ services:
         value: "900"
       - key: SPREADBOARD_NATIVE_FUNDING_ONLY
         value: "1"
+      - key: SPREADARB_OKX_DEX_API_KEY
+        sync: false
+      - key: SPREADARB_OKX_DEX_SECRET
+        sync: false
+      - key: SPREADARB_OKX_DEX_PASSPHRASE
+        sync: false
+      - key: SPREADARB_OKX_DEX_PROJECT_ID
+        sync: false

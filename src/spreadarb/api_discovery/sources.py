@@ -178,7 +178,7 @@ class OkxDexQuoteSource:
         ask = as_float(buy.get("dex_buy_price_usd"))
         if bid is None or ask is None:
             return None
-        gas = as_float(buy.get("estimate_gas_fee"))
+        network_fee_usd = as_float(buy.get("trade_fee_usd"))
         router = buy.get("router")
         return MarketQuote(
             token=asset.token,
@@ -194,7 +194,7 @@ class OkxDexQuoteSource:
             identity_source="watchlist",
             decimals=decimals,
             chain_id=chain_id,
-            gas_estimate_usd=gas,
+            gas_estimate_usd=network_fee_usd,
             route_plan=(str(router),) if router else (),
         )
 

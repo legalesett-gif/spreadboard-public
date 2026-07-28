@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import gc
 import json
 from pathlib import Path
+from threading import Lock
 import time
 from typing import Any
 from urllib.parse import urlencode
@@ -51,6 +52,8 @@ NATIVE_FUTURES_VENUES = {
 class FastQuoteRefresher:
     def __init__(self) -> None:
         self._clients: dict[tuple[str, str], Any] = {}
+        self._client_lock = Lock()
+        self._client_request_locks: dict[tuple[str, str], Lock] = {}
 
     def refresh(
         self, snapshot_path: Path, *, route_limit: int = 30, target_notional_usd: float = 50.0
@@ -59,28 +62,53 @@ class FastQuoteRefresher:
             payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             return {"status": "unavailable", "updated": 0, "error": type(exc).__name__}
-        rows = []
+        rows_by_lane: dict[str, list[dict[str, Any]]] = {
+            "FUTURES": [],
+            "FUTURES-SPOT": [],
+        }
         for bucket in ("api_discovered_rows", "dex_discovered_rows"):
             for row in payload.get(bucket) or []:
-                if not isinstance(row, dict) or any(
-                    str(item).startswith("mirage_guard:") for item in row.get("blockers") or []
-                ):
+                if not isinstance(row, dict) or _has_permanent_mirage_guard(row):
                     continue
-                if (
-                    row.get("long_market_type") != "Futures"
-                    or row.get("short_market_type") != "Futures"
-                    or row.get("long_venue") not in NATIVE_FUTURES_VENUES
-                    or row.get("short_venue") not in NATIVE_FUTURES_VENUES
-                ):
+                long_type = str(row.get("long_market_type") or "")
+                short_type = str(row.get("short_market_type") or "")
+                if {long_type, short_type} == {"Futures"}:
+                    lane = "FUTURES"
+                elif long_type == "Spot" and short_type == "Futures":
+                    lane = "FUTURES-SPOT"
+                else:
                     continue
                 spread = _number(row.get("depth_weighted_spread_pct"), -999999.0)
-                if 0.0 <= spread <= 5.0:
-                    rows.append(row)
-        selected = sorted(
-            rows,
-            key=lambda row: _number(row.get("depth_weighted_spread_pct"), -999999.0),
-            reverse=True,
-        )[: max(0, route_limit)]
+                if 0.0 <= spread <= 90.0:
+                    rows_by_lane[lane].append(row)
+        lane_limit = max(1, route_limit // 2)
+        selected = [
+            *(
+                _expanded_token_rows(
+                    rows_by_lane["FUTURES"],
+                    token_limit=min(25, lane_limit),
+                    route_limit=lane_limit,
+                )
+            ),
+            *(
+                _expanded_token_rows(
+                    rows_by_lane["FUTURES-SPOT"],
+                    token_limit=min(25, lane_limit),
+                    route_limit=lane_limit,
+                )
+            ),
+        ]
+        selected_ids = {id(row) for row in selected}
+        for lane_rows in rows_by_lane.values():
+            for row in lane_rows:
+                blockers = [
+                    str(item)
+                    for item in row.get("blockers") or []
+                    if not str(item).startswith("mirage_guard:fast_")
+                ]
+                if id(row) not in selected_ids:
+                    blockers.append("mirage_guard:fast_requote_pending")
+                row["blockers"] = list(dict.fromkeys(blockers))
         leg_cache: dict[tuple[str, str, str], dict[str, Any] | None] = {}
         leg_jobs: dict[tuple[str, str, str], tuple[dict[str, Any], str]] = {}
         for row in selected:
@@ -88,7 +116,7 @@ class FastQuoteRefresher:
                 key = _route_leg_key(row, side)
                 if key is not None:
                     leg_jobs.setdefault(key, (row, side))
-        with ThreadPoolExecutor(max_workers=max(1, min(6, len(leg_jobs)))) as pool:
+        with ThreadPoolExecutor(max_workers=max(1, min(10, len(leg_jobs)))) as pool:
             futures = {
                 key: pool.submit(
                     self._leg_quote,
@@ -96,6 +124,7 @@ class FastQuoteRefresher:
                     side,
                     target_notional_usd=target_notional_usd,
                     cache={},
+                    include_funding=True,
                 )
                 for key, (row, side) in leg_jobs.items()
             }
@@ -109,10 +138,18 @@ class FastQuoteRefresher:
                 if not str(item).startswith("mirage_guard:fast_")
             ]
             long_quote = self._leg_quote(
-                row, "long", target_notional_usd=target_notional_usd, cache=leg_cache
+                row,
+                "long",
+                target_notional_usd=target_notional_usd,
+                cache=leg_cache,
+                include_funding=True,
             )
             short_quote = self._leg_quote(
-                row, "short", target_notional_usd=target_notional_usd, cache=leg_cache
+                row,
+                "short",
+                target_notional_usd=target_notional_usd,
+                cache=leg_cache,
+                include_funding=True,
             )
             if long_quote is None or short_quote is None:
                 blockers.append("mirage_guard:fast_requote_unavailable")
@@ -133,11 +170,18 @@ class FastQuoteRefresher:
             row["executable_spread_pct"] = f"{executable:.8f}".rstrip("0").rstrip(".")
             row["depth_weighted_spread_pct"] = f"{depth:.8f}".rstrip("0").rstrip(".")
             row["quote_ts_us"] = min(long_quote["quote_ts_us"], short_quote["quote_ts_us"])
+            row["fast_quote_verified_at"] = _utc_now_iso()
             row["blockers"] = list(dict.fromkeys(blockers))
             updated += 1
+        refreshed_at = _utc_now_iso()
+        if updated:
+            payload["updated_at"] = refreshed_at
+            payload["expires_at"] = (
+                datetime.now(tz=timezone.utc) + timedelta(seconds=120)
+            ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         payload["fast_quote_refresh"] = {
             "status": "ok" if updated else "unavailable",
-            "updated_at": _utc_now_iso(),
+            "updated_at": refreshed_at,
             "updated_routes": updated,
             "failed_routes": failed,
             "selected_routes": len(selected),
@@ -162,6 +206,7 @@ class FastQuoteRefresher:
                 "long",
                 target_notional_usd=target_notional_usd,
                 cache={},
+                include_funding=False,
             )
             short_future = pool.submit(
                 self._leg_quote,
@@ -169,6 +214,7 @@ class FastQuoteRefresher:
                 "short",
                 target_notional_usd=target_notional_usd,
                 cache={},
+                include_funding=False,
             )
             long_quote = long_future.result()
             short_quote = short_future.result()
@@ -208,6 +254,7 @@ class FastQuoteRefresher:
                 except Exception:
                     pass
         self._clients.clear()
+        self._client_request_locks.clear()
         gc.collect()
 
     def _leg_quote(
@@ -217,6 +264,7 @@ class FastQuoteRefresher:
         *,
         target_notional_usd: float,
         cache: dict[tuple[str, str, str], dict[str, Any] | None],
+        include_funding: bool,
     ) -> dict[str, Any] | None:
         venue = str(row.get(f"{side}_venue") or "")
         market_type = str(row.get(f"{side}_market_type") or "")
@@ -240,21 +288,28 @@ class FastQuoteRefresher:
             native_book = _native_order_book(venue, market_type, symbol)
             if native_book is None:
                 client = self._client(venue, market_type)
-                market = client.market(symbol)
-                book = client.fetch_order_book(symbol, limit=20)
-                funding = (
-                    _ccxt_current_funding(client, symbol)
-                    if market_type == "Futures"
-                    else {}
-                )
-                contract_size = (
-                    _number(market.get("contractSize"), 1.0) if market_type == "Futures" else 1.0
-                )
+                with self._client_request_lock(venue, market_type):
+                    market = client.market(symbol)
+                    book = client.fetch_order_book(symbol, limit=20)
+                    funding = (
+                        _ccxt_current_funding(client, symbol)
+                        if include_funding and market_type == "Futures"
+                        else {}
+                    )
+                    contract_size = (
+                        _number(market.get("contractSize"), 1.0)
+                        if market_type == "Futures"
+                        else 1.0
+                    )
                 bids = _levels(book.get("bids"))
                 asks = _levels(book.get("asks"))
             else:
                 bids, asks = native_book
-                funding = _native_current_funding(venue, symbol)
+                funding = (
+                    _native_current_funding(venue, symbol)
+                    if include_funding
+                    else {}
+                )
                 contract_size = _number(
                     leg.get("contract_size") or row.get(f"{side}_contract_size"),
                     1.0,
@@ -276,8 +331,6 @@ class FastQuoteRefresher:
             }
         except Exception:
             value = None
-        finally:
-            self._discard_client(venue, market_type)
         cache[key] = value
         return value
 
@@ -285,23 +338,32 @@ class FastQuoteRefresher:
         import ccxt
 
         key = (venue, market_type)
-        client = self._clients.get(key)
-        if client is not None:
+        with self._client_lock:
+            client = self._clients.get(key)
+            if client is not None:
+                return client
+            klass = getattr(ccxt, VENUE_IDS[venue])
+            client = klass(
+                {
+                    "enableRateLimit": True,
+                    "timeout": 8_000,
+                    "options": {"defaultType": "spot" if market_type == "Spot" else "swap"},
+                }
+            )
+            client.load_markets()
+            self._clients[key] = client
+            self._client_request_locks.setdefault(key, Lock())
             return client
-        klass = getattr(ccxt, VENUE_IDS[venue])
-        client = klass(
-            {
-                "enableRateLimit": True,
-                "timeout": 8_000,
-                "options": {"defaultType": "spot" if market_type == "Spot" else "swap"},
-            }
-        )
-        client.load_markets()
-        self._clients[key] = client
-        return client
+
+    def _client_request_lock(self, venue: str, market_type: str) -> Lock:
+        key = (venue, market_type)
+        with self._client_lock:
+            return self._client_request_locks.setdefault(key, Lock())
 
     def _discard_client(self, venue: str, market_type: str) -> None:
-        client = self._clients.pop((venue, market_type), None)
+        key = (venue, market_type)
+        client = self._clients.pop(key, None)
+        self._client_request_locks.pop(key, None)
         close = getattr(client, "close", None)
         if callable(close):
             try:
@@ -339,6 +401,66 @@ def _route_leg_key(
         or ""
     )
     return (venue, market_type, symbol) if venue and market_type and symbol else None
+
+
+def _unique_token_rows(
+    rows: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    ranked = sorted(
+        rows,
+        key=lambda row: _number(row.get("depth_weighted_spread_pct"), -999999.0),
+        reverse=True,
+    )
+    for row in ranked:
+        token = str(row.get("token") or "").upper()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        selected.append(row)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _expanded_token_rows(
+    rows: list[dict[str, Any]],
+    *,
+    token_limit: int,
+    route_limit: int,
+) -> list[dict[str, Any]]:
+    """Select one route per top token first, then its other ranked venue routes."""
+
+    if route_limit <= 0 or token_limit <= 0:
+        return []
+    ranked = sorted(
+        rows,
+        key=lambda row: _number(row.get("depth_weighted_spread_pct"), -999999.0),
+        reverse=True,
+    )
+    seeds = _unique_token_rows(ranked, limit=min(token_limit, route_limit))
+    selected = list(seeds)
+    selected_ids = {id(row) for row in selected}
+    selected_tokens = {str(row.get("token") or "").upper() for row in selected}
+    for row in ranked:
+        if len(selected) >= route_limit:
+            break
+        token = str(row.get("token") or "").upper()
+        if token in selected_tokens and id(row) not in selected_ids:
+            selected.append(row)
+            selected_ids.add(id(row))
+    return selected
+
+
+def _has_permanent_mirage_guard(row: dict[str, Any]) -> bool:
+    return any(
+        str(item).startswith("mirage_guard:")
+        and not str(item).startswith("mirage_guard:fast_")
+        for item in row.get("blockers") or []
+    )
 
 
 def _native_order_book(

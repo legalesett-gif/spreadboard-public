@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from spreadboard import api_spreads, live, server
 from spreadarb.api_discovery import sources
+from spreadarb.api_discovery.identity import WatchAsset
 from spreadarb.api_discovery.models import MarketQuote
 
 
@@ -97,7 +98,7 @@ def test_public_candidate_priority_rejects_high_unknown_identity() -> None:
     assert not sources._candidate_is_publicly_rankable(inventory_unknown)
 
 
-def test_inverse_futures_spot_is_conditional_not_hidden() -> None:
+def test_inverse_futures_spot_is_hidden_without_inventory_proof() -> None:
     reasons = api_spreads._route_mirage_reasons(
         raw={"executable_spread_pct": 3},
         long_market_type="Futures",
@@ -106,14 +107,16 @@ def test_inverse_futures_spot_is_conditional_not_hidden() -> None:
         short_rails={},
     )
 
-    assert reasons == ["spot_sell_inventory_required"]
-    assert not any(reason.startswith("mirage_guard:") for reason in reasons)
+    assert reasons == ["mirage_guard:spot_sell_inventory_required"]
+    assert any(reason.startswith("mirage_guard:") for reason in reasons)
 
     row = SimpleNamespace(
         to_dict=lambda: {"blockers": reasons},
         blockers=reasons,
     )
-    assert api_spreads._public_row(row)["conditions"] == reasons
+    assert api_spreads._public_row(row)["conditions"] == [
+        "spot_sell_inventory_required"
+    ]
 
 
 def test_native_settled_history_is_not_mislabeled_as_current_funding() -> None:
@@ -129,6 +132,40 @@ def test_native_settled_history_is_not_mislabeled_as_current_funding() -> None:
     assert result["funding_interval_hours"] == 8.0
     assert "current_funding_pct" not in result
     assert "projected_24h_pct" not in result
+
+
+def test_okx_dex_uses_usd_network_fee_not_raw_gas_units() -> None:
+    okx = SimpleNamespace(
+        quote_usdc_to_token=lambda **_kwargs: {
+            "status": "ok",
+            "out_qty": "20",
+            "dex_buy_price_usd": "2.5",
+            "trade_fee_usd": "0.42",
+            "estimate_gas_fee": "123456",
+            "router": "Uniswap",
+        },
+        quote_token_to_usdc=lambda **_kwargs: {
+            "status": "ok",
+            "dex_sell_price_usd": "2.49",
+        },
+    )
+
+    quote = sources.OkxDexQuoteSource()._quote_asset(
+        WatchAsset(
+            symbol="TEST",
+            identity_key="asset:test",
+            dex_enabled=True,
+            evm_contracts={1: "0x123"},
+        ),
+        chain_id=1,
+        contract="0x123",
+        credentials=object(),
+        context=SimpleNamespace(target_notional_usd=50),
+        okx_dex=okx,
+    )
+
+    assert quote is not None
+    assert quote.gas_estimate_usd == 0.42
 
 
 def test_validated_reference_venues_are_enabled() -> None:

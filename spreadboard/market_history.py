@@ -137,7 +137,7 @@ def load_history(
         clauses.append("quote_ts_us >= ?")
         params.append(int(since_us))
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params.append(max(1, min(5000, int(max_points))))
+    params.append(max(1, min(25000, int(max_points))))
     try:
         rows = connection.execute(
             f"""

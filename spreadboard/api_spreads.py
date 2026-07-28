@@ -706,7 +706,7 @@ def _route_mirage_reasons(
     )
     reasons: list[str] = []
     if short_market_type == "Spot" and long_market_type != "Spot":
-        reasons.append("spot_sell_inventory_required")
+        reasons.append("mirage_guard:spot_sell_inventory_required")
     if spread < 1.0:
         return reasons
     raw_blockers = {str(item) for item in raw.get("blockers") or []}
@@ -944,9 +944,9 @@ def _row_sort_key(row: SpreadTerminalRow) -> tuple[float, float, float, float]:
 def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload = row.to_dict()
     payload["conditions"] = [
-        item
+        item.removeprefix("mirage_guard:")
         for item in row.blockers
-        if item in {"spot_sell_inventory_required"}
+        if item.removeprefix("mirage_guard:") in {"spot_sell_inventory_required"}
     ]
     for key in (
         "blockers",

@@ -14,7 +14,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlencode, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 import urllib.request
 
 import click
@@ -293,6 +293,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_json(api_token(symbol, self.server.board_path, include_live=not _query_bool(query, "local")))
             elif parsed.path == "/api/health":
                 self._send_json(api_health(self.server.board_path, self.server.config, self.server.alert_watcher))
+            elif parsed.path == "/assets/lightweight-charts.js":
+                self._send_asset(
+                    Path(__file__).with_name("static")
+                    / "lightweight-charts.standalone.production.js",
+                    "text/javascript; charset=utf-8",
+                )
             elif parsed.path == "/favicon.ico":
                 self._send_empty(HTTPStatus.NO_CONTENT)
             else:
@@ -350,6 +356,16 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self._send_security_headers()
         self.send_header("Content-Length", "0")
         self.end_headers()
+
+    def _send_asset(self, path: Path, content_type: str) -> None:
+        payload = path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "public, max-age=604800, immutable")
+        self._send_security_headers()
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
     def _send_security_headers(self) -> None:
         self.send_header(
@@ -1268,10 +1284,8 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
 
 def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
     route_key = str(row.get("route_key") or "")
-    min_interval = max(
-        8.0,
-        float(os.environ.get("SPREADBOARD_CHART_SAMPLE_SECONDS", "15")),
-    )
+    configured_interval = float(os.environ.get("SPREADBOARD_CHART_SAMPLE_SECONDS", "5"))
+    min_interval = 5.0 if _native_chart_route(row) else max(8.0, configured_interval)
     now = time.monotonic()
     with _CHART_SAMPLE_LOCK:
         cached = _CHART_SAMPLE_CACHE.get(route_key)
@@ -1299,24 +1313,35 @@ def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
             if event is not None:
                 event.set()
         return result
-    command = [
-        sys.executable,
-        str(Path(__file__).resolve().parents[1] / "scripts/route_quote_worker.py"),
-    ]
     started = time.monotonic()
     try:
-        completed = subprocess.run(
-            command,
-            cwd=Path(__file__).resolve().parents[1],
-            input=json.dumps(row, separators=(",", ":"), default=str),
-            capture_output=True,
-            text=True,
-            timeout=float(os.environ.get("SPREADBOARD_CHART_SAMPLE_TIMEOUT_SECONDS", "22")),
-            check=False,
-        )
-        worker = json.loads((completed.stdout or "").strip().splitlines()[-1])
+        if _native_chart_route(row):
+            from spreadboard.fast_quotes import FastQuoteRefresher
+
+            refresher = FastQuoteRefresher()
+            try:
+                worker = refresher.quote_route(row, target_notional_usd=50.0)
+            finally:
+                refresher.close()
+            worker_exit_code = 0 if worker.get("status") == "ok" else 1
+        else:
+            command = [
+                sys.executable,
+                str(Path(__file__).resolve().parents[1] / "scripts/route_quote_worker.py"),
+            ]
+            completed = subprocess.run(
+                command,
+                cwd=Path(__file__).resolve().parents[1],
+                input=json.dumps(row, separators=(",", ":"), default=str),
+                capture_output=True,
+                text=True,
+                timeout=float(os.environ.get("SPREADBOARD_CHART_SAMPLE_TIMEOUT_SECONDS", "22")),
+                check=False,
+            )
+            worker = json.loads((completed.stdout or "").strip().splitlines()[-1])
+            worker_exit_code = completed.returncode
         quoted_row = worker.get("row") if isinstance(worker, dict) else None
-        if completed.returncode == 0 and isinstance(quoted_row, dict):
+        if worker_exit_code == 0 and isinstance(quoted_row, dict):
             inserted = market_history.record_route(
                 quoted_row,
                 sample_source="live_chart_exact_route",
@@ -1349,6 +1374,16 @@ def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
         if event is not None:
             event.set()
     return result
+
+
+def _native_chart_route(row: dict[str, Any]) -> bool:
+    from spreadboard.fast_quotes import VENUE_IDS
+
+    return all(
+        str(row.get(f"{side}_market_type") or "") in {"Spot", "Futures"}
+        and str(row.get(f"{side}_venue") or "") in VENUE_IDS
+        for side in ("long", "short")
+    )
 
 
 def _history_meta(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1654,6 +1689,11 @@ def render_funding_farm_empty(selected_farm: str, health: dict[str, Any]) -> str
 
 def render_market_token_group(group: dict[str, Any]) -> str:
     best = group.get("best_route") or {}
+    best_chart_url = (
+        f"/charts?route_key={board.route_key_url(str(best.get('route_key') or ''))}"
+        if best.get("route_key")
+        else f"/charts?token={quote(str(group.get('token') or ''))}"
+    )
     name = group.get("token_name") or "Metadata pending"
     venues = group.get("venues") or []
     kinds = group.get("route_kinds") or []
@@ -1683,7 +1723,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
       <summary class="token-route-summary">
         <div class="asset-identity">
           <span class="asset-monogram">{h(str(group.get('token') or '?')[:2])}</span>
-          <span><strong>{h(group.get('token'))}</strong><em>{h(name)}</em></span>
+          <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best live route chart">{h(group.get('token'))}</a><em>{h(name)}</em></span>
         </div>
         <div class="best-route">
           <span>Best pair</span>
@@ -2485,12 +2525,17 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
 def render_funding_token_group(group: dict[str, Any]) -> str:
     best = group.get("best_funding_route") or group.get("best_route") or {}
     name = group.get("token_name") or "Metadata pending"
+    best_chart_url = (
+        f"/charts?route_key={board.route_key_url(str(best.get('route_key') or ''))}"
+        if best.get("route_key")
+        else f"/charts?token={quote(str(group.get('token') or ''))}"
+    )
     return f"""
     <details class="funding-token-group">
       <summary>
         <div class="asset-identity">
           <span class="asset-monogram">{h(str(group.get('token') or '?')[:2])}</span>
-          <span><strong>{h(group.get('token'))}</strong><em>{h(name)}</em></span>
+          <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best funding-pair chart">{h(group.get('token'))}</a><em>{h(name)}</em></span>
         </div>
         <div><span>Best farm</span><strong>{h(best.get('long_venue'))} → {h(best.get('short_venue'))}</strong></div>
         <div><span>Net 24h</span><strong>{fmt_signed_pct(best.get('funding_24h_pct'), digits=3)}</strong></div>
@@ -2847,7 +2892,7 @@ def render_charts_page(board_path: Path, config: dict[str, Any], query: dict[str
         api_history(
             selected_route,
             board_path,
-            {"max_points": ["5000"]},
+            {"max_points": ["25000"]},
         ).get("rows")
         or []
         if selected_row is not None
@@ -3091,13 +3136,10 @@ def render_selected_chart(
             <div class="chart-plot-title">
               <span>Spread progression</span>
               <strong data-chart-headline>In $50 {fmt_pct(row.get('depth_weighted_spread_pct'))}</strong>
+              <button type="button" data-funding-open>Funding history</button>
               <em data-chart-live-state>Connecting to exact route...</em>
             </div>
             {render_live_spread_chart(str(row.get('route_key') or ''), history, window)}
-          </section>
-          <section class="chart-plot-panel funding-plot">
-            <div class="chart-plot-title"><span>Funding events</span><button type="button" data-funding-open>History</button></div>
-            {render_funding_history_chart(long_leg, short_leg)}
           </section>
         </div>
       </div>
@@ -3151,15 +3193,19 @@ def render_live_spread_chart(
         "sample": {"status": "idle"},
     }
     return f"""
+    <script src="/assets/lightweight-charts.js"></script>
     <div class="live-spread-chart" data-live-spread-chart>
       <div class="live-chart-legend" aria-label="Chart series">
-        <span class="matched"><i></i>In $50 VWAP <strong data-latest-matched>—</strong></span>
-        <span class="entry"><i></i>In top book <strong data-latest-entry>—</strong></span>
-        <span class="exit"><i></i>Out top book <strong data-latest-exit>—</strong></span>
+        <button class="matched active" type="button" data-series-toggle="matched"><i></i>In $50 VWAP <strong data-latest-matched>—</strong></button>
+        <button class="entry" type="button" data-series-toggle="entry"><i></i>In top book <strong data-latest-entry>—</strong></button>
+        <button class="exit active" type="button" data-series-toggle="exit"><i></i>Out top book <strong data-latest-exit>—</strong></button>
+        <span class="funding-a"><i></i>Long fund <strong data-latest-long-funding>—</strong></span>
+        <span class="funding-b"><i></i>Short fund <strong data-latest-short-funding>—</strong></span>
       </div>
-      <div class="live-chart-canvas" data-live-chart-canvas aria-live="polite"></div>
+      <div class="live-chart-canvas" data-live-chart-canvas aria-label="Interactive entry, exit and funding chart"></div>
+      <div class="live-chart-tooltip" data-live-chart-tooltip hidden></div>
       <div class="live-chart-note">
-        <span>In = buy long ask, sell short bid. Out = sell long bid, buy short ask.</span>
+        <span>Drag to pan · scroll to zoom · In buys the long ask and sells the short bid · Out reverses both legs.</span>
         <strong data-live-chart-age>Waiting for sample</strong>
       </div>
     </div>
@@ -3171,6 +3217,7 @@ def render_live_spread_chart(
       const routeKey = {json.dumps(route_key)};
       const hours = {hours};
       const canvas = root.querySelector('[data-live-chart-canvas]');
+      const tooltip = root.querySelector('[data-live-chart-tooltip]');
       const state = document.querySelector('[data-chart-live-state]');
       const headline = document.querySelector('[data-chart-headline]');
       const count = document.querySelector('[data-chart-observation-count]');
@@ -3178,6 +3225,11 @@ def render_live_spread_chart(
       let timer = null;
       let controller = null;
       let refreshing = false;
+      let chart = null;
+      let resizeObserver = null;
+      let themeObserver = null;
+      const chartSeries = {{}};
+      let latestRows = [];
       const pct = (value) => Number.isFinite(Number(value))
         ? `${{Number(value) >= 0 ? '+' : ''}}${{Number(value).toFixed(3)}}%`
         : '—';
@@ -3194,6 +3246,189 @@ def render_live_spread_chart(
         second: hours <= 1 ? '2-digit' : undefined,
       }}).format(new Date(timestamp));
 
+      function palette() {{
+        const style = getComputedStyle(document.documentElement);
+        return {{
+          text: style.getPropertyValue('--terminal-text').trim() || '#dce9e5',
+          muted: style.getPropertyValue('--terminal-muted').trim() || '#7f9690',
+          panel: style.getPropertyValue('--terminal-panel').trim() || '#07120f',
+          grid: style.getPropertyValue('--terminal-line').trim() || '#223a34',
+          matched: style.getPropertyValue('--terminal-accent').trim() || '#24c7ad',
+          exit: style.getPropertyValue('--terminal-danger').trim() || '#ff7184',
+        }};
+      }}
+
+      function buildChart() {{
+        if (!window.LightweightCharts) return false;
+        canvas.innerHTML = '';
+        const colors = palette();
+        chart = LightweightCharts.createChart(canvas, {{
+          autoSize: true,
+          layout: {{
+            background: {{ type: 'solid', color: colors.panel }},
+            textColor: colors.muted,
+            fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+            fontSize: 11,
+            panes: {{
+              separatorColor: colors.grid,
+              separatorHoverColor: colors.matched,
+              enableResize: true,
+            }},
+          }},
+          grid: {{
+            vertLines: {{ color: colors.grid }},
+            horzLines: {{ color: colors.grid }},
+          }},
+          rightPriceScale: {{
+            borderColor: colors.grid,
+            scaleMargins: {{ top: .1, bottom: .1 }},
+          }},
+          timeScale: {{
+            borderColor: colors.grid,
+            timeVisible: true,
+            secondsVisible: hours <= 1,
+            rightOffset: 5,
+            barSpacing: hours <= 1 ? 7 : 4,
+            minBarSpacing: .5,
+          }},
+          crosshair: {{
+            mode: LightweightCharts.CrosshairMode.Normal,
+            vertLine: {{ color: colors.muted, width: 1, style: 2, labelBackgroundColor: colors.text }},
+            horzLine: {{ color: colors.muted, width: 1, style: 2, labelBackgroundColor: colors.text }},
+          }},
+          handleScroll: {{ mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false }},
+          handleScale: {{ axisPressedMouseMove: true, mouseWheel: true, pinch: true }},
+        }});
+        const addLine = (color, title, width = 2) => chart.addSeries(
+          LightweightCharts.LineSeries,
+          {{
+            color,
+            title,
+            lineWidth: width,
+            priceFormat: {{
+              type: 'custom',
+              formatter: (value) => `${{Number(value).toFixed(3)}}%`,
+            }},
+            crosshairMarkerVisible: true,
+            lastValueVisible: true,
+            priceLineVisible: true,
+          }},
+        );
+        chartSeries.matched = addLine(colors.matched, 'In $50 VWAP', 3);
+        chartSeries.entry = addLine('#4f8cff', 'In top book', 1);
+        chartSeries.exit = addLine(colors.exit, 'Out top book', 2);
+        chartSeries.longFunding = addLine('#1ebf8f', 'Long funding', 2);
+        chartSeries.shortFunding = addLine('#ff7a82', 'Short funding', 2);
+        chartSeries.longFunding.moveToPane(1);
+        chartSeries.shortFunding.moveToPane(1);
+        chartSeries.entry.applyOptions({{ visible: false }});
+        sizeChartPanes();
+        chart.subscribeCrosshairMove(showTooltip);
+        resizeObserver = new ResizeObserver(() => {{
+          if (chart && canvas.clientWidth && canvas.clientHeight) {{
+            chart.resize(canvas.clientWidth, canvas.clientHeight);
+            sizeChartPanes();
+          }}
+        }});
+        resizeObserver.observe(canvas);
+        themeObserver = new MutationObserver(applyChartTheme);
+        themeObserver.observe(document.documentElement, {{
+          attributes: true,
+          attributeFilter: ['data-theme'],
+        }});
+        return true;
+      }}
+
+      function sizeChartPanes() {{
+        if (!chart || !canvas.clientHeight) return;
+        const panes = chart.panes();
+        const fundingHeight = Math.max(90, Math.round(canvas.clientHeight * .22));
+        if (panes[0]) panes[0].setHeight(canvas.clientHeight - fundingHeight);
+        if (panes[1]) panes[1].setHeight(fundingHeight);
+      }}
+
+      function applyChartTheme() {{
+        if (!chart) return;
+        const colors = palette();
+        chart.applyOptions({{
+          layout: {{
+            background: {{ type: 'solid', color: colors.panel }},
+            textColor: colors.muted,
+          }},
+          grid: {{
+            vertLines: {{ color: colors.grid }},
+            horzLines: {{ color: colors.grid }},
+          }},
+          rightPriceScale: {{ borderColor: colors.grid }},
+          timeScale: {{ borderColor: colors.grid }},
+        }});
+        chartSeries.matched?.applyOptions({{ color: colors.matched }});
+        chartSeries.exit?.applyOptions({{ color: colors.exit }});
+      }}
+
+      function seriesData(rows, key, gapSeconds) {{
+        const output = [];
+        let previous = null;
+        rows.forEach((row) => {{
+          const value = row[key];
+          const time = Math.floor(row.ts / 1000);
+          if (previous !== null && time - previous > gapSeconds) {{
+            output.push({{ time: previous + 1 }});
+          }}
+          if (!Number.isFinite(value)) return;
+          const last = output[output.length - 1];
+          if (last?.time === time) last.value = value;
+          else output.push({{ time, value }});
+          previous = time;
+        }});
+        return output;
+      }}
+
+      function nearestRow(time) {{
+        if (!latestRows.length || !Number.isFinite(Number(time))) return null;
+        let low = 0;
+        let high = latestRows.length - 1;
+        while (low < high) {{
+          const mid = Math.floor((low + high) / 2);
+          if (latestRows[mid].ts / 1000 < Number(time)) low = mid + 1;
+          else high = mid;
+        }}
+        const after = latestRows[low];
+        const before = latestRows[Math.max(0, low - 1)];
+        return Math.abs(after.ts / 1000 - Number(time)) <
+          Math.abs(before.ts / 1000 - Number(time)) ? after : before;
+      }}
+
+      function showTooltip(param) {{
+        if (!param?.time || !param.point || param.point.x < 0 || param.point.y < 0 ||
+            param.point.x > canvas.clientWidth || param.point.y > canvas.clientHeight) {{
+          tooltip.hidden = true;
+          return;
+        }}
+        const row = nearestRow(param.time);
+        if (!row) {{
+          tooltip.hidden = true;
+          return;
+        }}
+        tooltip.innerHTML = `
+          <time>${{timeLabel(row.ts, true)}}</time>
+          <span>Spread $50<strong>${{pct(row.matched)}}</strong></span>
+          <span>In top book<strong>${{pct(row.entry)}}</strong></span>
+          <span>Out top book<strong>${{pct(row.exit)}}</strong></span>
+          <span>Long funding<strong>${{pct(row.longFunding)}}</strong></span>
+          <span>Short funding<strong>${{pct(row.shortFunding)}}</strong></span>`;
+        tooltip.hidden = false;
+        const box = tooltip.getBoundingClientRect();
+        const left = param.point.x + 18 + box.width > canvas.clientWidth
+          ? param.point.x - box.width - 18
+          : param.point.x + 18;
+        tooltip.style.left = `${{Math.max(8, left)}}px`;
+        tooltip.style.top = `${{Math.max(42, Math.min(
+          canvas.clientHeight - box.height - 8,
+          param.point.y - box.height / 2,
+        ))}}px`;
+      }}
+
       function render(payload) {{
         const rows = (payload.rows || []).map((row) => ({{
           ts: (num(row.quote_ts_us) ?? Number.NaN) / 1000,
@@ -3207,16 +3442,23 @@ def render_live_spread_chart(
           longNext: num(row.long_next_funding_ts_us),
           shortNext: num(row.short_next_funding_ts_us),
         }})).filter((row) => Number.isFinite(row.ts)).sort((a, b) => a.ts - b.ts);
+        latestRows = rows;
         if (count) count.textContent = `${{rows.length}} observations in this window`;
         if (!rows.length) {{
-          canvas.innerHTML = '<div class="chart-data-empty">Collecting the first exact-route observation.</div>';
+          if (!chart) canvas.innerHTML = '<div class="chart-data-empty">Collecting the first exact-route observation.</div>';
+          return;
+        }}
+        if (!chart && !buildChart()) {{
+          canvas.innerHTML = '<div class="chart-data-empty">Interactive chart engine unavailable.</div>';
           return;
         }}
         const latest = rows[rows.length - 1];
         root.querySelector('[data-latest-matched]').textContent = pct(latest.matched);
         root.querySelector('[data-latest-entry]').textContent = pct(latest.entry);
         root.querySelector('[data-latest-exit]').textContent = pct(latest.exit);
-        headline.textContent = `In $50 ${{pct(latest.matched)}}`;
+        root.querySelector('[data-latest-long-funding]').textContent = pct(latest.longFunding);
+        root.querySelector('[data-latest-short-funding]').textContent = pct(latest.shortFunding);
+        if (headline) headline.textContent = `In $50 ${{pct(latest.matched)}} · Out ${{pct(latest.exit)}}`;
         for (const side of ['long', 'short']) {{
           const funding = latest[`${{side}}Funding`];
           const interval = latest[`${{side}}Interval`];
@@ -3232,59 +3474,18 @@ def render_live_spread_chart(
             nextNode.textContent = `${{new Date(nextMs).toLocaleTimeString([], {{hour:'2-digit',minute:'2-digit',timeZone:'UTC'}})}} UTC (${{Math.floor(remaining/60)}}h ${{String(remaining%60).padStart(2,'0')}}m)`;
           }}
         }}
-        const width = 1000, height = 350, left = 72, right = 22, top = 22, bottom = 40;
-        const values = rows.flatMap((row) => [row.matched, row.entry, row.exit]).filter(Number.isFinite);
-        if (!values.length) {{
-          canvas.innerHTML = '<div class="chart-data-empty">Quotes arrived without enough book depth to calculate spreads.</div>';
-          return;
+        const gapSeconds = Math.max(90, Number(payload.meta?.gap_threshold_seconds || 90));
+        chartSeries.matched.setData(seriesData(rows, 'matched', gapSeconds));
+        chartSeries.entry.setData(seriesData(rows, 'entry', gapSeconds));
+        chartSeries.exit.setData(seriesData(rows, 'exit', gapSeconds));
+        chartSeries.longFunding.setData(seriesData(rows, 'longFunding', gapSeconds));
+        chartSeries.shortFunding.setData(seriesData(rows, 'shortFunding', gapSeconds));
+        if (!chart.__fitted) {{
+          chart.timeScale().fitContent();
+          chart.__fitted = true;
+        }} else {{
+          chart.timeScale().scrollToRealTime();
         }}
-        let low = Math.min(...values), high = Math.max(...values);
-        const padding = Math.max((high - low) * .1, .02);
-        low -= padding; high += padding;
-        const minTs = rows[0].ts, maxTs = Math.max(rows[rows.length - 1].ts, minTs + 1000);
-        const x = (ts) => left + (ts - minTs) / (maxTs - minTs) * (width - left - right);
-        const y = (value) => top + (high - value) / (high - low) * (height - top - bottom);
-        const gapMs = Math.max(90000, Number(payload.meta?.gap_threshold_seconds || 90) * 1000);
-        function paths(key, className) {{
-          const segments = []; let current = []; let previous = null;
-          rows.forEach((row) => {{
-            const value = row[key];
-            if (!Number.isFinite(value) || (previous !== null && row.ts - previous > gapMs)) {{
-              if (current.length) segments.push(current);
-              current = [];
-            }}
-            if (Number.isFinite(value)) {{
-              current.push(`${{x(row.ts).toFixed(1)}},${{y(value).toFixed(1)}}`);
-              previous = row.ts;
-            }}
-          }});
-          if (current.length) segments.push(current);
-          return segments.map((points) =>
-            `<polyline class="${{className}}" points="${{points.join(' ')}}"></polyline>`
-          ).join('');
-        }}
-        const grid = Array.from({{length: 5}}, (_, index) => {{
-          const value = high - (high - low) * index / 4;
-          const py = top + (height - top - bottom) * index / 4;
-          return `<line x1="${{left}}" y1="${{py}}" x2="${{width-right}}" y2="${{py}}"></line>
-            <text x="${{left-9}}" y="${{py+4}}">${{pct(value)}}</text>`;
-        }}).join('');
-        const ticks = Array.from({{length: 5}}, (_, index) => {{
-          const ts = minTs + (maxTs - minTs) * index / 4;
-          const px = left + (width - left - right) * index / 4;
-          return `<text class="x-label" x="${{px}}" y="${{height-12}}">${{esc(timeLabel(ts, hours >= 24))}}</text>`;
-        }}).join('');
-        const markers = rows.map((row, index) => {{
-          if (rows.length > 250 && index % Math.ceil(rows.length / 250) !== 0 && index !== rows.length - 1) return '';
-          const title = esc(`${{timeLabel(row.ts, true)}} | In $50 ${{pct(row.matched)}} | In top ${{pct(row.entry)}} | Out ${{pct(row.exit)}}`);
-          return `<circle cx="${{x(row.ts)}}" cy="${{y(row.matched)}}" r="7" class="chart-hit"><title>${{title}}</title></circle>`;
-        }}).join('');
-        canvas.innerHTML = `<svg class="live-chart-svg" viewBox="0 0 ${{width}} ${{height}}" role="img" aria-label="Live entry, matched-size and exit spread progression">
-          <g class="live-chart-grid">${{grid}}${{ticks}}</g>
-          <line class="zero-line" x1="${{left}}" y1="${{y(0)}}" x2="${{width-right}}" y2="${{y(0)}}"></line>
-          <g class="live-chart-lines">${{paths('entry','entry')}}${{paths('matched','matched')}}${{paths('exit','exit')}}</g>
-          <g class="live-chart-hits">${{markers}}</g>
-        </svg>`;
         const ageSeconds = Number(payload.meta?.age_seconds);
         age.textContent = Number.isFinite(ageSeconds)
           ? `Latest sample ${{Math.round(ageSeconds)}}s ago`
@@ -3298,7 +3499,7 @@ def render_live_spread_chart(
         controller = new AbortController();
         state.textContent = 'Sampling exact public order books...';
         try {{
-          const response = await fetch(`/api/history/${{encodeURIComponent(routeKey)}}?live=1&hours=${{hours}}&max_points=5000`, {{
+          const response = await fetch(`/api/history/${{encodeURIComponent(routeKey)}}?live=1&hours=${{hours}}&max_points=25000`, {{
             cache: 'no-store',
             signal: controller.signal,
           }});
@@ -3321,15 +3522,25 @@ def render_live_spread_chart(
           refreshing = false;
         }}
       }}
+      root.querySelectorAll('[data-series-toggle]').forEach((button) => {{
+        button.addEventListener('click', () => {{
+          const key = button.dataset.seriesToggle;
+          button.classList.toggle('active');
+          chartSeries[key]?.applyOptions({{ visible: button.classList.contains('active') }});
+        }});
+      }});
       render(JSON.parse(document.getElementById('live-chart-initial').textContent || '{{}}'));
       refresh();
-      timer = window.setInterval(refresh, 15000);
+      timer = window.setInterval(refresh, 5000);
       document.addEventListener('visibilitychange', () => {{
         if (!document.hidden) refresh();
       }});
       window.addEventListener('pagehide', () => {{
         window.clearInterval(timer);
         controller?.abort();
+        resizeObserver?.disconnect();
+        themeObserver?.disconnect();
+        chart?.remove();
       }}, {{once: true}});
     }})();
     </script>
@@ -6553,7 +6764,7 @@ def render_okx_dex_card(quote: dict[str, Any] | None) -> str:
       <div class="kv-row"><span>Status</span><strong>{label_text(quote.get('status') or 'unknown')}</strong></div>
       <div class="kv-row"><span>Buy</span><strong>{fmt_price(quote.get('dex_buy_price_usd'))}</strong></div>
       <div class="kv-row"><span>Sell</span><strong>{fmt_price(quote.get('dex_sell_price_usd'))}</strong></div>
-      <div class="kv-row"><span>Fee / gas</span><strong>{h(quote.get('trade_fee_usd') or '?')} / {h(quote.get('estimate_gas_fee') or '?')}</strong></div>
+      <div class="kv-row"><span>Network fee / gas units</span><strong>${h(quote.get('trade_fee_usd') or '?')} / {h(quote.get('estimate_gas_fee') or '?')}</strong></div>
       <p class="plain">{label_list(quote.get('blockers') or []) or label_text(quote.get('note')) or 'Read-only quote data only.'}</p>
     </article>
     """
@@ -7972,7 +8183,7 @@ body.alert-modal-open {{ overflow: hidden; }}
 .chart-leg-stats header em {{ grid-column: 1 / -1; }}
 .chart-leg-stats article > div {{ min-height: 36px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--terminal-line); color: var(--terminal-muted); font-size: 10px; }}
 .chart-leg-stats article > div strong {{ color: var(--terminal-text); text-align: right; }}
-.chart-plot-stack {{ display: grid; grid-template-rows: minmax(340px,1fr) 220px; min-width: 0; }}
+.chart-plot-stack {{ display: grid; grid-template-rows: minmax(560px,1fr); min-width: 0; }}
 .chart-plot-panel {{ min-width: 0; display: grid; grid-template-rows: auto minmax(0,1fr); padding: 10px 12px 6px; }}
 .chart-plot-panel + .chart-plot-panel {{ border-top: 1px solid var(--terminal-line); }}
 .chart-plot-title {{ display: flex; align-items: center; gap: 12px; min-height: 34px; color: var(--terminal-muted); font-size: 10px; }}
@@ -7980,14 +8191,22 @@ body.alert-modal-open {{ overflow: hidden; }}
 .chart-plot-title em {{ margin-left: auto; font-style: normal; }}
 .chart-plot-title em.stale {{ color: var(--terminal-danger); }}
 .chart-plot-title button, .funding-history-open {{ margin-left: auto; min-height: 30px; padding: 0 9px; border: 1px solid var(--terminal-line); border-radius: 5px; background: var(--terminal-row); color: var(--terminal-text); cursor: pointer; font: inherit; font-size: 10px; font-weight: 900; }}
-.live-spread-chart {{ min-width: 0; display: grid; grid-template-rows: auto minmax(280px,1fr) auto; }}
+.live-spread-chart {{ position: relative; min-width: 0; display: grid; grid-template-rows: auto minmax(500px,1fr) auto; }}
 .live-chart-legend {{ min-height: 30px; display: flex; justify-content: flex-end; align-items: center; gap: 14px; flex-wrap: wrap; color: var(--terminal-muted); font-size: 9px; font-weight: 900; }}
-.live-chart-legend span {{ display: inline-flex; align-items: center; gap: 5px; }}
+.live-chart-legend span, .live-chart-legend button {{ display: inline-flex; align-items: center; gap: 5px; }}
+.live-chart-legend button {{ padding: 4px 5px; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; opacity: .45; }}
+.live-chart-legend button.active {{ background: var(--terminal-panel-2); opacity: 1; }}
 .live-chart-legend i {{ width: 15px; height: 3px; border-radius: 1px; background: currentColor; }}
 .live-chart-legend .matched {{ color: var(--terminal-accent); }}
 .live-chart-legend .entry {{ color: #4f8cff; }}
 .live-chart-legend .exit {{ color: var(--terminal-danger); }}
-.live-chart-canvas {{ min-width: 0; min-height: 280px; }}
+.live-chart-legend .funding-a {{ color: #1ebf8f; }}
+.live-chart-legend .funding-b {{ color: #ff7a82; }}
+.live-chart-canvas {{ min-width: 0; min-height: 500px; cursor: crosshair; }}
+.live-chart-tooltip {{ position: absolute; z-index: 8; min-width: 190px; padding: 9px 10px; border: 1px solid var(--terminal-line); border-radius: 5px; background: color-mix(in srgb,var(--terminal-panel) 94%,transparent); color: var(--terminal-text); box-shadow: 0 10px 30px rgba(0,0,0,.28); pointer-events: none; font-size: 10px; }}
+.live-chart-tooltip time {{ display: block; margin-bottom: 6px; color: var(--terminal-muted); font-size: 9px; }}
+.live-chart-tooltip span {{ display: flex; justify-content: space-between; gap: 16px; margin-top: 3px; }}
+.live-chart-tooltip strong {{ color: var(--terminal-text); }}
 .live-chart-svg {{ width: 100%; height: 100%; min-height: 280px; overflow: visible; }}
 .live-chart-grid line {{ stroke: var(--terminal-line); stroke-width: 1; }}
 .live-chart-grid text {{ fill: var(--terminal-muted); font-size: 10px; text-anchor: end; }}
@@ -8001,6 +8220,8 @@ body.alert-modal-open {{ overflow: hidden; }}
 .live-chart-note {{ min-height: 30px; display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--terminal-muted); font-size: 9px; }}
 .live-chart-note strong {{ color: var(--terminal-text); white-space: nowrap; }}
 .live-chart-note strong.stale {{ color: var(--terminal-danger); }}
+.asset-chart-symbol {{ color: var(--terminal-text); font-size: inherit; font-weight: 900; text-decoration: none; }}
+.asset-chart-symbol:hover {{ color: var(--terminal-accent); text-decoration: underline; text-underline-offset: 3px; }}
 .dual-chart-wrap {{ min-width: 0; display: grid; grid-template-rows: auto minmax(0,1fr); }}
 .dual-chart-legend {{ display: flex; justify-content: flex-end; gap: 12px; min-height: 24px; }}
 .dual-chart-legend span {{ font-size: 10px; font-weight: 900; }}
