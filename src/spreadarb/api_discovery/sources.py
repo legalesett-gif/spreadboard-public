@@ -700,6 +700,10 @@ def default_enabled_cex_source() -> CexCcxtSource:
             "Bingx": "bingx",
             "Coinbase": "coinbaseexchange",
             "Kraken": "kraken",
+            "HTX": "htx",
+            "Phemex": "phemex",
+            "CoinEx": "coinex",
+            "WhiteBIT": "whitebit",
         }
     )
 
@@ -717,6 +721,10 @@ def default_enabled_cex_futures_source() -> CexCcxtSource:
             "Bingx": "bingx",
             "Kraken Futures": "krakenfutures",
             "Coinbase International": "coinbaseinternational",
+            "HTX": "htx",
+            "Phemex": "phemex",
+            "CoinEx": "coinex",
+            "WhiteBIT": "whitebit",
         },
         name="cex_futures_ccxt",
         market_type="Futures",
@@ -741,7 +749,6 @@ def default_sources(
         enabled.extend(source for source in source_specs if _source_enabled(source, source_filter))
     disabled_specs = [
         ("Crypto.com", "cex", "disabled_connector_spec_until_validated"),
-        ("HTX", "cex", "disabled_connector_spec_until_validated"),
         ("Bitfinex", "cex", "disabled_connector_spec_until_validated"),
         ("BitMart", "cex", "disabled_connector_spec_until_validated"),
         ("LBank", "cex", "disabled_connector_spec_until_validated"),
@@ -1692,21 +1699,36 @@ def _verify_top_candidate_books(
         max_spread_pct=context.max_spread_pct,
         min_net_funding_apr_pct=25.0,
     )
+    pairs = [
+        pair
+        for pair in pairs
+        if market_type
+        in {pair.long_quote.market_type, pair.short_quote.market_type}
+    ]
     if max_candidates <= 0:
         selected_pairs = pairs
     else:
-        spread_slots = max(1, int(max_candidates * 0.6))
+        spread_slots = max(1, int(max_candidates * 0.75))
         funding_slots = max(1, max_candidates - spread_slots)
-        spread_pairs = sorted(
-            pairs,
-            key=lambda pair: pair.depth_weighted_spread_pct,
-            reverse=True,
-        )[:spread_slots]
-        funding_pairs = sorted(
-            (pair for pair in pairs if _pair_net_funding_apr(pair) is not None),
-            key=lambda pair: _pair_net_funding_apr(pair) or -999999.0,
-            reverse=True,
-        )[:funding_slots]
+        spread_pairs = _balanced_route_candidates(
+            sorted(
+                pairs,
+                key=lambda pair: (
+                    _candidate_is_publicly_rankable(pair),
+                    pair.depth_weighted_spread_pct,
+                ),
+                reverse=True,
+            ),
+            spread_slots,
+        )
+        funding_pairs = _unique_token_first(
+            sorted(
+                (pair for pair in pairs if _pair_net_funding_apr(pair) is not None),
+                key=lambda pair: _pair_net_funding_apr(pair) or -999999.0,
+                reverse=True,
+            ),
+            funding_slots,
+        )
         selected_pairs = list(
             {
                 (
@@ -1774,6 +1796,92 @@ def _verify_top_candidate_books(
         finally:
             _release_ccxt_exchange(exchange)
     return list(verified.values())
+
+
+def _unique_token_first(
+    pairs: Iterable[QuoteCandidatePair],
+    limit: int,
+) -> list[QuoteCandidatePair]:
+    """Use scarce depth checks on distinct assets before extra venue permutations."""
+
+    ranked = list(pairs)
+    if limit <= 0:
+        return ranked
+    selected: list[QuoteCandidatePair] = []
+    deferred: list[QuoteCandidatePair] = []
+    seen_tokens: set[str] = set()
+    for pair in ranked:
+        token = pair.token.upper()
+        if token in seen_tokens:
+            deferred.append(pair)
+            continue
+        seen_tokens.add(token)
+        selected.append(pair)
+        if len(selected) >= limit:
+            return selected
+    selected.extend(deferred[: max(0, limit - len(selected))])
+    return selected
+
+
+def _balanced_route_candidates(
+    pairs: Iterable[QuoteCandidatePair],
+    limit: int,
+) -> list[QuoteCandidatePair]:
+    """Keep one route class from consuming every matched-depth check."""
+
+    ranked = list(pairs)
+    if limit <= 0:
+        return ranked
+    lanes: dict[str, list[QuoteCandidatePair]] = defaultdict(list)
+    for pair in ranked:
+        market_types = {
+            pair.long_quote.market_type,
+            pair.short_quote.market_type,
+        }
+        if market_types == {"Futures"}:
+            lane = "FUTURES"
+        elif market_types == {"Spot"}:
+            lane = "SPOT"
+        else:
+            lane = "FUTURES-SPOT"
+        lanes[lane].append(pair)
+    active = [lane for lane in ("FUTURES", "FUTURES-SPOT", "SPOT") if lanes[lane]]
+    if not active:
+        return []
+    base, remainder = divmod(limit, len(active))
+    selected: list[QuoteCandidatePair] = []
+    for index, lane in enumerate(active):
+        lane_limit = base + (1 if index < remainder else 0)
+        selected.extend(_unique_token_first(lanes[lane], lane_limit))
+    return selected[:limit]
+
+
+def _candidate_is_publicly_rankable(pair: QuoteCandidatePair) -> bool:
+    """Keep obvious mirages from consuming the limited order-book budget."""
+
+    if (
+        pair.short_quote.market_type == "Spot"
+        and pair.long_quote.market_type != "Spot"
+    ):
+        return False
+    dislocation = max(
+        abs(pair.executable_spread_pct),
+        abs(pair.depth_weighted_spread_pct),
+    )
+    if dislocation < HIGH_DISLOCATION_IDENTITY_THRESHOLD_PCT:
+        return True
+    identities = {
+        identity
+        for identity in (
+            pair.long_quote.identity_key,
+            pair.short_quote.identity_key,
+        )
+        if identity
+    }
+    return len(identities) == 1 and all(
+        quote.identity_key in identities
+        for quote in (pair.long_quote, pair.short_quote)
+    )
 
 
 def _pair_net_funding_apr(pair: QuoteCandidatePair) -> float | None:

@@ -16,9 +16,9 @@ services:
       - key: SPREADBOARD_FAST_QUOTE_SECONDS
         value: "30"
       - key: SPREADBOARD_FAST_QUOTE_ROUTES
-        value: "2"
+        value: "12"
       - key: SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS
-        value: "20"
+        value: "60"
       - key: SPREADBOARD_DATA_DIR
         value: /app/runtime
       - key: SPREADBOARD_LIGHTWEIGHT_MODE

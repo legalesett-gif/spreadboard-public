@@ -78,6 +78,15 @@ def exchange_market_url(
         if is_futures:
             return f"https://phemex.com/trade/{pair}"
         return f"https://phemex.com/spot/trade/{pair}"
+    if venue_key == "coinex":
+        if is_futures:
+            return f"https://www.coinex.com/en/futures/{pair}"
+        return f"https://www.coinex.com/en/exchange/{base.lower()}-{quote_asset.lower()}"
+    if venue_key == "whitebit":
+        market = f"{base}_PERP" if is_futures else underscored
+        return f"https://whitebit.com/trade/{market}"
+    if venue_key == "upbit":
+        return f"https://upbit.com/exchange?code=CRIX.UPBIT.{quote_asset}-{base}"
     if venue_key in {"okxdex", "okxdexaggregator"}:
         return "https://www.okx.com/web3/dex"
     return None

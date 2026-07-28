@@ -68,6 +68,7 @@ DISPLAY_LABELS = {
     "normalized_funding_time_required": "Funding schedule unavailable",
     "basis_and_exit_monitor_required": "History is collecting",
     "source_unavailable": "Source unavailable",
+    "spot_sell_inventory_required": "Spot or DEX inventory required",
     "stale": "Stale",
     "stale_route": "Stale route",
     "telegram_only": "Telegram only",
@@ -1187,7 +1188,7 @@ def _canonical_pair_row(row: dict[str, Any]) -> dict[str, Any]:
             "chart_url": f"/charts?route_key={board.route_key_url(str(row.get('route_key') or ''))}",
             "strategy_verdict": "current_api_data",
             "next_action": "monitor_route",
-            "blockers": [],
+            "blockers": list(row.get("conditions") or []),
             "canonical_api": True,
         }
     )
@@ -1206,12 +1207,57 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
             "count": len(public_rows),
             "rows": public_rows,
         }
+    market = api_market_spreads(
+        board_path,
+        {"limit": ["500"], "include_stale": ["0"]},
+    )
+    current = next(
+        (
+            row
+            for row in market.get("rows") or []
+            if str(row.get("route_key") or "") == route_key
+        ),
+        None,
+    )
+    if current is not None:
+        return {
+            "ok": True,
+            "mode": "canonical_public_api_current_snapshot",
+            "route_key": route_key,
+            "count": 1,
+            "collecting": True,
+            "rows": [_current_history_point(current)],
+        }
     rows = board.load_history(board_path, route_key=route_key, max_points=points)
     return {
         "ok": bool(rows),
         "route_key": route_key,
         "count": len(rows),
         "rows": [_decorate_history_row(row) for row in rows],
+    }
+
+
+def _current_history_point(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "route_key": row.get("route_key"),
+        "quote_ts_us": row.get("quote_ts_us"),
+        "token": row.get("token"),
+        "route_kind": row.get("route_kind"),
+        "long_venue": row.get("long_venue"),
+        "long_market_type": row.get("long_market_type"),
+        "short_venue": row.get("short_venue"),
+        "short_market_type": row.get("short_market_type"),
+        "executable_spread_pct": row.get("executable_spread_pct"),
+        "depth_weighted_spread_pct": row.get("depth_weighted_spread_pct"),
+        "funding_apr_pct": row.get("funding_apr_pct"),
+        "funding_daily_pct": row.get("funding_daily_pct"),
+        "long_price": row.get("long_price"),
+        "short_price": row.get("short_price"),
+        "long_bid_price": row.get("long_bid"),
+        "long_ask_price": row.get("long_ask"),
+        "short_bid_price": row.get("short_bid"),
+        "short_ask_price": row.get("short_ask"),
+        "exit_spread_pct": None,
     }
 
 
@@ -1593,13 +1639,14 @@ def render_market_filter_bar(data: dict[str, Any], query: dict[str, list[str]]) 
     selected_direction = _query_first(query, "direction") or "desc"
     selected_limit = str(int(_query_float(query, "limit", api_spreads.DEFAULT_LIMIT) or api_spreads.DEFAULT_LIMIT))
     summary = data.get("summary") or {}
-    kind_counts = data.get("route_kind_counts") or {}
-    # Spot-Spot and Spot-DEX farms are retired from the public board (their rows
-    # are dropped before they ever reach this page). Futures-Spot and Spot-Futures
-    # are shown as a single merged tab, same as the Funding page's Futures-Spot farm.
+    kind_counts = data.get("route_kind_token_counts") or {}
+    lane_counts = data.get("lane_token_counts") or {}
+    # Futures-Spot and Spot-Futures are one directional pair family. All routes
+    # stays last so the primary lane order remains predictable.
     kind_tabs = [
         ("FUTURES", "Futures-Futures"),
         ("FUTURES-SPOT-PAIR", "Futures-Spot"),
+        ("SPOT", "Spot-Spot"),
         ("DEX-FUTURES", "Futures-DEX"),
         ("", "All routes"),
     ]
@@ -1609,7 +1656,7 @@ def render_market_filter_bar(data: dict[str, Any], query: dict[str, list[str]]) 
       <div class="terminal-filter-row route-row">
         <span>Route</span>
         <div class="market-tabs route-tabs" aria-label="Route filters">
-          {''.join(render_market_tab(label, _query_with(query, kind=value or None, offset=None), str(selected_kind).upper() == value, market_kind_count(value, kind_counts, summary)) for value, label in kind_tabs)}
+          {''.join(render_market_tab(label, _query_with(query, kind=value or None, offset=None), str(selected_kind).upper() == value, market_kind_count(value, kind_counts, summary, lane_counts)) for value, label in kind_tabs)}
         </div>
       </div>
       <form class="market-filter-form" method="get" action="/markets">
@@ -1640,11 +1687,16 @@ def render_market_filter_bar(data: dict[str, Any], query: dict[str, list[str]]) 
     """
 
 
-def market_kind_count(value: str, counts: dict[str, Any], summary: dict[str, Any]) -> Any:
+def market_kind_count(
+    value: str,
+    counts: dict[str, Any],
+    summary: dict[str, Any],
+    lane_counts: dict[str, Any] | None = None,
+) -> Any:
     if not value:
-        return summary.get("total_tokens")
+        return summary.get("matching_tokens")
     if value == "FUTURES-SPOT-PAIR":
-        return int(counts.get("FUTURES-SPOT", 0) or 0) + int(counts.get("SPOT-FUTURES", 0) or 0)
+        return (lane_counts or {}).get("FUTURES-SPOT", 0)
     return counts.get(value, 0)
 
 
@@ -2640,7 +2692,12 @@ def render_charts_page(board_path: Path, config: dict[str, Any], query: dict[str
         else None
     )
     history = (
-        market_history.load_history(route_key=selected_route, max_points=5000)
+        api_history(
+            selected_route,
+            board_path,
+            {"max_points": ["5000"]},
+        ).get("rows")
+        or []
         if selected_row is not None
         else []
     )

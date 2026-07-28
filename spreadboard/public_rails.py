@@ -28,6 +28,11 @@ VENUE_IDS = {
     "Bingx": "bingx",
     "Coinbase": "coinbaseexchange",
     "Kraken": "kraken",
+    "HTX": "htx",
+    "Phemex": "phemex",
+    "CoinEx": "coinex",
+    "WhiteBIT": "whitebit",
+    "Upbit": "upbit",
 }
 
 

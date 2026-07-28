@@ -19,11 +19,9 @@ DEFAULT_API_DISCOVERY_PATH = RUNTIME_DIR / "api_discovery_latest.json"
 DEFAULT_MAX_AGE_MIN = 15.0
 DEFAULT_LIMIT = 25
 
-# Spot-Spot and Spot-DEX carry farms have been retired from the public board.
-# Rows in these route kinds are dropped at load time so they never surface in
-# groups, JSON output, top-edge/top-funding lanes, or kind counts anywhere in
-# the app, regardless of any kind filter a caller passes.
-RETIRED_ROUTE_KINDS = frozenset({"SPOT", "DEX-SPOT"})
+# Spot-DEX is outside the current public product. Spot-Spot remains a first-class
+# arbitrage lane and must participate in grouping and top-25 ranking.
+RETIRED_ROUTE_KINDS = frozenset({"DEX-SPOT"})
 
 
 @dataclass(frozen=True)
@@ -143,18 +141,25 @@ def load_spreads(
     )
     all_rows = [row for row in all_rows if row.route_kind not in RETIRED_ROUTE_KINDS]
     held_out = [row for row in all_rows if _is_mirage_guarded(row)]
-    # Mirage-guarded rows are no longer hidden. They stay in the ranked set and
-    # carry a `mirage_guarded` flag so the UI can badge them as unproven rather
-    # than silently dropping real opportunities (MEXC and most Futures-Spot
-    # routes were being suppressed entirely). `include_unverified` is retained
-    # for API compatibility but no longer gates visibility.
-    _ = include_unverified
-    ranked_rows = all_rows
+    # Headline rankings must be executable research leads, not ticker
+    # dislocations with unresolved identity, inventory, or transfer rails.
+    # Guarded rows remain available through the explicit audit switch.
+    ranked_rows = (
+        all_rows
+        if include_unverified
+        else [
+            row
+            for row in all_rows
+            if not _is_mirage_guarded(row) and not _is_non_crypto_contract(row)
+        ]
+    )
     public_universe = (
         ranked_rows
         if include_stale
         else [row for row in ranked_rows if row.freshness == "fresh"]
     )
+    route_kind_token_counts = _route_kind_token_counts(public_universe)
+    release_lane_token_counts = _release_lane_token_counts(public_universe)
     filtered = _filter_rows(
         ranked_rows,
         q=q,
@@ -238,17 +243,54 @@ def load_spreads(
                 **_public_source_health(api_meta),
                 "mirage_guarded_count": len(held_out),
                 "dex_raw_kind_counts": dex_raw_kind_counts,
+                "lane_token_counts": release_lane_token_counts,
+                "top_25_ready": {
+                    kind: count >= DEFAULT_LIMIT
+                    for kind, count in release_lane_token_counts.items()
+                },
             },
         },
         "exchange_options": _exchange_options(public_universe),
         "route_kind_counts": dict(
             sorted(Counter(row.route_kind for row in public_universe).items())
         ),
+        "route_kind_token_counts": route_kind_token_counts,
+        "lane_token_counts": release_lane_token_counts,
         "top_edges": _top_unique_groups(public_universe, metric="edge"),
         "top_funding": _top_unique_groups(public_universe, metric="funding"),
         "groups": visible_groups,
         "rows": [_public_row(row) for row in visible],
     }
+
+
+def _route_kind_token_counts(
+    rows: list[SpreadTerminalRow],
+) -> dict[str, int]:
+    tokens: dict[str, set[str]] = {}
+    for row in rows:
+        tokens.setdefault(row.route_kind, set()).add(row.token)
+    return {kind: len(values) for kind, values in sorted(tokens.items())}
+
+
+def _release_lane_token_counts(
+    rows: list[SpreadTerminalRow],
+) -> dict[str, int]:
+    tokens = {
+        "FUTURES": set(),
+        "FUTURES-SPOT": set(),
+        "SPOT": set(),
+        "DEX-FUTURES": set(),
+    }
+    for row in rows:
+        if row.route_kind == "FUTURES":
+            tokens["FUTURES"].add(row.token)
+        elif row.route_kind in {"FUTURES-SPOT", "SPOT-FUTURES"}:
+            tokens["FUTURES-SPOT"].add(row.token)
+        elif row.route_kind == "SPOT":
+            tokens["SPOT"].add(row.token)
+        elif row.route_kind in {"DEX-FUTURES", "FUTURES-DEX"}:
+            tokens["DEX-FUTURES"].add(row.token)
+    return {kind: len(values) for kind, values in tokens.items()}
 
 
 def _load_api_discovery_rows(
@@ -635,13 +677,16 @@ def _filter_rows(rows: list[SpreadTerminalRow], **filters: Any) -> list[SpreadTe
                 continue
         if not include_stale and row.freshness == "stale":
             continue
-        spread = abs(_float_or_none(row.executable_spread_pct) or 0.0)
+        spread = _entrance_spread(row)
         if min_spread is not None and spread < float(min_spread):
             continue
-        funding = abs(_float_or_none(row.funding_apr_pct) or 0.0)
-        if funding_only and funding <= 0:
+        settled_funding = _float_or_none(row.funding_24h_pct)
+        if funding_only and settled_funding is None:
             continue
-        if min_funding is not None and funding < float(min_funding):
+        if (
+            min_funding is not None
+            and abs(settled_funding or 0.0) < float(min_funding) / 365.0
+        ):
             continue
         output.append(row)
     return output
@@ -661,7 +706,7 @@ def _route_mirage_reasons(
     )
     reasons: list[str] = []
     if short_market_type == "Spot" and long_market_type != "Spot":
-        reasons.append("mirage_guard:spot_short_inventory_unproven")
+        reasons.append("spot_sell_inventory_required")
     if spread < 1.0:
         return reasons
     raw_blockers = {str(item) for item in raw.get("blockers") or []}
@@ -680,10 +725,17 @@ def _is_mirage_guarded(row: SpreadTerminalRow) -> bool:
     return any(str(item).startswith("mirage_guard:") for item in row.blockers)
 
 
+def _is_non_crypto_contract(row: SpreadTerminalRow) -> bool:
+    name = str(row.token_name or "").casefold()
+    return "prestocks" in name or row.token in {"ANTHROPIC", "OPENAI"}
+
+
 def _normalize_kind_filter(value: Any) -> str:
     kind = str(value or "").upper().strip()
     return {
         "FUTURES-FUTURES": "FUTURES",
+        "FUTURES-SPOT": "FUTURES-SPOT-PAIR",
+        "SPOT-FUTURES": "FUTURES-SPOT-PAIR",
         "SPOT-SPOT": "SPOT",
         "FUTURES-DEX": "DEX-FUTURES",
         "SPOT-DEX": "DEX-SPOT",
@@ -714,7 +766,9 @@ def _summary(
         "stale_rows": len([row for row in filtered if row.freshness == "stale"]),
         "api_rows": len(all_rows),
         "dex_rows": len([row for row in all_rows if row.raw_source_kind == "dex_discovered"]),
-        "funding_rows": len([row for row in filtered if row.funding_apr_pct is not None]),
+        "funding_rows": len(
+            [row for row in filtered if row.funding_24h_pct is not None]
+        ),
         "max_executable_spread_pct": max(
             (_float_or_none(row.executable_spread_pct) or 0.0 for row in filtered),
             default=None,
@@ -781,12 +835,10 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
             token_rows,
             key=_entrance_spread,
         )
-        funding_rows = [
-            row for row in token_rows if _effective_funding_24h(row) is not None
-        ]
+        funding_rows = [row for row in token_rows if row.funding_24h_pct is not None]
         best_funding = max(
             funding_rows,
-            key=lambda row: _effective_funding_24h(row) or -999999.0,
+            key=lambda row: row.funding_24h_pct or -999999.0,
             default=None,
         )
         output.append(
@@ -813,7 +865,7 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
                     best_funding.funding_apr_pct if best_funding is not None else None
                 ),
                 "best_funding_24h_pct": (
-                    _effective_funding_24h(best_funding)
+                    best_funding.funding_24h_pct
                     if best_funding is not None
                     else None
                 ),
@@ -858,9 +910,11 @@ def _route_dict_sort_value(row: dict[str, Any], sort_by: str) -> Any:
     if sort_by == "edge":
         return _entrance_spread_dict(row)
     if sort_by == "funding":
-        return _effective_funding_24h_dict(row) or -999999.0
+        settled = _float_or_none(row.get("funding_24h_pct"))
+        return settled if settled is not None else -999999.0
     if sort_by == "funding_abs":
-        return abs(_effective_funding_24h_dict(row) or 0.0)
+        settled = _float_or_none(row.get("funding_24h_pct"))
+        return abs(settled) if settled is not None else -999999.0
     if sort_by == "depth":
         return _float_or_none(row.get("depth_usd")) or 0.0
     if sort_by == "age":
@@ -889,6 +943,11 @@ def _row_sort_key(row: SpreadTerminalRow) -> tuple[float, float, float, float]:
 
 def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload = row.to_dict()
+    payload["conditions"] = [
+        item
+        for item in row.blockers
+        if item in {"spot_sell_inventory_required"}
+    ]
     for key in (
         "blockers",
         "executor_status",
@@ -913,9 +972,11 @@ def _sort_value(row: SpreadTerminalRow, sort_by: str) -> Any:
     if sort_by == "edge":
         return _entrance_spread(row)
     if sort_by == "funding":
-        return _effective_funding_24h(row) or -999999.0
+        settled = _float_or_none(row.funding_24h_pct)
+        return settled if settled is not None else -999999.0
     if sort_by == "funding_abs":
-        return abs(_effective_funding_24h(row) or 0.0)
+        settled = _float_or_none(row.funding_24h_pct)
+        return abs(settled) if settled is not None else -999999.0
     if sort_by == "depth":
         return _float_or_none(row.depth_usd) or 0.0
     if sort_by == "age":

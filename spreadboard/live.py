@@ -56,6 +56,9 @@ VENUE_EXCHANGE_IDS = {
     "KuCoin": "kucoin",
     "Kucoin": "kucoin",
     "KuCoin Futures": "kucoinfutures",
+    "Kucoin Futures": "kucoinfutures",
+    "Coinbase International": "coinbaseinternational",
+    "Upbit": "upbit",
     "Kraken": "kraken",
     "Kraken Futures": "krakenfutures",
     "Coinbase": "coinbase",
@@ -63,6 +66,8 @@ VENUE_EXCHANGE_IDS = {
     "Aster": "aster",
     "HTX": "htx",
     "Phemex": "phemex",
+    "CoinEx": "coinex",
+    "WhiteBIT": "whitebit",
 }
 
 
@@ -929,6 +934,84 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
             since_ms=now_ms - 24 * 3600 * 1000,
         )
         return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "htx":
+        url = (
+            "https://api.hbdm.com/linear-swap-api/v1/swap_historical_funding_rate?"
+            + urllib.parse.urlencode(
+                {"contract_code": f"{base}-USDT", "page_size": "100"}
+            )
+        )
+        data = _public_json(url)
+        raw_rows = (((data or {}).get("data") or {}).get("data") or [])
+        history = _normalize_native_funding_rows(
+            raw_rows,
+            timestamp_key="funding_time",
+            rate_key="funding_rate",
+            since_ms=since_ms,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "phemex":
+        url = (
+            "https://api.phemex.com/api-data/public/data/funding-rate-history?"
+            + urllib.parse.urlencode(
+                {
+                    "symbol": f".{base}FR8H",
+                    "start": since_ms,
+                    "end": now_ms,
+                    "limit": "100",
+                }
+            )
+        )
+        data = _public_json(url)
+        raw_rows = (((data or {}).get("data") or {}).get("rows") or [])
+        history = _normalize_native_funding_rows(
+            raw_rows,
+            timestamp_key="fundingTime",
+            rate_key="fundingRate",
+            since_ms=since_ms,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "coinex":
+        url = (
+            "https://api.coinex.com/v2/futures/funding-rate-history?"
+            + urllib.parse.urlencode(
+                {
+                    "market": f"{base}USDT",
+                    "start_time": since_ms,
+                    "end_time": now_ms,
+                    "limit": "100",
+                }
+            )
+        )
+        data = _public_json(url)
+        raw_rows = (data or {}).get("data") or []
+        history = _normalize_native_funding_rows(
+            raw_rows,
+            timestamp_key="funding_time",
+            rate_key="actual_funding_rate",
+            since_ms=since_ms,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "whitebit":
+        url = (
+            f"https://whitebit.com/api/v4/public/funding-history/{base}_PERP?"
+            + urllib.parse.urlencode(
+                {
+                    "startDate": since_ms // 1000,
+                    "endDate": now_ms // 1000,
+                    "limit": "100",
+                }
+            )
+        )
+        data = _public_json(url)
+        history = _normalize_native_funding_rows(
+            data if isinstance(data, list) else [],
+            timestamp_key="fundingTime",
+            rate_key="fundingRate",
+            since_ms=since_ms,
+            timestamp_multiplier=1000,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
     return None
 
 
@@ -1002,11 +1085,9 @@ def _native_funding_result(
     return {
         "status": "ok",
         "funding_24h_pct": sum(item["rate_pct"] for item in history),
-        "current_funding_pct": latest["rate_pct"],
         "funding_interval_hours": interval,
         "funding_interval_assumed": interval is None,
         "next_funding_ts_us": next_funding_ts_us,
-        "projected_24h_pct": _project_funding_24h(latest["rate_pct"], interval),
         "history": history,
         "samples": len(history),
     }

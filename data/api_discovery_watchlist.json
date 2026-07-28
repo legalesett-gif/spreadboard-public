@@ -1,6 +1,6 @@
 {
   "schema": "spreadarb.api_discovery.watchlist.v1",
-  "updated_at": "2026-05-23T00:00:00Z",
+  "updated_at": "2026-07-26T23:45:00Z",
   "tokens": [
     {
       "symbol": "ETH",
@@ -41,6 +41,46 @@
       "dex_enabled": true,
       "solana_mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
       "solana_decimals": 6
+    },
+    {
+      "symbol": "VANRY",
+      "identity_key": "asset:vanry",
+      "decimals": 18,
+      "cex_enabled": true,
+      "dex_enabled": true,
+      "evm_contracts": {
+        "1": "0x8DE5B80a0C1B02Fe4976851D030B36122dbb8624"
+      }
+    },
+    {
+      "symbol": "1INCH",
+      "identity_key": "asset:1inch",
+      "decimals": 18,
+      "cex_enabled": true,
+      "dex_enabled": true,
+      "evm_contracts": {
+        "1": "0x111111111117dC0aa78b770fA6A738034120C302"
+      }
+    },
+    {
+      "symbol": "SNX",
+      "identity_key": "asset:snx",
+      "decimals": 18,
+      "cex_enabled": true,
+      "dex_enabled": true,
+      "evm_contracts": {
+        "1": "0xC011a73ee8576Fb46F5E1c5751cA3B9Fe0af2a6F"
+      }
+    },
+    {
+      "symbol": "DEXE",
+      "identity_key": "asset:dexe",
+      "decimals": 18,
+      "cex_enabled": true,
+      "dex_enabled": true,
+      "evm_contracts": {
+        "1": "0xde4EE8057785A7e8e800Db58F9784845A5C2Cbd6"
+      }
     }
   ]
 }
