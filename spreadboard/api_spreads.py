@@ -366,6 +366,15 @@ def _dex_spot_source_status(payload: dict[str, Any]) -> dict[str, Any]:
                 "status": source.get("status"),
                 "rows": source.get("rows"),
                 "blockers": list(source.get("blockers") or []),
+                "errors": [
+                    str(error)[:240]
+                    for error in (source.get("errors") or [])[:5]
+                ],
+                "details": {
+                    key: value
+                    for key, value in dict(source.get("details") or {}).items()
+                    if key in {"provider", "quote_count"}
+                },
             }
     return {"name": "okx_dex_quote", "status": "absent", "rows": 0, "blockers": []}
 

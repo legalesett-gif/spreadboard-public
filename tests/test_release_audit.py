@@ -183,6 +183,34 @@ def test_okx_dex_uses_usd_network_fee_not_raw_gas_units() -> None:
     assert captured["token_decimals"] == 9
 
 
+def test_dex_source_health_keeps_sanitized_provider_diagnostics() -> None:
+    payload = {
+        "source_refresh": {
+            "sources": [
+                {
+                    "name": "okx_dex_quote",
+                    "status": "partial",
+                    "rows": 0,
+                    "blockers": ["partial_source_errors"],
+                    "errors": ["PEPE:1:RuntimeError: okx_dex_quote:IP validation failed"],
+                    "details": {
+                        "provider": "OKX DEX",
+                        "quote_count": 0,
+                        "private_debug": "do not expose",
+                    },
+                }
+            ]
+        }
+    }
+
+    health = api_spreads._dex_spot_source_status(payload)
+
+    assert health["errors"] == [
+        "PEPE:1:RuntimeError: okx_dex_quote:IP validation failed"
+    ]
+    assert health["details"] == {"provider": "OKX DEX", "quote_count": 0}
+
+
 def test_spread_ceiling_can_be_disabled_without_hiding_large_exact_routes() -> None:
     assert not sources._spread_ceiling_exceeded(102.2, max_spread_pct=0)
     assert sources._spread_ceiling_exceeded(102.2, max_spread_pct=100)
