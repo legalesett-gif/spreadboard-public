@@ -5,6 +5,7 @@ from __future__ import annotations
 
 # ruff: noqa: E402
 
+import gc
 import json
 import os
 from pathlib import Path
@@ -114,7 +115,7 @@ class RefreshLoop:
                 return
             funding_summary = live.enrich_snapshot_funding_24h(
                 snapshot,
-                max_workers=int(os.environ.get("SPREADBOARD_FUNDING_HISTORY_WORKERS", "12")),
+                max_workers=int(os.environ.get("SPREADBOARD_FUNDING_HISTORY_WORKERS", "4")),
             )
             _atomic_write_snapshot(snapshot)
         inserted = market_history.record_snapshot(snapshot)
@@ -141,6 +142,8 @@ class RefreshLoop:
                 public_rails.refresh_public_rails(snapshot)
             except Exception as exc:  # noqa: BLE001 - rail coverage can be partial.
                 _log(f"transfer-rail refresh unavailable: {type(exc).__name__}: {exc}")
+        del snapshot
+        gc.collect()
 
     def run_fast_quotes(self) -> None:
         interval = max(
@@ -170,7 +173,12 @@ class RefreshLoop:
             "--snapshot-path",
             str(SNAPSHOT_PATH),
             "--route-limit",
-            str(max(100, int(os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "100")))),
+            str(
+                min(
+                    50,
+                    max(25, int(os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "50"))),
+                )
+            ),
         ]
         try:
             result = subprocess.run(
