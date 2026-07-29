@@ -1377,11 +1377,11 @@ def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _native_chart_route(row: dict[str, Any]) -> bool:
-    from spreadboard.fast_quotes import VENUE_IDS
+    from spreadboard.fast_quotes import NATIVE_FUTURES_VENUES
 
     return all(
-        str(row.get(f"{side}_market_type") or "") in {"Spot", "Futures"}
-        and str(row.get(f"{side}_venue") or "") in VENUE_IDS
+        str(row.get(f"{side}_market_type") or "") == "Futures"
+        and str(row.get(f"{side}_venue") or "") in NATIVE_FUTURES_VENUES
         for side in ("long", "short")
     )
 

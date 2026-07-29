@@ -322,6 +322,22 @@ def test_aster_and_hyperliquid_futures_are_not_mislabeled_as_dex() -> None:
     assert market_history.route_kind_for(row) == "FUTURES"
 
 
+def test_only_native_futures_routes_sample_inside_web_process() -> None:
+    assert server._native_chart_route(_route())
+    gate_spot = {
+        **_route(),
+        "long_venue": "Gate",
+        "long_market_type": "Spot",
+        "long_market_symbol": "TEST/USDT",
+    }
+    assert not server._native_chart_route(gate_spot)
+    kucoin_futures = {
+        **_route(),
+        "long_venue": "Kucoin Futures",
+    }
+    assert not server._native_chart_route(kucoin_futures)
+
+
 def test_live_chart_surface_explains_series_and_polls_exact_route() -> None:
     html = server.render_live_spread_chart(_route()["route_key"], [], "1h")
 
