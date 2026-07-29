@@ -54,12 +54,14 @@ class RefreshLoop:
 
     def start(self) -> None:
         self.thread.start()
-        self.fast_thread.start()
+        if not _env_bool("SPREADBOARD_LIGHTWEIGHT_MODE"):
+            self.fast_thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
         self.thread.join(timeout=5.0)
-        self.fast_thread.join(timeout=5.0)
+        if self.fast_thread.is_alive():
+            self.fast_thread.join(timeout=5.0)
 
     def run(self) -> None:
         while not self.stop_event.is_set():
