@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -58,6 +59,7 @@ def run_discovery(
 ) -> dict[str, Any]:
     started_at = utc_now_iso()
     started = monotonic()
+    previous_snapshot = _load_previous_snapshot(snapshot_path)
     watchlist = load_watchlist(watchlist_path)
     identity_registry = load_identity_registry(identity_registry_path)
     executor_attestations = load_executor_attestations(attestation_path)
@@ -119,6 +121,11 @@ def run_discovery(
         )
         partial["source_refresh"]["partial"] = True
         partial["source_refresh"]["sources_completed"] = len(source_results)
+        partial = _retain_previous_rows(
+            partial,
+            previous_snapshot,
+            row_limit=row_limit,
+        )
         atomic_write_json(snapshot_path, partial)
     if not tokens:
         source_results.append(_empty_token_status(started_at))
@@ -162,6 +169,63 @@ def run_discovery(
     )
     snapshot["archive_path"] = str(archive_path)
     return snapshot
+
+
+def _load_previous_snapshot(snapshot_path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _retain_previous_rows(
+    partial: dict[str, Any],
+    previous: dict[str, Any],
+    *,
+    row_limit: int,
+) -> dict[str, Any]:
+    retained = 0
+    for bucket in ("api_discovered_rows", "dex_discovered_rows"):
+        current_rows = [
+            row for row in partial.get(bucket) or [] if isinstance(row, dict)
+        ]
+        previous_rows = [
+            row for row in previous.get(bucket) or [] if isinstance(row, dict)
+        ]
+        if len(current_rows) >= row_limit:
+            partial[bucket] = current_rows[:row_limit]
+            continue
+        seen = {_row_identity(row) for row in current_rows}
+        merged = list(current_rows)
+        for row in previous_rows:
+            identity = _row_identity(row)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            merged.append(row)
+            retained += 1
+            if len(merged) >= row_limit:
+                break
+        partial[bucket] = merged[:row_limit]
+    partial["source_refresh"]["previous_snapshot_rows_retained"] = retained
+    return partial
+
+
+def _row_identity(row: dict[str, Any]) -> tuple[str, ...]:
+    route_key = str(row.get("route_key") or "")
+    if route_key:
+        return ("route_key", route_key)
+    return (
+        "legs",
+        str(row.get("token") or ""),
+        str(row.get("long_venue") or ""),
+        str(row.get("long_market_type") or ""),
+        str(row.get("long_market_symbol") or ""),
+        str(row.get("short_venue") or ""),
+        str(row.get("short_market_type") or ""),
+        str(row.get("short_market_symbol") or ""),
+    )
 
 
 def _build_filtered_snapshot(

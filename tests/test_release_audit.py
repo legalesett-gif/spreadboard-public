@@ -290,6 +290,22 @@ def test_discovery_publishes_completed_sources_before_slowest_source(
     tmp_path,
 ) -> None:
     snapshot_path = tmp_path / "latest.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "api_discovered_rows": [
+                    {
+                        "route_key": "OLD|A|Futures|B|Futures",
+                        "source_kind": SOURCE_API_DISCOVERED,
+                        "token": "OLD",
+                    }
+                ],
+                "dex_discovered_rows": [],
+                "source_refresh": {},
+            }
+        ),
+        encoding="utf-8",
+    )
     watchlist_path = tmp_path / "watchlist.json"
     watchlist_path.write_text('{"tokens":[]}', encoding="utf-8")
 
@@ -327,7 +343,11 @@ def test_discovery_publishes_completed_sources_before_slowest_source(
             partial = json.loads(snapshot_path.read_text(encoding="utf-8"))
             assert partial["source_refresh"]["partial"] is True
             assert partial["source_refresh"]["sources_completed"] == 1
-            assert partial["api_discovered_rows"][0]["token"] == "ONE"
+            assert [row["token"] for row in partial["api_discovered_rows"]] == [
+                "ONE",
+                "OLD",
+            ]
+            assert partial["source_refresh"]["previous_snapshot_rows_retained"] == 1
             return SourceResult(status=status(self.name))
 
     result = runner.run_discovery(
@@ -341,7 +361,7 @@ def test_discovery_publishes_completed_sources_before_slowest_source(
     )
 
     assert result["source_refresh"].get("partial") is None
-    assert result["api_discovered_rows"][0]["token"] == "ONE"
+    assert [row["token"] for row in result["api_discovered_rows"]] == ["ONE"]
 
 
 def test_single_group_worker_uses_public_snapshot_for_incremental_updates(
