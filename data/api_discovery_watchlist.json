@@ -186,6 +186,12 @@
       "cex_enabled": true,
       "dex_enabled": true,
       "evm_contracts": {"56": "0x3e5d4f8aee0d9b3082d5f6da5d6e225d17ba9ea0"}
+    },
+    {
+      "symbol": "COTI",
+      "identity_key": "asset:coti",
+      "cex_enabled": true,
+      "dex_enabled": false
     }
   ]
 }

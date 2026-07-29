@@ -102,10 +102,10 @@ def test_public_candidate_priority_rejects_high_unknown_identity() -> None:
 
     assert not sources._candidate_is_publicly_rankable(unknown)
     assert sources._candidate_is_publicly_rankable(identified)
-    assert not sources._candidate_is_publicly_rankable(inventory_unknown)
+    assert sources._candidate_is_publicly_rankable(inventory_unknown)
 
 
-def test_inverse_futures_spot_is_hidden_without_inventory_proof() -> None:
+def test_inverse_futures_spot_is_visible_with_inventory_condition() -> None:
     reasons = api_spreads._route_mirage_reasons(
         raw={"executable_spread_pct": 3},
         long_market_type="Futures",
@@ -114,8 +114,8 @@ def test_inverse_futures_spot_is_hidden_without_inventory_proof() -> None:
         short_rails={},
     )
 
-    assert reasons == ["mirage_guard:spot_sell_inventory_required"]
-    assert any(reason.startswith("mirage_guard:") for reason in reasons)
+    assert reasons == ["condition:spot_sell_inventory_required"]
+    assert not any(reason.startswith("mirage_guard:") for reason in reasons)
 
     row = SimpleNamespace(
         to_dict=lambda: {"blockers": reasons},
@@ -124,6 +124,34 @@ def test_inverse_futures_spot_is_hidden_without_inventory_proof() -> None:
     assert api_spreads._public_row(row)["conditions"] == [
         "spot_sell_inventory_required"
     ]
+
+
+def test_unknown_spot_transfer_is_visible_as_research_condition() -> None:
+    reasons = api_spreads._route_mirage_reasons(
+        raw={"executable_spread_pct": 3},
+        long_market_type="Spot",
+        short_market_type="Spot",
+        long_rails={},
+        short_rails={},
+    )
+
+    assert reasons == ["condition:spot_transfer_unknown"]
+
+
+def test_unverified_cex_dislocation_uses_wider_research_ceiling() -> None:
+    reasons = api_spreads._route_mirage_reasons(
+        raw={
+            "source_kind": "api_discovered",
+            "executable_spread_pct": 6,
+            "blockers": ["identity_unverified"],
+        },
+        long_market_type="Spot",
+        short_market_type="Futures",
+        long_rails={},
+        short_rails={},
+    )
+
+    assert reasons == []
 
 
 def test_high_dislocation_dex_route_requires_exact_cex_identity() -> None:
@@ -220,6 +248,85 @@ def test_okx_dex_retries_rate_limits_without_changing_quote_math() -> None:
 
     assert result["status"] == "ok"
     assert calls == 2
+
+
+def test_okx_dynamic_catalogue_keeps_only_unique_symbol_contracts() -> None:
+    source = sources.OkxDexQuoteSource(request_interval_seconds=0)
+    refs = (
+        MarketQuote(
+            token="UNIQUE",
+            venue="Bybit",
+            market_type="Futures",
+            bid=2,
+            ask=2,
+            bid_vwap=2,
+            ask_vwap=2,
+            quote_ts_us=1,
+            source_name="test",
+            volume_24h_usd=100,
+        ),
+        MarketQuote(
+            token="DUP",
+            venue="Bybit",
+            market_type="Futures",
+            bid=2,
+            ask=2,
+            bid_vwap=2,
+            ask_vwap=2,
+            quote_ts_us=1,
+            source_name="test",
+            volume_24h_usd=200,
+        ),
+    )
+
+    class Okx:
+        @staticmethod
+        def list_tokens(*, chain: str, **_kwargs: object) -> dict[str, object]:
+            if chain == "1":
+                return {
+                    "status": "ok",
+                    "tokens": [
+                        {
+                            "symbol": "UNIQUE",
+                            "address": "0x111",
+                            "decimals": 18,
+                            "chain_index": "1",
+                        },
+                        {
+                            "symbol": "DUP",
+                            "address": "0x222",
+                            "decimals": 18,
+                            "chain_index": "1",
+                        },
+                    ],
+                }
+            if chain == "56":
+                return {
+                    "status": "ok",
+                    "tokens": [
+                        {
+                            "symbol": "DUP",
+                            "address": "0x333",
+                            "decimals": 18,
+                            "chain_index": "56",
+                        }
+                    ],
+                }
+            return {"status": "ok", "tokens": []}
+
+    assets, errors = source._discover_okx_assets(
+        context=SimpleNamespace(
+            reference_quotes=refs,
+            timed_out=lambda: False,
+        ),
+        credentials=object(),
+        okx_dex=Okx,
+        existing_tokens=set(),
+    )
+
+    assert errors == []
+    assert [asset.token for asset in assets] == ["UNIQUE"]
+    assert assets[0].identity_key == "eip155:1/erc20:0x111"
 
 
 def test_dex_source_health_keeps_sanitized_provider_diagnostics() -> None:

@@ -47,6 +47,16 @@ NATIVE_FUTURES_VENUES = {
     "Kraken Futures",
     "OKX",
 }
+NATIVE_SPOT_VENUES = {
+    "Binance",
+    "Bingx",
+    "Bitget",
+    "Bybit",
+    "Gate",
+    "Kucoin",
+    "Mexc",
+    "OKX",
+}
 
 
 class FastQuoteRefresher:
@@ -241,7 +251,7 @@ class FastQuoteRefresher:
                 "long",
                 target_notional_usd=target_notional_usd,
                 cache={},
-                include_funding=False,
+                include_funding=True,
             )
             short_future = pool.submit(
                 self._leg_quote,
@@ -249,7 +259,7 @@ class FastQuoteRefresher:
                 "short",
                 target_notional_usd=target_notional_usd,
                 cache={},
-                include_funding=False,
+                include_funding=True,
             )
             long_quote = long_future.result()
             short_quote = short_future.result()
@@ -342,7 +352,7 @@ class FastQuoteRefresher:
                 bids, asks = native_book
                 funding = (
                     _native_current_funding(venue, symbol)
-                    if include_funding
+                    if include_funding and market_type == "Futures"
                     else {}
                 )
                 contract_size = _number(
@@ -517,6 +527,8 @@ def _native_order_book(
     market_type: str,
     symbol: str,
 ) -> tuple[list[list[float]], list[list[float]]] | None:
+    if market_type == "Spot":
+        return _native_spot_order_book(venue, symbol)
     if market_type != "Futures" or venue not in NATIVE_FUTURES_VENUES:
         return None
     base = symbol.split("/", 1)[0].upper()
@@ -573,6 +585,75 @@ def _native_order_book(
     elif venue == "Kraken Futures":
         raw_bids = (payload.get("orderBook") or {}).get("bids")
         raw_asks = (payload.get("orderBook") or {}).get("asks")
+    elif venue == "OKX":
+        books = payload.get("data") or []
+        raw_bids = books[0].get("bids") if books else []
+        raw_asks = books[0].get("asks") if books else []
+    else:
+        raw_bids = payload.get("bids")
+        raw_asks = payload.get("asks")
+    bids = sorted(_levels(raw_bids), key=lambda level: level[0], reverse=True)
+    asks = sorted(_levels(raw_asks), key=lambda level: level[0])
+    return bids, asks
+
+
+def supports_native_order_book(venue: str, market_type: str) -> bool:
+    if market_type == "Spot":
+        return venue in NATIVE_SPOT_VENUES
+    if market_type == "Futures":
+        return venue in NATIVE_FUTURES_VENUES
+    return False
+
+
+def _native_spot_order_book(
+    venue: str,
+    symbol: str,
+) -> tuple[list[list[float]], list[list[float]]] | None:
+    if venue not in NATIVE_SPOT_VENUES:
+        return None
+    base, _, quote = symbol.partition("/")
+    base = base.upper()
+    quote = (quote.split(":", 1)[0] or "USDT").upper()
+    compact = f"{base}{quote}"
+    dashed = f"{base}-{quote}"
+    if venue == "Binance":
+        url = "https://api.binance.com/api/v3/depth?" + urlencode(
+            {"symbol": compact, "limit": 20}
+        )
+    elif venue == "Bingx":
+        url = "https://open-api.bingx.com/openApi/spot/v1/market/depth?" + urlencode(
+            {"symbol": dashed, "limit": 20}
+        )
+    elif venue == "Bitget":
+        url = "https://api.bitget.com/api/v2/spot/market/orderbook?" + urlencode(
+            {"symbol": compact, "type": "step0", "limit": 20}
+        )
+    elif venue == "Bybit":
+        url = "https://api.bybit.com/v5/market/orderbook?" + urlencode(
+            {"category": "spot", "symbol": compact, "limit": 20}
+        )
+    elif venue == "Gate":
+        url = "https://api.gateio.ws/api/v4/spot/order_book?" + urlencode(
+            {"currency_pair": f"{base}_{quote}", "limit": 20}
+        )
+    elif venue == "Kucoin":
+        url = f"https://api.kucoin.com/api/v1/market/orderbook/level2_20?symbol={dashed}"
+    elif venue == "Mexc":
+        url = "https://api.mexc.com/api/v3/depth?" + urlencode(
+            {"symbol": compact, "limit": 20}
+        )
+    else:
+        url = "https://www.okx.com/api/v5/market/books?" + urlencode(
+            {"instId": dashed, "sz": 20}
+        )
+    payload = _json_url(url)
+    if venue == "Bybit":
+        raw_bids = (payload.get("result") or {}).get("b")
+        raw_asks = (payload.get("result") or {}).get("a")
+    elif venue in {"Bingx", "Bitget", "Kucoin"}:
+        data = payload.get("data") or {}
+        raw_bids = data.get("bids")
+        raw_asks = data.get("asks")
     elif venue == "OKX":
         books = payload.get("data") or []
         raw_bids = books[0].get("bids") if books else []

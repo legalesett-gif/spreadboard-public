@@ -18,6 +18,7 @@ from spreadarb.public_runtime import keychain
 
 OKX_DEX_BASE_URL = "https://web3.okx.com"
 OKX_DEX_QUOTE_PATH = "/api/v6/dex/aggregator/quote"
+OKX_DEX_TOKENS_PATH = "/api/v6/dex/aggregator/all-tokens"
 SOLANA_USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
 ETHEREUM_USDT_ADDRESS = "0xdac17f958d2ee523a2206206994597c13d831ec7"
 ERC20_DECIMALS_SELECTOR = "0x313ce567"
@@ -240,6 +241,55 @@ def quote_token_to_usdc(
     }
 
 
+def list_tokens(
+    *,
+    chain: str,
+    credentials: OkxDexCredentials | None = None,
+    http_get: HttpGet | None = None,
+) -> dict[str, Any]:
+    """Return OKX's signed token catalogue without transaction data."""
+
+    index = chain_index(chain)
+    if index is None:
+        return {"status": "blocked", "blockers": [f"unsupported_chain:{chain}"]}
+    credentials = credentials or load_okx_dex_credentials()
+    if credentials is None:
+        return {"status": "blocked", "blockers": ["missing_okx_dex_credentials"]}
+    raw = _signed_get(
+        params={"chainIndex": index},
+        credentials=credentials,
+        http_get=http_get,
+        path=OKX_DEX_TOKENS_PATH,
+    )
+    if str(raw.get("code")) != "0":
+        code = str(raw.get("code") or "")
+        blocker = (
+            "okx_dex_geo_blocked"
+            if code == "53015"
+            else f"okx_dex_tokens:{raw.get('msg') or code or 'unknown'}"
+        )
+        return {"status": "blocked", "blockers": [blocker]}
+    tokens = []
+    for item in raw.get("data") or []:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("tokenSymbol") or "").upper().strip()
+        address = str(item.get("tokenContractAddress") or "").strip()
+        decimals = item.get("decimals")
+        if not symbol or not address or not str(decimals or "").isdigit():
+            continue
+        tokens.append(
+            {
+                "symbol": symbol,
+                "name": str(item.get("tokenName") or "").strip() or None,
+                "address": address,
+                "decimals": int(decimals),
+                "chain_index": index,
+            }
+        )
+    return {"status": "ok", "chain_index": index, "tokens": tokens}
+
+
 def erc20_decimals(*, chain: str, token_address: str) -> int | None:
     index = chain_index(chain)
     if index is None:
@@ -263,11 +313,12 @@ def _signed_get(
     params: dict[str, str],
     credentials: OkxDexCredentials,
     http_get: HttpGet | None,
+    path: str = OKX_DEX_QUOTE_PATH,
 ) -> dict[str, Any]:
     query_string = urlencode(params)
     query = f"?{query_string}"
     timestamp = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    prehash = f"{timestamp}GET{OKX_DEX_QUOTE_PATH}{query}"
+    prehash = f"{timestamp}GET{path}{query}"
     signature = base64.b64encode(
         hmac.new(
             credentials.secret.encode("utf-8"),
@@ -284,7 +335,7 @@ def _signed_get(
     }
     if credentials.project_id:
         headers["OK-ACCESS-PROJECT"] = credentials.project_id
-    return (http_get or _http_get)(f"{OKX_DEX_BASE_URL}{OKX_DEX_QUOTE_PATH}{query}", headers)
+    return (http_get or _http_get)(f"{OKX_DEX_BASE_URL}{path}{query}", headers)
 
 
 def _http_get(url: str, headers: dict[str, str]) -> dict[str, Any]:

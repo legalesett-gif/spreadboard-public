@@ -11,6 +11,7 @@ from spreadboard.fast_quotes import (
     FastQuoteRefresher,
     _expanded_token_rows,
     _has_permanent_mirage_guard,
+    _native_spot_order_book,
 )
 
 
@@ -126,7 +127,28 @@ def test_exact_route_quote_uses_four_book_sides_and_matched_size(
     assert result["row"]["executable_spread_pct"] == pytest.approx(10.0)
     assert result["row"]["depth_weighted_spread_pct"] == pytest.approx((108 / 101 - 1) * 100)
     assert result["row"]["quote_ts_us"] == 2_000_000
-    assert set(calls) == {("long", False), ("short", False)}
+    assert set(calls) == {("long", True), ("short", True)}
+
+
+def test_native_gate_spot_order_book_is_sorted_and_normalized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: list[str] = []
+
+    def fake_json_url(url: str) -> dict:
+        requested.append(url)
+        return {
+            "bids": [["0.102", "2"], ["0.104", "3"], ["0.103", "4"]],
+            "asks": [["0.107", "5"], ["0.105", "6"], ["0.106", "7"]],
+        }
+
+    monkeypatch.setattr("spreadboard.fast_quotes._json_url", fake_json_url)
+
+    bids, asks = _native_spot_order_book("Gate", "COTI/USDT") or ([], [])
+
+    assert "currency_pair=COTI_USDT" in requested[0]
+    assert bids == [[0.104, 3.0], [0.103, 4.0], [0.102, 2.0]]
+    assert asks == [[0.105, 6.0], [0.106, 7.0], [0.107, 5.0]]
 
 
 def test_history_persists_entry_matched_exit_and_sample_provenance(tmp_path: Path) -> None:
@@ -322,7 +344,7 @@ def test_aster_and_hyperliquid_futures_are_not_mislabeled_as_dex() -> None:
     assert market_history.route_kind_for(row) == "FUTURES"
 
 
-def test_only_native_futures_routes_sample_inside_web_process() -> None:
+def test_native_spot_and_futures_routes_sample_inside_web_process() -> None:
     assert server._native_chart_route(_route())
     gate_spot = {
         **_route(),
@@ -330,7 +352,7 @@ def test_only_native_futures_routes_sample_inside_web_process() -> None:
         "long_market_type": "Spot",
         "long_market_symbol": "TEST/USDT",
     }
-    assert not server._native_chart_route(gate_spot)
+    assert server._native_chart_route(gate_spot)
     kucoin_futures = {
         **_route(),
         "long_venue": "Kucoin Futures",
@@ -338,7 +360,7 @@ def test_only_native_futures_routes_sample_inside_web_process() -> None:
     assert not server._native_chart_route(kucoin_futures)
 
 
-def test_live_chart_surface_explains_series_and_polls_exact_route() -> None:
+def test_live_chart_surface_explains_series_and_streams_exact_route() -> None:
     html = server.render_live_spread_chart(_route()["route_key"], [], "1h")
 
     assert "$50 VWAP" in html
@@ -347,6 +369,8 @@ def test_live_chart_surface_explains_series_and_polls_exact_route() -> None:
     assert "?live=1&amp;" not in html
     assert "?live=1&hours=" in html
     assert "gap_threshold_seconds" in html
+    assert "new EventSource" in html
+    assert "/api/stream/" in html
     assert "setInterval(refresh, 5000)" in html
     assert "/assets/lightweight-charts.js" in html
     assert "max_points=25000" in html

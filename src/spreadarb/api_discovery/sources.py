@@ -18,6 +18,7 @@ import ccxt
 
 from spreadarb.api_discovery.attestations import ExecutorAttestationRegistry, route_key
 from spreadarb.api_discovery.identity import (
+    IdentityResolution,
     IdentityRegistry,
     WatchAsset,
     pair_identity_blockers,
@@ -110,9 +111,27 @@ class OkxDexQuoteSource:
                     blockers=("api_credentials_missing",),
                 )
             )
+        reference_tokens = {
+            quote.token.upper()
+            for quote in context.reference_quotes
+            if quote.market_type in {"Spot", "Futures"}
+        }
+        assets = [
+            asset
+            for asset in _dex_assets(context.watchlist)
+            if asset.token in reference_tokens
+        ]
+        dynamic_assets, catalogue_errors = self._discover_okx_assets(
+            context=context,
+            credentials=credentials,
+            okx_dex=okx_dex,
+            existing_tokens={asset.token for asset in assets},
+        )
+        assets.extend(dynamic_assets)
         quotes: list[MarketQuote] = []
         errors: list[str] = []
-        for asset in _dex_assets(context.watchlist):
+        errors.extend(catalogue_errors)
+        for asset in assets:
             if context.timed_out():
                 break
             contracts = dict(asset.evm_contracts or {})
@@ -149,9 +168,106 @@ class OkxDexQuoteSource:
             rows=len(rows),
             errors=tuple(errors[:12]),
             blockers=tuple(["partial_source_errors"] if errors else []),
-            details={"provider": "OKX DEX", "quote_count": len(quotes)},
+            details={
+                "provider": "OKX DEX",
+                "quote_count": len(quotes),
+                "static_asset_count": len(assets) - len(dynamic_assets),
+                "dynamic_asset_count": len(dynamic_assets),
+            },
         )
         return SourceResult(status=status, rows=tuple(rows), quotes=tuple(quotes))
+
+    def _discover_okx_assets(
+        self,
+        *,
+        context: DiscoveryContext,
+        credentials: Any,
+        okx_dex: Any,
+        existing_tokens: set[str],
+    ) -> tuple[list[WatchAsset], list[str]]:
+        limit = max(
+            0,
+            min(
+                50,
+                int(os.environ.get("SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS", "25")),
+            ),
+        )
+        if limit <= 0:
+            return [], []
+        reference_by_token: dict[str, list[MarketQuote]] = defaultdict(list)
+        for quote in context.reference_quotes:
+            if quote.market_type in {"Spot", "Futures"}:
+                reference_by_token[quote.token.upper()].append(quote)
+        candidate_symbols = set(reference_by_token) - existing_tokens
+        candidate_symbols -= {"USDT", "USDC", "USD", "DAI", "FDUSD", "TUSD"}
+        if not candidate_symbols:
+            return [], []
+
+        matches: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        errors: list[str] = []
+        for chain_id in (1, 56, 42161, 8453, 137, 501):
+            if context.timed_out():
+                break
+            result = self._quote_with_retry(
+                okx_dex.list_tokens,
+                chain=str(chain_id),
+                credentials=credentials,
+            )
+            if result.get("status") != "ok":
+                errors.append(
+                    f"catalogue:{chain_id}:"
+                    + ";".join(str(item) for item in result.get("blockers") or ["unavailable"])
+                )
+                continue
+            for token in result.get("tokens") or []:
+                symbol = str(token.get("symbol") or "").upper()
+                if symbol in candidate_symbols:
+                    matches[symbol].append(token)
+
+        unique_matches = {
+            symbol: items[0]
+            for symbol, items in matches.items()
+            if len(
+                {
+                    (
+                        str(item.get("chain_index")),
+                        str(item.get("address")).casefold(),
+                    )
+                    for item in items
+                }
+            )
+            == 1
+        }
+
+        def priority(symbol: str) -> tuple[int, float, str]:
+            refs = reference_by_token.get(symbol) or []
+            has_futures = any(quote.market_type == "Futures" for quote in refs)
+            volume = max((quote.volume_24h_usd or 0.0 for quote in refs), default=0.0)
+            return (1 if has_futures else 0, volume, symbol)
+
+        selected = sorted(unique_matches, key=priority, reverse=True)[:limit]
+        assets: list[WatchAsset] = []
+        for symbol in selected:
+            item = unique_matches[symbol]
+            chain_id = int(str(item["chain_index"]))
+            address = str(item["address"])
+            assets.append(
+                WatchAsset(
+                    symbol=symbol,
+                    identity_key=(
+                        f"solana:501/token:{address}"
+                        if chain_id == 501
+                        else f"eip155:{chain_id}/erc20:{address.casefold()}"
+                    ),
+                    decimals=int(item["decimals"]),
+                    cex_enabled=True,
+                    dex_enabled=True,
+                    evm_contracts=None if chain_id == 501 else {chain_id: address},
+                    solana_mint=address if chain_id == 501 else None,
+                    solana_decimals=int(item["decimals"]) if chain_id == 501 else None,
+                )
+            )
+        return assets, errors
 
     def _quote_asset(
         self,
@@ -1058,12 +1174,25 @@ def _resolve_quote_identity(
     context: DiscoveryContext,
 ):
     registry = context.identity_registry or IdentityRegistry.empty()
-    return registry.resolve_market(
+    resolved = registry.resolve_market(
         venue=venue,
         market_type=market_type,
         token=token,
         symbol=symbol,
     )
+    if resolved.identity_key:
+        return resolved
+    watch_asset = context.watchlist.get(str(token).upper())
+    if (
+        watch_asset
+        and watch_asset.cex_enabled
+        and str(watch_asset.identity_key or "").startswith("asset:")
+    ):
+        return IdentityResolution(
+            identity_key=watch_asset.identity_key,
+            blockers=resolved.blockers,
+        )
+    return resolved
 
 
 def _quote_pair_notes(
@@ -1827,6 +1956,26 @@ def _verify_top_candidate_books(
             if quote.market_type != market_type or quote.source_name != source_name:
                 continue
             selected_by_venue[quote.venue].append(quote)
+    # Once a token wins the global candidate budget, fetch every leg owned by
+    # this source batch. This preserves alternate venue routes (for example
+    # Gate and Kucoin spot against the same Bybit perp) without deep-fetching
+    # every market on every exchange.
+    expanded_tokens: list[str] = []
+    expanded_limit = max(10, min(30, max_candidates // 3 if max_candidates > 0 else 30))
+    for pair in selected_pairs:
+        token = pair.token.upper()
+        if token not in expanded_tokens:
+            expanded_tokens.append(token)
+        if len(expanded_tokens) >= expanded_limit:
+            break
+    expanded_token_set = set(expanded_tokens)
+    for quote in quotes:
+        if (
+            quote.token.upper() in expanded_token_set
+            and quote.market_type == market_type
+            and quote.source_name == source_name
+        ):
+            selected_by_venue[quote.venue].append(quote)
 
     verified: dict[tuple[str, str, str], MarketQuote] = {}
     for venue, venue_quotes in selected_by_venue.items():
@@ -1939,11 +2088,6 @@ def _balanced_route_candidates(
 def _candidate_is_publicly_rankable(pair: QuoteCandidatePair) -> bool:
     """Keep obvious mirages from consuming the limited order-book budget."""
 
-    if (
-        pair.short_quote.market_type == "Spot"
-        and pair.long_quote.market_type != "Spot"
-    ):
-        return False
     dislocation = max(
         abs(pair.executable_spread_pct),
         abs(pair.depth_weighted_spread_pct),

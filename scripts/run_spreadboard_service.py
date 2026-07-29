@@ -87,7 +87,7 @@ class RefreshLoop:
             "--dex-derivative-max-orderbook-candidates",
             os.environ.get("SPREADBOARD_DEX_CANDIDATES", "100"),
             "--row-limit",
-            "500",
+            os.environ.get("SPREADBOARD_DISCOVERY_ROWS", "1200"),
             "--ttl-s",
             "900",
         ]

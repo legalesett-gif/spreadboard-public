@@ -20,7 +20,9 @@ services:
       - key: SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS
         value: "240"
       - key: SPREADBOARD_CHART_SAMPLE_SECONDS
-        value: "5"
+        value: "2"
+      - key: SPREADBOARD_CHART_STREAM_SECONDS
+        value: "2"
       - key: SPREADBOARD_CHART_SAMPLE_TIMEOUT_SECONDS
         value: "22"
       - key: SPREADBOARD_CHART_SAMPLE_CONCURRENCY
@@ -30,9 +32,13 @@ services:
       - key: SPREADBOARD_LIGHTWEIGHT_MODE
         value: "1"
       - key: SPREADBOARD_CEX_CANDIDATES
-        value: "80"
+        value: "100"
+      - key: SPREADBOARD_DISCOVERY_ROWS
+        value: "1200"
       - key: SPREADBOARD_DEX_CANDIDATES
         value: "40"
+      - key: SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS
+        value: "25"
       - key: SPREADBOARD_FUNDING_HISTORY_WORKERS
         value: "4"
       - key: SPREADBOARD_REFRESH_TIMEOUT_SECONDS

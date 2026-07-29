@@ -715,7 +715,7 @@ def _route_mirage_reasons(
     )
     reasons: list[str] = []
     if short_market_type == "Spot" and long_market_type != "Spot":
-        reasons.append("mirage_guard:spot_sell_inventory_required")
+        reasons.append("condition:spot_sell_inventory_required")
     if spread < 1.0:
         return reasons
     raw_blockers = {str(item) for item in raw.get("blockers") or []}
@@ -724,14 +724,19 @@ def _route_mirage_reasons(
         or "cex_identity_unverified" in raw_blockers
         or any(item.startswith("identity_collision:") for item in raw_blockers)
     )
-    if spread >= 5.0 and identity_unverified:
+    raw_source = str(raw.get("source_kind") or raw.get("raw_source_kind") or "")
+    identity_threshold = 5.0 if "dex" in raw_source.casefold() else 25.0
+    if spread >= identity_threshold and identity_unverified:
         reasons.append("mirage_guard:high_dislocation_identity_unverified")
     if long_market_type == "Spot" and short_market_type == "Spot":
         compatibility = public_rails.transfer_compatibility(long_rails, short_rails)
-        if compatibility.get("status") != "compatible":
+        status = str(compatibility.get("status") or "unknown")
+        if status == "incompatible":
             reasons.append(
-                f"mirage_guard:spot_transfer_{compatibility.get('status') or 'unknown'}"
+                "mirage_guard:spot_transfer_incompatible"
             )
+        elif status != "compatible":
+            reasons.append(f"condition:spot_transfer_{status}")
     return reasons
 
 
@@ -953,9 +958,10 @@ def _row_sort_key(row: SpreadTerminalRow) -> tuple[float, float, float, float]:
 def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload = row.to_dict()
     payload["conditions"] = [
-        item.removeprefix("mirage_guard:")
+        item.removeprefix("mirage_guard:").removeprefix("condition:")
         for item in row.blockers
-        if item.removeprefix("mirage_guard:") in {"spot_sell_inventory_required"}
+        if item.startswith("condition:")
+        or item.removeprefix("mirage_guard:") in {"spot_sell_inventory_required"}
     ]
     for key in (
         "blockers",

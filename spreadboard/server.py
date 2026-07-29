@@ -288,6 +288,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path.startswith("/api/history/"):
                 route_key = unquote(parsed.path.removeprefix("/api/history/"))
                 self._send_json(api_history(route_key, self.server.board_path, query))
+            elif parsed.path.startswith("/api/stream/"):
+                route_key = unquote(parsed.path.removeprefix("/api/stream/"))
+                self._send_chart_stream(route_key, query)
             elif parsed.path.startswith("/api/token/"):
                 symbol = _clean_symbol(parsed.path.removeprefix("/api/token/"))
                 self._send_json(api_token(symbol, self.server.board_path, include_live=not _query_bool(query, "local")))
@@ -349,6 +352,35 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def _send_chart_stream(self, route_key: str, query: dict[str, list[str]]) -> None:
+        interval = max(
+            1.0,
+            min(
+                10.0,
+                float(os.environ.get("SPREADBOARD_CHART_STREAM_SECONDS", "2")),
+            ),
+        )
+        hours = max(1 / 60, min(_query_float(query, "hours", 1) or 1, 24 * 30))
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self._send_security_headers()
+        self.end_headers()
+        try:
+            self.wfile.write(b"retry: 2000\n\n")
+            self.wfile.flush()
+            for _ in range(300):
+                payload = _chart_stream_payload(route_key, self.server.board_path, hours)
+                event = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
+                self.wfile.write(b"event: quote\n")
+                self.wfile.write(b"data: " + event + b"\n\n")
+                self.wfile.flush()
+                time.sleep(interval)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def _send_empty(self, status: HTTPStatus) -> None:
         self.send_response(status)
@@ -1267,6 +1299,27 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
     }
 
 
+def _chart_stream_payload(route_key: str, board_path: Path, hours: float) -> dict[str, Any]:
+    history = api_history(
+        route_key,
+        board_path,
+        {
+            "live": ["1"],
+            "hours": [str(hours)],
+            "max_points": ["1"],
+            "no_cache": ["1"],
+        },
+    )
+    rows = history.get("rows") or []
+    return {
+        "ok": bool(history.get("ok")),
+        "route_key": route_key,
+        "row": rows[-1] if rows else None,
+        "sample": history.get("sample") or {},
+        "meta": history.get("meta") or {},
+    }
+
+
 def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | None:
     market = api_market_spreads(
         board_path,
@@ -1285,7 +1338,11 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
 def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
     route_key = str(row.get("route_key") or "")
     configured_interval = float(os.environ.get("SPREADBOARD_CHART_SAMPLE_SECONDS", "5"))
-    min_interval = 5.0 if _native_chart_route(row) else max(8.0, configured_interval)
+    min_interval = (
+        max(1.0, configured_interval)
+        if _native_chart_route(row)
+        else max(4.0, configured_interval)
+    )
     now = time.monotonic()
     with _CHART_SAMPLE_LOCK:
         cached = _CHART_SAMPLE_CACHE.get(route_key)
@@ -1377,11 +1434,13 @@ def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _native_chart_route(row: dict[str, Any]) -> bool:
-    from spreadboard.fast_quotes import NATIVE_FUTURES_VENUES
+    from spreadboard.fast_quotes import supports_native_order_book
 
     return all(
-        str(row.get(f"{side}_market_type") or "") == "Futures"
-        and str(row.get(f"{side}_venue") or "") in NATIVE_FUTURES_VENUES
+        supports_native_order_book(
+            str(row.get(f"{side}_venue") or ""),
+            str(row.get(f"{side}_market_type") or ""),
+        )
         for side in ("long", "short")
     )
 
@@ -3231,6 +3290,7 @@ def render_live_spread_chart(
       const count = document.querySelector('[data-chart-observation-count]');
       const age = root.querySelector('[data-live-chart-age]');
       let timer = null;
+      let stream = null;
       let controller = null;
       let refreshing = false;
       let chart = null;
@@ -3238,6 +3298,7 @@ def render_live_spread_chart(
       let themeObserver = null;
       const chartSeries = {{}};
       let latestRows = [];
+      let historyRows = [];
       const pct = (value) => Number.isFinite(Number(value))
         ? `${{Number(value) >= 0 ? '+' : ''}}${{Number(value).toFixed(3)}}%`
         : '—';
@@ -3438,7 +3499,8 @@ def render_live_spread_chart(
       }}
 
       function render(payload) {{
-        const rows = (payload.rows || []).map((row) => ({{
+        historyRows = payload.rows || [];
+        const rows = historyRows.map((row) => ({{
           ts: (num(row.quote_ts_us) ?? Number.NaN) / 1000,
           matched: num(row.depth_weighted_spread_pct),
           entry: num(row.executable_spread_pct),
@@ -3530,6 +3592,50 @@ def render_live_spread_chart(
           refreshing = false;
         }}
       }}
+      function mergeStreamRow(row) {{
+        if (!row || !Number.isFinite(Number(row.quote_ts_us))) return;
+        const ts = Number(row.quote_ts_us);
+        const index = historyRows.findIndex((item) => Number(item.quote_ts_us) === ts);
+        if (index >= 0) historyRows[index] = row;
+        else historyRows.push(row);
+        historyRows.sort((a, b) => Number(a.quote_ts_us) - Number(b.quote_ts_us));
+        if (historyRows.length > 25000) historyRows = historyRows.slice(-25000);
+      }}
+      function startStream() {{
+        if (!window.EventSource) return false;
+        stream?.close();
+        stream = new EventSource(`/api/stream/${{encodeURIComponent(routeKey)}}?hours=${{hours}}`);
+        stream.addEventListener('quote', (event) => {{
+          try {{
+            const payload = JSON.parse(event.data);
+            mergeStreamRow(payload.row);
+            render({{
+              rows: historyRows,
+              meta: payload.meta || {{}},
+              sample: payload.sample || {{}},
+            }});
+            const sample = payload.sample || {{}};
+            state.textContent = sample.status === 'ok'
+              ? `Streaming · exact books · ${{sample.duration_ms || 0}}ms`
+              : sample.cached && payload.meta?.age_seconds <= 60
+                ? 'Streaming · recent exact sample'
+                : `Stream sampler ${{sample.status || 'unavailable'}}`;
+            state.classList.toggle(
+              'stale',
+              !['ok','idle'].includes(sample.status) &&
+                !(sample.cached && payload.meta?.age_seconds <= 60),
+            );
+          }} catch (_error) {{
+            state.textContent = 'Stream data unavailable; reconnecting';
+            state.classList.add('stale');
+          }}
+        }});
+        stream.onerror = () => {{
+          state.textContent = 'Reconnecting live stream';
+          state.classList.add('stale');
+        }};
+        return true;
+      }}
       root.querySelectorAll('[data-series-toggle]').forEach((button) => {{
         button.addEventListener('click', () => {{
           const key = button.dataset.seriesToggle;
@@ -3539,12 +3645,18 @@ def render_live_spread_chart(
       }});
       render(JSON.parse(document.getElementById('live-chart-initial').textContent || '{{}}'));
       refresh();
-      timer = window.setInterval(refresh, 5000);
+      if (!startStream()) timer = window.setInterval(refresh, 5000);
       document.addEventListener('visibilitychange', () => {{
-        if (!document.hidden) refresh();
+        if (!document.hidden) {{
+          refresh();
+          startStream();
+        }} else {{
+          stream?.close();
+        }}
       }});
       window.addEventListener('pagehide', () => {{
         window.clearInterval(timer);
+        stream?.close();
         controller?.abort();
         resizeObserver?.disconnect();
         themeObserver?.disconnect();
