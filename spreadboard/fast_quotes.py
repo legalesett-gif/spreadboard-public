@@ -352,7 +352,21 @@ class FastQuoteRefresher:
             client = self._clients.get(key)
             if client is not None:
                 return client
-            klass = getattr(ccxt, VENUE_IDS[venue])
+            exchange_id = VENUE_IDS[venue]
+            aliases = {
+                "gateio": ("gateio", "gate"),
+                "gate": ("gate", "gateio"),
+            }
+            klass = next(
+                (
+                    getattr(ccxt, candidate)
+                    for candidate in aliases.get(exchange_id, (exchange_id,))
+                    if hasattr(ccxt, candidate)
+                ),
+                None,
+            )
+            if klass is None:
+                raise AttributeError(f"CCXT exchange adapter unavailable: {exchange_id}")
             client = klass(
                 {
                     "enableRateLimit": True,

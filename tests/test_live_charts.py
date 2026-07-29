@@ -58,6 +58,28 @@ def test_fast_quote_cycle_retries_temporary_guards_only() -> None:
         {"blockers": ["mirage_guard:spot_sell_inventory_required"]}
     )
 
+
+def test_fast_quote_gate_client_uses_available_ccxt_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ccxt
+
+    class GateClient:
+        def __init__(self, params: dict) -> None:
+            self.params = params
+
+        def load_markets(self) -> dict:
+            return {}
+
+    monkeypatch.delattr(ccxt, "gateio", raising=False)
+    monkeypatch.setattr(ccxt, "gate", GateClient)
+
+    client = FastQuoteRefresher()._client("Gate", "Spot")
+
+    assert isinstance(client, GateClient)
+    assert client.params["options"]["defaultType"] == "spot"
+
+
 def test_exact_route_quote_uses_four_book_sides_and_matched_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
