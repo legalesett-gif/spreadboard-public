@@ -56,7 +56,7 @@ class FastQuoteRefresher:
         self._client_request_locks: dict[tuple[str, str], Lock] = {}
 
     def refresh(
-        self, snapshot_path: Path, *, route_limit: int = 50, target_notional_usd: float = 50.0
+        self, snapshot_path: Path, *, route_limit: int = 100, target_notional_usd: float = 50.0
     ) -> dict[str, Any]:
         try:
             payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
@@ -89,25 +89,25 @@ class FastQuoteRefresher:
                 spread = _number(row.get("depth_weighted_spread_pct"), -999999.0)
                 if 0.0 <= spread <= 90.0:
                     rows_by_lane[lane].append(row)
-        futures_limit = min(25, len(rows_by_lane["FUTURES"]), route_limit)
-        spot_limit = min(
-            25,
+        futures_route_limit = min(50, max(0, (route_limit + 1) // 2))
+        spot_route_limit = min(
+            50,
             len(rows_by_lane["FUTURES-SPOT"]),
-            max(0, route_limit - futures_limit),
+            max(0, route_limit - futures_route_limit),
         )
         selected = [
             *(
                 _expanded_token_rows(
                     rows_by_lane["FUTURES"],
-                    token_limit=futures_limit,
-                    route_limit=futures_limit,
+                    token_limit=min(25, futures_route_limit),
+                    route_limit=futures_route_limit,
                 )
             ),
             *(
                 _expanded_token_rows(
                     rows_by_lane["FUTURES-SPOT"],
-                    token_limit=spot_limit,
-                    route_limit=spot_limit,
+                    token_limit=min(25, spot_route_limit),
+                    route_limit=spot_route_limit,
                 )
             ),
         ]

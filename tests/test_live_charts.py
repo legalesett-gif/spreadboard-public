@@ -230,38 +230,44 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
     rows: list[dict] = []
     for index in range(30):
         token = f"FUT{index:02d}"
-        rows.append(
-            {
-                **_route(),
-                "route_key": f"{token}|Kucoin Futures|Futures|Mexc|Futures",
-                "token": token,
-                "long_venue": "Kucoin Futures",
-                "short_venue": "Mexc",
-                "long_market_symbol": f"{token}/USDT:USDT",
-                "short_market_symbol": f"{token}/USDT:USDT",
-                "depth_weighted_spread_pct": 30 - index,
-                "executable_spread_pct": 30 - index,
-                "blockers": [],
-            }
-        )
+        for route_index, short_venue in enumerate(("Mexc", "Bybit")):
+            rows.append(
+                {
+                    **_route(),
+                    "route_key": (
+                        f"{token}|Kucoin Futures|Futures|{short_venue}|Futures"
+                    ),
+                    "token": token,
+                    "long_venue": "Kucoin Futures",
+                    "short_venue": short_venue,
+                    "long_market_symbol": f"{token}/USDT:USDT",
+                    "short_market_symbol": f"{token}/USDT:USDT",
+                    "depth_weighted_spread_pct": 30 - index - route_index / 10,
+                    "executable_spread_pct": 30 - index - route_index / 10,
+                    "blockers": [],
+                }
+            )
     for index in range(30):
         token = f"SPOT{index:02d}"
-        rows.append(
-            {
-                **_route(),
-                "route_key": f"{token}|WhiteBIT|Spot|Kucoin Futures|Futures",
-                "token": token,
-                "route_kind": "FUTURES-SPOT",
-                "long_venue": "WhiteBIT",
-                "long_market_type": "Spot",
-                "short_venue": "Kucoin Futures",
-                "long_market_symbol": f"{token}/USDT",
-                "short_market_symbol": f"{token}/USDT:USDT",
-                "depth_weighted_spread_pct": 30 - index,
-                "executable_spread_pct": 30 - index,
-                "blockers": [],
-            }
-        )
+        for route_index, short_venue in enumerate(("Kucoin Futures", "Bybit")):
+            rows.append(
+                {
+                    **_route(),
+                    "route_key": (
+                        f"{token}|WhiteBIT|Spot|{short_venue}|Futures"
+                    ),
+                    "token": token,
+                    "route_kind": "FUTURES-SPOT",
+                    "long_venue": "WhiteBIT",
+                    "long_market_type": "Spot",
+                    "short_venue": short_venue,
+                    "long_market_symbol": f"{token}/USDT",
+                    "short_market_symbol": f"{token}/USDT:USDT",
+                    "depth_weighted_spread_pct": 30 - index - route_index / 10,
+                    "executable_spread_pct": 30 - index - route_index / 10,
+                    "blockers": [],
+                }
+            )
     snapshot_path = tmp_path / "snapshot.json"
     snapshot_path.write_text(
         json.dumps(
@@ -297,10 +303,10 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
         if row.get("fast_quote_verified_at")
     ]
 
-    assert result["selected_routes"] == 50
-    assert result["updated_routes"] == 50
-    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 25
-    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 25
+    assert result["selected_routes"] == 100
+    assert result["updated_routes"] == 100
+    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 50
+    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 50
     assert {row["token"] for row in updated if row["route_kind"] == "FUTURES"} == {
         f"FUT{index:02d}" for index in range(25)
     }
