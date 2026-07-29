@@ -164,7 +164,7 @@ def test_okx_dex_uses_usd_network_fee_not_raw_gas_units() -> None:
         quote_token_to_usdc=sell_quote,
     )
 
-    quote = sources.OkxDexQuoteSource()._quote_asset(
+    quote = sources.OkxDexQuoteSource(request_interval_seconds=0)._quote_asset(
         WatchAsset(
             symbol="TEST",
             identity_key="asset:test",
@@ -181,6 +181,30 @@ def test_okx_dex_uses_usd_network_fee_not_raw_gas_units() -> None:
     assert quote is not None
     assert quote.gas_estimate_usd == 0.42
     assert captured["token_decimals"] == 9
+
+
+def test_okx_dex_retries_rate_limits_without_changing_quote_math() -> None:
+    calls = 0
+
+    def quote_func(**_kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "status": "blocked",
+                "blockers": ["okx_dex_quote:Too Many Requests"],
+            }
+        return {"status": "ok", "dex_buy_price_usd": "1"}
+
+    source = sources.OkxDexQuoteSource(
+        request_interval_seconds=0,
+        max_rate_limit_retries=1,
+    )
+
+    result = source._quote_with_retry(quote_func)
+
+    assert result["status"] == "ok"
+    assert calls == 2
 
 
 def test_dex_source_health_keeps_sanitized_provider_diagnostics() -> None:

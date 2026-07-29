@@ -9,7 +9,7 @@ from decimal import Decimal
 import gc
 import json
 import os
-from time import monotonic
+from time import monotonic, sleep
 from typing import Any, Protocol
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -77,6 +77,20 @@ class OkxDexQuoteSource:
 
     name = "okx_dex_quote"
     kind = "dex_spot"
+
+    def __init__(
+        self,
+        *,
+        request_interval_seconds: float = 1.1,
+        max_rate_limit_retries: int = 2,
+        monotonic_func: Callable[[], float] = monotonic,
+        sleep_func: Callable[[float], None] = sleep,
+    ) -> None:
+        self.request_interval_seconds = max(0.0, request_interval_seconds)
+        self.max_rate_limit_retries = max(0, max_rate_limit_retries)
+        self._monotonic = monotonic_func
+        self._sleep = sleep_func
+        self._last_request_started: float | None = None
 
     def collect(self, context: DiscoveryContext) -> SourceResult:
         from spreadarb.dex import okx_quotes as okx_dex
@@ -149,7 +163,8 @@ class OkxDexQuoteSource:
         context: DiscoveryContext,
         okx_dex: Any,
     ) -> MarketQuote | None:
-        buy = okx_dex.quote_usdc_to_token(
+        buy = self._quote_with_retry(
+            okx_dex.quote_usdc_to_token,
             chain=str(chain_id),
             token_address=contract,
             notional_usd=Decimal(str(context.target_notional_usd)),
@@ -165,7 +180,8 @@ class OkxDexQuoteSource:
         decimals = _as_int(buy.get("to_token_decimals"))
         if decimals is None:
             decimals = asset.solana_decimals if chain_id == 501 else asset.decimals
-        sell = okx_dex.quote_token_to_usdc(
+        sell = self._quote_with_retry(
+            okx_dex.quote_token_to_usdc,
             chain=str(chain_id),
             token_address=contract,
             token_quantity=quantity,
@@ -199,6 +215,36 @@ class OkxDexQuoteSource:
             gas_estimate_usd=network_fee_usd,
             route_plan=(str(router),) if router else (),
         )
+
+    def _quote_with_retry(
+        self,
+        quote_func: Callable[..., dict[str, Any]],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for attempt in range(self.max_rate_limit_retries + 1):
+            self._wait_for_request_slot()
+            result = quote_func(**kwargs)
+            if not _okx_rate_limited(result):
+                return result
+            if attempt < self.max_rate_limit_retries:
+                self._sleep(self.request_interval_seconds * (attempt + 1))
+        return result
+
+    def _wait_for_request_slot(self) -> None:
+        now = self._monotonic()
+        if self._last_request_started is not None:
+            remaining = self.request_interval_seconds - (now - self._last_request_started)
+            if remaining > 0:
+                self._sleep(remaining)
+                now = self._monotonic()
+        self._last_request_started = now
+
+
+def _okx_rate_limited(result: Mapping[str, Any]) -> bool:
+    blockers = " ".join(str(item) for item in result.get("blockers") or ())
+    normalized = blockers.casefold()
+    return "too many requests" in normalized or "rate limit" in normalized
 
 
 class DiscoverySource(Protocol):
