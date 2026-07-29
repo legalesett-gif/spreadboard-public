@@ -126,6 +126,21 @@ def test_inverse_futures_spot_is_hidden_without_inventory_proof() -> None:
     ]
 
 
+def test_high_dislocation_dex_route_requires_exact_cex_identity() -> None:
+    reasons = api_spreads._route_mirage_reasons(
+        raw={
+            "executable_spread_pct": 26_536,
+            "blockers": ["cex_identity_unverified"],
+        },
+        long_market_type="Spot",
+        short_market_type="Futures",
+        long_rails={},
+        short_rails={},
+    )
+
+    assert reasons == ["mirage_guard:high_dislocation_identity_unverified"]
+
+
 def test_native_settled_history_is_not_mislabeled_as_current_funding() -> None:
     result = live._native_funding_result(
         [

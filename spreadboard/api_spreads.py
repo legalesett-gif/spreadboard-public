@@ -719,7 +719,12 @@ def _route_mirage_reasons(
     if spread < 1.0:
         return reasons
     raw_blockers = {str(item) for item in raw.get("blockers") or []}
-    if spread >= 5.0 and "identity_unverified" in raw_blockers:
+    identity_unverified = (
+        "identity_unverified" in raw_blockers
+        or "cex_identity_unverified" in raw_blockers
+        or any(item.startswith("identity_collision:") for item in raw_blockers)
+    )
+    if spread >= 5.0 and identity_unverified:
         reasons.append("mirage_guard:high_dislocation_identity_unverified")
     if long_market_type == "Spot" and short_market_type == "Spot":
         compatibility = public_rails.transfer_compatibility(long_rails, short_rails)
