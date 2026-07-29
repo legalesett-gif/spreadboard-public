@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+import json
 import time
+from types import SimpleNamespace
 
 from spreadboard import api_spreads, live, server
-from spreadarb.api_discovery import sources
+from spreadarb.api_discovery import runner, sources, worker
 from spreadarb.api_discovery.identity import WatchAsset
-from spreadarb.api_discovery.models import MarketQuote
+from spreadarb.api_discovery.models import (
+    SOURCE_API_DISCOVERED,
+    MarketQuote,
+    SourceResult,
+    SourceStatus,
+)
 
 
 def test_public_route_contract_keeps_spot_spot_and_hides_spot_dex() -> None:
@@ -211,6 +217,100 @@ def test_short_chart_windows_filter_exact_elapsed_time() -> None:
     assert len(server.filter_chart_history(history, "5m")) == 2
     assert len(server.filter_chart_history(history, "30m")) == 3
     assert len(server.filter_chart_history(history, "1h")) == 4
+
+
+def test_discovery_publishes_completed_sources_before_slowest_source(
+    tmp_path,
+) -> None:
+    snapshot_path = tmp_path / "latest.json"
+    watchlist_path = tmp_path / "watchlist.json"
+    watchlist_path.write_text('{"tokens":[]}', encoding="utf-8")
+
+    def status(name: str) -> SourceStatus:
+        return SourceStatus(
+            name=name,
+            kind="cex",
+            status="ok",
+            started_at="2026-07-29T00:00:00Z",
+            finished_at="2026-07-29T00:00:01Z",
+            elapsed_seconds=1,
+            rows=1,
+        )
+
+    class FirstSource:
+        name = "first"
+        kind = "cex"
+
+        def collect(self, _context) -> SourceResult:
+            return SourceResult(
+                status=status(self.name),
+                rows=(
+                    {
+                        "source_kind": SOURCE_API_DISCOVERED,
+                        "token": "ONE",
+                    },
+                ),
+            )
+
+    class SecondSource:
+        name = "second"
+        kind = "cex"
+
+        def collect(self, _context) -> SourceResult:
+            partial = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            assert partial["source_refresh"]["partial"] is True
+            assert partial["source_refresh"]["sources_completed"] == 1
+            assert partial["api_discovered_rows"][0]["token"] == "ONE"
+            return SourceResult(status=status(self.name))
+
+    result = runner.run_discovery(
+        db_path=None,
+        watchlist_path=watchlist_path,
+        snapshot_path=snapshot_path,
+        archive_dir=tmp_path / "archive",
+        timeout_seconds=10,
+        sources=[FirstSource(), SecondSource()],
+        row_limit=25,
+    )
+
+    assert result["source_refresh"].get("partial") is None
+    assert result["api_discovered_rows"][0]["token"] == "ONE"
+
+
+def test_single_group_worker_uses_public_snapshot_for_incremental_updates(
+    tmp_path,
+) -> None:
+    seen_paths = []
+
+    def fake_run_discovery(**kwargs):
+        seen_paths.append(kwargs["snapshot_path"])
+        return {
+            "api_discovered_rows": [],
+            "dex_discovered_rows": [],
+            "source_refresh": {"sources": []},
+        }
+
+    output = tmp_path / "latest.json"
+    worker.run_grouped_discovery(
+        db_path=None,
+        watchlist_path=None,
+        snapshot_path=output,
+        archive_dir=tmp_path / "archive",
+        parts_dir=tmp_path / "parts",
+        groups=[
+            worker.DiscoveryGroup(
+                name="all",
+                sources={"cex"},
+                all_platform_tokens=True,
+                timeout_seconds=10,
+                max_orderbook_candidates=1,
+                row_limit=1,
+            )
+        ],
+        run_discovery_func=fake_run_discovery,
+    )
+
+    assert seen_paths == [output]
 
 
 def test_validated_reference_venues_are_enabled() -> None:

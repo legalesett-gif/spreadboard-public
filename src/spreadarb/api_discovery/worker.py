@@ -85,7 +85,11 @@ def run_grouped_discovery(
     group_snapshots: list[tuple[DiscoveryGroup, dict[str, Any]]] = []
     group_errors: list[SourceStatus] = []
     for group in selected_groups:
-        group_snapshot_path = parts_dir / f"{group.name}.json"
+        group_snapshot_path = (
+            snapshot_path
+            if len(selected_groups) == 1
+            else parts_dir / f"{group.name}.json"
+        )
         try:
             group_snapshot = run_discovery_func(
                 db_path=db_path,

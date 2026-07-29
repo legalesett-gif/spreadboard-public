@@ -70,6 +70,18 @@ def run_discovery(
     api_rows: list[dict[str, Any]] = []
     dex_rows: list[dict[str, Any]] = []
     reference_quotes = ()
+    blacklist: dict[str, Any] = {}
+    blacklist_load_error = None
+    if blacklist_filter_enabled and db_path is not None:
+        try:
+            blacklist = blacklisted_tokens(db_path)
+        except Exception as exc:
+            blacklist_load_error = clean_error(exc)
+    blacklist_overrides = (
+        load_blacklist_overrides(blacklist_override_path)
+        if blacklist_filter_enabled
+        else set()
+    )
     for source in sources if sources is not None else default_sources(
         include_network=include_network,
         source_filter=source_filter,
@@ -94,31 +106,33 @@ def run_discovery(
                 dex_rows.append(row)
             else:
                 api_rows.append(row)
+        partial = _build_filtered_snapshot(
+            api_rows=api_rows,
+            dex_rows=dex_rows,
+            source_results=source_results,
+            blacklist=blacklist,
+            blacklist_overrides=blacklist_overrides,
+            blacklist_filter_enabled=blacklist_filter_enabled,
+            blacklist_load_error=blacklist_load_error,
+            row_limit=row_limit,
+            ttl_seconds=ttl_seconds,
+        )
+        partial["source_refresh"]["partial"] = True
+        partial["source_refresh"]["sources_completed"] = len(source_results)
+        atomic_write_json(snapshot_path, partial)
     if not tokens:
         source_results.append(_empty_token_status(started_at))
-    source_statuses = [result.status for result in source_results]
-    blacklist: dict[str, Any] = {}
-    blacklist_load_error = None
-    if blacklist_filter_enabled and db_path is not None:
-        try:
-            blacklist = blacklisted_tokens(db_path)
-        except Exception as exc:
-            blacklist_load_error = clean_error(exc)
-    filtered = filter_blacklisted_rows(
+    snapshot = _build_filtered_snapshot(
         api_rows=api_rows,
         dex_rows=dex_rows,
+        source_results=source_results,
         blacklist=blacklist,
-        overrides=load_blacklist_overrides(blacklist_override_path) if blacklist_filter_enabled else set(),
-        enabled=blacklist_filter_enabled,
-        load_error=blacklist_load_error,
-    )
-    snapshot = build_snapshot(
-        api_rows=filtered.api_rows[:row_limit],
-        dex_rows=filtered.dex_rows[:row_limit],
-        source_statuses=source_statuses,
+        blacklist_overrides=blacklist_overrides,
+        blacklist_filter_enabled=blacklist_filter_enabled,
+        blacklist_load_error=blacklist_load_error,
+        row_limit=row_limit,
         ttl_seconds=ttl_seconds,
     )
-    snapshot["source_refresh"]["blacklist_filter"] = filtered.metadata
     snapshot["run"] = {
         "started_at": started_at,
         "finished_at": utc_now_iso(),
@@ -147,6 +161,36 @@ def run_discovery(
         },
     )
     snapshot["archive_path"] = str(archive_path)
+    return snapshot
+
+
+def _build_filtered_snapshot(
+    *,
+    api_rows: list[dict[str, Any]],
+    dex_rows: list[dict[str, Any]],
+    source_results: list[SourceResult],
+    blacklist: dict[str, Any],
+    blacklist_overrides: set[str],
+    blacklist_filter_enabled: bool,
+    blacklist_load_error: str | None,
+    row_limit: int,
+    ttl_seconds: int,
+) -> dict[str, Any]:
+    filtered = filter_blacklisted_rows(
+        api_rows=api_rows,
+        dex_rows=dex_rows,
+        blacklist=blacklist,
+        overrides=blacklist_overrides,
+        enabled=blacklist_filter_enabled,
+        load_error=blacklist_load_error,
+    )
+    snapshot = build_snapshot(
+        api_rows=filtered.api_rows[:row_limit],
+        dex_rows=filtered.dex_rows[:row_limit],
+        source_statuses=[result.status for result in source_results],
+        ttl_seconds=ttl_seconds,
+    )
+    snapshot["source_refresh"]["blacklist_filter"] = filtered.metadata
     return snapshot
 
 
