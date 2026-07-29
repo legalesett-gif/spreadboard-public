@@ -201,6 +201,89 @@ def test_fast_quote_refresh_advances_canonical_heartbeat(
     assert saved["expires_at"] > saved["updated_at"]
 
 
+def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    rows: list[dict] = []
+    for index in range(30):
+        token = f"FUT{index:02d}"
+        rows.append(
+            {
+                **_route(),
+                "route_key": f"{token}|Aster|Futures|Bybit|Futures",
+                "token": token,
+                "long_market_symbol": f"{token}/USDT:USDT",
+                "short_market_symbol": f"{token}/USDT:USDT",
+                "depth_weighted_spread_pct": 30 - index,
+                "executable_spread_pct": 30 - index,
+                "blockers": [],
+            }
+        )
+    for index in range(30):
+        token = f"SPOT{index:02d}"
+        rows.append(
+            {
+                **_route(),
+                "route_key": f"{token}|Gate|Spot|Bybit|Futures",
+                "token": token,
+                "route_kind": "FUTURES-SPOT",
+                "long_venue": "Gate",
+                "long_market_type": "Spot",
+                "long_market_symbol": f"{token}/USDT",
+                "short_market_symbol": f"{token}/USDT:USDT",
+                "depth_weighted_spread_pct": 30 - index,
+                "executable_spread_pct": 30 - index,
+                "blockers": [],
+            }
+        )
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "updated_at": "2020-01-01T00:00:00Z",
+                "expires_at": "2020-01-01T00:01:00Z",
+                "api_discovered_rows": rows,
+                "dex_discovered_rows": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    refresher = FastQuoteRefresher()
+
+    def quote_leg(row: dict, side: str, **_kwargs: object) -> dict:
+        symbol = row[f"{side}_market_symbol"]
+        return {
+            "symbol": symbol,
+            "bid": 100.0 if side == "long" else 103.0,
+            "ask": 101.0 if side == "long" else 104.0,
+            "bid_vwap": 100.0 if side == "long" else 103.0,
+            "ask_vwap": 101.0 if side == "long" else 104.0,
+            "contract_size": 1.0,
+            "quote_ts_us": 2_000_000,
+        }
+
+    monkeypatch.setattr(refresher, "_leg_quote", quote_leg)
+    result = refresher.refresh(snapshot_path)
+    saved = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    updated = [
+        row
+        for row in saved["api_discovered_rows"]
+        if row.get("fast_quote_verified_at")
+    ]
+
+    assert result["selected_routes"] == 50
+    assert result["updated_routes"] == 50
+    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 25
+    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 25
+    assert {row["token"] for row in updated if row["route_kind"] == "FUTURES"} == {
+        f"FUT{index:02d}" for index in range(25)
+    }
+    assert {
+        row["token"] for row in updated if row["route_kind"] == "FUTURES-SPOT"
+    } == {f"SPOT{index:02d}" for index in range(25)}
+
+
 def test_aster_and_hyperliquid_futures_are_not_mislabeled_as_dex() -> None:
     row = _route()
     assert market_history.route_kind_for(row) == "FUTURES"

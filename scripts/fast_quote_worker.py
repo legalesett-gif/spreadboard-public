@@ -20,7 +20,7 @@ from spreadboard.fast_quotes import FastQuoteRefresher  # noqa: E402
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--snapshot-path", type=Path, required=True)
-    parser.add_argument("--route-limit", type=int, default=16)
+    parser.add_argument("--route-limit", type=int, default=50)
     args = parser.parse_args()
 
     refresher = FastQuoteRefresher()
