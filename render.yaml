@@ -34,11 +34,11 @@ services:
       - key: SPREADBOARD_CEX_CANDIDATES
         value: "100"
       - key: SPREADBOARD_DISCOVERY_ROWS
-        value: "1200"
+        value: "800"
       - key: SPREADBOARD_DEX_CANDIDATES
         value: "40"
       - key: SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS
-        value: "25"
+        value: "0"
       - key: SPREADBOARD_FUNDING_HISTORY_WORKERS
         value: "4"
       - key: SPREADBOARD_REFRESH_TIMEOUT_SECONDS
