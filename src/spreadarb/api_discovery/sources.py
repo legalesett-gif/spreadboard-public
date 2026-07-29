@@ -189,7 +189,7 @@ class OkxDexQuoteSource:
             0,
             min(
                 50,
-                int(os.environ.get("SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS", "25")),
+                int(os.environ.get("SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS", "0")),
             ),
         )
         if limit <= 0:

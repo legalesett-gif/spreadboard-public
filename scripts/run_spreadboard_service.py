@@ -83,11 +83,11 @@ class RefreshLoop:
             str(RUNTIME_DIR / "api_discovery_parts"),
             "--skip-broad-dex-spot",
             "--cex-max-orderbook-candidates",
-            os.environ.get("SPREADBOARD_CEX_CANDIDATES", "150"),
+            os.environ.get("SPREADBOARD_CEX_CANDIDATES", "100"),
             "--dex-derivative-max-orderbook-candidates",
-            os.environ.get("SPREADBOARD_DEX_CANDIDATES", "100"),
+            os.environ.get("SPREADBOARD_DEX_CANDIDATES", "40"),
             "--row-limit",
-            os.environ.get("SPREADBOARD_DISCOVERY_ROWS", "1200"),
+            os.environ.get("SPREADBOARD_DISCOVERY_ROWS", "800"),
             "--ttl-s",
             "900",
         ]
@@ -97,7 +97,7 @@ class RefreshLoop:
                 cwd=ROOT,
                 capture_output=True,
                 text=True,
-                timeout=float(os.environ.get("SPREADBOARD_REFRESH_TIMEOUT_SECONDS", "540")),
+                timeout=float(os.environ.get("SPREADBOARD_REFRESH_TIMEOUT_SECONDS", "900")),
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:

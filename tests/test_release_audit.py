@@ -250,7 +250,10 @@ def test_okx_dex_retries_rate_limits_without_changing_quote_math() -> None:
     assert calls == 2
 
 
-def test_okx_dynamic_catalogue_keeps_only_unique_symbol_contracts() -> None:
+def test_okx_dynamic_catalogue_keeps_only_unique_symbol_contracts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS", "25")
     source = sources.OkxDexQuoteSource(request_interval_seconds=0)
     refs = (
         MarketQuote(

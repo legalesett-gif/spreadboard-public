@@ -1337,7 +1337,7 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
 
 def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
     route_key = str(row.get("route_key") or "")
-    configured_interval = float(os.environ.get("SPREADBOARD_CHART_SAMPLE_SECONDS", "5"))
+    configured_interval = float(os.environ.get("SPREADBOARD_CHART_SAMPLE_SECONDS", "2"))
     min_interval = (
         max(1.0, configured_interval)
         if _native_chart_route(row)
