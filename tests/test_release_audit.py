@@ -322,6 +322,32 @@ def test_validated_reference_venues_are_enabled() -> None:
     assert "Upbit" not in spot
 
 
+def test_default_sources_publish_small_cex_batches_before_enrichment() -> None:
+    enabled = sources.default_sources(include_network=True)
+    cex = [
+        source
+        for source in enabled
+        if isinstance(source, sources.CexCcxtSource) and source.kind == "cex"
+    ]
+
+    assert cex
+    assert all(len(source.venues) <= 5 for source in cex)
+    assert cex[0].market_type == "Spot"
+    assert cex[1].market_type == "Futures"
+    assert {
+        venue
+        for source in cex
+        if source.market_type == "Spot"
+        for venue in source.venues
+    } == set(sources.default_enabled_cex_source().venues)
+    assert {
+        venue
+        for source in cex
+        if source.market_type == "Futures"
+        for venue in source.venues
+    } == set(sources.default_enabled_cex_futures_source().venues)
+
+
 def test_lane_counts_are_unique_assets_not_route_permutations() -> None:
     rows = [
         SimpleNamespace(route_kind="FUTURES", token="ONE"),

@@ -746,9 +746,18 @@ def default_sources(
 ) -> list[DiscoverySource]:
     enabled: list[DiscoverySource] = []
     if include_network:
+        spot = default_enabled_cex_source()
+        futures = default_enabled_cex_futures_source()
+        spot_batches = _batched_cex_sources(spot, batch_size=5)
+        futures_batches = _batched_cex_sources(futures, batch_size=5)
         source_specs: list[DiscoverySource] = [
-            default_enabled_cex_source(),
-            default_enabled_cex_futures_source(),
+            *[
+                source
+                for pair in zip(spot_batches, futures_batches)
+                for source in pair
+            ],
+            *spot_batches[len(futures_batches) :],
+            *futures_batches[len(spot_batches) :],
             OkxDexQuoteSource(),
             DexDerivativeCcxtSource(venues={"Hyperliquid": "hyperliquid", "Aster": "aster"}),
         ]
@@ -768,6 +777,27 @@ def default_sources(
         if source_filter is None or "disabled" in source_filter
     )
     return enabled
+
+
+def _batched_cex_sources(
+    source: CexCcxtSource,
+    *,
+    batch_size: int,
+) -> list[CexCcxtSource]:
+    venues = list(source.venues.items())
+    batches: list[CexCcxtSource] = []
+    for index in range(0, len(venues), max(1, batch_size)):
+        batches.append(
+            CexCcxtSource(
+                venues=dict(venues[index : index + batch_size]),
+                name=f"{source.name}_{len(batches) + 1}",
+                market_type=source.market_type,
+                source_kind=source.source_kind,
+                include_reference_quotes=True,
+                collect_funding=source.collect_funding,
+            )
+        )
+    return batches
 
 
 def pairwise_candidates(
