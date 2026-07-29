@@ -400,6 +400,40 @@ def test_single_group_worker_uses_public_snapshot_for_incremental_updates(
     assert seen_paths == [output]
 
 
+def test_discovery_merge_keeps_newest_duplicate_without_retaining_old_final_route() -> None:
+    current = {
+        "api_discovered_rows": [
+            {"route_key": "SAME", "quote_ts_us": 100, "token": "CURRENT"}
+        ],
+        "dex_discovered_rows": [],
+        "source_refresh": {},
+    }
+    previous = {
+        "api_discovered_rows": [
+            {"route_key": "SAME", "quote_ts_us": 200, "token": "NEWER"},
+            {"route_key": "OLD", "quote_ts_us": 200, "token": "OLD"},
+        ],
+        "dex_discovered_rows": [],
+        "source_refresh": {},
+    }
+
+    partial = runner._retain_previous_rows(
+        json.loads(json.dumps(current)),
+        previous,
+        row_limit=10,
+    )
+    final = runner._prefer_newer_previous_rows(
+        json.loads(json.dumps(current)),
+        previous,
+    )
+
+    assert [row["token"] for row in partial["api_discovered_rows"]] == [
+        "NEWER",
+        "OLD",
+    ]
+    assert [row["token"] for row in final["api_discovered_rows"]] == ["NEWER"]
+
+
 def test_validated_reference_venues_are_enabled() -> None:
     spot = sources.default_enabled_cex_source().venues
     futures = sources.default_enabled_cex_futures_source().venues

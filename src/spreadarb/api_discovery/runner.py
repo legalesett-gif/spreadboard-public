@@ -158,6 +158,7 @@ def run_discovery(
         "db_path": str(db_path) if db_path else None,
         "network_enabled": include_network,
     }
+    snapshot = _prefer_newer_previous_rows(snapshot, previous_snapshot)
     atomic_write_json(snapshot_path, snapshot)
     archive_path = append_archive(
         archive_dir,
@@ -185,19 +186,63 @@ def _retain_previous_rows(
     *,
     row_limit: int,
 ) -> dict[str, Any]:
+    return _merge_previous_rows(
+        partial,
+        previous,
+        row_limit=row_limit,
+        retain_unmatched=True,
+    )
+
+
+def _prefer_newer_previous_rows(
+    snapshot: dict[str, Any],
+    previous: dict[str, Any],
+) -> dict[str, Any]:
+    return _merge_previous_rows(
+        snapshot,
+        previous,
+        row_limit=max(
+            len(snapshot.get("api_discovered_rows") or []),
+            len(snapshot.get("dex_discovered_rows") or []),
+            1,
+        ),
+        retain_unmatched=False,
+    )
+
+
+def _merge_previous_rows(
+    snapshot: dict[str, Any],
+    previous: dict[str, Any],
+    *,
+    row_limit: int,
+    retain_unmatched: bool,
+) -> dict[str, Any]:
     retained = 0
     for bucket in ("api_discovered_rows", "dex_discovered_rows"):
         current_rows = [
-            row for row in partial.get(bucket) or [] if isinstance(row, dict)
+            row for row in snapshot.get(bucket) or [] if isinstance(row, dict)
         ]
         previous_rows = [
             row for row in previous.get(bucket) or [] if isinstance(row, dict)
         ]
-        if len(current_rows) >= row_limit:
-            partial[bucket] = current_rows[:row_limit]
+        previous_by_identity = {_row_identity(row): row for row in previous_rows}
+        merged = []
+        seen = set()
+        for row in current_rows:
+            identity = _row_identity(row)
+            previous_row = previous_by_identity.get(identity)
+            if (
+                previous_row is not None
+                and _row_quote_ts(previous_row) > _row_quote_ts(row)
+            ):
+                merged.append(previous_row)
+                retained += 1
+            else:
+                merged.append(row)
+            seen.add(identity)
+        if not retain_unmatched or len(merged) >= row_limit:
+            snapshot[bucket] = merged[:row_limit]
             continue
-        seen = {_row_identity(row) for row in current_rows}
-        merged = list(current_rows)
         for row in previous_rows:
             identity = _row_identity(row)
             if identity in seen:
@@ -207,9 +252,9 @@ def _retain_previous_rows(
             retained += 1
             if len(merged) >= row_limit:
                 break
-        partial[bucket] = merged[:row_limit]
-    partial["source_refresh"]["previous_snapshot_rows_retained"] = retained
-    return partial
+        snapshot[bucket] = merged[:row_limit]
+    snapshot["source_refresh"]["previous_snapshot_rows_retained"] = retained
+    return snapshot
 
 
 def _row_identity(row: dict[str, Any]) -> tuple[str, ...]:
@@ -226,6 +271,13 @@ def _row_identity(row: dict[str, Any]) -> tuple[str, ...]:
         str(row.get("short_market_type") or ""),
         str(row.get("short_market_symbol") or ""),
     )
+
+
+def _row_quote_ts(row: dict[str, Any]) -> int:
+    try:
+        return int(float(row.get("quote_ts_us") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _build_filtered_snapshot(
