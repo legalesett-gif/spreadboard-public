@@ -119,27 +119,31 @@ class FastQuoteRefresher:
                     if not str(item).startswith("mirage_guard:fast_")
                 ]
                 row["blockers"] = list(dict.fromkeys(blockers))
-        leg_cache: dict[tuple[str, str, str], dict[str, Any] | None] = {}
         leg_jobs: dict[tuple[str, str, str], tuple[dict[str, Any], str]] = {}
         for row in selected:
             for side in ("long", "short"):
                 key = _route_leg_key(row, side)
                 if key is not None:
                     leg_jobs.setdefault(key, (row, side))
-        with ThreadPoolExecutor(max_workers=max(1, min(6, len(leg_jobs)))) as pool:
+        jobs_by_venue: dict[
+            tuple[str, str],
+            list[tuple[tuple[str, str, str], dict[str, Any], str]],
+        ] = {}
+        for key, (row, side) in leg_jobs.items():
+            jobs_by_venue.setdefault((key[0], key[1]), []).append((key, row, side))
+        leg_cache: dict[tuple[str, str, str], dict[str, Any] | None] = {}
+        with ThreadPoolExecutor(max_workers=max(1, min(2, len(jobs_by_venue)))) as pool:
             futures = {
-                key: pool.submit(
-                    self._leg_quote,
-                    row,
-                    side,
+                venue_key: pool.submit(
+                    self._quote_venue_jobs,
+                    venue_key,
+                    jobs,
                     target_notional_usd=target_notional_usd,
-                    cache={},
-                    include_funding=True,
                 )
-                for key, (row, side) in leg_jobs.items()
+                for venue_key, jobs in jobs_by_venue.items()
             }
-            for key, future in futures.items():
-                leg_cache[key] = future.result()
+            for future in futures.values():
+                leg_cache.update(future.result())
         updated = failed = 0
         for row in selected:
             blockers = [
@@ -199,6 +203,27 @@ class FastQuoteRefresher:
         }
         _atomic_write(snapshot_path, payload)
         return payload["fast_quote_refresh"]
+
+    def _quote_venue_jobs(
+        self,
+        venue_key: tuple[str, str],
+        jobs: list[tuple[tuple[str, str, str], dict[str, Any], str]],
+        *,
+        target_notional_usd: float,
+    ) -> dict[tuple[str, str, str], dict[str, Any] | None]:
+        cache: dict[tuple[str, str, str], dict[str, Any] | None] = {}
+        try:
+            for key, row, side in jobs:
+                cache[key] = self._leg_quote(
+                    row,
+                    side,
+                    target_notional_usd=target_notional_usd,
+                    cache=cache,
+                    include_funding=True,
+                )
+        finally:
+            self._discard_client(*venue_key)
+        return cache
 
     def quote_route(
         self,
