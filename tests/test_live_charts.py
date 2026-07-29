@@ -233,8 +233,10 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
         rows.append(
             {
                 **_route(),
-                "route_key": f"{token}|Aster|Futures|Bybit|Futures",
+                "route_key": f"{token}|Kucoin Futures|Futures|Mexc|Futures",
                 "token": token,
+                "long_venue": "Kucoin Futures",
+                "short_venue": "Mexc",
                 "long_market_symbol": f"{token}/USDT:USDT",
                 "short_market_symbol": f"{token}/USDT:USDT",
                 "depth_weighted_spread_pct": 30 - index,
@@ -247,11 +249,12 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
         rows.append(
             {
                 **_route(),
-                "route_key": f"{token}|Gate|Spot|Bybit|Futures",
+                "route_key": f"{token}|WhiteBIT|Spot|Kucoin Futures|Futures",
                 "token": token,
                 "route_kind": "FUTURES-SPOT",
-                "long_venue": "Gate",
+                "long_venue": "WhiteBIT",
                 "long_market_type": "Spot",
+                "short_venue": "Kucoin Futures",
                 "long_market_symbol": f"{token}/USDT",
                 "short_market_symbol": f"{token}/USDT:USDT",
                 "depth_weighted_spread_pct": 30 - index,

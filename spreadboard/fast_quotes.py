@@ -74,14 +74,14 @@ class FastQuoteRefresher:
                 short_type = str(row.get("short_market_type") or "")
                 if (
                     {long_type, short_type} == {"Futures"}
-                    and row.get("long_venue") in NATIVE_FUTURES_VENUES
-                    and row.get("short_venue") in NATIVE_FUTURES_VENUES
+                    and row.get("long_venue") in VENUE_IDS
+                    and row.get("short_venue") in VENUE_IDS
                 ):
                     lane = "FUTURES"
                 elif (
-                    long_type == "Spot"
-                    and short_type == "Futures"
-                    and row.get("short_venue") in NATIVE_FUTURES_VENUES
+                    {long_type, short_type} == {"Spot", "Futures"}
+                    and row.get("long_venue") in VENUE_IDS
+                    and row.get("short_venue") in VENUE_IDS
                 ):
                     lane = "FUTURES-SPOT"
                 else:
