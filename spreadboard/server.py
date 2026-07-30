@@ -1324,7 +1324,7 @@ def _chart_stream_payload(route_key: str, board_path: Path, hours: float) -> dic
 def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | None:
     market = api_market_spreads(
         board_path,
-        {"limit": ["500"], "include_stale": ["0"]},
+        {"limit": ["500"], "include_stale": ["1"]},
     )
     return next(
         (

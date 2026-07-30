@@ -33,6 +33,27 @@ def test_okx_dex_source_budget_covers_rate_limited_watchlist_scan() -> None:
     assert args.dex_spot_timeout_s == 240.0
 
 
+def test_open_chart_can_requote_route_after_board_freshness_cutoff(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_market_spreads(_board_path, query):
+        captured["query"] = query
+        return {"rows": [{"route_key": "TOKEN|A|Spot|B|Futures"}]}
+
+    monkeypatch.setattr(server, "api_market_spreads", fake_market_spreads)
+
+    row = server._find_canonical_route(
+        "TOKEN|A|Spot|B|Futures",
+        tmp_path / "board.jsonl",
+    )
+
+    assert row == {"route_key": "TOKEN|A|Spot|B|Futures"}
+    assert captured["query"]["include_stale"] == ["1"]
+
+
 def test_depth_candidate_selection_prefers_unique_tokens() -> None:
     pairs = [
         SimpleNamespace(token="ONE"),
