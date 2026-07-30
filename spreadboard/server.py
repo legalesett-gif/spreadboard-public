@@ -1198,7 +1198,8 @@ def api_pair(route_key: str, board_path: Path, config: dict[str, Any]) -> dict[s
         board_path,
         {
             "limit": ["500"],
-            "include_stale": ["0"],
+            "include_stale": ["1"],
+            "no_cache": ["1"],
         },
     )
     canonical_row = next(

@@ -56,6 +56,32 @@ def test_open_chart_can_requote_route_after_board_freshness_cutoff(
     assert captured["limit"] is None
 
 
+def test_pair_detail_keeps_exact_route_after_board_freshness_cutoff(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, list[str]] = {}
+    route_key = "TOKEN|A|Spot|B|Futures"
+
+    def fake_market(_board_path, query):
+        captured.update(query)
+        return {"rows": [{"route_key": route_key, "token": "TOKEN"}]}
+
+    monkeypatch.setattr(server, "api_market_spreads", fake_market)
+    monkeypatch.setattr(
+        server.live,
+        "get_route_detail",
+        lambda row, config: {"board_row": row, "config": config},
+    )
+
+    result = server.api_pair(route_key, tmp_path / "board.jsonl", {"read_only": True})
+
+    assert result["ok"] is True
+    assert result["board_row"]["route_key"] == route_key
+    assert captured["include_stale"] == ["1"]
+    assert captured["no_cache"] == ["1"]
+
+
 def test_depth_candidate_selection_prefers_unique_tokens() -> None:
     pairs = [
         SimpleNamespace(token="ONE"),
