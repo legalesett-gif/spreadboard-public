@@ -39,11 +39,11 @@ def test_open_chart_can_requote_route_after_board_freshness_cutoff(
 ) -> None:
     captured: dict[str, object] = {}
 
-    def fake_market_spreads(_board_path, query):
-        captured["query"] = query
+    def fake_load_spreads(**kwargs):
+        captured.update(kwargs)
         return {"rows": [{"route_key": "TOKEN|A|Spot|B|Futures"}]}
 
-    monkeypatch.setattr(server, "api_market_spreads", fake_market_spreads)
+    monkeypatch.setattr(api_spreads, "load_spreads", fake_load_spreads)
 
     row = server._find_canonical_route(
         "TOKEN|A|Spot|B|Futures",
@@ -51,7 +51,9 @@ def test_open_chart_can_requote_route_after_board_freshness_cutoff(
     )
 
     assert row == {"route_key": "TOKEN|A|Spot|B|Futures"}
-    assert captured["query"]["include_stale"] == ["1"]
+    assert captured["include_stale"] is True
+    assert captured["include_unverified"] is False
+    assert captured["limit"] is None
 
 
 def test_depth_candidate_selection_prefers_unique_tokens() -> None:
