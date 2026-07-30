@@ -1276,12 +1276,14 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
             "rows": public_rows,
         }
     if current is not None:
-        rows = [_current_history_point(current)]
+        current_point = _current_history_point(current)
+        current_ts = _float_or_none(current_point.get("quote_ts_us")) or 0
+        rows = [current_point] if current_ts >= since_us else []
         return {
             "ok": True,
             "mode": "canonical_public_api_current_snapshot",
             "route_key": route_key,
-            "count": 1,
+            "count": len(rows),
             "collecting": True,
             "sample": sample,
             "meta": _history_meta(rows),

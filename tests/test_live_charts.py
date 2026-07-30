@@ -12,6 +12,8 @@ from spreadboard.fast_quotes import (
     _expanded_token_rows,
     _has_permanent_mirage_guard,
     _native_spot_order_book,
+    _native_current_funding,
+    _okx_dex_leg_quote,
 )
 from scripts.audit_live_charts import _formula_errors
 
@@ -150,6 +152,108 @@ def test_native_gate_spot_order_book_is_sorted_and_normalized(
     assert "currency_pair=COTI_USDT" in requested[0]
     assert bids == [[0.104, 3.0], [0.103, 4.0], [0.102, 2.0]]
     assert asks == [[0.105, 6.0], [0.106, 7.0], [0.107, 5.0]]
+
+
+def test_native_binance_funding_uses_official_interval_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_json_url(url: str):
+        if "fundingInfo" in url:
+            return [{"symbol": "ANTHROPICUSDT", "fundingIntervalHours": 8}]
+        return {"lastFundingRate": "0.00005", "nextFundingTime": 1_800_000_000_000}
+
+    monkeypatch.setattr("spreadboard.fast_quotes._json_url", fake_json_url)
+
+    result = _native_current_funding("Binance", "ANTHROPIC/USDT:USDT")
+
+    assert result["current_funding_pct"] == pytest.approx(0.005)
+    assert result["funding_interval_hours"] == 8
+
+
+def test_native_hyperliquid_funding_uses_live_asset_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "spreadboard.fast_quotes._json_post",
+        lambda *_args, **_kwargs: [
+            {"universe": [{"name": "BTC"}, {"name": "ZK"}]},
+            [{"funding": "0.00001"}, {"funding": "-0.0000180442"}],
+        ],
+    )
+
+    result = _native_current_funding("Hyperliquid", "ZK/USDC:USDC")
+
+    assert result["current_funding_pct"] == pytest.approx(-0.00180442)
+    assert result["funding_interval_hours"] == 1
+    assert result["next_funding_ts_us"] > int(time.time() * 1_000_000)
+
+
+def test_exact_okx_dex_leg_requotes_both_sides_at_matched_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from spreadarb.dex import okx_quotes
+
+    monkeypatch.setattr(
+        okx_quotes,
+        "quote_usdc_to_token",
+        lambda **_kwargs: {
+            "status": "ok",
+            "out_qty": "20",
+            "to_token_decimals": 18,
+            "dex_buy_price_usd": "2.5",
+        },
+    )
+    monkeypatch.setattr(
+        okx_quotes,
+        "quote_token_to_usdc",
+        lambda **_kwargs: {
+            "status": "ok",
+            "dex_sell_price_usd": "2.45",
+        },
+    )
+
+    result = _okx_dex_leg_quote(
+        {
+            "token": "TEST",
+            "dex_chain": "1",
+            "dex_contract": "0x123",
+        },
+        "short",
+        target_notional_usd=50,
+    )
+
+    assert result is not None
+    assert result["bid"] == pytest.approx(2.45)
+    assert result["ask"] == pytest.approx(2.5)
+    assert result["bid_vwap"] == pytest.approx(2.45)
+    assert result["ask_vwap"] == pytest.approx(2.5)
+
+
+def test_history_window_does_not_reinsert_an_older_current_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    stale_route = {
+        **_route(),
+        "quote_ts_us": int((time.time() - 600) * 1_000_000),
+        "long_bid": 99,
+        "long_ask": 100,
+        "short_bid": 110,
+        "short_ask": 112,
+    }
+    monkeypatch.setattr(server, "_find_canonical_route", lambda *_args: stale_route)
+    monkeypatch.setattr(server, "_refresh_chart_route", lambda *_args: {"status": "idle"})
+    monkeypatch.setattr(market_history, "load_history", lambda **_kwargs: [])
+
+    payload = server.api_history(
+        stale_route["route_key"],
+        tmp_path / "board.json",
+        {"hours": [str(1 / 60)]},
+    )
+
+    assert payload["ok"]
+    assert payload["count"] == 0
+    assert payload["rows"] == []
 
 
 def test_history_persists_entry_matched_exit_and_sample_provenance(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from decimal import Decimal
 import gc
 import json
 from pathlib import Path
@@ -320,6 +321,14 @@ class FastQuoteRefresher:
             or ""
         )
         key = (venue, market_type, symbol)
+        if "okx dex" in venue.casefold():
+            value = _okx_dex_leg_quote(
+                row,
+                side,
+                target_notional_usd=target_notional_usd,
+            )
+            cache[key] = value
+            return value
         if not venue or not symbol or venue not in VENUE_IDS:
             return None
         if key in cache:
@@ -332,10 +341,28 @@ class FastQuoteRefresher:
                     market = client.market(symbol)
                     book = client.fetch_order_book(symbol, limit=20)
                     funding = (
-                        _ccxt_current_funding(client, symbol)
+                        _ccxt_current_funding(client, symbol, venue=venue)
                         if include_funding and market_type == "Futures"
                         else {}
                     )
+                    if (
+                        include_funding
+                        and market_type == "Futures"
+                        and (
+                            funding.get("current_funding_pct") is None
+                            or funding.get("funding_interval_hours") is None
+                        )
+                    ):
+                        funding = {
+                            **funding,
+                            **{
+                                key: value
+                                for key, value in _native_current_funding(
+                                    venue, symbol
+                                ).items()
+                                if value is not None
+                            },
+                        }
                     contract_size = (
                         _number(market.get("contractSize"), 1.0)
                         if market_type == "Futures"
@@ -671,8 +698,22 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                 f"https://{host}/fapi/v1/premiumIndex?"
                 + urlencode({"symbol": compact})
             )
+            info_payload = _json_url(
+                f"https://{host}/fapi/v1/fundingInfo?"
+                + urlencode({"symbol": compact})
+            )
+            info_rows = info_payload if isinstance(info_payload, list) else []
+            funding_info = next(
+                (
+                    item
+                    for item in info_rows
+                    if isinstance(item, dict) and item.get("symbol") == compact
+                ),
+                {},
+            )
             return _funding_fields(
                 payload.get("lastFundingRate"),
+                interval_hours=funding_info.get("fundingIntervalHours"),
                 next_funding_ms=payload.get("nextFundingTime"),
             )
         if venue == "Bybit":
@@ -731,12 +772,47 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                 item.get("lastFundingRate"),
                 next_funding_ms=item.get("nextFundingTime"),
             )
+        if venue == "Hyperliquid":
+            payload = _json_post(
+                "https://api.hyperliquid.xyz/info",
+                {"type": "metaAndAssetCtxs"},
+            )
+            if not isinstance(payload, list) or len(payload) < 2:
+                return {}
+            meta = payload[0] if isinstance(payload[0], dict) else {}
+            contexts = payload[1] if isinstance(payload[1], list) else []
+            universe = meta.get("universe") if isinstance(meta.get("universe"), list) else []
+            index = next(
+                (
+                    index
+                    for index, item in enumerate(universe)
+                    if isinstance(item, dict)
+                    and (
+                        str(item.get("name") or "").upper() == base
+                        or str(item.get("name") or "").upper().endswith(f":{base}")
+                    )
+                ),
+                None,
+            )
+            if index is None or index >= len(contexts) or not isinstance(contexts[index], dict):
+                return {}
+            next_hour_ms = int((time.time() // 3600 + 1) * 3600 * 1000)
+            return _funding_fields(
+                contexts[index].get("funding"),
+                interval_hours=1,
+                next_funding_ms=next_hour_ms,
+            )
     except Exception:
         return {}
     return {}
 
 
-def _ccxt_current_funding(client: Any, symbol: str) -> dict[str, Any]:
+def _ccxt_current_funding(
+    client: Any,
+    symbol: str,
+    *,
+    venue: str | None = None,
+) -> dict[str, Any]:
     try:
         if not getattr(client, "has", {}).get("fetchFundingRate"):
             return {}
@@ -775,11 +851,74 @@ def _funding_fields(
     }
 
 
-def _json_url(url: str) -> dict[str, Any]:
+def _json_url(url: str) -> Any:
     request = Request(url, headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"})
     with urlopen(request, timeout=6.0) as response:
         payload = json.loads(response.read().decode("utf-8"))
-    return payload if isinstance(payload, dict) else {}
+    return payload if isinstance(payload, (dict, list)) else {}
+
+
+def _json_post(url: str, payload: dict[str, Any]) -> Any:
+    request = Request(
+        url,
+        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "SpreadBoard/1.0",
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=6.0) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _okx_dex_leg_quote(
+    row: dict[str, Any],
+    side: str,
+    *,
+    target_notional_usd: float,
+) -> dict[str, Any] | None:
+    chain = str(row.get("dex_chain") or "").strip()
+    contract = str(row.get("dex_contract") or "").strip()
+    if not chain or not contract:
+        return None
+    try:
+        from spreadarb.dex import okx_quotes
+
+        buy = okx_quotes.quote_usdc_to_token(
+            chain=chain,
+            token_address=contract,
+            notional_usd=Decimal(str(target_notional_usd)),
+        )
+        quantity = Decimal(str(buy.get("out_qty") or "0"))
+        decimals = _optional_int(buy.get("to_token_decimals"))
+        if buy.get("status") != "ok" or quantity <= 0 or decimals is None:
+            return None
+        sell = okx_quotes.quote_token_to_usdc(
+            chain=chain,
+            token_address=contract,
+            token_quantity=quantity,
+            token_decimals=decimals,
+        )
+        bid = _optional_number(sell.get("dex_sell_price_usd"))
+        ask = _optional_number(buy.get("dex_buy_price_usd"))
+        if sell.get("status") != "ok" or bid is None or ask is None:
+            return None
+        return {
+            "symbol": str(row.get("token") or ""),
+            "bid": bid,
+            "ask": ask,
+            "bid_vwap": bid,
+            "ask_vwap": ask,
+            "contract_size": 1.0,
+            "quote_ts_us": int(time.time() * 1_000_000),
+            "chain_id": chain,
+            "token_address": contract,
+            "sample_side": side,
+        }
+    except Exception:
+        return None
 
 
 def _interval_hours(current_ms: Any, next_ms: Any) -> float | None:
@@ -798,6 +937,13 @@ def _seconds_to_hours(value: Any) -> float | None:
 def _optional_number(value: Any) -> float | None:
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None
 
