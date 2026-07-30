@@ -740,8 +740,6 @@ def _route_mirage_reasons(
     reasons: list[str] = []
     if short_market_type == "Spot" and long_market_type != "Spot":
         reasons.append("condition:spot_sell_inventory_required")
-    if spread < 1.0:
-        return reasons
     raw_blockers = {str(item) for item in raw.get("blockers") or []}
     identity_unverified = (
         "identity_unverified" in raw_blockers
@@ -749,9 +747,14 @@ def _route_mirage_reasons(
         or any(item.startswith("identity_collision:") for item in raw_blockers)
     )
     raw_source = str(raw.get("source_kind") or raw.get("raw_source_kind") or "")
-    identity_threshold = 5.0 if "dex" in raw_source.casefold() else 25.0
-    if spread >= identity_threshold and identity_unverified:
+    is_dex = "dex" in raw_source.casefold()
+    already_guarded = any(item.startswith("mirage_guard:") for item in raw_blockers)
+    if is_dex and identity_unverified and not already_guarded:
+        reasons.append("mirage_guard:dex_cex_identity_unverified")
+    elif spread >= 25.0 and identity_unverified and not already_guarded:
         reasons.append("mirage_guard:high_dislocation_identity_unverified")
+    if spread < 1.0:
+        return reasons
     if long_market_type == "Spot" and short_market_type == "Spot":
         compatibility = public_rails.transfer_compatibility(long_rails, short_rails)
         status = str(compatibility.get("status") or "unknown")
