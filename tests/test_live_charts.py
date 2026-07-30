@@ -10,6 +10,7 @@ from spreadboard import market_history, server
 from spreadboard.fast_quotes import (
     FastQuoteRefresher,
     _expanded_token_rows,
+    _fast_quote_lane,
     _has_permanent_mirage_guard,
     _native_spot_order_book,
     _native_current_funding,
@@ -58,9 +59,35 @@ def test_fast_quote_cycle_retries_temporary_guards_only() -> None:
     assert not _has_permanent_mirage_guard(
         {"blockers": ["mirage_guard:fast_requote_unavailable"]}
     )
-    assert _has_permanent_mirage_guard(
+    assert not _has_permanent_mirage_guard(
         {"blockers": ["mirage_guard:spot_sell_inventory_required"]}
     )
+
+
+def test_fast_quote_lane_covers_all_public_route_families() -> None:
+    futures = _route()
+    futures_spot = {
+        **_route(),
+        "long_venue": "Gate",
+        "long_market_type": "Spot",
+    }
+    spot = {
+        **_route(),
+        "long_venue": "Gate",
+        "long_market_type": "Spot",
+        "short_venue": "Mexc",
+        "short_market_type": "Spot",
+    }
+    dex = {
+        **_route(),
+        "short_venue": "OKX DEX 56",
+        "short_market_type": "Spot",
+    }
+
+    assert _fast_quote_lane(futures) == "FUTURES"
+    assert _fast_quote_lane(futures_spot) == "FUTURES-SPOT"
+    assert _fast_quote_lane(spot) == "SPOT"
+    assert _fast_quote_lane(dex) == "DEX-FUTURES"
 
 
 def test_fast_quote_gate_client_uses_available_ccxt_alias(
@@ -401,6 +428,43 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
                     "blockers": [],
                 }
             )
+    for index in range(30):
+        token = f"CASH{index:02d}"
+        rows.append(
+            {
+                **_route(),
+                "route_key": f"{token}|Gate|Spot|Mexc|Spot",
+                "token": token,
+                "route_kind": "SPOT",
+                "long_venue": "Gate",
+                "long_market_type": "Spot",
+                "short_venue": "Mexc",
+                "short_market_type": "Spot",
+                "long_market_symbol": f"{token}/USDT",
+                "short_market_symbol": f"{token}/USDT",
+                "depth_weighted_spread_pct": 30 - index,
+                "executable_spread_pct": 30 - index,
+                "blockers": [],
+            }
+        )
+    for index in range(12):
+        token = f"DEX{index:02d}"
+        rows.append(
+            {
+                **_route(),
+                "route_key": f"{token}|Bybit|Futures|OKX DEX 56|Spot",
+                "token": token,
+                "route_kind": "DEX-FUTURES",
+                "long_venue": "Bybit",
+                "short_venue": "OKX DEX 56",
+                "short_market_type": "Spot",
+                "long_market_symbol": f"{token}/USDT:USDT",
+                "short_market_symbol": f"{token}/USDC",
+                "depth_weighted_spread_pct": 30 - index,
+                "executable_spread_pct": 30 - index,
+                "blockers": [],
+            }
+        )
     snapshot_path = tmp_path / "snapshot.json"
     snapshot_path.write_text(
         json.dumps(
@@ -436,16 +500,24 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
         if row.get("fast_quote_verified_at")
     ]
 
-    assert result["selected_routes"] == 100
-    assert result["updated_routes"] == 100
-    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 50
-    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 50
+    assert result["selected_routes"] == 87
+    assert result["updated_routes"] == 87
+    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 25
+    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 25
+    assert sum(row["route_kind"] == "SPOT" for row in updated) == 25
+    assert sum(row["route_kind"] == "DEX-FUTURES" for row in updated) == 12
     assert {row["token"] for row in updated if row["route_kind"] == "FUTURES"} == {
         f"FUT{index:02d}" for index in range(25)
     }
     assert {
         row["token"] for row in updated if row["route_kind"] == "FUTURES-SPOT"
     } == {f"SPOT{index:02d}" for index in range(25)}
+    assert {row["token"] for row in updated if row["route_kind"] == "SPOT"} == {
+        f"CASH{index:02d}" for index in range(25)
+    }
+    assert {
+        row["token"] for row in updated if row["route_kind"] == "DEX-FUTURES"
+    } == {f"DEX{index:02d}" for index in range(12)}
 
 
 def test_aster_and_hyperliquid_futures_are_not_mislabeled_as_dex() -> None:

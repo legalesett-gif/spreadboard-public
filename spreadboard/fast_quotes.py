@@ -58,6 +58,7 @@ NATIVE_SPOT_VENUES = {
     "Mexc",
     "OKX",
 }
+FAST_QUOTE_LANES = ("FUTURES", "FUTURES-SPOT", "SPOT", "DEX-FUTURES")
 
 
 class FastQuoteRefresher:
@@ -74,54 +75,29 @@ class FastQuoteRefresher:
         except (OSError, json.JSONDecodeError) as exc:
             return {"status": "unavailable", "updated": 0, "error": type(exc).__name__}
         rows_by_lane: dict[str, list[dict[str, Any]]] = {
-            "FUTURES": [],
-            "FUTURES-SPOT": [],
+            lane: [] for lane in FAST_QUOTE_LANES
         }
         for bucket in ("api_discovered_rows", "dex_discovered_rows"):
             for row in payload.get(bucket) or []:
                 if not isinstance(row, dict) or _has_permanent_mirage_guard(row):
                     continue
-                long_type = str(row.get("long_market_type") or "")
-                short_type = str(row.get("short_market_type") or "")
-                if (
-                    {long_type, short_type} == {"Futures"}
-                    and row.get("long_venue") in VENUE_IDS
-                    and row.get("short_venue") in VENUE_IDS
-                ):
-                    lane = "FUTURES"
-                elif (
-                    {long_type, short_type} == {"Spot", "Futures"}
-                    and row.get("long_venue") in VENUE_IDS
-                    and row.get("short_venue") in VENUE_IDS
-                ):
-                    lane = "FUTURES-SPOT"
-                else:
+                lane = _fast_quote_lane(row)
+                if lane is None:
                     continue
                 spread = _number(row.get("depth_weighted_spread_pct"), -999999.0)
                 if 0.0 <= spread <= 90.0:
                     rows_by_lane[lane].append(row)
-        futures_route_limit = min(50, max(0, (route_limit + 1) // 2))
-        spot_route_limit = min(
-            50,
-            len(rows_by_lane["FUTURES-SPOT"]),
-            max(0, route_limit - futures_route_limit),
-        )
-        selected = [
-            *(
+        base_quota, extra = divmod(max(0, route_limit), len(FAST_QUOTE_LANES))
+        selected: list[dict[str, Any]] = []
+        for index, lane in enumerate(FAST_QUOTE_LANES):
+            lane_limit = base_quota + (1 if index < extra else 0)
+            selected.extend(
                 _expanded_token_rows(
-                    rows_by_lane["FUTURES"],
-                    token_limit=min(25, futures_route_limit),
-                    route_limit=futures_route_limit,
+                    rows_by_lane[lane],
+                    token_limit=min(25, lane_limit),
+                    route_limit=lane_limit,
                 )
-            ),
-            *(
-                _expanded_token_rows(
-                    rows_by_lane["FUTURES-SPOT"],
-                    token_limit=min(25, spot_route_limit),
-                    route_limit=spot_route_limit,
-                )
-            ),
-        ]
+            )
         for lane_rows in rows_by_lane.values():
             for row in lane_rows:
                 blockers = [
@@ -484,6 +460,29 @@ def _route_leg_key(
     return (venue, market_type, symbol) if venue and market_type and symbol else None
 
 
+def _fast_quote_lane(row: dict[str, Any]) -> str | None:
+    long_type = str(row.get("long_market_type") or "")
+    short_type = str(row.get("short_market_type") or "")
+    long_venue = str(row.get("long_venue") or "")
+    short_venue = str(row.get("short_venue") or "")
+    venues = (long_venue, short_venue)
+    has_okx_dex = any("okx dex" in venue.casefold() for venue in venues)
+    cex_supported = all(
+        venue in VENUE_IDS or "okx dex" in venue.casefold() for venue in venues
+    )
+    if not cex_supported:
+        return None
+    if has_okx_dex:
+        return "DEX-FUTURES" if {long_type, short_type} == {"Spot", "Futures"} else None
+    if long_type == short_type == "Futures":
+        return "FUTURES"
+    if {long_type, short_type} == {"Spot", "Futures"}:
+        return "FUTURES-SPOT"
+    if long_type == short_type == "Spot":
+        return "SPOT"
+    return None
+
+
 def _unique_token_rows(
     rows: list[dict[str, Any]],
     *,
@@ -540,6 +539,7 @@ def _has_permanent_mirage_guard(row: dict[str, Any]) -> bool:
     return any(
         str(item).startswith("mirage_guard:")
         and not str(item).startswith("mirage_guard:fast_")
+        and str(item) != "mirage_guard:spot_sell_inventory_required"
         for item in row.get("blockers") or []
     )
 
