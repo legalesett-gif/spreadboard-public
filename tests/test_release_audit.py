@@ -421,6 +421,38 @@ def test_verified_dex_watchlist_and_cex_identity_cover_reference_top_ten() -> No
     ).identity_key is None
 
 
+def test_watchlist_suppresses_contract_claimed_by_multiple_assets(tmp_path: Path) -> None:
+    path = tmp_path / "watchlist.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tokens": [
+                    {
+                        "symbol": "ETH",
+                        "identity_key": "asset:eth",
+                        "dex_enabled": True,
+                        "evm_contracts": {"1": "0xeth"},
+                        "solana_mint": "SoDuplicate",
+                    },
+                    {
+                        "symbol": "SOL",
+                        "identity_key": "asset:sol",
+                        "dex_enabled": True,
+                        "solana_mint": "SoDuplicate",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    watchlist = load_watchlist(path)
+
+    assert watchlist["ETH"].evm_contracts == {1: "0xeth"}
+    assert watchlist["ETH"].solana_mint is None
+    assert watchlist["SOL"].solana_mint is None
+
+
 def test_projected_funding_is_visible_rankable_and_filterable_in_24h_units() -> None:
     quote_ts_us = int(time.time() * 1_000_000)
 

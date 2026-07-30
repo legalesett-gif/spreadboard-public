@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -167,7 +168,40 @@ def load_watchlist(path: Path | None) -> dict[str, WatchAsset]:
             solana_decimals=_int(item.get("solana_decimals"), _int(item.get("decimals"), 18)),
         )
         assets[asset.token] = asset
-    return assets
+    return _without_ambiguous_contracts(assets)
+
+
+def _without_ambiguous_contracts(assets: dict[str, WatchAsset]) -> dict[str, WatchAsset]:
+    """Drop DEX addresses claimed by more than one asset identity."""
+
+    address_counts: Counter[tuple[int, str]] = Counter()
+    for asset in assets.values():
+        for chain_id, contract in (asset.evm_contracts or {}).items():
+            address_counts[(chain_id, contract.casefold())] += 1
+        if asset.solana_mint:
+            address_counts[(501, asset.solana_mint)] += 1
+
+    sanitized: dict[str, WatchAsset] = {}
+    for token, asset in assets.items():
+        evm_contracts = {
+            chain_id: contract
+            for chain_id, contract in (asset.evm_contracts or {}).items()
+            if address_counts[(chain_id, contract.casefold())] == 1
+        }
+        solana_mint = asset.solana_mint
+        if solana_mint and address_counts[(501, solana_mint)] != 1:
+            solana_mint = None
+        sanitized[token] = WatchAsset(
+            symbol=asset.symbol,
+            identity_key=asset.identity_key,
+            decimals=asset.decimals,
+            cex_enabled=asset.cex_enabled,
+            dex_enabled=asset.dex_enabled,
+            evm_contracts=evm_contracts or None,
+            solana_mint=solana_mint,
+            solana_decimals=asset.solana_decimals,
+        )
+    return sanitized
 
 
 def load_identity_registry(path: Path | None) -> IdentityRegistry:
