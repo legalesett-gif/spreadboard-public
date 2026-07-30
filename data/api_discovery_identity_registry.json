@@ -153,6 +153,109 @@
       "cex_spot": [
         {"venue": "Bingx", "symbol": "PAI/USDT"}
       ]
+    },
+    {
+      "asset_id": "solana:501/token:BPxxfRCXkUVhig4HS1Lh7kZqV6SPJhzfEk4x6fVBjPCy",
+      "symbol": "BP",
+      "decimals": 9,
+      "solana_mint": "BPxxfRCXkUVhig4HS1Lh7kZqV6SPJhzfEk4x6fVBjPCy",
+      "solana_decimals": 9,
+      "cex_futures": [
+        {"venue": "Mexc", "symbol": "BP/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
+        {"venue": "Gate", "symbol": "BP/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+      ]
+    },
+    {
+      "asset_id": "eip155:1/erc20:0xcdf7028ceab81fa0c6971208e83fa7872994bee5",
+      "symbol": "T",
+      "name": "Threshold Network Token",
+      "decimals": 18,
+      "evm_contracts": {
+        "1": "0xcdf7028ceab81fa0c6971208e83fa7872994bee5"
+      },
+      "cex_futures": [
+        {"venue": "Binance", "symbol": "T/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
+        {"venue": "Mexc", "symbol": "T/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+      ]
+    },
+    {
+      "asset_id": "eip155:56/erc20:0xf39e4b21c84e737df08e2c3b32541d856f508e48",
+      "symbol": "ESPORTS",
+      "decimals": 18,
+      "evm_contracts": {
+        "56": "0xf39e4b21c84e737df08e2c3b32541d856f508e48"
+      },
+      "cex_futures": [
+        {"venue": "Kucoin Futures", "symbol": "ESPORTS/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+      ]
+    },
+    {
+      "asset_id": "eip155:8453/erc20:0x532f27101965dd16442e59d40670faf5ebb142e4",
+      "symbol": "BRETT",
+      "decimals": 18,
+      "evm_contracts": {
+        "8453": "0x532f27101965dd16442e59d40670faf5ebb142e4"
+      },
+      "cex_futures": [
+        {"venue": "Bybit", "symbol": "BRETT/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+      ]
+    },
+    {
+      "asset_id": "eip155:56/erc20:0x3aee7602b612de36088f3ffed8c8f10e86ebf2bf",
+      "symbol": "BANK",
+      "decimals": 18,
+      "evm_contracts": {
+        "56": "0x3aee7602b612de36088f3ffed8c8f10e86ebf2bf"
+      },
+      "cex_futures": [
+        {"venue": "Kucoin Futures", "symbol": "BANK/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+      ]
+    },
+    {
+      "asset_id": "eip155:56/erc20:0x95c9b514566fbd224dc2037f5914eb8ab91c9201",
+      "symbol": "PTB",
+      "decimals": 18,
+      "evm_contracts": {
+        "56": "0x95c9b514566fbd224dc2037f5914eb8ab91c9201"
+      },
+      "cex_futures": [
+        {"venue": "Bybit", "symbol": "PTB/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+      ]
+    },
+    {
+      "asset_id": "eip155:1/erc20:0xf280b16ef293d8e534e370794ef26bf312694126",
+      "symbol": "ASTEROID",
+      "decimals": 9,
+      "evm_contracts": {
+        "1": "0xf280b16ef293d8e534e370794ef26bf312694126"
+      },
+      "cex_futures": [
+        {"venue": "Mexc", "symbol": "ASTEROID/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+      ]
+    },
+    {
+      "asset_id": "eip155:56/erc20:0x7083609fce4d1d8dc0c979aab8c869ea2c873402",
+      "symbol": "DOT",
+      "name": "Binance-Peg Polkadot Token",
+      "decimals": 18,
+      "evm_contracts": {
+        "56": "0x7083609fce4d1d8dc0c979aab8c869ea2c873402"
+      },
+      "cex_futures": [
+        {"venue": "Bingx", "symbol": "DOT/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
+        {"venue": "Binance", "symbol": "DOT/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+      ]
+    },
+    {
+      "asset_id": "eip155:1/erc20:0xa27ec0006e59f245217ff08cd52a7e8b169e62d2",
+      "symbol": "AZTEC",
+      "decimals": 18,
+      "evm_contracts": {
+        "1": "0xa27ec0006e59f245217ff08cd52a7e8b169e62d2"
+      },
+      "cex_futures": [
+        {"venue": "Bybit", "symbol": "AZTEC/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+      ]
     }
   ],
   "known_ticker_collisions": [

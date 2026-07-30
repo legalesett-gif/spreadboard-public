@@ -98,6 +98,7 @@ def load_spreads(
     kind: str | None = None,
     source: str | None = None,
     min_spread_pct: float | None = None,
+    min_abs_funding_24h_pct: float | None = None,
     min_abs_funding_apr_pct: float | None = None,
     funding_only: bool = False,
     include_stale: bool = False,
@@ -169,7 +170,15 @@ def load_spreads(
         kind=kind,
         source=source,
         min_spread_pct=min_spread_pct,
-        min_abs_funding_apr_pct=min_abs_funding_apr_pct,
+        min_abs_funding_24h_pct=(
+            min_abs_funding_24h_pct
+            if min_abs_funding_24h_pct is not None
+            else (
+                min_abs_funding_apr_pct / 365.0
+                if min_abs_funding_apr_pct is not None
+                else None
+            )
+        ),
         funding_only=funding_only,
         include_stale=include_stale,
     )
@@ -221,6 +230,7 @@ def load_spreads(
             "kind": kind,
             "source": "public_api",
             "min_spread_pct": min_spread_pct,
+            "min_abs_funding_24h_pct": min_abs_funding_24h_pct,
             "min_abs_funding_apr_pct": min_abs_funding_apr_pct,
             "funding_only": funding_only,
             "include_stale": include_stale,
@@ -682,7 +692,7 @@ def _filter_rows(rows: list[SpreadTerminalRow], **filters: Any) -> list[SpreadTe
     exchange = str(filters.get("exchange") or "").casefold().strip()
     kind = _normalize_kind_filter(filters.get("kind"))
     min_spread = filters.get("min_spread_pct")
-    min_funding = filters.get("min_abs_funding_apr_pct")
+    min_funding = filters.get("min_abs_funding_24h_pct")
     funding_only = bool(filters.get("funding_only"))
     include_stale = bool(filters.get("include_stale"))
 
@@ -703,12 +713,12 @@ def _filter_rows(rows: list[SpreadTerminalRow], **filters: Any) -> list[SpreadTe
         spread = _entrance_spread(row)
         if min_spread is not None and spread < float(min_spread):
             continue
-        settled_funding = _float_or_none(row.funding_24h_pct)
-        if funding_only and settled_funding is None:
+        effective_funding = _effective_funding_24h(row)
+        if funding_only and effective_funding is None:
             continue
         if (
             min_funding is not None
-            and abs(settled_funding or 0.0) < float(min_funding) / 365.0
+            and abs(effective_funding or 0.0) < float(min_funding)
         ):
             continue
         output.append(row)
@@ -794,9 +804,7 @@ def _summary(
         "stale_rows": len([row for row in filtered if row.freshness == "stale"]),
         "api_rows": len(all_rows),
         "dex_rows": len([row for row in all_rows if row.raw_source_kind == "dex_discovered"]),
-        "funding_rows": len(
-            [row for row in filtered if row.funding_24h_pct is not None]
-        ),
+        "funding_rows": len([row for row in filtered if _effective_funding_24h(row) is not None]),
         "max_executable_spread_pct": max(
             (_float_or_none(row.executable_spread_pct) or 0.0 for row in filtered),
             default=None,
@@ -810,7 +818,7 @@ def _summary(
             default=None,
         ),
         "max_abs_funding_24h_pct": max(
-            (abs(_float_or_none(row.funding_24h_pct) or 0.0) for row in filtered),
+            (abs(_effective_funding_24h(row) or 0.0) for row in filtered),
             default=None,
         ),
     }
@@ -818,7 +826,12 @@ def _summary(
 
 def _top_unique_groups(rows: list[SpreadTerminalRow], *, metric: str) -> list[dict[str, Any]]:
     groups = _group_rows(
-        [row for row in rows if row.freshness == "fresh" and (metric != "funding" or row.funding_24h_pct is not None)]
+        [
+            row
+            for row in rows
+            if row.freshness == "fresh"
+            and (metric != "funding" or _effective_funding_24h(row) is not None)
+        ]
     )
     if metric == "edge":
         groups = [
@@ -863,10 +876,12 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
             token_rows,
             key=_entrance_spread,
         )
-        funding_rows = [row for row in token_rows if row.funding_24h_pct is not None]
+        funding_rows = [
+            row for row in token_rows if _effective_funding_24h(row) is not None
+        ]
         best_funding = max(
             funding_rows,
-            key=lambda row: row.funding_24h_pct or -999999.0,
+            key=lambda row: abs(_effective_funding_24h(row) or 0.0),
             default=None,
         )
         output.append(
@@ -893,7 +908,14 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
                     best_funding.funding_apr_pct if best_funding is not None else None
                 ),
                 "best_funding_24h_pct": (
-                    best_funding.funding_24h_pct
+                    _effective_funding_24h(best_funding)
+                    if best_funding is not None
+                    else None
+                ),
+                "best_funding_24h_basis": (
+                    "settled_public_events"
+                    if best_funding is not None and best_funding.funding_24h_pct is not None
+                    else "projected_current_rate"
                     if best_funding is not None
                     else None
                 ),
@@ -938,11 +960,11 @@ def _route_dict_sort_value(row: dict[str, Any], sort_by: str) -> Any:
     if sort_by == "edge":
         return _entrance_spread_dict(row)
     if sort_by == "funding":
-        settled = _float_or_none(row.get("funding_24h_pct"))
-        return settled if settled is not None else -999999.0
+        funding = _effective_funding_24h_dict(row)
+        return funding if funding is not None else -999999.0
     if sort_by == "funding_abs":
-        settled = _float_or_none(row.get("funding_24h_pct"))
-        return abs(settled) if settled is not None else -999999.0
+        funding = _effective_funding_24h_dict(row)
+        return abs(funding) if funding is not None else -999999.0
     if sort_by == "depth":
         return _float_or_none(row.get("depth_usd")) or 0.0
     if sort_by == "age":
@@ -1001,11 +1023,11 @@ def _sort_value(row: SpreadTerminalRow, sort_by: str) -> Any:
     if sort_by == "edge":
         return _entrance_spread(row)
     if sort_by == "funding":
-        settled = _float_or_none(row.funding_24h_pct)
-        return settled if settled is not None else -999999.0
+        funding = _effective_funding_24h(row)
+        return funding if funding is not None else -999999.0
     if sort_by == "funding_abs":
-        settled = _float_or_none(row.funding_24h_pct)
-        return abs(settled) if settled is not None else -999999.0
+        funding = _effective_funding_24h(row)
+        return abs(funding) if funding is not None else -999999.0
     if sort_by == "depth":
         return _float_or_none(row.depth_usd) or 0.0
     if sort_by == "age":

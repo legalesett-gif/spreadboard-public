@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import time
 from types import SimpleNamespace
 
 from spreadboard import api_spreads, live, server
 from spreadarb.api_discovery import runner, sources, worker
-from spreadarb.api_discovery.identity import WatchAsset
+from spreadarb.api_discovery.identity import (
+    WatchAsset,
+    load_identity_registry,
+    load_watchlist,
+)
 from spreadarb.api_discovery.models import (
     SOURCE_API_DISCOVERED,
     MarketQuote,
@@ -267,6 +272,84 @@ def test_okx_dex_identity_reaches_normalized_board_row() -> None:
 
     assert row.dex_chain == "1"
     assert row.dex_contract == "0x123"
+
+
+def test_verified_dex_watchlist_and_cex_identity_cover_reference_top_ten() -> None:
+    root = Path(__file__).resolve().parents[1]
+    watchlist = load_watchlist(root / "data" / "api_discovery_watchlist.json")
+    registry = load_identity_registry(
+        root / "data" / "api_discovery_identity_registry.json"
+    )
+    expected = {
+        "BP": ("501", "BPxxfRCXkUVhig4HS1Lh7kZqV6SPJhzfEk4x6fVBjPCy"),
+        "T": ("1", "0xcdf7028ceab81fa0c6971208e83fa7872994bee5"),
+        "DEXE": ("1", "0xde4EE8057785A7e8e800Db58F9784845A5C2Cbd6"),
+        "ESPORTS": ("56", "0xf39e4b21c84e737df08e2c3b32541d856f508e48"),
+        "BRETT": ("8453", "0x532f27101965dd16442e59d40670faf5ebb142e4"),
+        "BANK": ("56", "0x3aee7602b612de36088f3ffed8c8f10e86ebf2bf"),
+        "PTB": ("56", "0x95c9b514566fbd224dc2037f5914eb8ab91c9201"),
+        "ASTEROID": ("1", "0xf280b16ef293d8e534e370794ef26bf312694126"),
+        "DOT": ("56", "0x7083609fce4d1d8dc0c979aab8c869ea2c873402"),
+        "AZTEC": ("1", "0xa27ec0006e59f245217ff08cd52a7e8b169e62d2"),
+    }
+
+    for symbol, (chain_id, contract) in expected.items():
+        asset = watchlist[symbol]
+        assert asset.dex_enabled
+        if chain_id == "501":
+            assert asset.solana_mint == contract
+        else:
+            assert asset.evm_contracts[int(chain_id)].casefold() == contract.casefold()
+
+    assert registry.resolve_market(
+        venue="Bybit",
+        market_type="Futures",
+        token="BRETT",
+        symbol="BRETT/USDT:USDT",
+    ).identity_key == "eip155:8453/erc20:0x532f27101965dd16442e59d40670faf5ebb142e4"
+    assert registry.resolve_market(
+        venue="Bybit",
+        market_type="Futures",
+        token="BANK",
+        symbol="BANK/USDT:USDT",
+    ).identity_key is None
+
+
+def test_projected_funding_is_visible_rankable_and_filterable_in_24h_units() -> None:
+    quote_ts_us = int(time.time() * 1_000_000)
+
+    def row(token: str, *, settled: float | None, projected: float):
+        return api_spreads._row_from_api(
+            {
+                "token": token,
+                "long_venue": "Aster",
+                "long_market_type": "Futures",
+                "short_venue": "Bybit",
+                "short_market_type": "Futures",
+                "quote_ts_us": quote_ts_us,
+                "executable_spread_pct": 2.0,
+                "funding_24h_pct": settled,
+                "funding_projected_24h_pct": projected,
+            },
+            bucket="api_discovered",
+            now=quote_ts_us / 1_000_000,
+        )
+
+    settled = row("SETTLED", settled=0.25, projected=9.0)
+    projected = row("PROJECTED", settled=None, projected=0.5)
+    negative = row("NEGATIVE", settled=-0.75, projected=-0.1)
+    groups = api_spreads._group_rows([settled, projected, negative])
+    by_token = {group["token"]: group for group in groups}
+
+    assert by_token["SETTLED"]["best_funding_24h_pct"] == 0.25
+    assert by_token["SETTLED"]["best_funding_24h_basis"] == "settled_public_events"
+    assert by_token["PROJECTED"]["best_funding_24h_pct"] == 0.5
+    assert by_token["PROJECTED"]["best_funding_24h_basis"] == "projected_current_rate"
+    assert by_token["NEGATIVE"]["best_funding_24h_pct"] == -0.75
+    assert api_spreads._filter_rows(
+        [settled, projected],
+        min_abs_funding_24h_pct=0.4,
+    ) == [projected]
 
 
 def test_okx_dex_retries_rate_limits_without_changing_quote_math() -> None:

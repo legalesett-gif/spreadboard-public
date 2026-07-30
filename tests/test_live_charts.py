@@ -13,6 +13,7 @@ from spreadboard.fast_quotes import (
     _has_permanent_mirage_guard,
     _native_spot_order_book,
 )
+from scripts.audit_live_charts import _formula_errors
 
 
 def _route() -> dict:
@@ -158,7 +159,7 @@ def test_history_persists_entry_matched_exit_and_sample_provenance(tmp_path: Pat
         {
             "quote_ts_us": quote_ts_us,
             "executable_spread_pct": 10.0,
-            "depth_weighted_spread_pct": 6.93,
+            "depth_weighted_spread_pct": (108 / 101 - 1) * 100,
             "target_notional_usd": 50.0,
             "notes": {
                 "route_inputs": {
@@ -189,13 +190,18 @@ def test_history_persists_entry_matched_exit_and_sample_provenance(tmp_path: Pat
     )
 
     assert saved[0]["executable_spread_pct"] == pytest.approx(10.0)
-    assert saved[0]["depth_weighted_spread_pct"] == pytest.approx(6.93)
+    assert saved[0]["depth_weighted_spread_pct"] == pytest.approx(
+        (108 / 101 - 1) * 100
+    )
     assert saved[0]["exit_spread_pct"] == pytest.approx((99 / 112 - 1) * 100)
+    assert saved[0]["long_ask_vwap_price"] == pytest.approx(101.0)
+    assert saved[0]["short_bid_vwap_price"] == pytest.approx(108.0)
     assert saved[0]["sample_source"] == "live_chart_exact_route"
     assert saved[0]["target_notional_usd"] == 50.0
     assert saved[0]["long_current_funding_pct"] == pytest.approx(0.01)
     assert saved[0]["short_current_funding_pct"] == pytest.approx(-0.08)
     assert saved[0]["short_funding_interval_hours"] == pytest.approx(4.0)
+    assert _formula_errors(saved[0]) == []
 
 
 def test_fast_quote_refresh_preserves_broad_snapshot_freshness(

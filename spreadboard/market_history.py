@@ -43,6 +43,10 @@ def record_snapshot(
             long_ask = _route_price(route_inputs, "long", "ask", "ask_vwap")
             short_bid = _route_price(route_inputs, "short", "bid", "bid_vwap")
             short_ask = _route_price(route_inputs, "short", "ask", "ask_vwap")
+            long_bid_vwap = _route_price(route_inputs, "long", "bid_vwap", "bid")
+            long_ask_vwap = _route_price(route_inputs, "long", "ask_vwap", "ask")
+            short_bid_vwap = _route_price(route_inputs, "short", "bid_vwap", "bid")
+            short_ask_vwap = _route_price(route_inputs, "short", "ask_vwap", "ask")
             connection.execute(
                 """
                 INSERT OR IGNORE INTO route_points (
@@ -51,11 +55,13 @@ def record_snapshot(
                     depth_weighted_spread_pct, funding_apr_pct, funding_daily_pct,
                     long_price, short_price, long_bid_price, long_ask_price,
                     short_bid_price, short_ask_price, exit_spread_pct,
+                    long_bid_vwap_price, long_ask_vwap_price,
+                    short_bid_vwap_price, short_ask_vwap_price,
                     sample_source, target_notional_usd,
                     long_current_funding_pct, short_current_funding_pct,
                     long_funding_interval_hours, short_funding_interval_hours,
                     long_next_funding_ts_us, short_next_funding_ts_us
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     route_key,
@@ -77,6 +83,10 @@ def record_snapshot(
                     short_bid,
                     short_ask,
                     _exit_spread_pct(long_bid, short_ask),
+                    long_bid_vwap,
+                    long_ask_vwap,
+                    short_bid_vwap,
+                    short_ask_vwap,
                     sample_source,
                     _float_or_none(row.get("target_notional_usd")) or 50.0,
                     _route_price(route_inputs, "long", "current_funding_pct"),
@@ -146,6 +156,8 @@ def load_history(
                    depth_weighted_spread_pct, funding_apr_pct, funding_daily_pct,
                    long_price, short_price, long_bid_price, long_ask_price,
                    short_bid_price, short_ask_price, exit_spread_pct,
+                   long_bid_vwap_price, long_ask_vwap_price,
+                   short_bid_vwap_price, short_ask_vwap_price,
                    sample_source, target_notional_usd,
                    long_current_funding_pct, short_current_funding_pct,
                    long_funding_interval_hours, short_funding_interval_hours,
@@ -223,6 +235,10 @@ def _connect(path: Path | str) -> sqlite3.Connection:
             short_bid_price REAL,
             short_ask_price REAL,
             exit_spread_pct REAL,
+            long_bid_vwap_price REAL,
+            long_ask_vwap_price REAL,
+            short_bid_vwap_price REAL,
+            short_ask_vwap_price REAL,
             sample_source TEXT,
             target_notional_usd REAL,
             long_current_funding_pct REAL,
@@ -243,6 +259,10 @@ def _connect(path: Path | str) -> sqlite3.Connection:
             "short_bid_price": "REAL",
             "short_ask_price": "REAL",
             "exit_spread_pct": "REAL",
+            "long_bid_vwap_price": "REAL",
+            "long_ask_vwap_price": "REAL",
+            "short_bid_vwap_price": "REAL",
+            "short_ask_vwap_price": "REAL",
             "sample_source": "TEXT",
             "target_notional_usd": "REAL",
             "long_current_funding_pct": "REAL",

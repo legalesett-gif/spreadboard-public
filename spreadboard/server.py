@@ -498,8 +498,6 @@ def api_market_spreads(board_path: Path, query: dict[str, list[str]] | None = No
     try:
         min_funding_24h = _query_float(query, "min_abs_funding_24h_pct")
         min_funding_apr = _query_float(query, "min_abs_funding_apr_pct")
-        if min_funding_24h is not None:
-            min_funding_apr = min_funding_24h * 365.0
         data = api_spreads.load_spreads(
             board_path=board_path,
             q=_query_first(query, "q"),
@@ -507,6 +505,7 @@ def api_market_spreads(board_path: Path, query: dict[str, list[str]] | None = No
             kind=_query_first(query, "kind"),
             source=_query_first(query, "source"),
             min_spread_pct=_query_float(query, "min_spread_pct"),
+            min_abs_funding_24h_pct=min_funding_24h,
             min_abs_funding_apr_pct=min_funding_apr,
             funding_only=_query_bool(query, "funding_only"),
             include_stale=_market_include_stale(query),
@@ -2581,6 +2580,18 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
 
 def render_funding_token_group(group: dict[str, Any]) -> str:
     best = group.get("best_funding_route") or group.get("best_route") or {}
+    funding_24h = (
+        best.get("funding_24h_pct")
+        if best.get("funding_24h_pct") is not None
+        else best.get("funding_projected_24h_pct")
+    )
+    funding_basis = (
+        "settled 24h"
+        if best.get("funding_24h_pct") is not None
+        else "24h at current rate"
+        if funding_24h is not None
+        else "history unavailable"
+    )
     name = group.get("token_name") or "Metadata pending"
     best_chart_url = (
         f"/charts?route_key={board.route_key_url(str(best.get('route_key') or ''))}"
@@ -2595,7 +2606,7 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
           <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best funding-pair chart">{h(group.get('token'))}</a><em>{h(name)}</em></span>
         </div>
         <div><span>Best farm</span><strong>{h(best.get('long_venue'))} → {h(best.get('short_venue'))}</strong></div>
-        <div><span>Net 24h</span><strong>{fmt_signed_pct(best.get('funding_24h_pct'), digits=3)}</strong></div>
+        <div><span>Net 24h</span><strong>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
         <div><span>Payouts</span><strong>{h(funding_cadence_pair(best))}</strong></div>
         <div><span>Entry basis</span><strong>{fmt_pct(best.get('executable_spread_pct'))}</strong></div>
         <div><span>Pairs</span><strong>{h(group.get('route_count') or 0)}</strong></div>
@@ -2609,11 +2620,23 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
 
 
 def render_funding_pair(row: dict[str, Any]) -> str:
+    funding_24h = (
+        row.get("funding_24h_pct")
+        if row.get("funding_24h_pct") is not None
+        else row.get("funding_projected_24h_pct")
+    )
+    funding_basis = (
+        "settled"
+        if row.get("funding_24h_pct") is not None
+        else "at current rate"
+        if funding_24h is not None
+        else "history unavailable"
+    )
     return f"""
     <article class="funding-pair-row">
       <div><span>Long</span>{render_exchange_link(row, 'long', include_market_type=True)}<em>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)} · {h(funding_interval_label(row.get('long_funding_interval_hours'), row.get('long_funding_interval_assumed')))}</em></div>
       <div><span>Short</span>{render_exchange_link(row, 'short', include_market_type=True)}<em>{fmt_signed_pct(row.get('short_funding_pct'), digits=4)} · {h(funding_interval_label(row.get('short_funding_interval_hours'), row.get('short_funding_interval_assumed')))}</em></div>
-      <div><span>Net 24h</span><strong>{fmt_signed_pct(row.get('funding_24h_pct'), digits=3)}</strong><em>{h(funding_cadence_pair(row))}</em></div>
+      <div><span>Net 24h</span><strong>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)} · {h(funding_cadence_pair(row))}</em></div>
       <div><span>Basis / VWAP</span><strong>{fmt_pct(row.get('executable_spread_pct'))}</strong><em>{fmt_pct(row.get('depth_weighted_spread_pct'))}</em></div>
       <div><span>Updated</span><strong>{fmt_age(row.get('age_min'))}</strong></div>
       <div class="route-actions">{render_alert_draft_button(row, alert_type='funding', compact=True)}<a href="/pair/{h(board.route_key_url(str(row.get('route_key') or '')))}">Details</a><a href="/charts?route_key={h(board.route_key_url(str(row.get('route_key') or '')))}">Chart</a></div>
@@ -2627,6 +2650,11 @@ def render_funding_route_row(row: dict[str, Any]) -> str:
     headline = row.get("displayed_open_spread_pct")
     if headline is None:
         headline = row.get("executable_spread_pct")
+    funding_24h = (
+        row.get("funding_24h_pct")
+        if row.get("funding_24h_pct") is not None
+        else row.get("funding_projected_24h_pct")
+    )
     return f"""
     <article class="funding-terminal-grid funding-route-row {direction_class} {h(row.get('freshness'))}">
       <div class="funding-token-cell">
@@ -2639,7 +2667,7 @@ def render_funding_route_row(row: dict[str, Any]) -> str:
       <div>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)}</div>
       <div>{fmt_signed_pct(row.get('short_funding_pct'), digits=4)}</div>
       <div><b>{fmt_signed_pct(row.get('funding_daily_pct'), digits=3)}</b></div>
-      <div><strong>{fmt_signed_pct(row.get('funding_24h_pct'), digits=3)}</strong></div>
+      <div><strong>{fmt_signed_pct(funding_24h, digits=3)}</strong></div>
       <div>{fmt_pct(headline)}</div>
       <div>{fmt_money(row.get('depth_usd'))}</div>
       <div>{fmt_age(row.get('age_min'))}</div>
@@ -3337,7 +3365,7 @@ def render_live_spread_chart(
             background: {{ type: 'solid', color: colors.panel }},
             textColor: colors.muted,
             fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-            fontSize: 11,
+            fontSize: 13,
             panes: {{
               separatorColor: colors.grid,
               separatorHoverColor: colors.matched,
@@ -8288,8 +8316,8 @@ body.alert-modal-open {{ overflow: hidden; }}
 .selected-chart-head {{ min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--terminal-line); }}
 .selected-chart-head > div {{ display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: baseline; }}
 .selected-chart-head span {{ color: var(--terminal-muted); font-size: 9px; font-weight: 900; text-transform: uppercase; }}
-.selected-chart-head strong {{ color: var(--terminal-text); font-size: 20px; }}
-.selected-chart-head em {{ grid-column: 1 / -1; color: var(--terminal-muted); font-size: 11px; font-style: normal; }}
+.selected-chart-head strong {{ color: var(--terminal-text); font-size: 24px; }}
+.selected-chart-head em {{ grid-column: 1 / -1; color: var(--terminal-muted); font-size: 13px; font-style: normal; }}
 .chart-window-tabs {{ display: flex; gap: 3px; }}
 .chart-window-tabs a {{ min-width: 34px; min-height: 30px; display: grid; place-items: center; border-radius: 5px; color: var(--terminal-muted); font-size: 10px; font-weight: 900; }}
 .chart-window-tabs a.active {{ background: var(--terminal-accent); color: var(--accent-ink); }}
@@ -8298,21 +8326,21 @@ body.alert-modal-open {{ overflow: hidden; }}
 .chart-leg-stats article {{ min-height: 50%; display: grid; align-content: start; gap: 0; padding: 12px; border-top: 1px solid var(--terminal-line); }}
 .chart-leg-stats article:first-child {{ border-top: 0; }}
 .chart-leg-stats header {{ display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; padding-bottom: 10px; }}
-.chart-leg-stats header span, .chart-leg-stats header em {{ color: var(--terminal-muted); font-size: 9px; font-style: normal; text-transform: uppercase; }}
-.chart-leg-stats header strong {{ color: var(--terminal-text); font-size: 15px; }}
+.chart-leg-stats header span, .chart-leg-stats header em {{ color: var(--terminal-muted); font-size: 11px; font-style: normal; text-transform: uppercase; }}
+.chart-leg-stats header strong {{ color: var(--terminal-text); font-size: 17px; }}
 .chart-leg-stats header em {{ grid-column: 1 / -1; }}
-.chart-leg-stats article > div {{ min-height: 36px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--terminal-line); color: var(--terminal-muted); font-size: 10px; }}
-.chart-leg-stats article > div strong {{ color: var(--terminal-text); text-align: right; }}
+.chart-leg-stats article > div {{ min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--terminal-line); color: var(--terminal-muted); font-size: 12px; }}
+.chart-leg-stats article > div strong {{ color: var(--terminal-text); text-align: right; font-size: 13px; }}
 .chart-plot-stack {{ display: grid; grid-template-rows: minmax(560px,1fr); min-width: 0; }}
 .chart-plot-panel {{ min-width: 0; display: grid; grid-template-rows: auto minmax(0,1fr); padding: 10px 12px 6px; }}
 .chart-plot-panel + .chart-plot-panel {{ border-top: 1px solid var(--terminal-line); }}
-.chart-plot-title {{ display: flex; align-items: center; gap: 12px; min-height: 34px; color: var(--terminal-muted); font-size: 10px; }}
-.chart-plot-title strong {{ color: var(--terminal-text); }}
+.chart-plot-title {{ display: flex; align-items: center; gap: 12px; min-height: 38px; color: var(--terminal-muted); font-size: 12px; }}
+.chart-plot-title strong {{ color: var(--terminal-text); font-size: 15px; }}
 .chart-plot-title em {{ margin-left: auto; font-style: normal; }}
 .chart-plot-title em.stale {{ color: var(--terminal-danger); }}
 .chart-plot-title button, .funding-history-open {{ margin-left: auto; min-height: 30px; padding: 0 9px; border: 1px solid var(--terminal-line); border-radius: 5px; background: var(--terminal-row); color: var(--terminal-text); cursor: pointer; font: inherit; font-size: 10px; font-weight: 900; }}
 .live-spread-chart {{ position: relative; min-width: 0; display: grid; grid-template-rows: auto minmax(500px,1fr) auto; }}
-.live-chart-legend {{ min-height: 30px; display: flex; justify-content: flex-end; align-items: center; gap: 14px; flex-wrap: wrap; color: var(--terminal-muted); font-size: 9px; font-weight: 900; }}
+.live-chart-legend {{ min-height: 34px; display: flex; justify-content: flex-end; align-items: center; gap: 14px; flex-wrap: wrap; color: var(--terminal-muted); font-size: 11px; font-weight: 900; }}
 .live-chart-legend span, .live-chart-legend button {{ display: inline-flex; align-items: center; gap: 5px; }}
 .live-chart-legend button {{ padding: 4px 5px; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font: inherit; opacity: .45; }}
 .live-chart-legend button.active {{ background: var(--terminal-panel-2); opacity: 1; }}
@@ -8323,8 +8351,8 @@ body.alert-modal-open {{ overflow: hidden; }}
 .live-chart-legend .funding-a {{ color: #1ebf8f; }}
 .live-chart-legend .funding-b {{ color: #ff7a82; }}
 .live-chart-canvas {{ min-width: 0; min-height: 500px; cursor: crosshair; }}
-.live-chart-tooltip {{ position: absolute; z-index: 8; min-width: 190px; padding: 9px 10px; border: 1px solid var(--terminal-line); border-radius: 5px; background: color-mix(in srgb,var(--terminal-panel) 94%,transparent); color: var(--terminal-text); box-shadow: 0 10px 30px rgba(0,0,0,.28); pointer-events: none; font-size: 10px; }}
-.live-chart-tooltip time {{ display: block; margin-bottom: 6px; color: var(--terminal-muted); font-size: 9px; }}
+.live-chart-tooltip {{ position: absolute; z-index: 8; min-width: 220px; padding: 10px 12px; border: 1px solid var(--terminal-line); border-radius: 5px; background: color-mix(in srgb,var(--terminal-panel) 94%,transparent); color: var(--terminal-text); box-shadow: 0 10px 30px rgba(0,0,0,.28); pointer-events: none; font-size: 12px; }}
+.live-chart-tooltip time {{ display: block; margin-bottom: 6px; color: var(--terminal-muted); font-size: 11px; }}
 .live-chart-tooltip span {{ display: flex; justify-content: space-between; gap: 16px; margin-top: 3px; }}
 .live-chart-tooltip strong {{ color: var(--terminal-text); }}
 .live-chart-svg {{ width: 100%; height: 100%; min-height: 280px; overflow: visible; }}
