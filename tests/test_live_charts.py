@@ -256,6 +256,54 @@ def test_exact_okx_dex_leg_requotes_both_sides_at_matched_size(
     assert result["ask_vwap"] == pytest.approx(2.5)
 
 
+def test_exact_okx_dex_leg_reads_raw_discovery_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from spreadarb.dex import okx_quotes
+
+    captured: dict[str, str] = {}
+
+    def fake_buy(**kwargs: object) -> dict:
+        captured.update(
+            chain=str(kwargs["chain"]),
+            token_address=str(kwargs["token_address"]),
+        )
+        return {
+            "status": "ok",
+            "out_qty": "20",
+            "to_token_decimals": 18,
+            "dex_buy_price_usd": "2.5",
+        }
+
+    monkeypatch.setattr(okx_quotes, "quote_usdc_to_token", fake_buy)
+    monkeypatch.setattr(
+        okx_quotes,
+        "quote_token_to_usdc",
+        lambda **_kwargs: {
+            "status": "ok",
+            "dex_sell_price_usd": "2.45",
+        },
+    )
+    row = {
+        "token": "TEST",
+        "long_venue": "Bybit",
+        "short_venue": "OKX DEX 56",
+        "notes": {
+            "identity": {
+                "short": {
+                    "chain_id": "56",
+                    "token_address": "0x123",
+                }
+            }
+        },
+    }
+
+    result = _okx_dex_leg_quote(row, "short", target_notional_usd=50)
+
+    assert result is not None
+    assert captured == {"chain": "56", "token_address": "0x123"}
+
+
 def test_history_window_does_not_reinsert_an_older_current_snapshot(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

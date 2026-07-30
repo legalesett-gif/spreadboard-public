@@ -879,8 +879,7 @@ def _okx_dex_leg_quote(
     *,
     target_notional_usd: float,
 ) -> dict[str, Any] | None:
-    chain = str(row.get("dex_chain") or "").strip()
-    contract = str(row.get("dex_contract") or "").strip()
+    chain, contract = _dex_chain_contract(row)
     if not chain or not contract:
         return None
     try:
@@ -919,6 +918,25 @@ def _okx_dex_leg_quote(
         }
     except Exception:
         return None
+
+
+def _dex_chain_contract(row: dict[str, Any]) -> tuple[str, str]:
+    chain = str(row.get("dex_chain") or "").strip()
+    contract = str(row.get("dex_contract") or "").strip()
+    if chain and contract:
+        return chain, contract
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    identities = notes.get("identity") if isinstance(notes.get("identity"), dict) else {}
+    for side in ("long", "short"):
+        venue = str(row.get(f"{side}_venue") or "")
+        identity = identities.get(side) if isinstance(identities.get(side), dict) else {}
+        if "okx dex" not in venue.casefold():
+            continue
+        nested_chain = str(identity.get("chain_id") or "").strip()
+        nested_contract = str(identity.get("token_address") or "").strip()
+        if nested_chain and nested_contract:
+            return nested_chain, nested_contract
+    return "", ""
 
 
 def _interval_hours(current_ms: Any, next_ms: Any) -> float | None:
