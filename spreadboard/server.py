@@ -1194,22 +1194,7 @@ def _triage_source_item(name: str, item: dict[str, Any]) -> dict[str, Any]:
 
 
 def api_pair(route_key: str, board_path: Path, config: dict[str, Any]) -> dict[str, Any]:
-    market = api_market_spreads(
-        board_path,
-        {
-            "limit": ["500"],
-            "include_stale": ["1"],
-            "no_cache": ["1"],
-        },
-    )
-    canonical_row = next(
-        (
-            row
-            for row in market.get("rows") or []
-            if row.get("route_key") == route_key
-        ),
-        None,
-    )
+    canonical_row = _find_canonical_route(route_key, board_path)
     if canonical_row is not None:
         row_data = _canonical_pair_row(canonical_row)
     else:

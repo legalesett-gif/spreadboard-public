@@ -60,14 +60,14 @@ def test_pair_detail_keeps_exact_route_after_board_freshness_cutoff(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    captured: dict[str, list[str]] = {}
+    captured: dict[str, object] = {}
     route_key = "TOKEN|A|Spot|B|Futures"
 
-    def fake_market(_board_path, query):
-        captured.update(query)
+    def fake_load_spreads(**kwargs):
+        captured.update(kwargs)
         return {"rows": [{"route_key": route_key, "token": "TOKEN"}]}
 
-    monkeypatch.setattr(server, "api_market_spreads", fake_market)
+    monkeypatch.setattr(api_spreads, "load_spreads", fake_load_spreads)
     monkeypatch.setattr(
         server.live,
         "get_route_detail",
@@ -78,8 +78,9 @@ def test_pair_detail_keeps_exact_route_after_board_freshness_cutoff(
 
     assert result["ok"] is True
     assert result["board_row"]["route_key"] == route_key
-    assert captured["include_stale"] == ["1"]
-    assert captured["no_cache"] == ["1"]
+    assert captured["include_stale"] is True
+    assert captured["include_unverified"] is False
+    assert captured["limit"] is None
 
 
 def test_depth_candidate_selection_prefers_unique_tokens() -> None:
