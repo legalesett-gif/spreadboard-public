@@ -317,6 +317,45 @@ def test_exact_okx_dex_leg_reads_raw_discovery_identity(
     assert captured == {"chain": "56", "token_address": "0x123"}
 
 
+def test_exact_okx_dex_leg_reuses_cycle_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refresher = FastQuoteRefresher()
+    calls = 0
+
+    def fake_quote(*_args: object, **_kwargs: object) -> dict:
+        nonlocal calls
+        calls += 1
+        return {"bid": 1.0, "ask": 1.1}
+
+    monkeypatch.setattr("spreadboard.fast_quotes._okx_dex_leg_quote", fake_quote)
+    row = {
+        "token": "TEST",
+        "short_venue": "OKX DEX 56",
+        "short_market_type": "Spot",
+        "short_market_symbol": "TEST/USDC",
+    }
+    cache: dict = {}
+
+    first = refresher._leg_quote(
+        row,
+        "short",
+        target_notional_usd=50,
+        cache=cache,
+        include_funding=True,
+    )
+    second = refresher._leg_quote(
+        row,
+        "short",
+        target_notional_usd=50,
+        cache=cache,
+        include_funding=True,
+    )
+
+    assert first == second
+    assert calls == 1
+
+
 def test_history_window_does_not_reinsert_an_older_current_snapshot(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -561,7 +600,7 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
         }
 
     monkeypatch.setattr(refresher, "_leg_quote", quote_leg)
-    result = refresher.refresh(snapshot_path)
+    result = refresher.refresh(snapshot_path, route_limit=120)
     saved = json.loads(snapshot_path.read_text(encoding="utf-8"))
     updated = [
         row
@@ -569,20 +608,20 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
         if row.get("fast_quote_verified_at")
     ]
 
-    assert result["selected_routes"] == 87
-    assert result["updated_routes"] == 87
-    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 25
-    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 25
-    assert sum(row["route_kind"] == "SPOT" for row in updated) == 25
+    assert result["selected_routes"] == 102
+    assert result["updated_routes"] == 102
+    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 30
+    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 30
+    assert sum(row["route_kind"] == "SPOT" for row in updated) == 30
     assert sum(row["route_kind"] == "DEX-FUTURES" for row in updated) == 12
     assert {row["token"] for row in updated if row["route_kind"] == "FUTURES"} == {
-        f"FUT{index:02d}" for index in range(25)
+        f"FUT{index:02d}" for index in range(30)
     }
     assert {
         row["token"] for row in updated if row["route_kind"] == "FUTURES-SPOT"
-    } == {f"SPOT{index:02d}" for index in range(25)}
+    } == {f"SPOT{index:02d}" for index in range(30)}
     assert {row["token"] for row in updated if row["route_kind"] == "SPOT"} == {
-        f"CASH{index:02d}" for index in range(25)
+        f"CASH{index:02d}" for index in range(30)
     }
     assert {
         row["token"] for row in updated if row["route_kind"] == "DEX-FUTURES"

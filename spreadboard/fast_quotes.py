@@ -94,7 +94,7 @@ class FastQuoteRefresher:
             selected.extend(
                 _expanded_token_rows(
                     rows_by_lane[lane],
-                    token_limit=min(25, lane_limit),
+                    token_limit=min(30, lane_limit),
                     route_limit=lane_limit,
                 )
             )
@@ -297,6 +297,8 @@ class FastQuoteRefresher:
             or ""
         )
         key = (venue, market_type, symbol)
+        if key in cache:
+            return cache[key]
         if "okx dex" in venue.casefold():
             value = _okx_dex_leg_quote(
                 row,
@@ -307,8 +309,6 @@ class FastQuoteRefresher:
             return value
         if not venue or not symbol or venue not in VENUE_IDS:
             return None
-        if key in cache:
-            return cache[key]
         try:
             native_book = _native_order_book(venue, market_type, symbol)
             if native_book is None:
