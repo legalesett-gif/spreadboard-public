@@ -473,6 +473,15 @@ def _fast_quote_lane(row: dict[str, Any]) -> str | None:
     if not cex_supported:
         return None
     if has_okx_dex:
+        blockers = {str(item) for item in row.get("blockers") or []}
+        identity_unverified = (
+            "cex_identity_unverified" in blockers
+            or "identity_unverified" in blockers
+            or any(item.startswith("identity_collision:") for item in blockers)
+        )
+        chain, contract = _dex_chain_contract(row)
+        if identity_unverified or not chain or not contract:
+            return None
         return "DEX-FUTURES" if {long_type, short_type} == {"Spot", "Futures"} else None
     if long_type == short_type == "Futures":
         return "FUTURES"

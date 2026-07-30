@@ -82,12 +82,25 @@ def test_fast_quote_lane_covers_all_public_route_families() -> None:
         **_route(),
         "short_venue": "OKX DEX 56",
         "short_market_type": "Spot",
+        "notes": {
+            "identity": {
+                "short": {
+                    "chain_id": "56",
+                    "token_address": "0x123",
+                }
+            }
+        },
     }
 
     assert _fast_quote_lane(futures) == "FUTURES"
     assert _fast_quote_lane(futures_spot) == "FUTURES-SPOT"
     assert _fast_quote_lane(spot) == "SPOT"
     assert _fast_quote_lane(dex) == "DEX-FUTURES"
+    assert (
+        _fast_quote_lane({**dex, "blockers": ["cex_identity_unverified"]})
+        is None
+    )
+    assert _fast_quote_lane({**dex, "notes": {}}) is None
 
 
 def test_fast_quote_gate_client_uses_available_ccxt_alias(
@@ -508,6 +521,14 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
                 "short_market_type": "Spot",
                 "long_market_symbol": f"{token}/USDT:USDT",
                 "short_market_symbol": f"{token}/USDC",
+                "notes": {
+                    "identity": {
+                        "short": {
+                            "chain_id": "56",
+                            "token_address": f"0x{index:040x}",
+                        }
+                    }
+                },
                 "depth_weighted_spread_pct": 30 - index,
                 "executable_spread_pct": 30 - index,
                 "blockers": [],
