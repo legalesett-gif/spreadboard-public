@@ -12,9 +12,11 @@ import time
 from typing import Any
 
 from spreadboard import board, exchange_links, public_rails, token_metadata
+from spreadarb.api_discovery.identity import WatchAsset, load_watchlist
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
+DEX_WATCHLIST_PATH = ROOT / "data" / "api_discovery_watchlist.json"
 DEFAULT_API_DISCOVERY_PATH = RUNTIME_DIR / "api_discovery_latest.json"
 DEFAULT_MAX_AGE_MIN = 15.0
 DEFAULT_LIMIT = 25
@@ -476,6 +478,8 @@ def _row_from_api(
         if "dex" in str(short_venue or "").casefold()
         else {}
     )
+    dex_chain = _str_or_none(dex_identity.get("chain_id"))
+    dex_contract = _str_or_none(dex_identity.get("token_address"))
     long_rails = public_rails.rail_state(rails or {}, long_venue, token)
     short_rails = public_rails.rail_state(rails or {}, short_venue, token)
     blockers.extend(
@@ -485,6 +489,13 @@ def _row_from_api(
             short_market_type=short_market_type,
             long_rails=long_rails,
             short_rails=short_rails,
+        )
+    )
+    blockers.extend(
+        _dex_contract_mirage_reasons(
+            token=token,
+            chain_id=dex_chain,
+            contract=dex_contract,
         )
     )
     return SpreadTerminalRow(
@@ -600,8 +611,8 @@ def _row_from_api(
             market_symbol=short_market_symbol,
             token=token,
         ),
-        dex_chain=_str_or_none(dex_identity.get("chain_id")),
-        dex_contract=_str_or_none(dex_identity.get("token_address")),
+        dex_chain=dex_chain,
+        dex_contract=dex_contract,
         raw_source_kind=source_kind or bucket,
         mirage_guarded=any(str(item).startswith("mirage_guard:") for item in blockers),
     )
@@ -765,6 +776,33 @@ def _route_mirage_reasons(
         elif status != "compatible":
             reasons.append(f"condition:spot_transfer_{status}")
     return reasons
+
+
+def _dex_contract_mirage_reasons(
+    *,
+    token: str,
+    chain_id: str | None,
+    contract: str | None,
+    watchlist: dict[str, WatchAsset] | None = None,
+) -> list[str]:
+    if not chain_id and not contract:
+        return []
+    if not chain_id or not contract:
+        return ["mirage_guard:dex_contract_incomplete"]
+    assets = watchlist if watchlist is not None else load_watchlist(DEX_WATCHLIST_PATH)
+    asset = assets.get(str(token).upper())
+    if asset is None:
+        return ["mirage_guard:dex_contract_unregistered"]
+    if str(chain_id) == "501":
+        expected = str(asset.solana_mint or "")
+        matches = expected == contract
+    else:
+        try:
+            expected = str((asset.evm_contracts or {}).get(int(chain_id)) or "")
+        except ValueError:
+            expected = ""
+        matches = bool(expected) and expected.casefold() == contract.casefold()
+    return [] if matches else ["mirage_guard:dex_contract_mismatch"]
 
 
 def _is_mirage_guarded(row: SpreadTerminalRow) -> bool:

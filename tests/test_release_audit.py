@@ -280,6 +280,36 @@ def test_exact_identity_dex_route_is_not_mirage_guarded() -> None:
     assert reasons == []
 
 
+def test_dex_contract_guard_rejects_contract_from_another_token() -> None:
+    watchlist = {
+        "ETH": WatchAsset(
+            symbol="ETH",
+            identity_key="asset:eth",
+            dex_enabled=True,
+            evm_contracts={1: "0xeth"},
+        ),
+        "SOL": WatchAsset(
+            symbol="SOL",
+            identity_key="asset:sol",
+            dex_enabled=True,
+            solana_mint="So111",
+        ),
+    }
+
+    assert api_spreads._dex_contract_mirage_reasons(
+        token="ETH",
+        chain_id="501",
+        contract="So111",
+        watchlist=watchlist,
+    ) == ["mirage_guard:dex_contract_mismatch"]
+    assert api_spreads._dex_contract_mirage_reasons(
+        token="SOL",
+        chain_id="501",
+        contract="So111",
+        watchlist=watchlist,
+    ) == []
+
+
 def test_native_settled_history_is_not_mislabeled_as_current_funding() -> None:
     result = live._native_funding_result(
         [
