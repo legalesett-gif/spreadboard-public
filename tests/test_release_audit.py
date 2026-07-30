@@ -81,6 +81,49 @@ def test_depth_budget_is_balanced_between_route_classes() -> None:
     assert {pair.token for pair in selected} == {"ONE", "TWO", "THREE"}
 
 
+def test_exact_dex_watchlist_cex_quotes_bypass_general_depth_ranking() -> None:
+    exact = MarketQuote(
+        token="DEXE",
+        venue="Binance",
+        market_type="Futures",
+        bid=2.3,
+        ask=2.31,
+        bid_vwap=2.3,
+        ask_vwap=2.31,
+        quote_ts_us=1,
+        source_name="cex",
+        identity_key="asset:dexe",
+    )
+    unrelated = MarketQuote(
+        token="OTHER",
+        venue="Binance",
+        market_type="Futures",
+        bid=1,
+        ask=1.01,
+        bid_vwap=1,
+        ask_vwap=1.01,
+        quote_ts_us=1,
+        source_name="cex",
+        identity_key="asset:other",
+    )
+    context = sources.DiscoveryContext(
+        tokens=(),
+        watchlist={
+            "DEXE": WatchAsset(
+                symbol="DEXE",
+                identity_key="asset:dexe",
+                cex_enabled=True,
+                dex_enabled=True,
+            )
+        },
+        deadline_monotonic=None,
+    )
+
+    selected = sources._exact_dex_watchlist_quotes([unrelated, exact], context)
+
+    assert selected == [exact]
+
+
 def test_public_candidate_priority_rejects_high_unknown_identity() -> None:
     def quote(market_type: str, identity: str | None = None) -> MarketQuote:
         return MarketQuote(

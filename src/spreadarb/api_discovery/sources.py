@@ -1958,6 +1958,12 @@ def _verify_top_candidate_books(
             if quote.market_type != market_type or quote.source_name != source_name:
                 continue
             selected_by_venue[quote.venue].append(quote)
+    # DEX comparison cannot depend on a CEX-to-CEX route first winning the
+    # general spread budget. Exact registry matches get one matched-size book
+    # check so every known CEX leg can reach the later OKX DEX source.
+    for quote in _exact_dex_watchlist_quotes(quotes, context):
+        if quote.market_type == market_type and quote.source_name == source_name:
+            selected_by_venue[quote.venue].append(quote)
     # Once a token wins the global candidate budget, fetch every leg owned by
     # this source batch. This preserves alternate venue routes (for example
     # Gate and Kucoin spot against the same Bybit perp) without deep-fetching
@@ -2052,6 +2058,22 @@ def _unique_token_first(
             return selected
     selected.extend(deferred[: max(0, limit - len(selected))])
     return selected
+
+
+def _exact_dex_watchlist_quotes(
+    quotes: Iterable[MarketQuote],
+    context: DiscoveryContext,
+) -> list[MarketQuote]:
+    exact_identity_keys = {
+        str(asset.identity_key)
+        for asset in context.watchlist.values()
+        if asset.dex_enabled and asset.identity_key
+    }
+    return [
+        quote
+        for quote in quotes
+        if quote.identity_key and str(quote.identity_key) in exact_identity_keys
+    ]
 
 
 def _balanced_route_candidates(
