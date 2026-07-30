@@ -80,6 +80,8 @@ class SpreadTerminalRow:
     short_market_symbol: str | None = None
     long_exchange_url: str | None = None
     short_exchange_url: str | None = None
+    dex_chain: str | None = None
+    dex_contract: str | None = None
     raw_source_kind: str | None = None
     mirage_guarded: bool = False
 
@@ -441,6 +443,9 @@ def _row_from_api(
     )
     notes = raw.get("notes") if isinstance(raw.get("notes"), dict) else {}
     route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+    identities = notes.get("identity") if isinstance(notes.get("identity"), dict) else {}
+    long_identity = identities.get("long") if isinstance(identities.get("long"), dict) else {}
+    short_identity = identities.get("short") if isinstance(identities.get("short"), dict) else {}
     funding = notes.get("funding") if isinstance(notes.get("funding"), dict) else {}
     long_funding = funding.get("long") if isinstance(funding.get("long"), dict) else {}
     short_funding = funding.get("short") if isinstance(funding.get("short"), dict) else {}
@@ -453,6 +458,13 @@ def _row_from_api(
         (route_inputs.get("short") or {}).get("symbol")
         if isinstance(route_inputs.get("short"), dict)
         else None
+    )
+    dex_identity = (
+        long_identity
+        if "dex" in str(long_venue or "").casefold()
+        else short_identity
+        if "dex" in str(short_venue or "").casefold()
+        else {}
     )
     long_rails = public_rails.rail_state(rails or {}, long_venue, token)
     short_rails = public_rails.rail_state(rails or {}, short_venue, token)
@@ -578,6 +590,8 @@ def _row_from_api(
             market_symbol=short_market_symbol,
             token=token,
         ),
+        dex_chain=_str_or_none(dex_identity.get("chain_id")),
+        dex_contract=_str_or_none(dex_identity.get("token_address")),
         raw_source_kind=source_kind or bucket,
         mirage_guarded=any(str(item).startswith("mirage_guard:") for item in blockers),
     )

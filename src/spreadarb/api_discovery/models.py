@@ -89,6 +89,7 @@ class MarketQuote:
     identity_source: str | None = None
     decimals: int | None = None
     chain_id: int | None = None
+    token_address: str | None = None
     settle_asset: str | None = None
     contract_size: str | None = None
     funding_rate_pct: float | None = None

@@ -1,0 +1,20 @@
+{
+	admin off
+}
+
+spreadboard.178.128.126.204.sslip.io {
+	encode zstd gzip
+
+	reverse_proxy app:8200 {
+		flush_interval -1
+	}
+
+	header {
+		-Server
+		X-Robots-Tag "noindex, nofollow"
+	}
+}
+
+http://178.128.126.204 {
+	redir https://spreadboard.178.128.126.204.sslip.io{uri} permanent
+}

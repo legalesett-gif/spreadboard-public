@@ -555,14 +555,19 @@ def enrich_snapshot_funding_24h(
     snapshot: dict[str, Any],
     *,
     max_workers: int = 12,
+    route_keys: set[str] | None = None,
 ) -> dict[str, int]:
-    """Attach settled 24h funding to every unique futures leg in a snapshot."""
+    """Attach settled 24h funding to selected unique futures legs in a snapshot."""
 
     rows = [
         row
         for bucket in ("api_discovered_rows", "dex_discovered_rows")
         for row in snapshot.get(bucket) or []
         if isinstance(row, dict)
+        and (
+            route_keys is None
+            or _snapshot_route_key(row) in route_keys
+        )
     ]
     leg_keys: dict[tuple[str, str], tuple[str, str]] = {}
     for row in rows:
@@ -687,10 +692,24 @@ def enrich_snapshot_funding_24h(
         else:
             row.pop("funding_projected_24h_pct", None)
     return {
+        "selected_routes": len(rows),
         "unique_futures_legs": len(leg_keys),
         "settled_routes": settled_routes,
         "projected_routes": projected_routes,
     }
+
+
+def _snapshot_route_key(row: dict[str, Any]) -> str:
+    return "|".join(
+        str(row.get(key) or "")
+        for key in (
+            "token",
+            "long_venue",
+            "long_market_type",
+            "short_venue",
+            "short_market_type",
+        )
+    )
 
 
 def _fetch_funding_24h_uncached(exchange_id: str, symbol: str) -> dict[str, Any]:
@@ -1237,7 +1256,14 @@ def _next_funding_ts_us(payload: dict[str, Any]) -> int | None:
 
 def okx_dex_quote_summary(board_row: dict[str, Any], *, config: dict[str, Any] | None = None) -> dict[str, Any]:
     config = config or {}
-    if "Dex" not in {board_row.get("long_market_type"), board_row.get("short_market_type")}:
+    venue_text = " ".join(
+        str(board_row.get(key) or "")
+        for key in ("long_venue", "short_venue")
+    ).casefold()
+    if (
+        "Dex" not in {board_row.get("long_market_type"), board_row.get("short_market_type")}
+        and "dex" not in venue_text
+    ):
         return {"provider": "OKX DEX", "status": "not_applicable"}
     if config.get("okx_dex_quotes_enabled") is False:
         return {"provider": "OKX DEX", "status": "disabled", "blockers": ["okx_dex_quotes_disabled"]}
@@ -1257,7 +1283,10 @@ def okx_dex_quote_summary(board_row: dict[str, Any], *, config: dict[str, Any] |
     try:
         from spreadarb.dex import okx_quotes as okx_dex
 
-        if board_row.get("long_market_type") == "Dex":
+        if (
+            board_row.get("long_market_type") == "Dex"
+            or "dex" in str(board_row.get("long_venue") or "").casefold()
+        ):
             raw = okx_dex.quote_usdc_to_token(
                 chain=chain,
                 token_address=token_address,

@@ -223,7 +223,50 @@ def test_okx_dex_uses_usd_network_fee_not_raw_gas_units() -> None:
 
     assert quote is not None
     assert quote.gas_estimate_usd == 0.42
+    assert quote.token_address == "0x123"
     assert captured["token_decimals"] == 9
+
+
+def test_okx_dex_pair_detail_recognizes_spot_leg_venue() -> None:
+    summary = live.okx_dex_quote_summary(
+        {
+            "long_venue": "XT",
+            "long_market_type": "Futures",
+            "short_venue": "OKX DEX 1",
+            "short_market_type": "Spot",
+        }
+    )
+
+    assert summary["status"] == "blocked"
+    assert summary["blockers"] == ["exact_chain_contract_required"]
+
+
+def test_okx_dex_identity_reaches_normalized_board_row() -> None:
+    quote_ts_us = int(time.time() * 1_000_000)
+    row = api_spreads._row_from_api(
+        {
+            "token": "TEST",
+            "long_venue": "XT",
+            "long_market_type": "Futures",
+            "short_venue": "OKX DEX 1",
+            "short_market_type": "Spot",
+            "quote_ts_us": quote_ts_us,
+            "notes": {
+                "identity": {
+                    "long": {},
+                    "short": {
+                        "chain_id": 1,
+                        "token_address": "0x123",
+                    },
+                },
+            },
+        },
+        bucket="dex_discovered",
+        now=quote_ts_us / 1_000_000,
+    )
+
+    assert row.dex_chain == "1"
+    assert row.dex_contract == "0x123"
 
 
 def test_okx_dex_retries_rate_limits_without_changing_quote_math() -> None:

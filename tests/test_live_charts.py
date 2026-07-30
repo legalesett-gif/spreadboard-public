@@ -198,7 +198,7 @@ def test_history_persists_entry_matched_exit_and_sample_provenance(tmp_path: Pat
     assert saved[0]["short_funding_interval_hours"] == pytest.approx(4.0)
 
 
-def test_fast_quote_refresh_advances_canonical_heartbeat(
+def test_fast_quote_refresh_preserves_broad_snapshot_freshness(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -240,9 +240,10 @@ def test_fast_quote_refresh_advances_canonical_heartbeat(
     saved = json.loads(snapshot_path.read_text(encoding="utf-8"))
 
     assert result["status"] == "ok"
-    assert saved["updated_at"] == result["updated_at"]
-    assert saved["updated_at"] != "2020-01-01T00:00:00Z"
-    assert saved["expires_at"] > saved["updated_at"]
+    assert result["updated_at"] != "2020-01-01T00:00:00Z"
+    assert saved["updated_at"] == "2020-01-01T00:00:00Z"
+    assert saved["expires_at"] == "2020-01-01T00:01:00Z"
+    assert saved["fast_quote_refresh"]["updated_at"] == result["updated_at"]
 
 
 def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(

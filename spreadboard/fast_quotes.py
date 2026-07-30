@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import gc
 import json
 from pathlib import Path
@@ -198,11 +198,6 @@ class FastQuoteRefresher:
             row["blockers"] = list(dict.fromkeys(blockers))
             updated += 1
         refreshed_at = _utc_now_iso()
-        if updated:
-            payload["updated_at"] = refreshed_at
-            payload["expires_at"] = (
-                datetime.now(tz=timezone.utc) + timedelta(seconds=120)
-            ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         payload["fast_quote_refresh"] = {
             "status": "ok" if updated else "unavailable",
             "updated_at": refreshed_at,

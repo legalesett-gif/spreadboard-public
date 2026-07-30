@@ -328,6 +328,7 @@ class OkxDexQuoteSource:
             identity_source="watchlist",
             decimals=decimals,
             chain_id=chain_id,
+            token_address=contract,
             gas_estimate_usd=network_fee_usd,
             route_plan=(str(router),) if router else (),
         )
@@ -1228,6 +1229,7 @@ def _quote_identity_note(quote: MarketQuote) -> dict[str, Any]:
         "identity_source": quote.identity_source,
         "decimals": quote.decimals,
         "chain_id": quote.chain_id,
+        "token_address": quote.token_address,
         "settle_asset": quote.settle_asset,
         "contract_size": quote.contract_size,
     }
