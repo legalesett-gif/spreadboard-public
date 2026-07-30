@@ -6,6 +6,7 @@ import time
 from types import SimpleNamespace
 
 from spreadboard import api_spreads, live, server
+from scripts.api_discovery_worker import build_parser as discovery_worker_parser
 from spreadarb.api_discovery import runner, sources, worker
 from spreadarb.api_discovery.identity import (
     WatchAsset,
@@ -24,6 +25,12 @@ def test_public_route_contract_keeps_spot_spot_and_hides_spot_dex() -> None:
     assert "SPOT" not in api_spreads.RETIRED_ROUTE_KINDS
     assert "DEX-SPOT" in api_spreads.RETIRED_ROUTE_KINDS
     assert api_spreads._normalize_kind_filter("FUTURES-SPOT") == "FUTURES-SPOT-PAIR"
+
+
+def test_okx_dex_source_budget_covers_rate_limited_watchlist_scan() -> None:
+    args = discovery_worker_parser().parse_args([])
+
+    assert args.dex_spot_timeout_s == 240.0
 
 
 def test_depth_candidate_selection_prefers_unique_tokens() -> None:

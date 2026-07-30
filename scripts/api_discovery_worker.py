@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--row-limit", type=int, default=100)
     parser.add_argument("--cex-max-orderbook-candidates", type=int, default=100)
     parser.add_argument("--dex-derivative-max-orderbook-candidates", type=int, default=100)
-    parser.add_argument("--dex-spot-timeout-s", type=float, default=30.0)
+    parser.add_argument("--dex-spot-timeout-s", type=float, default=240.0)
     parser.add_argument("--skip-dex-spot", action="store_true")
     parser.add_argument(
         "--skip-broad-dex-spot",
