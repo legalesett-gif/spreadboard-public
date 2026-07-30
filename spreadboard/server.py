@@ -8616,7 +8616,7 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   .chart-leg-stats {{ display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); border-right: 0; border-bottom: 1px solid var(--terminal-line); }}
   .chart-leg-stats article {{ min-height: 0; border-top: 0; border-left: 1px solid var(--terminal-line); }}
   .chart-leg-stats article:first-child {{ border-left: 0; }}
-  .chart-plot-stack {{ grid-template-rows: 360px 230px; }}
+  .chart-plot-stack {{ grid-template-rows: auto; }}
   .dual-chart {{ min-height: 250px; }}
   .dual-chart.compact {{ min-height: 130px; }}
   .funding-history-dialog th, .funding-history-dialog td {{ padding: 8px; }}
@@ -8779,6 +8779,18 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   .pair-anchors {{ max-width: 100%; overflow-x: auto; flex-wrap: nowrap; }}
   .price-pair {{ justify-content: flex-start; }}
   .auto-refresh-pill {{ right: 10px; bottom: 10px; max-width: calc(100vw - 20px); }}
+}}
+@media (max-width: 560px) {{
+  .chart-leg-stats {{ grid-template-columns: 1fr; }}
+  .chart-leg-stats article,
+  .chart-leg-stats article:first-child {{ border-left: 0; border-top: 1px solid var(--terminal-line); }}
+  .chart-leg-stats article:first-child {{ border-top: 0; }}
+  .chart-plot-title {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 10px; padding: 8px 0; }}
+  .chart-plot-title strong {{ text-align: right; }}
+  .chart-plot-title button {{ margin-left: 0; }}
+  .chart-plot-title em {{ grid-column: 1 / -1; margin-left: 0; }}
+  .live-chart-note {{ align-items: flex-start; flex-direction: column; padding: 8px 0; }}
+  .selected-chart-foot {{ min-height: 58px; }}
 }}
 </style>
 </head>
