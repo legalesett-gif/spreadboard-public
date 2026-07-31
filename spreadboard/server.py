@@ -223,6 +223,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             "/",
             "/login",
             "/subscription",
+            "/register",
             "/account",
             "/markets",
             "/intel",
@@ -253,6 +254,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/login":
                 self._send_html(render_login_page(query))
+            elif parsed.path == "/register":
+                self._send_html(render_register_page())
             elif parsed.path == "/subscription":
                 self._send_html(render_subscription_page())
             elif parsed.path == "/account":
@@ -394,6 +397,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(result)
                 return
+            if parsed.path == "/api/register":
+                self._handle_register()
+                return
             if parsed.path == "/api/login":
                 self._handle_login()
                 return
@@ -520,7 +526,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.current_user = None
         if not accounts.auth_required():
             return True
-        public = path in {"/login", "/api/login", "/api/health", "/api/billing/webhook", "/favicon.ico"} or path.startswith("/assets/")
+        public = path in {"/login", "/register", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/favicon.ico"} or path.startswith("/assets/")
         token = self._session_token()
         user = accounts.user_for_session(token, self.server.accounts_path) if token else None
         self.current_user = user
@@ -574,6 +580,34 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self._send_json(
             {"ok": True, "user": user.public_dict(), "csrf_token": user.csrf_token},
             session_token=token,
+        )
+
+    def _handle_register(self) -> None:
+        payload = self._read_payload()
+        key = "register:" + (self.client_address[0] if self.client_address else "unknown")
+        now = time.monotonic()
+        with self._login_attempts_lock:
+            recent = [item for item in self._login_attempts.get(key, []) if now - item < 3600]
+            if len(recent) >= 10:
+                self._send_json({"ok": False, "error": "too_many_registration_attempts"}, status=HTTPStatus.TOO_MANY_REQUESTS)
+                return
+            self._login_attempts[key] = recent + [now]
+        accounts.create_user(
+            email=str(payload.get("email") or ""),
+            display_name=str(payload.get("display_name") or ""),
+            password=str(payload.get("password") or ""),
+            subscription_status="inactive",
+            subscription_days=1,
+            db_path=self.server.accounts_path,
+        )
+        user, token = accounts.login(
+            str(payload.get("email") or ""), str(payload.get("password") or ""),
+            user_agent=self.headers.get("User-Agent", ""), ip_address=key,
+            db_path=self.server.accounts_path,
+        )
+        self._send_json(
+            {"ok": True, "user": user.public_dict(), "csrf_token": user.csrf_token, "next": "/subscription"},
+            status=HTTPStatus.CREATED, session_token=token,
         )
 
     def _required_user(self) -> accounts.User:
@@ -4758,11 +4792,11 @@ def render_login_page(query: dict[str, list[str]]) -> str:
 .login-panel {{ border:1px solid var(--line); background:var(--panel); padding:28px; border-radius:8px; }} h1 {{ margin:0 0 8px; font-size:28px; letter-spacing:0; }} p {{ color:var(--muted); margin:0 0 24px; line-height:1.5; }}
 label {{ display:grid; gap:7px; margin:0 0 16px; color:var(--muted); font-size:12px; font-weight:800; text-transform:uppercase; }} input {{ width:100%; min-height:46px; border:1px solid var(--line); background:#081310; color:var(--ink); border-radius:5px; padding:0 13px; font:inherit; }} input:focus {{ outline:2px solid var(--accent); outline-offset:1px; }}
 button {{ width:100%; min-height:46px; border:0; border-radius:5px; background:var(--accent); color:#052c26; font:inherit; font-weight:900; cursor:pointer; }} button:disabled {{ opacity:.55; cursor:wait; }}
-.login-error {{ min-height:20px; margin:14px 0 0; color:var(--danger); font-size:13px; }} .login-note {{ margin-top:18px; color:var(--muted); font-size:12px; text-align:center; }}
+.login-error {{ min-height:20px; margin:14px 0 0; color:var(--danger); font-size:13px; }} .login-note {{ margin-top:18px; color:var(--muted); font-size:12px; text-align:center; }} .login-note a {{ color:var(--accent); font-weight:800; }}
 </style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div>
 <section class="login-panel"><h1>Welcome back</h1><p>Sign in to your private market workspace and position journal.</p>
 <form id="loginForm"><label>Email<input name="email" type="email" autocomplete="username" required autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">Sign in</button><div class="login-error" role="alert"></div></form></section>
-<div class="login-note">Private subscription access · secure, opaque session cookie</div></main>
+<div class="login-note">New here? <a href="/register">Create an account</a><br><br>Private subscription access · secure, opaque session cookie</div></main>
 <script>
 document.getElementById('loginForm').addEventListener('submit', async (event) => {{
   event.preventDefault(); const form=event.currentTarget; const button=form.querySelector('button'); const error=form.querySelector('.login-error'); button.disabled=true; error.textContent='';
@@ -4770,6 +4804,17 @@ document.getElementById('loginForm').addEventListener('submit', async (event) =>
   catch(exc) {{ error.textContent=exc.message || 'Sign in failed.'; }} finally {{ button.disabled=false; }}
 }});
 </script></body></html>"""
+
+
+def render_register_page() -> str:
+    return """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Create account - SpreadBoard</title>
+<style>
+:root { color-scheme:dark;--bg:#07110f;--panel:#101d1a;--line:#29443d;--ink:#edf8f4;--muted:#9bb1aa;--accent:#38d4bd;--danger:#ff8695; }
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}.login-shell{width:min(440px,100%)}.login-brand{display:flex;align-items:center;gap:12px;margin-bottom:28px;font-size:24px;font-weight:800}.login-mark{width:26px;height:26px;border-radius:50%;background:var(--accent);border:3px solid #dffff8;box-shadow:12px 9px 0 -5px #7fdccf}.login-panel{border:1px solid var(--line);background:var(--panel);padding:28px;border-radius:8px}h1{margin:0 0 8px;font-size:28px}p{color:var(--muted);margin:0 0 24px;line-height:1.5}label{display:grid;gap:7px;margin:0 0 16px;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}input{width:100%;min-height:46px;border:1px solid var(--line);background:#081310;color:var(--ink);border-radius:5px;padding:0 13px;font:inherit}input:focus{outline:2px solid var(--accent);outline-offset:1px}button{width:100%;min-height:46px;border:0;border-radius:5px;background:var(--accent);color:#052c26;font:inherit;font-weight:900;cursor:pointer}button:disabled{opacity:.55;cursor:wait}.login-error{min-height:20px;margin:14px 0 0;color:var(--danger);font-size:13px}.login-note{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}.login-note a{color:var(--accent);font-weight:800}
+</style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div><section class="login-panel"><h1>Create your account</h1><p>Set up your private workspace, then choose monthly access.</p><form id="registerForm"><label>Name<input name="display_name" maxlength="100" autocomplete="name" required autofocus></label><label>Email<input name="email" type="email" maxlength="254" autocomplete="email" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><button type="submit">Continue</button><div class="login-error" role="alert"></div></form></section><div class="login-note">Already registered? <a href="/login">Sign in</a></div></main>
+<script>document.getElementById('registerForm').addEventListener('submit',async(event)=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),error=form.querySelector('.login-error');button.disabled=true;error.textContent='';try{const response=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(form)))});const data=await response.json();if(!response.ok)throw new Error(({email_already_registered:'An account already exists for this email.',invalid_email:'Enter a valid email address.',password_must_be_at_least_12_characters:'Use at least 12 characters.',too_many_registration_attempts:'Too many attempts. Try again later.'})[data.error]||'Could not create the account.');location.assign(data.next||'/subscription')}catch(exc){error.textContent=exc.message||'Could not create the account.';button.disabled=false}});</script></body></html>"""
 
 
 def render_subscription_page() -> str:

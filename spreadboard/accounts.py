@@ -355,28 +355,35 @@ def create_user(
     subscription_days: int = 30,
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> dict[str, Any]:
+    normalized_email = email.strip().casefold()
+    if (
+        len(normalized_email) > 254
+        or normalized_email.count("@") != 1
+        or not all(normalized_email.split("@", 1))
+        or "." not in normalized_email.split("@", 1)[1]
+    ):
+        raise ValueError("invalid_email")
+    clean_name = display_name.strip()
+    if not clean_name or len(clean_name) > 100:
+        raise ValueError("invalid_display_name")
     status = subscription_status if subscription_status in {"inactive", "trialing", "active"} else "trialing"
     now = datetime.now(tz=timezone.utc)
     expires = now + timedelta(days=max(1, min(3660, int(subscription_days))))
     connection = _connect(db_path)
     try:
-        cursor = connection.execute(
-            """
-            INSERT INTO users (
-                email, display_name, password_hash, role, subscription_status,
-                subscription_expires_at, created_at, updated_at
-            ) VALUES (?, ?, ?, 'member', ?, ?, ?, ?)
-            """,
-            (
-                email.strip().casefold(),
-                display_name.strip() or email.strip().split("@", 1)[0],
-                hash_password(password),
-                status,
-                _utc_iso(expires),
-                _utc_iso(now),
-                _utc_iso(now),
-            ),
-        )
+        try:
+            cursor = connection.execute(
+                """
+                INSERT INTO users (
+                    email, display_name, password_hash, role, subscription_status,
+                    subscription_expires_at, created_at, updated_at
+                ) VALUES (?, ?, ?, 'member', ?, ?, ?, ?)
+                """,
+                (normalized_email, clean_name, hash_password(password), status,
+                 _utc_iso(expires), _utc_iso(now), _utc_iso(now)),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("email_already_registered") from exc
         connection.commit()
         return get_user(int(cursor.lastrowid), db_path=db_path) or {}
     finally:

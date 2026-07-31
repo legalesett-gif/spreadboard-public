@@ -37,6 +37,20 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         assert json.loads(response.read())["error"] == "billing_webhook_not_configured"
 
         connection.request(
+            "POST", "/api/register",
+            body=json.dumps({"display_name": "New Member", "email": "new@example.test", "password": "new-member-password"}),
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        assert response.status == 201
+        member_cookie = response.getheader("Set-Cookie")
+        assert json.loads(response.read())["next"] == "/subscription"
+        connection.request("GET", "/api/board", headers={"Cookie": member_cookie})
+        response = connection.getresponse()
+        assert response.status == 402
+        assert json.loads(response.read())["error"] == "subscription_required"
+
+        connection.request(
             "POST",
             "/api/login",
             body=json.dumps({"email": "admin@example.test", "password": "correct-horse-battery-staple"}),
