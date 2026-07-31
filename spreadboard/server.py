@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import hashlib
 import hmac
 import json
 import os
@@ -28,6 +29,7 @@ from spreadboard import (  # noqa: E402
     accounts,
     alerts,
     api_spreads,
+    billing,
     board,
     chart_catalog,
     historical_spreads,
@@ -262,6 +264,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         "ok": user is not None,
                         "user": user.public_dict() if user else None,
                         "csrf_token": user.csrf_token if user else None,
+                        "billing": billing.status(),
                     },
                     status=HTTPStatus.OK if user else HTTPStatus.UNAUTHORIZED,
                 )
@@ -381,6 +384,16 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             return
         accounts.set_current_user(getattr(self, "current_user", None))
         try:
+            if parsed.path == "/api/billing/webhook":
+                raw = self._read_raw_body()
+                event = billing.verify_webhook(raw, self.headers.get("Stripe-Signature", ""))
+                result = accounts.apply_billing_event(
+                    event,
+                    payload_sha256=hashlib.sha256(raw).hexdigest(),
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json(result)
+                return
             if parsed.path == "/api/login":
                 self._handle_login()
                 return
@@ -394,7 +407,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             self._require_csrf()
             payload = self._read_payload()
             user = self._required_user()
-            if parsed.path == "/api/positions":
+            if parsed.path == "/api/billing/checkout":
+                self._send_json({"ok": True, "url": billing.create_checkout_session(user)})
+            elif parsed.path == "/api/billing/portal":
+                self._send_json({"ok": True, "url": billing.create_portal_session(user)})
+            elif parsed.path == "/api/positions":
                 position = accounts.create_position(user.id, payload, db_path=self.server.accounts_path)
                 self._send_json({"ok": True, "position": position}, status=HTTPStatus.CREATED)
             elif parsed.path.startswith("/api/positions/") and parsed.path.endswith("/close"):
@@ -452,7 +469,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 )
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "not found")
-        except ValueError as exc:
+        except (ValueError, billing.BillingError) as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
         except Exception as exc:  # noqa: BLE001
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
@@ -503,7 +520,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.current_user = None
         if not accounts.auth_required():
             return True
-        public = path in {"/login", "/api/login", "/api/health", "/favicon.ico"} or path.startswith("/assets/")
+        public = path in {"/login", "/api/login", "/api/health", "/api/billing/webhook", "/favicon.ico"} or path.startswith("/assets/")
         token = self._session_token()
         user = accounts.user_for_session(token, self.server.accounts_path) if token else None
         self.current_user = user
@@ -517,7 +534,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             else:
                 self._redirect("/login?" + urlencode({"next": self.path[:500]}))
             return False
-        subscription_paths = {"/subscription", "/account", "/profile", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings"}
+        subscription_paths = {"/subscription", "/account", "/profile", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings", "/api/billing/checkout", "/api/billing/portal"}
         if not user.subscription_active and path not in subscription_paths and not (user.is_admin and path.startswith("/api/account-users")):
             if path.startswith("/api/"):
                 self._send_json({"ok": False, "error": "subscription_required"}, status=HTTPStatus.PAYMENT_REQUIRED)
@@ -581,13 +598,21 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         return morsel.value if morsel is not None else ""
 
     def _read_payload(self) -> dict[str, Any]:
-        length = min(1_000_000, max(0, int(self.headers.get("Content-Length", "0") or 0)))
-        raw = self.rfile.read(length) if length else b"{}"
+        raw = self._read_raw_body() or b"{}"
         if "application/json" in self.headers.get("Content-Type", ""):
             value = json.loads(raw.decode("utf-8") or "{}")
             return value if isinstance(value, dict) else {}
         parsed = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
         return {key: values[0] if values else "" for key, values in parsed.items()}
+
+    def _read_raw_body(self) -> bytes:
+        try:
+            declared = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError as exc:
+            raise ValueError("invalid_content_length") from exc
+        if declared < 0 or declared > 1_000_000:
+            raise ValueError("request_body_too_large")
+        return self.rfile.read(declared) if declared else b""
 
     def _redirect(self, location: str) -> None:
         self.send_response(HTTPStatus.SEE_OTHER)
@@ -4749,11 +4774,19 @@ document.getElementById('loginForm').addEventListener('submit', async (event) =>
 
 def render_subscription_page() -> str:
     user = accounts.current_user()
+    billing_state = billing.status()
+    action = (
+        '<button class="sheet-button primary" type="button" data-billing-action="portal">Manage billing</button>'
+        if user and user.billing_customer_id
+        else '<button class="sheet-button primary" type="button" data-billing-action="checkout">Subscribe monthly</button>'
+    ) if billing_state["checkout_ready"] else '<p>Online subscription activation is being configured. No payment can be taken yet.</p>'
     body = f"""
-    <section class="account-page narrow-account">
+    <section class="account-page narrow-account" data-account-page>
       <header class="terminal-heading"><div><span class="page-kicker">Membership</span><h1>Subscription required</h1><p>Your account is signed in, but market access is not currently active.</p></div></header>
-      <section class="account-empty-panel"><strong>{h(user.display_name if user else 'Member')}</strong><p>Status: {h(user.subscription_status if user else 'inactive')}. Contact the group administrator to renew monthly access.</p><a class="sheet-button primary" href="/account">Open account</a></section>
+      <section class="account-empty-panel"><strong>{h(user.display_name if user else 'Member')}</strong><p>Status: {h(user.subscription_status if user else 'inactive')}.</p>{action}<a class="sheet-button" href="/account">Open account</a><p role="alert" data-billing-error></p></section>
     </section>
+    <script type="application/json" id="account-session">{json_script_data({'csrf_token': user.csrf_token if user else None})}</script>
+    {render_billing_script()}
     """
     return shell("Subscription - SpreadBoard", "profile", body)
 
@@ -4794,6 +4827,7 @@ def render_account_page(
     </section>
     <script type="application/json" id="account-session">{json_script_data({'csrf_token': user.csrf_token})}</script>
     {render_account_script()}
+    {render_billing_script()}
     """
     return shell("My portfolio - SpreadBoard", "profile", body)
 
@@ -4830,7 +4864,27 @@ def render_account_notification(item: dict[str, Any]) -> str:
 
 
 def render_account_settings(user: accounts.User) -> str:
-    return f"""<section class="account-settings"><div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is used only as the denominator for your return statistics.</p></div></div><form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Tracked monthly capital, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or '')}"></label><button class="sheet-button primary" type="submit">Save settings</button></form></section>"""
+    state = billing.status()
+    if user.billing_customer_id:
+        billing_action = '<button class="sheet-button" type="button" data-billing-action="portal">Manage billing</button>'
+    elif state["checkout_ready"] and not user.is_admin:
+        billing_action = '<button class="sheet-button" type="button" data-billing-action="checkout">Subscribe monthly</button>'
+    else:
+        billing_action = '<span>Online billing is not active for this account.</span>'
+    cancel_note = "Cancellation scheduled at period end." if user.subscription_cancel_at_period_end else "Renews monthly while active."
+    return f"""<section class="account-settings"><div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is used only as the denominator for your return statistics.</p></div></div><form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Tracked monthly capital, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or '')}"></label><button class="sheet-button primary" type="submit">Save settings</button></form><div class="account-empty-panel"><strong>Monthly membership</strong><p>{h(user.subscription_status)} · {h(cancel_note)}</p>{billing_action}<p role="alert" data-billing-error></p></div></section>"""
+
+
+def render_billing_script() -> str:
+    return """<script>
+(() => {
+  const session=JSON.parse(document.getElementById('account-session')?.textContent||'{}');
+  document.querySelectorAll('[data-billing-action]').forEach(button=>button.addEventListener('click',async()=>{
+    button.disabled=true;const error=document.querySelector('[data-billing-error]');if(error)error.textContent='';
+    try{const response=await fetch(`/api/billing/${button.dataset.billingAction}`,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf_token},body:'{}'});const data=await response.json();if(!response.ok||!data.url)throw new Error(data.error||'Billing is temporarily unavailable.');location.assign(data.url);}catch(exc){if(error)error.textContent=exc.message||'Billing is temporarily unavailable.';button.disabled=false;}
+  }));
+})();
+</script>"""
 
 
 def render_member_admin() -> str:

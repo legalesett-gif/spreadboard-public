@@ -34,6 +34,9 @@ class User:
     subscription_status: str
     subscription_expires_at: str | None
     monthly_capital_usd: float | None
+    billing_customer_id: str | None = None
+    billing_subscription_id: str | None = None
+    subscription_cancel_at_period_end: bool = False
     csrf_token: str | None = None
 
     @property
@@ -65,6 +68,8 @@ class User:
             "subscription_expires_at": self.subscription_expires_at,
             "subscription_active": self.subscription_active,
             "monthly_capital_usd": self.monthly_capital_usd,
+            "billing_managed": bool(self.billing_customer_id),
+            "subscription_cancel_at_period_end": self.subscription_cancel_at_period_end,
         }
 
 
@@ -167,6 +172,13 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 created_at TEXT NOT NULL,
                 read_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS billing_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL,
+                result TEXT NOT NULL,
+                processed_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS sessions_token_hash ON sessions(token_hash);
             CREATE INDEX IF NOT EXISTS sessions_user_expiry ON sessions(user_id, expires_at);
             CREATE INDEX IF NOT EXISTS positions_user_status ON positions(user_id, status, opened_at DESC);
@@ -174,6 +186,16 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS alert_rules_user_position ON position_alert_rules(user_id, position_id, enabled);
             CREATE INDEX IF NOT EXISTS notifications_user_time ON in_app_notifications(user_id, created_at DESC);
             """
+        )
+        _ensure_columns(connection, "users", {
+            "billing_provider": "TEXT",
+            "billing_customer_id": "TEXT",
+            "billing_subscription_id": "TEXT",
+            "subscription_cancel_at_period_end": "INTEGER NOT NULL DEFAULT 0",
+            "billing_updated_at": "TEXT",
+        })
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS users_billing_customer ON users(billing_customer_id) WHERE billing_customer_id IS NOT NULL"
         )
         connection.commit()
     finally:
@@ -399,6 +421,104 @@ def update_subscription(
     finally:
         connection.close()
     return get_user(user_id, db_path=db_path)
+
+
+def apply_billing_event(
+    event: dict[str, Any],
+    *,
+    payload_sha256: str,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Apply a verified Stripe event exactly once."""
+
+    event_id = str(event.get("id") or "")[:255]
+    event_type = str(event.get("type") or "")[:255]
+    obj = ((event.get("data") or {}).get("object") or {})
+    if not event_id or not event_type or not isinstance(obj, dict):
+        raise ValueError("invalid_billing_event")
+    connection = _connect(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        prior = connection.execute(
+            "SELECT result FROM billing_events WHERE event_id = ?", (event_id,)
+        ).fetchone()
+        if prior is not None:
+            connection.rollback()
+            return {"ok": True, "duplicate": True, "result": prior["result"]}
+
+        customer_id = _stripe_id(obj.get("customer"), "cus_")
+        raw_subscription = obj.get("id")
+        if event_type.startswith("checkout."):
+            raw_subscription = obj.get("subscription")
+        elif event_type.startswith("invoice."):
+            raw_subscription = obj.get("subscription") or (
+                (((obj.get("parent") or {}).get("subscription_details") or {}).get("subscription"))
+                if isinstance(obj.get("parent"), dict) else None
+            )
+        subscription_id = _stripe_id(raw_subscription, "sub_")
+        user_id = _billing_user_id(connection, obj, customer_id)
+        result = "ignored_no_user"
+        if user_id is not None:
+            _assert_customer_owner(connection, user_id, customer_id)
+            now = _utc_iso()
+            explicit_user = bool(
+                (isinstance(obj.get("metadata"), dict) and obj["metadata"].get("spreadboard_user_id"))
+                or obj.get("client_reference_id")
+            )
+            stored = connection.execute(
+                "SELECT billing_subscription_id FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+            stored_subscription = stored["billing_subscription_id"] if stored else None
+            mismatched_subscription = bool(
+                subscription_id and stored_subscription and subscription_id != stored_subscription
+            )
+            if event_type == "checkout.session.completed":
+                connection.execute(
+                    """UPDATE users SET billing_provider = 'stripe', billing_customer_id = COALESCE(?, billing_customer_id),
+                       billing_subscription_id = COALESCE(?, billing_subscription_id), billing_updated_at = ?, updated_at = ? WHERE id = ?""",
+                    (customer_id, subscription_id, now, now, user_id),
+                )
+                result = "customer_linked"
+            elif event_type.startswith("customer.subscription.") and mismatched_subscription and not explicit_user:
+                result = "ignored_subscription_mismatch"
+            elif event_type.startswith("customer.subscription."):
+                status = _subscription_status(str(obj.get("status") or ""), event_type)
+                expiry = _stripe_period_end(obj)
+                connection.execute(
+                    """UPDATE users SET billing_provider = 'stripe', billing_customer_id = COALESCE(?, billing_customer_id),
+                       billing_subscription_id = COALESCE(?, billing_subscription_id), subscription_status = ?,
+                       subscription_expires_at = ?, subscription_cancel_at_period_end = ?, billing_updated_at = ?, updated_at = ?
+                       WHERE id = ?""",
+                    (customer_id, subscription_id, status, expiry, int(bool(obj.get("cancel_at_period_end"))), now, now, user_id),
+                )
+                result = f"subscription_{status}"
+            elif event_type.startswith("invoice.") and (not subscription_id or mismatched_subscription):
+                result = "ignored_subscription_mismatch"
+            elif event_type == "invoice.payment_failed":
+                connection.execute(
+                    "UPDATE users SET subscription_status = 'past_due', billing_updated_at = ?, updated_at = ? WHERE id = ?",
+                    (now, now, user_id),
+                )
+                result = "subscription_past_due"
+            elif event_type == "invoice.paid":
+                connection.execute(
+                    "UPDATE users SET subscription_status = 'active', billing_updated_at = ?, updated_at = ? WHERE id = ?",
+                    (now, now, user_id),
+                )
+                result = "subscription_active"
+            else:
+                result = "ignored_event_type"
+        connection.execute(
+            "INSERT INTO billing_events (event_id, event_type, payload_sha256, result, processed_at) VALUES (?, ?, ?, ?, ?)",
+            (event_id, event_type, payload_sha256, result, _utc_iso()),
+        )
+        connection.commit()
+        return {"ok": True, "duplicate": False, "result": result}
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def update_account_settings(
@@ -708,7 +828,15 @@ def _connect(db_path: Path | str) -> sqlite3.Connection:
     return connection
 
 
+def _ensure_columns(connection: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {str(row["name"]) for row in connection.execute(f"PRAGMA table_info({table})")}
+    for name, declaration in columns.items():
+        if name not in existing:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+
+
 def _user_from_row(row: sqlite3.Row, *, csrf_token: str | None = None) -> User:
+    keys = set(row.keys())
     return User(
         id=int(row["id"]),
         email=str(row["email"]),
@@ -717,8 +845,70 @@ def _user_from_row(row: sqlite3.Row, *, csrf_token: str | None = None) -> User:
         subscription_status=str(row["subscription_status"]),
         subscription_expires_at=row["subscription_expires_at"],
         monthly_capital_usd=float(row["monthly_capital_usd"]) if row["monthly_capital_usd"] is not None else None,
+        billing_customer_id=row["billing_customer_id"] if "billing_customer_id" in keys else None,
+        billing_subscription_id=row["billing_subscription_id"] if "billing_subscription_id" in keys else None,
+        subscription_cancel_at_period_end=bool(row["subscription_cancel_at_period_end"]) if "subscription_cancel_at_period_end" in keys else False,
         csrf_token=csrf_token,
     )
+
+
+def _stripe_id(value: Any, prefix: str) -> str | None:
+    candidate = str(value or "")
+    return candidate[:255] if candidate.startswith(prefix) else None
+
+
+def _billing_user_id(
+    connection: sqlite3.Connection, obj: dict[str, Any], customer_id: str | None
+) -> int | None:
+    metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+    raw = metadata.get("spreadboard_user_id") or obj.get("client_reference_id")
+    if raw not in (None, ""):
+        try:
+            user_id = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError("invalid_billing_user") from None
+        if connection.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+            raise ValueError("billing_user_not_found")
+        return user_id
+    if customer_id:
+        row = connection.execute(
+            "SELECT id FROM users WHERE billing_customer_id = ?", (customer_id,)
+        ).fetchone()
+        return int(row["id"]) if row else None
+    return None
+
+
+def _assert_customer_owner(
+    connection: sqlite3.Connection, user_id: int, customer_id: str | None
+) -> None:
+    if not customer_id:
+        return
+    row = connection.execute(
+        "SELECT id FROM users WHERE billing_customer_id = ? AND id != ?", (customer_id, user_id)
+    ).fetchone()
+    if row is not None:
+        raise ValueError("billing_customer_conflict")
+
+
+def _subscription_status(stripe_status: str, event_type: str) -> str:
+    if event_type == "customer.subscription.deleted" or stripe_status == "canceled":
+        return "cancelled"
+    if stripe_status in {"active", "trialing"}:
+        return stripe_status
+    if stripe_status in {"past_due", "unpaid"}:
+        return "past_due"
+    return "inactive"
+
+
+def _stripe_period_end(obj: dict[str, Any]) -> str | None:
+    raw = obj.get("current_period_end")
+    if not raw:
+        items = ((obj.get("items") or {}).get("data") or []) if isinstance(obj.get("items"), dict) else []
+        raw = items[0].get("current_period_end") if items and isinstance(items[0], dict) else None
+    try:
+        return _utc_iso(datetime.fromtimestamp(int(raw), tz=timezone.utc)) if raw else None
+    except (TypeError, ValueError, OSError):
+        return None
 
 
 def _token_hash(token: str) -> str:

@@ -6,7 +6,7 @@ import threading
 
 import pytest
 
-from spreadboard import accounts, portfolio
+from spreadboard import accounts, billing, portfolio
 from spreadboard.server import SpreadBoardHandler, SpreadBoardServer
 
 
@@ -31,6 +31,11 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         assert response.status == 401
         response.read()
 
+        connection.request("POST", "/api/billing/webhook", body="{}", headers={"Content-Type": "application/json"})
+        response = connection.getresponse()
+        assert response.status == 400
+        assert json.loads(response.read())["error"] == "billing_webhook_not_configured"
+
         connection.request(
             "POST",
             "/api/login",
@@ -42,6 +47,15 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         cookie = response.getheader("Set-Cookie")
         assert "HttpOnly" in cookie and "Secure" in cookie and "SameSite=Lax" in cookie
         login = json.loads(response.read())
+
+        monkeypatch.setattr(billing, "create_checkout_session", lambda user: "https://checkout.stripe.com/test-session")
+        connection.request(
+            "POST", "/api/billing/checkout", body="{}",
+            headers={"Cookie": cookie, "Content-Type": "application/json", "X-CSRF-Token": login["csrf_token"]},
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        assert json.loads(response.read())["url"] == "https://checkout.stripe.com/test-session"
 
         connection.request("POST", "/api/positions", body="{}", headers={"Cookie": cookie})
         response = connection.getresponse()
