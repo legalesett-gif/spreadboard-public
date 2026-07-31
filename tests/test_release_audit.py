@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from spreadboard import api_spreads, live, server
 from scripts.api_discovery_worker import build_parser as discovery_worker_parser
+from scripts.run_spreadboard_service import RefreshLoop, _merge_newer_fast_quotes
 from spreadarb.api_discovery import runner, sources, worker
 from spreadarb.api_discovery.identity import (
     WatchAsset,
@@ -25,6 +26,41 @@ def test_public_route_contract_keeps_spot_spot_and_hides_spot_dex() -> None:
     assert "SPOT" not in api_spreads.RETIRED_ROUTE_KINDS
     assert "DEX-SPOT" in api_spreads.RETIRED_ROUTE_KINDS
     assert api_spreads._normalize_kind_filter("FUTURES-SPOT") == "FUTURES-SPOT-PAIR"
+    assert api_spreads.DEFAULT_MAX_AGE_MIN == 4.0
+
+
+def test_discovery_publish_keeps_newer_fast_quotes() -> None:
+    route = {
+        "token": "COTI",
+        "long_venue": "Gate",
+        "long_market_type": "Spot",
+        "short_venue": "Bybit",
+        "short_market_type": "Futures",
+    }
+    discovery = {
+        "api_discovered_rows": [{**route, "quote_ts_us": 100, "executable_spread_pct": 1}],
+        "dex_discovered_rows": [],
+    }
+    current = {
+        "api_discovered_rows": [{**route, "quote_ts_us": 200, "executable_spread_pct": 2}],
+        "dex_discovered_rows": [],
+        "fast_quote_refresh": {
+            "status": "ok",
+            "updated_at": "2026-07-31T00:00:00Z",
+            "updated_routes": 1,
+        },
+    }
+
+    _merge_newer_fast_quotes(discovery, current)
+
+    assert discovery["api_discovered_rows"][0]["quote_ts_us"] == 200
+    assert discovery["api_discovered_rows"][0]["executable_spread_pct"] == 2
+    assert discovery["fast_quote_refresh"] == current["fast_quote_refresh"]
+
+
+def test_refresh_loop_keeps_fast_quote_worker_methods() -> None:
+    assert callable(RefreshLoop.run_fast_quotes)
+    assert callable(RefreshLoop._refresh_fast_quotes)
 
 
 def test_source_health_uses_live_quote_age_without_hiding_discovery_age(
@@ -146,7 +182,7 @@ def test_open_chart_can_requote_route_after_board_freshness_cutoff(
 
     assert row == {"route_key": "TOKEN|A|Spot|B|Futures"}
     assert captured["include_stale"] is True
-    assert captured["include_unverified"] is False
+    assert captured["include_unverified"] is True
     assert captured["limit"] is None
 
 
@@ -173,7 +209,7 @@ def test_pair_detail_keeps_exact_route_after_board_freshness_cutoff(
     assert result["ok"] is True
     assert result["board_row"]["route_key"] == route_key
     assert captured["include_stale"] is True
-    assert captured["include_unverified"] is False
+    assert captured["include_unverified"] is True
     assert captured["limit"] is None
 
 

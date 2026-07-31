@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEX_WATCHLIST_PATH = ROOT / "data" / "api_discovery_watchlist.json"
 DEFAULT_API_DISCOVERY_PATH = RUNTIME_DIR / "api_discovery_latest.json"
-DEFAULT_MAX_AGE_MIN = 15.0
+DEFAULT_MAX_AGE_MIN = float(os.environ.get("SPREADBOARD_LIVE_MAX_AGE_MIN", "4"))
 DEFAULT_LIMIT = 25
 
 # Spot-DEX is outside the current public product. Spot-Spot remains a first-class

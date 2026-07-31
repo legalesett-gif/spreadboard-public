@@ -130,6 +130,11 @@ class RefreshLoop:
         # The discovery worker writes to a staging snapshot so it cannot block
         # or overwrite fast quote cycles while the broad venue scan is running.
         with self.quote_cycle_lock, self.snapshot_lock:
+            try:
+                current_snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                current_snapshot = {}
+            _merge_newer_fast_quotes(snapshot, current_snapshot)
             _atomic_write_snapshot(snapshot)
         inserted = market_history.record_snapshot(snapshot)
         refresh = snapshot.get("source_refresh") or {}
@@ -215,6 +220,52 @@ class RefreshLoop:
                 "updated_routes": 0,
                 "exit_code": result.returncode,
             }
+
+
+def _merge_newer_fast_quotes(
+    discovery_snapshot: dict[str, Any],
+    current_snapshot: dict[str, Any],
+) -> None:
+    """Keep quotes produced while the staged discovery scan was running."""
+
+    current_fast = current_snapshot.get("fast_quote_refresh")
+    if isinstance(current_fast, dict) and current_fast.get("status") == "ok":
+        discovery_snapshot["fast_quote_refresh"] = dict(current_fast)
+
+    for bucket in ("api_discovered_rows", "dex_discovered_rows"):
+        discovered = discovery_snapshot.get(bucket)
+        current = current_snapshot.get(bucket)
+        if not isinstance(discovered, list) or not isinstance(current, list):
+            continue
+        current_by_key = {
+            _snapshot_route_key(row): row
+            for row in current
+            if isinstance(row, dict) and _snapshot_route_key(row)
+        }
+        for index, row in enumerate(discovered):
+            if not isinstance(row, dict):
+                continue
+            newer = current_by_key.get(_snapshot_route_key(row))
+            if not isinstance(newer, dict):
+                continue
+            if int(newer.get("quote_ts_us") or 0) > int(row.get("quote_ts_us") or 0):
+                discovered[index] = newer
+
+
+def _snapshot_route_key(row: dict[str, Any]) -> str:
+    explicit = str(row.get("route_key") or "").strip()
+    if explicit:
+        return explicit
+    return "|".join(
+        str(row.get(field) or "").strip()
+        for field in (
+            "token",
+            "long_venue",
+            "long_market_type",
+            "short_venue",
+            "short_market_type",
+        )
+    )
 
 
 def _refresh_enrichment_subprocess() -> None:

@@ -1311,7 +1311,10 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
     market = api_spreads.load_spreads(
         board_path=board_path,
         include_stale=True,
-        include_unverified=False,
+        # A route can be quarantined by the fast refresh after the user opens
+        # it. Keep the exact row available to the chart sampler so it can make
+        # one fresh public quote attempt and report the real result.
+        include_unverified=True,
         limit=None,
     )
     return next(
