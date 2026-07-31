@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import threading
 from typing import Any
 
 from spreadboard import accounts, api_spreads
@@ -174,7 +175,8 @@ def _portfolio_totals(positions: list[dict[str, Any]], monthly_capital: float | 
     }
 
 
-def _evaluate_position_alerts(user_id: int, position: dict[str, Any], *, accounts_path: Path | str) -> None:
+def _evaluate_position_alerts(user_id: int, position: dict[str, Any], *, accounts_path: Path | str) -> int:
+    created = 0
     values = {
         "exit_spread_pct": position.get("current_exit_spread_pct"),
         "open_spread_pct": position.get("current_open_spread_pct"),
@@ -189,15 +191,85 @@ def _evaluate_position_alerts(user_id: int, position: dict[str, Any], *, account
         if value is None or threshold is None:
             continue
         triggered = value <= threshold if rule.get("operator") == "lte" else value >= threshold
-        if not triggered:
-            continue
-        accounts.record_alert_trigger(
+        notification = accounts.record_alert_evaluation(
             user_id,
             int(rule["id"]),
+            condition_met=triggered,
             title=f"{position.get('token')} position alert",
             body=f"{str(rule.get('metric')).replace('_', ' ')} is {value:.4f}; rule {rule.get('operator')} {threshold:.4f}.",
             db_path=accounts_path,
         )
+        created += int(notification is not None)
+    return created
+
+
+class PositionAlertWorker:
+    """Continuously evaluate user-owned position rules against current books."""
+
+    def __init__(
+        self,
+        *,
+        board_path: Path,
+        accounts_path: Path | str = accounts.DEFAULT_DB_PATH,
+        poll_seconds: float = 30.0,
+    ) -> None:
+        self.board_path = board_path
+        self.accounts_path = Path(accounts_path)
+        self.poll_seconds = max(10.0, float(poll_seconds))
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name="spreadboard-position-alerts", daemon=True
+        )
+
+    @property
+    def running(self) -> bool:
+        return self._thread.is_alive()
+
+    def start(self) -> None:
+        if not self.running:
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self.running:
+            self._thread.join(timeout=5.0)
+
+    def _run(self) -> None:
+        self._stop.wait(10.0)
+        while not self._stop.is_set():
+            try:
+                summary = self.check_once()
+                if summary["users"]:
+                    print(f"spreadboard-position-alerts: {summary}", flush=True)
+            except Exception as exc:  # noqa: BLE001 - market refresh remains independent.
+                print(f"spreadboard-position-alerts: {type(exc).__name__}: {exc}", flush=True)
+            self._stop.wait(self.poll_seconds)
+
+    def check_once(self) -> dict[str, int]:
+        market = api_spreads.load_spreads(
+            board_path=self.board_path,
+            include_stale=False,
+            include_unverified=False,
+            limit=None,
+        )
+        rows = [row for row in market.get("rows") or [] if isinstance(row, dict)]
+        user_count = position_count = notification_count = 0
+        for user_id in accounts.list_alert_user_ids(db_path=self.accounts_path):
+            user = accounts.get_user_object(user_id, db_path=self.accounts_path)
+            if user is None or not user.subscription_active:
+                continue
+            user_count += 1
+            for raw in accounts.list_positions(user_id, db_path=self.accounts_path):
+                if raw.get("status") != "open" or not any(
+                    rule.get("enabled") for rule in raw.get("alert_rules") or []
+                ):
+                    continue
+                position_count += 1
+                hydrated = _hydrate_position(raw, rows)
+                notification_count += _evaluate_position_alerts(
+                    user_id, hydrated, accounts_path=self.accounts_path
+                )
+        return {"users": user_count, "positions": position_count, "notifications": notification_count}
 
 
 def _route_kind(position: dict[str, Any]) -> str:

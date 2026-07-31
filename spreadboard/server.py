@@ -440,6 +440,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     db_path=self.server.accounts_path,
                 )
                 self._send_json({"ok": True, "user": updated})
+            elif parsed.path == "/api/notifications/read":
+                count = accounts.mark_notifications_read(user.id, db_path=self.server.accounts_path)
+                self._send_json({"ok": True, "updated": count})
             elif parsed.path == "/api/account-users":
                 if not user.is_admin:
                     self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
@@ -540,7 +543,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             else:
                 self._redirect("/login?" + urlencode({"next": self.path[:500]}))
             return False
-        subscription_paths = {"/subscription", "/account", "/profile", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings", "/api/billing/checkout", "/api/billing/portal"}
+        subscription_paths = {"/subscription", "/account", "/profile", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings", "/api/notifications/read", "/api/billing/checkout", "/api/billing/portal"}
         if not user.subscription_active and path not in subscription_paths and not (user.is_admin and path.startswith("/api/account-users")):
             if path.startswith("/api/"):
                 self._send_json({"ok": False, "error": "subscription_required"}, status=HTTPStatus.PAYMENT_REQUIRED)
@@ -4864,7 +4867,7 @@ def render_account_page(
         <div class="account-panel-head"><div><h2>Position journal</h2><p>Manual records are marked with current public books whenever the exact route is available.</p></div><button class="sheet-button primary" type="button" data-position-new>Add position</button></div>
         <div class="position-list">{''.join(render_position_card(item) for item in positions) or '<div class="account-empty-panel"><strong>No positions yet</strong><p>Add the first spread or funding farm to start tracking it.</p></div>'}</div>
       </section>
-      <section data-account-panel="alerts" hidden><div class="account-panel-head"><div><h2>Notifications</h2><p>Exit-spread, PnL, and funding rules evaluated against your tracked positions.</p></div></div><div class="notification-list">{''.join(render_account_notification(item) for item in notifications) or '<div class="account-empty-panel"><strong>No notifications</strong><p>Position alerts will appear here when a rule crosses its threshold.</p></div>'}</div></section>
+      <section data-account-panel="alerts" hidden><div class="account-panel-head"><div><h2>Notifications</h2><p>Exit-spread, PnL, and funding rules are evaluated continuously, even while you are signed out.</p></div><button class="sheet-button" type="button" data-notifications-read>Mark all read</button></div><div class="notification-list">{''.join(render_account_notification(item) for item in notifications) or '<div class="account-empty-panel"><strong>No notifications</strong><p>Position alerts will appear here when a rule crosses its threshold.</p></div>'}</div></section>
       <section data-account-panel="settings" hidden>{render_account_settings(user)}</section>
       {render_member_admin() if user.is_admin else ''}
       {render_position_dialog()}
@@ -4958,6 +4961,7 @@ def render_account_script() -> str:
   root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;actionDialog.querySelector('[data-action-title]').textContent={funding:'Add funding cashflow',alert:'Create alert rule',close:'Close position'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=fields[actionType];actionDialog.showModal();});
   actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={funding:'funding',alert:'alerts',close:'close'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   root.querySelector('[data-account-settings]')?.addEventListener('submit',async event=>{event.preventDefault();await request('/api/account-settings',Object.fromEntries(new FormData(event.currentTarget)));location.reload();});
+  root.querySelector('[data-notifications-read]')?.addEventListener('click',async()=>{await request('/api/notifications/read',{});location.reload();});
   root.querySelector('[data-member-create]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;try{await request('/api/account-users',Object.fromEntries(new FormData(form)));form.reset();loadMembers();}catch(error){alert(error.message);}});
   async function loadMembers(){const target=root.querySelector('[data-member-list]');if(!target)return;const response=await fetch('/api/account-users');const data=await response.json();target.innerHTML=(data.users||[]).map(user=>`<article class="member-row"><div><strong>${escapeHtml(user.display_name)}</strong><span>${escapeHtml(user.email)}</span></div><span>${escapeHtml(user.subscription_status)}</span><em>${escapeHtml(user.subscription_expires_at||'No expiry')}</em></article>`).join('');}
   const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));

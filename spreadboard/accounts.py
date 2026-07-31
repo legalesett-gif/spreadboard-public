@@ -194,6 +194,9 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
             "subscription_cancel_at_period_end": "INTEGER NOT NULL DEFAULT 0",
             "billing_updated_at": "TEXT",
         })
+        _ensure_columns(connection, "position_alert_rules", {
+            "last_condition_met": "INTEGER NOT NULL DEFAULT 0",
+        })
         connection.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS users_billing_customer ON users(billing_customer_id) WHERE billing_customer_id IS NOT NULL"
         )
@@ -395,6 +398,27 @@ def get_user(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str
     try:
         row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return _user_from_row(row).public_dict() if row is not None else None
+    finally:
+        connection.close()
+
+
+def get_user_object(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> User | None:
+    connection = _connect(db_path)
+    try:
+        row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return _user_from_row(row) if row is not None else None
+    finally:
+        connection.close()
+
+
+def list_alert_user_ids(*, db_path: Path | str = DEFAULT_DB_PATH) -> list[int]:
+    connection = _connect(db_path)
+    try:
+        return [int(row["user_id"]) for row in connection.execute(
+            """SELECT DISTINCT p.user_id FROM positions p
+               JOIN position_alert_rules r ON r.position_id = p.id AND r.user_id = p.user_id
+               WHERE p.status = 'open' AND r.enabled = 1 ORDER BY p.user_id"""
+        ).fetchall()]
     finally:
         connection.close()
 
@@ -802,6 +826,72 @@ def record_alert_trigger(
             "SELECT * FROM in_app_notifications WHERE id = ?", (cursor.lastrowid,)
         ).fetchone()
         return dict(created)
+    finally:
+        connection.close()
+
+
+def record_alert_evaluation(
+    user_id: int,
+    rule_id: int,
+    *,
+    condition_met: bool,
+    title: str,
+    body: str,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    """Persist one notification per false-to-true threshold crossing."""
+
+    connection = _connect(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            """SELECT r.*, p.token FROM position_alert_rules r
+               JOIN positions p ON p.id = r.position_id
+               WHERE r.id = ? AND r.user_id = ? AND r.enabled = 1 AND p.status = 'open'""",
+            (rule_id, user_id),
+        ).fetchone()
+        if row is None:
+            connection.rollback()
+            return None
+        previous = bool(row["last_condition_met"])
+        now = _utc_iso()
+        created = None
+        if condition_met and not previous:
+            cursor = connection.execute(
+                """INSERT INTO in_app_notifications (
+                       user_id, alert_rule_id, position_id, title, body, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (user_id, rule_id, row["position_id"], title[:160], body[:1000], now),
+            )
+            created = int(cursor.lastrowid)
+        connection.execute(
+            """UPDATE position_alert_rules SET last_condition_met = ?,
+               last_triggered_at = CASE WHEN ? THEN ? ELSE last_triggered_at END,
+               updated_at = ? WHERE id = ?""",
+            (int(condition_met), int(bool(created)), now, now, rule_id),
+        )
+        connection.commit()
+        if created is None:
+            return None
+        result = connection.execute(
+            "SELECT * FROM in_app_notifications WHERE id = ?", (created,)
+        ).fetchone()
+        return dict(result) if result else None
+    finally:
+        connection.close()
+
+
+def mark_notifications_read(
+    user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> int:
+    connection = _connect(db_path)
+    try:
+        cursor = connection.execute(
+            "UPDATE in_app_notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL",
+            (_utc_iso(), user_id),
+        )
+        connection.commit()
+        return int(cursor.rowcount)
     finally:
         connection.close()
 

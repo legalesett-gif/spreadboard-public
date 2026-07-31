@@ -157,3 +157,51 @@ def test_portfolio_return_falls_back_to_tracked_position_capital() -> None:
     assert summary["monthly_capital_usd"] == 500
     assert summary["capital_basis"] == "tracked_positions"
     assert summary["monthly_return_pct"] == pytest.approx(5)
+
+
+def test_background_position_alerts_trigger_once_and_rearm(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "accounts.sqlite3"
+    accounts.initialize(db_path)
+    user = accounts.create_user(
+        email="alerts@example.test", display_name="Alerts",
+        password="alerts-password-strong", subscription_status="active",
+        subscription_days=30, db_path=db_path,
+    )
+    position = accounts.create_position(
+        user["id"],
+        {
+            "token": "TEST", "long_venue": "A", "long_market_type": "Spot",
+            "long_quantity": 1, "long_entry_price": 100,
+            "short_venue": "B", "short_market_type": "Futures",
+            "short_quantity": 1, "short_entry_price": 110,
+        }, db_path=db_path,
+    )
+    accounts.add_alert_rule(
+        user["id"], position["id"],
+        {"metric": "pnl_usd", "operator": "gte", "threshold": 10},
+        db_path=db_path,
+    )
+    market = {"long_bid": 105, "long_ask": 106, "short_bid": 101, "short_ask": 102}
+    def rows(**_):
+        return {"rows": [{
+            "route_key": position["route_key"], "token": "TEST",
+            "long_venue": "A", "long_market_type": "Spot",
+            "short_venue": "B", "short_market_type": "Futures", **market,
+        }]}
+    monkeypatch.setattr(portfolio.api_spreads, "load_spreads", rows)
+    worker = portfolio.PositionAlertWorker(
+        board_path=tmp_path / "board", accounts_path=db_path, poll_seconds=10,
+    )
+    worker.check_once()
+    worker.check_once()
+    assert len(accounts.list_notifications(user["id"], db_path=db_path)) == 1
+
+    market.update(long_bid=100, short_ask=110)
+    worker.check_once()
+    market.update(long_bid=105, short_ask=102)
+    worker.check_once()
+    assert len(accounts.list_notifications(user["id"], db_path=db_path)) == 2
+    assert accounts.mark_notifications_read(user["id"], db_path=db_path) == 2
+    assert all(item["read_at"] for item in accounts.list_notifications(user["id"], db_path=db_path))

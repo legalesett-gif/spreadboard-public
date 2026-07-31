@@ -29,6 +29,7 @@ from spreadboard import (
     chart_catalog,
     live,
     market_history,
+    portfolio,
     public_rails,
     token_metadata,
     verified_identity,
@@ -387,6 +388,11 @@ def main() -> int:
         board_path=board_path,
         config=alerts.load_config(),
     )
+    position_alert_worker = portfolio.PositionAlertWorker(
+        board_path=board_path,
+        accounts_path=server.accounts_path,
+        poll_seconds=float(os.environ.get("SPREADBOARD_POSITION_ALERT_SECONDS", "30")),
+    )
 
     def stop_service(_signum: int, _frame: Any) -> None:
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -394,10 +400,12 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stop_service)
     signal.signal(signal.SIGINT, stop_service)
     refresh_loop.start()
+    position_alert_worker.start()
     _log(f"serving http://{host}:{port}")
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
+        position_alert_worker.stop()
         refresh_loop.stop()
         server.server_close()
     return 0

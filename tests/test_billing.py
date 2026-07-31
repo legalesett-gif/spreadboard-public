@@ -155,3 +155,9 @@ def test_initialize_migrates_existing_users_table(tmp_path: Path) -> None:
     finally:
         connection.close()
     assert {"billing_customer_id", "billing_subscription_id", "subscription_cancel_at_period_end"} <= columns
+    connection = sqlite3.connect(db_path)
+    try:
+        alert_columns = {row[1] for row in connection.execute("PRAGMA table_info(position_alert_rules)")}
+    finally:
+        connection.close()
+    assert "last_condition_met" in alert_columns
