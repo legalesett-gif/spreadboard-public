@@ -1718,11 +1718,9 @@ def render_funding_farm_empty(selected_farm: str, health: dict[str, Any]) -> str
     if "api_credentials_missing" in blockers or status in {"skipped", "absent"}:
         return """
     <article class="live-market-empty">
-      <strong>OKX DEX quoting is not configured</strong>
-      <p>Futures-DEX needs OKX DEX API credentials. Set SPREADARB_OKX_DEX_API_KEY,
-      SPREADARB_OKX_DEX_SECRET and SPREADARB_OKX_DEX_PASSPHRASE on the service,
-      then add DEX-enabled tokens with exact chain and contract to the watchlist.</p>
-      <span>Source status: skipped</span>
+      <strong>OKX DEX feed is temporarily unavailable</strong>
+      <p>Exact-chain DEX routes will return automatically when verified quotes resume.</p>
+      <span>Source status: reconnecting</span>
     </article>
     """
     return f"""
