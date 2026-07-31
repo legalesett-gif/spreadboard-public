@@ -608,7 +608,7 @@ def _native_order_book(
     if market_type != "Futures" or venue not in NATIVE_FUTURES_VENUES:
         return None
     base, quote = _symbol_base_quote(symbol)
-    compact = f"{base}{quote}"
+    compact = _native_linear_symbol(venue, base, quote)
     if venue == "Aster":
         url = (
             f"https://fapi.asterdex.com/fapi/v1/depth?{urlencode({'symbol': compact, 'limit': 20})}"
@@ -619,13 +619,13 @@ def _native_order_book(
         )
     elif venue == "Bingx":
         url = "https://open-api.bingx.com/openApi/swap/v2/quote/depth?" + urlencode(
-            {"symbol": f"{base}-USDT", "limit": 20}
+            {"symbol": f"{base}-{quote}", "limit": 20}
         )
     elif venue == "Bitget":
         url = "https://api.bitget.com/api/v2/mix/market/merge-depth?" + urlencode(
             {
                 "symbol": compact,
-                "productType": "USDT-FUTURES",
+                "productType": f"{quote}-FUTURES",
                 "precision": "scale0",
                 "limit": 20,
             }
@@ -645,7 +645,7 @@ def _native_order_book(
         )
     elif venue == "Kucoin Futures":
         url = "https://api-futures.kucoin.com/api/v1/level2/depth20?" + urlencode(
-            {"symbol": f"{base}{quote}M"}
+            {"symbol": compact}
         )
     elif venue == "Mexc":
         url = f"https://contract.mexc.com/api/v1/contract/depth/{base}_{quote}"
@@ -851,7 +851,7 @@ def _native_spot_order_book(
 
 def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
     base, quote = _symbol_base_quote(symbol)
-    compact = f"{base}{quote}"
+    compact = _native_linear_symbol(venue, base, quote)
     try:
         if venue in {"Aster", "Binance"}:
             host = "fapi.asterdex.com" if venue == "Aster" else "fapi.binance.com"
@@ -890,7 +890,7 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
         if venue == "OKX":
             payload = _json_url(
                 "https://www.okx.com/api/v5/public/funding-rate?"
-                + urlencode({"instId": f"{base}-USDT-SWAP"})
+                + urlencode({"instId": f"{base}-{quote}-SWAP"})
             )
             rows = payload.get("data") or []
             item = rows[0] if rows else {}
@@ -910,7 +910,7 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
         if venue == "Bitget":
             payload = _json_url(
                 "https://api.bitget.com/api/v2/mix/market/current-fund-rate?"
-                + urlencode({"symbol": compact, "productType": "USDT-FUTURES"})
+                + urlencode({"symbol": compact, "productType": f"{quote}-FUTURES"})
             )
             rows = payload.get("data") or []
             item = rows[0] if rows else {}
@@ -922,7 +922,7 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
         if venue == "Bingx":
             payload = _json_url(
                 "https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex?"
-                + urlencode({"symbol": f"{base}-USDT"})
+                + urlencode({"symbol": f"{base}-{quote}"})
             )
             item = payload.get("data") or {}
             return _funding_fields(
@@ -932,7 +932,7 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
             )
         if venue == "Kucoin Futures":
             payload = _json_url(
-                f"https://api-futures.kucoin.com/api/v1/funding-rate/{compact}M/current"
+                f"https://api-futures.kucoin.com/api/v1/funding-rate/{compact}/current"
             )
             item = payload.get("data") or {}
             return _funding_fields(
@@ -942,7 +942,7 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
             )
         if venue == "Mexc":
             payload = _json_url(
-                f"https://contract.mexc.com/api/v1/contract/funding_rate/{base}_USDT"
+                f"https://contract.mexc.com/api/v1/contract/funding_rate/{base}_{quote}"
             )
             item = payload.get("data") or {}
             return _funding_fields(
@@ -1169,6 +1169,14 @@ def _symbol_base_quote(symbol: str) -> tuple[str, str]:
 
 def _kraken_asset_code(base: str) -> str:
     return {"BTC": "XBT", "DOGE": "XDG"}.get(base.upper(), base.upper())
+
+
+def _native_linear_symbol(venue: str, base: str, quote: str) -> str:
+    if quote.upper() == "USDC" and venue in {"Bitget", "Bybit"}:
+        return f"{base.upper()}PERP"
+    if venue == "Kucoin Futures":
+        return f"{_kraken_asset_code(base)}{quote.upper()}M"
+    return f"{base.upper()}{quote.upper()}"
 
 
 def _sorted_book(

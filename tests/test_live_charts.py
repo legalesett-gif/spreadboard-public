@@ -17,6 +17,7 @@ from spreadboard.fast_quotes import (
     _native_current_funding,
     _okx_dex_leg_quote,
     _kraken_asset_code,
+    _native_linear_symbol,
 )
 from scripts.audit_live_charts import _formula_errors
 
@@ -545,6 +546,14 @@ def test_native_kraken_funding_converts_velocity_to_hourly_rate(
     assert result["current_funding_pct"] == pytest.approx(0.002)
     assert result["funding_interval_hours"] == 1
     assert result["next_funding_ts_us"] > int(time.time() * 1_000_000)
+
+
+def test_native_linear_symbols_preserve_venue_usdc_conventions() -> None:
+    assert _native_linear_symbol("Bybit", "BTC", "USDC") == "BTCPERP"
+    assert _native_linear_symbol("Bitget", "BTC", "USDC") == "BTCPERP"
+    assert _native_linear_symbol("Kucoin Futures", "BTC", "USDT") == "XBTUSDTM"
+    assert _native_linear_symbol("Kucoin Futures", "BTC", "USDC") == "XBTUSDCM"
+    assert _native_linear_symbol("Binance", "BTC", "USDC") == "BTCUSDC"
 
 
 def test_exact_okx_dex_leg_requotes_both_sides_at_matched_size(
