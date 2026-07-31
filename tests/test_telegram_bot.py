@@ -43,3 +43,12 @@ def test_unlinked_chat_cannot_read_subscription(tmp_path) -> None:
         db_path=db_path,
     )
     assert "Link this chat" in response["text"]
+
+
+def test_group_messages_are_ignored(tmp_path) -> None:
+    db_path = _linked_user(tmp_path)
+    response = telegram_bot.handle_update(
+        {"message": {"chat": {"id": -100123, "type": "supergroup"}, "text": "/subscribe"}},
+        db_path=db_path,
+    )
+    assert response is None

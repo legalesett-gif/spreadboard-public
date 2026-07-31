@@ -2,19 +2,6 @@
 	admin off
 }
 
-spreadboard.178.128.126.204.sslip.io {
-	encode zstd gzip
-
-	reverse_proxy app:8200 {
-		flush_interval -1
-	}
-
-	header {
-		-Server
-		X-Robots-Tag "noindex, nofollow"
-	}
-}
-
 spreadarbitrage.ink {
 	encode zstd gzip
 
@@ -27,10 +14,10 @@ spreadarbitrage.ink {
 	}
 }
 
-www.spreadarbitrage.ink {
+www.spreadarbitrage.ink, spreadboard.178.128.126.204.sslip.io {
 	redir https://spreadarbitrage.ink{uri} permanent
 }
 
 http://178.128.126.204 {
-	redir https://spreadboard.178.128.126.204.sslip.io{uri} permanent
+	redir https://spreadarbitrage.ink{uri} permanent
 }

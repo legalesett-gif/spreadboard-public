@@ -68,7 +68,7 @@ def handle_update(update: dict[str, Any], *, db_path: Any) -> dict[str, Any] | N
         return None
     chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
     if chat.get("type") != "private":
-        return _reply(int(chat.get("id") or 0), "Please use this bot in a private chat.")
+        return None
     chat_id = int(chat.get("id") or 0)
     text = str(message.get("text") or "").strip()
     command, _, argument = text.partition(" ")

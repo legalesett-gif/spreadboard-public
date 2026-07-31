@@ -38,7 +38,7 @@ SPREADBOARD_SUBSCRIPTION_LABEL=$180/month
 Create a recurring monthly Price in Stripe, then register this HTTPS webhook:
 
 ```text
-https://spreadboard.178.128.126.204.sslip.io/api/billing/webhook
+https://spreadarbitrage.ink/api/billing/webhook
 ```
 
 Subscribe it to `checkout.session.completed`,
@@ -67,8 +67,11 @@ SPREADBOARD_TELEGRAM_WEBHOOK_SECRET=replace_with_a_random_32_byte_value
    command line:
 
 ```bash
-SPREADBOARD_PUBLIC_URL=https://spreadboard.178.128.126.204.sslip.io \
+SPREADBOARD_PUBLIC_URL=https://spreadarbitrage.ink \
   uv run python scripts/configure_telegram_webhook.py
+
+SPREADBOARD_PUBLIC_URL=https://spreadarbitrage.ink \
+  uv run python scripts/configure_stripe_webhook.py
 ```
 
 Members connect the bot from Account settings using a single-use link that
