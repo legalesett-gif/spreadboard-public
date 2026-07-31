@@ -622,6 +622,7 @@ def _row_from_api(
             token=token,
             chain_id=dex_chain,
             contract=dex_contract,
+            identity_key=_str_or_none(raw.get("identity_key")),
         )
     )
     return SpreadTerminalRow(
@@ -923,12 +924,20 @@ def _dex_contract_mirage_reasons(
     token: str,
     chain_id: str | None,
     contract: str | None,
+    identity_key: str | None = None,
     watchlist: dict[str, WatchAsset] | None = None,
 ) -> list[str]:
     if not chain_id and not contract:
         return []
     if not chain_id or not contract:
         return ["mirage_guard:dex_contract_incomplete"]
+    canonical_identity = (
+        f"solana:501/token:{contract}"
+        if str(chain_id) == "501"
+        else f"eip155:{chain_id}/erc20:{contract.casefold()}"
+    )
+    if identity_key and str(identity_key).casefold() == canonical_identity.casefold():
+        return []
     assets = watchlist if watchlist is not None else load_watchlist(DEX_WATCHLIST_PATH)
     asset = assets.get(str(token).upper())
     if asset is None:

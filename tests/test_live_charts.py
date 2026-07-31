@@ -528,6 +528,35 @@ def test_history_persists_entry_matched_exit_and_sample_provenance(tmp_path: Pat
     assert _formula_errors(saved[0]) == []
 
 
+def test_history_bucketing_keeps_latest_sample_per_bucket(tmp_path: Path) -> None:
+    route = _route()
+    start_us = int(time.time() * 1_000_000) - 60_000_000
+    db_path = tmp_path / "history.sqlite3"
+    for offset_seconds, spread in ((1, 1.0), (5, 2.0), (12, 3.0), (19, 4.0)):
+        row = {
+            **route,
+            "quote_ts_us": start_us + offset_seconds * 1_000_000,
+            "executable_spread_pct": spread,
+            "depth_weighted_spread_pct": spread,
+            "notes": {"route_inputs": {
+                "long": {"bid": 99, "ask": 100, "bid_vwap": 100, "ask_vwap": 100},
+                "short": {"bid": 101, "ask": 102, "bid_vwap": 101, "ask_vwap": 102},
+            }},
+        }
+        assert market_history.record_route(row, db_path=db_path) == 1
+
+    saved = market_history.load_history(
+        route_key=route["route_key"], since_us=start_us,
+        bucket_seconds=10, max_points=10, db_path=db_path,
+    )
+
+    assert len(saved) in {2, 3}
+    assert saved[-1]["executable_spread_pct"] == pytest.approx(4.0)
+    assert [row["quote_ts_us"] for row in saved] == sorted(
+        row["quote_ts_us"] for row in saved
+    )
+
+
 def test_fast_quote_refresh_preserves_broad_snapshot_freshness(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -791,7 +820,7 @@ def test_native_spot_and_futures_routes_sample_inside_web_process() -> None:
         **_route(),
         "long_venue": "Kucoin Futures",
     }
-    assert not server._native_chart_route(kucoin_futures)
+    assert server._native_chart_route(kucoin_futures)
 
 
 def test_live_chart_surface_explains_series_and_streams_exact_route() -> None:
@@ -807,7 +836,8 @@ def test_live_chart_surface_explains_series_and_streams_exact_route() -> None:
     assert "/api/stream/" in html
     assert "setInterval(refresh, 5000)" in html
     assert "/assets/lightweight-charts.js" in html
-    assert "max_points=25000" in html
+    assert "bucket_seconds=${bucketSeconds}" in html
+    assert "max_points=${maxPoints}" in html
     assert "subscribeCrosshairMove" in html
     assert "moveToPane(1)" in html
     assert "setHeight(" in html

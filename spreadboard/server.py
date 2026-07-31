@@ -1239,6 +1239,7 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
     query = query or {}
     points = int(_query_float(query, "max_points", 240) or 240)
     hours = max(1 / 60, min(_query_float(query, "hours", 24) or 24, 24 * 30))
+    bucket_seconds = max(0, min(int(_query_float(query, "bucket_seconds", 0) or 0), 3600))
     since_us = int((time.time() - hours * 3600) * 1_000_000)
     current = _find_canonical_route(route_key, board_path)
     sample = (
@@ -1250,6 +1251,7 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
         route_key=route_key,
         max_points=points,
         since_us=since_us,
+        bucket_seconds=bucket_seconds or None,
     )
     if public_rows:
         return {
@@ -2964,17 +2966,24 @@ def render_charts_page(board_path: Path, config: dict[str, Any], query: dict[str
         if selected_row is not None
         else None
     )
+    window = (_query_first(query, "window") or "1h").casefold()
+    if window not in CHART_WINDOWS:
+        window = "1h"
+    window_config = chart_window_config(window)
     history = (
         api_history(
             selected_route,
             board_path,
-            {"max_points": ["25000"]},
+            {
+                "max_points": [str(window_config["max_points"])],
+                "hours": [str(window_config["hours"])],
+                "bucket_seconds": [str(window_config["bucket_seconds"])],
+            },
         ).get("rows")
         or []
         if selected_row is not None
         else []
     )
-    window = (_query_first(query, "window") or "1h").casefold()
     history = filter_chart_history(history, window)
     body = f"""
     <section class="charts-page">
@@ -3173,13 +3182,24 @@ def render_chart_blank_state() -> str:
     """
 
 
+CHART_WINDOWS: dict[str, dict[str, float | int | str]] = {
+    "1m": {"label": "1M", "hours": 1 / 60, "bucket_seconds": 1, "max_points": 1200},
+    "5m": {"label": "5M", "hours": 5 / 60, "bucket_seconds": 1, "max_points": 1200},
+    "30m": {"label": "30M", "hours": 0.5, "bucket_seconds": 2, "max_points": 1200},
+    "1h": {"label": "1H", "hours": 1, "bucket_seconds": 3, "max_points": 1200},
+    "4h": {"label": "4H", "hours": 4, "bucket_seconds": 12, "max_points": 1200},
+    "12h": {"label": "12H", "hours": 12, "bucket_seconds": 36, "max_points": 1200},
+    "3d": {"label": "3D", "hours": 72, "bucket_seconds": 216, "max_points": 1200},
+    "7d": {"label": "7D", "hours": 168, "bucket_seconds": 504, "max_points": 1200},
+}
+
+
+def chart_window_config(window: str) -> dict[str, float | int | str]:
+    return CHART_WINDOWS.get(str(window).casefold(), CHART_WINDOWS["1h"])
+
+
 def filter_chart_history(history: list[dict[str, Any]], window: str) -> list[dict[str, Any]]:
-    hours = {
-        "1m": 1 / 60,
-        "5m": 5 / 60,
-        "30m": 0.5,
-        "1h": 1,
-    }.get(window, 1)
+    hours = float(chart_window_config(window)["hours"])
     cutoff_us = int((time.time() - hours * 3600) * 1_000_000)
     return [
         row
@@ -3198,7 +3218,7 @@ def render_selected_chart(
     long_leg = legs.get("long") or {}
     short_leg = legs.get("short") or {}
     route_key = board.route_key_url(str(row.get("route_key") or ""))
-    windows = [("1m", "1M"), ("5m", "5M"), ("30m", "30M"), ("1h", "1H")]
+    windows = [(value, str(config["label"])) for value, config in CHART_WINDOWS.items()]
     return f"""
     <section class="selected-chart">
       <header class="selected-chart-head">
@@ -3265,12 +3285,10 @@ def render_live_spread_chart(
     history: list[dict[str, Any]],
     window: str,
 ) -> str:
-    hours = {
-        "1m": 1 / 60,
-        "5m": 5 / 60,
-        "30m": 0.5,
-        "1h": 1,
-    }.get(window, 1)
+    window_config = chart_window_config(window)
+    hours = float(window_config["hours"])
+    bucket_seconds = int(window_config["bucket_seconds"])
+    max_points = int(window_config["max_points"])
     initial = {
         "ok": True,
         "rows": history,
@@ -3302,6 +3320,8 @@ def render_live_spread_chart(
       if (!root) return;
       const routeKey = {json.dumps(route_key)};
       const hours = {hours};
+      const bucketSeconds = {bucket_seconds};
+      const maxPoints = {max_points};
       const canvas = root.querySelector('[data-live-chart-canvas]');
       const tooltip = root.querySelector('[data-live-chart-tooltip]');
       const state = document.querySelector('[data-chart-live-state]');
@@ -3588,7 +3608,7 @@ def render_live_spread_chart(
         controller = new AbortController();
         state.textContent = 'Sampling exact public order books...';
         try {{
-          const response = await fetch(`/api/history/${{encodeURIComponent(routeKey)}}?live=1&hours=${{hours}}&max_points=25000`, {{
+          const response = await fetch(`/api/history/${{encodeURIComponent(routeKey)}}?live=1&hours=${{hours}}&bucket_seconds=${{bucketSeconds}}&max_points=${{maxPoints}}`, {{
             cache: 'no-store',
             signal: controller.signal,
           }});
@@ -3618,7 +3638,7 @@ def render_live_spread_chart(
         if (index >= 0) historyRows[index] = row;
         else historyRows.push(row);
         historyRows.sort((a, b) => Number(a.quote_ts_us) - Number(b.quote_ts_us));
-        if (historyRows.length > 25000) historyRows = historyRows.slice(-25000);
+        if (historyRows.length > maxPoints) historyRows = historyRows.slice(-maxPoints);
       }}
       function startStream() {{
         if (!window.EventSource) return false;

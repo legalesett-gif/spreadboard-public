@@ -5,6 +5,8 @@ from pathlib import Path
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from spreadboard import api_spreads, live, server
 from scripts.api_discovery_worker import build_parser as discovery_worker_parser
 from scripts.run_spreadboard_service import RefreshLoop, _merge_newer_fast_quotes
@@ -467,6 +469,16 @@ def test_dex_contract_guard_rejects_contract_from_another_token() -> None:
     ) == []
 
 
+def test_dex_contract_guard_accepts_exact_dynamic_identity() -> None:
+    assert api_spreads._dex_contract_mirage_reasons(
+        token="DYNAMIC",
+        chain_id="56",
+        contract="0xAbC",
+        identity_key="eip155:56/erc20:0xabc",
+        watchlist={},
+    ) == []
+
+
 def test_native_settled_history_is_not_mislabeled_as_current_funding() -> None:
     result = live._native_funding_result(
         [
@@ -821,6 +833,48 @@ def test_okx_dynamic_catalogue_keeps_only_unique_symbol_contracts(
     assert assets[0].identity_key == "eip155:1/erc20:0x111"
 
 
+def test_okx_dynamic_catalogue_prioritizes_funding_before_volume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS", "1")
+    source = sources.OkxDexQuoteSource(request_interval_seconds=0)
+    refs = (
+        MarketQuote(
+            token="CARRY", venue="Bybit", market_type="Futures",
+            bid=1, ask=1, bid_vwap=1, ask_vwap=1, quote_ts_us=1,
+            source_name="test", funding_rate_pct=0.2,
+            funding_interval_hours=4, volume_24h_usd=10,
+        ),
+        MarketQuote(
+            token="VOLUME", venue="Bybit", market_type="Futures",
+            bid=1, ask=1, bid_vwap=1, ask_vwap=1, quote_ts_us=1,
+            source_name="test", funding_rate_pct=0.01,
+            funding_interval_hours=4, volume_24h_usd=1_000_000,
+        ),
+    )
+
+    class Okx:
+        @staticmethod
+        def list_tokens(*, chain: str, **_kwargs: object) -> dict[str, object]:
+            if chain != "1":
+                return {"status": "ok", "tokens": []}
+            return {
+                "status": "ok",
+                "tokens": [
+                    {"symbol": "CARRY", "address": "0x1", "decimals": 18, "chain_index": "1"},
+                    {"symbol": "VOLUME", "address": "0x2", "decimals": 18, "chain_index": "1"},
+                ],
+            }
+
+    assets, errors = source._discover_okx_assets(
+        context=SimpleNamespace(reference_quotes=refs, timed_out=lambda: False),
+        credentials=object(), okx_dex=Okx, existing_tokens=set(),
+    )
+
+    assert errors == []
+    assert [asset.token for asset in assets] == ["CARRY"]
+
+
 def test_dex_source_health_keeps_sanitized_provider_diagnostics() -> None:
     payload = {
         "source_refresh": {
@@ -883,6 +937,10 @@ def test_short_chart_windows_filter_exact_elapsed_time() -> None:
     assert len(server.filter_chart_history(history, "5m")) == 2
     assert len(server.filter_chart_history(history, "30m")) == 3
     assert len(server.filter_chart_history(history, "1h")) == 4
+    assert server.chart_window_config("4h")["hours"] == 4
+    assert server.chart_window_config("12h")["hours"] == 12
+    assert server.chart_window_config("3d")["hours"] == 72
+    assert server.chart_window_config("7d")["hours"] == 168
 
 
 def test_discovery_publishes_completed_sources_before_slowest_source(

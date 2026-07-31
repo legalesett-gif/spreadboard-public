@@ -46,6 +46,7 @@ NATIVE_FUTURES_VENUES = {
     "Bybit",
     "Gate",
     "Kraken Futures",
+    "Kucoin Futures",
     "OKX",
 }
 NATIVE_SPOT_VENUES = {
@@ -621,6 +622,10 @@ def _native_order_book(
         url = "https://futures.kraken.com/derivatives/api/v3/orderbook?" + urlencode(
             {"symbol": f"pf_{base.lower()}usd"}
         )
+    elif venue == "Kucoin Futures":
+        url = "https://api-futures.kucoin.com/api/v1/level2/depth20?" + urlencode(
+            {"symbol": f"{base}USDTM"}
+        )
     else:
         url = "https://www.okx.com/api/v5/market/books?" + urlencode(
             {"instId": f"{base}-USDT-SWAP", "sz": 20}
@@ -640,6 +645,9 @@ def _native_order_book(
     elif venue == "Kraken Futures":
         raw_bids = (payload.get("orderBook") or {}).get("bids")
         raw_asks = (payload.get("orderBook") or {}).get("asks")
+    elif venue == "Kucoin Futures":
+        raw_bids = (payload.get("data") or {}).get("bids")
+        raw_asks = (payload.get("data") or {}).get("asks")
     elif venue == "OKX":
         books = payload.get("data") or []
         raw_bids = books[0].get("bids") if books else []

@@ -136,6 +136,7 @@ def load_history(
     route_kind: str | None = None,
     max_points: int = 240,
     since_us: int | None = None,
+    bucket_seconds: int | None = None,
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> list[dict[str, Any]]:
     connection = _connect(db_path)
@@ -154,28 +155,56 @@ def load_history(
         clauses.append("quote_ts_us >= ?")
         params.append(int(since_us))
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params.append(max(1, min(25000, int(max_points))))
+    columns = """
+            route_key, quote_ts_us, token, route_kind, long_venue, long_market_type,
+            short_venue, short_market_type, executable_spread_pct,
+            depth_weighted_spread_pct, funding_apr_pct, funding_daily_pct,
+            long_price, short_price, long_bid_price, long_ask_price,
+            short_bid_price, short_ask_price, exit_spread_pct,
+            long_bid_vwap_price, long_ask_vwap_price,
+            short_bid_vwap_price, short_ask_vwap_price,
+            sample_source, target_notional_usd,
+            long_current_funding_pct, short_current_funding_pct,
+            long_funding_interval_hours, short_funding_interval_hours,
+            long_next_funding_ts_us, short_next_funding_ts_us
+    """
+    limit = max(1, min(25000, int(max_points)))
     try:
-        rows = connection.execute(
-            f"""
-            SELECT route_key, quote_ts_us, token, route_kind, long_venue, long_market_type,
-                   short_venue, short_market_type, executable_spread_pct,
-                   depth_weighted_spread_pct, funding_apr_pct, funding_daily_pct,
-                   long_price, short_price, long_bid_price, long_ask_price,
-                   short_bid_price, short_ask_price, exit_spread_pct,
-                   long_bid_vwap_price, long_ask_vwap_price,
-                   short_bid_vwap_price, short_ask_vwap_price,
-                   sample_source, target_notional_usd,
-                   long_current_funding_pct, short_current_funding_pct,
-                   long_funding_interval_hours, short_funding_interval_hours,
-                   long_next_funding_ts_us, short_next_funding_ts_us
-            FROM route_points
-            {where}
-            ORDER BY quote_ts_us DESC
-            LIMIT ?
-            """,
-            params,
-        ).fetchall()
+        if bucket_seconds is not None and int(bucket_seconds) > 0:
+            bucket_us = max(1, int(bucket_seconds)) * 1_000_000
+            rows = connection.execute(
+                f"""
+                WITH filtered AS (
+                    SELECT {columns}
+                    FROM route_points
+                    {where}
+                ), bucketed AS (
+                    SELECT filtered.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY CAST(quote_ts_us / ? AS INTEGER)
+                               ORDER BY quote_ts_us DESC
+                           ) AS bucket_rank
+                    FROM filtered
+                )
+                SELECT {columns}
+                FROM bucketed
+                WHERE bucket_rank = 1
+                ORDER BY quote_ts_us DESC
+                LIMIT ?
+                """,
+                [*params, bucket_us, limit],
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                f"""
+                SELECT {columns}
+                FROM route_points
+                {where}
+                ORDER BY quote_ts_us DESC
+                LIMIT ?
+                """,
+                [*params, limit],
+            ).fetchall()
     finally:
         connection.close()
     return [

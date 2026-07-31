@@ -239,11 +239,21 @@ class OkxDexQuoteSource:
             == 1
         }
 
-        def priority(symbol: str) -> tuple[int, float, str]:
+        def priority(symbol: str) -> tuple[float, int, float, str]:
             refs = reference_by_token.get(symbol) or []
             has_futures = any(quote.market_type == "Futures" for quote in refs)
+            projected_funding_24h = max(
+                (
+                    abs(quote.funding_rate_pct or 0.0)
+                    * 24.0
+                    / max(quote.funding_interval_hours or 8.0, 0.01)
+                    for quote in refs
+                    if quote.market_type == "Futures"
+                ),
+                default=0.0,
+            )
             volume = max((quote.volume_24h_usd or 0.0 for quote in refs), default=0.0)
-            return (1 if has_futures else 0, volume, symbol)
+            return (projected_funding_24h, 1 if has_futures else 0, volume, symbol)
 
         selected = sorted(unique_matches, key=priority, reverse=True)[:limit]
         assets: list[WatchAsset] = []
