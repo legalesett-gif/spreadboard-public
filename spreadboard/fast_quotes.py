@@ -805,6 +805,28 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                 item.get("lastFundingRate"),
                 next_funding_ms=item.get("nextFundingTime"),
             )
+        if venue == "Kucoin Futures":
+            payload = _json_url(
+                "https://api-futures.kucoin.com/api/v1/funding-rate/"
+                f"{compact}M/current"
+            )
+            item = payload.get("data") or {}
+            return _funding_fields(
+                item.get("value"),
+                interval_hours=_milliseconds_to_hours(item.get("granularity")),
+                next_funding_ms=item.get("fundingTime"),
+            )
+        if venue == "Mexc":
+            payload = _json_url(
+                "https://contract.mexc.com/api/v1/contract/funding_rate/"
+                f"{base}_USDT"
+            )
+            item = payload.get("data") or {}
+            return _funding_fields(
+                item.get("fundingRate"),
+                interval_hours=item.get("collectCycle"),
+                next_funding_ms=item.get("nextSettleTime"),
+            )
         if venue == "Hyperliquid":
             payload = _json_post(
                 "https://api.hyperliquid.xyz/info",
@@ -838,6 +860,11 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
     except Exception:
         return {}
     return {}
+
+
+def _milliseconds_to_hours(value: Any) -> float | None:
+    parsed = _optional_number(value)
+    return parsed / 3_600_000.0 if parsed is not None and parsed > 0 else None
 
 
 def _ccxt_current_funding(

@@ -244,6 +244,48 @@ def test_native_binance_funding_uses_official_interval_endpoint(
     assert result["funding_interval_hours"] == 8
 
 
+def test_native_kucoin_funding_uses_public_current_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "spreadboard.fast_quotes._json_url",
+        lambda _url: {
+            "data": {
+                "value": "-0.000072",
+                "granularity": 3_600_000,
+                "fundingTime": 1_800_000_000_000,
+            }
+        },
+    )
+
+    result = _native_current_funding("Kucoin Futures", "COTI/USDT:USDT")
+
+    assert result["current_funding_pct"] == pytest.approx(-0.0072)
+    assert result["funding_interval_hours"] == 1
+    assert result["next_funding_ts_us"] == 1_800_000_000_000_000
+
+
+def test_native_mexc_funding_uses_public_contract_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "spreadboard.fast_quotes._json_url",
+        lambda _url: {
+            "data": {
+                "fundingRate": "-0.002911",
+                "collectCycle": 4,
+                "nextSettleTime": 1_800_000_000_000,
+            }
+        },
+    )
+
+    result = _native_current_funding("Mexc", "VANRY/USDT:USDT")
+
+    assert result["current_funding_pct"] == pytest.approx(-0.2911)
+    assert result["funding_interval_hours"] == 4
+    assert result["next_funding_ts_us"] == 1_800_000_000_000_000
+
+
 def test_native_hyperliquid_funding_uses_live_asset_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
