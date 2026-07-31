@@ -117,9 +117,7 @@ class OkxDexQuoteSource:
             if quote.market_type in {"Spot", "Futures"}
         }
         assets = [
-            asset
-            for asset in _dex_assets(context.watchlist)
-            if asset.token in reference_tokens
+            asset for asset in _dex_assets(context.watchlist) if asset.token in reference_tokens
         ]
         dynamic_assets, catalogue_errors = self._discover_okx_assets(
             context=context,
@@ -924,11 +922,7 @@ def default_sources(
         spot_batches = _batched_cex_sources(spot, batch_size=5)
         futures_batches = _batched_cex_sources(futures, batch_size=5)
         source_specs: list[DiscoverySource] = [
-            *[
-                source
-                for pair in zip(spot_batches, futures_batches)
-                for source in pair
-            ],
+            *[source for pair in zip(spot_batches, futures_batches) for source in pair],
             *spot_batches[len(futures_batches) :],
             *futures_batches[len(spot_batches) :],
             OkxDexQuoteSource(),
@@ -1739,6 +1733,15 @@ def _fetch_funding_rates(
 ) -> Mapping[str, Any]:
     if context.timed_out() or not symbols:
         return {}
+    native = _fetch_native_bulk_funding_rates(
+        exchange,
+        symbols,
+        context=context,
+        errors=errors,
+        venue=venue,
+    )
+    if native is not None:
+        return native
     method = getattr(exchange, "fetch_funding_rates", None)
     has_bulk = bool(getattr(exchange, "has", {}).get("fetchFundingRates"))
     if not callable(method) or not has_bulk:
@@ -1760,6 +1763,173 @@ def _fetch_funding_rates(
             if isinstance(item, Mapping) and item.get("symbol")
         }
     return {}
+
+
+def _fetch_native_bulk_funding_rates(
+    exchange: Any,
+    symbols: Sequence[str],
+    *,
+    context: DiscoveryContext,
+    errors: list[str],
+    venue: str,
+) -> Mapping[str, Any] | None:
+    specs: dict[str, tuple[str, str, str, str, float]] = {
+        "Mexc": (
+            "https://contract.mexc.com/api/v1/contract/funding_rate",
+            "data",
+            "symbol",
+            "fundingRate",
+            1.0,
+        ),
+        "Kucoin Futures": (
+            "https://api-futures.kucoin.com/api/v1/contracts/active",
+            "data",
+            "symbol",
+            "fundingFeeRate",
+            1.0,
+        ),
+        "HTX": (
+            "https://api.hbdm.com/linear-swap-api/v1/swap_batch_funding_rate",
+            "data",
+            "contract_code",
+            "funding_rate",
+            1.0,
+        ),
+        "Phemex": (
+            "https://api.phemex.com/md/v2/ticker/24hr/all",
+            "result",
+            "symbol",
+            "fundingRateRr",
+            1.0,
+        ),
+        "CoinEx": (
+            "https://api.coinex.com/v2/futures/funding-rate",
+            "data",
+            "market",
+            "next_funding_rate",
+            1.0,
+        ),
+        "WhiteBIT": (
+            "https://whitebit.com/api/v4/public/futures",
+            "result",
+            "ticker_id",
+            "funding_rate",
+            1.0,
+        ),
+        "BitMart": (
+            "https://api-cloud-v2.bitmart.com/contract/public/details",
+            "data.symbols",
+            "symbol",
+            "funding_rate",
+            1.0,
+        ),
+        "Coinbase International": (
+            "https://api.international.coinbase.com/api/v1/instruments",
+            "",
+            "symbol",
+            "quote.predicted_funding",
+            1.0,
+        ),
+    }
+    spec = specs.get(venue)
+    if spec is None:
+        return None
+    url, rows_path, id_path, rate_path, multiplier = spec
+    try:
+        payload = fetch_json(
+            url,
+            {"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"},
+            context.remaining_timeout(12.0),
+        )
+        rows = _nested_value(payload, rows_path)
+        if not isinstance(rows, list):
+            raise ValueError("funding payload did not contain a row list")
+        by_market_id = {
+            _normalize_market_id(_nested_value(row, id_path)): row
+            for row in rows
+            if isinstance(row, Mapping) and _nested_value(row, id_path)
+        }
+        result: dict[str, Any] = {}
+        markets = getattr(exchange, "markets", {}) or {}
+        for symbol in symbols:
+            market = markets.get(symbol) or {}
+            market_id = _normalize_market_id(market.get("id"))
+            item = by_market_id.get(market_id)
+            rate = as_float(_nested_value(item, rate_path)) if item else None
+            if rate is None:
+                continue
+            interval_hours = _native_funding_interval_hours(venue, item)
+            next_funding_ms = _native_next_funding_ms(venue, item)
+            result[str(symbol)] = {
+                "fundingRate": rate * multiplier,
+                "interval": f"{interval_hours:g}h" if interval_hours else None,
+                "nextFundingTimestamp": next_funding_ms,
+                "info": item,
+            }
+        return result
+    except Exception as exc:
+        errors.append(f"{venue}:native_funding_rates:{clean_error(exc)}")
+        return None
+
+
+def _nested_value(value: Any, path: str) -> Any:
+    current = value
+    if not path:
+        return current
+    for key in path.split("."):
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _normalize_market_id(value: Any) -> str:
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+def _native_funding_interval_hours(venue: str, item: Mapping[str, Any]) -> float | None:
+    if venue == "Mexc":
+        return as_float(item.get("collectCycle"))
+    if venue == "Kucoin Futures":
+        value = as_float(
+            item.get("currentFundingRateGranularity") or item.get("fundingRateGranularity")
+        )
+        return value / 3_600_000.0 if value else None
+    if venue == "WhiteBIT":
+        value = as_float(item.get("funding_interval_minutes"))
+        return value / 60.0 if value else None
+    if venue == "BitMart":
+        return as_float(item.get("funding_interval_hours"))
+    if venue == "Coinbase International":
+        value = as_float(item.get("funding_interval"))
+        return value / 3_600_000_000_000.0 if value else None
+    if venue == "HTX":
+        return _timestamp_interval_hours(item.get("funding_time"), item.get("next_funding_time"))
+    return 8.0
+
+
+def _native_next_funding_ms(venue: str, item: Mapping[str, Any]) -> int | None:
+    keys = {
+        "Mexc": ("nextSettleTime",),
+        "Kucoin Futures": ("nextFundingRateDateTime",),
+        "HTX": ("next_funding_time", "funding_time"),
+        "CoinEx": ("next_funding_time",),
+        "WhiteBIT": ("next_funding_rate_timestamp",),
+        "BitMart": ("funding_time",),
+    }.get(venue, ())
+    for key in keys:
+        value = _as_int(item.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _timestamp_interval_hours(current: Any, upcoming: Any) -> float | None:
+    current_ms = as_float(current)
+    upcoming_ms = as_float(upcoming)
+    if current_ms is None or upcoming_ms is None or upcoming_ms <= current_ms:
+        return None
+    return (upcoming_ms - current_ms) / 3_600_000.0
 
 
 def _funding_values(value: Any) -> dict[str, Any]:
@@ -1923,8 +2093,7 @@ def _verify_top_candidate_books(
     pairs = [
         pair
         for pair in pairs
-        if market_type
-        in {pair.long_quote.market_type, pair.short_quote.market_type}
+        if market_type in {pair.long_quote.market_type, pair.short_quote.market_type}
     ]
     if max_candidates <= 0:
         selected_pairs = pairs
@@ -2137,8 +2306,7 @@ def _candidate_is_publicly_rankable(pair: QuoteCandidatePair) -> bool:
         if identity
     }
     return len(identities) == 1 and all(
-        quote.identity_key in identities
-        for quote in (pair.long_quote, pair.short_quote)
+        quote.identity_key in identities for quote in (pair.long_quote, pair.short_quote)
     )
 
 

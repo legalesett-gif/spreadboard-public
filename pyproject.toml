@@ -5,6 +5,7 @@ requires-python = ">=3.13"
 dependencies = [
   "ccxt>=4.4.0",
   "click>=8.1",
+  "protobuf==5.29.5",
 ]
 
 [build-system]

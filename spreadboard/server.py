@@ -22,7 +22,15 @@ import click
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from spreadboard import alerts, api_spreads, board, intel, live, market_history  # noqa: E402
+from spreadboard import (  # noqa: E402
+    alerts,
+    api_spreads,
+    board,
+    intel,
+    live,
+    live_book_cache,
+    market_history,
+)
 
 _INTEL_CACHE_TTL_SECONDS = 20.0
 _INTEL_CACHE_LOCK = threading.Lock()
@@ -630,12 +638,23 @@ def api_source_health(board_path: Path, config: dict[str, Any]) -> dict[str, Any
         "ok": market.get("ok"),
         "mode": "canonical_public_api_health",
         "canonical_api": (market.get("source_health") or {}).get("canonical_api") or {},
+        "websocket_books": _live_book_status(),
         "market": {
             "asset_count": (market.get("summary") or {}).get("total_tokens"),
             "route_count": (market.get("summary") or {}).get("total_rows"),
             "funding_pair_count": (market.get("summary") or {}).get("funding_rows"),
         },
     }
+
+
+def _live_book_status() -> dict[str, Any]:
+    if not live_book_cache.DEFAULT_PATH.exists():
+        return {"status": "empty", "books": 0, "age_seconds": None}
+    store = live_book_cache.LiveBookStore()
+    try:
+        return store.status()
+    finally:
+        store.close()
 
 
 def api_intel(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:

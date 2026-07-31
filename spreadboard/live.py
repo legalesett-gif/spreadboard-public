@@ -68,6 +68,8 @@ VENUE_EXCHANGE_IDS = {
     "Phemex": "phemex",
     "CoinEx": "coinex",
     "WhiteBIT": "whitebit",
+    "BitMart": "bitmart",
+    "XT": "xt",
 }
 
 
@@ -158,8 +160,7 @@ def _route_leg_details(board_row: dict[str, Any]) -> dict[str, dict[str, Any]]:
     legs: dict[str, dict[str, Any]] = {}
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
     future_map = {
-        pool.submit(_leg_detail, board_row, side=side): side
-        for side in ("long", "short")
+        pool.submit(_leg_detail, board_row, side=side): side for side in ("long", "short")
     }
     try:
         try:
@@ -199,16 +200,11 @@ def _leg_detail(board_row: dict[str, Any], *, side: str) -> dict[str, Any]:
     market_type = board_row.get(f"{side}_market_type")
     symbol = str(board_row.get("symbol") or "").upper()
     exchange_id = venue_exchange_id(str(venue or ""), str(market_type or ""))
-    market_symbol = (
-        board_row.get(f"{side}_market_symbol")
-        or market_symbol_for(symbol, str(market_type or ""), exchange_id)
+    market_symbol = board_row.get(f"{side}_market_symbol") or market_symbol_for(
+        symbol, str(market_type or ""), exchange_id
     )
     if _env_bool("SPREADBOARD_LIGHTWEIGHT_MODE"):
-        funding = (
-            fetch_funding_24h(exchange_id, market_symbol)
-            if market_type == "Futures"
-            else {}
-        )
+        funding = fetch_funding_24h(exchange_id, market_symbol) if market_type == "Futures" else {}
         return _leg_detail_from_board(
             board_row,
             side=side,
@@ -272,8 +268,7 @@ def _leg_public_enrichment(
         )
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks))
     future_map = {
-        pool.submit(fn, *args): (name, fallback)
-        for name, (fn, args, fallback) in tasks.items()
+        pool.submit(fn, *args): (name, fallback) for name, (fn, args, fallback) in tasks.items()
     }
     completed: dict[str, dict[str, Any]] = {}
     try:
@@ -286,7 +281,10 @@ def _leg_public_enrichment(
                 try:
                     value = future.result()
                 except Exception as exc:  # noqa: BLE001
-                    value = {"status": "unavailable", "reason": f"{type(exc).__name__}:{str(exc)[:120]}"}
+                    value = {
+                        "status": "unavailable",
+                        "reason": f"{type(exc).__name__}:{str(exc)[:120]}",
+                    }
                 completed[name] = value if isinstance(value, dict) else fallback
         except concurrent.futures.TimeoutError:
             pass
@@ -376,8 +374,7 @@ def _leg_detail_from_board(
             else board_row.get(f"{side}_funding_interval_assumed", False)
         ),
         "next_funding_ts_us": (
-            funding.get("next_funding_ts_us")
-            or board_row.get(f"{side}_next_funding_ts_us")
+            funding.get("next_funding_ts_us") or board_row.get(f"{side}_next_funding_ts_us")
         ),
         "funding_history": funding.get("history") or [],
         "funding_history_status": funding.get("status", "not_applicable"),
@@ -499,19 +496,13 @@ def _fetch_native_ohlcv_stats(
     token = symbol.split("/", 1)[0].upper()
     is_futures = ":" in symbol
     if is_futures:
-        path = (
-            "https://api.gateio.ws/api/v4/futures/usdt/candlesticks?"
-            + urllib.parse.urlencode(
+        path = "https://api.gateio.ws/api/v4/futures/usdt/candlesticks?" + urllib.parse.urlencode(
                 {"contract": f"{token}_USDT", "interval": "1h", "limit": 30}
             )
-        )
     else:
-        path = (
-            "https://api.gateio.ws/api/v4/spot/candlesticks?"
-            + urllib.parse.urlencode(
+        path = "https://api.gateio.ws/api/v4/spot/candlesticks?" + urllib.parse.urlencode(
                 {"currency_pair": f"{token}_USDT", "interval": "1h", "limit": 30}
             )
-        )
     try:
         request = urllib.request.Request(path, headers={"User-Agent": "SpreadBoard/1"})
         with urllib.request.urlopen(
@@ -578,7 +569,11 @@ def volatility_from_ohlcv(candles: list[Any]) -> dict[str, Any]:
     highs = [value for value in highs if value and value > 0]
     lows = [value for value in lows if value and value > 0]
     if len(closes) < 3:
-        return {"status": "unavailable", "reason": "not_enough_ohlcv_candles", "samples": len(closes)}
+        return {
+            "status": "unavailable",
+            "reason": "not_enough_ohlcv_candles",
+            "samples": len(closes),
+        }
     returns = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
     realized = math.sqrt(sum(value * value for value in returns)) * 100.0
     high_low_range = ((max(highs) / min(lows)) - 1.0) * 100.0 if highs and lows else None
@@ -593,8 +588,16 @@ def volatility_from_ohlcv(candles: list[Any]) -> dict[str, Any]:
 def route_spread_volatility_24h(long_ohlcv: Any, short_ohlcv: Any) -> dict[str, Any]:
     if not isinstance(long_ohlcv, list) or not isinstance(short_ohlcv, list):
         return {"status": "unavailable", "reason": "leg_ohlcv_missing"}
-    long_by_ts = {_int_or_none(item[0]): _float_or_none(item[4]) for item in long_ohlcv if isinstance(item, list)}
-    short_by_ts = {_int_or_none(item[0]): _float_or_none(item[4]) for item in short_ohlcv if isinstance(item, list)}
+    long_by_ts = {
+        _int_or_none(item[0]): _float_or_none(item[4])
+        for item in long_ohlcv
+        if isinstance(item, list)
+    }
+    short_by_ts = {
+        _int_or_none(item[0]): _float_or_none(item[4])
+        for item in short_ohlcv
+        if isinstance(item, list)
+    }
     spreads = []
     for ts in sorted(set(long_by_ts) & set(short_by_ts))[-25:]:
         long_close = long_by_ts.get(ts)
@@ -602,7 +605,11 @@ def route_spread_volatility_24h(long_ohlcv: Any, short_ohlcv: Any) -> dict[str, 
         if long_close and short_close and long_close > 0:
             spreads.append((short_close / long_close - 1.0) * 100.0)
     if len(spreads) < 3:
-        return {"status": "unavailable", "reason": "not_enough_aligned_spread_candles", "samples": len(spreads)}
+        return {
+            "status": "unavailable",
+            "reason": "not_enough_aligned_spread_candles",
+            "samples": len(spreads),
+        }
     returns = [spreads[i] - spreads[i - 1] for i in range(1, len(spreads))]
     return {
         "status": "ok",
@@ -640,17 +647,15 @@ def enrich_snapshot_funding_24h(
         row
         for bucket in ("api_discovered_rows", "dex_discovered_rows")
         for row in snapshot.get(bucket) or []
-        if isinstance(row, dict)
-        and (
-            route_keys is None
-            or _snapshot_route_key(row) in route_keys
-        )
+        if isinstance(row, dict) and (route_keys is None or _snapshot_route_key(row) in route_keys)
     ]
     leg_keys: dict[tuple[str, str], tuple[str, str]] = {}
     for row in rows:
         token = str(row.get("token") or "").upper()
         notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
-        route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+        route_inputs = (
+            notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+        )
         for side in ("long", "short"):
             if row.get(f"{side}_market_type") != "Futures":
                 continue
@@ -685,15 +690,16 @@ def enrich_snapshot_funding_24h(
     projected_routes = 0
     for row in rows:
         has_futures_leg = any(
-            row.get(f"{side}_market_type") == "Futures"
-            for side in ("long", "short")
+            row.get(f"{side}_market_type") == "Futures" for side in ("long", "short")
         )
         token = str(row.get("token") or "").upper()
         notes = row.setdefault("notes", {})
         if not isinstance(notes, dict):
             notes = {}
             row["notes"] = notes
-        route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+        route_inputs = (
+            notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+        )
         funding = notes.setdefault("funding", {})
         if not isinstance(funding, dict):
             funding = {}
@@ -748,11 +754,7 @@ def enrich_snapshot_funding_24h(
             settled[side] = _float_or_none(result.get("funding_24h_pct"))
             projected[side] = live_projection
 
-        if (
-            has_futures_leg
-            and settled.get("long") is not None
-            and settled.get("short") is not None
-        ):
+        if has_futures_leg and settled.get("long") is not None and settled.get("short") is not None:
             row["funding_24h_pct"] = settled["short"] - settled["long"]
             row["funding_24h_source"] = "settled_public_events"
             settled_routes += 1
@@ -871,8 +873,12 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
             if exchange_id == "binance"
             else "https://fapi.asterdex.com/fapi/v3"
         )
-        url = host + "/fundingRate?" + urllib.parse.urlencode(
+        url = (
+            host
+            + "/fundingRate?"
+            + urllib.parse.urlencode(
             {"symbol": f"{base}USDT", "startTime": since_ms, "limit": "100"}
+        )
         )
         data = _public_json(url)
         if not isinstance(data, list):
@@ -923,12 +929,9 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
         )
         return _native_funding_result(history, exchange_id=exchange_id)
     if exchange_id == "gateio":
-        url = (
-            "https://api.gateio.ws/api/v4/futures/usdt/funding_rate?"
-            + urllib.parse.urlencode(
+        url = "https://api.gateio.ws/api/v4/futures/usdt/funding_rate?" + urllib.parse.urlencode(
                 {"contract": f"{base}_USDT", "from": since_ms // 1000, "limit": "100"}
             )
-        )
         data = _public_json(url)
         if not isinstance(data, list):
             return None
@@ -993,9 +996,8 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
         )
         return _native_funding_result(history, exchange_id=exchange_id)
     if exchange_id == "okx":
-        url = (
-            "https://www.okx.com/api/v5/public/funding-rate-history?"
-            + urllib.parse.urlencode({"instId": f"{base}-USDT-SWAP", "limit": "100"})
+        url = "https://www.okx.com/api/v5/public/funding-rate-history?" + urllib.parse.urlencode(
+            {"instId": f"{base}-USDT-SWAP", "limit": "100"}
         )
         data = _public_json(url)
         if data is None:
@@ -1011,18 +1013,15 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
         )
         return _native_funding_result(history, exchange_id=exchange_id)
     if exchange_id == "bybit":
-        url = (
-            "https://api.bybit.com/v5/market/funding/history?"
-            + urllib.parse.urlencode(
+        url = "https://api.bybit.com/v5/market/funding/history?" + urllib.parse.urlencode(
                 {"category": "linear", "symbol": f"{base}USDT", "limit": "100"}
             )
-        )
         data = _public_json(url)
         if data is None:
             return None
         if int(data.get("retCode") or 0) != 0:
             return {"status": "unavailable", "reason": "bybit_funding_history_error"}
-        raw_rows = ((data.get("result") or {}).get("list") or [])
+        raw_rows = (data.get("result") or {}).get("list") or []
         history = _normalize_native_funding_rows(
             raw_rows,
             timestamp_key="fundingRateTimestamp",
@@ -1033,12 +1032,10 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
     if exchange_id == "htx":
         url = (
             "https://api.hbdm.com/linear-swap-api/v1/swap_historical_funding_rate?"
-            + urllib.parse.urlencode(
-                {"contract_code": f"{base}-USDT", "page_size": "100"}
-            )
+            + urllib.parse.urlencode({"contract_code": f"{base}-USDT", "page_size": "100"})
         )
         data = _public_json(url)
-        raw_rows = (((data or {}).get("data") or {}).get("data") or [])
+        raw_rows = ((data or {}).get("data") or {}).get("data") or []
         history = _normalize_native_funding_rows(
             raw_rows,
             timestamp_key="funding_time",
@@ -1059,7 +1056,7 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
             )
         )
         data = _public_json(url)
-        raw_rows = (((data or {}).get("data") or {}).get("rows") or [])
+        raw_rows = ((data or {}).get("data") or {}).get("rows") or []
         history = _normalize_native_funding_rows(
             raw_rows,
             timestamp_key="fundingTime",
@@ -1068,9 +1065,7 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
         )
         return _native_funding_result(history, exchange_id=exchange_id)
     if exchange_id == "coinex":
-        url = (
-            "https://api.coinex.com/v2/futures/funding-rate-history?"
-            + urllib.parse.urlencode(
+        url = "https://api.coinex.com/v2/futures/funding-rate-history?" + urllib.parse.urlencode(
                 {
                     "market": f"{base}USDT",
                     "start_time": since_ms,
@@ -1078,7 +1073,6 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
                     "limit": "100",
                 }
             )
-        )
         data = _public_json(url)
         raw_rows = (data or {}).get("data") or []
         history = _normalize_native_funding_rows(
@@ -1106,6 +1100,53 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
             rate_key="fundingRate",
             since_ms=since_ms,
             timestamp_multiplier=1000,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "bitmart":
+        url = (
+            "https://api-cloud-v2.bitmart.com/contract/public/funding-rate-history?"
+            + urllib.parse.urlencode({"symbol": f"{base}USDT"})
+        )
+        data = _public_json(url)
+        history = _normalize_native_funding_rows(
+            (((data or {}).get("data") or {}).get("list") or []),
+            timestamp_key="funding_time",
+            rate_key="funding_rate",
+            since_ms=since_ms,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "xt":
+        url = (
+            "https://fapi.xt.com/future/market/v1/public/q/funding-rate-record?"
+            + urllib.parse.urlencode({"symbol": f"{base.lower()}_usdt", "limit": "100"})
+        )
+        data = _public_json(url)
+        history = _normalize_native_funding_rows(
+            (((data or {}).get("result") or {}).get("items") or []),
+            timestamp_key="createdTime",
+            rate_key="fundingRate",
+            since_ms=since_ms,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "coinbaseinternational":
+        url = (
+            "https://api.international.coinbase.com/api/v1/instruments/"
+            f"{base}-PERP/funding?" + urllib.parse.urlencode({"result_limit": "100"})
+        )
+        data = _public_json(url)
+        rows = []
+        for item in (data or {}).get("results") or []:
+            if not isinstance(item, dict):
+                continue
+            timestamp_ms = _iso_timestamp_ms(item.get("event_time"))
+            if timestamp_ms is None:
+                continue
+            rows.append({**item, "timestamp_ms": timestamp_ms})
+        history = _normalize_native_funding_rows(
+            rows,
+            timestamp_key="timestamp_ms",
+            rate_key="funding_rate",
+            since_ms=since_ms,
         )
         return _native_funding_result(history, exchange_id=exchange_id)
     return None
@@ -1159,6 +1200,16 @@ def _normalize_native_funding_rows(
     return history
 
 
+def _iso_timestamp_ms(value: Any) -> int | None:
+    try:
+        from datetime import datetime
+
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return int(parsed.timestamp() * 1000)
+
+
 def _native_funding_result(
     history: list[dict[str, Any]],
     *,
@@ -1175,9 +1226,7 @@ def _native_funding_result(
     latest = history[-1]
     next_funding_ts_us = None
     if interval:
-        next_funding_ts_us = int(
-            (latest["timestamp_ms"] + interval * 3600 * 1000) * 1000
-        )
+        next_funding_ts_us = int((latest["timestamp_ms"] + interval * 3600 * 1000) * 1000)
     return {
         "status": "ok",
         "funding_24h_pct": sum(item["rate_pct"] for item in history),
@@ -1331,11 +1380,12 @@ def _next_funding_ts_us(payload: dict[str, Any]) -> int | None:
     return timestamp
 
 
-def okx_dex_quote_summary(board_row: dict[str, Any], *, config: dict[str, Any] | None = None) -> dict[str, Any]:
+def okx_dex_quote_summary(
+    board_row: dict[str, Any], *, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
     config = config or {}
     venue_text = " ".join(
-        str(board_row.get(key) or "")
-        for key in ("long_venue", "short_venue")
+        str(board_row.get(key) or "") for key in ("long_venue", "short_venue")
     ).casefold()
     if (
         "Dex" not in {board_row.get("long_market_type"), board_row.get("short_market_type")}
@@ -1343,9 +1393,15 @@ def okx_dex_quote_summary(board_row: dict[str, Any], *, config: dict[str, Any] |
     ):
         return {"provider": "OKX DEX", "status": "not_applicable"}
     if config.get("okx_dex_quotes_enabled") is False:
-        return {"provider": "OKX DEX", "status": "disabled", "blockers": ["okx_dex_quotes_disabled"]}
+        return {
+            "provider": "OKX DEX",
+            "status": "disabled",
+            "blockers": ["okx_dex_quotes_disabled"],
+        }
     chain = str(board_row.get("dex_chain") or config.get("default_dex_chain") or "").strip()
-    token_address = str(board_row.get("dex_contract") or board_row.get("token_address") or "").strip()
+    token_address = str(
+        board_row.get("dex_contract") or board_row.get("token_address") or ""
+    ).strip()
     if not chain or not token_address:
         return {
             "provider": "OKX DEX",
@@ -1383,7 +1439,11 @@ def okx_dex_quote_summary(board_row: dict[str, Any], *, config: dict[str, Any] |
                 token_quantity=notional / Decimal(str(price)),
             )
     except Exception as exc:  # noqa: BLE001
-        return {"provider": "OKX DEX", "status": "blocked", "blockers": [f"{type(exc).__name__}:{str(exc)[:160]}"]}
+        return {
+            "provider": "OKX DEX",
+            "status": "blocked",
+            "blockers": [f"{type(exc).__name__}:{str(exc)[:160]}"],
+        }
     return sanitize_okx_quote(raw)
 
 
@@ -1442,7 +1502,9 @@ def fetch_exchange_rows(symbol: str) -> list[dict[str, Any]]:
     }
     try:
         try:
-            for future in concurrent.futures.as_completed(future_map, timeout=TOKEN_EXCHANGE_SCAN_TIMEOUT_SECONDS):
+            for future in concurrent.futures.as_completed(
+                future_map, timeout=TOKEN_EXCHANGE_SCAN_TIMEOUT_SECONDS
+            ):
                 row = future.result()
                 if row:
                     rows.append(row)
@@ -1533,7 +1595,10 @@ def fetch_dexscreener(symbol: str, cex_median_price: float | None) -> dict[str, 
         if price is None or abs(price - cex_median_price) > cex_median_price * 0.4:
             continue
         pairs.append(pair)
-    pairs.sort(key=lambda item: _float_or_none((item.get("liquidity") or {}).get("usd")) or 0.0, reverse=True)
+    pairs.sort(
+        key=lambda item: _float_or_none((item.get("liquidity") or {}).get("usd")) or 0.0,
+        reverse=True,
+    )
     if not pairs:
         return None
     pair = pairs[0]
@@ -1693,13 +1758,24 @@ def _merge_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "withdraw": None,
             },
         )
-        for key in ("perp_symbol", "spot_symbol", "perp_price", "spot_price", "funding_rate_pct", "deposit", "withdraw"):
+        for key in (
+            "perp_symbol",
+            "spot_symbol",
+            "perp_price",
+            "spot_price",
+            "funding_rate_pct",
+            "deposit",
+            "withdraw",
+        ):
             if existing.get(key) is None and row.get(key) is not None:
                 existing[key] = row[key]
-        existing["volume_usd"] = max(
+        existing["volume_usd"] = (
+            max(
             _float_or_none(existing.get("volume_usd")) or 0.0,
             _float_or_none(row.get("volume_usd")) or 0.0,
-        ) or None
+            )
+            or None
+        )
     result = list(merged.values())
     result.sort(
         key=lambda item: (
@@ -1714,7 +1790,12 @@ def _merge_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _transfer_note(buy: dict[str, Any], sell: dict[str, Any]) -> dict[str, Any]:
     needs_transfer = sell["leg"] in {"spot", "dex"} and buy["leg"] != "perp"
     if not needs_transfer:
-        return {"label": "no token transfer needed", "withdraw_open": None, "deposit_open": None, "needs_transfer": False}
+        return {
+            "label": "no token transfer needed",
+            "withdraw_open": None,
+            "deposit_open": None,
+            "needs_transfer": False,
+        }
     withdraw_open = True if buy["leg"] == "dex" else buy.get("withdraw")
     deposit_open = True if sell["leg"] == "dex" else sell.get("deposit")
     return {
@@ -1750,9 +1831,7 @@ def _display_venue(exchange_id: str) -> str:
 
 
 def _ccxt_exchange_class(ccxt_module: Any, exchange_id: str) -> Any:
-    for candidate in (
-        ("gateio", "gate") if exchange_id == "gateio" else (exchange_id,)
-    ):
+    for candidate in ("gateio", "gate") if exchange_id == "gateio" else (exchange_id,):
         exchange_class = getattr(ccxt_module, candidate, None)
         if exchange_class is not None:
             return exchange_class

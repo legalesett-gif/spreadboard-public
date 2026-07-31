@@ -30,12 +30,14 @@ from spreadboard import (
     market_history,
     public_rails,
     token_metadata,
+    verified_identity,
 )  # noqa: E402
 from spreadboard.server import SpreadBoardHandler, SpreadBoardServer  # noqa: E402
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 SNAPSHOT_PATH = RUNTIME_DIR / "api_discovery_latest.json"
 REFRESH_SNAPSHOT_PATH = RUNTIME_DIR / "api_discovery_refresh.json"
+GENERATED_IDENTITY_PATH = RUNTIME_DIR / "api_discovery_identity_registry.generated.json"
 
 
 class RefreshLoop:
@@ -52,8 +54,10 @@ class RefreshLoop:
             name="spreadboard-fast-quotes",
             daemon=True,
         )
+        self.websocket_process: subprocess.Popen[str] | None = None
 
     def start(self) -> None:
+        self._ensure_websocket_worker()
         self.thread.start()
         if not _env_bool("SPREADBOARD_LIGHTWEIGHT_MODE"):
             self.fast_thread.start()
@@ -63,13 +67,35 @@ class RefreshLoop:
         self.thread.join(timeout=5.0)
         if self.fast_thread.is_alive():
             self.fast_thread.join(timeout=5.0)
+        if self.websocket_process is not None and self.websocket_process.poll() is None:
+            self.websocket_process.terminate()
+            try:
+                self.websocket_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.websocket_process.kill()
 
     def run(self) -> None:
         while not self.stop_event.is_set():
+            self._ensure_websocket_worker()
             started = time.monotonic()
             self.refresh_once()
             elapsed = time.monotonic() - started
             self.stop_event.wait(max(15.0, self.interval_seconds - elapsed))
+
+    def _ensure_websocket_worker(self) -> None:
+        if _env_bool("SPREADBOARD_DISABLE_WEBSOCKETS"):
+            return
+        if self.websocket_process is not None and self.websocket_process.poll() is None:
+            return
+        self.websocket_process = subprocess.Popen(
+            [
+                sys.executable,
+                str(ROOT / "scripts/websocket_book_worker.py"),
+            ],
+            cwd=ROOT,
+            text=True,
+        )
+        _log(f"websocket book worker pid={self.websocket_process.pid}")
 
     def refresh_once(self) -> None:
         lightweight_mode = _env_bool("SPREADBOARD_LIGHTWEIGHT_MODE")
@@ -78,6 +104,9 @@ class RefreshLoop:
                 shutil.copyfile(SNAPSHOT_PATH, REFRESH_SNAPSHOT_PATH)
             else:
                 REFRESH_SNAPSHOT_PATH.unlink(missing_ok=True)
+        self._refresh_verified_identity_registry(
+            snapshot_path=SNAPSHOT_PATH if SNAPSHOT_PATH.exists() else REFRESH_SNAPSHOT_PATH
+        )
         command = [
             sys.executable,
             str(ROOT / "scripts/api_discovery_worker.py"),
@@ -89,6 +118,12 @@ class RefreshLoop:
             str(RUNTIME_DIR / "api_discovery_archive"),
             "--parts-dir",
             str(RUNTIME_DIR / "api_discovery_parts"),
+            "--identity-registry-path",
+            str(
+                GENERATED_IDENTITY_PATH
+                if GENERATED_IDENTITY_PATH.exists()
+                else ROOT / "data/api_discovery_identity_registry.json"
+            ),
             "--skip-broad-dex-spot",
             "--dex-spot-timeout-s",
             os.environ.get("SPREADBOARD_DEX_SPOT_TIMEOUT_SECONDS", "240"),
@@ -160,8 +195,27 @@ class RefreshLoop:
                 public_rails.refresh_public_rails(snapshot)
             except Exception as exc:  # noqa: BLE001 - rail coverage can be partial.
                 _log(f"transfer-rail refresh unavailable: {type(exc).__name__}: {exc}")
+            self._refresh_verified_identity_registry(snapshot_path=SNAPSHOT_PATH)
         del snapshot
         gc.collect()
+
+    def _refresh_verified_identity_registry(self, *, snapshot_path: Path) -> None:
+        try:
+            payload = verified_identity.build_verified_identity_registry(
+                static_registry_path=ROOT / "data/api_discovery_identity_registry.json",
+                watchlist_path=ROOT / "data/api_discovery_watchlist.json",
+                rails_path=RUNTIME_DIR / "public_transfer_rails.json",
+                snapshot_path=snapshot_path,
+                output_path=GENERATED_IDENTITY_PATH,
+            )
+            generation = payload.get("generation") or {}
+            _log(
+                "verified identity registry "
+                f"matches={generation.get('verified_matches', 0)} "
+                f"markets_added={generation.get('markets_added', 0)}"
+            )
+        except Exception as exc:  # noqa: BLE001 - static registry remains available.
+            _log(f"verified identity refresh unavailable: {type(exc).__name__}: {exc}")
 
     def run_fast_quotes(self) -> None:
         interval = max(
@@ -382,9 +436,8 @@ def _funding_lane(row: dict[str, Any]) -> str | None:
             str(row.get("short_venue") or ""),
         )
     ).casefold()
-    if (
-        "Futures" in {long_type, short_type}
-        and ("dex" in venue_text or "dex" in f"{long_type} {short_type}".casefold())
+    if "Futures" in {long_type, short_type} and (
+        "dex" in venue_text or "dex" in f"{long_type} {short_type}".casefold()
     ):
         return "DEX-FUTURES"
     if long_type == short_type == "Futures":

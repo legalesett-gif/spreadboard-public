@@ -6,12 +6,13 @@ import time
 
 import pytest
 
-from spreadboard import market_history, server
+from spreadboard import live_book_cache, market_history, server
 from spreadboard.fast_quotes import (
     FastQuoteRefresher,
     _expanded_token_rows,
     _fast_quote_lane,
     _has_permanent_mirage_guard,
+    _native_order_book,
     _native_spot_order_book,
     _native_current_funding,
     _okx_dex_leg_quote,
@@ -53,12 +54,8 @@ def test_fast_quote_selection_keeps_top_tokens_and_their_other_routes() -> None:
 
 
 def test_fast_quote_cycle_retries_temporary_guards_only() -> None:
-    assert not _has_permanent_mirage_guard(
-        {"blockers": ["mirage_guard:fast_requote_pending"]}
-    )
-    assert not _has_permanent_mirage_guard(
-        {"blockers": ["mirage_guard:fast_requote_unavailable"]}
-    )
+    assert not _has_permanent_mirage_guard({"blockers": ["mirage_guard:fast_requote_pending"]})
+    assert not _has_permanent_mirage_guard({"blockers": ["mirage_guard:fast_requote_unavailable"]})
     assert not _has_permanent_mirage_guard(
         {"blockers": ["mirage_guard:spot_sell_inventory_required"]}
     )
@@ -96,10 +93,7 @@ def test_fast_quote_lane_covers_all_public_route_families() -> None:
     assert _fast_quote_lane(futures_spot) == "FUTURES-SPOT"
     assert _fast_quote_lane(spot) == "SPOT"
     assert _fast_quote_lane(dex) == "DEX-FUTURES"
-    assert (
-        _fast_quote_lane({**dex, "blockers": ["cex_identity_unverified"]})
-        is None
-    )
+    assert _fast_quote_lane({**dex, "blockers": ["cex_identity_unverified"]}) is None
     assert _fast_quote_lane({**dex, "notes": {}}) is None
 
 
@@ -226,6 +220,164 @@ def test_native_gate_spot_order_book_is_sorted_and_normalized(
     assert "currency_pair=COTI_USDT" in requested[0]
     assert bids == [[0.104, 3.0], [0.103, 4.0], [0.102, 2.0]]
     assert asks == [[0.105, 6.0], [0.106, 7.0], [0.107, 5.0]]
+
+
+@pytest.mark.parametrize(
+    ("venue", "payload", "url_fragment"),
+    [
+        (
+            "Mexc",
+            {"data": {"bids": [[2.0, 3]], "asks": [[2.1, 4]]}},
+            "/depth/TEST_USDT",
+        ),
+        (
+            "HTX",
+            {"tick": {"bids": [[2.0, 3]], "asks": [[2.1, 4]]}},
+            "contract_code=TEST-USDT",
+        ),
+        (
+            "CoinEx",
+            {"data": {"depth": {"bids": [[2.0, 3]], "asks": [[2.1, 4]]}}},
+            "market=TESTUSDT",
+        ),
+        (
+            "Phemex",
+            {"result": {"orderbook_p": {"bids": [[2.0, 3]], "asks": [[2.1, 4]]}}},
+            "/md/v2/orderbook",
+        ),
+        (
+            "WhiteBIT",
+            {"bids": [[2.0, 3]], "asks": [[2.1, 4]]},
+            "TEST_PERP",
+        ),
+        (
+            "BitMart",
+            {"data": {"bids": [[2.0, 3]], "asks": [[2.1, 4]]}},
+            "symbol=TESTUSDT",
+        ),
+        (
+            "XT",
+            {"result": {"b": [[2.0, 3]], "a": [[2.1, 4]]}},
+            "level=20",
+        ),
+        (
+            "Coinbase International",
+            {
+                "best_bid_price": "2.0",
+                "best_bid_size": "3",
+                "best_ask_price": "2.1",
+                "best_ask_size": "4",
+            },
+            "TEST-PERP/quote",
+        ),
+    ],
+)
+def test_secondary_native_futures_books_are_normalized(
+    monkeypatch: pytest.MonkeyPatch,
+    venue: str,
+    payload: dict,
+    url_fragment: str,
+) -> None:
+    requested: list[str] = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(payload).encode()
+
+    def fake_urlopen(request, timeout: float):
+        requested.append(request.full_url)
+        assert timeout == 8.0
+        return Response()
+
+    monkeypatch.setattr("spreadboard.fast_quotes.urlopen", fake_urlopen)
+
+    bids, asks = _native_order_book(venue, "Futures", "TEST/USDT:USDT") or ([], [])
+
+    assert url_fragment in requested[0]
+    assert bids == [[2.0, 3.0]]
+    assert asks == [[2.1, 4.0]]
+
+
+def test_native_hyperliquid_book_uses_exact_l2_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "spreadboard.fast_quotes._json_post",
+        lambda *_args, **_kwargs: {
+            "levels": [[{"px": "2", "sz": "3"}], [{"px": "2.1", "sz": "4"}]]
+        },
+    )
+
+    bids, asks = _native_order_book("Hyperliquid", "Futures", "TEST/USDC:USDC") or ([], [])
+
+    assert bids == [[2.0, 3.0]]
+    assert asks == [[2.1, 4.0]]
+
+
+def test_live_book_cache_rejects_stale_and_returns_fresh(tmp_path: Path) -> None:
+    store = live_book_cache.LiveBookStore(tmp_path / "books.sqlite3")
+    try:
+        store.put(
+            "Bybit",
+            "Futures",
+            "TEST/USDT:USDT",
+            bids=[[2.0, 3.0]],
+            asks=[[2.1, 4.0]],
+            quote_ts_us=int(time.time() * 1_000_000),
+        )
+        fresh = store.get("Bybit", "Futures", "TEST/USDT:USDT", max_age_seconds=5)
+        assert fresh is not None
+        assert fresh.bids == [[2.0, 3.0]]
+        assert fresh.source == "public_websocket"
+
+        store.put(
+            "Bybit",
+            "Futures",
+            "OLD/USDT:USDT",
+            bids=[[1.0, 1.0]],
+            asks=[[1.1, 1.0]],
+            quote_ts_us=int((time.time() - 30) * 1_000_000),
+        )
+        assert store.get("Bybit", "Futures", "OLD/USDT:USDT", max_age_seconds=5) is None
+    finally:
+        store.close()
+
+
+def test_exact_route_prefers_fresh_websocket_book(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refresher = FastQuoteRefresher()
+    websocket_book = live_book_cache.CachedBook(
+        bids=[[2.0, 30.0]],
+        asks=[[2.1, 30.0]],
+        quote_ts_us=123_000_000,
+    )
+    monkeypatch.setattr(
+        "spreadboard.fast_quotes.live_book_cache.load_live_book",
+        lambda *_args, **_kwargs: websocket_book,
+    )
+    monkeypatch.setattr(
+        "spreadboard.fast_quotes._native_order_book",
+        lambda *_args, **_kwargs: pytest.fail("REST should not be called for a fresh WS book"),
+    )
+
+    result = refresher._leg_quote(
+        _route(),
+        "long",
+        target_notional_usd=50,
+        cache={},
+        include_funding=False,
+    )
+
+    assert result is not None
+    assert result["quote_ts_us"] == 123_000_000
+    assert result["quote_source"] == "public_websocket"
 
 
 def test_native_binance_funding_uses_official_interval_endpoint(
@@ -514,9 +666,7 @@ def test_history_persists_entry_matched_exit_and_sample_provenance(tmp_path: Pat
     )
 
     assert saved[0]["executable_spread_pct"] == pytest.approx(10.0)
-    assert saved[0]["depth_weighted_spread_pct"] == pytest.approx(
-        (108 / 101 - 1) * 100
-    )
+    assert saved[0]["depth_weighted_spread_pct"] == pytest.approx((108 / 101 - 1) * 100)
     assert saved[0]["exit_spread_pct"] == pytest.approx((99 / 112 - 1) * 100)
     assert saved[0]["long_ask_vwap_price"] == pytest.approx(101.0)
     assert saved[0]["short_bid_vwap_price"] == pytest.approx(108.0)
@@ -538,23 +688,26 @@ def test_history_bucketing_keeps_latest_sample_per_bucket(tmp_path: Path) -> Non
             "quote_ts_us": start_us + offset_seconds * 1_000_000,
             "executable_spread_pct": spread,
             "depth_weighted_spread_pct": spread,
-            "notes": {"route_inputs": {
+            "notes": {
+                "route_inputs": {
                 "long": {"bid": 99, "ask": 100, "bid_vwap": 100, "ask_vwap": 100},
                 "short": {"bid": 101, "ask": 102, "bid_vwap": 101, "ask_vwap": 102},
-            }},
+                }
+            },
         }
         assert market_history.record_route(row, db_path=db_path) == 1
 
     saved = market_history.load_history(
-        route_key=route["route_key"], since_us=start_us,
-        bucket_seconds=10, max_points=10, db_path=db_path,
+        route_key=route["route_key"],
+        since_us=start_us,
+        bucket_seconds=10,
+        max_points=10,
+        db_path=db_path,
     )
 
     assert len(saved) in {2, 3}
     assert saved[-1]["executable_spread_pct"] == pytest.approx(4.0)
-    assert [row["quote_ts_us"] for row in saved] == sorted(
-        row["quote_ts_us"] for row in saved
-    )
+    assert [row["quote_ts_us"] for row in saved] == sorted(row["quote_ts_us"] for row in saved)
 
 
 def test_fast_quote_refresh_preserves_broad_snapshot_freshness(
@@ -641,10 +794,13 @@ def test_history_hides_legacy_dex_identity_outliers(tmp_path: Path) -> None:
     finally:
         connection.close()
 
-    assert market_history.load_history(
+    assert (
+        market_history.load_history(
         route_key=row["route_key"],
         db_path=db_path,
-    ) == []
+        )
+        == []
+    )
 
 
 def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
@@ -658,9 +814,7 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
             rows.append(
                 {
                     **_route(),
-                    "route_key": (
-                        f"{token}|Kucoin Futures|Futures|{short_venue}|Futures"
-                    ),
+                    "route_key": (f"{token}|Kucoin Futures|Futures|{short_venue}|Futures"),
                     "token": token,
                     "long_venue": "Kucoin Futures",
                     "short_venue": short_venue,
@@ -677,9 +831,7 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
             rows.append(
                 {
                     **_route(),
-                    "route_key": (
-                        f"{token}|WhiteBIT|Spot|{short_venue}|Futures"
-                    ),
+                    "route_key": (f"{token}|WhiteBIT|Spot|{short_venue}|Futures"),
                     "token": token,
                     "route_kind": "FUTURES-SPOT",
                     "long_venue": "WhiteBIT",
@@ -766,11 +918,7 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
     monkeypatch.setattr(refresher, "_leg_quote", quote_leg)
     result = refresher.refresh(snapshot_path, route_limit=200)
     saved = json.loads(snapshot_path.read_text(encoding="utf-8"))
-    updated = [
-        row
-        for row in saved["api_discovered_rows"]
-        if row.get("fast_quote_verified_at")
-    ]
+    updated = [row for row in saved["api_discovered_rows"] if row.get("fast_quote_verified_at")]
 
     assert result["selected_routes"] == 142
     assert result["updated_routes"] == 142
@@ -781,23 +929,20 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
     assert {row["token"] for row in updated if row["route_kind"] == "FUTURES"} == {
         f"FUT{index:02d}" for index in range(30)
     }
-    assert {
-        row["token"] for row in updated if row["route_kind"] == "FUTURES-SPOT"
-    } == {f"SPOT{index:02d}" for index in range(30)}
+    assert {row["token"] for row in updated if row["route_kind"] == "FUTURES-SPOT"} == {
+        f"SPOT{index:02d}" for index in range(30)
+    }
     assert {row["token"] for row in updated if row["route_kind"] == "SPOT"} == {
         f"CASH{index:02d}" for index in range(30)
     }
-    assert {
-        row["token"] for row in updated if row["route_kind"] == "DEX-FUTURES"
-    } == {f"DEX{index:02d}" for index in range(12)}
-    assert sum(
-        row["token"] == "FUT00" and row["route_kind"] == "FUTURES"
-        for row in updated
-    ) == 2
-    assert sum(
-        row["token"] == "SPOT00" and row["route_kind"] == "FUTURES-SPOT"
-        for row in updated
-    ) == 2
+    assert {row["token"] for row in updated if row["route_kind"] == "DEX-FUTURES"} == {
+        f"DEX{index:02d}" for index in range(12)
+    }
+    assert sum(row["token"] == "FUT00" and row["route_kind"] == "FUTURES" for row in updated) == 2
+    assert (
+        sum(row["token"] == "SPOT00" and row["route_kind"] == "FUTURES-SPOT" for row in updated)
+        == 2
+    )
 
 
 def test_aster_and_hyperliquid_futures_are_not_mislabeled_as_dex() -> None:

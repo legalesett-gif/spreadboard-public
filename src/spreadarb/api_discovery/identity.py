@@ -89,8 +89,7 @@ class IdentityRegistry:
         self.assets = assets or {}
         self.market_identities = market_identities or []
         self.known_ticker_collisions = {
-            key.upper(): tuple(value)
-            for key, value in (known_ticker_collisions or {}).items()
+            key.upper(): tuple(value) for key, value in (known_ticker_collisions or {}).items()
         }
         self._by_exact_symbol: dict[tuple[str, str, str], MarketIdentity] = {}
         self._by_token: dict[tuple[str, str, str], MarketIdentity] = {}
@@ -227,7 +226,8 @@ def load_identity_registry(path: Path | None) -> IdentityRegistry:
             symbol=symbol,
             name=str(item.get("name") or "").strip() or None,
             decimals=_optional_int(item.get("decimals")),
-            evm_contracts=_parse_evm_contracts(item.get("evm_contracts") or item.get("contracts")) or None,
+            evm_contracts=_parse_evm_contracts(item.get("evm_contracts") or item.get("contracts"))
+            or None,
             solana_mint=str(item.get("solana_mint") or "").strip() or None,
             solana_decimals=_optional_int(item.get("solana_decimals")),
         )
@@ -241,7 +241,9 @@ def load_identity_registry(path: Path | None) -> IdentityRegistry:
         symbol = str(item.get("symbol") or item.get("token") or "").upper().strip()
         if not symbol:
             continue
-        asset_ids = tuple(str(value) for value in item.get("asset_ids") or item.get("identities") or [])
+        asset_ids = tuple(
+            str(value) for value in item.get("asset_ids") or item.get("identities") or []
+        )
         collisions[symbol] = asset_ids
     return IdentityRegistry(
         assets=assets,
@@ -250,7 +252,9 @@ def load_identity_registry(path: Path | None) -> IdentityRegistry:
     )
 
 
-def load_scanner_tokens(db_path: Path | None, *, lookback_seconds: int = 86_400, limit: int = 20) -> list[str]:
+def load_scanner_tokens(
+    db_path: Path | None, *, lookback_seconds: int = 86_400, limit: int = 20
+) -> list[str]:
     if db_path is None or not db_path.exists():
         return []
     min_ts = now_us() - int(lookback_seconds * 1_000_000)
@@ -312,9 +316,15 @@ def pair_identity_blockers(
     return list(dict.fromkeys(blockers))
 
 
-def _market_identities_for_asset(asset: AssetIdentity, item: dict[str, Any]) -> list[MarketIdentity]:
+def _market_identities_for_asset(
+    asset: AssetIdentity, item: dict[str, Any]
+) -> list[MarketIdentity]:
     identities: list[MarketIdentity] = []
-    for market_type, key in (("Spot", "cex_spot"), ("Futures", "cex_futures"), ("Futures", "cex_perp")):
+    for market_type, key in (
+        ("Spot", "cex_spot"),
+        ("Futures", "cex_futures"),
+        ("Futures", "cex_perp"),
+    ):
         for market in item.get(key) or []:
             if not isinstance(market, dict):
                 continue
@@ -327,12 +337,15 @@ def _market_identities_for_asset(asset: AssetIdentity, item: dict[str, Any]) -> 
                     market_type=str(market.get("market_type") or market_type),
                     token=str(market.get("token") or asset.symbol).upper(),
                     asset_id=asset.asset_id,
-                    exchange_symbol=str(market.get("symbol") or market.get("exchange_symbol") or "").strip()
+                    exchange_symbol=str(
+                        market.get("symbol") or market.get("exchange_symbol") or ""
+                    ).strip()
                     or None,
                     decimals=_optional_int(market.get("decimals")) or asset.decimals,
                     chain_id=_optional_int(market.get("chain_id")),
                     settle_asset=str(market.get("settle_asset") or "").upper().strip() or None,
                     contract_size=str(market.get("contract_size") or "").strip() or None,
+                    source=str(market.get("source") or "identity_registry"),
                 )
             )
     return identities

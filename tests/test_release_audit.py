@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from spreadboard import api_spreads, live, server
+from spreadboard.verified_identity import build_verified_identity_registry
 from scripts.api_discovery_worker import build_parser as discovery_worker_parser
 from scripts.run_spreadboard_service import RefreshLoop, _merge_newer_fast_quotes
 from spreadarb.api_discovery import runner, sources, worker
@@ -358,9 +359,7 @@ def test_inverse_futures_spot_is_visible_with_inventory_condition() -> None:
         to_dict=lambda: {"blockers": reasons},
         blockers=reasons,
     )
-    assert api_spreads._public_row(row)["conditions"] == [
-        "spot_sell_inventory_required"
-    ]
+    assert api_spreads._public_row(row)["conditions"] == ["spot_sell_inventory_required"]
 
 
 def test_unknown_spot_transfer_is_visible_as_research_condition() -> None:
@@ -461,22 +460,28 @@ def test_dex_contract_guard_rejects_contract_from_another_token() -> None:
         contract="So111",
         watchlist=watchlist,
     ) == ["mirage_guard:dex_contract_mismatch"]
-    assert api_spreads._dex_contract_mirage_reasons(
+    assert (
+        api_spreads._dex_contract_mirage_reasons(
         token="SOL",
         chain_id="501",
         contract="So111",
         watchlist=watchlist,
-    ) == []
+        )
+        == []
+    )
 
 
 def test_dex_contract_guard_accepts_exact_dynamic_identity() -> None:
-    assert api_spreads._dex_contract_mirage_reasons(
+    assert (
+        api_spreads._dex_contract_mirage_reasons(
         token="DYNAMIC",
         chain_id="56",
         contract="0xAbC",
         identity_key="eip155:56/erc20:0xabc",
         watchlist={},
-    ) == []
+        )
+        == []
+    )
 
 
 def test_native_settled_history_is_not_mislabeled_as_current_funding() -> None:
@@ -492,6 +497,52 @@ def test_native_settled_history_is_not_mislabeled_as_current_funding() -> None:
     assert result["funding_interval_hours"] == 8.0
     assert "current_funding_pct" not in result
     assert "projected_24h_pct" not in result
+
+
+@pytest.mark.parametrize(
+    ("exchange_id", "payload"),
+    [
+        (
+            "bitmart",
+            {
+                "data": {
+                    "list": [
+                        {
+                            "funding_time": int(time.time() * 1000) - 3_600_000,
+                            "funding_rate": "0.0002",
+                        }
+                    ]
+                }
+            },
+        ),
+        (
+            "xt",
+            {
+                "result": {
+                    "items": [
+                        {
+                            "createdTime": int(time.time() * 1000) - 3_600_000,
+                            "fundingRate": "0.0002",
+                        }
+                    ]
+                }
+            },
+        ),
+    ],
+)
+def test_new_native_funding_histories_sum_settled_events(
+    monkeypatch: pytest.MonkeyPatch,
+    exchange_id: str,
+    payload: dict,
+) -> None:
+    monkeypatch.setattr(live, "_public_json", lambda *_args, **_kwargs: payload)
+
+    result = live._fetch_native_funding_24h(exchange_id, "TEST/USDT:USDT")
+
+    assert result is not None
+    assert result["status"] == "ok"
+    assert result["funding_24h_pct"] == pytest.approx(0.02)
+    assert result["samples"] == 1
 
 
 def test_okx_dex_uses_usd_network_fee_not_raw_gas_units() -> None:
@@ -620,9 +671,7 @@ def test_fast_quote_funding_reaches_normalized_board_row() -> None:
 def test_verified_dex_watchlist_and_cex_identity_cover_reference_top_ten() -> None:
     root = Path(__file__).resolve().parents[1]
     watchlist = load_watchlist(root / "data" / "api_discovery_watchlist.json")
-    registry = load_identity_registry(
-        root / "data" / "api_discovery_identity_registry.json"
-    )
+    registry = load_identity_registry(root / "data" / "api_discovery_identity_registry.json")
     expected = {
         "BP": ("501", "BPxxfRCXkUVhig4HS1Lh7kZqV6SPJhzfEk4x6fVBjPCy"),
         "T": ("1", "0xcdf7028ceab81fa0c6971208e83fa7872994bee5"),
@@ -644,18 +693,24 @@ def test_verified_dex_watchlist_and_cex_identity_cover_reference_top_ten() -> No
         else:
             assert asset.evm_contracts[int(chain_id)].casefold() == contract.casefold()
 
-    assert registry.resolve_market(
+    assert (
+        registry.resolve_market(
         venue="Bybit",
         market_type="Futures",
         token="BRETT",
         symbol="BRETT/USDT:USDT",
-    ).identity_key == "eip155:8453/erc20:0x532f27101965dd16442e59d40670faf5ebb142e4"
-    assert registry.resolve_market(
+        ).identity_key
+        == "eip155:8453/erc20:0x532f27101965dd16442e59d40670faf5ebb142e4"
+    )
+    assert (
+        registry.resolve_market(
         venue="Bybit",
         market_type="Futures",
         token="BANK",
         symbol="BANK/USDT:USDT",
-    ).identity_key is None
+        ).identity_key
+        is None
+    )
 
 
 def test_watchlist_suppresses_contract_claimed_by_multiple_assets(tmp_path: Path) -> None:
@@ -688,6 +743,131 @@ def test_watchlist_suppresses_contract_claimed_by_multiple_assets(tmp_path: Path
     assert watchlist["ETH"].evm_contracts == {1: "0xeth"}
     assert watchlist["ETH"].solana_mint is None
     assert watchlist["SOL"].solana_mint is None
+
+
+def test_generated_identity_registry_requires_exact_unique_contract_match(
+    tmp_path: Path,
+) -> None:
+    static_path = tmp_path / "static.json"
+    watchlist_path = tmp_path / "watchlist.json"
+    rails_path = tmp_path / "rails.json"
+    snapshot_path = tmp_path / "snapshot.json"
+    output_path = tmp_path / "generated.json"
+    static_path.write_text(
+        json.dumps(
+            {
+                "schema": "spreadarb.api_discovery.identity_registry.v1",
+                "assets": [],
+                "known_ticker_collisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    watchlist_path.write_text(
+        json.dumps(
+            {
+                "tokens": [
+                    {
+                        "symbol": "COTI",
+                        "identity_key": "asset:coti",
+                        "decimals": 18,
+                        "evm_contracts": {"1": "0xC0ti"},
+                    },
+                    {
+                        "symbol": "PAI",
+                        "identity_key": "asset:pai-one",
+                        "evm_contracts": {"1": "0xDuplicate"},
+                    },
+                    {
+                        "symbol": "PAI",
+                        "identity_key": "asset:pai-two",
+                        "evm_contracts": {"1": "0xDuplicate"},
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    rails_path.write_text(
+        json.dumps(
+            {
+                "rails": {
+                    "Coinbase": {
+                        "COTI": {"networks": [{"network": "ERC20", "contract": "0xc0TI"}]},
+                        "PAI": {"networks": [{"network": "ERC20", "contract": "0xduplicate"}]},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "api_discovered_rows": [
+                    {
+                        "token": "COTI",
+                        "long_venue": "Coinbase",
+                        "long_market_type": "Spot",
+                        "short_venue": "Coinbase",
+                        "short_market_type": "Futures",
+                        "notes": {
+                            "route_inputs": {
+                                "long": {"symbol": "COTI/USD"},
+                                "short": {"symbol": "COTI/USDC:USDC"},
+                            }
+                        },
+                    },
+                    {
+                        "token": "PAI",
+                        "long_venue": "Coinbase",
+                        "long_market_type": "Spot",
+                        "notes": {"route_inputs": {"long": {"symbol": "PAI/USD"}}},
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = build_verified_identity_registry(
+        static_registry_path=static_path,
+        watchlist_path=watchlist_path,
+        rails_path=rails_path,
+        snapshot_path=snapshot_path,
+        output_path=output_path,
+    )
+    registry = load_identity_registry(output_path)
+
+    assert payload["generation"]["verified_matches"] == 1
+    assert payload["generation"]["markets_added"] == 2
+    assert (
+        registry.resolve_market(
+            venue="Coinbase",
+            market_type="Spot",
+            token="COTI",
+            symbol="COTI/USD",
+        ).identity_key
+        == "asset:coti"
+    )
+    future = registry.resolve_market(
+        venue="Coinbase",
+        market_type="Futures",
+        token="COTI",
+        symbol="COTI/USDC:USDC",
+    )
+    assert future.identity_key == "asset:coti"
+    assert future.market_identity is not None
+    assert future.market_identity.source == "public_contract_match"
+    assert (
+        registry.resolve_market(
+            venue="Coinbase",
+            market_type="Spot",
+            token="PAI",
+            symbol="PAI/USD",
+        ).identity_key
+        is None
+    )
 
 
 def test_projected_funding_is_visible_rankable_and_filterable_in_24h_units() -> None:
@@ -840,16 +1020,32 @@ def test_okx_dynamic_catalogue_prioritizes_funding_before_volume(
     source = sources.OkxDexQuoteSource(request_interval_seconds=0)
     refs = (
         MarketQuote(
-            token="CARRY", venue="Bybit", market_type="Futures",
-            bid=1, ask=1, bid_vwap=1, ask_vwap=1, quote_ts_us=1,
-            source_name="test", funding_rate_pct=0.2,
-            funding_interval_hours=4, volume_24h_usd=10,
+            token="CARRY",
+            venue="Bybit",
+            market_type="Futures",
+            bid=1,
+            ask=1,
+            bid_vwap=1,
+            ask_vwap=1,
+            quote_ts_us=1,
+            source_name="test",
+            funding_rate_pct=0.2,
+            funding_interval_hours=4,
+            volume_24h_usd=10,
         ),
         MarketQuote(
-            token="VOLUME", venue="Bybit", market_type="Futures",
-            bid=1, ask=1, bid_vwap=1, ask_vwap=1, quote_ts_us=1,
-            source_name="test", funding_rate_pct=0.01,
-            funding_interval_hours=4, volume_24h_usd=1_000_000,
+            token="VOLUME",
+            venue="Bybit",
+            market_type="Futures",
+            bid=1,
+            ask=1,
+            bid_vwap=1,
+            ask_vwap=1,
+            quote_ts_us=1,
+            source_name="test",
+            funding_rate_pct=0.01,
+            funding_interval_hours=4,
+            volume_24h_usd=1_000_000,
         ),
     )
 
@@ -868,7 +1064,9 @@ def test_okx_dynamic_catalogue_prioritizes_funding_before_volume(
 
     assets, errors = source._discover_okx_assets(
         context=SimpleNamespace(reference_quotes=refs, timed_out=lambda: False),
-        credentials=object(), okx_dex=Okx, existing_tokens=set(),
+        credentials=object(),
+        okx_dex=Okx,
+        existing_tokens=set(),
     )
 
     assert errors == []
@@ -897,9 +1095,7 @@ def test_dex_source_health_keeps_sanitized_provider_diagnostics() -> None:
 
     health = api_spreads._dex_spot_source_status(payload)
 
-    assert health["errors"] == [
-        "PEPE:1:RuntimeError: okx_dex_quote:IP validation failed"
-    ]
+    assert health["errors"] == ["PEPE:1:RuntimeError: okx_dex_quote:IP validation failed"]
     assert health["details"] == {"provider": "OKX DEX", "quote_count": 0}
 
 
@@ -1059,9 +1255,7 @@ def test_single_group_worker_uses_public_snapshot_for_incremental_updates(
 
 def test_discovery_merge_keeps_newest_duplicate_without_retaining_old_final_route() -> None:
     current = {
-        "api_discovered_rows": [
-            {"route_key": "SAME", "quote_ts_us": 100, "token": "CURRENT"}
-        ],
+        "api_discovered_rows": [{"route_key": "SAME", "quote_ts_us": 100, "token": "CURRENT"}],
         "dex_discovered_rows": [],
         "source_refresh": {},
     }
@@ -1100,6 +1294,69 @@ def test_validated_reference_venues_are_enabled() -> None:
     assert "Upbit" not in spot
 
 
+@pytest.mark.parametrize(
+    ("venue", "market_id", "payload", "expected_rate", "expected_interval"),
+    [
+        (
+            "Mexc",
+            "TEST_USDT",
+            {
+                "data": [
+                    {
+                        "symbol": "TEST_USDT",
+                        "fundingRate": "-0.0012",
+                        "collectCycle": 4,
+                        "nextSettleTime": 1_800_000_000_000,
+                    }
+                ]
+            },
+            -0.0012,
+            "4h",
+        ),
+        (
+            "WhiteBIT",
+            "TEST_PERP",
+            {
+                "result": [
+                    {
+                        "ticker_id": "TEST_PERP",
+                        "funding_rate": "0.0003",
+                        "funding_interval_minutes": 60,
+                        "next_funding_rate_timestamp": 1_800_000_000_000,
+                    }
+                ]
+            },
+            0.0003,
+            "1h",
+        ),
+    ],
+)
+def test_native_bulk_funding_maps_exchange_market_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    venue: str,
+    market_id: str,
+    payload: dict,
+    expected_rate: float,
+    expected_interval: str,
+) -> None:
+    monkeypatch.setattr(sources, "fetch_json", lambda *_args, **_kwargs: payload)
+    exchange = SimpleNamespace(markets={"TEST/USDT:USDT": {"id": market_id}})
+    errors: list[str] = []
+
+    result = sources._fetch_native_bulk_funding_rates(
+        exchange,
+        ["TEST/USDT:USDT"],
+        context=SimpleNamespace(remaining_timeout=lambda _cap: 5.0),
+        errors=errors,
+        venue=venue,
+    )
+
+    assert errors == []
+    assert result is not None
+    assert result["TEST/USDT:USDT"]["fundingRate"] == expected_rate
+    assert result["TEST/USDT:USDT"]["interval"] == expected_interval
+
+
 def test_default_sources_publish_small_cex_batches_before_enrichment() -> None:
     enabled = sources.default_sources(include_network=True)
     cex = [
@@ -1113,16 +1370,10 @@ def test_default_sources_publish_small_cex_batches_before_enrichment() -> None:
     assert cex[0].market_type == "Spot"
     assert cex[1].market_type == "Futures"
     assert {
-        venue
-        for source in cex
-        if source.market_type == "Spot"
-        for venue in source.venues
+        venue for source in cex if source.market_type == "Spot" for venue in source.venues
     } == set(sources.default_enabled_cex_source().venues)
     assert {
-        venue
-        for source in cex
-        if source.market_type == "Futures"
-        for venue in source.venues
+        venue for source in cex if source.market_type == "Futures" for venue in source.venues
     } == set(sources.default_enabled_cex_futures_source().venues)
 
 
@@ -1156,12 +1407,15 @@ def test_release_lane_counts_merge_spot_futures_directions() -> None:
         "SPOT": 1,
         "DEX-FUTURES": 1,
     }
-    assert server.market_kind_count(
+    assert (
+        server.market_kind_count(
         "FUTURES-SPOT-PAIR",
         {"FUTURES-SPOT": 2, "SPOT-FUTURES": 2},
         {},
         {"FUTURES-SPOT": 3},
-    ) == 3
+        )
+        == 3
+    )
 
 
 def test_current_snapshot_can_seed_a_new_route_chart() -> None:

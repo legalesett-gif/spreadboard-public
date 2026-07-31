@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from spreadboard import live_book_cache
 from spreadarb.api_discovery.models import spread_pct
 from spreadarb.api_discovery.orderbook import depth_weighted_price
 
@@ -22,8 +23,10 @@ VENUE_IDS = {
     "Binance": "binance",
     "Bingx": "bingx",
     "Bitget": "bitget",
+    "BitMart": "bitmart",
     "Bybit": "bybit",
     "Coinbase": "coinbaseexchange",
+    "Coinbase International": "coinbaseinternational",
     "CoinEx": "coinex",
     "Gate": "gateio",
     "HTX": "htx",
@@ -36,6 +39,7 @@ VENUE_IDS = {
     "OKX": "okx",
     "Phemex": "phemex",
     "WhiteBIT": "whitebit",
+    "XT": "xt",
 }
 
 NATIVE_FUTURES_VENUES = {
@@ -43,21 +47,36 @@ NATIVE_FUTURES_VENUES = {
     "Binance",
     "Bingx",
     "Bitget",
+    "BitMart",
     "Bybit",
+    "CoinEx",
+    "Coinbase International",
     "Gate",
+    "HTX",
+    "Hyperliquid",
     "Kraken Futures",
     "Kucoin Futures",
+    "Mexc",
     "OKX",
+    "Phemex",
+    "WhiteBIT",
+    "XT",
 }
 NATIVE_SPOT_VENUES = {
     "Binance",
     "Bingx",
     "Bitget",
+    "BitMart",
     "Bybit",
+    "CoinEx",
+    "Coinbase",
     "Gate",
+    "HTX",
     "Kucoin",
     "Mexc",
     "OKX",
+    "WhiteBIT",
+    "XT",
 }
 FAST_QUOTE_LANES = ("FUTURES", "FUTURES-SPOT", "SPOT", "DEX-FUTURES")
 
@@ -75,9 +94,7 @@ class FastQuoteRefresher:
             payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             return {"status": "unavailable", "updated": 0, "error": type(exc).__name__}
-        rows_by_lane: dict[str, list[dict[str, Any]]] = {
-            lane: [] for lane in FAST_QUOTE_LANES
-        }
+        rows_by_lane: dict[str, list[dict[str, Any]]] = {lane: [] for lane in FAST_QUOTE_LANES}
         for bucket in ("api_discovered_rows", "dex_discovered_rows"):
             for row in payload.get(bucket) or []:
                 if not isinstance(row, dict) or _has_permanent_mirage_guard(row):
@@ -302,10 +319,7 @@ class FastQuoteRefresher:
         )
         leg = route_inputs.get(side) if isinstance(route_inputs.get(side), dict) else {}
         symbol = str(
-            leg.get("symbol")
-            or row.get(f"{side}_market_symbol")
-            or row.get(f"{side}_symbol")
-            or ""
+            leg.get("symbol") or row.get(f"{side}_market_symbol") or row.get(f"{side}_symbol") or ""
         )
         if "okx dex" in venue.casefold():
             chain, contract = _dex_chain_contract(row)
@@ -325,7 +339,17 @@ class FastQuoteRefresher:
         if not venue or not symbol or venue not in VENUE_IDS:
             return None
         try:
-            native_book = _native_order_book(venue, market_type, symbol)
+            live_book = live_book_cache.load_live_book(
+                venue,
+                market_type,
+                symbol,
+                max_age_seconds=5.0,
+            )
+            native_book = (
+                (live_book.bids, live_book.asks)
+                if live_book is not None
+                else _native_order_book(venue, market_type, symbol)
+            )
             if native_book is None:
                 client = self._client(venue, market_type)
                 with self._client_request_lock(venue, market_type):
@@ -348,9 +372,7 @@ class FastQuoteRefresher:
                             **funding,
                             **{
                                 key: value
-                                for key, value in _native_current_funding(
-                                    venue, symbol
-                                ).items()
+                                for key, value in _native_current_funding(venue, symbol).items()
                                 if value is not None
                             },
                         }
@@ -384,7 +406,10 @@ class FastQuoteRefresher:
                 "bid_vwap": bid_vwap,
                 "ask_vwap": ask_vwap,
                 "contract_size": contract_size,
-                "quote_ts_us": int(time.time() * 1_000_000),
+                "quote_ts_us": (
+                    live_book.quote_ts_us if live_book is not None else int(time.time() * 1_000_000)
+                ),
+                "quote_source": (live_book.source if live_book is not None else "public_rest"),
                 **funding,
             }
         except Exception:
@@ -467,10 +492,7 @@ def _route_leg_key(
     route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
     leg = route_inputs.get(side) if isinstance(route_inputs.get(side), dict) else {}
     symbol = str(
-        leg.get("symbol")
-        or row.get(f"{side}_market_symbol")
-        or row.get(f"{side}_symbol")
-        or ""
+        leg.get("symbol") or row.get(f"{side}_market_symbol") or row.get(f"{side}_symbol") or ""
     )
     if "okx dex" in venue.casefold():
         chain, contract = _dex_chain_contract(row)
@@ -485,9 +507,7 @@ def _fast_quote_lane(row: dict[str, Any]) -> str | None:
     short_venue = str(row.get("short_venue") or "")
     venues = (long_venue, short_venue)
     has_okx_dex = any("okx dex" in venue.casefold() for venue in venues)
-    cex_supported = all(
-        venue in VENUE_IDS or "okx dex" in venue.casefold() for venue in venues
-    )
+    cex_supported = all(venue in VENUE_IDS or "okx dex" in venue.casefold() for venue in venues)
     if not cex_supported:
         return None
     if has_okx_dex:
@@ -512,8 +532,7 @@ def _fast_quote_lane(row: dict[str, Any]) -> str | None:
 
 def _is_dex_route(row: dict[str, Any]) -> bool:
     return any(
-        "okx dex" in str(row.get(f"{side}_venue") or "").casefold()
-        for side in ("long", "short")
+        "okx dex" in str(row.get(f"{side}_venue") or "").casefold() for side in ("long", "short")
     )
 
 
@@ -587,8 +606,8 @@ def _native_order_book(
         return _native_spot_order_book(venue, symbol)
     if market_type != "Futures" or venue not in NATIVE_FUTURES_VENUES:
         return None
-    base = symbol.split("/", 1)[0].upper()
-    compact = f"{base}USDT"
+    base, quote = _symbol_base_quote(symbol)
+    compact = f"{base}{quote}"
     if venue == "Aster":
         url = (
             f"https://fapi.asterdex.com/fapi/v1/depth?{urlencode({'symbol': compact, 'limit': 20})}"
@@ -624,11 +643,54 @@ def _native_order_book(
         )
     elif venue == "Kucoin Futures":
         url = "https://api-futures.kucoin.com/api/v1/level2/depth20?" + urlencode(
-            {"symbol": f"{base}USDTM"}
+            {"symbol": f"{base}{quote}M"}
         )
+    elif venue == "Mexc":
+        url = f"https://contract.mexc.com/api/v1/contract/depth/{base}_{quote}"
+    elif venue == "HTX":
+        url = "https://api.hbdm.com/linear-swap-ex/market/depth?" + urlencode(
+            {"contract_code": f"{base}-{quote}", "depth": 20, "type": "step0"}
+        )
+    elif venue == "CoinEx":
+        url = "https://api.coinex.com/v2/futures/depth?" + urlencode(
+            {"market": compact, "limit": 20, "interval": "0"}
+        )
+    elif venue == "Phemex":
+        url = "https://api.phemex.com/md/v2/orderbook?" + urlencode({"symbol": compact})
+    elif venue == "WhiteBIT":
+        url = f"https://whitebit.com/api/v4/public/orderbook/{base}_PERP?" + urlencode(
+            {"limit": 20, "level": 2}
+        )
+    elif venue == "BitMart":
+        url = "https://api-cloud-v2.bitmart.com/contract/public/depth?" + urlencode(
+            {"symbol": compact}
+        )
+    elif venue == "XT":
+        url = "https://fapi.xt.com/future/market/v1/public/q/depth?" + urlencode(
+            {"symbol": f"{base.lower()}_{quote.lower()}", "level": 20}
+        )
+    elif venue == "Coinbase International":
+        url = f"https://api.international.coinbase.com/api/v1/instruments/{base}-PERP/quote"
+    elif venue == "Hyperliquid":
+        payload = _json_post(
+            "https://api.hyperliquid.xyz/info",
+            {"type": "l2Book", "coin": base},
+        )
+        levels = payload.get("levels") if isinstance(payload, dict) else []
+        raw_bids = [
+            [item.get("px"), item.get("sz")]
+            for item in (levels[0] if isinstance(levels, list) and levels else [])
+            if isinstance(item, dict)
+        ]
+        raw_asks = [
+            [item.get("px"), item.get("sz")]
+            for item in (levels[1] if isinstance(levels, list) and len(levels) > 1 else [])
+            if isinstance(item, dict)
+        ]
+        return _sorted_book(raw_bids, raw_asks)
     else:
         url = "https://www.okx.com/api/v5/market/books?" + urlencode(
-            {"instId": f"{base}-USDT-SWAP", "sz": 20}
+            {"instId": f"{base}-{quote}-SWAP", "sz": 20}
         )
     request = Request(url, headers={"User-Agent": "SpreadBoard/1.0"})
     with urlopen(request, timeout=8.0) as response:
@@ -648,6 +710,31 @@ def _native_order_book(
     elif venue == "Kucoin Futures":
         raw_bids = (payload.get("data") or {}).get("bids")
         raw_asks = (payload.get("data") or {}).get("asks")
+    elif venue == "Mexc":
+        raw_bids = (payload.get("data") or {}).get("bids")
+        raw_asks = (payload.get("data") or {}).get("asks")
+    elif venue == "HTX":
+        raw_bids = (payload.get("tick") or {}).get("bids")
+        raw_asks = (payload.get("tick") or {}).get("asks")
+    elif venue == "CoinEx":
+        depth = (payload.get("data") or {}).get("depth") or {}
+        raw_bids = depth.get("bids")
+        raw_asks = depth.get("asks")
+    elif venue == "Phemex":
+        book = (payload.get("result") or {}).get("orderbook_p") or {}
+        raw_bids = book.get("bids")
+        raw_asks = book.get("asks")
+    elif venue in {"WhiteBIT", "BitMart"}:
+        data = payload.get("data") if venue == "BitMart" else payload
+        raw_bids = (data or {}).get("bids")
+        raw_asks = (data or {}).get("asks")
+    elif venue == "XT":
+        data = payload.get("result") or {}
+        raw_bids = data.get("b")
+        raw_asks = data.get("a")
+    elif venue == "Coinbase International":
+        raw_bids = [[payload.get("best_bid_price"), payload.get("best_bid_size")]]
+        raw_asks = [[payload.get("best_ask_price"), payload.get("best_ask_size")]]
     elif venue == "OKX":
         books = payload.get("data") or []
         raw_bids = books[0].get("bids") if books else []
@@ -655,9 +742,7 @@ def _native_order_book(
     else:
         raw_bids = payload.get("bids")
         raw_asks = payload.get("asks")
-    bids = sorted(_levels(raw_bids), key=lambda level: level[0], reverse=True)
-    asks = sorted(_levels(raw_asks), key=lambda level: level[0])
-    return bids, asks
+    return _sorted_book(raw_bids, raw_asks)
 
 
 def supports_native_order_book(venue: str, market_type: str) -> bool:
@@ -674,15 +759,11 @@ def _native_spot_order_book(
 ) -> tuple[list[list[float]], list[list[float]]] | None:
     if venue not in NATIVE_SPOT_VENUES:
         return None
-    base, _, quote = symbol.partition("/")
-    base = base.upper()
-    quote = (quote.split(":", 1)[0] or "USDT").upper()
+    base, quote = _symbol_base_quote(symbol)
     compact = f"{base}{quote}"
     dashed = f"{base}-{quote}"
     if venue == "Binance":
-        url = "https://api.binance.com/api/v3/depth?" + urlencode(
-            {"symbol": compact, "limit": 20}
-        )
+        url = "https://api.binance.com/api/v3/depth?" + urlencode({"symbol": compact, "limit": 20})
     elif venue == "Bingx":
         url = "https://open-api.bingx.com/openApi/spot/v1/market/depth?" + urlencode(
             {"symbol": dashed, "limit": 20}
@@ -702,13 +783,33 @@ def _native_spot_order_book(
     elif venue == "Kucoin":
         url = f"https://api.kucoin.com/api/v1/market/orderbook/level2_20?symbol={dashed}"
     elif venue == "Mexc":
-        url = "https://api.mexc.com/api/v3/depth?" + urlencode(
-            {"symbol": compact, "limit": 20}
+        url = "https://api.mexc.com/api/v3/depth?" + urlencode({"symbol": compact, "limit": 20})
+    elif venue == "HTX":
+        url = "https://api.huobi.pro/market/depth?" + urlencode(
+            {"symbol": compact.lower(), "type": "step0", "depth": 20}
+        )
+    elif venue == "CoinEx":
+        url = "https://api.coinex.com/v2/spot/depth?" + urlencode(
+            {"market": compact, "limit": 20, "interval": "0"}
+        )
+    elif venue == "WhiteBIT":
+        url = f"https://whitebit.com/api/v4/public/orderbook/{base}_{quote}?" + urlencode(
+            {"limit": 20, "level": 2}
+        )
+    elif venue == "BitMart":
+        url = "https://api-cloud.bitmart.com/spot/quotation/v3/books?" + urlencode(
+            {"symbol": f"{base}_{quote}", "limit": 20}
+        )
+    elif venue == "XT":
+        url = "https://sapi.xt.com/v4/public/depth?" + urlencode(
+            {"symbol": f"{base.lower()}_{quote.lower()}", "limit": 20}
+        )
+    elif venue == "Coinbase":
+        url = f"https://api.exchange.coinbase.com/products/{base}-{quote}/book?" + urlencode(
+            {"level": 2}
         )
     else:
-        url = "https://www.okx.com/api/v5/market/books?" + urlencode(
-            {"instId": dashed, "sz": 20}
-        )
+        url = "https://www.okx.com/api/v5/market/books?" + urlencode({"instId": dashed, "sz": 20})
     payload = _json_url(url)
     if venue == "Bybit":
         raw_bids = (payload.get("result") or {}).get("b")
@@ -721,27 +822,34 @@ def _native_spot_order_book(
         books = payload.get("data") or []
         raw_bids = books[0].get("bids") if books else []
         raw_asks = books[0].get("asks") if books else []
+    elif venue == "HTX":
+        raw_bids = (payload.get("tick") or {}).get("bids")
+        raw_asks = (payload.get("tick") or {}).get("asks")
+    elif venue == "CoinEx":
+        depth = (payload.get("data") or {}).get("depth") or {}
+        raw_bids = depth.get("bids")
+        raw_asks = depth.get("asks")
+    elif venue in {"BitMart", "XT"}:
+        data = payload.get("data") if venue == "BitMart" else payload.get("result")
+        raw_bids = (data or {}).get("bids")
+        raw_asks = (data or {}).get("asks")
     else:
         raw_bids = payload.get("bids")
         raw_asks = payload.get("asks")
-    bids = sorted(_levels(raw_bids), key=lambda level: level[0], reverse=True)
-    asks = sorted(_levels(raw_asks), key=lambda level: level[0])
-    return bids, asks
+    return _sorted_book(raw_bids, raw_asks)
 
 
 def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
-    base = symbol.split("/", 1)[0].upper()
-    compact = f"{base}USDT"
+    base, quote = _symbol_base_quote(symbol)
+    compact = f"{base}{quote}"
     try:
         if venue in {"Aster", "Binance"}:
             host = "fapi.asterdex.com" if venue == "Aster" else "fapi.binance.com"
             payload = _json_url(
-                f"https://{host}/fapi/v1/premiumIndex?"
-                + urlencode({"symbol": compact})
+                f"https://{host}/fapi/v1/premiumIndex?" + urlencode({"symbol": compact})
             )
             info_payload = _json_url(
-                f"https://{host}/fapi/v1/fundingInfo?"
-                + urlencode({"symbol": compact})
+                f"https://{host}/fapi/v1/fundingInfo?" + urlencode({"symbol": compact})
             )
             info_rows = info_payload if isinstance(info_payload, list) else []
             funding_info = next(
@@ -762,7 +870,7 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                 "https://api.bybit.com/v5/market/tickers?"
                 + urlencode({"category": "linear", "symbol": compact})
             )
-            rows = ((payload.get("result") or {}).get("list") or [])
+            rows = (payload.get("result") or {}).get("list") or []
             item = rows[0] if rows else {}
             return _funding_fields(
                 item.get("fundingRate"),
@@ -783,9 +891,7 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                 next_funding_ms=item.get("nextFundingTime"),
             )
         if venue == "Gate":
-            payload = _json_url(
-                f"https://api.gateio.ws/api/v4/futures/usdt/contracts/{base}_USDT"
-            )
+            payload = _json_url(f"https://api.gateio.ws/api/v4/futures/usdt/contracts/{base}_USDT")
             return _funding_fields(
                 payload.get("funding_rate"),
                 interval_hours=_seconds_to_hours(payload.get("funding_interval")),
@@ -815,8 +921,7 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
             )
         if venue == "Kucoin Futures":
             payload = _json_url(
-                "https://api-futures.kucoin.com/api/v1/funding-rate/"
-                f"{compact}M/current"
+                f"https://api-futures.kucoin.com/api/v1/funding-rate/{compact}M/current"
             )
             item = payload.get("data") or {}
             return _funding_fields(
@@ -826,8 +931,7 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
             )
         if venue == "Mexc":
             payload = _json_url(
-                "https://contract.mexc.com/api/v1/contract/funding_rate/"
-                f"{base}_USDT"
+                f"https://contract.mexc.com/api/v1/contract/funding_rate/{base}_USDT"
             )
             item = payload.get("data") or {}
             return _funding_fields(
@@ -865,6 +969,83 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                 interval_hours=1,
                 next_funding_ms=next_hour_ms,
             )
+        if venue == "HTX":
+            payload = _json_url(
+                "https://api.hbdm.com/v5/market/funding_rate?"
+                + urlencode({"contract_code": f"{base}-{quote}"})
+            )
+            rows = payload.get("data") or []
+            item = rows[0] if rows else {}
+            return _funding_fields(
+                item.get("funding_rate"),
+                interval_hours=_interval_hours(
+                    item.get("funding_time"), item.get("next_funding_time")
+                ),
+                next_funding_ms=item.get("next_funding_time"),
+            )
+        if venue == "Phemex":
+            payload = _json_url(
+                "https://api.phemex.com/md/v2/ticker/24hr?" + urlencode({"symbol": compact})
+            )
+            item = payload.get("result") or {}
+            return _funding_fields(item.get("fundingRateRr"), interval_hours=8)
+        if venue == "CoinEx":
+            payload = _json_url(
+                "https://api.coinex.com/v2/futures/funding-rate?" + urlencode({"market": compact})
+            )
+            rows = payload.get("data") or []
+            item = rows[0] if rows else {}
+            return _funding_fields(
+                item.get("next_funding_rate") or item.get("latest_funding_rate"),
+                interval_hours=_interval_hours(
+                    item.get("latest_funding_time"), item.get("next_funding_time")
+                ),
+                next_funding_ms=item.get("next_funding_time"),
+            )
+        if venue == "BitMart":
+            payload = _json_url(
+                "https://api-cloud-v2.bitmart.com/contract/public/funding-rate?"
+                + urlencode({"symbol": compact})
+            )
+            item = payload.get("data") or {}
+            return _funding_fields(
+                item.get("rate_value") or item.get("expected_rate"),
+                interval_hours=8,
+                next_funding_ms=item.get("funding_time"),
+            )
+        if venue == "XT":
+            payload = _json_url(
+                "https://fapi.xt.com/future/market/v1/public/q/funding-rate?"
+                + urlencode({"symbol": f"{base.lower()}_{quote.lower()}"})
+            )
+            item = payload.get("result") or {}
+            return _funding_fields(
+                item.get("fundingRate"),
+                interval_hours=item.get("collectionInternal"),
+                next_funding_ms=item.get("nextCollectionTime"),
+            )
+        if venue == "WhiteBIT":
+            payload = _json_url("https://whitebit.com/api/v4/public/futures")
+            rows = payload.get("result") if isinstance(payload, dict) else payload
+            item = next(
+                (
+                    row
+                    for row in rows or []
+                    if isinstance(row, dict)
+                    and str(row.get("name") or "").upper() in {f"{base}_PERP", f"{base}_{quote}"}
+                ),
+                {},
+            )
+            return _funding_fields(
+                item.get("funding_rate"),
+                interval_hours=_seconds_to_hours(item.get("funding_interval")),
+                next_funding_seconds=item.get("funding_next_apply"),
+            )
+        if venue == "Coinbase International":
+            payload = _json_url(
+                f"https://api.international.coinbase.com/api/v1/instruments/{base}-PERP/quote"
+            )
+            return _funding_fields(payload.get("predicted_funding"), interval_hours=1)
     except Exception:
         return {}
     return {}
@@ -939,6 +1120,20 @@ def _json_post(url: str, payload: dict[str, Any]) -> Any:
     )
     with urlopen(request, timeout=6.0) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _symbol_base_quote(symbol: str) -> tuple[str, str]:
+    base, _, quote = str(symbol).partition("/")
+    return base.upper(), (quote.split(":", 1)[0] or "USDT").upper()
+
+
+def _sorted_book(
+    raw_bids: Any,
+    raw_asks: Any,
+) -> tuple[list[list[float]], list[list[float]]]:
+    bids = sorted(_levels(raw_bids), key=lambda level: level[0], reverse=True)
+    asks = sorted(_levels(raw_asks), key=lambda level: level[0])
+    return bids, asks
 
 
 def _okx_dex_leg_quote(
