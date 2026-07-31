@@ -95,6 +95,14 @@ def test_catalog_refresh_retains_last_successful_venue(tmp_path, monkeypatch) ->
     assert payload["health"]["Gate|Spot"]["catalogued_at"] == "2026-07-31T10:00:00Z"
 
 
+def test_catalog_excludes_inverse_perpetuals_from_stablecoin_chart_path() -> None:
+    inverse = {"active": True, "swap": True, "quote": "USD", "settle": "BTC"}
+    linear = {"active": True, "swap": True, "quote": "USDT", "settle": "USDT"}
+
+    assert not chart_catalog._catalog_market_supported(inverse, "Futures")
+    assert chart_catalog._catalog_market_supported(linear, "Futures")
+
+
 def test_one_day_chart_budget_can_hold_every_minute() -> None:
     config = server.chart_window_config("1d")
     assert config["hours"] == 24

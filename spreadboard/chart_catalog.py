@@ -149,15 +149,9 @@ def _load_venue(venue: str, market_type: str) -> list[dict[str, Any]]:
         loaded = client.load_markets()
         rows = []
         for market in loaded.values():
-            if market.get("active") is False or str(market.get("quote") or "").upper() not in STABLE_QUOTES:
+            if not _catalog_market_supported(market, market_type):
                 continue
-            # The board's Futures lane means perpetual swaps with funding.
-            # Dated futures and options have different carry semantics.
             is_derivative = bool(market.get("swap"))
-            if market_type == "Futures" and not is_derivative:
-                continue
-            if market_type == "Spot" and not market.get("spot"):
-                continue
             token = str(market.get("base") or "").upper()
             symbol = str(market.get("symbol") or "")
             if not token or not symbol:
@@ -176,6 +170,19 @@ def _load_venue(venue: str, market_type: str) -> list[dict[str, Any]]:
         close = getattr(client, "close", None)
         if callable(close):
             close()
+
+
+def _catalog_market_supported(market: dict[str, Any], market_type: str) -> bool:
+    if market.get("active") is False or str(market.get("quote") or "").upper() not in STABLE_QUOTES:
+        return False
+    if market_type == "Spot":
+        return bool(market.get("spot"))
+    if market_type != "Futures" or not market.get("swap"):
+        return False
+    # The native futures adapters quote stablecoin-settled perpetuals. Inverse
+    # contracts such as BTC/USD:BTC need different symbols, sizing, and funding
+    # units and must not leak into the same chart path.
+    return str(market.get("settle") or "").upper() in STABLE_QUOTES
 
 
 def _compact_leg(leg: dict[str, Any]) -> dict[str, str]:
