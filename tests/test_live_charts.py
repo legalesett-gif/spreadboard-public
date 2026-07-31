@@ -334,6 +334,8 @@ def test_exact_okx_dex_leg_reuses_cycle_cache(
         "short_venue": "OKX DEX 56",
         "short_market_type": "Spot",
         "short_market_symbol": "TEST/USDC",
+        "dex_chain": "56",
+        "dex_contract": "0x123",
     }
     cache: dict = {}
 
@@ -354,6 +356,21 @@ def test_exact_okx_dex_leg_reuses_cycle_cache(
 
     assert first == second
     assert calls == 1
+
+    other = {
+        **row,
+        "token": "OTHER",
+        "dex_contract": "0x456",
+    }
+    refresher._leg_quote(
+        other,
+        "short",
+        target_notional_usd=50,
+        cache=cache,
+        include_funding=True,
+    )
+
+    assert calls == 2
 
 
 def test_history_window_does_not_reinsert_an_older_current_snapshot(

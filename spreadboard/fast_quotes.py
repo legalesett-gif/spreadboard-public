@@ -296,7 +296,11 @@ class FastQuoteRefresher:
             or row.get(f"{side}_symbol")
             or ""
         )
-        key = (venue, market_type, symbol)
+        if "okx dex" in venue.casefold():
+            chain, contract = _dex_chain_contract(row)
+            key = (venue, market_type, f"{chain}:{contract}")
+        else:
+            key = (venue, market_type, symbol)
         if key in cache:
             return cache[key]
         if "okx dex" in venue.casefold():
@@ -457,6 +461,9 @@ def _route_leg_key(
         or row.get(f"{side}_symbol")
         or ""
     )
+    if "okx dex" in venue.casefold():
+        chain, contract = _dex_chain_contract(row)
+        symbol = f"{chain}:{contract}" if chain and contract else ""
     return (venue, market_type, symbol) if venue and market_type and symbol else None
 
 
