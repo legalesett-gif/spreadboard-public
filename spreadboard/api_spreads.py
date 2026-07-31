@@ -345,12 +345,37 @@ def _load_api_discovery_rows(
                     )
                 )
     updated_at = _str_or_none(payload.get("updated_at"))
-    age = _iso_age_min(updated_at, now=now)
+    discovery_age = _iso_age_min(updated_at, now=now)
+    fast_refresh = (
+        payload.get("fast_quote_refresh")
+        if isinstance(payload.get("fast_quote_refresh"), dict)
+        else {}
+    )
+    fast_updated_at = _str_or_none(fast_refresh.get("updated_at"))
+    fast_age = (
+        _iso_age_min(fast_updated_at, now=now)
+        if fast_refresh.get("status") == "ok"
+        and (_int_or_none(fast_refresh.get("updated_routes")) or 0) > 0
+        else None
+    )
+    effective_age = min(
+        (value for value in (discovery_age, fast_age) if value is not None),
+        default=None,
+    )
+    effective_updated_at = (
+        fast_updated_at
+        if fast_age is not None
+        and (discovery_age is None or fast_age <= discovery_age)
+        else updated_at
+    )
     return rows, {
-        "status": _freshness(age, DEFAULT_MAX_AGE_MIN),
+        "status": _freshness(effective_age, DEFAULT_MAX_AGE_MIN),
         "path": str(path),
-        "updated_at": updated_at,
-        "age_min": age,
+        "updated_at": effective_updated_at,
+        "age_min": effective_age,
+        "discovery_updated_at": updated_at,
+        "discovery_age_min": discovery_age,
+        "fast_quote_age_min": fast_age,
         "row_count": len(rows),
         "api_discovered_count": len(payload.get("api_discovered_rows") or []),
         "dex_discovered_count": len(payload.get("dex_discovered_rows") or []),
@@ -400,6 +425,9 @@ def _public_source_health(meta: dict[str, Any]) -> dict[str, Any]:
             "status",
             "updated_at",
             "age_min",
+            "discovery_updated_at",
+            "discovery_age_min",
+            "fast_quote_age_min",
             "row_count",
             "api_discovered_count",
             "dex_discovered_count",

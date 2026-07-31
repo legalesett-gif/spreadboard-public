@@ -27,6 +27,44 @@ def test_public_route_contract_keeps_spot_spot_and_hides_spot_dex() -> None:
     assert api_spreads._normalize_kind_filter("FUTURES-SPOT") == "FUTURES-SPOT-PAIR"
 
 
+def test_source_health_uses_live_quote_age_without_hiding_discovery_age(
+    tmp_path: Path,
+) -> None:
+    now = time.time()
+    current = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+    old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 3600))
+    snapshot = tmp_path / "api.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "updated_at": old,
+                "api_discovered_rows": [],
+                "dex_discovered_rows": [],
+                "fast_quote_refresh": {
+                    "status": "ok",
+                    "updated_at": current,
+                    "updated_routes": 25,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _rows, meta = api_spreads._load_api_discovery_rows(
+        snapshot,
+        now=now,
+        metadata={},
+        rails={},
+    )
+
+    assert meta["status"] == "fresh"
+    assert meta["age_min"] < 0.1
+    assert meta["fast_quote_age_min"] < 0.1
+    assert meta["discovery_age_min"] > 59
+    assert meta["updated_at"] == current
+    assert meta["discovery_updated_at"] == old
+
+
 def test_okx_dex_source_budget_covers_rate_limited_watchlist_scan() -> None:
     args = discovery_worker_parser().parse_args([])
 
