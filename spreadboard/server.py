@@ -5082,6 +5082,10 @@ def render_subscription_page() -> str:
 
 def render_legal_page(page: str) -> str:
     support = os.environ.get("SPREADBOARD_SUPPORT_EMAIL", "support@spreadarbitrage.ink")
+    support_url = os.environ.get(
+        "SPREADBOARD_SUPPORT_URL",
+        "https://t.me/spreadarbitragesubscription_bot",
+    )
     pages = {
         "terms": (
             "Terms of Service",
@@ -5093,7 +5097,7 @@ def render_legal_page(page: str) -> str:
                 ("Acceptable use", "Do not attempt to bypass access controls, overload data providers, reverse engineer credentials, or use the service for unlawful activity. We may suspend access needed to protect users, providers, or the service."),
                 ("Availability", "We aim to run continuously but do not guarantee uninterrupted access or that every venue, token, route, chart, or alert will always be available."),
                 ("Liability", "Nothing excludes liability that cannot lawfully be excluded. To the extent permitted by law, SpreadBoard is not liable for trading losses, missed opportunities, exchange failures, or decisions based on market information."),
-                ("Contact", f"Questions about these terms can be sent to {support}. Version {TERMS_VERSION}."),
+                ("Contact", f"Questions can be sent to {support} or through {support_url}. Version {TERMS_VERSION}."),
             ],
         ),
         "privacy": (
@@ -5105,7 +5109,7 @@ def render_legal_page(page: str) -> str:
                 ("Notifications", "Pushover user keys are encrypted at rest. Telegram and Pushover identifiers are used only to deliver the features you enable."),
                 ("Technical data", "We may retain security and operational records such as session identifiers, IP address, browser information, consent records, and service logs."),
                 ("Sharing and retention", "Data is shared only with providers needed to run the service, such as Stripe, Telegram, Pushover, hosting, and market-data providers. We keep it only as long as needed for service, security, accounting, and legal obligations."),
-                ("Your choices", f"You may request access, correction, deletion, or account closure by contacting {support}. Some records may need to be retained for legal or fraud-prevention purposes."),
+                ("Your choices", f"You may request access, correction, deletion, or account closure through {support_url} or by contacting {support}. Some records may need to be retained for legal or fraud-prevention purposes."),
             ],
         ),
         "refunds": (
@@ -5116,7 +5120,7 @@ def render_legal_page(page: str) -> str:
                 ("Immediate access", "At checkout you are asked to request immediate digital access and acknowledge that beginning supply may affect the statutory 14-day cancellation right. This does not remove rights that cannot legally be waived."),
                 ("Service faults", "If paid access is materially unavailable or not supplied as described, contact us promptly. We will investigate and provide the remedy required by applicable consumer law, which may include restoration, a credit, or a refund."),
                 ("Duplicate or incorrect charges", "Report a duplicate or incorrect charge with the account email and Stripe receipt identifier. Do not send card details."),
-                ("How to request", f"Email {support}. Include the account email, payment date, and reason. Refunds, when due, are returned through the original payment method."),
+                ("How to request", f"Contact {support} or {support_url}. Include the account email, payment date, and reason. Refunds, when due, are returned through the original payment method."),
             ],
         ),
     }

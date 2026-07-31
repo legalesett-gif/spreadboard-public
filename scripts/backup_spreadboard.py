@@ -46,6 +46,7 @@ def run_backup() -> None:
     _require_restic_configuration()
     if not RUNTIME_DIR.is_dir():
         raise RuntimeError("backup_source_missing")
+    _ensure_repository()
     with tempfile.TemporaryDirectory(prefix="spreadboard-backup-") as temporary:
         stage = Path(temporary) / "spreadboard-runtime"
         stage.mkdir()
@@ -73,6 +74,21 @@ def run_backup() -> None:
             check=True,
         )
         subprocess.run([RESTIC, "check", "--read-data-subset=1/20"], check=True)
+
+
+def _ensure_repository() -> None:
+    probe = subprocess.run(
+        [RESTIC, "snapshots", "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if probe.returncode == 0:
+        return
+    combined = f"{probe.stdout}\n{probe.stderr}".casefold()
+    if "unable to open config file" not in combined and "is there a repository at" not in combined:
+        raise RuntimeError("backup_repository_unavailable")
+    subprocess.run([RESTIC, "init"], check=True)
 
 
 def _backup_sqlite(source: Path, destination: Path) -> None:
