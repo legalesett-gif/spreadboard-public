@@ -659,24 +659,32 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
         if row.get("fast_quote_verified_at")
     ]
 
-    assert result["selected_routes"] == 102
-    assert result["updated_routes"] == 102
+    assert result["selected_routes"] == 97
+    assert result["updated_routes"] == 97
     assert sum(row["route_kind"] == "FUTURES" for row in updated) == 30
     assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 30
-    assert sum(row["route_kind"] == "SPOT" for row in updated) == 30
+    assert sum(row["route_kind"] == "SPOT" for row in updated) == 25
     assert sum(row["route_kind"] == "DEX-FUTURES" for row in updated) == 12
     assert {row["token"] for row in updated if row["route_kind"] == "FUTURES"} == {
-        f"FUT{index:02d}" for index in range(30)
+        f"FUT{index:02d}" for index in range(25)
     }
     assert {
         row["token"] for row in updated if row["route_kind"] == "FUTURES-SPOT"
-    } == {f"SPOT{index:02d}" for index in range(30)}
+    } == {f"SPOT{index:02d}" for index in range(25)}
     assert {row["token"] for row in updated if row["route_kind"] == "SPOT"} == {
-        f"CASH{index:02d}" for index in range(30)
+        f"CASH{index:02d}" for index in range(25)
     }
     assert {
         row["token"] for row in updated if row["route_kind"] == "DEX-FUTURES"
     } == {f"DEX{index:02d}" for index in range(12)}
+    assert sum(
+        row["token"] == "FUT00" and row["route_kind"] == "FUTURES"
+        for row in updated
+    ) == 2
+    assert sum(
+        row["token"] == "SPOT00" and row["route_kind"] == "FUTURES-SPOT"
+        for row in updated
+    ) == 2
 
 
 def test_aster_and_hyperliquid_futures_are_not_mislabeled_as_dex() -> None:
