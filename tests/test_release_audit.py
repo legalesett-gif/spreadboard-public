@@ -567,6 +567,44 @@ def test_okx_dex_identity_reaches_normalized_board_row() -> None:
     assert row.dex_contract == "0x123"
 
 
+def test_fast_quote_funding_reaches_normalized_board_row() -> None:
+    quote_ts_us = int(time.time() * 1_000_000)
+    row = api_spreads._row_from_api(
+        {
+            "token": "COTI",
+            "long_venue": "Kucoin Futures",
+            "long_market_type": "Futures",
+            "short_venue": "Bybit",
+            "short_market_type": "Futures",
+            "quote_ts_us": quote_ts_us,
+            "notes": {
+                "route_inputs": {
+                    "long": {
+                        "symbol": "COTI/USDT:USDT",
+                        "current_funding_pct": -0.0072,
+                        "funding_interval_hours": 1,
+                        "next_funding_ts_us": 1_800_000_000_000_000,
+                    },
+                    "short": {
+                        "symbol": "COTI/USDT:USDT",
+                        "current_funding_pct": -0.1,
+                        "funding_interval_hours": 1,
+                        "next_funding_ts_us": 1_800_000_000_000_000,
+                    },
+                }
+            },
+        },
+        bucket="api_discovered",
+        now=quote_ts_us / 1_000_000,
+    )
+
+    assert row.long_funding_pct == -0.0072
+    assert row.short_funding_pct == -0.1
+    assert row.long_funding_interval_hours == 1
+    assert row.short_funding_interval_hours == 1
+    assert row.long_next_funding_ts_us == 1_800_000_000_000_000
+
+
 def test_verified_dex_watchlist_and_cex_identity_cover_reference_top_ten() -> None:
     root = Path(__file__).resolve().parents[1]
     watchlist = load_watchlist(root / "data" / "api_discovery_watchlist.json")

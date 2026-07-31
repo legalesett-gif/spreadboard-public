@@ -679,12 +679,14 @@ def _row_from_api(
         long_funding_pct=_float_or_none(
             raw.get("long_funding_pct"),
             raw.get("long_funding"),
+            _nested_float(route_inputs, "long", "current_funding_pct"),
             long_funding.get("current_funding_pct"),
             long_funding.get("rate_pct"),
         ),
         short_funding_pct=_float_or_none(
             raw.get("short_funding_pct"),
             raw.get("short_funding"),
+            _nested_float(route_inputs, "short", "current_funding_pct"),
             short_funding.get("current_funding_pct"),
             short_funding.get("rate_pct"),
         ),
@@ -692,10 +694,12 @@ def _row_from_api(
         funding_projected_24h_pct=funding_projected_24h,
         funding_24h_source=_str_or_none(raw.get("funding_24h_source")),
         long_funding_interval_hours=_float_or_none(
+            _nested_float(route_inputs, "long", "funding_interval_hours"),
             long_funding.get("funding_interval_hours"),
             long_funding.get("interval_hours"),
         ),
         short_funding_interval_hours=_float_or_none(
+            _nested_float(route_inputs, "short", "funding_interval_hours"),
             short_funding.get("funding_interval_hours"),
             short_funding.get("interval_hours"),
         ),
@@ -711,8 +715,18 @@ def _row_from_api(
                 short_funding.get("interval_assumed", False),
             )
         ),
-        long_next_funding_ts_us=_int_or_none(long_funding.get("next_funding_ts_us")),
-        short_next_funding_ts_us=_int_or_none(short_funding.get("next_funding_ts_us")),
+        long_next_funding_ts_us=_int_or_none(
+            _float_or_none(
+                _nested_float(route_inputs, "long", "next_funding_ts_us"),
+                long_funding.get("next_funding_ts_us"),
+            )
+        ),
+        short_next_funding_ts_us=_int_or_none(
+            _float_or_none(
+                _nested_float(route_inputs, "short", "next_funding_ts_us"),
+                short_funding.get("next_funding_ts_us"),
+            )
+        ),
         long_volume_24h_usd=_nested_float(route_inputs, "long", "volume_24h_usd"),
         short_volume_24h_usd=_nested_float(route_inputs, "short", "volume_24h_usd"),
         long_bid=_nested_float(route_inputs, "long", "bid"),
