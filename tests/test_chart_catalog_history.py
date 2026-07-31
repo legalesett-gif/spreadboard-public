@@ -168,3 +168,7 @@ def test_position_suggestions_use_canonical_live_route(tmp_path, monkeypatch) ->
     assert result["routes"][0]["long_entry_price"] == 0.01
     assert result["routes"][0]["short_entry_price"] == 0.011
     assert {item["venue"] for item in result["legs"]} == {"Gate", "Bybit"}
+
+    empty = server.api_position_suggestions(tmp_path / "board", {})
+    assert empty["routes"] == []
+    assert empty["legs"] == []
