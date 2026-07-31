@@ -65,6 +65,48 @@ def test_source_health_uses_live_quote_age_without_hiding_discovery_age(
     assert meta["discovery_updated_at"] == old
 
 
+def test_settled_funding_propagates_to_every_route_using_same_leg() -> None:
+    def route(long_venue: str, settled: float | None) -> dict:
+        short_funding = {
+            "current_funding_pct": 0.01,
+            "funding_interval_hours": 1.0,
+        }
+        if settled is not None:
+            short_funding["funding_24h_pct"] = settled
+            short_funding["status"] = "ok"
+        return {
+            "token": "COTI",
+            "long_venue": long_venue,
+            "long_market_type": "Spot",
+            "short_venue": "Bybit",
+            "short_market_type": "Futures",
+            "notes": {
+                "route_inputs": {
+                    "long": {"symbol": "COTI/USDT"},
+                    "short": {"symbol": "COTI/USDT:USDT"},
+                },
+                "funding": {"short": short_funding},
+            },
+        }
+
+    kucoin = route("Kucoin", -3.27)
+    gate = route("Gate", None)
+    payload = {"api_discovered_rows": [kucoin, gate], "dex_discovered_rows": []}
+
+    api_spreads._propagate_funding_by_leg(payload)
+
+    assert gate["notes"]["funding"]["short"]["funding_24h_pct"] == -3.27
+    assert gate["funding_24h_pct"] == -3.27
+    assert gate["funding_24h_source"] == "settled_public_events"
+
+
+def test_gate_ccxt_alias_falls_back_to_current_adapter_name() -> None:
+    current_gate_adapter = object()
+    ccxt_stub = SimpleNamespace(gate=current_gate_adapter)
+
+    assert live._ccxt_exchange_class(ccxt_stub, "gateio") is current_gate_adapter
+
+
 def test_okx_dex_source_budget_covers_rate_limited_watchlist_scan() -> None:
     args = discovery_worker_parser().parse_args([])
 

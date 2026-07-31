@@ -331,6 +331,7 @@ def _load_api_discovery_rows(
             "row_count": 0,
         }
 
+    _propagate_funding_by_leg(payload)
     rows: list[SpreadTerminalRow] = []
     for bucket in ("api_discovered_rows", "dex_discovered_rows"):
         for raw in payload.get(bucket) or []:
@@ -385,6 +386,103 @@ def _load_api_discovery_rows(
         "dex_spot_source": _dex_spot_source_status(payload),
         "fast_quote_refresh": payload.get("fast_quote_refresh"),
     }
+
+
+def _propagate_funding_by_leg(payload: dict[str, Any]) -> None:
+    """Reuse one settled futures-leg result across every route using that leg."""
+
+    raw_rows = [
+        row
+        for bucket in ("api_discovered_rows", "dex_discovered_rows")
+        for row in payload.get(bucket) or []
+        if isinstance(row, dict)
+    ]
+    leg_funding: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in raw_rows:
+        for side in ("long", "short"):
+            key = _raw_futures_leg_key(row, side)
+            funding = _raw_leg_funding(row, side)
+            if key is None or not funding:
+                continue
+            existing = leg_funding.get(key)
+            if existing is None or _funding_leg_quality(funding) > _funding_leg_quality(existing):
+                leg_funding[key] = dict(funding)
+
+    fields = (
+        "status",
+        "reason",
+        "funding_24h_pct",
+        "projected_24h_pct",
+        "current_funding_pct",
+        "funding_interval_hours",
+        "funding_interval_assumed",
+        "next_funding_ts_us",
+        "samples",
+    )
+    for row in raw_rows:
+        notes = row.setdefault("notes", {})
+        if not isinstance(notes, dict):
+            notes = {}
+            row["notes"] = notes
+        funding = notes.setdefault("funding", {})
+        if not isinstance(funding, dict):
+            funding = {}
+            notes["funding"] = funding
+        settled: dict[str, float | None] = {}
+        projected: dict[str, float | None] = {}
+        has_futures = False
+        for side in ("long", "short"):
+            if row.get(f"{side}_market_type") != "Futures":
+                settled[side] = 0.0
+                projected[side] = 0.0
+                continue
+            has_futures = True
+            key = _raw_futures_leg_key(row, side)
+            source = leg_funding.get(key) if key is not None else None
+            target = funding.setdefault(side, {})
+            if not isinstance(target, dict):
+                target = {}
+                funding[side] = target
+            if source:
+                for field in fields:
+                    if target.get(field) is None and source.get(field) is not None:
+                        target[field] = source[field]
+            settled[side] = _float_or_none(target.get("funding_24h_pct"))
+            projected[side] = _float_or_none(target.get("projected_24h_pct"))
+        if has_futures and all(settled.get(side) is not None for side in ("long", "short")):
+            row["funding_24h_pct"] = settled["short"] - settled["long"]
+            row["funding_24h_source"] = "settled_public_events"
+        if has_futures and all(projected.get(side) is not None for side in ("long", "short")):
+            row["funding_projected_24h_pct"] = projected["short"] - projected["long"]
+
+
+def _raw_futures_leg_key(
+    row: dict[str, Any],
+    side: str,
+) -> tuple[str, str, str] | None:
+    if row.get(f"{side}_market_type") != "Futures":
+        return None
+    token = str(row.get("token") or "").upper()
+    venue = str(row.get(f"{side}_venue") or "")
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+    leg_input = inputs.get(side) if isinstance(inputs.get(side), dict) else {}
+    symbol = str(leg_input.get("symbol") or f"{token}/USDT:USDT")
+    return (token, venue, symbol) if token and venue and symbol else None
+
+
+def _raw_leg_funding(row: dict[str, Any], side: str) -> dict[str, Any]:
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    funding = notes.get("funding") if isinstance(notes.get("funding"), dict) else {}
+    return funding.get(side) if isinstance(funding.get(side), dict) else {}
+
+
+def _funding_leg_quality(funding: dict[str, Any]) -> tuple[int, int, int]:
+    return (
+        int(_float_or_none(funding.get("funding_24h_pct")) is not None),
+        int(_float_or_none(funding.get("projected_24h_pct")) is not None),
+        int(_float_or_none(funding.get("current_funding_pct")) is not None),
+    )
 
 
 def _dex_spot_source_status(payload: dict[str, Any]) -> dict[str, Any]:

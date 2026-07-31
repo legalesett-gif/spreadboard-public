@@ -470,7 +470,7 @@ def _fetch_ohlcv_stats_uncached(exchange_id: str, symbol: str) -> dict[str, Any]
     try:
         import ccxt
 
-        exchange_class = getattr(ccxt, exchange_id)
+        exchange_class = _ccxt_exchange_class(ccxt, exchange_id)
         exchange = exchange_class({"enableRateLimit": True})
         exchange.timeout = ROUTE_PUBLIC_TIMEOUT_MS
         exchange.load_markets()
@@ -729,7 +729,7 @@ def _fetch_funding_24h_uncached(exchange_id: str, symbol: str) -> dict[str, Any]
     try:
         import ccxt
 
-        exchange_class = getattr(ccxt, exchange_id)
+        exchange_class = _ccxt_exchange_class(ccxt, exchange_id)
         exchange = exchange_class({"enableRateLimit": True, "options": {"defaultType": "swap"}})
         exchange.timeout = ROUTE_PUBLIC_TIMEOUT_MS
         exchange.load_markets()
@@ -1128,7 +1128,7 @@ def fetch_market_stats(
     try:
         import ccxt
 
-        exchange_class = getattr(ccxt, exchange_id)
+        exchange_class = _ccxt_exchange_class(ccxt, exchange_id)
         options = {"defaultType": "swap"} if market_type == "Futures" else {}
         exchange = exchange_class({"enableRateLimit": True, "options": options})
         exchange.timeout = ROUTE_PUBLIC_TIMEOUT_MS
@@ -1382,7 +1382,7 @@ def _fetch_exchange_row(exchange_id: str, symbol: str) -> dict[str, Any] | None:
     try:
         import ccxt
 
-        exchange_class = getattr(ccxt, exchange_id)
+        exchange_class = _ccxt_exchange_class(ccxt, exchange_id)
         exchange = exchange_class(
             {
                 "enableRateLimit": True,
@@ -1670,6 +1670,16 @@ def _display_venue(exchange_id: str) -> str:
         "htx": "HTX",
         "phemex": "Phemex",
     }.get(exchange_id, exchange_id.capitalize())
+
+
+def _ccxt_exchange_class(ccxt_module: Any, exchange_id: str) -> Any:
+    for candidate in (
+        ("gateio", "gate") if exchange_id == "gateio" else (exchange_id,)
+    ):
+        exchange_class = getattr(ccxt_module, candidate, None)
+        if exchange_class is not None:
+            return exchange_class
+    raise AttributeError(f"CCXT exchange adapter unavailable: {exchange_id}")
 
 
 def _merge_venue_name(name: str) -> str:
