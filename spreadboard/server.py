@@ -9499,7 +9499,7 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   .main-nav {{ display: none; }}
   .header-actions {{ margin-left: auto; }}
   .header-strip {{ height: 8px; }}
-  .mobile-primary-nav {{ display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; padding: 6px 8px 8px; background: var(--dark); }}
+  .mobile-primary-nav {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 6px 8px 8px; background: var(--dark); }}
   .mobile-primary-nav a {{ min-height: 40px; display: grid; place-items: center; border-radius: 8px; color: #dce8e5; font-size: 11px; font-weight: 900; white-space: nowrap; }}
   .mobile-primary-nav a.active {{ background: var(--accent); color: var(--accent-ink); }}
   .mobile-secondary-nav {{ display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; padding: 0 8px 8px; background: var(--dark); border-top: 1px solid rgba(255,255,255,.08); }}

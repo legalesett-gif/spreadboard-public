@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import base64
+import fcntl
 import hashlib
 import hmac
 import json
+import os
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -75,6 +78,15 @@ PUBLIC_RPC_BY_CHAIN = {
 }
 
 HttpGet = Callable[[str, dict[str, str]], dict[str, Any]]
+
+OKX_DEX_RATE_STATE_PATH = os.environ.get(
+    "SPREADBOARD_OKX_DEX_RATE_STATE_PATH",
+    "/tmp/spreadboard-okx-dex-rate.state",
+)
+OKX_DEX_MIN_REQUEST_INTERVAL_SECONDS = float(
+    os.environ.get("SPREADBOARD_OKX_DEX_MIN_INTERVAL_S", "1.15")
+)
+OKX_DEX_RATE_LIMIT_RETRIES = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,28 +329,38 @@ def _signed_get(
 ) -> dict[str, Any]:
     query_string = urlencode(params)
     query = f"?{query_string}"
-    timestamp = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    prehash = f"{timestamp}GET{path}{query}"
-    signature = base64.b64encode(
-        hmac.new(
-            credentials.secret.encode("utf-8"),
-            prehash.encode("utf-8"),
-            hashlib.sha256,
-        ).digest()
-    ).decode("ascii")
-    headers = {
-        "Content-Type": "application/json",
-        "OK-ACCESS-KEY": credentials.api_key,
-        "OK-ACCESS-SIGN": signature,
-        "OK-ACCESS-TIMESTAMP": timestamp,
-        "OK-ACCESS-PASSPHRASE": credentials.passphrase,
-    }
-    if credentials.project_id:
-        headers["OK-ACCESS-PROJECT"] = credentials.project_id
-    return (http_get or _http_get)(f"{OKX_DEX_BASE_URL}{path}{query}", headers)
+    getter = http_get or _http_get
+    attempts = 1 if http_get is not None else OKX_DEX_RATE_LIMIT_RETRIES + 1
+    result: dict[str, Any] = {}
+    for _attempt in range(attempts):
+        timestamp = datetime.now(UTC).isoformat(timespec="milliseconds").replace(
+            "+00:00", "Z"
+        )
+        prehash = f"{timestamp}GET{path}{query}"
+        signature = base64.b64encode(
+            hmac.new(
+                credentials.secret.encode("utf-8"),
+                prehash.encode("utf-8"),
+                hashlib.sha256,
+            ).digest()
+        ).decode("ascii")
+        headers = {
+            "Content-Type": "application/json",
+            "OK-ACCESS-KEY": credentials.api_key,
+            "OK-ACCESS-SIGN": signature,
+            "OK-ACCESS-TIMESTAMP": timestamp,
+            "OK-ACCESS-PASSPHRASE": credentials.passphrase,
+        }
+        if credentials.project_id:
+            headers["OK-ACCESS-PROJECT"] = credentials.project_id
+        result = getter(f"{OKX_DEX_BASE_URL}{path}{query}", headers)
+        if not _is_rate_limited(result):
+            break
+    return result
 
 
 def _http_get(url: str, headers: dict[str, str]) -> dict[str, Any]:
+    _wait_for_shared_request_slot()
     request = Request(
         url,
         headers={"User-Agent": "Mozilla/5.0 SpreadBoard/1.0", **headers},
@@ -361,6 +383,36 @@ def _http_get(url: str, headers: dict[str, str]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError("OKX DEX returned non-object JSON")
     return payload
+
+
+def _wait_for_shared_request_slot() -> None:
+    """Coordinate OKX Web3 requests across the web and discovery processes."""
+
+    state_path = OKX_DEX_RATE_STATE_PATH
+    with open(state_path, "a+", encoding="ascii") as state:
+        fcntl.flock(state.fileno(), fcntl.LOCK_EX)
+        try:
+            state.seek(0)
+            try:
+                last_started = float(state.read().strip() or "0")
+            except ValueError:
+                last_started = 0.0
+            remaining = OKX_DEX_MIN_REQUEST_INTERVAL_SECONDS - (
+                time.monotonic() - last_started
+            )
+            if remaining > 0:
+                time.sleep(remaining)
+            state.seek(0)
+            state.truncate()
+            state.write(str(time.monotonic()))
+            state.flush()
+        finally:
+            fcntl.flock(state.fileno(), fcntl.LOCK_UN)
+
+
+def _is_rate_limited(payload: dict[str, Any]) -> bool:
+    message = f"{payload.get('code', '')} {payload.get('msg', '')}".casefold()
+    return "too many requests" in message or "rate limit" in message
 
 
 def _quote_payload(raw: dict[str, Any]) -> dict[str, Any]:
