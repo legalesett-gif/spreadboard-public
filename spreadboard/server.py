@@ -208,6 +208,7 @@ class SpreadBoardServer(ThreadingHTTPServer):
         self.accounts_path = Path(accounts_path)
         accounts.initialize(self.accounts_path)
         self.alert_watcher: alerts.AlertWatcher | None = None
+        self.position_alert_worker: Any = None
 
 
 class SpreadBoardHandler(BaseHTTPRequestHandler):
@@ -360,7 +361,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 symbol = _clean_symbol(parsed.path.removeprefix("/api/token/"))
                 self._send_json(api_token(symbol, self.server.board_path, include_live=not _query_bool(query, "local")))
             elif parsed.path == "/api/health":
-                self._send_json(api_health(self.server.board_path, self.server.config, self.server.alert_watcher))
+                self._send_json(api_health(
+                    self.server.board_path,
+                    self.server.config,
+                    self.server.alert_watcher,
+                    self.server.position_alert_worker,
+                ))
             elif parsed.path == "/assets/lightweight-charts.js":
                 self._send_asset(
                     Path(__file__).with_name("static")
@@ -1921,6 +1927,7 @@ def api_health(
     board_path: Path,
     config: dict[str, Any],
     watcher: alerts.AlertWatcher | None,
+    position_alert_worker: Any = None,
 ) -> dict[str, Any]:
     del watcher
     source_health = api_source_health(board_path, config)
@@ -1933,6 +1940,10 @@ def api_health(
         "market_updated_at": canonical.get("updated_at"),
         "market_row_count": canonical.get("row_count"),
         "source_health": source_health,
+        "position_alerts": {
+            "running": bool(position_alert_worker and position_alert_worker.running),
+            "poll_seconds": getattr(position_alert_worker, "poll_seconds", None),
+        },
     }
 
 

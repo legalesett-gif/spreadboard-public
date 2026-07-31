@@ -393,6 +393,7 @@ def main() -> int:
         accounts_path=server.accounts_path,
         poll_seconds=float(os.environ.get("SPREADBOARD_POSITION_ALERT_SECONDS", "30")),
     )
+    server.position_alert_worker = position_alert_worker
 
     def stop_service(_signum: int, _frame: Any) -> None:
         threading.Thread(target=server.shutdown, daemon=True).start()
