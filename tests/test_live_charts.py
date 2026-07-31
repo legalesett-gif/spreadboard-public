@@ -438,6 +438,50 @@ def test_native_mexc_funding_uses_public_contract_rate(
     assert result["next_funding_ts_us"] == 1_800_000_000_000_000
 
 
+def test_native_bingx_funding_preserves_reported_cadence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "spreadboard.fast_quotes._json_url",
+        lambda _url: {
+            "data": {
+                "lastFundingRate": "0.001342",
+                "fundingIntervalHours": 1,
+                "nextFundingTime": 1_800_000_000_000,
+            }
+        },
+    )
+
+    result = _native_current_funding("Bingx", "COTI/USDT:USDT")
+
+    assert result["current_funding_pct"] == pytest.approx(0.1342)
+    assert result["funding_interval_hours"] == 1
+
+
+def test_native_whitebit_funding_uses_ticker_id_and_minutes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "spreadboard.fast_quotes._json_url",
+        lambda _url: {
+            "result": [
+                {
+                    "ticker_id": "COTI_PERP",
+                    "funding_rate": "0.00005",
+                    "funding_interval_minutes": 240,
+                    "next_funding_rate_timestamp": 1_800_000_000_000,
+                }
+            ]
+        },
+    )
+
+    result = _native_current_funding("WhiteBIT", "COTI/USDT:USDT")
+
+    assert result["current_funding_pct"] == pytest.approx(0.005)
+    assert result["funding_interval_hours"] == 4
+    assert result["next_funding_ts_us"] == 1_800_000_000_000_000
+
+
 def test_native_hyperliquid_funding_uses_live_asset_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

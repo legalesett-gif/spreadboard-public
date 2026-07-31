@@ -247,7 +247,7 @@ class RefreshLoop:
             "--route-limit",
             str(
                 min(
-                    200,
+                    400,
                     max(25, int(os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "50"))),
                 )
             ),

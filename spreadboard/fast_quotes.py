@@ -112,7 +112,7 @@ class FastQuoteRefresher:
             selected.extend(
                 _expanded_token_rows(
                     rows_by_lane[lane],
-                    token_limit=min(32, lane_limit),
+                    token_limit=min(50, lane_limit),
                     route_limit=lane_limit,
                 )
             )
@@ -917,6 +917,7 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
             item = payload.get("data") or {}
             return _funding_fields(
                 item.get("lastFundingRate"),
+                interval_hours=item.get("fundingIntervalHours"),
                 next_funding_ms=item.get("nextFundingTime"),
             )
         if venue == "Kucoin Futures":
@@ -1032,13 +1033,19 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                     row
                     for row in rows or []
                     if isinstance(row, dict)
-                    and str(row.get("name") or "").upper() in {f"{base}_PERP", f"{base}_{quote}"}
+                    and str(row.get("ticker_id") or row.get("name") or "").upper()
+                    in {f"{base}_PERP", f"{base}_{quote}"}
                 ),
                 {},
             )
             return _funding_fields(
                 item.get("funding_rate"),
-                interval_hours=_seconds_to_hours(item.get("funding_interval")),
+                interval_hours=(
+                    _optional_number(item.get("funding_interval_minutes")) / 60.0
+                    if _optional_number(item.get("funding_interval_minutes"))
+                    else _seconds_to_hours(item.get("funding_interval"))
+                ),
+                next_funding_ms=item.get("next_funding_rate_timestamp"),
                 next_funding_seconds=item.get("funding_next_apply"),
             )
         if venue == "Coinbase International":
@@ -1093,11 +1100,12 @@ def _funding_fields(
     if next_ms is None:
         next_seconds = _optional_number(next_funding_seconds)
         next_ms = next_seconds * 1000 if next_seconds is not None else None
-    return {
-        "current_funding_pct": parsed * 100.0,
-        "funding_interval_hours": interval,
-        "next_funding_ts_us": int(next_ms * 1000) if next_ms is not None else None,
-    }
+    output = {"current_funding_pct": parsed * 100.0}
+    if interval is not None:
+        output["funding_interval_hours"] = interval
+    if next_ms is not None:
+        output["next_funding_ts_us"] = int(next_ms * 1000)
+    return output
 
 
 def _json_url(url: str) -> Any:
