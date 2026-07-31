@@ -26,7 +26,7 @@ def load_or_fetch(row: dict[str, Any], *, hours: float, max_points: int = 1200) 
     cache_path = _cache_path(str(row.get("route_key") or ""), hours)
     cached = _read_cache(cache_path)
     if cached and time.time() - float(cached.get("cached_at") or 0) <= 300:
-        return cached
+        return _with_sampled_rows(cached, max_points=max_points)
     timeframe = "1m" if hours <= 24 else "5m" if hours <= 72 else "15m"
     since_ms = int((time.time() - hours * 3600) * 1000)
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -40,12 +40,6 @@ def load_or_fetch(row: dict[str, Any], *, hours: float, max_points: int = 1200) 
         _atomic_json(cache_path, result)
         return result
     rows = _align(legs["long"], legs["short"], timeframe)
-    if len(rows) > max_points:
-        latest = rows[-1]
-        stride = max(1, len(rows) // max_points)
-        rows = rows[::stride]
-        if rows[-1]["quote_ts_us"] != latest["quote_ts_us"]:
-            rows.append(latest)
     result = {
         "status": "ok" if rows else "unavailable",
         "sample_source": "historical_ohlcv_close_proxy",
@@ -54,7 +48,25 @@ def load_or_fetch(row: dict[str, Any], *, hours: float, max_points: int = 1200) 
         "cached_at": time.time(),
     }
     _atomic_json(cache_path, result)
+    return _with_sampled_rows(result, max_points=max_points)
+
+
+def _with_sampled_rows(payload: dict[str, Any], *, max_points: int) -> dict[str, Any]:
+    result = dict(payload)
+    result["rows"] = evenly_sample(list(payload.get("rows") or []), max_points=max_points)
     return result
+
+
+def evenly_sample(rows: list[dict[str, Any]], *, max_points: int) -> list[dict[str, Any]]:
+    """Sample the whole time range while retaining its first and latest points."""
+    limit = max(1, int(max_points))
+    if len(rows) <= limit:
+        return rows
+    if limit == 1:
+        return [rows[-1]]
+    last_index = len(rows) - 1
+    indices = [(index * last_index) // (limit - 1) for index in range(limit)]
+    return [rows[index] for index in indices]
 
 
 def _fetch_leg(row: dict[str, Any], side: str, timeframe: str, since_ms: int) -> list[list[float]]:

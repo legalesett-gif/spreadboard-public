@@ -36,6 +36,28 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         assert response.status == 400
         assert json.loads(response.read())["error"] == "billing_webhook_not_configured"
 
+        monkeypatch.setenv("SPREADBOARD_TELEGRAM_BOT_TOKEN", "123:test-token")
+        monkeypatch.setenv("SPREADBOARD_TELEGRAM_BOT_USERNAME", "spreadboard_test_bot")
+        monkeypatch.setenv("SPREADBOARD_TELEGRAM_WEBHOOK_SECRET", "webhook-secret")
+        telegram_update = json.dumps(
+            {"update_id": 1, "message": {"chat": {"id": 99, "type": "private"}, "text": "/mysubscription"}}
+        )
+        connection.request(
+            "POST", "/api/telegram/webhook", body=telegram_update,
+            headers={"Content-Type": "application/json", "X-Telegram-Bot-Api-Secret-Token": "forged"},
+        )
+        response = connection.getresponse()
+        assert response.status == 400
+        assert json.loads(response.read())["error"] == "invalid_telegram_webhook_secret"
+
+        connection.request(
+            "POST", "/api/telegram/webhook", body=telegram_update,
+            headers={"Content-Type": "application/json", "X-Telegram-Bot-Api-Secret-Token": "webhook-secret"},
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        assert "Link this chat" in json.loads(response.read())["text"]
+
         connection.request(
             "POST", "/api/register",
             body=json.dumps({"display_name": "New Member", "email": "new@example.test", "password": "new-member-password"}),

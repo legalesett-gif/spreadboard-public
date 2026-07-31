@@ -179,12 +179,26 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 result TEXT NOT NULL,
                 processed_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS telegram_links (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                chat_id INTEGER NOT NULL UNIQUE,
+                linked_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS telegram_link_tokens (
+                token_hash TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT
+            );
             CREATE INDEX IF NOT EXISTS sessions_token_hash ON sessions(token_hash);
             CREATE INDEX IF NOT EXISTS sessions_user_expiry ON sessions(user_id, expires_at);
             CREATE INDEX IF NOT EXISTS positions_user_status ON positions(user_id, status, opened_at DESC);
             CREATE INDEX IF NOT EXISTS funding_position_time ON funding_cashflows(position_id, occurred_at);
             CREATE INDEX IF NOT EXISTS alert_rules_user_position ON position_alert_rules(user_id, position_id, enabled);
             CREATE INDEX IF NOT EXISTS notifications_user_time ON in_app_notifications(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS telegram_link_tokens_user ON telegram_link_tokens(user_id, expires_at);
             """
         )
         _ensure_columns(connection, "users", {
@@ -407,6 +421,104 @@ def get_user_object(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> U
     try:
         row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return _user_from_row(row) if row is not None else None
+    finally:
+        connection.close()
+
+
+def create_telegram_link_token(
+    user_id: int,
+    *,
+    ttl_minutes: int = 10,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> str:
+    token = secrets.token_urlsafe(18)
+    now = datetime.now(tz=timezone.utc)
+    expires = now + timedelta(minutes=max(1, min(60, int(ttl_minutes))))
+    connection = _connect(db_path)
+    try:
+        if connection.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+            raise ValueError("user_not_found")
+        connection.execute("DELETE FROM telegram_link_tokens WHERE user_id = ? OR expires_at <= ?", (user_id, _utc_iso(now)))
+        connection.execute(
+            "INSERT INTO telegram_link_tokens (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (_token_hash(token), user_id, _utc_iso(now), _utc_iso(expires)),
+        )
+        connection.commit()
+        return token
+    finally:
+        connection.close()
+
+
+def bind_telegram_chat(
+    token: str,
+    chat_id: int,
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> User:
+    connection = _connect(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT * FROM telegram_link_tokens WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
+            (_token_hash(token), _utc_iso()),
+        ).fetchone()
+        if row is None:
+            raise ValueError("invalid_or_expired_telegram_link")
+        user_id = int(row["user_id"])
+        owner = connection.execute("SELECT user_id FROM telegram_links WHERE chat_id = ?", (int(chat_id),)).fetchone()
+        if owner is not None and int(owner["user_id"]) != user_id:
+            raise ValueError("telegram_chat_already_linked")
+        now = _utc_iso()
+        connection.execute(
+            "INSERT INTO telegram_links (user_id, chat_id, linked_at, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET chat_id = excluded.chat_id, updated_at = excluded.updated_at",
+            (user_id, int(chat_id), now, now),
+        )
+        connection.execute("UPDATE telegram_link_tokens SET used_at = ? WHERE token_hash = ?", (now, row["token_hash"]))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    user = get_user_object(user_id, db_path=db_path)
+    if user is None:
+        raise ValueError("user_not_found")
+    return user
+
+
+def user_for_telegram_chat(chat_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> User | None:
+    connection = _connect(db_path)
+    try:
+        row = connection.execute(
+            "SELECT u.* FROM telegram_links t JOIN users u ON u.id = t.user_id WHERE t.chat_id = ?",
+            (int(chat_id),),
+        ).fetchone()
+        return _user_from_row(row) if row is not None else None
+    finally:
+        connection.close()
+
+
+def telegram_link_status(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
+    connection = _connect(db_path)
+    try:
+        row = connection.execute("SELECT linked_at, updated_at FROM telegram_links WHERE user_id = ?", (user_id,)).fetchone()
+        return {
+            "linked": row is not None,
+            "linked_at": row["linked_at"] if row is not None else None,
+            "updated_at": row["updated_at"] if row is not None else None,
+        }
+    finally:
+        connection.close()
+
+
+def unlink_telegram_chat(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> bool:
+    connection = _connect(db_path)
+    try:
+        cursor = connection.execute("DELETE FROM telegram_links WHERE user_id = ?", (user_id,))
+        connection.execute("DELETE FROM telegram_link_tokens WHERE user_id = ?", (user_id,))
+        connection.commit()
+        return cursor.rowcount > 0
     finally:
         connection.close()
 

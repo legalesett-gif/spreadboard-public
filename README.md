@@ -9,8 +9,8 @@ public exchange quotes by token, compares venue routes, normalizes funding over
 - Public market APIs only
 - No exchange credentials
 - No balances, positions, orders, transfers, swaps, or execution controls
-- No private Telegram messages
-- Telegram and notification settings are browser-local templates only
+- Telegram subscription commands only after an explicit one-time account link
+- No Telegram usernames, private message history, or payment credentials are stored
 
 ## Run
 
@@ -45,3 +45,40 @@ Subscribe it to `checkout.session.completed`,
 `customer.subscription.deleted`, `invoice.paid`, and
 `invoice.payment_failed`. Access changes only after a signed webhook is applied;
 the Checkout success redirect does not grant access.
+
+## Telegram Subscription Bot
+
+The Telegram bot is a second front door to the same subscription account. It
+can show status and create a hosted checkout link, but it cannot activate an
+account. Only a verified payment-provider webhook can do that.
+
+1. Create a dedicated bot with BotFather using `/newbot`.
+2. Add the token, username without `@`, and a random webhook secret to
+   production `app.env`:
+
+```bash
+SPREADBOARD_TELEGRAM_BOT_TOKEN=123456:replace_me
+SPREADBOARD_TELEGRAM_BOT_USERNAME=spreadboard_bot
+SPREADBOARD_TELEGRAM_WEBHOOK_SECRET=replace_with_a_random_32_byte_value
+```
+
+3. Restart the app, then register the webhook without putting the token on the
+   command line:
+
+```bash
+SPREADBOARD_PUBLIC_URL=https://spreadboard.178.128.126.204.sslip.io \
+  uv run python scripts/configure_telegram_webhook.py
+```
+
+Members connect the bot from Account settings using a single-use link that
+expires after ten minutes. Supported commands are `/subscribe` and
+`/mysubscription`.
+
+## Crypto Checkout
+
+Whitepay is a crypto payment processor, not Stripe. A Whitepay invoice is a
+one-time crypto payment; recurring membership and renewal state remain the
+responsibility of SpreadBoard. Whitepay production checkout is intentionally
+disabled until merchant onboarding supplies the exact API contract, credentials,
+and signed webhook specification. Do not grant access from a browser redirect
+or an unsigned payment-status callback.

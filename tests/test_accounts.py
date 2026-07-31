@@ -106,3 +106,26 @@ def test_position_funding_and_alert_records_are_user_scoped(
             {"metric": "pnl_usd", "operator": "gte", "threshold": 10},
             db_path=path,
         )
+
+
+def test_telegram_link_is_one_time_and_chat_cannot_be_reassigned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _database(tmp_path, monkeypatch)
+    first = accounts.create_user(
+        email="telegram-first@example.com", display_name="First",
+        password="first-secure-password", subscription_status="active", db_path=path,
+    )
+    second = accounts.create_user(
+        email="telegram-second@example.com", display_name="Second",
+        password="second-secure-password", subscription_status="active", db_path=path,
+    )
+    token = accounts.create_telegram_link_token(first["id"], db_path=path)
+    linked = accounts.bind_telegram_chat(token, 12345, db_path=path)
+    assert linked.id == first["id"]
+    assert accounts.telegram_link_status(first["id"], db_path=path)["linked"] is True
+    with pytest.raises(ValueError, match="invalid_or_expired_telegram_link"):
+        accounts.bind_telegram_chat(token, 12345, db_path=path)
+    second_token = accounts.create_telegram_link_token(second["id"], db_path=path)
+    with pytest.raises(ValueError, match="telegram_chat_already_linked"):
+        accounts.bind_telegram_chat(second_token, 12345, db_path=path)

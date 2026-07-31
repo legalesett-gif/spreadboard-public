@@ -16,6 +16,7 @@ from spreadboard.fast_quotes import (
     _native_spot_order_book,
     _native_current_funding,
     _okx_dex_leg_quote,
+    _kraken_asset_code,
 )
 from scripts.audit_live_charts import _formula_errors
 
@@ -496,6 +497,52 @@ def test_native_hyperliquid_funding_uses_live_asset_context(
     result = _native_current_funding("Hyperliquid", "ZK/USDC:USDC")
 
     assert result["current_funding_pct"] == pytest.approx(-0.00180442)
+    assert result["funding_interval_hours"] == 1
+    assert result["next_funding_ts_us"] > int(time.time() * 1_000_000)
+
+
+def test_native_kraken_spot_parses_pretrade_book(monkeypatch: pytest.MonkeyPatch) -> None:
+    requested: list[str] = []
+
+    def fake_json_url(url: str):
+        requested.append(url)
+        return {
+            "error": [],
+            "result": {
+                "bids": [{"price": "0.98", "qty": "20"}],
+                "asks": [{"price": "1.02", "qty": "25"}],
+            },
+        }
+
+    monkeypatch.setattr("spreadboard.fast_quotes._json_url", fake_json_url)
+
+    bids, asks = _native_spot_order_book("Kraken", "TEST/USD") or ([], [])
+
+    assert requested and "PreTrade" in requested[0]
+    assert bids == [[0.98, 20.0]]
+    assert asks == [[1.02, 25.0]]
+
+
+def test_native_kraken_funding_converts_velocity_to_hourly_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "spreadboard.fast_quotes._json_url",
+        lambda _url: {
+            "tickers": [
+                {
+                    "symbol": "PF_XBTUSD",
+                    "fundingRate": 0.8,
+                    "indexPrice": 40_000,
+                }
+            ]
+        },
+    )
+
+    result = _native_current_funding("Kraken Futures", "BTC/USD:USD")
+
+    assert _kraken_asset_code("BTC") == "XBT"
+    assert result["current_funding_pct"] == pytest.approx(0.002)
     assert result["funding_interval_hours"] == 1
     assert result["next_funding_ts_us"] > int(time.time() * 1_000_000)
 

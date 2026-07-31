@@ -53,6 +53,19 @@ def status() -> dict[str, Any]:
         "checkout_ready": value.checkout_ready,
         "webhook_ready": value.webhook_ready,
         "configured": value.checkout_ready and value.webhook_ready,
+        "providers": {
+            "stripe": {
+                "checkout_ready": value.checkout_ready,
+                "webhook_ready": value.webhook_ready,
+                "recurring": True,
+            },
+            "whitepay": {
+                "checkout_ready": False,
+                "webhook_ready": False,
+                "recurring": False,
+                "status": "merchant_onboarding_required",
+            },
+        },
     }
 
 

@@ -38,6 +38,7 @@ from spreadboard import (  # noqa: E402
     live_book_cache,
     market_history,
     portfolio,
+    telegram_bot,
 )
 
 _INTEL_CACHE_TTL_SECONDS = 20.0
@@ -269,11 +270,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         "user": user.public_dict() if user else None,
                         "csrf_token": user.csrf_token if user else None,
                         "billing": billing.status(),
+                        "telegram": telegram_bot.status(),
                     },
                     status=HTTPStatus.OK if user else HTTPStatus.UNAUTHORIZED,
                 )
             elif parsed.path == "/api/portfolio":
                 self._send_json(api_portfolio(self._required_user(), self.server.board_path, self.server.accounts_path))
+            elif parsed.path == "/api/position-suggestions":
+                self._send_json(api_position_suggestions(self.server.board_path, query))
             elif parsed.path == "/api/account-users":
                 user = self._required_user()
                 if not user.is_admin:
@@ -403,6 +407,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(result)
                 return
+            if parsed.path == "/api/telegram/webhook":
+                telegram_bot.verify_webhook(self.headers.get("X-Telegram-Bot-Api-Secret-Token", ""))
+                response = telegram_bot.handle_update(
+                    telegram_bot.parse_update(self._read_raw_body()),
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json(response or {"ok": True})
+                return
             if parsed.path == "/api/register":
                 self._handle_register()
                 return
@@ -446,6 +458,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     db_path=self.server.accounts_path,
                 )
                 self._send_json({"ok": True, "user": updated})
+            elif parsed.path == "/api/telegram/link":
+                token = accounts.create_telegram_link_token(user.id, db_path=self.server.accounts_path)
+                self._send_json({"ok": True, "url": telegram_bot.link_url(token), "expires_in_seconds": 600})
+            elif parsed.path == "/api/telegram/unlink":
+                self._send_json({"ok": True, "unlinked": accounts.unlink_telegram_chat(user.id, db_path=self.server.accounts_path)})
             elif parsed.path == "/api/notifications/read":
                 count = accounts.mark_notifications_read(user.id, db_path=self.server.accounts_path)
                 self._send_json({"ok": True, "updated": count})
@@ -484,7 +501,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 )
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "not found")
-        except (ValueError, billing.BillingError) as exc:
+        except (ValueError, billing.BillingError, telegram_bot.TelegramBotError) as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
         except Exception as exc:  # noqa: BLE001
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
@@ -535,7 +552,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.current_user = None
         if not accounts.auth_required():
             return True
-        public = path in {"/login", "/register", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/favicon.ico"} or path.startswith("/assets/")
+        public = path in {"/login", "/register", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico"} or path.startswith("/assets/")
         token = self._session_token()
         user = accounts.user_for_session(token, self.server.accounts_path) if token else None
         self.current_user = user
@@ -549,7 +566,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             else:
                 self._redirect("/login?" + urlencode({"next": self.path[:500]}))
             return False
-        subscription_paths = {"/subscription", "/account", "/profile", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings", "/api/notifications/read", "/api/billing/checkout", "/api/billing/portal"}
+        subscription_paths = {"/subscription", "/account", "/profile", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings", "/api/notifications/read", "/api/billing/checkout", "/api/billing/portal", "/api/telegram/link", "/api/telegram/unlink"}
         if not user.subscription_active and path not in subscription_paths and not (user.is_admin and path.startswith("/api/account-users")):
             if path.startswith("/api/"):
                 self._send_json({"ok": False, "error": "subscription_required"}, status=HTTPStatus.PAYMENT_REQUIRED)
@@ -1251,6 +1268,72 @@ def api_watchlist_suggestions(board_path: Path, query: dict[str, list[str]] | No
     }
 
 
+def api_position_suggestions(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+    query = query or {}
+    requested = _clean_symbol(_query_first(query, "q") or _query_first(query, "token") or "")
+    limit = max(1, min(50, int(_query_float(query, "limit", 20) or 20)))
+    catalogue = chart_catalog.load()
+    catalog_markets = [item for item in catalogue.get("markets") or [] if isinstance(item, dict)]
+    market = api_spreads.load_spreads(
+        board_path=board_path,
+        q=requested or None,
+        include_stale=False,
+        include_unverified=False,
+        limit=None,
+        sort_by="edge",
+        direction="desc",
+    )
+    live_rows = [item for item in market.get("rows") or [] if isinstance(item, dict)]
+    tokens = sorted(
+        {
+            str(item.get("token") or "").upper()
+            for item in [*catalog_markets, *live_rows]
+            if item.get("token") and (not requested or str(item.get("token") or "").upper().startswith(requested))
+        }
+    )[:limit]
+    exact_rows = [row for row in live_rows if not requested or str(row.get("token") or "").upper() == requested]
+    routes = []
+    for row in exact_rows[:limit]:
+        routes.append(
+            {
+                "token": row.get("token"),
+                "route_key": row.get("route_key"),
+                "route_kind": row.get("route_kind"),
+                "long_venue": row.get("long_venue"),
+                "long_market_type": row.get("long_market_type"),
+                "long_symbol": row.get("long_market_symbol"),
+                "long_entry_price": row.get("long_ask") or row.get("long_price"),
+                "short_venue": row.get("short_venue"),
+                "short_market_type": row.get("short_market_type"),
+                "short_symbol": row.get("short_market_symbol"),
+                "short_entry_price": row.get("short_bid") or row.get("short_price"),
+                "entry_spread_pct": row.get("depth_weighted_spread_pct")
+                if row.get("depth_weighted_spread_pct") is not None
+                else row.get("executable_spread_pct"),
+                "funding_24h_pct": row.get("funding_24h_pct"),
+                "age_min": row.get("age_min"),
+            }
+        )
+    legs = [
+        {
+            "token": item.get("token"),
+            "venue": item.get("venue"),
+            "market_type": item.get("market_type"),
+            "symbol": item.get("symbol"),
+        }
+        for item in catalog_markets
+        if requested and str(item.get("token") or "").upper() == requested
+    ][:200]
+    return {
+        "ok": bool(tokens or routes or legs),
+        "query": requested,
+        "tokens": tokens,
+        "routes": routes,
+        "legs": legs,
+        "catalog_generated_at": catalogue.get("generated_at"),
+    }
+
+
 def api_signals(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
     data = api_intel(board_path, query)
     return {
@@ -1579,10 +1662,13 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
     proxy = historical_spreads.load_or_fetch(current, hours=hours, max_points=points) if current is not None else {"status": "not_applicable", "rows": []}
     proxy_rows = proxy.get("rows") or []
     if proxy_rows:
-        exact_cutoff = min((int(item.get("quote_ts_us") or 0) for item in public_rows), default=2**63 - 1)
-        public_rows = [item for item in proxy_rows if int(item.get("quote_ts_us") or 0) < exact_cutoff] + public_rows
-        if len(public_rows) > points:
-            public_rows = public_rows[-points:]
+        public_rows = _merge_history_rows(
+            proxy_rows,
+            public_rows,
+            since_us=since_us,
+            max_points=points,
+            bucket_seconds=bucket_seconds,
+        )
     if public_rows:
         meta = _history_meta(public_rows)
         meta.update(_history_coverage_meta(public_rows, hours, proxy))
@@ -1618,6 +1704,35 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
         "meta": _history_meta(rows),
         "rows": [_decorate_history_row(row) for row in rows],
     }
+
+
+def _merge_history_rows(
+    proxy_rows: list[dict[str, Any]],
+    exact_rows: list[dict[str, Any]],
+    *,
+    since_us: int,
+    max_points: int,
+    bucket_seconds: int = 0,
+) -> list[dict[str, Any]]:
+    """Merge proxy and exact samples without sacrificing full-window coverage."""
+    bucket_us = max(0, int(bucket_seconds)) * 1_000_000
+    merged: dict[int, dict[str, Any]] = {}
+
+    def add(rows: list[dict[str, Any]], *, exact: bool) -> None:
+        for row in rows:
+            timestamp = int(row.get("quote_ts_us") or 0)
+            if timestamp < since_us:
+                continue
+            key = timestamp // bucket_us if bucket_us else timestamp
+            current = merged.get(key)
+            current_exact = bool(current and current.get("sample_source") != "historical_ohlcv_close_proxy")
+            if current is None or exact or (not current_exact and timestamp >= int(current.get("quote_ts_us") or 0)):
+                merged[key] = row
+
+    add(proxy_rows, exact=False)
+    add(exact_rows, exact=True)
+    rows = sorted(merged.values(), key=lambda item: int(item.get("quote_ts_us") or 0))
+    return historical_spreads.evenly_sample(rows, max_points=max_points)
 
 
 def _chart_stream_payload(route_key: str, board_path: Path, hours: float) -> dict[str, Any]:
@@ -1944,6 +2059,8 @@ def api_health(
             "running": bool(position_alert_worker and position_alert_worker.running),
             "poll_seconds": getattr(position_alert_worker, "poll_seconds", None),
         },
+        "billing": billing.status(),
+        "telegram_bot": telegram_bot.status(),
     }
 
 
@@ -4879,7 +4996,7 @@ def render_account_page(
         <div class="position-list">{''.join(render_position_card(item) for item in positions) or '<div class="account-empty-panel"><strong>No positions yet</strong><p>Add the first spread or funding farm to start tracking it.</p></div>'}</div>
       </section>
       <section data-account-panel="alerts" hidden><div class="account-panel-head"><div><h2>Notifications</h2><p>Exit-spread, PnL, and funding rules are evaluated continuously, even while you are signed out.</p></div><button class="sheet-button" type="button" data-notifications-read>Mark all read</button></div><div class="notification-list">{''.join(render_account_notification(item) for item in notifications) or '<div class="account-empty-panel"><strong>No notifications</strong><p>Position alerts will appear here when a rule crosses its threshold.</p></div>'}</div></section>
-      <section data-account-panel="settings" hidden>{render_account_settings(user)}</section>
+      <section data-account-panel="settings" hidden>{render_account_settings(user, accounts_path)}</section>
       {render_member_admin() if user.is_admin else ''}
       {render_position_dialog()}
       {render_position_action_dialog()}
@@ -4922,7 +5039,7 @@ def render_account_notification(item: dict[str, Any]) -> str:
     return f'<article><span>{h(item.get("created_at"))}</span><strong>{h(item.get("title"))}</strong><p>{h(item.get("body"))}</p></article>'
 
 
-def render_account_settings(user: accounts.User) -> str:
+def render_account_settings(user: accounts.User, accounts_path: Path | str = accounts.DEFAULT_DB_PATH) -> str:
     state = billing.status()
     if user.billing_customer_id:
         billing_action = '<button class="sheet-button" type="button" data-billing-action="portal">Manage billing</button>'
@@ -4931,7 +5048,18 @@ def render_account_settings(user: accounts.User) -> str:
     else:
         billing_action = '<span>Online billing is not active for this account.</span>'
     cancel_note = "Cancellation scheduled at period end." if user.subscription_cancel_at_period_end else "Renews monthly while active."
-    return f"""<section class="account-settings"><div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is used only as the denominator for your return statistics.</p></div></div><form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Tracked monthly capital, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or '')}"></label><button class="sheet-button primary" type="submit">Save settings</button></form><div class="account-empty-panel"><strong>Monthly membership</strong><p>{h(user.subscription_status)} · {h(cancel_note)}</p>{billing_action}<p role="alert" data-billing-error></p></div></section>"""
+    telegram_state = telegram_bot.status()
+    telegram_link = accounts.telegram_link_status(user.id, db_path=accounts_path)
+    if telegram_state["configured"] and telegram_link["linked"]:
+        telegram_action = '<button class="sheet-button" type="button" data-telegram-action="unlink">Disconnect Telegram</button>'
+        telegram_note = f"Linked since {h(telegram_link.get('linked_at') or '')}."
+    elif telegram_state["configured"]:
+        telegram_action = '<button class="sheet-button primary" type="button" data-telegram-action="link">Connect Telegram bot</button>'
+        telegram_note = "The one-time link expires after 10 minutes."
+    else:
+        telegram_action = '<span>Telegram subscription commands are awaiting the dedicated bot credentials.</span>'
+        telegram_note = "No Telegram account data is stored until you explicitly link it."
+    return f"""<section class="account-settings"><div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is used only as the denominator for your return statistics.</p></div></div><form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Tracked monthly capital, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or '')}"></label><button class="sheet-button primary" type="submit">Save settings</button></form><div class="account-empty-panel"><strong>Monthly membership</strong><p>{h(user.subscription_status)} · {h(cancel_note)}</p>{billing_action}<p role="alert" data-billing-error></p></div><div class="account-empty-panel"><strong>Telegram subscription bot</strong><p>{telegram_note}</p>{telegram_action}<p role="alert" data-telegram-error></p></div></section>"""
 
 
 def render_billing_script() -> str:
@@ -4951,7 +5079,7 @@ def render_member_admin() -> str:
 
 
 def render_position_dialog() -> str:
-    return """<dialog class="account-dialog" data-position-dialog><form method="dialog" data-position-form><header><div><span>Position journal</span><h2>Add position</h2></div><button value="cancel" aria-label="Close">×</button></header><div class="position-form-grid"><label><span>Token</span><input name="token" required></label><label><span>Capital, USD</span><input name="capital_usd" type="number" min="0" step="0.01"></label><label><span>Long venue</span><input name="long_venue" required></label><label><span>Long market</span><select name="long_market_type"><option>Spot</option><option>Futures</option></select></label><label><span>Long symbol</span><input name="long_symbol" placeholder="COTI/USDT"></label><label><span>Long quantity</span><input name="long_quantity" type="number" min="0" step="any" required></label><label><span>Long entry</span><input name="long_entry_price" type="number" min="0" step="any" required></label><label><span>Short venue</span><input name="short_venue" required></label><label><span>Short market</span><select name="short_market_type"><option>Futures</option><option>Spot</option></select></label><label><span>Short symbol</span><input name="short_symbol" placeholder="COTI/USDT:USDT"></label><label><span>Short quantity</span><input name="short_quantity" type="number" min="0" step="any" required></label><label><span>Short entry</span><input name="short_entry_price" type="number" min="0" step="any" required></label><label><span>Entry fees, USD</span><input name="entry_fees_usd" type="number" min="0" step="0.01" value="0"></label><label><span>Opened at</span><input name="opened_at" type="datetime-local"></label><label class="wide"><span>Notes</span><textarea name="notes" rows="3"></textarea></label></div><footer><button value="cancel">Cancel</button><button class="primary" type="submit" value="default">Add position</button></footer><p role="alert" data-form-error></p></form></dialog>"""
+    return """<dialog class="account-dialog" data-position-dialog><form method="dialog" data-position-form><header><div><span>Position journal</span><h2>Add position</h2></div><button value="cancel" aria-label="Close">×</button></header><div class="position-form-grid"><input name="route_key" type="hidden"><input name="entry_spread_pct" type="hidden"><label><span>Token</span><input name="token" list="position-token-options" autocomplete="off" required><datalist id="position-token-options"></datalist></label><label><span>Capital, USD</span><input name="capital_usd" type="number" min="0" step="0.01"></label><label class="wide"><span>Suggested live route</span><select data-position-route><option value="">Select a token to see current routes</option></select><em data-position-suggestion-note>Suggestions use current public books. Confirm them against your actual fills.</em></label><label><span>Long venue</span><input name="long_venue" list="position-long-venues" required><datalist id="position-long-venues"></datalist></label><label><span>Long market</span><select name="long_market_type"><option>Spot</option><option>Futures</option></select></label><label><span>Long symbol</span><input name="long_symbol" list="position-long-symbols" placeholder="COTI/USDT"><datalist id="position-long-symbols"></datalist></label><label><span>Long quantity</span><input name="long_quantity" type="number" min="0" step="any" required></label><label><span>Long entry</span><input name="long_entry_price" type="number" min="0" step="any" required></label><label><span>Short venue</span><input name="short_venue" list="position-short-venues" required><datalist id="position-short-venues"></datalist></label><label><span>Short market</span><select name="short_market_type"><option>Futures</option><option>Spot</option></select></label><label><span>Short symbol</span><input name="short_symbol" list="position-short-symbols" placeholder="COTI/USDT:USDT"><datalist id="position-short-symbols"></datalist></label><label><span>Short quantity</span><input name="short_quantity" type="number" min="0" step="any" required></label><label><span>Short entry</span><input name="short_entry_price" type="number" min="0" step="any" required></label><label><span>Entry fees, USD</span><input name="entry_fees_usd" type="number" min="0" step="0.01" value="0"></label><label><span>Opened at</span><input name="opened_at" type="datetime-local"></label><label class="wide"><span>Notes</span><textarea name="notes" rows="3"></textarea></label></div><footer><button value="cancel">Cancel</button><button class="primary" type="submit" value="default">Add position</button></footer><p role="alert" data-form-error></p></form></dialog>"""
 
 
 def render_position_action_dialog() -> str:
@@ -4965,13 +5093,19 @@ def render_account_script() -> str:
   const {csrf_token:csrf}=JSON.parse(document.getElementById('account-session').textContent||'{}');
   const request=async(url,body)=>{const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw new Error(data.error||'Request failed');return data;};
   root.querySelectorAll('[data-account-tab]').forEach(button=>button.addEventListener('click',()=>{root.querySelectorAll('[data-account-tab]').forEach(item=>item.classList.toggle('active',item===button));root.querySelectorAll('[data-account-panel]').forEach(panel=>panel.hidden=panel.dataset.accountPanel!==button.dataset.accountTab);if(button.dataset.accountTab==='members')loadMembers();}));
-  const positionDialog=root.querySelector('[data-position-dialog]');root.querySelector('[data-position-new]')?.addEventListener('click',()=>positionDialog.showModal());
+  const positionDialog=root.querySelector('[data-position-dialog]');root.querySelector('[data-position-new]')?.addEventListener('click',()=>{positionDialog.showModal();refreshSuggestions('');});
+  const positionForm=positionDialog?.querySelector('form'),tokenInput=positionForm?.elements.token,routeSelect=positionForm?.querySelector('[data-position-route]');let suggestedRoutes=[],suggestionTimer;
+  const setOptions=(id,values)=>{const list=document.getElementById(id);if(!list)return;list.replaceChildren(...[...new Set(values.filter(Boolean))].map(value=>new Option(value)));};
+  async function refreshSuggestions(value){const token=String(value||'').trim().toUpperCase();try{const response=await fetch('/api/position-suggestions?'+new URLSearchParams({q:token,limit:'30'}));const data=await response.json();if(!response.ok)throw new Error(data.error||'Suggestions unavailable');setOptions('position-token-options',data.tokens||[]);suggestedRoutes=data.routes||[];routeSelect.replaceChildren(new Option(suggestedRoutes.length?'Choose a current route':'No current route for this token',''),...suggestedRoutes.map((route,index)=>new Option(`${route.long_venue} ${route.long_market_type} → ${route.short_venue} ${route.short_market_type} · ${Number(route.entry_spread_pct??0).toFixed(3)}%`,String(index))));const legs=data.legs||[];setOptions('position-long-venues',legs.map(item=>item.venue));setOptions('position-short-venues',legs.map(item=>item.venue));setOptions('position-long-symbols',legs.map(item=>item.symbol));setOptions('position-short-symbols',legs.map(item=>item.symbol));}catch(error){positionForm.querySelector('[data-position-suggestion-note]').textContent=error.message;}}
+  tokenInput?.addEventListener('input',()=>{clearTimeout(suggestionTimer);tokenInput.value=tokenInput.value.toUpperCase();suggestionTimer=setTimeout(()=>refreshSuggestions(tokenInput.value),180);});
+  routeSelect?.addEventListener('change',()=>{if(routeSelect.value==='')return;const route=suggestedRoutes[Number(routeSelect.value)];if(!route)return;for(const [name,key] of Object.entries({token:'token',route_key:'route_key',entry_spread_pct:'entry_spread_pct',long_venue:'long_venue',long_market_type:'long_market_type',long_symbol:'long_symbol',long_entry_price:'long_entry_price',short_venue:'short_venue',short_market_type:'short_market_type',short_symbol:'short_symbol',short_entry_price:'short_entry_price'})){positionForm.elements[name].value=route[key]??'';}positionForm.querySelector('[data-position-suggestion-note]').textContent=`Suggested from live public books · ${Number(route.age_min??0).toFixed(1)} min old. Replace prices with your actual fills.`;});
   positionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const payload=Object.fromEntries(new FormData(form));try{await request('/api/positions',payload);location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   const actionDialog=root.querySelector('[data-action-dialog]');let actionPosition=null;let actionType='';
   const fields={funding:'<label><span>Venue</span><input name="venue" required></label><label><span>Amount, USD</span><input name="amount_usd" type="number" step="any" required></label><label><span>Occurred at</span><input name="occurred_at" type="datetime-local"></label>',alert:'<label><span>Metric</span><select name="metric"><option value="exit_spread_pct">Exit spread %</option><option value="open_spread_pct">Open spread %</option><option value="pnl_usd">Total PnL USD</option><option value="funding_usd">Funding USD</option></select></label><label><span>Condition</span><select name="operator"><option value="lte">At or below</option><option value="gte">At or above</option></select></label><label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>',close:'<label><span>Long exit price</span><input name="long_exit_price" type="number" min="0" step="any" required></label><label><span>Short exit price</span><input name="short_exit_price" type="number" min="0" step="any" required></label><label><span>Exit fees, USD</span><input name="exit_fees_usd" type="number" min="0" step="0.01" value="0"></label>'};
   root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;actionDialog.querySelector('[data-action-title]').textContent={funding:'Add funding cashflow',alert:'Create alert rule',close:'Close position'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=fields[actionType];actionDialog.showModal();});
   actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={funding:'funding',alert:'alerts',close:'close'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   root.querySelector('[data-account-settings]')?.addEventListener('submit',async event=>{event.preventDefault();await request('/api/account-settings',Object.fromEntries(new FormData(event.currentTarget)));location.reload();});
+  root.querySelector('[data-telegram-action]')?.addEventListener('click',async event=>{const button=event.currentTarget,error=root.querySelector('[data-telegram-error]');button.disabled=true;if(error)error.textContent='';try{const data=await request(`/api/telegram/${button.dataset.telegramAction}`,{});if(data.url){window.open(data.url,'_blank','noopener');button.textContent='Link opened';}else location.reload();}catch(exc){if(error)error.textContent=exc.message;button.disabled=false;}});
   root.querySelector('[data-notifications-read]')?.addEventListener('click',async()=>{await request('/api/notifications/read',{});location.reload();});
   root.querySelector('[data-member-create]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;try{await request('/api/account-users',Object.fromEntries(new FormData(form)));form.reset();loadMembers();}catch(error){alert(error.message);}});
   async function loadMembers(){const target=root.querySelector('[data-member-list]');if(!target)return;const response=await fetch('/api/account-users');const data=await response.json();target.innerHTML=(data.users||[]).map(user=>`<article class="member-row"><div><strong>${escapeHtml(user.display_name)}</strong><span>${escapeHtml(user.email)}</span></div><span>${escapeHtml(user.subscription_status)}</span><em>${escapeHtml(user.subscription_expires_at||'No expiry')}</em></article>`).join('');}

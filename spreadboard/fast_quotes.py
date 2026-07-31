@@ -72,6 +72,7 @@ NATIVE_SPOT_VENUES = {
     "Coinbase",
     "Gate",
     "HTX",
+    "Kraken",
     "Kucoin",
     "Mexc",
     "OKX",
@@ -638,8 +639,9 @@ def _native_order_book(
             {"contract": f"{base}_USDT", "limit": 20}
         )
     elif venue == "Kraken Futures":
+        kraken_base = _kraken_asset_code(base)
         url = "https://futures.kraken.com/derivatives/api/v3/orderbook?" + urlencode(
-            {"symbol": f"pf_{base.lower()}usd"}
+            {"symbol": f"pf_{kraken_base.lower()}usd"}
         )
     elif venue == "Kucoin Futures":
         url = "https://api-futures.kucoin.com/api/v1/level2/depth20?" + urlencode(
@@ -808,6 +810,10 @@ def _native_spot_order_book(
         url = f"https://api.exchange.coinbase.com/products/{base}-{quote}/book?" + urlencode(
             {"level": 2}
         )
+    elif venue == "Kraken":
+        url = "https://api.kraken.com/0/public/PreTrade?" + urlencode(
+            {"symbol": f"{base}/{quote}"}
+        )
     else:
         url = "https://www.okx.com/api/v5/market/books?" + urlencode({"instId": dashed, "sz": 20})
     payload = _json_url(url)
@@ -833,6 +839,10 @@ def _native_spot_order_book(
         data = payload.get("data") if venue == "BitMart" else payload.get("result")
         raw_bids = (data or {}).get("bids")
         raw_asks = (data or {}).get("asks")
+    elif venue == "Kraken":
+        data = payload.get("result") or {}
+        raw_bids = [[item.get("price"), item.get("qty")] for item in data.get("bids") or []]
+        raw_asks = [[item.get("price"), item.get("qty")] for item in data.get("asks") or []]
     else:
         raw_bids = payload.get("bids")
         raw_asks = payload.get("asks")
@@ -1053,6 +1063,28 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                 f"https://api.international.coinbase.com/api/v1/instruments/{base}-PERP/quote"
             )
             return _funding_fields(payload.get("predicted_funding"), interval_hours=1)
+        if venue == "Kraken Futures":
+            kraken_symbol = f"PF_{_kraken_asset_code(base)}USD"
+            payload = _json_url("https://futures.kraken.com/derivatives/api/v3/tickers")
+            item = next(
+                (
+                    row
+                    for row in payload.get("tickers") or []
+                    if isinstance(row, dict)
+                    and str(row.get("symbol") or "").upper() == kraken_symbol
+                ),
+                {},
+            )
+            funding_velocity = _optional_number(item.get("fundingRate"))
+            index_price = _optional_number(item.get("indexPrice"))
+            if funding_velocity is None or index_price is None or index_price <= 0:
+                return {}
+            next_hour_ms = int((time.time() // 3600 + 1) * 3600 * 1000)
+            return _funding_fields(
+                funding_velocity / index_price,
+                interval_hours=1,
+                next_funding_ms=next_hour_ms,
+            )
     except Exception:
         return {}
     return {}
@@ -1133,6 +1165,10 @@ def _json_post(url: str, payload: dict[str, Any]) -> Any:
 def _symbol_base_quote(symbol: str) -> tuple[str, str]:
     base, _, quote = str(symbol).partition("/")
     return base.upper(), (quote.split(":", 1)[0] or "USDT").upper()
+
+
+def _kraken_asset_code(base: str) -> str:
+    return {"BTC": "XBT", "DOGE": "XDG"}.get(base.upper(), base.upper())
 
 
 def _sorted_book(

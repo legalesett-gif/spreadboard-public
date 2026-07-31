@@ -99,3 +99,72 @@ def test_one_day_chart_budget_can_hold_every_minute() -> None:
     config = server.chart_window_config("1d")
     assert config["hours"] == 24
     assert config["max_points"] >= 24 * 60
+
+
+def test_historical_cache_is_not_poisoned_by_one_point_stream_request(monkeypatch, tmp_path) -> None:
+    now = datetime.now(tz=timezone.utc).timestamp()
+    rows = [
+        {"quote_ts_us": index * 60_000_000, "sample_source": "historical_ohlcv_close_proxy"}
+        for index in range(1440)
+    ]
+    cached = {"status": "ok", "cached_at": now, "rows": rows}
+    monkeypatch.setattr(historical_spreads, "_cache_path", lambda *_: tmp_path / "cached.json")
+    monkeypatch.setattr(historical_spreads, "_read_cache", lambda *_: cached)
+    route = {"route_key": "route", "long_venue": "Aster", "short_venue": "Binance"}
+
+    latest = historical_spreads.load_or_fetch(route, hours=24, max_points=1)
+    full = historical_spreads.load_or_fetch(route, hours=24, max_points=1440)
+
+    assert latest["rows"] == [rows[-1]]
+    assert full["rows"] == rows
+
+
+def test_history_merge_preserves_full_window_and_prefers_exact_bucket() -> None:
+    minute = 60_000_000
+    proxy = [
+        {"quote_ts_us": index * minute, "sample_source": "historical_ohlcv_close_proxy"}
+        for index in range(1440)
+    ]
+    exact = [
+        {"quote_ts_us": (1439 * minute) + 30_000_000, "sample_source": "exact_public_order_book"}
+    ]
+
+    rows = server._merge_history_rows(
+        proxy,
+        exact,
+        since_us=0,
+        max_points=1200,
+        bucket_seconds=60,
+    )
+
+    assert len(rows) == 1200
+    assert rows[0]["quote_ts_us"] == 0
+    assert rows[-1] == exact[0]
+    assert (rows[-1]["quote_ts_us"] - rows[0]["quote_ts_us"]) / 3_600_000_000 > 23.9
+
+
+def test_position_suggestions_use_canonical_live_route(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        server.api_spreads,
+        "load_spreads",
+        lambda **_: {"rows": [{
+            "token": "COTI", "route_key": "route", "route_kind": "FUTURES-SPOT",
+            "long_venue": "Gate", "long_market_type": "Spot", "long_market_symbol": "COTI/USDT",
+            "long_ask": 0.01, "short_venue": "Bybit", "short_market_type": "Futures",
+            "short_market_symbol": "COTI/USDT:USDT", "short_bid": 0.011,
+            "depth_weighted_spread_pct": 9.8, "funding_24h_pct": -1.2, "age_min": 0.1,
+        }]},
+    )
+    monkeypatch.setattr(
+        server.chart_catalog,
+        "load",
+        lambda: {"generated_at": "now", "markets": [
+            {"token": "COTI", "venue": "Gate", "market_type": "Spot", "symbol": "COTI/USDT"},
+            {"token": "COTI", "venue": "Bybit", "market_type": "Futures", "symbol": "COTI/USDT:USDT"},
+        ]},
+    )
+    result = server.api_position_suggestions(tmp_path / "board", {"q": ["COTI"]})
+    assert result["tokens"] == ["COTI"]
+    assert result["routes"][0]["long_entry_price"] == 0.01
+    assert result["routes"][0]["short_entry_price"] == 0.011
+    assert {item["venue"] for item in result["legs"]} == {"Gate", "Bybit"}
