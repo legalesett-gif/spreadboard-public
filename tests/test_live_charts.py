@@ -534,6 +534,48 @@ def test_fast_quote_refresh_preserves_broad_snapshot_freshness(
     assert saved["fast_quote_refresh"]["updated_at"] == result["updated_at"]
 
 
+def test_history_hides_legacy_dex_identity_outliers(tmp_path: Path) -> None:
+    row = {
+        **_route(),
+        "route_key": "PTB|Bybit|Futures|OKX DEX 56|Spot",
+        "token": "PTB",
+        "route_kind": "DEX-FUTURES",
+        "short_venue": "OKX DEX 56",
+        "short_market_type": "Spot",
+        "quote_ts_us": 2_000_000,
+        "executable_spread_pct": 1.7,
+        "depth_weighted_spread_pct": 1.6,
+        "notes": {
+            "route_inputs": {
+                "long": {"bid": 0.000621, "ask": 0.000622},
+                "short": {"bid": 0.000633, "ask": 0.000636},
+            }
+        },
+    }
+    db_path = tmp_path / "history.sqlite3"
+    assert market_history.record_route(row, db_path=db_path) == 1
+
+    connection = market_history._connect(db_path)
+    try:
+        connection.execute(
+            """
+            UPDATE route_points
+            SET executable_spread_pct = 9821.0,
+                depth_weighted_spread_pct = 9818.0
+            WHERE route_key = ?
+            """,
+            (row["route_key"],),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert market_history.load_history(
+        route_key=row["route_key"],
+        db_path=db_path,
+    ) == []
+
+
 def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

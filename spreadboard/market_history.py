@@ -36,6 +36,13 @@ def record_snapshot(
             quote_ts_us = _int_or_none(row.get("quote_ts_us"))
             if not route_key or quote_ts_us is None:
                 continue
+            route_kind = route_kind_for(row)
+            executable_spread = _float_or_none(row.get("executable_spread_pct"))
+            depth_spread = _float_or_none(row.get("depth_weighted_spread_pct"))
+            if _is_contaminated_dex_sample(
+                route_kind, executable_spread, depth_spread
+            ):
+                continue
             notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
             route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
             funding = notes.get("funding") if isinstance(notes.get("funding"), dict) else {}
@@ -67,13 +74,13 @@ def record_snapshot(
                     route_key,
                     quote_ts_us,
                     str(row.get("token") or "").upper(),
-                    route_kind_for(row),
+                    route_kind,
                     row.get("long_venue"),
                     row.get("long_market_type"),
                     row.get("short_venue"),
                     row.get("short_market_type"),
-                    _float_or_none(row.get("executable_spread_pct")),
-                    _float_or_none(row.get("depth_weighted_spread_pct")),
+                    executable_spread,
+                    depth_spread,
                     _float_or_none(row.get("funding_spread_apr_pct"), funding.get("net_apr_pct")),
                     _float_or_none(row.get("funding_daily_pct"), funding.get("net_daily_pct")),
                     long_ask,
@@ -171,7 +178,15 @@ def load_history(
         ).fetchall()
     finally:
         connection.close()
-    return [dict(row) for row in reversed(rows)]
+    return [
+        row
+        for row in (dict(item) for item in reversed(rows))
+        if not _is_contaminated_dex_sample(
+            str(row.get("route_kind") or ""),
+            _float_or_none(row.get("executable_spread_pct")),
+            _float_or_none(row.get("depth_weighted_spread_pct")),
+        )
+    ]
 
 
 def route_key_for(row: dict[str, Any]) -> str:
@@ -187,6 +202,16 @@ def route_key_for(row: dict[str, Any]) -> str:
 
 
 def route_kind_for(row: dict[str, Any]) -> str:
+    explicit = str(row.get("route_kind") or "").upper()
+    if explicit in {
+        "DEX-FUTURES",
+        "DEX-SPOT",
+        "FUTURES",
+        "SPOT-FUTURES",
+        "FUTURES-SPOT",
+        "SPOT",
+    }:
+        return explicit
     long_type = str(row.get("long_market_type") or "")
     short_type = str(row.get("short_market_type") or "")
     source_kind = str(row.get("source_kind") or "")
@@ -204,6 +229,19 @@ def route_kind_for(row: dict[str, Any]) -> str:
     if long_type == "Spot" and short_type == "Spot":
         return "SPOT"
     return "UNKNOWN"
+
+
+def _is_contaminated_dex_sample(
+    route_kind: str,
+    executable_spread_pct: float | None,
+    depth_weighted_spread_pct: float | None,
+) -> bool:
+    if not str(route_kind).upper().startswith("DEX-"):
+        return False
+    return any(
+        value is not None and value > 90.0
+        for value in (executable_spread_pct, depth_weighted_spread_pct)
+    )
 
 
 def _connect(path: Path | str) -> sqlite3.Connection:
