@@ -693,7 +693,7 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
         }
 
     monkeypatch.setattr(refresher, "_leg_quote", quote_leg)
-    result = refresher.refresh(snapshot_path, route_limit=120)
+    result = refresher.refresh(snapshot_path, route_limit=200)
     saved = json.loads(snapshot_path.read_text(encoding="utf-8"))
     updated = [
         row
@@ -701,20 +701,20 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
         if row.get("fast_quote_verified_at")
     ]
 
-    assert result["selected_routes"] == 97
-    assert result["updated_routes"] == 97
-    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 30
-    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 30
-    assert sum(row["route_kind"] == "SPOT" for row in updated) == 25
+    assert result["selected_routes"] == 142
+    assert result["updated_routes"] == 142
+    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 50
+    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 50
+    assert sum(row["route_kind"] == "SPOT" for row in updated) == 30
     assert sum(row["route_kind"] == "DEX-FUTURES" for row in updated) == 12
     assert {row["token"] for row in updated if row["route_kind"] == "FUTURES"} == {
-        f"FUT{index:02d}" for index in range(25)
+        f"FUT{index:02d}" for index in range(30)
     }
     assert {
         row["token"] for row in updated if row["route_kind"] == "FUTURES-SPOT"
-    } == {f"SPOT{index:02d}" for index in range(25)}
+    } == {f"SPOT{index:02d}" for index in range(30)}
     assert {row["token"] for row in updated if row["route_kind"] == "SPOT"} == {
-        f"CASH{index:02d}" for index in range(25)
+        f"CASH{index:02d}" for index in range(30)
     }
     assert {
         row["token"] for row in updated if row["route_kind"] == "DEX-FUTURES"
