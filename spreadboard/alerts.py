@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import urllib.error
 import urllib.parse
@@ -10,7 +11,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from spreadboard import board
+from spreadboard import accounts, api_spreads, board
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
@@ -72,6 +73,8 @@ def send_pushover_message(
     title: str,
     message: str,
     url: str | None = None,
+    device: str | None = None,
+    sound: str | None = None,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
     payload = {
@@ -82,6 +85,10 @@ def send_pushover_message(
     }
     if url:
         payload["url"] = url
+    if device:
+        payload["device"] = device
+    if sound:
+        payload["sound"] = sound
     body = urllib.parse.urlencode(payload).encode("utf-8")
     request = urllib.request.Request(
         PUSHOVER_URL,
@@ -201,6 +208,139 @@ class AlertWatcher:
                     }
                 )
         return results
+
+
+class UserMarketAlertWorker:
+    """Evaluate authenticated route rules and deliver crossing notifications."""
+
+    def __init__(
+        self,
+        *,
+        board_path: Path | str = board.DEFAULT_BOARD_PATH,
+        accounts_path: Path | str = accounts.DEFAULT_DB_PATH,
+        poll_seconds: float = 10.0,
+    ) -> None:
+        self.board_path = Path(board_path)
+        self.accounts_path = Path(accounts_path)
+        self.poll_seconds = max(5.0, float(poll_seconds))
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="spreadboard-market-alerts", daemon=True)
+
+    @property
+    def running(self) -> bool:
+        return self._thread.is_alive()
+
+    def start(self) -> None:
+        if not self.running:
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self.running:
+            self._thread.join(timeout=5.0)
+
+    def _run(self) -> None:
+        self._stop.wait(5.0)
+        while not self._stop.is_set():
+            try:
+                self.check_once()
+            except Exception as exc:  # noqa: BLE001
+                print(f"spreadboard-market-alerts: {type(exc).__name__}: {exc}", flush=True)
+            self._stop.wait(self.poll_seconds)
+
+    def check_once(self) -> dict[str, int]:
+        market = api_spreads.load_spreads(
+            board_path=self.board_path,
+            include_stale=False,
+            include_unverified=False,
+            limit=None,
+        )
+        rows = {
+            str(row.get("route_key") or ""): row
+            for row in market.get("rows") or []
+            if isinstance(row, dict) and row.get("route_key")
+        }
+        evaluated = triggered = delivered = 0
+        app_token = os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
+        public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
+        for user_id in accounts.list_market_alert_user_ids(db_path=self.accounts_path):
+            user = accounts.get_user_object(user_id, db_path=self.accounts_path)
+            if user is None or not user.subscription_active:
+                continue
+            delivery = accounts.notification_delivery(user_id, db_path=self.accounts_path)
+            for rule in accounts.list_market_alert_rules(user_id, db_path=self.accounts_path):
+                if not rule.get("enabled"):
+                    continue
+                row = rows.get(str(rule.get("route_key") or ""))
+                value = _rule_value(row, str(rule.get("metric") or "")) if row else None
+                if value is None:
+                    continue
+                evaluated += 1
+                metric_label = "24h paired funding" if rule["metric"] == "funding_24h_pct" else "open spread"
+                body = (
+                    f"{rule['symbol']} {metric_label} is {value:+.4f}% on "
+                    f"{row.get('long_venue') or '?'} -> {row.get('short_venue') or '?'}; "
+                    f"threshold {rule['operator']} {float(rule['threshold']):+.4f}%."
+                )
+                notification = accounts.record_market_alert_evaluation(
+                    user_id,
+                    int(rule["id"]),
+                    value=value,
+                    title=f"{rule['symbol']} route alert",
+                    body=body,
+                    db_path=self.accounts_path,
+                )
+                if notification is None:
+                    continue
+                triggered += 1
+                if app_token and delivery:
+                    result = send_pushover_message(
+                        app_token=app_token,
+                        user_key=delivery["user_key"],
+                        title=notification["title"],
+                        message=notification["body"],
+                        url=f"{public_url}/pair/{urllib.parse.quote(str(rule['route_key']), safe='')}" if public_url else None,
+                        device=delivery.get("device"),
+                        sound=delivery.get("sound"),
+                    )
+                    delivered += int(bool(result.get("ok")))
+        return {"evaluated": evaluated, "triggered": triggered, "delivered": delivered}
+
+
+def send_user_test_alert(user_id: int, *, accounts_path: Path | str = accounts.DEFAULT_DB_PATH) -> dict[str, Any]:
+    app_token = os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
+    if not app_token:
+        return {"ok": False, "error": "pushover_app_not_configured"}
+    delivery = accounts.notification_delivery(user_id, db_path=accounts_path)
+    if not delivery:
+        return {"ok": False, "error": "pushover_user_not_configured"}
+    result = send_pushover_message(
+        app_token=app_token,
+        user_key=delivery["user_key"],
+        title="SpreadBoard test",
+        message="Pushover delivery is active for your SpreadBoard account.",
+        device=delivery.get("device"),
+        sound=delivery.get("sound"),
+    )
+    return {"ok": bool(result.get("ok")), "status": result.get("status"), "error": result.get("error")}
+
+
+def _rule_value(row: dict[str, Any] | None, metric: str) -> float | None:
+    if not row:
+        return None
+    keys = (
+        ("funding_net_24h_pct", "funding_24h_pct", "net_funding_24h_pct")
+        if metric == "funding_24h_pct"
+        else ("open_spread_pct", "entry_spread_pct", "spread_pct")
+    )
+    for key in keys:
+        try:
+            value = row.get(key)
+            if value is not None:
+                return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _public_detail(result: dict[str, Any]) -> dict[str, Any]:

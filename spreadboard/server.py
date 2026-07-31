@@ -60,6 +60,7 @@ _PUBLIC_INTEL_FEED_URL = os.environ.get(
     "b348e50f10b0ad7de8b71fd619ea7151/raw/spreadboard-community-feed.json",
 )
 _PUBLIC_INTEL_FEED_CACHE: tuple[float, dict[str, Any]] | None = None
+TERMS_VERSION = "2026-07-31"
 
 DISPLAY_LABELS = {
     "available_on_pair_page": "Available on pair page",
@@ -225,6 +226,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             "/",
             "/login",
             "/pricing",
+            "/terms",
+            "/privacy",
+            "/refunds",
             "/subscription",
             "/register",
             "/account",
@@ -261,6 +265,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_register_page())
             elif parsed.path == "/pricing":
                 self._send_html(render_pricing_page())
+            elif parsed.path == "/terms":
+                self._send_html(render_legal_page("terms"))
+            elif parsed.path == "/privacy":
+                self._send_html(render_legal_page("privacy"))
+            elif parsed.path == "/refunds":
+                self._send_html(render_legal_page("refunds"))
             elif parsed.path == "/subscription":
                 self._send_html(render_subscription_page())
             elif parsed.path == "/account":
@@ -281,6 +291,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_json(api_portfolio(self._required_user(), self.server.board_path, self.server.accounts_path))
             elif parsed.path == "/api/position-suggestions":
                 self._send_json(api_position_suggestions(self.server.board_path, query))
+            elif parsed.path == "/api/notification-preferences":
+                user = self._required_user()
+                self._send_json({"ok": True, "preferences": accounts.notification_preferences(user.id, db_path=self.server.accounts_path)})
+            elif parsed.path == "/api/market-alert-rules":
+                user = self._required_user()
+                self._send_json({"ok": True, "rules": accounts.list_market_alert_rules(user.id, db_path=self.server.accounts_path)})
             elif parsed.path == "/api/account-users":
                 user = self._required_user()
                 if not user.is_admin:
@@ -435,6 +451,16 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             payload = self._read_payload()
             user = self._required_user()
             if parsed.path == "/api/billing/checkout":
+                if not payload.get("terms_accepted") or not payload.get("immediate_access_consent"):
+                    raise ValueError("subscription_consent_required")
+                accounts.record_subscription_consent(
+                    user.id,
+                    terms_version=TERMS_VERSION,
+                    immediate_access=True,
+                    ip_address=self.client_address[0] if self.client_address else "",
+                    user_agent=self.headers.get("User-Agent", ""),
+                    db_path=self.server.accounts_path,
+                )
                 self._send_json({"ok": True, "url": billing.create_checkout_session(user)})
             elif parsed.path == "/api/billing/portal":
                 self._send_json({"ok": True, "url": billing.create_portal_session(user)})
@@ -466,6 +492,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "url": telegram_bot.link_url(token), "expires_in_seconds": 600})
             elif parsed.path == "/api/telegram/unlink":
                 self._send_json({"ok": True, "unlinked": accounts.unlink_telegram_chat(user.id, db_path=self.server.accounts_path)})
+            elif parsed.path == "/api/notification-preferences":
+                preferences = accounts.save_notification_preferences(
+                    user.id, payload, db_path=self.server.accounts_path
+                )
+                self._send_json({"ok": True, "preferences": preferences})
+            elif parsed.path == "/api/market-alert-rules":
+                rule = accounts.add_market_alert_rule(user.id, payload, db_path=self.server.accounts_path)
+                self._send_json({"ok": True, "rule": rule}, status=HTTPStatus.CREATED)
             elif parsed.path == "/api/notifications/read":
                 count = accounts.mark_notifications_read(user.id, db_path=self.server.accounts_path)
                 self._send_json({"ok": True, "updated": count})
@@ -495,13 +529,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     )
                     self._send_json({"ok": True, "user": updated})
             elif parsed.path == "/api/alert-test":
-                self._send_json(
-                    {
-                        "ok": True,
-                        "mode": "preview_only_no_send",
-                        "message": "Pushover sending is disabled in SpreadBoard. Use /api/alert-preview to inspect would-trigger rules.",
-                    }
-                )
+                self._send_json(alerts.send_user_test_alert(user.id, accounts_path=self.server.accounts_path))
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "not found")
         except (ValueError, billing.BillingError, telegram_bot.TelegramBotError) as exc:
@@ -555,7 +583,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.current_user = None
         if not accounts.auth_required():
             return True
-        public = path in {"/login", "/register", "/pricing", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico"} or path.startswith("/assets/")
+        public = path in {"/login", "/register", "/pricing", "/terms", "/privacy", "/refunds", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico"} or path.startswith("/assets/")
         token = self._session_token()
         user = accounts.user_for_session(token, self.server.accounts_path) if token else None
         self.current_user = user
@@ -3504,14 +3532,15 @@ def render_chart_builder(
     catalogue: dict[str, Any],
 ) -> str:
     selected_token = str((selected_row or {}).get("token") or "")
+    skhx_route = board.route_key_url(chart_catalog.skhx_skhynix_route_key())
     return f"""
     <section class="chart-builder">
       <div class="chart-builder-title">
         <div><span class="chart-builder-icon" aria-hidden="true">+</span><strong>Custom chart</strong><em>Choose any active stablecoin market in the public venue catalogue.</em></div>
-        <span class="chart-builder-state" data-chart-state>{h(catalogue.get('token_count') or 0)} tokens · {h(catalogue.get('count') or 0)} markets</span>
+        <div class="chart-builder-tools"><a href="/charts?route_key={h(skhx_route)}&window=1h" title="Open the normalized Hyperliquid relative-value chart">SKHX / SK Hynix · 10:1</a><span class="chart-builder-state" data-chart-state>{h(catalogue.get('token_count') or 0)} tokens · {h(catalogue.get('count') or 0)} markets</span></div>
       </div>
       <form class="chart-builder-form" action="/charts" method="get" data-chart-builder>
-        <label class="chart-token-field"><span>Token</span><input data-chart-token value="{h(selected_token)}" placeholder="Type a symbol, e.g. COTI" autocomplete="off" spellcheck="false"></label>
+        <label class="chart-token-field"><span>Token</span><input data-chart-token list="chart-token-list" value="{h(selected_token)}" placeholder="Type a symbol, e.g. COTI" autocomplete="off" spellcheck="false"><datalist id="chart-token-list"></datalist></label>
         <div class="chart-leg-picker long">
           <span>Long</span>
           <select data-chart-long aria-label="Long venue and market"><option value="">Select venue / market</option></select>
@@ -3552,6 +3581,7 @@ def render_chart_builder_script(
       const form = document.querySelector('[data-chart-builder]');
       if (!form) return;
       let markets = JSON.parse(document.getElementById('chart-route-data').textContent || '[]');
+      let catalogTokens = [];
       const token = form.querySelector('[data-chart-token]');
       const longSelect = form.querySelector('[data-chart-long]');
       const shortSelect = form.querySelector('[data-chart-short]');
@@ -3562,6 +3592,12 @@ def render_chart_builder_script(
       const selectedShort = {json.dumps(selected_short)};
       const combo = (item) => `${{item.venue || ''}}|${{item.market_type || ''}}|${{item.symbol || ''}}`;
       const tokenMarkets = () => markets.filter((row) => row.token === token.value);
+      const tokenList = document.getElementById('chart-token-list');
+      function fillTokenSuggestions(query='') {{
+        const needle=String(query||'').trim().toUpperCase();
+        const matches=catalogTokens.filter(value=>!needle||value.startsWith(needle)||value.includes(needle)).slice(0,80);
+        tokenList.replaceChildren(...matches.map(value=>new Option(value)));
+      }}
       function optionsForToken() {{
         const values = new Map();
         tokenMarkets().forEach((row) => {{
@@ -3598,17 +3634,23 @@ def render_chart_builder_script(
       }}
       async function rebuild(useSelected = false) {{
         token.value=token.value.trim().toUpperCase();
-        if (token.value && !markets.some(item => item.token === token.value)) {{
+        fillTokenSuggestions(token.value);
+        if (token.value && catalogTokens.includes(token.value) && !markets.some(item => item.token === token.value)) {{
           state.textContent='Loading venue markets';
           try {{ const response=await fetch(`/api/chart-catalog?token=${{encodeURIComponent(token.value)}}`); const data=await response.json(); markets=data.markets||[]; }}
           catch(error) {{ markets=[]; state.textContent='Catalogue unavailable'; }}
+        }}
+        if (token.value && !catalogTokens.includes(token.value)) {{
+          longSelect.innerHTML='<option value="">Select a suggested token first</option>';
+          shortSelect.innerHTML='<option value="">Select a suggested token first</option>';
+          routeKey.value=''; create.disabled=true; state.textContent='Choose a token from the suggestions'; return;
         }}
         fill(longSelect, useSelected ? selectedLong : '');
         fill(shortSelect, useSelected ? selectedShort : '');
         update();
       }}
       let tokenTimer=null;
-      token.addEventListener('input', () => {{ clearTimeout(tokenTimer); tokenTimer=setTimeout(()=>rebuild(false),300); }});
+      token.addEventListener('input', () => {{ clearTimeout(tokenTimer); token.value=token.value.toUpperCase(); fillTokenSuggestions(token.value); tokenTimer=setTimeout(()=>rebuild(false),180); }});
       token.addEventListener('change', () => rebuild(false));
       longSelect.addEventListener('change', update);
       shortSelect.addEventListener('change', update);
@@ -3621,7 +3663,7 @@ def render_chart_builder_script(
       form.addEventListener('submit', (event) => {{
         if (!routeKey.value) event.preventDefault();
       }});
-      rebuild(Boolean(token.value));
+      fetch('/api/chart-catalog').then(response=>response.json()).then(data=>{{catalogTokens=(data.tokens||[]).filter(Boolean).sort();fillTokenSuggestions(token.value);return rebuild(Boolean(token.value));}}).catch(()=>{{state.textContent='Catalogue unavailable';}});
     }})();
     </script>
     """
@@ -3677,6 +3719,12 @@ def render_selected_chart(
     route_key = board.route_key_url(str(row.get("route_key") or ""))
     windows = [(value, str(config["label"])) for value, config in CHART_WINDOWS.items()]
     history_meta = history_meta or {}
+    relative_value = ((row.get("notes") or {}).get("relative_value") or {}) if isinstance(row.get("notes"), dict) else {}
+    normalization_note = (
+        f" · normalized {float(relative_value.get('long_multiplier') or 1):g}:{float(relative_value.get('short_multiplier') or 1):g}"
+        if relative_value
+        else ""
+    )
     coverage_note = (
         f"{float(history_meta.get('coverage_pct') or 0):.0f}% window coverage"
         + (f" · older points use {h(history_meta.get('historical_proxy_timeframe'))} close-price proxy" if history_meta.get("historical_proxy") else " · exact book samples only")
@@ -3684,7 +3732,7 @@ def render_selected_chart(
     return f"""
     <section class="selected-chart">
       <header class="selected-chart-head">
-        <div><span>Spread chart</span><strong>{h(row.get('token'))}</strong><em>{h(row.get('long_venue'))} {h(row.get('long_market_type'))} → {h(row.get('short_venue'))} {h(row.get('short_market_type'))}</em></div>
+        <div><span>Spread chart</span><strong>{h(row.get('token'))}</strong><em>{h(row.get('long_venue'))} {h(row.get('long_market_type'))} → {h(row.get('short_venue'))} {h(row.get('short_market_type'))}{h(normalization_note)}</em></div>
         <nav class="chart-window-tabs" aria-label="Chart window">
           {''.join(f'<a class="{"active" if value == window else ""}" href="/charts?route_key={h(route_key)}&window={value}">{label}</a>' for value, label in windows)}
         </nav>
@@ -5006,7 +5054,7 @@ def render_pricing_page() -> str:
       <section class="pricing-section">
         <header class="pricing-section-head"><div><span>Product standard</span><h2>What the numbers mean</h2></div></header>
         <div class="pricing-standards"><div><strong>Continuously refreshed</strong><span>Public exchange and DEX data is collected on the production server.</span></div><div><strong>Freshness visible</strong><span>Unavailable or unresolved inputs are labelled rather than silently estimated.</span></div><div><strong>Read-only by design</strong><span>No orders, transfers, approvals, signatures, or withdrawals are initiated.</span></div><div><strong>Telegram connected</strong><span>Link your account privately to check membership and open the payment flow.</span></div></div>
-        <p class="pricing-disclaimer">SpreadBoard is a market-information and research product, not an exchange, broker, investment adviser, or execution service. Digital-asset markets are volatile. Displayed spreads can change before either leg is filled, and access does not guarantee profit or execution.</p>
+        <p class="pricing-disclaimer">SpreadBoard is a market-information and research product, not an exchange, broker, investment adviser, or execution service. Digital-asset markets are volatile. Displayed spreads can change before either leg is filled, and access does not guarantee profit or execution. <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/refunds">Refunds</a></p>
       </section>
     </section>
     """
@@ -5024,12 +5072,63 @@ def render_subscription_page() -> str:
     body = f"""
     <section class="account-page narrow-account" data-account-page>
       <header class="terminal-heading"><div><span class="page-kicker">Membership</span><h1>Subscription required</h1><p>Your account is signed in, but market access is not currently active.</p></div></header>
-      <section class="account-empty-panel"><strong>{h(user.display_name if user else 'Member')}</strong><p>Status: {h(user.subscription_status if user else 'inactive')}.</p>{action}<a class="sheet-button" href="/account">Open account</a><p role="alert" data-billing-error></p></section>
+      <section class="account-empty-panel"><strong>{h(user.display_name if user else 'Member')}</strong><p>Status: {h(user.subscription_status if user else 'inactive')}.</p><label class="subscription-consent"><input type="checkbox" data-subscription-consent> <span>I accept the <a href="/terms" target="_blank">Terms</a> and <a href="/refunds" target="_blank">Refund Policy</a>, request immediate access, and acknowledge that the statutory cancellation right may be affected once digital access begins.</span></label>{action}<a class="sheet-button" href="/account">Open account</a><p role="alert" data-billing-error></p></section>
     </section>
     <script type="application/json" id="account-session">{json_script_data({'csrf_token': user.csrf_token if user else None})}</script>
     {render_billing_script()}
     """
     return shell("Subscription - SpreadBoard", "profile", body)
+
+
+def render_legal_page(page: str) -> str:
+    support = os.environ.get("SPREADBOARD_SUPPORT_EMAIL", "support@spreadarbitrage.ink")
+    pages = {
+        "terms": (
+            "Terms of Service",
+            "These terms govern access to SpreadBoard, a read-only market-information service.",
+            [
+                ("Service", "SpreadBoard presents public-market data, calculated spreads, funding information, charts, alerts, and research tools. It does not execute trades, hold client assets, provide custody, or provide personalised investment advice."),
+                ("Market risk", "Prices, liquidity, funding, transfer status, and availability can change without notice. Displayed values may be delayed, incomplete, or unavailable. You remain responsible for checking any decision directly with the relevant venue."),
+                ("Membership", "Membership is billed monthly at the price shown before checkout and renews until cancelled. Access is personal and may not be resold, shared, scraped, or used to disrupt the service."),
+                ("Acceptable use", "Do not attempt to bypass access controls, overload data providers, reverse engineer credentials, or use the service for unlawful activity. We may suspend access needed to protect users, providers, or the service."),
+                ("Availability", "We aim to run continuously but do not guarantee uninterrupted access or that every venue, token, route, chart, or alert will always be available."),
+                ("Liability", "Nothing excludes liability that cannot lawfully be excluded. To the extent permitted by law, SpreadBoard is not liable for trading losses, missed opportunities, exchange failures, or decisions based on market information."),
+                ("Contact", f"Questions about these terms can be sent to {support}. Version {TERMS_VERSION}."),
+            ],
+        ),
+        "privacy": (
+            "Privacy Notice",
+            "What SpreadBoard stores and why.",
+            [
+                ("Account data", "We store your name, email address, password hash, subscription state, linked Telegram identifier, settings, alerts, and journal entries to operate your account."),
+                ("Payments", "Stripe processes payment-card details. SpreadBoard stores provider customer, subscription, and event identifiers, but not full card numbers."),
+                ("Notifications", "Pushover user keys are encrypted at rest. Telegram and Pushover identifiers are used only to deliver the features you enable."),
+                ("Technical data", "We may retain security and operational records such as session identifiers, IP address, browser information, consent records, and service logs."),
+                ("Sharing and retention", "Data is shared only with providers needed to run the service, such as Stripe, Telegram, Pushover, hosting, and market-data providers. We keep it only as long as needed for service, security, accounting, and legal obligations."),
+                ("Your choices", f"You may request access, correction, deletion, or account closure by contacting {support}. Some records may need to be retained for legal or fraud-prevention purposes."),
+            ],
+        ),
+        "refunds": (
+            "Cancellation and Refund Policy",
+            "How recurring membership cancellation and service problems are handled.",
+            [
+                ("Cancel any time", "You can cancel recurring billing through the account billing portal. Access normally continues until the end of the paid billing period."),
+                ("Immediate access", "At checkout you are asked to request immediate digital access and acknowledge that beginning supply may affect the statutory 14-day cancellation right. This does not remove rights that cannot legally be waived."),
+                ("Service faults", "If paid access is materially unavailable or not supplied as described, contact us promptly. We will investigate and provide the remedy required by applicable consumer law, which may include restoration, a credit, or a refund."),
+                ("Duplicate or incorrect charges", "Report a duplicate or incorrect charge with the account email and Stripe receipt identifier. Do not send card details."),
+                ("How to request", f"Email {support}. Include the account email, payment date, and reason. Refunds, when due, are returned through the original payment method."),
+            ],
+        ),
+    }
+    title, intro, sections = pages.get(page, pages["terms"])
+    body = f"""
+    <section class="legal-page">
+      <header><span class="page-kicker">SpreadBoard</span><h1>{h(title)}</h1><p>{h(intro)}</p></header>
+      <main>{''.join(f'<section><h2>{h(heading)}</h2><p>{h(copy)}</p></section>' for heading, copy in sections)}</main>
+      <nav><a href="/pricing">Membership</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/refunds">Refunds</a></nav>
+    </section>
+    """
+    return shell(f"{title} - SpreadBoard", "pricing", body)
 
 
 def render_account_page(
@@ -5109,11 +5208,11 @@ def render_account_settings(user: accounts.User, accounts_path: Path | str = acc
     if user.billing_customer_id:
         billing_action = '<button class="sheet-button" type="button" data-billing-action="portal">Manage billing</button>'
     elif state["checkout_ready"] and not user.is_admin:
-        billing_action = f'<button class="sheet-button" type="button" data-billing-action="checkout">Subscribe · {h(billing.status()["plan_label"])}</button>'
+        billing_action = f'<a class="sheet-button" href="/subscription">Subscribe · {h(billing.status()["plan_label"])}</a>'
     else:
         billing_action = '<span>Online billing is not active for this account.</span>'
     cancel_note = "Cancellation scheduled at period end." if user.subscription_cancel_at_period_end else "Renews monthly while active."
-    telegram_state = telegram_bot.status()
+    telegram_state = telegram_bot.status(db_path=accounts_path)
     telegram_link = accounts.telegram_link_status(user.id, db_path=accounts_path)
     if telegram_state["configured"] and telegram_link["linked"]:
         telegram_action = '<button class="sheet-button" type="button" data-telegram-action="unlink">Disconnect Telegram</button>'
@@ -5124,7 +5223,25 @@ def render_account_settings(user: accounts.User, accounts_path: Path | str = acc
     else:
         telegram_action = '<span>Telegram subscription commands are awaiting the dedicated bot credentials.</span>'
         telegram_note = "No Telegram account data is stored until you explicitly link it."
-    return f"""<section class="account-settings"><div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is used only as the denominator for your return statistics.</p></div></div><form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Tracked monthly capital, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or '')}"></label><button class="sheet-button primary" type="submit">Save settings</button></form><div class="account-empty-panel"><strong>Monthly membership</strong><p>{h(user.subscription_status)} · {h(cancel_note)}</p>{billing_action}<p role="alert" data-billing-error></p></div><div class="account-empty-panel"><strong>Telegram subscription bot</strong><p>{telegram_note}</p>{telegram_action}<p role="alert" data-telegram-error></p></div></section>"""
+    push = accounts.notification_preferences(user.id, db_path=accounts_path)
+    push_checked = "checked" if push.get("pushover_enabled") else ""
+    push_key_note = "Key saved securely" if push.get("pushover_configured") else "No key saved"
+    return f"""
+    <section class="account-settings">
+      <div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is used only as the denominator for your return statistics.</p></div></div>
+      <form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Tracked monthly capital, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or '')}"></label><button class="sheet-button primary" type="submit">Save settings</button></form>
+      <div class="account-empty-panel"><strong>Monthly membership</strong><p>{h(user.subscription_status)} · {h(cancel_note)}</p>{billing_action}<p role="alert" data-billing-error></p></div>
+      <div class="account-empty-panel"><strong>Telegram subscriber access</strong><p>{telegram_note}</p>{telegram_action}<p>{'Subscriber group connected. Use /access in the private bot.' if telegram_state.get('community_configured') else 'The community owner still needs to run /setupgroup after granting the bot invite permissions.'}</p><p role="alert" data-telegram-error></p></div>
+      <form data-pushover-settings>
+        <label><span>Pushover user key</span><input name="pushover_user_key" type="password" autocomplete="off" placeholder="{h(push_key_note)}"></label>
+        <label><span>Device</span><input name="pushover_device" value="{h(push.get('pushover_device') or '')}" placeholder="Optional"></label>
+        <label><span>Sound</span><select name="pushover_sound">{''.join(f'<option value="{h(sound)}" {"selected" if sound == push.get("pushover_sound") else ""}>{h(sound)}</option>' for sound in ["pushover", "default", "siren", "magic", "cashregister", "vibrate"])}</select></label>
+        <label><span>Delivery enabled</span><input name="pushover_enabled" type="checkbox" {push_checked}></label>
+        <button class="sheet-button primary" type="submit">Save Pushover</button>
+        <button class="sheet-button" type="button" data-pushover-test>Send test</button>
+        <p role="alert" data-pushover-status>{h(push_key_note)}</p>
+      </form>
+    </section>"""
 
 
 def render_billing_script() -> str:
@@ -5133,7 +5250,7 @@ def render_billing_script() -> str:
   const session=JSON.parse(document.getElementById('account-session')?.textContent||'{}');
   document.querySelectorAll('[data-billing-action]').forEach(button=>button.addEventListener('click',async()=>{
     button.disabled=true;const error=document.querySelector('[data-billing-error]');if(error)error.textContent='';
-    try{const response=await fetch(`/api/billing/${button.dataset.billingAction}`,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf_token},body:'{}'});const data=await response.json();if(!response.ok||!data.url)throw new Error(data.error||'Billing is temporarily unavailable.');location.assign(data.url);}catch(exc){if(error)error.textContent=exc.message||'Billing is temporarily unavailable.';button.disabled=false;}
+    try{const checkout=button.dataset.billingAction==='checkout';const consent=document.querySelector('[data-subscription-consent]');if(checkout&&!consent?.checked)throw new Error('Accept the terms and immediate-access acknowledgement before continuing.');const payload=checkout?{terms_accepted:true,immediate_access_consent:true}:{};const response=await fetch(`/api/billing/${button.dataset.billingAction}`,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf_token},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok||!data.url)throw new Error(data.error||'Billing is temporarily unavailable.');location.assign(data.url);}catch(exc){if(error)error.textContent=exc.message||'Billing is temporarily unavailable.';button.disabled=false;}
   }));
 })();
 </script>"""
@@ -5171,6 +5288,8 @@ def render_account_script() -> str:
   root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;actionDialog.querySelector('[data-action-title]').textContent={funding:'Add funding cashflow',alert:'Create alert rule',close:'Close position'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=fields[actionType];actionDialog.showModal();});
   actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={funding:'funding',alert:'alerts',close:'close'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   root.querySelector('[data-account-settings]')?.addEventListener('submit',async event=>{event.preventDefault();await request('/api/account-settings',Object.fromEntries(new FormData(event.currentTarget)));location.reload();});
+  root.querySelector('[data-pushover-settings]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,status=form.querySelector('[data-pushover-status]');const payload=Object.fromEntries(new FormData(form));payload.pushover_enabled=form.elements.pushover_enabled.checked;try{await request('/api/notification-preferences',payload);form.elements.pushover_user_key.value='';status.textContent='Pushover settings saved securely.';}catch(error){status.textContent=error.message;}});
+  root.querySelector('[data-pushover-test]')?.addEventListener('click',async event=>{const status=root.querySelector('[data-pushover-status]');event.currentTarget.disabled=true;try{const result=await request('/api/alert-test',{});status.textContent=result.ok?'Test sent to Pushover.':(result.error||'Test failed.');}catch(error){status.textContent=error.message;}finally{event.currentTarget.disabled=false;}});
   root.querySelector('[data-telegram-action]')?.addEventListener('click',async event=>{const button=event.currentTarget,error=root.querySelector('[data-telegram-error]');button.disabled=true;if(error)error.textContent='';try{const data=await request(`/api/telegram/${button.dataset.telegramAction}`,{});if(data.url){window.open(data.url,'_blank','noopener');button.textContent='Link opened';}else location.reload();}catch(exc){if(error)error.textContent=exc.message;button.disabled=false;}});
   root.querySelector('[data-notifications-read]')?.addEventListener('click',async()=>{await request('/api/notifications/read',{});location.reload();});
   root.querySelector('[data-member-create]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;try{await request('/api/account-users',Object.fromEntries(new FormData(form)));form.reset();loadMembers();}catch(error){alert(error.message);}});
@@ -7980,7 +8099,7 @@ def render_alert_draft_script() -> str:
           <label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>
           <label><span>Stability check, seconds</span><input name="stability" type="number" min="0" step="1" value="10"></label>
           <label class="alert-modal-switch"><span>Enabled</span><input name="enabled" type="checkbox" checked></label>
-          <p>Saved locally. This template evaluates current rows but does not send Pushover or Telegram messages.</p>
+          <p>Saved to your account. Fresh server rows are evaluated continuously; Pushover delivery uses your account settings.</p>
           <footer><button class="sheet-button" type="button" data-alert-close>Cancel</button><button class="sheet-button primary" type="submit">Save alert</button></footer>
         </form>
       </section>`;
@@ -8018,7 +8137,7 @@ def render_alert_draft_script() -> str:
     backdrop.addEventListener("keydown", (event) => {
       if (event.key === "Escape") close();
     });
-    form.addEventListener("submit", (event) => {
+    form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const now = new Date().toISOString();
       const rule = {
@@ -8032,16 +8151,27 @@ def render_alert_draft_script() -> str:
         enabled: enabled.checked,
         createdAt: draft.createdAt || now,
         updatedAt: now,
-        delivery: "preview_only"
+        delivery: "account"
       };
-      const rules = readRules();
-      const index = rules.findIndex((item) => item.id === rule.id);
-      if (index >= 0) rules[index] = rule;
-      else rules.unshift(rule);
-      writeRules(rules);
-      logActivity(index >= 0 ? "Alert updated" : "Alert created", `${labelForType(rule.type)} ${rule.symbol || "all tokens"}`);
-      showToast("Alert template saved locally");
-      close();
+      const csrf = document.querySelector('[data-logout]')?.dataset.csrf || JSON.parse(document.getElementById('account-session')?.textContent || '{}').csrf_token;
+      try {
+        const response = await fetch('/api/market-alert-rules', {method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf||''}, body:JSON.stringify({
+          route_key: rule.routeKey, symbol: rule.symbol, type: rule.type,
+          direction: rule.direction, threshold: rule.threshold,
+          stability_seconds: rule.stabilitySeconds, enabled: rule.enabled
+        })});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Alert could not be saved');
+        rule.id = String(data.rule.id);
+        const rules = readRules();
+        rules.unshift(rule);
+        writeRules(rules);
+        logActivity("Alert created", `${labelForType(rule.type)} ${rule.symbol || "all tokens"}`);
+        showToast("Live alert activated");
+        close();
+      } catch (error) {
+        showToast(error.message || 'Alert could not be saved');
+      }
     });
     threshold.focus();
   }
@@ -9048,9 +9178,12 @@ body.alert-modal-open {{ overflow: hidden; }}
 .chart-heading {{ align-items: end; }}
 .chart-builder {{ border: 1px solid var(--terminal-line); border-radius: 7px; background: var(--terminal-panel); overflow: hidden; }}
 .chart-builder-title {{ min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 14px; border-bottom: 1px solid var(--terminal-line); }}
-.chart-builder-title > div {{ display: grid; grid-template-columns: 34px auto; column-gap: 10px; align-items: center; }}
+.chart-builder-title > div:first-child {{ display: grid; grid-template-columns: 34px auto; column-gap: 10px; align-items: center; }}
 .chart-builder-title strong {{ color: var(--terminal-text); font-size: 15px; }}
 .chart-builder-title em {{ grid-column: 2; color: var(--terminal-muted); font-size: 11px; font-style: normal; }}
+.chart-builder-tools {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }}
+.chart-builder-tools a {{ padding:6px 8px; border:1px solid var(--terminal-line); color:var(--terminal-text); font-size:11px; font-weight:900; text-decoration:none; }}
+.chart-builder-tools a:hover {{ border-color:var(--accent); color:var(--accent); }}
 .chart-builder-icon {{ grid-row: 1 / span 2; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 6px; background: var(--terminal-accent-soft); color: var(--terminal-accent); font-size: 21px; font-weight: 900; }}
 .chart-builder-state {{ padding: 5px 7px; border-radius: 5px; background: var(--terminal-panel-2); color: var(--terminal-muted); font-size: 10px; font-weight: 900; text-transform: uppercase; }}
 .chart-builder-form {{ display: grid; grid-template-columns: minmax(130px,.55fr) minmax(250px,1fr) 36px minmax(250px,1fr); gap: 10px; align-items: end; padding: 14px; }}
@@ -9565,6 +9698,18 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 .account-membership {{ min-width:180px; border:1px solid var(--terminal-line); padding:13px 15px; display:grid; gap:4px; background:var(--terminal-panel); }}
 .account-membership span,.account-membership em {{ color:var(--terminal-muted); font-size:12px; font-style:normal; }}
 .account-membership strong {{ text-transform:capitalize; }}
+.subscription-consent {{ display:flex; align-items:flex-start; gap:9px; max-width:720px; color:var(--terminal-muted); font-size:12px; line-height:1.45; }}
+.subscription-consent input {{ width:auto; margin-top:2px; accent-color:var(--accent); }}
+.subscription-consent a {{ color:var(--accent); text-decoration:underline; }}
+.legal-page {{ width:min(900px,calc(100% - 32px)); margin:38px auto 72px; }}
+.legal-page>header {{ padding:30px 0 24px; border-bottom:1px solid var(--terminal-line); }}
+.legal-page h1 {{ margin:6px 0 10px; font-size:40px; }}
+.legal-page>header p,.legal-page main p {{ color:var(--terminal-muted); line-height:1.65; }}
+.legal-page main section {{ padding:22px 0; border-bottom:1px solid var(--terminal-line); }}
+.legal-page main h2 {{ margin:0 0 8px; font-size:18px; }}
+.legal-page main p {{ margin:0; }}
+.legal-page nav {{ display:flex; flex-wrap:wrap; gap:16px; padding-top:20px; }}
+.legal-page nav a {{ color:var(--accent); font-weight:800; }}
 .account-kpis {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border:1px solid var(--terminal-line); margin:20px 0; background:var(--terminal-panel); }}
 .account-kpis article {{ min-width:0; padding:16px; display:grid; gap:5px; border-right:1px solid var(--terminal-line); }}
 .account-kpis article:last-child {{ border-right:0; }} .account-kpis span,.account-kpis em {{ color:var(--terminal-muted); font-size:12px; font-style:normal; }} .account-kpis strong {{ font-size:23px; }}

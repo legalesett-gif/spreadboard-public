@@ -1,0 +1,22 @@
+[Unit]
+Description=Encrypted offsite SpreadBoard backup
+After=network-online.target docker.service
+Wants=network-online.target
+ConditionPathExists=/opt/spreadboard/secrets/backup.env
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/spreadboard/secrets/backup.env
+Environment=RESTIC_CACHE_DIR=/tmp/restic-cache
+ExecStart=/usr/bin/python3 /opt/spreadboard/app/scripts/backup_spreadboard.py
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/spreadboard/runtime /opt/spreadboard/app
+
+[Install]
+WantedBy=multi-user.target

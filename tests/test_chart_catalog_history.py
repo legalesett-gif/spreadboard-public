@@ -21,6 +21,19 @@ def test_custom_chart_route_round_trip() -> None:
     assert row["blockers"] == ["custom_chart_research_only"]
 
 
+def test_skhx_skhynix_route_is_explicitly_normalized_ten_to_one() -> None:
+    row = chart_catalog.route_from_key(chart_catalog.skhx_skhynix_route_key())
+
+    assert row is not None
+    assert row["token"] == "SKHX / SK HYNIX"
+    assert row["long_market_symbol"] == "XYZ-SKHX/USDC:USDC"
+    assert row["short_market_symbol"] == "XYZ-SKHY/USDC:USDC"
+    assert row["notes"]["relative_value"] == {
+        "long_multiplier": 1.0,
+        "short_multiplier": 10.0,
+    }
+
+
 def test_custom_chart_route_rejects_unknown_venue() -> None:
     key = chart_catalog.custom_route_key(
         "TEST",
@@ -39,6 +52,41 @@ def test_historical_spread_aligns_matching_candles_only() -> None:
     assert rows[1]["executable_spread_pct"] == pytest.approx(10)
     assert rows[0]["sample_source"] == "historical_ohlcv_close_proxy"
     assert rows[0]["depth_weighted_spread_pct"] is None
+
+
+def test_historical_relative_value_spread_applies_leg_multipliers() -> None:
+    rows = historical_spreads._align(
+        [[0, 0, 0, 0, 100]],
+        [[0, 0, 0, 0, 13]],
+        "1m",
+        short_multiplier=10,
+    )
+
+    assert rows[0]["long_price"] == 100
+    assert rows[0]["short_price"] == 130
+    assert rows[0]["executable_spread_pct"] == pytest.approx(30)
+
+
+def test_relative_value_history_normalizes_prices_and_exit(tmp_path) -> None:
+    row = chart_catalog.route_from_key(chart_catalog.skhx_skhynix_route_key())
+    assert row is not None
+    row.update(
+        {
+            "quote_ts_us": int(datetime.now(tz=timezone.utc).timestamp() * 1_000_000),
+            "executable_spread_pct": 29.9,
+        }
+    )
+    row["notes"]["route_inputs"]["long"].update({"bid": 99, "ask": 100})
+    row["notes"]["route_inputs"]["short"].update({"bid": 13, "ask": 13.1})
+
+    market_history.record_route(row, db_path=tmp_path / "history.sqlite3")
+    point = market_history.load_history(
+        route_key=row["route_key"], db_path=tmp_path / "history.sqlite3"
+    )[0]
+
+    assert point["long_ask_price"] == 100
+    assert point["short_bid_price"] == 130
+    assert point["exit_spread_pct"] == pytest.approx((99 / 131 - 1) * 100)
 
 
 def test_history_preserves_custom_route_key(tmp_path) -> None:

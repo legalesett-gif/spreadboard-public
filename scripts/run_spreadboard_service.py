@@ -31,6 +31,7 @@ from spreadboard import (
     market_history,
     portfolio,
     public_rails,
+    telegram_bot,
     token_metadata,
     verified_identity,
 )  # noqa: E402
@@ -394,6 +395,15 @@ def main() -> int:
         poll_seconds=float(os.environ.get("SPREADBOARD_POSITION_ALERT_SECONDS", "30")),
     )
     server.position_alert_worker = position_alert_worker
+    membership_worker = telegram_bot.MembershipWorker(
+        db_path=server.accounts_path,
+        poll_seconds=float(os.environ.get("SPREADBOARD_TELEGRAM_MEMBERSHIP_SECONDS", "60")),
+    )
+    market_alert_worker = alerts.UserMarketAlertWorker(
+        board_path=board_path,
+        accounts_path=server.accounts_path,
+        poll_seconds=float(os.environ.get("SPREADBOARD_MARKET_ALERT_SECONDS", "10")),
+    )
 
     def stop_service(_signum: int, _frame: Any) -> None:
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -402,11 +412,15 @@ def main() -> int:
     signal.signal(signal.SIGINT, stop_service)
     refresh_loop.start()
     position_alert_worker.start()
+    membership_worker.start()
+    market_alert_worker.start()
     _log(f"serving http://{host}:{port}")
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
         position_alert_worker.stop()
+        membership_worker.stop()
+        market_alert_worker.stop()
         refresh_loop.stop()
         server.server_close()
     return 0

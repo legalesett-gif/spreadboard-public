@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Create consistent SpreadBoard snapshots and send them to encrypted restic storage."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import os
+from pathlib import Path
+import shutil
+import sqlite3
+import subprocess
+import tempfile
+
+
+RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_BACKUP_SOURCE", "/opt/spreadboard/runtime"))
+RESTIC = os.environ.get("SPREADBOARD_RESTIC_BIN", "restic")
+RETENTION_DAILY = os.environ.get("SPREADBOARD_BACKUP_KEEP_DAILY", "7")
+RETENTION_WEEKLY = os.environ.get("SPREADBOARD_BACKUP_KEEP_WEEKLY", "4")
+RETENTION_MONTHLY = os.environ.get("SPREADBOARD_BACKUP_KEEP_MONTHLY", "3")
+
+
+def stage_snapshot(source: Path, target: Path) -> list[Path]:
+    """Stage consistent databases plus small operational state files."""
+    copied: list[Path] = []
+    for path in sorted(source.rglob("*")):
+        if not path.is_file() or _excluded(path, source):
+            continue
+        relative = path.relative_to(source)
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if path.suffix.casefold() in {".sqlite", ".sqlite3", ".db"}:
+            _backup_sqlite(path, destination)
+        else:
+            shutil.copy2(path, destination)
+        copied.append(relative)
+    manifest = target / "BACKUP-MANIFEST.txt"
+    manifest.write_text(
+        "created_at=" + datetime.now(tz=timezone.utc).isoformat() + "\n"
+        + "files=" + str(len(copied)) + "\n",
+        encoding="utf-8",
+    )
+    return copied
+
+
+def run_backup() -> None:
+    _require_restic_configuration()
+    if not RUNTIME_DIR.is_dir():
+        raise RuntimeError("backup_source_missing")
+    with tempfile.TemporaryDirectory(prefix="spreadboard-backup-") as temporary:
+        stage = Path(temporary) / "spreadboard-runtime"
+        stage.mkdir()
+        copied = stage_snapshot(RUNTIME_DIR, stage)
+        if not copied:
+            raise RuntimeError("backup_source_empty")
+        subprocess.run(
+            [RESTIC, "backup", "--tag", "spreadboard", "--host", "spreadboard-prod", str(stage)],
+            check=True,
+        )
+        subprocess.run(
+            [
+                RESTIC,
+                "forget",
+                "--tag",
+                "spreadboard",
+                "--keep-daily",
+                RETENTION_DAILY,
+                "--keep-weekly",
+                RETENTION_WEEKLY,
+                "--keep-monthly",
+                RETENTION_MONTHLY,
+                "--prune",
+            ],
+            check=True,
+        )
+        subprocess.run([RESTIC, "check", "--read-data-subset=1/20"], check=True)
+
+
+def _backup_sqlite(source: Path, destination: Path) -> None:
+    try:
+        with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as source_db:
+            with sqlite3.connect(destination) as destination_db:
+                source_db.backup(destination_db)
+    except sqlite3.DatabaseError:
+        # A file with a database suffix may be an incomplete cache. Never turn
+        # a failed consistency check into a successful-looking backup.
+        destination.unlink(missing_ok=True)
+        raise
+
+
+def _excluded(path: Path, root: Path) -> bool:
+    relative = path.relative_to(root)
+    name = path.name.casefold()
+    if any(part in {"__pycache__", "historical_spread_cache"} for part in relative.parts):
+        return True
+    if name.endswith(("-wal", "-shm", ".tmp", ".log")):
+        return True
+    return path.stat().st_size > 250 * 1024 * 1024
+
+
+def _require_restic_configuration() -> None:
+    required = ("RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError("backup_configuration_missing:" + ",".join(missing))
+
+
+if __name__ == "__main__":
+    run_backup()

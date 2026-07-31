@@ -179,6 +179,15 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 result TEXT NOT NULL,
                 processed_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS subscription_consents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                terms_version TEXT NOT NULL,
+                immediate_access INTEGER NOT NULL CHECK (immediate_access IN (0, 1)),
+                ip_address TEXT NOT NULL DEFAULT '',
+                user_agent TEXT NOT NULL DEFAULT '',
+                accepted_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS telegram_links (
                 user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
                 chat_id INTEGER NOT NULL UNIQUE,
@@ -192,13 +201,64 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 expires_at TEXT NOT NULL,
                 used_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS telegram_communities (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                chat_id INTEGER NOT NULL UNIQUE,
+                title TEXT NOT NULL DEFAULT '',
+                invite_link TEXT,
+                configured_by_telegram_user_id INTEGER NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS telegram_memberships (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                telegram_user_id INTEGER NOT NULL,
+                community_chat_id INTEGER NOT NULL,
+                state TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (state IN ('pending', 'active', 'removed', 'exempt', 'error')),
+                last_checked_at TEXT,
+                last_error TEXT,
+                joined_at TEXT,
+                removed_at TEXT,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS notification_preferences (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                pushover_user_key_encrypted TEXT,
+                pushover_device TEXT NOT NULL DEFAULT '',
+                pushover_sound TEXT NOT NULL DEFAULT 'pushover',
+                pushover_enabled INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS market_alert_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                route_key TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                metric TEXT NOT NULL CHECK (metric IN ('open_spread_pct', 'funding_24h_pct')),
+                operator TEXT NOT NULL CHECK (operator IN ('lte', 'gte')),
+                threshold REAL NOT NULL,
+                stability_seconds INTEGER NOT NULL DEFAULT 10,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                condition_since TEXT,
+                last_condition_met INTEGER NOT NULL DEFAULT 0,
+                last_triggered_at TEXT,
+                last_value REAL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS sessions_token_hash ON sessions(token_hash);
             CREATE INDEX IF NOT EXISTS sessions_user_expiry ON sessions(user_id, expires_at);
             CREATE INDEX IF NOT EXISTS positions_user_status ON positions(user_id, status, opened_at DESC);
             CREATE INDEX IF NOT EXISTS funding_position_time ON funding_cashflows(position_id, occurred_at);
             CREATE INDEX IF NOT EXISTS alert_rules_user_position ON position_alert_rules(user_id, position_id, enabled);
             CREATE INDEX IF NOT EXISTS notifications_user_time ON in_app_notifications(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS subscription_consents_user_time ON subscription_consents(user_id, accepted_at DESC);
             CREATE INDEX IF NOT EXISTS telegram_link_tokens_user ON telegram_link_tokens(user_id, expires_at);
+            CREATE INDEX IF NOT EXISTS telegram_memberships_state ON telegram_memberships(state, updated_at);
+            CREATE INDEX IF NOT EXISTS market_alert_rules_user ON market_alert_rules(user_id, enabled, updated_at);
             """
         )
         _ensure_columns(connection, "users", {
@@ -519,6 +579,321 @@ def unlink_telegram_chat(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH)
         connection.execute("DELETE FROM telegram_link_tokens WHERE user_id = ?", (user_id,))
         connection.commit()
         return cursor.rowcount > 0
+    finally:
+        connection.close()
+
+
+def configure_telegram_community(
+    chat_id: int,
+    *,
+    title: str,
+    configured_by_telegram_user_id: int,
+    invite_link: str | None = None,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    now = _utc_iso()
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """INSERT INTO telegram_communities (
+                   id, chat_id, title, invite_link, configured_by_telegram_user_id,
+                   active, created_at, updated_at
+               ) VALUES (1, ?, ?, ?, ?, 1, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET chat_id = excluded.chat_id,
+                   title = excluded.title, invite_link = excluded.invite_link,
+                   configured_by_telegram_user_id = excluded.configured_by_telegram_user_id,
+                   active = 1, updated_at = excluded.updated_at""",
+            (
+                int(chat_id),
+                str(title or "SpreadBoard community")[:255],
+                str(invite_link or "")[:1000] or None,
+                int(configured_by_telegram_user_id),
+                now,
+                now,
+            ),
+        )
+        connection.execute(
+            "UPDATE telegram_memberships SET state = 'pending', updated_at = ? WHERE community_chat_id != ?",
+            (now, int(chat_id)),
+        )
+        connection.commit()
+        row = connection.execute("SELECT * FROM telegram_communities WHERE id = 1").fetchone()
+        return dict(row)
+    finally:
+        connection.close()
+
+
+def telegram_community(*, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any] | None:
+    connection = _connect(db_path)
+    try:
+        row = connection.execute(
+            "SELECT * FROM telegram_communities WHERE id = 1 AND active = 1"
+        ).fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        connection.close()
+
+
+def record_telegram_membership(
+    user_id: int,
+    *,
+    telegram_user_id: int,
+    community_chat_id: int,
+    state: str,
+    error: str | None = None,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    if state not in {"pending", "active", "removed", "exempt", "error"}:
+        raise ValueError("invalid_telegram_membership_state")
+    now = _utc_iso()
+    joined_at = now if state == "active" else None
+    removed_at = now if state == "removed" else None
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """INSERT INTO telegram_memberships (
+                   user_id, telegram_user_id, community_chat_id, state,
+                   last_checked_at, last_error, joined_at, removed_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                   telegram_user_id = excluded.telegram_user_id,
+                   community_chat_id = excluded.community_chat_id,
+                   state = excluded.state,
+                   last_checked_at = excluded.last_checked_at,
+                   last_error = excluded.last_error,
+                   joined_at = COALESCE(telegram_memberships.joined_at, excluded.joined_at),
+                   removed_at = excluded.removed_at,
+                   updated_at = excluded.updated_at""",
+            (
+                int(user_id), int(telegram_user_id), int(community_chat_id), state,
+                now, str(error or "")[:500] or None, joined_at, removed_at, now,
+            ),
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM telegram_memberships WHERE user_id = ?", (int(user_id),)
+        ).fetchone()
+        return dict(row)
+    finally:
+        connection.close()
+
+
+def telegram_membership_candidates(*, db_path: Path | str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+    connection = _connect(db_path)
+    try:
+        return [dict(row) for row in connection.execute(
+            """SELECT u.id AS user_id, u.role, u.subscription_status,
+                      u.subscription_expires_at, t.chat_id AS telegram_user_id,
+                      m.state AS membership_state
+               FROM users u
+               JOIN telegram_links t ON t.user_id = u.id
+               LEFT JOIN telegram_memberships m ON m.user_id = u.id
+               ORDER BY u.id"""
+        ).fetchall()]
+    finally:
+        connection.close()
+
+
+def notification_preferences(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
+    connection = _connect(db_path)
+    try:
+        row = connection.execute(
+            "SELECT * FROM notification_preferences WHERE user_id = ?", (int(user_id),)
+        ).fetchone()
+        return {
+            "pushover_configured": bool(row and row["pushover_user_key_encrypted"]),
+            "pushover_device": str(row["pushover_device"] or "") if row else "",
+            "pushover_sound": str(row["pushover_sound"] or "pushover") if row else "pushover",
+            "pushover_enabled": bool(row["pushover_enabled"]) if row else False,
+            "updated_at": row["updated_at"] if row else None,
+        }
+    finally:
+        connection.close()
+
+
+def save_notification_preferences(
+    user_id: int,
+    payload: dict[str, Any],
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    from spreadboard import field_crypto
+
+    key = str(payload.get("pushover_user_key") or "").strip()
+    if key and (len(key) < 20 or len(key) > 80 or not key.isalnum()):
+        raise ValueError("invalid_pushover_user_key")
+    device = str(payload.get("pushover_device") or "").strip()[:64]
+    sound = str(payload.get("pushover_sound") or "pushover").strip()
+    allowed_sounds = {"default", "pushover", "siren", "magic", "cashregister", "vibrate"}
+    if sound not in allowed_sounds:
+        raise ValueError("invalid_pushover_sound")
+    enabled = bool(payload.get("pushover_enabled"))
+    now = _utc_iso()
+    connection = _connect(db_path)
+    try:
+        existing = connection.execute(
+            "SELECT pushover_user_key_encrypted, created_at FROM notification_preferences WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+        encrypted = field_crypto.encrypt(key) if key else (
+            str(existing["pushover_user_key_encrypted"] or "") if existing else ""
+        )
+        if enabled and not encrypted:
+            raise ValueError("pushover_user_key_required")
+        connection.execute(
+            """INSERT INTO notification_preferences (
+                   user_id, pushover_user_key_encrypted, pushover_device,
+                   pushover_sound, pushover_enabled, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                   pushover_user_key_encrypted = excluded.pushover_user_key_encrypted,
+                   pushover_device = excluded.pushover_device,
+                   pushover_sound = excluded.pushover_sound,
+                   pushover_enabled = excluded.pushover_enabled,
+                   updated_at = excluded.updated_at""",
+            (int(user_id), encrypted or None, device, sound, int(enabled), now, now),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return notification_preferences(user_id, db_path=db_path)
+
+
+def notification_delivery(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any] | None:
+    from spreadboard import field_crypto
+
+    connection = _connect(db_path)
+    try:
+        row = connection.execute(
+            "SELECT * FROM notification_preferences WHERE user_id = ? AND pushover_enabled = 1",
+            (int(user_id),),
+        ).fetchone()
+        if row is None or not row["pushover_user_key_encrypted"]:
+            return None
+        return {
+            "user_key": field_crypto.decrypt(str(row["pushover_user_key_encrypted"])),
+            "device": str(row["pushover_device"] or ""),
+            "sound": str(row["pushover_sound"] or "pushover"),
+        }
+    finally:
+        connection.close()
+
+
+def add_market_alert_rule(
+    user_id: int,
+    payload: dict[str, Any],
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    route_key = str(payload.get("route_key") or "").strip()[:1000]
+    symbol = str(payload.get("symbol") or "").strip().upper()[:80]
+    alert_type = str(payload.get("type") or "token_spread")
+    metric = "funding_24h_pct" if alert_type == "funding" else "open_spread_pct"
+    operator = "lte" if str(payload.get("direction") or "above") == "below" else "gte"
+    threshold = float(payload.get("threshold"))
+    stability = max(0, min(3600, int(payload.get("stability_seconds") or 0)))
+    if not route_key or not symbol:
+        raise ValueError("route_alert_requires_exact_route")
+    now = _utc_iso()
+    connection = _connect(db_path)
+    try:
+        cursor = connection.execute(
+            """INSERT INTO market_alert_rules (
+                   user_id, route_key, symbol, metric, operator, threshold,
+                   stability_seconds, enabled, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                int(user_id), route_key, symbol, metric, operator, threshold,
+                stability, int(payload.get("enabled") is not False), now, now,
+            ),
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM market_alert_rules WHERE id = ?", (cursor.lastrowid,)
+        ).fetchone()
+        return dict(row)
+    finally:
+        connection.close()
+
+
+def list_market_alert_rules(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+    connection = _connect(db_path)
+    try:
+        return [dict(row) for row in connection.execute(
+            "SELECT * FROM market_alert_rules WHERE user_id = ? ORDER BY updated_at DESC",
+            (int(user_id),),
+        ).fetchall()]
+    finally:
+        connection.close()
+
+
+def list_market_alert_user_ids(*, db_path: Path | str = DEFAULT_DB_PATH) -> list[int]:
+    connection = _connect(db_path)
+    try:
+        return [int(row["user_id"]) for row in connection.execute(
+            "SELECT DISTINCT user_id FROM market_alert_rules WHERE enabled = 1 ORDER BY user_id"
+        ).fetchall()]
+    finally:
+        connection.close()
+
+
+def record_market_alert_evaluation(
+    user_id: int,
+    rule_id: int,
+    *,
+    value: float,
+    title: str,
+    body: str,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    now_dt = datetime.now(tz=timezone.utc)
+    now = _utc_iso(now_dt)
+    connection = _connect(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT * FROM market_alert_rules WHERE id = ? AND user_id = ? AND enabled = 1",
+            (int(rule_id), int(user_id)),
+        ).fetchone()
+        if row is None:
+            connection.rollback()
+            return None
+        condition = value <= float(row["threshold"]) if row["operator"] == "lte" else value >= float(row["threshold"])
+        condition_since = row["condition_since"]
+        should_trigger = False
+        if condition:
+            if not condition_since:
+                condition_since = now
+            try:
+                started = datetime.fromisoformat(str(condition_since).replace("Z", "+00:00"))
+                stable = (now_dt - started).total_seconds() >= int(row["stability_seconds"])
+            except ValueError:
+                stable = False
+            should_trigger = stable and not bool(row["last_condition_met"])
+        else:
+            condition_since = None
+        notification = None
+        if should_trigger:
+            cursor = connection.execute(
+                """INSERT INTO in_app_notifications (
+                       user_id, alert_rule_id, position_id, title, body, created_at
+                   ) VALUES (?, NULL, NULL, ?, ?, ?)""",
+                (int(user_id), title[:160], body[:1000], now),
+            )
+            notification = dict(connection.execute(
+                "SELECT * FROM in_app_notifications WHERE id = ?", (cursor.lastrowid,)
+            ).fetchone())
+        connection.execute(
+            """UPDATE market_alert_rules SET condition_since = ?, last_condition_met = ?,
+                   last_triggered_at = CASE WHEN ? THEN ? ELSE last_triggered_at END,
+                   last_value = ?, updated_at = ? WHERE id = ?""",
+            (condition_since, int(condition and (should_trigger or bool(row["last_condition_met"]))), int(should_trigger), now, value, now, int(rule_id)),
+        )
+        connection.commit()
+        return notification
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
 
@@ -1004,6 +1379,36 @@ def mark_notifications_read(
         )
         connection.commit()
         return int(cursor.rowcount)
+    finally:
+        connection.close()
+
+
+def record_subscription_consent(
+    user_id: int,
+    *,
+    terms_version: str,
+    immediate_access: bool,
+    ip_address: str = "",
+    user_agent: str = "",
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> None:
+    if not terms_version.strip() or not immediate_access:
+        raise ValueError("subscription_consent_required")
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """INSERT INTO subscription_consents (
+                   user_id, terms_version, immediate_access, ip_address, user_agent, accepted_at
+               ) VALUES (?, ?, 1, ?, ?, ?)""",
+            (
+                int(user_id),
+                terms_version.strip()[:80],
+                ip_address[:120],
+                user_agent[:500],
+                _utc_iso(),
+            ),
+        )
+        connection.commit()
     finally:
         connection.close()
 

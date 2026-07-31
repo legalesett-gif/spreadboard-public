@@ -99,11 +99,20 @@ def load(path: Path | str = DEFAULT_PATH) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {"ok": False, "markets": []}
 
 
-def custom_route_key(token: str, long_leg: dict[str, Any], short_leg: dict[str, Any]) -> str:
+def custom_route_key(
+    token: str,
+    long_leg: dict[str, Any],
+    short_leg: dict[str, Any],
+    *,
+    long_multiplier: float = 1.0,
+    short_multiplier: float = 1.0,
+) -> str:
     payload = {
         "token": str(token).upper(),
         "long": _compact_leg(long_leg),
         "short": _compact_leg(short_leg),
+        "long_multiplier": _validated_multiplier(long_multiplier),
+        "short_multiplier": _validated_multiplier(short_multiplier),
     }
     encoded = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     return f"CUSTOM:{encoded}"
@@ -118,6 +127,8 @@ def route_from_key(route_key: str) -> dict[str, Any] | None:
         token = str(payload["token"]).upper()
         long_leg = _validated_leg(payload["long"])
         short_leg = _validated_leg(payload["short"])
+        long_multiplier = _validated_multiplier(payload.get("long_multiplier", 1.0))
+        short_multiplier = _validated_multiplier(payload.get("short_multiplier", 1.0))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
     route_kind = _route_kind(long_leg, short_leg)
@@ -131,7 +142,17 @@ def route_from_key(route_key: str) -> dict[str, Any] | None:
         "short_venue": short_leg["venue"],
         "short_market_type": short_leg["market_type"],
         "short_market_symbol": short_leg["symbol"],
-        "notes": {"route_inputs": {"long": {"symbol": long_leg["symbol"]}, "short": {"symbol": short_leg["symbol"]}}, "custom_chart": True},
+        "notes": {
+            "route_inputs": {
+                "long": {"symbol": long_leg["symbol"]},
+                "short": {"symbol": short_leg["symbol"]},
+            },
+            "custom_chart": True,
+            "relative_value": {
+                "long_multiplier": long_multiplier,
+                "short_multiplier": short_multiplier,
+            },
+        },
         "blockers": ["custom_chart_research_only"],
     }
 
@@ -196,6 +217,31 @@ def _validated_leg(value: Any) -> dict[str, str]:
     if leg["venue"] not in VENUE_IDS or leg["market_type"] not in {"Spot", "Futures"} or not leg["symbol"]:
         raise ValueError("invalid_leg")
     return leg
+
+
+def _validated_multiplier(value: Any) -> float:
+    multiplier = float(value)
+    if not 0 < multiplier <= 10_000:
+        raise ValueError("invalid_multiplier")
+    return multiplier
+
+
+def skhx_skhynix_route_key() -> str:
+    """Hyperliquid pre-IPO relative-value route normalized to SKHX = 10 x SK Hynix."""
+    return custom_route_key(
+        "SKHX / SK HYNIX",
+        {
+            "venue": "Hyperliquid",
+            "market_type": "Futures",
+            "symbol": "XYZ-SKHX/USDC:USDC",
+        },
+        {
+            "venue": "Hyperliquid",
+            "market_type": "Futures",
+            "symbol": "XYZ-SKHY/USDC:USDC",
+        },
+        short_multiplier=10.0,
+    )
 
 
 def _route_kind(long_leg: dict[str, str], short_leg: dict[str, str]) -> str:

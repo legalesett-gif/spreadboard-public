@@ -13,6 +13,7 @@ from scripts.api_discovery_worker import build_parser as discovery_worker_parser
 from scripts.run_spreadboard_service import RefreshLoop, _merge_newer_fast_quotes
 from spreadarb.api_discovery import runner, sources, worker
 from spreadarb.api_discovery.identity import (
+    IdentityRegistry,
     WatchAsset,
     load_identity_registry,
     load_watchlist,
@@ -64,6 +65,83 @@ def test_discovery_publish_keeps_newer_fast_quotes() -> None:
 def test_refresh_loop_keeps_fast_quote_worker_methods() -> None:
     assert callable(RefreshLoop.run_fast_quotes)
     assert callable(RefreshLoop._refresh_fast_quotes)
+
+
+def test_unique_okx_identity_enriches_cex_quote_but_guards_large_dislocation() -> None:
+    cex = MarketQuote(
+        token="SAFE",
+        venue="Bybit",
+        market_type="Futures",
+        bid=100.0,
+        ask=100.1,
+        bid_vwap=100.0,
+        ask_vwap=100.1,
+        quote_ts_us=1,
+        source_name="ccxt",
+        symbol="SAFE/USDT:USDT",
+    )
+    asset = WatchAsset(
+        symbol="SAFE",
+        identity_key="eip155:56/erc20:0xabc",
+        cex_enabled=True,
+        dex_enabled=True,
+        evm_contracts={56: "0xabc"},
+    )
+
+    enriched = sources._apply_unique_okx_identities(
+        [cex], [asset], registry=IdentityRegistry.empty()
+    )[0]
+    assert enriched.identity_key == asset.identity_key
+    assert enriched.identity_source == "okx_unique_symbol_inference"
+
+    dex = MarketQuote(
+        token="SAFE",
+        venue="OKX DEX 56",
+        market_type="Spot",
+        bid=106.0,
+        ask=106.1,
+        bid_vwap=106.0,
+        ask_vwap=106.1,
+        quote_ts_us=1,
+        source_name="okx_dex_quote",
+        identity_key=asset.identity_key,
+        identity_source="okx_token_catalog",
+        chain_id=56,
+        token_address="0xabc",
+    )
+    rows = sources.dex_candidates(
+        [dex], [enriched], source_name="okx_dex_quote", min_spread_pct=-100
+    )
+    assert rows
+    assert all(
+        "mirage_guard:high_dislocation_identity_inferred" in row["blockers"]
+        for row in rows
+        if max(abs(float(row["executable_spread_pct"])), abs(float(row["depth_weighted_spread_pct"]))) >= 5
+    )
+
+
+def test_unique_okx_identity_does_not_infer_known_collision() -> None:
+    quote = MarketQuote(
+        token="SAME",
+        venue="Bybit",
+        market_type="Futures",
+        bid=1.0,
+        ask=1.0,
+        bid_vwap=1.0,
+        ask_vwap=1.0,
+        quote_ts_us=1,
+        source_name="ccxt",
+    )
+    asset = WatchAsset(
+        symbol="SAME",
+        identity_key="eip155:1/erc20:0xabc",
+        cex_enabled=True,
+        dex_enabled=True,
+        evm_contracts={1: "0xabc"},
+    )
+    registry = IdentityRegistry(known_ticker_collisions={"SAME": ("a", "b")})
+
+    assert sources._apply_unique_okx_identities([quote], [asset], registry=registry)[0] == quote
 
 
 def test_source_health_uses_live_quote_age_without_hiding_discovery_age(

@@ -39,7 +39,14 @@ def load_or_fetch(row: dict[str, Any], *, hours: float, max_points: int = 1200) 
         result = {"status": "unavailable", "rows": [], "timeframe": timeframe, "cached_at": time.time()}
         _atomic_json(cache_path, result)
         return result
-    rows = _align(legs["long"], legs["short"], timeframe)
+    long_multiplier, short_multiplier = _relative_value_multipliers(row)
+    rows = _align(
+        legs["long"],
+        legs["short"],
+        timeframe,
+        long_multiplier=long_multiplier,
+        short_multiplier=short_multiplier,
+    )
     result = {
         "status": "ok" if rows else "unavailable",
         "sample_source": "historical_ohlcv_close_proxy",
@@ -111,14 +118,21 @@ def _fetch_leg(row: dict[str, Any], side: str, timeframe: str, since_ms: int) ->
             close()
 
 
-def _align(long_rows: list[list[float]], short_rows: list[list[float]], timeframe: str) -> list[dict[str, Any]]:
+def _align(
+    long_rows: list[list[float]],
+    short_rows: list[list[float]],
+    timeframe: str,
+    *,
+    long_multiplier: float = 1.0,
+    short_multiplier: float = 1.0,
+) -> list[dict[str, Any]]:
     interval_ms = {"1m": 60_000, "5m": 300_000, "15m": 900_000}[timeframe]
     long_map = {int(item[0] // interval_ms): float(item[4]) for item in long_rows if float(item[4]) > 0}
     short_map = {int(item[0] // interval_ms): float(item[4]) for item in short_rows if float(item[4]) > 0}
     rows = []
     for bucket in sorted(long_map.keys() & short_map.keys()):
-        long_close = long_map[bucket]
-        short_close = short_map[bucket]
+        long_close = long_map[bucket] * long_multiplier
+        short_close = short_map[bucket] * short_multiplier
         rows.append({
             "quote_ts_us": bucket * interval_ms * 1000,
             "long_price": long_close,
@@ -130,6 +144,17 @@ def _align(long_rows: list[list[float]], short_rows: list[list[float]], timefram
             "target_notional_usd": None,
         })
     return rows
+
+
+def _relative_value_multipliers(row: dict[str, Any]) -> tuple[float, float]:
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    value = notes.get("relative_value") if isinstance(notes.get("relative_value"), dict) else {}
+    try:
+        long_multiplier = float(value.get("long_multiplier", 1.0))
+        short_multiplier = float(value.get("short_multiplier", 1.0))
+    except (TypeError, ValueError):
+        return 1.0, 1.0
+    return max(long_multiplier, 0.000001), max(short_multiplier, 0.000001)
 
 
 def _symbol(row: dict[str, Any], side: str) -> str:

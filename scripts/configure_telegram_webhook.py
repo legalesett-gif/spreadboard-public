@@ -18,7 +18,7 @@ def main() -> int:
         {
             "url": f"{public_url}/api/telegram/webhook",
             "secret_token": secret,
-            "allowed_updates": ["message"],
+            "allowed_updates": ["message", "chat_join_request", "my_chat_member"],
             "drop_pending_updates": True,
         },
         separators=(",", ":"),

@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from spreadboard import live_book_cache, market_history, server
+from spreadboard import fast_quotes, live_book_cache, market_history, server
 from spreadboard.fast_quotes import (
     FastQuoteRefresher,
     _expanded_token_rows,
@@ -201,6 +201,37 @@ def test_exact_dex_route_rejects_out_of_bounds_spread(
         "status": "unavailable",
         "error": "exact_route_spread_out_of_bounds",
     }
+
+
+def test_relative_value_quote_applies_multiplier_without_rewriting_raw_prices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refresher = FastQuoteRefresher()
+    route = {
+        **_route(),
+        "notes": {
+            "relative_value": {"long_multiplier": 1, "short_multiplier": 10},
+            "route_inputs": {
+                "long": {"symbol": "XYZ-SKHX/USDC:USDC"},
+                "short": {"symbol": "XYZ-SKHY/USDC:USDC"},
+            },
+        },
+    }
+    quotes = {
+        "long": {"bid": 99, "ask": 100, "bid_vwap": 98, "ask_vwap": 101, "quote_ts_us": 1},
+        "short": {"bid": 13, "ask": 13.1, "bid_vwap": 12.9, "ask_vwap": 13.2, "quote_ts_us": 2},
+    }
+    monkeypatch.setattr(refresher, "_leg_quote", lambda _row, side, **_kwargs: quotes[side])
+
+    result = refresher.quote_route(route)
+
+    assert result["row"]["executable_spread_pct"] == pytest.approx(30)
+    assert result["row"]["depth_weighted_spread_pct"] == pytest.approx((129 / 101 - 1) * 100)
+    assert result["row"]["notes"]["route_inputs"]["short"]["bid"] == 13
+
+
+def test_hyperliquid_xyz_catalog_symbol_maps_to_xyz_coin() -> None:
+    assert fast_quotes._hyperliquid_coin("XYZ-SKHX") == "xyz:SKHX"
 
 
 def test_native_gate_spot_order_book_is_sorted_and_normalized(

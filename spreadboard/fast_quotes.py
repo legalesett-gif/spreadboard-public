@@ -264,8 +264,15 @@ class FastQuoteRefresher:
                 "status": "unavailable",
                 "error": "exact_route_order_book_unavailable",
             }
-        executable = spread_pct(long_quote["ask"], short_quote["bid"])
-        depth = spread_pct(long_quote["ask_vwap"], short_quote["bid_vwap"])
+        long_multiplier, short_multiplier = _relative_value_multipliers(quoted)
+        executable = spread_pct(
+            long_quote["ask"] * long_multiplier,
+            short_quote["bid"] * short_multiplier,
+        )
+        depth = spread_pct(
+            long_quote["ask_vwap"] * long_multiplier,
+            short_quote["bid_vwap"] * short_multiplier,
+        )
         if executable is None or depth is None:
             return {
                 "status": "unavailable",
@@ -676,7 +683,7 @@ def _native_order_book(
     elif venue == "Hyperliquid":
         payload = _json_post(
             "https://api.hyperliquid.xyz/info",
-            {"type": "l2Book", "coin": base},
+            {"type": "l2Book", "coin": _hyperliquid_coin(base)},
         )
         levels = payload.get("levels") if isinstance(payload, dict) else []
         raw_bids = [
@@ -960,14 +967,14 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
             meta = payload[0] if isinstance(payload[0], dict) else {}
             contexts = payload[1] if isinstance(payload[1], list) else []
             universe = meta.get("universe") if isinstance(meta.get("universe"), list) else []
+            hyperliquid_coin = _hyperliquid_coin(base).upper()
             index = next(
                 (
                     index
                     for index, item in enumerate(universe)
                     if isinstance(item, dict)
                     and (
-                        str(item.get("name") or "").upper() == base
-                        or str(item.get("name") or "").upper().endswith(f":{base}")
+                        str(item.get("name") or "").upper() == hyperliquid_coin
                     )
                 ),
                 None,
@@ -1165,6 +1172,22 @@ def _json_post(url: str, payload: dict[str, Any]) -> Any:
 def _symbol_base_quote(symbol: str) -> tuple[str, str]:
     base, _, quote = str(symbol).partition("/")
     return base.upper(), (quote.split(":", 1)[0] or "USDT").upper()
+
+
+def _hyperliquid_coin(base: str) -> str:
+    normalized = str(base).upper()
+    if normalized.startswith("XYZ-"):
+        return f"xyz:{normalized.removeprefix('XYZ-')}"
+    return normalized
+
+
+def _relative_value_multipliers(row: dict[str, Any]) -> tuple[float, float]:
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    value = notes.get("relative_value") if isinstance(notes.get("relative_value"), dict) else {}
+    return (
+        max(0.000001, _number(value.get("long_multiplier"), 1.0)),
+        max(0.000001, _number(value.get("short_multiplier"), 1.0)),
+    )
 
 
 def _kraken_asset_code(base: str) -> str:

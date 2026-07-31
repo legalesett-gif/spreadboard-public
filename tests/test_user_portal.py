@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import sqlite3
 import threading
 
 import pytest
@@ -82,6 +83,18 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         assert "Create account" in pricing_page
         assert "uacryptoinvest" not in pricing_page.lower()
 
+        for path, expected in (
+            ("/terms", "Terms of Service"),
+            ("/privacy", "Privacy Notice"),
+            ("/refunds", "Refund Policy"),
+        ):
+            connection.request("GET", path)
+            response = connection.getresponse()
+            page = response.read().decode("utf-8")
+            assert response.status == 200
+            assert expected in page
+            assert "uacryptoinvest" not in page.lower()
+
         connection.request(
             "POST",
             "/api/login",
@@ -100,8 +113,25 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
             headers={"Cookie": cookie, "Content-Type": "application/json", "X-CSRF-Token": login["csrf_token"]},
         )
         response = connection.getresponse()
+        assert response.status == 400
+        assert json.loads(response.read())["error"] == "subscription_consent_required"
+
+        connection.request(
+            "POST", "/api/billing/checkout",
+            body=json.dumps({"terms_accepted": True, "immediate_access_consent": True}),
+            headers={"Cookie": cookie, "Content-Type": "application/json", "X-CSRF-Token": login["csrf_token"]},
+        )
+        response = connection.getresponse()
         assert response.status == 200
         assert json.loads(response.read())["url"] == "https://checkout.stripe.com/test-session"
+        with sqlite3.connect(db_path) as database:
+            consent = database.execute(
+                "SELECT terms_version, immediate_access, ip_address, user_agent FROM subscription_consents"
+            ).fetchone()
+        assert consent is not None
+        assert consent[0] == "2026-07-31"
+        assert consent[1] == 1
+        assert consent[2]
 
         connection.request("POST", "/api/positions", body="{}", headers={"Cookie": cookie})
         response = connection.getresponse()

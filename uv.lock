@@ -692,6 +692,7 @@ source = { editable = "." }
 dependencies = [
     { name = "ccxt" },
     { name = "click" },
+    { name = "cryptography" },
     { name = "protobuf" },
 ]
 
@@ -699,6 +700,7 @@ dependencies = [
 requires-dist = [
     { name = "ccxt", specifier = ">=4.4.0" },
     { name = "click", specifier = ">=8.1" },
+    { name = "cryptography", specifier = ">=49.0" },
     { name = "protobuf", specifier = "==5.29.5" },
 ]
 

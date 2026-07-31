@@ -1,0 +1,11 @@
+[Unit]
+Description=Run encrypted SpreadBoard backup every six hours
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:17:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=spreadboard-backup.service
+
+[Install]
+WantedBy=timers.target

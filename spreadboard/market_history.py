@@ -46,14 +46,15 @@ def record_snapshot(
             notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
             route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
             funding = notes.get("funding") if isinstance(notes.get("funding"), dict) else {}
-            long_bid = _route_price(route_inputs, "long", "bid", "bid_vwap")
-            long_ask = _route_price(route_inputs, "long", "ask", "ask_vwap")
-            short_bid = _route_price(route_inputs, "short", "bid", "bid_vwap")
-            short_ask = _route_price(route_inputs, "short", "ask", "ask_vwap")
-            long_bid_vwap = _route_price(route_inputs, "long", "bid_vwap", "bid")
-            long_ask_vwap = _route_price(route_inputs, "long", "ask_vwap", "ask")
-            short_bid_vwap = _route_price(route_inputs, "short", "bid_vwap", "bid")
-            short_ask_vwap = _route_price(route_inputs, "short", "ask_vwap", "ask")
+            long_multiplier, short_multiplier = _relative_value_multipliers(notes)
+            long_bid = _scaled_route_price(route_inputs, "long", long_multiplier, "bid", "bid_vwap")
+            long_ask = _scaled_route_price(route_inputs, "long", long_multiplier, "ask", "ask_vwap")
+            short_bid = _scaled_route_price(route_inputs, "short", short_multiplier, "bid", "bid_vwap")
+            short_ask = _scaled_route_price(route_inputs, "short", short_multiplier, "ask", "ask_vwap")
+            long_bid_vwap = _scaled_route_price(route_inputs, "long", long_multiplier, "bid_vwap", "bid")
+            long_ask_vwap = _scaled_route_price(route_inputs, "long", long_multiplier, "ask_vwap", "ask")
+            short_bid_vwap = _scaled_route_price(route_inputs, "short", short_multiplier, "bid_vwap", "bid")
+            short_ask_vwap = _scaled_route_price(route_inputs, "short", short_multiplier, "ask_vwap", "ask")
             connection.execute(
                 """
                 INSERT OR IGNORE INTO route_points (
@@ -364,6 +365,24 @@ def _route_price(route_inputs: Any, side: str, *keys: str) -> float | None:
     if not isinstance(value, dict):
         return None
     return _float_or_none(*(value.get(key) for key in keys))
+
+
+def _scaled_route_price(
+    route_inputs: Any,
+    side: str,
+    multiplier: float,
+    *keys: str,
+) -> float | None:
+    price = _route_price(route_inputs, side, *keys)
+    return price * multiplier if price is not None else None
+
+
+def _relative_value_multipliers(notes: dict[str, Any]) -> tuple[float, float]:
+    value = notes.get("relative_value") if isinstance(notes.get("relative_value"), dict) else {}
+    return (
+        max(_float_or_none(value.get("long_multiplier"), 1.0) or 1.0, 0.000001),
+        max(_float_or_none(value.get("short_multiplier"), 1.0) or 1.0, 0.000001),
+    )
 
 
 def _route_int(route_inputs: Any, side: str, key: str) -> int | None:

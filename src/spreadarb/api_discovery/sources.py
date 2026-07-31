@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 import gc
 import json
@@ -126,6 +126,11 @@ class OkxDexQuoteSource:
             existing_tokens={asset.token for asset in assets},
         )
         assets.extend(dynamic_assets)
+        reference_quotes = _apply_unique_okx_identities(
+            context.reference_quotes,
+            dynamic_assets,
+            registry=context.identity_registry,
+        )
         quotes: list[MarketQuote] = []
         errors: list[str] = []
         errors.extend(catalogue_errors)
@@ -151,7 +156,7 @@ class OkxDexQuoteSource:
                     errors.append(f"{asset.token}:{chain_id}:{clean_error(exc)}")
         rows = dex_candidates(
             quotes,
-            context.reference_quotes,
+            reference_quotes,
             source_name=self.name,
             min_spread_pct=context.min_spread_pct,
             max_spread_pct=context.max_spread_pct,
@@ -370,6 +375,53 @@ def _okx_rate_limited(result: Mapping[str, Any]) -> bool:
     blockers = " ".join(str(item) for item in result.get("blockers") or ())
     normalized = blockers.casefold()
     return "too many requests" in normalized or "rate limit" in normalized
+
+
+def _apply_unique_okx_identities(
+    quotes: Iterable[MarketQuote],
+    assets: Iterable[WatchAsset],
+    *,
+    registry: IdentityRegistry | None,
+) -> list[MarketQuote]:
+    """Carry a unique OKX token-list identity onto same-cycle CEX quotes.
+
+    OKX dynamic assets are discovered after the initial CEX catalogue pass.
+    Without this bridge, their CEX legs remain unresolved until a later static
+    registry update and valid DEX routes disappear from the public board.
+    Known ticker collisions are never inferred, and inferred identities remain
+    guarded for large dislocations in ``_dex_candidate_pair``.
+    """
+
+    registry = registry or IdentityRegistry.empty()
+    inferred: dict[str, WatchAsset] = {}
+    for asset in assets:
+        symbol = asset.token.upper()
+        if not asset.identity_key or symbol in registry.known_ticker_collisions:
+            continue
+        if symbol in inferred and inferred[symbol].identity_key != asset.identity_key:
+            inferred.pop(symbol, None)
+            continue
+        inferred[symbol] = asset
+
+    output: list[MarketQuote] = []
+    for quote in quotes:
+        asset = inferred.get(quote.token.upper())
+        if quote.identity_key or asset is None:
+            output.append(quote)
+            continue
+        output.append(
+            replace(
+                quote,
+                identity_key=asset.identity_key,
+                identity_source="okx_unique_symbol_inference",
+                blockers=tuple(
+                    dict.fromkeys(
+                        (*quote.blockers, "identity_inferred_from_unique_okx_symbol")
+                    )
+                ),
+            )
+        )
+    return output
 
 
 class DiscoverySource(Protocol):
@@ -1329,6 +1381,7 @@ def _dex_candidate_pair(
         identities = [dex_quote.identity_key, cex_quote.identity_key]
         known_identities = {identity for identity in identities if identity}
         identity = next(iter(known_identities)) if len(known_identities) == 1 else None
+        inferred_identity = cex_quote.identity_source == "okx_unique_symbol_inference"
         blockers = [
             *dex_quote.blockers,
             *cex_quote.blockers,
@@ -1339,6 +1392,8 @@ def _dex_candidate_pair(
         ]
         if not cex_quote.identity_key:
             blockers.append("cex_identity_unverified")
+        if inferred_identity and max(abs(executable), abs(depth)) >= HIGH_DISLOCATION_IDENTITY_THRESHOLD_PCT:
+            blockers.append("mirage_guard:high_dislocation_identity_inferred")
         rows.append(
             DiscoveryCandidate(
                 token=dex_quote.token,
