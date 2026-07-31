@@ -8,6 +8,20 @@ import os
 from urllib.request import Request, urlopen
 
 
+def telegram_call(token: str, method: str, payload: dict[str, object]) -> dict[str, object]:
+    request = Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=json.dumps(payload, separators=(",", ":")).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=20) as response:
+        result = json.loads(response.read().decode())
+    if not result.get("ok"):
+        raise SystemExit(f"Telegram rejected {method}")
+    return result
+
+
 def main() -> int:
     token = os.environ.get("SPREADBOARD_TELEGRAM_BOT_TOKEN", "").strip()
     secret = os.environ.get("SPREADBOARD_TELEGRAM_WEBHOOK_SECRET", "").strip()
@@ -23,17 +37,45 @@ def main() -> int:
         },
         separators=(",", ":"),
     ).encode()
-    request = Request(
-        f"https://api.telegram.org/bot{token}/setWebhook",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
+    telegram_call(token, "setWebhook", json.loads(payload))
+    telegram_call(
+        token,
+        "setMyCommands",
+        {
+            "scope": {"type": "all_private_chats"},
+            "commands": [
+                {"command": "subscribe", "description": "Open secure membership checkout"},
+                {"command": "mysubscription", "description": "Check membership status"},
+                {"command": "access", "description": "Request subscriber group access"},
+            ],
+        },
     )
-    with urlopen(request, timeout=20) as response:
-        result = json.loads(response.read().decode())
-    if not result.get("ok"):
-        raise SystemExit("Telegram rejected the webhook configuration")
-    print("Telegram webhook configured successfully")
+    telegram_call(
+        token,
+        "setMyCommands",
+        {
+            "scope": {"type": "all_group_chats"},
+            "commands": [
+                {"command": "setupgroup", "description": "Connect this subscriber group"}
+            ],
+        },
+    )
+    telegram_call(
+        token,
+        "setMyDescription",
+        {
+            "description": (
+                "Link your SpreadBoard account, manage membership, and request "
+                "access to the subscriber community. Payments stay on secure checkout pages."
+            )
+        },
+    )
+    telegram_call(
+        token,
+        "setMyShortDescription",
+        {"short_description": "SpreadBoard membership and subscriber access."},
+    )
+    print("Telegram webhook, command menus, and profile text configured successfully")
     return 0
 
 
