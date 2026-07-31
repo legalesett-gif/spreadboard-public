@@ -105,6 +105,7 @@ class BookWorker:
         aliases = {
             "gateio": ("gateio", "gate"),
             "gate": ("gate", "gateio"),
+            "coinbaseexchange": ("coinbase",),
         }
         klass = next(
             (
