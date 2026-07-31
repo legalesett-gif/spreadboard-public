@@ -4958,7 +4958,7 @@ def render_subscription_page() -> str:
     action = (
         '<button class="sheet-button primary" type="button" data-billing-action="portal">Manage billing</button>'
         if user and user.billing_customer_id
-        else '<button class="sheet-button primary" type="button" data-billing-action="checkout">Subscribe monthly</button>'
+        else f'<button class="sheet-button primary" type="button" data-billing-action="checkout">Subscribe · {h(billing_state["plan_label"])}</button>'
     ) if billing_state["checkout_ready"] else '<p>Online subscription activation is being configured. No payment can be taken yet.</p>'
     body = f"""
     <section class="account-page narrow-account" data-account-page>
@@ -5048,7 +5048,7 @@ def render_account_settings(user: accounts.User, accounts_path: Path | str = acc
     if user.billing_customer_id:
         billing_action = '<button class="sheet-button" type="button" data-billing-action="portal">Manage billing</button>'
     elif state["checkout_ready"] and not user.is_admin:
-        billing_action = '<button class="sheet-button" type="button" data-billing-action="checkout">Subscribe monthly</button>'
+        billing_action = f'<button class="sheet-button" type="button" data-billing-action="checkout">Subscribe · {h(billing.status()["plan_label"])}</button>'
     else:
         billing_action = '<span>Online billing is not active for this account.</span>'
     cancel_note = "Cancellation scheduled at period end." if user.subscription_cancel_at_period_end else "Renews monthly while active."

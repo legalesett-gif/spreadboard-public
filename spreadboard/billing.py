@@ -24,6 +24,7 @@ class StripeConfig:
     webhook_secret: str
     price_id: str
     public_url: str
+    plan_label: str
 
     @property
     def checkout_ready(self) -> bool:
@@ -43,6 +44,8 @@ def config() -> StripeConfig:
         webhook_secret=os.environ.get("SPREADBOARD_STRIPE_WEBHOOK_SECRET", "").strip(),
         price_id=os.environ.get("SPREADBOARD_STRIPE_PRICE_ID", "").strip(),
         public_url=public_url,
+        plan_label=os.environ.get("SPREADBOARD_SUBSCRIPTION_LABEL", "Monthly membership").strip()
+        or "Monthly membership",
     )
 
 
@@ -53,6 +56,7 @@ def status() -> dict[str, Any]:
         "checkout_ready": value.checkout_ready,
         "webhook_ready": value.webhook_ready,
         "configured": value.checkout_ready and value.webhook_ready,
+        "plan_label": value.plan_label,
         "providers": {
             "stripe": {
                 "checkout_ready": value.checkout_ready,

@@ -61,6 +61,11 @@ def test_checkout_uses_recurring_price_and_user_metadata(monkeypatch: pytest.Mon
     assert captured["params"]["subscription_data[metadata][spreadboard_user_id]"] == "7"
 
 
+def test_status_exposes_configured_plan_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SPREADBOARD_SUBSCRIPTION_LABEL", "$180/month")
+    assert billing.status()["plan_label"] == "$180/month"
+
+
 def test_subscription_event_is_idempotent(tmp_path: Path) -> None:
     db_path = tmp_path / "accounts.sqlite3"
     user = _member(db_path)

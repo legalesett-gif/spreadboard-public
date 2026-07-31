@@ -91,7 +91,11 @@ def handle_update(update: dict[str, Any], *, db_path: Any) -> dict[str, Any] | N
             url = billing.create_checkout_session(user)
         except billing.BillingError:
             return _reply(chat_id, "Online checkout is not configured yet. Your account has not been charged.")
-        return _reply(chat_id, "Your secure monthly subscription link is ready.", button=("Open payment page", url))
+        return _reply(
+            chat_id,
+            f"Your secure {billing.config().plan_label} subscription link is ready.",
+            button=("Open payment page", url),
+        )
     return _reply(chat_id, "Commands: /subscribe, /mysubscription")
 
 
