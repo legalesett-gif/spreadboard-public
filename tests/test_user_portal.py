@@ -72,6 +72,16 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         assert response.status == 402
         assert json.loads(response.read())["error"] == "subscription_required"
 
+        connection.request("GET", "/pricing")
+        response = connection.getresponse()
+        pricing_page = response.read().decode("utf-8")
+        assert response.status == 200
+        assert "$180" in pricing_page
+        assert "Futures-DEX" in pricing_page
+        assert "OKX DEX" in pricing_page
+        assert "Create account" in pricing_page
+        assert "uacryptoinvest" not in pricing_page.lower()
+
         connection.request(
             "POST",
             "/api/login",

@@ -15,6 +15,22 @@ spreadboard.178.128.126.204.sslip.io {
 	}
 }
 
+spreadarbitrage.ink {
+	encode zstd gzip
+
+	reverse_proxy app:8200 {
+		flush_interval -1
+	}
+
+	header {
+		-Server
+	}
+}
+
+www.spreadarbitrage.ink {
+	redir https://spreadarbitrage.ink{uri} permanent
+}
+
 http://178.128.126.204 {
 	redir https://spreadboard.178.128.126.204.sslip.io{uri} permanent
 }

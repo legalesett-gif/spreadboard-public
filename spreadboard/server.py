@@ -224,6 +224,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         public_paths = {
             "/",
             "/login",
+            "/pricing",
             "/subscription",
             "/register",
             "/account",
@@ -258,6 +259,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_login_page(query))
             elif parsed.path == "/register":
                 self._send_html(render_register_page())
+            elif parsed.path == "/pricing":
+                self._send_html(render_pricing_page())
             elif parsed.path == "/subscription":
                 self._send_html(render_subscription_page())
             elif parsed.path == "/account":
@@ -552,7 +555,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.current_user = None
         if not accounts.auth_required():
             return True
-        public = path in {"/login", "/register", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico"} or path.startswith("/assets/")
+        public = path in {"/login", "/register", "/pricing", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico"} or path.startswith("/assets/")
         token = self._session_token()
         user = accounts.user_for_session(token, self.server.accounts_path) if token else None
         self.current_user = user
@@ -4931,7 +4934,7 @@ button {{ width:100%; min-height:46px; border:0; border-radius:5px; background:v
 </style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div>
 <section class="login-panel"><h1>Welcome back</h1><p>Sign in to your private market workspace and position journal.</p>
 <form id="loginForm"><label>Email<input name="email" type="email" autocomplete="username" required autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">Sign in</button><div class="login-error" role="alert"></div></form></section>
-<div class="login-note">New here? <a href="/register">Create an account</a><br><br>Private subscription access · secure, opaque session cookie</div></main>
+<div class="login-note">New here? <a href="/register">Create an account</a><br><br><a href="/pricing">See membership details</a> · secure, opaque session cookie</div></main>
 <script>
 document.getElementById('loginForm').addEventListener('submit', async (event) => {{
   event.preventDefault(); const form=event.currentTarget; const button=form.querySelector('button'); const error=form.querySelector('.login-error'); button.disabled=true; error.textContent='';
@@ -4948,8 +4951,66 @@ def render_register_page() -> str:
 <style>
 :root { color-scheme:dark;--bg:#07110f;--panel:#101d1a;--line:#29443d;--ink:#edf8f4;--muted:#9bb1aa;--accent:#38d4bd;--danger:#ff8695; }
 *{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}.login-shell{width:min(440px,100%)}.login-brand{display:flex;align-items:center;gap:12px;margin-bottom:28px;font-size:24px;font-weight:800}.login-mark{width:26px;height:26px;border-radius:50%;background:var(--accent);border:3px solid #dffff8;box-shadow:12px 9px 0 -5px #7fdccf}.login-panel{border:1px solid var(--line);background:var(--panel);padding:28px;border-radius:8px}h1{margin:0 0 8px;font-size:28px}p{color:var(--muted);margin:0 0 24px;line-height:1.5}label{display:grid;gap:7px;margin:0 0 16px;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}input{width:100%;min-height:46px;border:1px solid var(--line);background:#081310;color:var(--ink);border-radius:5px;padding:0 13px;font:inherit}input:focus{outline:2px solid var(--accent);outline-offset:1px}button{width:100%;min-height:46px;border:0;border-radius:5px;background:var(--accent);color:#052c26;font:inherit;font-weight:900;cursor:pointer}button:disabled{opacity:.55;cursor:wait}.login-error{min-height:20px;margin:14px 0 0;color:var(--danger);font-size:13px}.login-note{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}.login-note a{color:var(--accent);font-weight:800}
-</style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div><section class="login-panel"><h1>Create your account</h1><p>Set up your private workspace, then choose monthly access.</p><form id="registerForm"><label>Name<input name="display_name" maxlength="100" autocomplete="name" required autofocus></label><label>Email<input name="email" type="email" maxlength="254" autocomplete="email" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><button type="submit">Continue</button><div class="login-error" role="alert"></div></form></section><div class="login-note">Already registered? <a href="/login">Sign in</a></div></main>
+</style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div><section class="login-panel"><h1>Create your account</h1><p>Set up your private workspace, then choose monthly access.</p><form id="registerForm"><label>Name<input name="display_name" maxlength="100" autocomplete="name" required autofocus></label><label>Email<input name="email" type="email" maxlength="254" autocomplete="email" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><button type="submit">Continue</button><div class="login-error" role="alert"></div></form></section><div class="login-note">Already registered? <a href="/login">Sign in</a><br><br><a href="/pricing">See membership details</a></div></main>
 <script>document.getElementById('registerForm').addEventListener('submit',async(event)=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),error=form.querySelector('.login-error');button.disabled=true;error.textContent='';try{const response=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(form)))});const data=await response.json();if(!response.ok)throw new Error(({email_already_registered:'An account already exists for this email.',invalid_email:'Enter a valid email address.',password_must_be_at_least_12_characters:'Use at least 12 characters.',too_many_registration_attempts:'Too many attempts. Try again later.'})[data.error]||'Could not create the account.');location.assign(data.next||'/subscription')}catch(exc){error.textContent=exc.message||'Could not create the account.';button.disabled=false}});</script></body></html>"""
+
+
+def render_pricing_page() -> str:
+    user = accounts.current_user()
+    if user and user.subscription_active:
+        primary_action = '<a class="pricing-button primary" href="/">Open market terminal</a>'
+        secondary_action = '<a class="pricing-button" href="/account">Open portfolio</a>'
+    elif user:
+        primary_action = '<a class="pricing-button primary" href="/subscription">Continue to payment</a>'
+        secondary_action = '<a class="pricing-button" href="/account">Open account</a>'
+    else:
+        primary_action = '<a class="pricing-button primary" href="/register">Create account</a>'
+        secondary_action = '<a class="pricing-button" href="/login">Sign in</a>'
+    body = f"""
+    <style>
+      .pricing-page {{ width:min(1240px,calc(100% - 36px)); margin:36px auto 72px; }}
+      .pricing-intro {{ display:grid; grid-template-columns:minmax(0,1.45fr) minmax(320px,.72fr); border-block:1px solid var(--terminal-line); background:var(--terminal-panel); }}
+      .pricing-copy {{ padding:42px 38px; }} .pricing-copy h1 {{ margin:7px 0 14px; max-width:760px; font-size:clamp(34px,5vw,64px); line-height:1.02; letter-spacing:0; }}
+      .pricing-copy p {{ max-width:720px; margin:0; color:var(--terminal-muted); font-size:17px; line-height:1.55; }}
+      .pricing-plan {{ padding:32px; border-left:1px solid var(--terminal-line); display:grid; align-content:center; gap:14px; }}
+      .pricing-plan span,.pricing-section-head span,.pricing-card span {{ color:var(--accent); font-size:11px; font-weight:900; text-transform:uppercase; }}
+      .pricing-price {{ display:flex; align-items:baseline; gap:8px; }} .pricing-price strong {{ font-size:48px; }} .pricing-price em {{ color:var(--terminal-muted); font-style:normal; }}
+      .pricing-actions {{ display:flex; gap:9px; flex-wrap:wrap; }} .pricing-button {{ min-height:43px; padding:11px 16px; border:1px solid var(--terminal-line); color:var(--terminal-text); text-decoration:none; font-weight:900; display:inline-flex; align-items:center; justify-content:center; }}
+      .pricing-button.primary {{ background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }}
+      .pricing-note {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.45; }}
+      .pricing-section {{ margin-top:30px; }} .pricing-section-head {{ display:flex; justify-content:space-between; align-items:end; gap:20px; padding:0 0 13px; border-bottom:1px solid var(--terminal-line); }}
+      .pricing-section-head h2 {{ margin:4px 0 0; font-size:28px; }} .pricing-section-head p {{ max-width:520px; margin:0; color:var(--terminal-muted); line-height:1.45; }}
+      .pricing-grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }} .pricing-card {{ min-height:190px; padding:24px; border-right:1px solid var(--terminal-line); border-bottom:1px solid var(--terminal-line); }}
+      .pricing-card:nth-child(3n+1) {{ border-left:1px solid var(--terminal-line); }} .pricing-card h3 {{ margin:8px 0 10px; font-size:20px; }} .pricing-card p {{ margin:0; color:var(--terminal-muted); line-height:1.5; }}
+      .pricing-standards {{ display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--terminal-line); }} .pricing-standards div {{ padding:18px; border-right:1px solid var(--terminal-line); }} .pricing-standards div:last-child {{ border-right:0; }} .pricing-standards strong {{ display:block; margin-bottom:5px; }} .pricing-standards span {{ color:var(--terminal-muted); font-size:12px; line-height:1.4; }}
+      .pricing-disclaimer {{ margin:20px 0 0; color:var(--terminal-muted); font-size:12px; line-height:1.55; }}
+      @media(max-width:820px) {{ .pricing-intro {{ grid-template-columns:1fr; }} .pricing-plan {{ border-left:0; border-top:1px solid var(--terminal-line); }} .pricing-grid {{ grid-template-columns:1fr 1fr; }} .pricing-card:nth-child(n) {{ border-left:0; border-right:1px solid var(--terminal-line); }} .pricing-card:nth-child(2n+1) {{ border-left:1px solid var(--terminal-line); }} .pricing-standards {{ grid-template-columns:1fr 1fr; }} .pricing-standards div:nth-child(2) {{ border-right:0; }} .pricing-standards div:nth-child(-n+2) {{ border-bottom:1px solid var(--terminal-line); }} }}
+      @media(max-width:560px) {{ .pricing-page {{ width:min(100% - 20px,1240px); margin-top:18px; }} .pricing-copy,.pricing-plan {{ padding:24px 20px; }} .pricing-grid,.pricing-standards {{ grid-template-columns:1fr; }} .pricing-card:nth-child(n),.pricing-standards div {{ border-left:1px solid var(--terminal-line); border-right:1px solid var(--terminal-line); }} .pricing-standards div:not(:last-child) {{ border-bottom:1px solid var(--terminal-line); }} .pricing-section-head {{ align-items:flex-start; flex-direction:column; }} }}
+    </style>
+    <section class="pricing-page">
+      <header class="pricing-intro">
+        <div class="pricing-copy"><span class="page-kicker">SpreadBoard membership</span><h1>One terminal for live spread and funding research.</h1><p>Compare executable CEX and OKX DEX routes, inspect funding and transfer constraints, and follow divergence and convergence without stitching together exchange screens.</p></div>
+        <aside class="pricing-plan"><span>Full access</span><div class="pricing-price"><strong>$180</strong><em>per month</em></div><p class="pricing-note">Recurring monthly membership. Billing and cancellation are managed through Stripe.</p><div class="pricing-actions">{primary_action}{secondary_action}</div></aside>
+      </header>
+      <section class="pricing-section">
+        <header class="pricing-section-head"><div><span>Included</span><h2>Built for route verification</h2></div><p>Every view is designed to answer whether a displayed edge is current, liquid enough to inspect, and carrying a funding cost or benefit.</p></header>
+        <div class="pricing-grid">
+          <article class="pricing-card"><span>Arbitrage</span><h3>All major route types</h3><p>Futures-Futures, Futures-Spot, Spot-Spot, and Futures-DEX opportunities grouped by token, with the strongest route first.</p></article>
+          <article class="pricing-card"><span>Execution context</span><h3>Order-book aware spreads</h3><p>Top-book entry and exit spreads sit beside matched-size $50 VWAP so a thin quote is not presented as effortless liquidity.</p></article>
+          <article class="pricing-card"><span>Funding</span><h3>Paired carry, not isolated rates</h3><p>Current funding, settled 24-hour funding, payout cadence, next event, and available history for every futures leg.</p></article>
+          <article class="pricing-card"><span>Charts</span><h3>Live spread progression</h3><p>Interactive route charts from one minute through seven days, including entry, exit, matched VWAP, and funding series where available.</p></article>
+          <article class="pricing-card"><span>DEX</span><h3>OKX DEX-first identity</h3><p>Read-only quotes use exact chain and contract identity, with route metadata and quote age instead of ticker-only matching.</p></article>
+          <article class="pricing-card"><span>Workflow</span><h3>Alerts, Intel, and journal</h3><p>Watchlists, route and funding alerts, anonymized Community Intel, and a position journal that separates price PnL, funding, and fees.</p></article>
+        </div>
+      </section>
+      <section class="pricing-section">
+        <header class="pricing-section-head"><div><span>Product standard</span><h2>What the numbers mean</h2></div></header>
+        <div class="pricing-standards"><div><strong>Continuously refreshed</strong><span>Public exchange and DEX data is collected on the production server.</span></div><div><strong>Freshness visible</strong><span>Unavailable or unresolved inputs are labelled rather than silently estimated.</span></div><div><strong>Read-only by design</strong><span>No orders, transfers, approvals, signatures, or withdrawals are initiated.</span></div><div><strong>Telegram connected</strong><span>Link your account privately to check membership and open the payment flow.</span></div></div>
+        <p class="pricing-disclaimer">SpreadBoard is a market-information and research product, not an exchange, broker, investment adviser, or execution service. Digital-asset markets are volatile. Displayed spreads can change before either leg is filled, and access does not guarantee profit or execution.</p>
+      </section>
+    </section>
+    """
+    return shell("Membership - SpreadBoard", "pricing", body)
 
 
 def render_subscription_page() -> str:
@@ -9536,6 +9597,7 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
       <a class="{active_class(active, 'intel')}" href="/intel">Intel</a>
       <a class="{active_class(active, 'watchlist')}" href="/watchlist">Watchlist</a>
       <a class="{active_class(active, 'profile')}" href="/account">Portfolio</a>
+      <a class="{active_class(active, 'pricing')}" href="/pricing">Membership</a>
     </nav>
     <div class="header-actions">
       {account_action}
@@ -9553,6 +9615,7 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
     <a class="{active_class(active, 'intel')}" href="/intel">Intel</a>
     <a class="{active_class(active, 'profile')}" href="/account">Portfolio</a>
     <a class="{active_class(active, 'watchlist')}" href="/watchlist">Watchlist</a>
+    <a class="{active_class(active, 'pricing')}" href="/pricing">Membership</a>
   </nav>
   <nav class="mobile-secondary-nav" aria-label="Mobile community navigation">
     <a class="{active_class(active, 'alerts')}" href="/alerts">Alerts</a>
