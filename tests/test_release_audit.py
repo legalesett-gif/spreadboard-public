@@ -107,6 +107,20 @@ def test_gate_ccxt_alias_falls_back_to_current_adapter_name() -> None:
     assert live._ccxt_exchange_class(ccxt_stub, "gateio") is current_gate_adapter
 
 
+def test_gate_public_candles_normalize_spot_and_futures_shapes() -> None:
+    spot = live._gate_candles_to_ohlcv(
+        [["100", "12", "1.1", "1.3", "0.9", "1.0", "8", "true"]],
+        futures=False,
+    )
+    futures = live._gate_candles_to_ohlcv(
+        [{"t": 100, "o": "1.0", "h": "1.3", "l": "0.9", "c": "1.1", "v": 8}],
+        futures=True,
+    )
+
+    assert spot == [[100_000.0, 1.0, 1.3, 0.9, 1.1, 8.0]]
+    assert futures == [[100_000.0, 1.0, 1.3, 0.9, 1.1, 8.0]]
+
+
 def test_okx_dex_source_budget_covers_rate_limited_watchlist_scan() -> None:
     args = discovery_worker_parser().parse_args([])
 

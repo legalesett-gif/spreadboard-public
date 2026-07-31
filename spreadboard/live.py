@@ -467,6 +467,9 @@ def fetch_ohlcv_stats(exchange_id: str | None, symbol: str | None) -> dict[str, 
 
 
 def _fetch_ohlcv_stats_uncached(exchange_id: str, symbol: str) -> dict[str, Any]:
+    native = _fetch_native_ohlcv_stats(exchange_id, symbol)
+    if native is not None:
+        return native
     try:
         import ccxt
 
@@ -485,6 +488,80 @@ def _fetch_ohlcv_stats_uncached(exchange_id: str, symbol: str) -> dict[str, Any]
     stats = volatility_from_ohlcv(candles)
     stats["_ohlcv"] = candles
     return stats
+
+
+def _fetch_native_ohlcv_stats(
+    exchange_id: str,
+    symbol: str,
+) -> dict[str, Any] | None:
+    if exchange_id != "gateio":
+        return None
+    token = symbol.split("/", 1)[0].upper()
+    is_futures = ":" in symbol
+    if is_futures:
+        path = (
+            "https://api.gateio.ws/api/v4/futures/usdt/candlesticks?"
+            + urllib.parse.urlencode(
+                {"contract": f"{token}_USDT", "interval": "1h", "limit": 30}
+            )
+        )
+    else:
+        path = (
+            "https://api.gateio.ws/api/v4/spot/candlesticks?"
+            + urllib.parse.urlencode(
+                {"currency_pair": f"{token}_USDT", "interval": "1h", "limit": 30}
+            )
+        )
+    try:
+        request = urllib.request.Request(path, headers={"User-Agent": "SpreadBoard/1"})
+        with urllib.request.urlopen(
+            request,
+            timeout=max(1.0, ROUTE_PUBLIC_TIMEOUT_MS / 1000),
+        ) as response:
+            payload = json.load(response)
+        candles = _gate_candles_to_ohlcv(payload, futures=is_futures)
+        if not candles:
+            return {"status": "unavailable", "reason": "gate_ohlcv_empty"}
+        stats = volatility_from_ohlcv(candles)
+        stats["_ohlcv"] = candles
+        return stats
+    except Exception:  # noqa: BLE001 - fall back to the generic public adapter.
+        return None
+
+
+def _gate_candles_to_ohlcv(
+    payload: Any,
+    *,
+    futures: bool,
+) -> list[list[float]]:
+    candles: list[list[float]] = []
+    for item in payload if isinstance(payload, list) else []:
+        try:
+            if futures and isinstance(item, dict):
+                candles.append(
+                    [
+                        float(item["t"]) * 1000,
+                        float(item["o"]),
+                        float(item["h"]),
+                        float(item["l"]),
+                        float(item["c"]),
+                        float(item["v"]),
+                    ]
+                )
+            elif not futures and isinstance(item, list) and len(item) >= 7:
+                candles.append(
+                    [
+                        float(item[0]) * 1000,
+                        float(item[5]),
+                        float(item[3]),
+                        float(item[4]),
+                        float(item[2]),
+                        float(item[6]),
+                    ]
+                )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return candles
 
 
 def volatility_from_ohlcv(candles: list[Any]) -> dict[str, Any]:
