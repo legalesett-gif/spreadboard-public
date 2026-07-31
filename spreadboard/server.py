@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import html
+import hmac
 import json
 import os
+from http.cookies import SimpleCookie
 import subprocess
 import sys
 import threading
@@ -23,13 +25,17 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from spreadboard import (  # noqa: E402
+    accounts,
     alerts,
     api_spreads,
     board,
+    chart_catalog,
+    historical_spreads,
     intel,
     live,
     live_book_cache,
     market_history,
+    portfolio,
 )
 
 _INTEL_CACHE_TTL_SECONDS = 20.0
@@ -192,20 +198,30 @@ class SpreadBoardServer(ThreadingHTTPServer):
         *,
         board_path: Path,
         config: dict[str, Any],
+        accounts_path: Path | str = accounts.DEFAULT_DB_PATH,
     ) -> None:
         super().__init__(server_address, handler_class)
         self.board_path = board_path
         self.config = config
+        self.accounts_path = Path(accounts_path)
+        accounts.initialize(self.accounts_path)
         self.alert_watcher: alerts.AlertWatcher | None = None
 
 
 class SpreadBoardHandler(BaseHTTPRequestHandler):
     server: SpreadBoardServer
+    _login_attempts: dict[str, list[float]] = {}
+    _login_attempts_lock = threading.Lock()
 
     def do_HEAD(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if not self._authorize(parsed.path, head_only=True):
+            return
         public_paths = {
             "/",
+            "/login",
+            "/subscription",
+            "/account",
             "/markets",
             "/intel",
             "/triage",
@@ -221,7 +237,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             "/watchlist",
             "/favicon.ico",
         }
-        if parsed.path in public_paths or parsed.path.startswith(("/pair/", "/token/", "/api/")):
+        if parsed.path in public_paths or parsed.path.startswith(("/pair/", "/token/", "/api/", "/assets/")):
             self._send_empty(HTTPStatus.OK)
             return
         self.send_error(HTTPStatus.NOT_FOUND, "not found")
@@ -229,8 +245,35 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
+        if not self._authorize(parsed.path):
+            return
+        accounts.set_current_user(getattr(self, "current_user", None))
         try:
-            if parsed.path == "/":
+            if parsed.path == "/login":
+                self._send_html(render_login_page(query))
+            elif parsed.path == "/subscription":
+                self._send_html(render_subscription_page())
+            elif parsed.path == "/account":
+                self._send_html(render_account_page(self.server.board_path, self.server.accounts_path))
+            elif parsed.path == "/api/session":
+                user = getattr(self, "current_user", None)
+                self._send_json(
+                    {
+                        "ok": user is not None,
+                        "user": user.public_dict() if user else None,
+                        "csrf_token": user.csrf_token if user else None,
+                    },
+                    status=HTTPStatus.OK if user else HTTPStatus.UNAUTHORIZED,
+                )
+            elif parsed.path == "/api/portfolio":
+                self._send_json(api_portfolio(self._required_user(), self.server.board_path, self.server.accounts_path))
+            elif parsed.path == "/api/account-users":
+                user = self._required_user()
+                if not user.is_admin:
+                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                else:
+                    self._send_json({"ok": True, "users": accounts.list_users(db_path=self.server.accounts_path)})
+            elif parsed.path == "/":
                 self._send_html(render_markets_page(self.server.board_path, self.server.config, query))
             elif parsed.path == "/markets":
                 self._send_html(render_markets_page(self.server.board_path, self.server.config, query))
@@ -253,7 +296,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/learn":
                 self._send_html(render_learn_page())
             elif parsed.path == "/profile":
-                self._send_html(render_profile_page(self.server.board_path, self.server.config, query))
+                self._send_html(render_account_page(self.server.board_path, self.server.accounts_path))
             elif parsed.path == "/alerts":
                 self._send_html(render_alerts_page(self.server.board_path, self.server.config, query))
             elif parsed.path == "/watchlist":
@@ -268,6 +311,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_json(api_board(self.server.board_path, query))
             elif parsed.path == "/api/spreads":
                 self._send_json(api_market_spreads(self.server.board_path, query))
+            elif parsed.path == "/api/chart-catalog":
+                catalog = chart_catalog.load()
+                token = _clean_symbol(_query_first(query, "token") or "")
+                if token:
+                    selected = [item for item in catalog.get("markets") or [] if item.get("token") == token]
+                    self._send_json({"ok": bool(selected), "token": token, "count": len(selected), "markets": selected, "generated_at": catalog.get("generated_at")})
+                else:
+                    self._send_json({key: value for key, value in catalog.items() if key != "markets"} | {"tokens": sorted({item.get("token") for item in catalog.get("markets") or [] if item.get("token")})})
             elif parsed.path == "/api/alert-context":
                 self._send_json(api_alert_context(self.server.board_path, query))
             elif parsed.path == "/api/intel":
@@ -321,11 +372,77 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
             except (BrokenPipeError, ConnectionResetError):
                 return
+        finally:
+            accounts.set_current_user(None)
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if not self._authorize(parsed.path):
+            return
+        accounts.set_current_user(getattr(self, "current_user", None))
         try:
-            if parsed.path == "/api/alert-test":
+            if parsed.path == "/api/login":
+                self._handle_login()
+                return
+            if parsed.path == "/api/logout":
+                self._require_csrf()
+                token = self._session_token()
+                if token:
+                    accounts.logout(token, self.server.accounts_path)
+                self._send_json({"ok": True}, clear_session=True)
+                return
+            self._require_csrf()
+            payload = self._read_payload()
+            user = self._required_user()
+            if parsed.path == "/api/positions":
+                position = accounts.create_position(user.id, payload, db_path=self.server.accounts_path)
+                self._send_json({"ok": True, "position": position}, status=HTTPStatus.CREATED)
+            elif parsed.path.startswith("/api/positions/") and parsed.path.endswith("/close"):
+                position_id = int(parsed.path.split("/")[3])
+                position = accounts.close_position(user.id, position_id, payload, db_path=self.server.accounts_path)
+                self._send_json({"ok": True, "position": position})
+            elif parsed.path.startswith("/api/positions/") and parsed.path.endswith("/funding"):
+                position_id = int(parsed.path.split("/")[3])
+                event = accounts.add_funding_cashflow(user.id, position_id, payload, db_path=self.server.accounts_path)
+                self._send_json({"ok": True, "funding_cashflow": event}, status=HTTPStatus.CREATED)
+            elif parsed.path.startswith("/api/positions/") and parsed.path.endswith("/alerts"):
+                position_id = int(parsed.path.split("/")[3])
+                rule = accounts.add_alert_rule(user.id, position_id, payload, db_path=self.server.accounts_path)
+                self._send_json({"ok": True, "alert_rule": rule}, status=HTTPStatus.CREATED)
+            elif parsed.path == "/api/account-settings":
+                updated = accounts.update_account_settings(
+                    user.id,
+                    display_name=str(payload.get("display_name") or user.display_name),
+                    monthly_capital_usd=_float_or_none(payload.get("monthly_capital_usd")),
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json({"ok": True, "user": updated})
+            elif parsed.path == "/api/account-users":
+                if not user.is_admin:
+                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                else:
+                    created = accounts.create_user(
+                        email=str(payload.get("email") or ""),
+                        display_name=str(payload.get("display_name") or ""),
+                        password=str(payload.get("password") or ""),
+                        subscription_status=str(payload.get("subscription_status") or "trialing"),
+                        subscription_days=int(payload.get("subscription_days") or 30),
+                        db_path=self.server.accounts_path,
+                    )
+                    self._send_json({"ok": True, "user": created}, status=HTTPStatus.CREATED)
+            elif parsed.path.startswith("/api/account-users/") and parsed.path.endswith("/subscription"):
+                if not user.is_admin:
+                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                else:
+                    target_id = int(parsed.path.split("/")[3])
+                    updated = accounts.update_subscription(
+                        target_id,
+                        status=str(payload.get("status") or "inactive"),
+                        expires_at=str(payload.get("expires_at") or "") or None,
+                        db_path=self.server.accounts_path,
+                    )
+                    self._send_json({"ok": True, "user": updated})
+            elif parsed.path == "/api/alert-test":
                 self._send_json(
                     {
                         "ok": True,
@@ -335,8 +452,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 )
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "not found")
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
         except Exception as exc:  # noqa: BLE001
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+        finally:
+            accounts.set_current_user(None)
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         sys.stderr.write("spreadboard: " + format % args + "\n")
@@ -351,15 +472,130 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def _send_json(self, data: object) -> None:
+    def _send_json(
+        self,
+        data: object,
+        *,
+        status: HTTPStatus = HTTPStatus.OK,
+        session_token: str | None = None,
+        clear_session: bool = False,
+    ) -> None:
         payload = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
-        self.send_response(HTTPStatus.OK)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        if session_token:
+            self.send_header(
+                "Set-Cookie",
+                f"{accounts.SESSION_COOKIE}={session_token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={accounts.SESSION_DAYS * 86400}",
+            )
+        elif clear_session:
+            self.send_header(
+                "Set-Cookie",
+                f"{accounts.SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+            )
         self._send_security_headers()
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def _authorize(self, path: str, *, head_only: bool = False) -> bool:
+        self.current_user = None
+        if not accounts.auth_required():
+            return True
+        public = path in {"/login", "/api/login", "/api/health", "/favicon.ico"} or path.startswith("/assets/")
+        token = self._session_token()
+        user = accounts.user_for_session(token, self.server.accounts_path) if token else None
+        self.current_user = user
+        if public:
+            return True
+        if user is None:
+            if path.startswith("/api/"):
+                self._send_json({"ok": False, "error": "authentication_required"}, status=HTTPStatus.UNAUTHORIZED)
+            elif head_only:
+                self._send_empty(HTTPStatus.UNAUTHORIZED)
+            else:
+                self._redirect("/login?" + urlencode({"next": self.path[:500]}))
+            return False
+        subscription_paths = {"/subscription", "/account", "/profile", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings"}
+        if not user.subscription_active and path not in subscription_paths and not (user.is_admin and path.startswith("/api/account-users")):
+            if path.startswith("/api/"):
+                self._send_json({"ok": False, "error": "subscription_required"}, status=HTTPStatus.PAYMENT_REQUIRED)
+            elif head_only:
+                self._send_empty(HTTPStatus.PAYMENT_REQUIRED)
+            else:
+                self._redirect("/subscription")
+            return False
+        return True
+
+    def _handle_login(self) -> None:
+        payload = self._read_payload()
+        key = self.client_address[0] if self.client_address else "unknown"
+        now = time.monotonic()
+        with self._login_attempts_lock:
+            recent = [item for item in self._login_attempts.get(key, []) if now - item < 900]
+            if len(recent) >= 10:
+                self._send_json({"ok": False, "error": "too_many_login_attempts"}, status=HTTPStatus.TOO_MANY_REQUESTS)
+                return
+            self._login_attempts[key] = recent
+        try:
+            user, token = accounts.login(
+                str(payload.get("email") or ""),
+                str(payload.get("password") or ""),
+                user_agent=self.headers.get("User-Agent", ""),
+                ip_address=key,
+                db_path=self.server.accounts_path,
+            )
+        except ValueError:
+            with self._login_attempts_lock:
+                self._login_attempts.setdefault(key, []).append(now)
+            time.sleep(0.25)
+            self._send_json({"ok": False, "error": "invalid_credentials"}, status=HTTPStatus.UNAUTHORIZED)
+            return
+        with self._login_attempts_lock:
+            self._login_attempts.pop(key, None)
+        self._send_json(
+            {"ok": True, "user": user.public_dict(), "csrf_token": user.csrf_token},
+            session_token=token,
+        )
+
+    def _required_user(self) -> accounts.User:
+        user = getattr(self, "current_user", None)
+        if user is None:
+            raise ValueError("authentication_required")
+        return user
+
+    def _require_csrf(self) -> None:
+        user = self._required_user()
+        supplied = self.headers.get("X-CSRF-Token", "")
+        if not supplied or not user.csrf_token or not hmac.compare_digest(supplied, user.csrf_token):
+            raise ValueError("invalid_csrf_token")
+
+    def _session_token(self) -> str:
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+        except Exception:
+            return ""
+        morsel = cookie.get(accounts.SESSION_COOKIE)
+        return morsel.value if morsel is not None else ""
+
+    def _read_payload(self) -> dict[str, Any]:
+        length = min(1_000_000, max(0, int(self.headers.get("Content-Length", "0") or 0)))
+        raw = self.rfile.read(length) if length else b"{}"
+        if "application/json" in self.headers.get("Content-Type", ""):
+            value = json.loads(raw.decode("utf-8") or "{}")
+            return value if isinstance(value, dict) else {}
+        parsed = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
+        return {key: values[0] if values else "" for key, values in parsed.items()}
+
+    def _redirect(self, location: str) -> None:
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Location", location)
+        self.send_header("Cache-Control", "no-store")
+        self._send_security_headers()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _send_chart_stream(self, route_key: str, query: dict[str, list[str]]) -> None:
         interval = max(
@@ -1272,14 +1508,23 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
         since_us=since_us,
         bucket_seconds=bucket_seconds or None,
     )
+    proxy = historical_spreads.load_or_fetch(current, hours=hours, max_points=points) if current is not None else {"status": "not_applicable", "rows": []}
+    proxy_rows = proxy.get("rows") or []
+    if proxy_rows:
+        exact_cutoff = min((int(item.get("quote_ts_us") or 0) for item in public_rows), default=2**63 - 1)
+        public_rows = [item for item in proxy_rows if int(item.get("quote_ts_us") or 0) < exact_cutoff] + public_rows
+        if len(public_rows) > points:
+            public_rows = public_rows[-points:]
     if public_rows:
+        meta = _history_meta(public_rows)
+        meta.update(_history_coverage_meta(public_rows, hours, proxy))
         return {
             "ok": True,
             "mode": "canonical_public_api_history",
             "route_key": route_key,
             "count": len(public_rows),
             "sample": sample,
-            "meta": _history_meta(public_rows),
+            "meta": meta,
             "rows": public_rows,
         }
     if current is not None:
@@ -1329,6 +1574,9 @@ def _chart_stream_payload(route_key: str, board_path: Path, hours: float) -> dic
 
 
 def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | None:
+    custom = chart_catalog.route_from_key(route_key)
+    if custom is not None:
+        return custom
     market = api_spreads.load_spreads(
         board_path=board_path,
         include_stale=True,
@@ -1419,6 +1667,7 @@ def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
             result = {
                 "status": "ok",
                 "inserted": inserted,
+                "row": quoted_row,
                 "quote_ts_us": quoted_row.get("quote_ts_us"),
                 "target_notional_usd": worker.get("target_notional_usd") or 50.0,
                 "duration_ms": round((time.monotonic() - started) * 1000),
@@ -1485,6 +1734,28 @@ def _history_meta(rows: list[dict[str, Any]]) -> dict[str, Any]:
             ),
             50.0,
         ),
+    }
+
+
+def _history_coverage_meta(
+    rows: list[dict[str, Any]],
+    requested_hours: float,
+    proxy: dict[str, Any],
+) -> dict[str, Any]:
+    timestamps = sorted(int(item.get("quote_ts_us") or 0) for item in rows if item.get("quote_ts_us"))
+    coverage = (timestamps[-1] - timestamps[0]) / 1_000_000 if len(timestamps) > 1 else 0.0
+    requested = requested_hours * 3600
+    sources = {str(item.get("sample_source") or "unknown") for item in rows}
+    return {
+        "requested_window_seconds": requested,
+        "actual_coverage_seconds": coverage,
+        "coverage_pct": min(100.0, coverage / requested * 100.0) if requested > 0 else 0.0,
+        "history_complete": coverage >= requested * 0.95,
+        "sample_sources": sorted(sources),
+        "historical_proxy": proxy.get("status") == "ok",
+        "historical_proxy_timeframe": proxy.get("timeframe"),
+        "exact_point_count": sum(1 for item in rows if item.get("sample_source") != "historical_ohlcv_close_proxy"),
+        "proxy_point_count": sum(1 for item in rows if item.get("sample_source") == "historical_ohlcv_close_proxy"),
     }
 
 
@@ -2975,21 +3246,14 @@ def render_charts_page(board_path: Path, config: dict[str, Any], query: dict[str
         "direction": ["desc"],
     }
     market_data = api_market_spreads(board_path, market_query)
-    rows = market_data.get("rows") or []
-    selected_row = next(
-        (row for row in rows if str(row.get("route_key") or "") == selected_route),
-        None,
-    )
-    detail = (
-        api_pair(selected_route, board_path, config)
-        if selected_row is not None
-        else None
-    )
+    catalogue = chart_catalog.load()
+    markets = catalogue.get("markets") or []
+    selected_row = _find_canonical_route(selected_route, board_path) if selected_route else None
     window = (_query_first(query, "window") or "1h").casefold()
     if window not in CHART_WINDOWS:
         window = "1h"
     window_config = chart_window_config(window)
-    history = (
+    history_payload = (
         api_history(
             selected_route,
             board_path,
@@ -2997,12 +3261,21 @@ def render_charts_page(board_path: Path, config: dict[str, Any], query: dict[str
                 "max_points": [str(window_config["max_points"])],
                 "hours": [str(window_config["hours"])],
                 "bucket_seconds": [str(window_config["bucket_seconds"])],
+                "live": ["1"],
             },
-        ).get("rows")
-        or []
+        )
         if selected_row is not None
-        else []
+        else {"rows": [], "meta": {}}
     )
+    sampled_row = (history_payload.get("sample") or {}).get("row")
+    if isinstance(sampled_row, dict):
+        selected_row = sampled_row
+    detail = (
+        {"ok": True, **live.get_route_detail(_canonical_pair_row(selected_row), config=config)}
+        if selected_row is not None
+        else None
+    )
+    history = history_payload.get("rows") or []
     history = filter_chart_history(history, window)
     body = f"""
     <section class="charts-page">
@@ -3018,33 +3291,30 @@ def render_charts_page(board_path: Path, config: dict[str, Any], query: dict[str
           <em>canonical public APIs</em>
         </div>
       </header>
-      {render_chart_builder(rows, selected_row)}
-      {render_selected_chart(selected_row, detail, history, window) if selected_row and detail else render_chart_blank_state()}
+      {render_chart_builder(markets, selected_row, catalogue)}
+      {render_selected_chart(selected_row, detail, history, window, history_payload.get('meta') or {}) if selected_row and detail else render_chart_blank_state()}
       {render_funding_history_dialog(detail) if detail else ''}
     </section>
-    {render_chart_builder_script(rows, selected_row)}
+    {render_chart_builder_script([item for item in markets if item.get('token') == str((selected_row or {}).get('token') or '')], selected_row)}
     {render_funding_history_script() if detail else ''}
     """
     return shell("Charts - SpreadBoard", "charts", body)
 
 
 def render_chart_builder(
-    rows: list[dict[str, Any]],
+    markets: list[dict[str, Any]],
     selected_row: dict[str, Any] | None,
+    catalogue: dict[str, Any],
 ) -> str:
-    tokens = sorted({str(row.get("token") or "") for row in rows if row.get("token")})
     selected_token = str((selected_row or {}).get("token") or "")
     return f"""
     <section class="chart-builder">
       <div class="chart-builder-title">
-        <div><span class="chart-builder-icon" aria-hidden="true">+</span><strong>Custom chart</strong><em>Long and short legs can use any currently matched venue.</em></div>
-        <span class="chart-builder-state" data-chart-state>Choose both legs</span>
+        <div><span class="chart-builder-icon" aria-hidden="true">+</span><strong>Custom chart</strong><em>Choose any active stablecoin market in the public venue catalogue.</em></div>
+        <span class="chart-builder-state" data-chart-state>{h(catalogue.get('token_count') or 0)} tokens · {h(catalogue.get('count') or 0)} markets</span>
       </div>
       <form class="chart-builder-form" action="/charts" method="get" data-chart-builder>
-        <label class="chart-token-field"><span>Token</span><select data-chart-token>
-          <option value="">Select token</option>
-          {''.join(f'<option value="{h(token)}" {"selected" if token == selected_token else ""}>{h(token)}</option>' for token in tokens)}
-        </select></label>
+        <label class="chart-token-field"><span>Token</span><input data-chart-token value="{h(selected_token)}" placeholder="Type a symbol, e.g. COTI" autocomplete="off" spellcheck="false"></label>
         <div class="chart-leg-picker long">
           <span>Long</span>
           <select data-chart-long aria-label="Long venue and market"><option value="">Select venue / market</option></select>
@@ -3064,36 +3334,17 @@ def render_chart_builder(
 
 
 def render_chart_builder_script(
-    rows: list[dict[str, Any]],
+    markets: list[dict[str, Any]],
     selected_row: dict[str, Any] | None,
 ) -> str:
-    route_data = [
-        {
-            key: row.get(key)
-            for key in (
-                "route_key",
-                "token",
-                "long_venue",
-                "long_market_type",
-                "short_venue",
-                "short_market_type",
-                "long_bid",
-                "long_ask",
-                "short_bid",
-                "short_ask",
-                "long_price",
-                "short_price",
-            )
-        }
-        for row in rows
-    ]
+    route_data = [{key: row.get(key) for key in ("token", "venue", "market_type", "symbol", "quote")} for row in markets]
     selected_long = (
-        f"{selected_row.get('long_venue')}|{selected_row.get('long_market_type')}"
+        f"{selected_row.get('long_venue')}|{selected_row.get('long_market_type')}|{selected_row.get('long_market_symbol') or ((selected_row.get('notes') or {}).get('route_inputs') or {}).get('long', {}).get('symbol', '')}"
         if selected_row
         else ""
     )
     selected_short = (
-        f"{selected_row.get('short_venue')}|{selected_row.get('short_market_type')}"
+        f"{selected_row.get('short_venue')}|{selected_row.get('short_market_type')}|{selected_row.get('short_market_symbol') or ((selected_row.get('notes') or {}).get('route_inputs') or {}).get('short', {}).get('symbol', '')}"
         if selected_row
         else ""
     )
@@ -3103,7 +3354,7 @@ def render_chart_builder_script(
     (() => {{
       const form = document.querySelector('[data-chart-builder]');
       if (!form) return;
-      const routes = JSON.parse(document.getElementById('chart-route-data').textContent || '[]');
+      let markets = JSON.parse(document.getElementById('chart-route-data').textContent || '[]');
       const token = form.querySelector('[data-chart-token]');
       const longSelect = form.querySelector('[data-chart-long]');
       const shortSelect = form.querySelector('[data-chart-short]');
@@ -3112,16 +3363,12 @@ def render_chart_builder_script(
       const state = document.querySelector('[data-chart-state]');
       const selectedLong = {json.dumps(selected_long)};
       const selectedShort = {json.dumps(selected_short)};
-      const combo = (venue, market) => `${{venue || ''}}|${{market || ''}}`;
-      const price = (value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))
-        ? Number(value).toLocaleString(undefined, {{ maximumSignificantDigits: 8 }})
-        : '—';
-      const tokenRoutes = () => routes.filter((row) => row.token === token.value);
+      const combo = (item) => `${{item.venue || ''}}|${{item.market_type || ''}}|${{item.symbol || ''}}`;
+      const tokenMarkets = () => markets.filter((row) => row.token === token.value);
       function optionsForToken() {{
         const values = new Map();
-        tokenRoutes().forEach((row) => {{
-          values.set(combo(row.long_venue, row.long_market_type), `${{row.long_venue}} · ${{row.long_market_type}}`);
-          values.set(combo(row.short_venue, row.short_market_type), `${{row.short_venue}} · ${{row.short_market_type}}`);
+        tokenMarkets().forEach((row) => {{
+          values.set(combo(row), `${{row.venue}} · ${{row.market_type}} · ${{row.symbol}}`);
         }});
         return [...values.entries()].sort((a, b) => a[1].localeCompare(b[1]));
       }}
@@ -3136,43 +3383,35 @@ def render_chart_builder_script(
           select.appendChild(option);
         }});
       }}
-      function quoteFor(value, side) {{
-        const [venue, market] = value.split('|');
-        const row = tokenRoutes().find((item) =>
-          item[`${{side}}_venue`] === venue && item[`${{side}}_market_type`] === market
-        ) || tokenRoutes().find((item) =>
-          item.long_venue === venue && item.long_market_type === market
-        ) || tokenRoutes().find((item) =>
-          item.short_venue === venue && item.short_market_type === market
-        );
-        if (!row) return {{ bid: null, ask: null }};
-        if (row.long_venue === venue && row.long_market_type === market) {{
-          return {{ bid: row.long_bid || row.long_price, ask: row.long_ask || row.long_price }};
-        }}
-        return {{ bid: row.short_bid || row.short_price, ask: row.short_ask || row.short_price }};
+      function selectedMarket(value) {{
+        return tokenMarkets().find((item) => combo(item) === value) || null;
+      }}
+      function customKey(longLeg, shortLeg) {{
+        const payload=JSON.stringify({{token:token.value,long:{{market_type:longLeg.market_type,symbol:longLeg.symbol,venue:longLeg.venue}},short:{{market_type:shortLeg.market_type,symbol:shortLeg.symbol,venue:shortLeg.venue}}}});
+        const bytes=new TextEncoder().encode(payload); let binary=''; bytes.forEach(byte=>binary+=String.fromCharCode(byte));
+        return `CUSTOM:${{btoa(binary).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'')}}`;
       }}
       function update() {{
-        const [longVenue, longMarket] = longSelect.value.split('|');
-        const [shortVenue, shortMarket] = shortSelect.value.split('|');
-        const exact = tokenRoutes().find((row) =>
-          row.long_venue === longVenue && row.long_market_type === longMarket &&
-          row.short_venue === shortVenue && row.short_market_type === shortMarket
-        );
-        const longQuote = quoteFor(longSelect.value, 'long');
-        const shortQuote = quoteFor(shortSelect.value, 'short');
-        form.querySelector('[data-long-bid]').textContent = price(longQuote.bid);
-        form.querySelector('[data-long-ask]').textContent = price(longQuote.ask);
-        form.querySelector('[data-short-bid]').textContent = price(shortQuote.bid);
-        form.querySelector('[data-short-ask]').textContent = price(shortQuote.ask);
-        routeKey.value = exact?.route_key || '';
-        create.disabled = !exact;
-        state.textContent = exact ? 'Route ready' : (longSelect.value && shortSelect.value ? 'No live match for this direction' : 'Choose both legs');
+        const longLeg=selectedMarket(longSelect.value); const shortLeg=selectedMarket(shortSelect.value);
+        form.querySelector('[data-long-bid]').textContent = 'quoted live'; form.querySelector('[data-long-ask]').textContent = 'on create';
+        form.querySelector('[data-short-bid]').textContent = 'quoted live'; form.querySelector('[data-short-ask]').textContent = 'on create';
+        const ready=Boolean(longLeg&&shortLeg&&longSelect.value!==shortSelect.value);
+        routeKey.value=ready?customKey(longLeg,shortLeg):''; create.disabled=!ready;
+        state.textContent=ready?'Route ready':(longLeg&&shortLeg?'Choose two different markets':'Choose both legs');
       }}
-      function rebuild(useSelected = false) {{
+      async function rebuild(useSelected = false) {{
+        token.value=token.value.trim().toUpperCase();
+        if (token.value && !markets.some(item => item.token === token.value)) {{
+          state.textContent='Loading venue markets';
+          try {{ const response=await fetch(`/api/chart-catalog?token=${{encodeURIComponent(token.value)}}`); const data=await response.json(); markets=data.markets||[]; }}
+          catch(error) {{ markets=[]; state.textContent='Catalogue unavailable'; }}
+        }}
         fill(longSelect, useSelected ? selectedLong : '');
         fill(shortSelect, useSelected ? selectedShort : '');
         update();
       }}
+      let tokenTimer=null;
+      token.addEventListener('input', () => {{ clearTimeout(tokenTimer); tokenTimer=setTimeout(()=>rebuild(false),300); }});
       token.addEventListener('change', () => rebuild(false));
       longSelect.addEventListener('change', update);
       shortSelect.addEventListener('change', update);
@@ -3208,6 +3447,7 @@ CHART_WINDOWS: dict[str, dict[str, float | int | str]] = {
     "1h": {"label": "1H", "hours": 1, "bucket_seconds": 3, "max_points": 1200},
     "4h": {"label": "4H", "hours": 4, "bucket_seconds": 12, "max_points": 1200},
     "12h": {"label": "12H", "hours": 12, "bucket_seconds": 36, "max_points": 1200},
+    "1d": {"label": "1D", "hours": 24, "bucket_seconds": 60, "max_points": 1800},
     "3d": {"label": "3D", "hours": 72, "bucket_seconds": 216, "max_points": 1200},
     "7d": {"label": "7D", "hours": 168, "bucket_seconds": 504, "max_points": 1200},
 }
@@ -3232,12 +3472,18 @@ def render_selected_chart(
     detail: dict[str, Any],
     history: list[dict[str, Any]],
     window: str,
+    history_meta: dict[str, Any] | None = None,
 ) -> str:
     legs = detail.get("legs") or {}
     long_leg = legs.get("long") or {}
     short_leg = legs.get("short") or {}
     route_key = board.route_key_url(str(row.get("route_key") or ""))
     windows = [(value, str(config["label"])) for value, config in CHART_WINDOWS.items()]
+    history_meta = history_meta or {}
+    coverage_note = (
+        f"{float(history_meta.get('coverage_pct') or 0):.0f}% window coverage"
+        + (f" · older points use {h(history_meta.get('historical_proxy_timeframe'))} close-price proxy" if history_meta.get("historical_proxy") else " · exact book samples only")
+    )
     return f"""
     <section class="selected-chart">
       <header class="selected-chart-head">
@@ -3265,7 +3511,7 @@ def render_selected_chart(
       </div>
       <footer class="selected-chart-foot">
         <a href="/pair/{h(route_key)}">Open full pair details</a>
-        <span data-chart-observation-count>{h(len(history))} observations in this window</span>
+        <span data-chart-observation-count>{h(len(history))} observations · {coverage_note}</span>
       </footer>
     </section>
     """
@@ -4458,6 +4704,166 @@ def render_sources_page(board_path: Path, config: dict[str, Any]) -> str:
     </section>
     """
     return shell("Sources - SpreadBoard", "sources", body)
+
+
+def api_portfolio(
+    user: accounts.User,
+    board_path: Path,
+    accounts_path: Path | str,
+) -> dict[str, Any]:
+    return portfolio.portfolio_snapshot(
+        user,
+        board_path=board_path,
+        accounts_path=accounts_path,
+    )
+
+
+def render_login_page(query: dict[str, list[str]]) -> str:
+    next_path = _query_first(query, "next") or "/"
+    if not next_path.startswith("/") or next_path.startswith("//"):
+        next_path = "/"
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in - SpreadBoard</title>
+<style>
+:root {{ color-scheme: dark; --bg:#07110f; --panel:#101d1a; --line:#29443d; --ink:#edf8f4; --muted:#9bb1aa; --accent:#38d4bd; --danger:#ff8695; }}
+* {{ box-sizing:border-box; }} body {{ margin:0; min-height:100vh; background:var(--bg); color:var(--ink); font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; display:grid; place-items:center; padding:24px; }}
+.login-shell {{ width:min(420px,100%); }} .login-brand {{ display:flex; align-items:center; gap:12px; margin-bottom:28px; font-size:24px; font-weight:800; }}
+.login-mark {{ width:26px; height:26px; border-radius:50%; background:var(--accent); border:3px solid #dffff8; box-shadow:12px 9px 0 -5px #7fdccf; }}
+.login-panel {{ border:1px solid var(--line); background:var(--panel); padding:28px; border-radius:8px; }} h1 {{ margin:0 0 8px; font-size:28px; letter-spacing:0; }} p {{ color:var(--muted); margin:0 0 24px; line-height:1.5; }}
+label {{ display:grid; gap:7px; margin:0 0 16px; color:var(--muted); font-size:12px; font-weight:800; text-transform:uppercase; }} input {{ width:100%; min-height:46px; border:1px solid var(--line); background:#081310; color:var(--ink); border-radius:5px; padding:0 13px; font:inherit; }} input:focus {{ outline:2px solid var(--accent); outline-offset:1px; }}
+button {{ width:100%; min-height:46px; border:0; border-radius:5px; background:var(--accent); color:#052c26; font:inherit; font-weight:900; cursor:pointer; }} button:disabled {{ opacity:.55; cursor:wait; }}
+.login-error {{ min-height:20px; margin:14px 0 0; color:var(--danger); font-size:13px; }} .login-note {{ margin-top:18px; color:var(--muted); font-size:12px; text-align:center; }}
+</style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div>
+<section class="login-panel"><h1>Welcome back</h1><p>Sign in to your private market workspace and position journal.</p>
+<form id="loginForm"><label>Email<input name="email" type="email" autocomplete="username" required autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">Sign in</button><div class="login-error" role="alert"></div></form></section>
+<div class="login-note">Private subscription access · secure, opaque session cookie</div></main>
+<script>
+document.getElementById('loginForm').addEventListener('submit', async (event) => {{
+  event.preventDefault(); const form=event.currentTarget; const button=form.querySelector('button'); const error=form.querySelector('.login-error'); button.disabled=true; error.textContent='';
+  try {{ const response=await fetch('/api/login',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(Object.fromEntries(new FormData(form)))}}); const data=await response.json(); if(!response.ok) throw new Error(data.error==='too_many_login_attempts'?'Too many attempts. Try again later.':'Email or password is incorrect.'); window.location.assign({json.dumps(next_path)}); }}
+  catch(exc) {{ error.textContent=exc.message || 'Sign in failed.'; }} finally {{ button.disabled=false; }}
+}});
+</script></body></html>"""
+
+
+def render_subscription_page() -> str:
+    user = accounts.current_user()
+    body = f"""
+    <section class="account-page narrow-account">
+      <header class="terminal-heading"><div><span class="page-kicker">Membership</span><h1>Subscription required</h1><p>Your account is signed in, but market access is not currently active.</p></div></header>
+      <section class="account-empty-panel"><strong>{h(user.display_name if user else 'Member')}</strong><p>Status: {h(user.subscription_status if user else 'inactive')}. Contact the group administrator to renew monthly access.</p><a class="sheet-button primary" href="/account">Open account</a></section>
+    </section>
+    """
+    return shell("Subscription - SpreadBoard", "profile", body)
+
+
+def render_account_page(
+    board_path: Path,
+    accounts_path: Path | str = accounts.DEFAULT_DB_PATH,
+) -> str:
+    user = accounts.current_user()
+    if user is None:
+        return render_login_page({})
+    data = api_portfolio(user, board_path, accounts_path)
+    summary = data.get("summary") or {}
+    positions = data.get("positions") or []
+    notifications = data.get("notifications") or []
+    body = f"""
+    <section class="account-page" data-account-page>
+      <header class="terminal-heading account-heading">
+        <div><span class="page-kicker">Private workspace</span><h1>{h(user.display_name)}</h1><p>Track multi-exchange positions, price PnL, funding income, returns, and exit conditions in one place.</p></div>
+        <div class="account-membership"><span>Membership</span><strong>{h(user.subscription_status)}</strong><em>{h(user.subscription_expires_at or 'No expiry')}</em></div>
+      </header>
+      <section class="account-kpis">
+        {render_account_kpi('Open positions', summary.get('open_positions'), 'actively marked')}
+        {render_account_kpi('Portfolio PnL', fmt_signed_money(summary.get('price_and_funding_pnl_usd')), 'price + funding - fees')}
+        {render_account_kpi('Funding income', fmt_signed_money(summary.get('funding_income_usd')), 'recorded cashflows')}
+        {render_account_kpi('Return', fmt_signed_pct(summary.get('monthly_return_pct'), digits=2), 'on tracked capital')}
+      </section>
+      <nav class="account-tabs" aria-label="Account sections"><button class="active" data-account-tab="positions">Positions</button><button data-account-tab="alerts">Alerts <i>{h(len([item for item in notifications if not item.get('read_at')]))}</i></button><button data-account-tab="settings">Settings</button>{'<button data-account-tab="members">Members</button>' if user.is_admin else ''}</nav>
+      <section data-account-panel="positions">
+        <div class="account-panel-head"><div><h2>Position journal</h2><p>Manual records are marked with current public books whenever the exact route is available.</p></div><button class="sheet-button primary" type="button" data-position-new>Add position</button></div>
+        <div class="position-list">{''.join(render_position_card(item) for item in positions) or '<div class="account-empty-panel"><strong>No positions yet</strong><p>Add the first spread or funding farm to start tracking it.</p></div>'}</div>
+      </section>
+      <section data-account-panel="alerts" hidden><div class="account-panel-head"><div><h2>Notifications</h2><p>Exit-spread, PnL, and funding rules evaluated against your tracked positions.</p></div></div><div class="notification-list">{''.join(render_account_notification(item) for item in notifications) or '<div class="account-empty-panel"><strong>No notifications</strong><p>Position alerts will appear here when a rule crosses its threshold.</p></div>'}</div></section>
+      <section data-account-panel="settings" hidden>{render_account_settings(user)}</section>
+      {render_member_admin() if user.is_admin else ''}
+      {render_position_dialog()}
+      {render_position_action_dialog()}
+    </section>
+    <script type="application/json" id="account-session">{json_script_data({'csrf_token': user.csrf_token})}</script>
+    {render_account_script()}
+    """
+    return shell("My portfolio - SpreadBoard", "profile", body)
+
+
+def render_account_kpi(label: str, value: Any, note: str) -> str:
+    return f'<article><span>{h(label)}</span><strong>{h(value if value is not None else "—")}</strong><em>{h(note)}</em></article>'
+
+
+def render_position_card(item: dict[str, Any]) -> str:
+    market_live = item.get("market_status") == "live"
+    return f"""
+    <article class="position-card" data-position-id="{h(item.get('id'))}">
+      <header><div><span class="position-token">{h(item.get('token'))}</span><strong>{h(item.get('long_venue'))} → {h(item.get('short_venue'))}</strong><em>{h(item.get('long_market_type'))} / {h(item.get('short_market_type'))}</em></div><div class="position-status {'live' if market_live else 'unavailable'}"><span>{h(item.get('status'))}</span><strong>{'Live books' if market_live else 'Market unavailable'}</strong></div></header>
+      <div class="position-metrics">
+        <span>Total PnL<strong class="{spread_class(item.get('total_pnl_usd'))}">{fmt_signed_money(item.get('total_pnl_usd'))}</strong></span>
+        <span>Price PnL<strong>{fmt_signed_money(item.get('price_pnl_usd'))}</strong></span>
+        <span>Funding<strong>{fmt_signed_money(item.get('funding_income_usd'))}</strong></span>
+        <span>Return<strong>{fmt_signed_pct(item.get('return_pct'), digits=2)}</strong></span>
+        <span>Exit spread<strong>{fmt_signed_pct(item.get('current_exit_spread_pct'), digits=3)}</strong></span>
+        <span>Open spread<strong>{fmt_signed_pct(item.get('current_open_spread_pct'), digits=3)}</strong></span>
+      </div>
+      <div class="position-legs"><div><span>Long</span><strong>{h(item.get('long_venue'))} · {h(item.get('long_quantity'))}</strong><em>{fmt_price(item.get('long_entry_price'))} → {fmt_price(item.get('long_mark_price'))}</em></div><div><span>Short</span><strong>{h(item.get('short_venue'))} · {h(item.get('short_quantity'))}</strong><em>{fmt_price(item.get('short_entry_price'))} → {fmt_price(item.get('short_mark_price'))}</em></div></div>
+      <footer><span>Opened {h(item.get('opened_at'))}</span><div>{render_position_rules(item.get('alert_rules') or [])}<button type="button" data-position-action="funding">Add funding</button><button type="button" data-position-action="alert">Add alert</button>{'<button type="button" data-position-action="close">Close position</button>' if item.get('status') == 'open' else ''}<a href="/charts?route_key={h(board.route_key_url(str(item.get('route_key') or '')))}">Chart</a></div></footer>
+    </article>"""
+
+
+def render_position_rules(rules: list[dict[str, Any]]) -> str:
+    enabled = [rule for rule in rules if rule.get("enabled")]
+    return f'<span class="position-rule-count">{len(enabled)} alert{"s" if len(enabled) != 1 else ""}</span>'
+
+
+def render_account_notification(item: dict[str, Any]) -> str:
+    return f'<article><span>{h(item.get("created_at"))}</span><strong>{h(item.get("title"))}</strong><p>{h(item.get("body"))}</p></article>'
+
+
+def render_account_settings(user: accounts.User) -> str:
+    return f"""<section class="account-settings"><div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is used only as the denominator for your return statistics.</p></div></div><form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Tracked monthly capital, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or '')}"></label><button class="sheet-button primary" type="submit">Save settings</button></form></section>"""
+
+
+def render_member_admin() -> str:
+    return """<section data-account-panel="members" hidden><div class="account-panel-head"><div><h2>Member access</h2><p>Create monthly accounts and manage subscription status. Passwords are hashed immediately and never shown again.</p></div></div><form class="member-create-form" data-member-create><label><span>Name</span><input name="display_name" required></label><label><span>Email</span><input name="email" type="email" required></label><label><span>Temporary password</span><input name="password" type="password" minlength="12" required></label><label><span>Access days</span><input name="subscription_days" type="number" min="1" max="3660" value="30"></label><button class="sheet-button primary" type="submit">Create member</button></form><div data-member-list></div></section>"""
+
+
+def render_position_dialog() -> str:
+    return """<dialog class="account-dialog" data-position-dialog><form method="dialog" data-position-form><header><div><span>Position journal</span><h2>Add position</h2></div><button value="cancel" aria-label="Close">×</button></header><div class="position-form-grid"><label><span>Token</span><input name="token" required></label><label><span>Capital, USD</span><input name="capital_usd" type="number" min="0" step="0.01"></label><label><span>Long venue</span><input name="long_venue" required></label><label><span>Long market</span><select name="long_market_type"><option>Spot</option><option>Futures</option></select></label><label><span>Long symbol</span><input name="long_symbol" placeholder="COTI/USDT"></label><label><span>Long quantity</span><input name="long_quantity" type="number" min="0" step="any" required></label><label><span>Long entry</span><input name="long_entry_price" type="number" min="0" step="any" required></label><label><span>Short venue</span><input name="short_venue" required></label><label><span>Short market</span><select name="short_market_type"><option>Futures</option><option>Spot</option></select></label><label><span>Short symbol</span><input name="short_symbol" placeholder="COTI/USDT:USDT"></label><label><span>Short quantity</span><input name="short_quantity" type="number" min="0" step="any" required></label><label><span>Short entry</span><input name="short_entry_price" type="number" min="0" step="any" required></label><label><span>Entry fees, USD</span><input name="entry_fees_usd" type="number" min="0" step="0.01" value="0"></label><label><span>Opened at</span><input name="opened_at" type="datetime-local"></label><label class="wide"><span>Notes</span><textarea name="notes" rows="3"></textarea></label></div><footer><button value="cancel">Cancel</button><button class="primary" type="submit" value="default">Add position</button></footer><p role="alert" data-form-error></p></form></dialog>"""
+
+
+def render_position_action_dialog() -> str:
+    return """<dialog class="account-dialog compact" data-action-dialog><form method="dialog" data-action-form><header><div><span>Position</span><h2 data-action-title>Update</h2></div><button value="cancel" aria-label="Close">×</button></header><div data-action-fields></div><footer><button value="cancel">Cancel</button><button class="primary" type="submit" value="default">Save</button></footer><p role="alert" data-form-error></p></form></dialog>"""
+
+
+def render_account_script() -> str:
+    return """<script>
+(() => {
+  const root=document.querySelector('[data-account-page]'); if(!root) return;
+  const {csrf_token:csrf}=JSON.parse(document.getElementById('account-session').textContent||'{}');
+  const request=async(url,body)=>{const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw new Error(data.error||'Request failed');return data;};
+  root.querySelectorAll('[data-account-tab]').forEach(button=>button.addEventListener('click',()=>{root.querySelectorAll('[data-account-tab]').forEach(item=>item.classList.toggle('active',item===button));root.querySelectorAll('[data-account-panel]').forEach(panel=>panel.hidden=panel.dataset.accountPanel!==button.dataset.accountTab);if(button.dataset.accountTab==='members')loadMembers();}));
+  const positionDialog=root.querySelector('[data-position-dialog]');root.querySelector('[data-position-new]')?.addEventListener('click',()=>positionDialog.showModal());
+  positionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const payload=Object.fromEntries(new FormData(form));try{await request('/api/positions',payload);location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
+  const actionDialog=root.querySelector('[data-action-dialog]');let actionPosition=null;let actionType='';
+  const fields={funding:'<label><span>Venue</span><input name="venue" required></label><label><span>Amount, USD</span><input name="amount_usd" type="number" step="any" required></label><label><span>Occurred at</span><input name="occurred_at" type="datetime-local"></label>',alert:'<label><span>Metric</span><select name="metric"><option value="exit_spread_pct">Exit spread %</option><option value="open_spread_pct">Open spread %</option><option value="pnl_usd">Total PnL USD</option><option value="funding_usd">Funding USD</option></select></label><label><span>Condition</span><select name="operator"><option value="lte">At or below</option><option value="gte">At or above</option></select></label><label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>',close:'<label><span>Long exit price</span><input name="long_exit_price" type="number" min="0" step="any" required></label><label><span>Short exit price</span><input name="short_exit_price" type="number" min="0" step="any" required></label><label><span>Exit fees, USD</span><input name="exit_fees_usd" type="number" min="0" step="0.01" value="0"></label>'};
+  root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;actionDialog.querySelector('[data-action-title]').textContent={funding:'Add funding cashflow',alert:'Create alert rule',close:'Close position'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=fields[actionType];actionDialog.showModal();});
+  actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={funding:'funding',alert:'alerts',close:'close'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
+  root.querySelector('[data-account-settings]')?.addEventListener('submit',async event=>{event.preventDefault();await request('/api/account-settings',Object.fromEntries(new FormData(event.currentTarget)));location.reload();});
+  root.querySelector('[data-member-create]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;try{await request('/api/account-users',Object.fromEntries(new FormData(form)));form.reset();loadMembers();}catch(error){alert(error.message);}});
+  async function loadMembers(){const target=root.querySelector('[data-member-list]');if(!target)return;const response=await fetch('/api/account-users');const data=await response.json();target.innerHTML=(data.users||[]).map(user=>`<article class="member-row"><div><strong>${escapeHtml(user.display_name)}</strong><span>${escapeHtml(user.email)}</span></div><span>${escapeHtml(user.subscription_status)}</span><em>${escapeHtml(user.subscription_expires_at||'No expiry')}</em></article>`).join('');}
+  const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+})();
+</script>"""
 
 
 def render_source_summary_card(title: str, age_min: Any, note: str) -> str:
@@ -7341,6 +7747,13 @@ def render_alert_draft_script() -> str:
 
 
 def shell(title: str, active: str, body: str) -> str:
+    user = accounts.current_user()
+    account_action = (
+        f'<a class="account-chip" href="/account"><span>{h(user.display_name)}</span><em>{h(user.subscription_status)}</em></a>'
+        f'<button class="logout-button" type="button" data-logout data-csrf="{h(user.csrf_token or "")}" aria-label="Sign out" title="Sign out">&#x21AA;</button>'
+        if user
+        else ''
+    )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -8329,7 +8742,7 @@ body.alert-modal-open {{ overflow: hidden; }}
 .chart-builder-form {{ display: grid; grid-template-columns: minmax(130px,.55fr) minmax(250px,1fr) 36px minmax(250px,1fr); gap: 10px; align-items: end; padding: 14px; }}
 .chart-builder-form label, .chart-leg-picker {{ display: grid; gap: 6px; min-width: 0; }}
 .chart-builder-form label > span, .chart-leg-picker > span {{ color: var(--terminal-muted); font-size: 9px; font-weight: 900; text-transform: uppercase; }}
-.chart-builder-form select {{ width: 100%; min-height: 40px; padding: 0 10px; border: 1px solid var(--terminal-line); border-radius: 6px; background: var(--terminal-row); color: var(--terminal-text); font: inherit; font-size: 12px; font-weight: 800; }}
+.chart-builder-form select, .chart-builder-form input {{ width: 100%; min-height: 40px; padding: 0 10px; border: 1px solid var(--terminal-line); border-radius: 6px; background: var(--terminal-row); color: var(--terminal-text); font: inherit; font-size: 12px; font-weight: 800; }}
 .chart-leg-picker.long > span {{ color: var(--terminal-accent); }}
 .chart-leg-picker.short > span {{ color: var(--terminal-danger); }}
 .chart-quote-preview {{ display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 5px; }}
@@ -8832,6 +9245,30 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   .live-chart-note {{ align-items: flex-start; flex-direction: column; padding: 8px 0; }}
   .selected-chart-foot {{ min-height: 58px; }}
 }}
+.account-page {{ width:min(1480px,calc(100% - 36px)); margin:34px auto 70px; }}
+.narrow-account {{ width:min(820px,calc(100% - 36px)); }}
+.account-heading {{ display:flex; justify-content:space-between; gap:24px; align-items:flex-start; }}
+.account-membership {{ min-width:180px; border:1px solid var(--terminal-line); padding:13px 15px; display:grid; gap:4px; background:var(--terminal-panel); }}
+.account-membership span,.account-membership em {{ color:var(--terminal-muted); font-size:12px; font-style:normal; }}
+.account-membership strong {{ text-transform:capitalize; }}
+.account-kpis {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border:1px solid var(--terminal-line); margin:20px 0; background:var(--terminal-panel); }}
+.account-kpis article {{ min-width:0; padding:16px; display:grid; gap:5px; border-right:1px solid var(--terminal-line); }}
+.account-kpis article:last-child {{ border-right:0; }} .account-kpis span,.account-kpis em {{ color:var(--terminal-muted); font-size:12px; font-style:normal; }} .account-kpis strong {{ font-size:23px; }}
+.account-tabs {{ display:flex; border-bottom:1px solid var(--terminal-line); margin-bottom:18px; overflow-x:auto; }}
+.account-tabs button {{ border:0; border-bottom:3px solid transparent; background:transparent; color:var(--terminal-muted); padding:13px 18px; font:inherit; font-weight:800; cursor:pointer; white-space:nowrap; }}
+.account-tabs button.active {{ color:var(--terminal-text); border-bottom-color:var(--accent); }} .account-tabs i {{ font-style:normal; padding:2px 6px; background:var(--accent); color:var(--accent-ink); }}
+.account-panel-head {{ display:flex; align-items:center; justify-content:space-between; gap:20px; margin:16px 0; }} .account-panel-head h2 {{ margin:0 0 5px; }} .account-panel-head p {{ margin:0; color:var(--terminal-muted); }}
+.position-list,.notification-list {{ display:grid; gap:10px; }} .position-card,.account-empty-panel,.account-settings,.notification-list article,.member-row {{ border:1px solid var(--terminal-line); background:var(--terminal-panel); padding:16px; }}
+.position-card header,.position-card footer,.position-legs {{ display:flex; justify-content:space-between; align-items:center; gap:14px; }} .position-card header>div:first-child {{ display:grid; grid-template-columns:auto auto; gap:3px 12px; align-items:baseline; }} .position-card header em {{ grid-column:2; color:var(--terminal-muted); font-style:normal; font-size:12px; }}
+.position-token {{ font-size:24px; font-weight:900; grid-row:1/3; }} .position-status {{ text-align:right; display:grid; }} .position-status span {{ text-transform:uppercase; font-size:10px; color:var(--terminal-muted); }} .position-status.live strong {{ color:var(--green); }}
+.position-metrics {{ display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); border-block:1px solid var(--terminal-line); margin:14px -16px; }} .position-metrics span {{ padding:11px 16px; display:grid; gap:4px; color:var(--terminal-muted); font-size:11px; border-right:1px solid var(--terminal-line); }} .position-metrics strong {{ color:var(--terminal-text); font-size:16px; }}
+.position-legs>div {{ flex:1; display:grid; grid-template-columns:auto 1fr auto; gap:10px; }} .position-legs span,.position-legs em {{ color:var(--terminal-muted); font-style:normal; }} .position-card footer {{ margin-top:14px; color:var(--terminal-muted); font-size:12px; }} .position-card footer div {{ display:flex; flex-wrap:wrap; gap:7px; align-items:center; }} .position-card footer button,.position-card footer a {{ border:1px solid var(--terminal-line); background:transparent; color:var(--terminal-text); padding:7px 10px; text-decoration:none; font:inherit; font-weight:700; cursor:pointer; }}
+.account-dialog {{ width:min(760px,calc(100% - 28px)); max-height:90vh; overflow:auto; border:1px solid var(--terminal-line); background:var(--terminal-panel); color:var(--terminal-text); padding:0; }} .account-dialog::backdrop {{ background:rgba(0,0,0,.68); }} .account-dialog form>header,.account-dialog form>footer {{ padding:15px 18px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--terminal-line); }} .account-dialog form>footer {{ border:0; border-top:1px solid var(--terminal-line); justify-content:flex-end; }} .account-dialog h2 {{ margin:2px 0 0; }} .account-dialog header span {{ color:var(--terminal-muted); font-size:11px; text-transform:uppercase; }} .account-dialog button {{ border:1px solid var(--terminal-line); background:transparent; color:var(--terminal-text); padding:8px 13px; cursor:pointer; }} .account-dialog button.primary {{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }}
+.position-form-grid,.account-dialog [data-action-fields],.account-settings form,.member-create-form {{ padding:18px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px; }} .position-form-grid label,.account-dialog [data-action-fields] label,.account-settings label,.member-create-form label {{ display:grid; gap:6px; color:var(--terminal-muted); font-size:11px; text-transform:uppercase; }} .position-form-grid input,.position-form-grid select,.position-form-grid textarea,.account-dialog [data-action-fields] input,.account-dialog [data-action-fields] select,.account-settings input,.member-create-form input {{ min-height:40px; width:100%; border:1px solid var(--terminal-line); background:var(--terminal-row); color:var(--terminal-text); padding:8px; font:inherit; }} .position-form-grid .wide {{ grid-column:1/-1; }}
+.notification-list article {{ display:grid; grid-template-columns:180px 220px 1fr; gap:14px; }} .notification-list p {{ margin:0; color:var(--terminal-muted); }} .member-row {{ display:grid; grid-template-columns:1fr auto auto; gap:20px; margin-top:8px; }} .member-row div {{ display:grid; }} .member-row span,.member-row em {{ color:var(--terminal-muted); font-style:normal; }}
+.account-chip {{ display:grid; color:var(--terminal-shell-text); text-decoration:none; text-align:right; line-height:1.1; }} .account-chip em {{ color:var(--accent); font-size:10px; font-style:normal; text-transform:uppercase; }} .logout-button {{ width:38px; height:38px; border:1px solid rgba(255,255,255,.25); background:transparent; color:var(--terminal-shell-text); font-size:19px; cursor:pointer; }}
+@media(max-width:900px) {{ .account-kpis {{ grid-template-columns:repeat(2,1fr); }} .position-metrics {{ grid-template-columns:repeat(3,1fr); }} .position-legs {{ align-items:stretch; flex-direction:column; }} .account-chip,.logout-button {{ display:none; }} }}
+@media(max-width:600px) {{ .account-heading {{ flex-direction:column; }} .account-membership {{ width:100%; }} .account-kpis {{ grid-template-columns:1fr 1fr; }} .position-metrics {{ grid-template-columns:1fr 1fr; }} .position-card header,.position-card footer {{ align-items:flex-start; flex-direction:column; }} .position-form-grid,.account-dialog [data-action-fields],.account-settings form,.member-create-form {{ grid-template-columns:1fr; }} .position-form-grid .wide {{ grid-column:auto; }} .notification-list article {{ grid-template-columns:1fr; }} }}
 </style>
 </head>
 <body>
@@ -8845,9 +9282,10 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
       <a class="{active_class(active, 'charts')}" href="/charts">Charts</a>
       <a class="{active_class(active, 'intel')}" href="/intel">Intel</a>
       <a class="{active_class(active, 'watchlist')}" href="/watchlist">Watchlist</a>
-      <a class="{active_class(active, 'profile')}" href="/profile">Profile</a>
+      <a class="{active_class(active, 'profile')}" href="/account">Portfolio</a>
     </nav>
     <div class="header-actions">
+      {account_action}
       <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle light and dark mode" aria-pressed="false">
         <span class="theme-swatch" aria-hidden="true"></span>
         <span data-theme-label>Theme</span>
@@ -8860,7 +9298,7 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
     <a class="{active_class(active, 'funding')}" href="/funding">Funding</a>
     <a class="{active_class(active, 'charts')}" href="/charts">Charts</a>
     <a class="{active_class(active, 'intel')}" href="/intel">Intel</a>
-    <a class="{active_class(active, 'profile')}" href="/profile">Profile</a>
+    <a class="{active_class(active, 'profile')}" href="/account">Portfolio</a>
     <a class="{active_class(active, 'watchlist')}" href="/watchlist">Watchlist</a>
   </nav>
   <nav class="mobile-secondary-nav" aria-label="Mobile community navigation">
@@ -8874,6 +9312,7 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 <main>{body}</main>
 {render_theme_script()}
 {render_auto_refresh_script()}
+<script>document.querySelector('[data-logout]')?.addEventListener('click',async event=>{{await fetch('/api/logout',{{method:'POST',headers:{{'X-CSRF-Token':event.currentTarget.dataset.csrf}}}});location.assign('/login');}});</script>
 </body>
 </html>"""
 
@@ -8992,6 +9431,11 @@ def fmt_signed_pct(value: Any, *, digits: int = 1) -> str:
 def fmt_money(value: Any) -> str:
     number = _float_or_none(value)
     return "?" if number is None else f"${number:,.0f}"
+
+
+def fmt_signed_money(value: Any) -> str:
+    number = _float_or_none(value)
+    return "?" if number is None else f"{number:+,.2f} USD"
 
 
 def fmt_signed_number(value: Any) -> str:

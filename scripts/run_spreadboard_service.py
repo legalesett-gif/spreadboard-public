@@ -26,6 +26,7 @@ for import_path in (ROOT / "src", ROOT):
 from spreadboard import (
     alerts,
     board,
+    chart_catalog,
     live,
     market_history,
     public_rails,
@@ -54,11 +55,17 @@ class RefreshLoop:
             name="spreadboard-fast-quotes",
             daemon=True,
         )
+        self.catalog_thread = threading.Thread(
+            target=self.run_chart_catalog,
+            name="spreadboard-chart-catalog",
+            daemon=True,
+        )
         self.websocket_process: subprocess.Popen[str] | None = None
 
     def start(self) -> None:
         self._ensure_websocket_worker()
         self.thread.start()
+        self.catalog_thread.start()
         if not _env_bool("SPREADBOARD_LIGHTWEIGHT_MODE"):
             self.fast_thread.start()
 
@@ -67,6 +74,8 @@ class RefreshLoop:
         self.thread.join(timeout=5.0)
         if self.fast_thread.is_alive():
             self.fast_thread.join(timeout=5.0)
+        if self.catalog_thread.is_alive():
+            self.catalog_thread.join(timeout=5.0)
         if self.websocket_process is not None and self.websocket_process.poll() is None:
             self.websocket_process.terminate()
             try:
@@ -81,6 +90,22 @@ class RefreshLoop:
             self.refresh_once()
             elapsed = time.monotonic() - started
             self.stop_event.wait(max(15.0, self.interval_seconds - elapsed))
+
+    def run_chart_catalog(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                payload = chart_catalog.refresh(
+                    workers=int(os.environ.get("SPREADBOARD_CHART_CATALOG_WORKERS", "4"))
+                )
+                _log(
+                    f"chart catalog markets={payload.get('count', 0)} "
+                    f"tokens={payload.get('token_count', 0)}"
+                )
+            except Exception as exc:  # noqa: BLE001 - board refresh remains independent.
+                _log(f"chart catalog unavailable: {type(exc).__name__}: {exc}")
+            self.stop_event.wait(
+                max(900.0, float(os.environ.get("SPREADBOARD_CHART_CATALOG_SECONDS", "21600")))
+            )
 
     def _ensure_websocket_worker(self) -> None:
         if _env_bool("SPREADBOARD_DISABLE_WEBSOCKETS"):

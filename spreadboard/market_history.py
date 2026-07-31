@@ -219,6 +219,9 @@ def load_history(
 
 
 def route_key_for(row: dict[str, Any]) -> str:
+    explicit = str(row.get("route_key") or "").strip()
+    if explicit:
+        return explicit
     return "|".join(
         [
             str(row.get("token") or "").upper() or "?",
