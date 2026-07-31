@@ -85,7 +85,7 @@ class FastQuoteRefresher:
                 if lane is None:
                     continue
                 spread = _number(row.get("depth_weighted_spread_pct"), -999999.0)
-                if 0.0 <= spread <= 90.0:
+                if 0.0 <= spread <= 90.0 or row.get("fast_quote_verified_at"):
                     rows_by_lane[lane].append(row)
         base_quota, extra = divmod(max(0, route_limit), len(FAST_QUOTE_LANES))
         selected: list[dict[str, Any]] = []
@@ -161,6 +161,11 @@ class FastQuoteRefresher:
             depth = spread_pct(long_quote["ask_vwap"], short_quote["bid_vwap"])
             if executable is None or depth is None:
                 blockers.append("mirage_guard:fast_target_depth_unavailable")
+                row["blockers"] = list(dict.fromkeys(blockers))
+                failed += 1
+                continue
+            if _is_dex_route(row) and max(executable, depth) > 90.0:
+                blockers.append("mirage_guard:fast_spread_out_of_bounds")
                 row["blockers"] = list(dict.fromkeys(blockers))
                 failed += 1
                 continue
@@ -246,6 +251,11 @@ class FastQuoteRefresher:
             return {
                 "status": "unavailable",
                 "error": "exact_route_target_depth_unavailable",
+            }
+        if _is_dex_route(quoted) and max(executable, depth) > 90.0:
+            return {
+                "status": "unavailable",
+                "error": "exact_route_spread_out_of_bounds",
             }
         notes = quoted.setdefault("notes", {})
         route_inputs = notes.setdefault("route_inputs", {})
@@ -497,6 +507,13 @@ def _fast_quote_lane(row: dict[str, Any]) -> str | None:
     if long_type == short_type == "Spot":
         return "SPOT"
     return None
+
+
+def _is_dex_route(row: dict[str, Any]) -> bool:
+    return any(
+        "okx dex" in str(row.get(f"{side}_venue") or "").casefold()
+        for side in ("long", "short")
+    )
 
 
 def _unique_token_rows(

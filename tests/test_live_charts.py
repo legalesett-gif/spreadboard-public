@@ -173,6 +173,40 @@ def test_exact_route_quote_uses_four_book_sides_and_matched_size(
     assert set(calls) == {("long", True), ("short", True)}
 
 
+def test_exact_dex_route_rejects_out_of_bounds_spread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refresher = FastQuoteRefresher()
+    route = {
+        **_route(),
+        "short_venue": "OKX DEX 56",
+        "short_market_type": "Spot",
+        "short_market_symbol": "TEST/USDC",
+        "dex_chain": "56",
+        "dex_contract": "0x123",
+    }
+
+    monkeypatch.setattr(
+        refresher,
+        "_leg_quote",
+        lambda _row, side, **_kwargs: {
+            "symbol": "TEST/USDT",
+            "bid": 1.0 if side == "long" else 3.0,
+            "ask": 1.0 if side == "long" else 3.1,
+            "bid_vwap": 1.0 if side == "long" else 3.0,
+            "ask_vwap": 1.0 if side == "long" else 3.1,
+            "quote_ts_us": 2_000_000,
+        },
+    )
+
+    result = refresher.quote_route(route)
+
+    assert result == {
+        "status": "unavailable",
+        "error": "exact_route_spread_out_of_bounds",
+    }
+
+
 def test_native_gate_spot_order_book_is_sorted_and_normalized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
