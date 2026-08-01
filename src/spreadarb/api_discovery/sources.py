@@ -933,6 +933,7 @@ def default_enabled_cex_source() -> CexCcxtSource:
             "XT": "xt",
             # Added 2026-08-01: venues the reference product quotes that we did not scan.
             "Upbit": "upbit",
+            "Ourbit": "ourbit",
         }
     )
 
@@ -958,6 +959,7 @@ def default_enabled_cex_futures_source() -> CexCcxtSource:
             "XT": "xt",
             # Added 2026-08-01. Lighter is a perp DEX the reference product quotes.
             "Lighter": "lighter",
+            "Ourbit": "ourbit",
         },
         name="cex_futures_ccxt",
         market_type="Futures",
@@ -1557,6 +1559,35 @@ def _jupiter_route_plan(payload: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(labels)
 
 
+OURBIT_HOSTS = {
+    "spot": {"public": "https://api.ourbit.com", "private": "https://api.ourbit.com"},
+    "spot2": {
+        "public": "https://www.ourbit.com/open/api/v2",
+        "private": "https://www.ourbit.com/open/api/v2",
+    },
+    "contract": {
+        "public": "https://futures.ourbit.com/api/v1/contract",
+        "private": "https://futures.ourbit.com/api/v1/private",
+    },
+    "broker": {"private": "https://api.ourbit.com/api/v3/broker"},
+}
+
+
+def _build_ourbit_exchange(params: dict[str, Any]) -> Any:
+    """Ourbit has no ccxt adapter, but it is an MEXC white-label.
+
+    Its spot API is MEXC's /api/v3 and its futures API is MEXC's
+    /api/v1/contract, so a ccxt MEXC client pointed at Ourbit's hosts works
+    without a bespoke REST client. Verified 2026-08-01: 831 spot + 703 swap
+    markets, tickers parse correctly.
+    """
+    exchange = ccxt.mexc(params)
+    exchange.urls = dict(exchange.urls)
+    exchange.urls["api"] = {key: dict(value) for key, value in OURBIT_HOSTS.items()}
+    exchange.id = "ourbit"
+    return exchange
+
+
 def _build_ccxt_exchange(exchange_id: str, market_type: str, timeout_s: float) -> Any:
     if exchange_id == "bitget":
         install_bitget_dns_fallback()
@@ -1569,13 +1600,15 @@ def _build_ccxt_exchange(exchange_id: str, market_type: str, timeout_s: float) -
         (getattr(ccxt, candidate) for candidate in exchange_ids if hasattr(ccxt, candidate)),
         None,
     )
-    if klass is None:
+    if klass is None and exchange_id != "ourbit":
         raise AttributeError(f"CCXT exchange adapter unavailable: {exchange_id}")
     params: dict[str, Any] = {"enableRateLimit": True, "timeout": int(timeout_s * 1000)}
     if market_type == "Spot":
         params["options"] = {"defaultType": "spot"}
     else:
         params["options"] = {"defaultType": "swap"}
+    if exchange_id == "ourbit":
+        return _build_ourbit_exchange(params)
     return klass(params)
 
 

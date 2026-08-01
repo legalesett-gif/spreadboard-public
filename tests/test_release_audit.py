@@ -1551,3 +1551,22 @@ def test_all_five_lanes_have_a_markets_tab() -> None:
         ("DEX-SPOT", "Spot-DEX"),
     ]:
         assert f'("{value}", "{label}")' in source, f"missing markets tab for {label}"
+
+
+def test_ourbit_is_registered_on_both_market_types() -> None:
+    """Ourbit has no ccxt adapter; it is an MEXC white-label we retarget."""
+    assert "Ourbit" in sources.default_enabled_cex_source().venues
+    assert "Ourbit" in sources.default_enabled_cex_futures_source().venues
+
+
+def test_ourbit_exchange_points_at_ourbit_hosts_not_mexc() -> None:
+    """A retarget bug would silently quote MEXC prices under the Ourbit name."""
+    exchange = sources._build_ccxt_exchange("ourbit", "Futures", 5.0)
+    urls = exchange.urls["api"]
+    flat = " ".join(
+        str(v) for value in urls.values()
+        for v in (value.values() if isinstance(value, dict) else [value])
+    )
+    assert "ourbit.com" in flat
+    assert "mexc.com" not in flat, "must not fall back to MEXC hosts"
+    assert exchange.id == "ourbit"
