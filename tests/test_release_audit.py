@@ -1758,3 +1758,60 @@ def test_long_futures_short_spot_is_flagged_as_inventory_required() -> None:
     assert api_spreads.requires_existing_spot_inventory(_vrow(route_kind="FUTURES-SPOT")) is True
     for kind in ("SPOT-FUTURES", "FUTURES", "SPOT", "DEX-FUTURES", "DEX-SPOT"):
         assert api_spreads.requires_existing_spot_inventory(_vrow(route_kind=kind)) is False
+
+
+def _frow(**kw):
+    from types import SimpleNamespace
+    base = dict(route_kind="FUTURES", long_funding_pct=None, long_funding_interval_hours=None,
+                short_funding_pct=None, short_funding_interval_hours=None)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_funding_legs_are_normalised_to_a_common_basis() -> None:
+    """AIXBT showed 4482% APR purely from a 4h leg differenced against a 1h leg."""
+    daily, apr = api_spreads.normalised_funding(_frow(
+        long_funding_pct=0.1, long_funding_interval_hours=4.0,
+        short_funding_pct=0.05, short_funding_interval_hours=1.0,
+    ))
+    # long 0.1%/4h = 0.6%/day; short 0.05%/1h = 1.2%/day; net +0.6%/day
+    assert round(daily, 6) == 0.6
+    assert round(apr, 2) == 219.0
+
+
+def test_reproduces_the_reference_boards_recurring_apr() -> None:
+    """uacryptoinvest shows 10.95% constantly: 0.01% per 8h, annualised."""
+    _, apr = api_spreads.normalised_funding(_frow(
+        long_funding_pct=0.0, long_funding_interval_hours=8.0,
+        short_funding_pct=0.01, short_funding_interval_hours=8.0,
+    ))
+    assert round(apr, 2) == 10.95
+
+
+def test_equal_rates_on_equal_intervals_net_to_zero() -> None:
+    daily, apr = api_spreads.normalised_funding(_frow(
+        long_funding_pct=0.02, long_funding_interval_hours=8.0,
+        short_funding_pct=0.02, short_funding_interval_hours=8.0,
+    ))
+    assert daily == 0.0 and apr == 0.0
+
+
+def test_inventory_required_routes_report_the_executable_direction() -> None:
+    """Spot cannot be shorted, so the executable trade is the mirror image and
+    its carry has the opposite sign."""
+    kw = dict(long_funding_pct=0.1, long_funding_interval_hours=4.0,
+              short_funding_pct=0.05, short_funding_interval_hours=1.0)
+    normal, _ = api_spreads.normalised_funding(_frow(**kw))
+    flipped, _ = api_spreads.normalised_funding(_frow(route_kind="FUTURES-SPOT", **kw))
+    assert flipped == -normal
+
+
+def test_missing_interval_falls_back_to_the_exchange_default() -> None:
+    daily, _ = api_spreads.normalised_funding(_frow(
+        long_funding_pct=0.0, short_funding_pct=0.01, short_funding_interval_hours=None,
+    ))
+    assert round(daily, 6) == 0.03  # 0.01% per 8h
+
+
+def test_no_funding_data_returns_none() -> None:
+    assert api_spreads.normalised_funding(_frow()) == (None, None)

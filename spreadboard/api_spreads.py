@@ -1239,7 +1239,9 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
                     _public_row(best_funding) if best_funding is not None else None
                 ),
                 "best_funding_apr_pct": (
-                    best_funding.funding_apr_pct if best_funding is not None else None
+                    normalised_funding(best_funding)[1]
+                    if best_funding is not None
+                    else None
                 ),
                 "best_funding_24h_pct": (
                     _effective_funding_24h(best_funding)
@@ -1325,6 +1327,45 @@ def _row_sort_key(row: SpreadTerminalRow) -> tuple[float, float, float, float]:
     return (fresh_bonus + spread + funding + depth, funding, spread, -(row.age_min or 999999.0))
 
 
+# Funding rates are quoted per settlement interval, and those intervals differ
+# between venues (1h, 4h, 8h). Subtracting a 4-hourly rate from a 1-hourly one
+# is subtracting different units: AIXBT showed a 12.28% "funding spread" and a
+# 4482% APR purely from a 4h leg differenced against a 1h leg. Both sides must
+# be converted to the same per-day basis first.
+def _per_day(rate_pct: float | None, interval_hours: float | None) -> float | None:
+    rate = _float_or_none(rate_pct)
+    if rate is None:
+        return None
+    hours = _float_or_none(interval_hours)
+    if not hours or hours <= 0:
+        hours = 8.0  # exchanges default to 8h when they do not publish one
+    return rate * (24.0 / hours)
+
+
+def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | None]:
+    """Net carry as (percent per day, APR percent), both legs on a common basis.
+
+    A delta-neutral position pays funding on the long leg and receives it on the
+    short leg, so the net is short-minus-long. For routes that would require
+    selling spot you do not own, the executable trade is the mirror image (hold
+    spot long, short the futures), so the carry flips sign with it.
+    """
+    long_daily = _per_day(
+        getattr(row, "long_funding_pct", None),
+        getattr(row, "long_funding_interval_hours", None),
+    )
+    short_daily = _per_day(
+        getattr(row, "short_funding_pct", None),
+        getattr(row, "short_funding_interval_hours", None),
+    )
+    if long_daily is None and short_daily is None:
+        return None, None
+    net_daily = (short_daily or 0.0) - (long_daily or 0.0)
+    if requires_existing_spot_inventory(row):
+        net_daily = -net_daily
+    return net_daily, net_daily * 365.0
+
+
 def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload = row.to_dict()
     payload["deliverable"] = route_deliverable(row)
@@ -1332,6 +1373,16 @@ def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload["identity_mismatch"] = price_ratio_implausible(row)
     payload["thin_book"] = leg_volume_too_thin(row)
     payload["requires_spot_inventory"] = requires_existing_spot_inventory(row)
+    daily, apr = normalised_funding(row)
+    if daily is not None:
+        payload["funding_daily_pct"] = daily
+        payload["funding_spread_pct"] = daily
+        payload["funding_apr_pct"] = apr
+    payload["executable_direction"] = (
+        "hold spot long, short futures"
+        if requires_existing_spot_inventory(row)
+        else "long the buy leg, short the sell leg"
+    )
     payload["conditions"] = [
         item.removeprefix("mirage_guard:").removeprefix("condition:")
         for item in row.blockers
