@@ -987,8 +987,10 @@ def _hide_guarded_rows() -> bool:
 # would be free money at absurd scale. CAT was seen at 0.000001366 on Kucoin spot
 # and 806.75 on Bitget futures: a 590,000,000x ratio, i.e. two unrelated tokens
 # sharing a ticker. This is a statement about identity, not about opportunity
-# size, so it leaves genuine large spreads (SIREN at 2x, even 900%) untouched.
-MAX_CROSS_VENUE_PRICE_RATIO = 10.0
+# size. Tightened 10x -> 3x on 2026-08-01: ANTHROPIC slipped through at 9.8x
+# (881% edge) while the reference product showed 3.13%. 3x still preserves a
+# 150% capture (2.5x), which the operator has taken for real money.
+MAX_CROSS_VENUE_PRICE_RATIO = 3.0
 
 
 def price_ratio_implausible(row: "SpreadTerminalRow") -> bool:

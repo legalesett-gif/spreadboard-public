@@ -1640,9 +1640,17 @@ def test_absurd_price_ratio_is_flagged_as_a_different_asset() -> None:
 
 
 def test_genuine_large_spreads_survive_the_ratio_rule() -> None:
-    """SIREN at ~2x and even a 900% edge are about opportunity, not identity."""
+    """A 150% capture is 2.5x and must survive; the operator has taken one."""
+    # SIREN DEX vs Kucoin, ~2x
     assert api_spreads.price_ratio_implausible(_row(long_price=0.0280, short_price=0.0565)) is False
-    assert api_spreads.price_ratio_implausible(_row(long_price=1.0, short_price=9.5)) is False
+    # a 150% edge, 2.5x
+    assert api_spreads.price_ratio_implausible(_row(long_price=1.0, short_price=2.5)) is False
+
+
+def test_ratio_bound_catches_the_anthropic_tier() -> None:
+    """ANTHROPIC showed 881% (9.8x) here against 3.13% on the reference board."""
+    assert api_spreads.MAX_CROSS_VENUE_PRICE_RATIO == 3.0
+    assert api_spreads.price_ratio_implausible(_row(long_price=1.0, short_price=9.8)) is True
 
 
 def test_missing_prices_do_not_trigger_the_ratio_rule() -> None:
