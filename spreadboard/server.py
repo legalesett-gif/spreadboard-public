@@ -32,6 +32,8 @@ from spreadboard import (  # noqa: E402
     billing,
     board,
     chart_catalog,
+    crypto_billing,
+    crypto_watcher,
     historical_spreads,
     intel,
     live,
@@ -275,6 +277,25 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_subscription_page())
             elif parsed.path == "/account":
                 self._send_html(render_account_page(self.server.board_path, self.server.accounts_path))
+            elif parsed.path.startswith("/api/billing/crypto/invoice/"):
+                user = self._required_user()
+                try:
+                    invoice_id = int(parsed.path.rsplit("/", 1)[-1])
+                except ValueError:
+                    raise ValueError("invalid_invoice_id") from None
+                invoice = crypto_billing.get_invoice(invoice_id, db_path=self.server.accounts_path)
+                # Never let one member poll another member's invoice.
+                if invoice is None or (invoice["user_id"] != user.id and not user.is_admin):
+                    raise ValueError("invoice_not_found")
+                self._send_json({"ok": True, "invoice": invoice})
+            elif parsed.path == "/api/billing/crypto/pending":
+                user = self._required_user()
+                if not user.is_admin:
+                    raise PermissionError("admin_required")
+                self._send_json({
+                    "ok": True,
+                    "payments": crypto_billing.pending_payments(db_path=self.server.accounts_path),
+                })
             elif parsed.path == "/api/session":
                 user = getattr(self, "current_user", None)
                 self._send_json(
@@ -283,6 +304,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         "user": user.public_dict() if user else None,
                         "csrf_token": user.csrf_token if user else None,
                         "billing": billing.status(),
+                        "crypto_billing": crypto_billing.status(),
                         "telegram": telegram_bot.status(),
                     },
                     status=HTTPStatus.OK if user else HTTPStatus.UNAUTHORIZED,
@@ -464,6 +486,38 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "url": billing.create_checkout_session(user)})
             elif parsed.path == "/api/billing/portal":
                 self._send_json({"ok": True, "url": billing.create_portal_session(user)})
+            elif parsed.path == "/api/billing/crypto/invoice":
+                if not payload.get("terms_accepted") or not payload.get("immediate_access_consent"):
+                    raise ValueError("subscription_consent_required")
+                accounts.record_subscription_consent(
+                    user.id,
+                    terms_version=TERMS_VERSION,
+                    immediate_access=True,
+                    ip_address=self.client_address[0] if self.client_address else "",
+                    user_agent=self.headers.get("User-Agent", ""),
+                    db_path=self.server.accounts_path,
+                )
+                try:
+                    period_days = int(payload.get("period_days") or 0)
+                except (TypeError, ValueError):
+                    raise ValueError("invalid_period") from None
+                invoice = crypto_billing.create_invoice(
+                    user.id, period_days, db_path=self.server.accounts_path
+                )
+                self._send_json({"ok": True, "invoice": invoice}, status=HTTPStatus.CREATED)
+            elif parsed.path == "/api/billing/crypto/settle":
+                if not user.is_admin:
+                    raise PermissionError("admin_required")
+                try:
+                    invoice_id = int(payload.get("invoice_id") or 0)
+                except (TypeError, ValueError):
+                    raise ValueError("invalid_invoice_id") from None
+                self._send_json({
+                    "ok": True,
+                    "result": crypto_billing.settle_manually(
+                        invoice_id, db_path=self.server.accounts_path
+                    ),
+                })
             elif parsed.path == "/api/positions":
                 position = accounts.create_position(user.id, payload, db_path=self.server.accounts_path)
                 self._send_json({"ok": True, "position": position}, status=HTTPStatus.CREATED)
@@ -597,8 +651,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             else:
                 self._redirect("/login?" + urlencode({"next": self.path[:500]}))
             return False
-        subscription_paths = {"/subscription", "/account", "/profile", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings", "/api/notifications/read", "/api/billing/checkout", "/api/billing/portal", "/api/telegram/link", "/api/telegram/unlink"}
-        if not user.subscription_active and path not in subscription_paths and not (user.is_admin and path.startswith("/api/account-users")):
+        subscription_paths = {"/subscription", "/account", "/profile", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings", "/api/notifications/read", "/api/billing/checkout", "/api/billing/portal", "/api/billing/crypto/invoice", "/api/telegram/link", "/api/telegram/unlink"}
+        # Paying members-to-be have no active subscription yet, so the checkout
+        # and invoice-polling routes must stay reachable or nobody can ever buy.
+        allowed_without_subscription = (
+            path in subscription_paths
+            or path.startswith("/api/billing/crypto/invoice/")
+        )
+        if not user.subscription_active and not allowed_without_subscription and not (user.is_admin and path.startswith("/api/account-users")):
             if path.startswith("/api/"):
                 self._send_json({"ok": False, "error": "subscription_required"}, status=HTTPStatus.PAYMENT_REQUIRED)
             elif head_only:
@@ -2095,6 +2155,7 @@ def api_health(
             "poll_seconds": getattr(position_alert_worker, "poll_seconds", None),
         },
         "billing": billing.status(),
+        "crypto_billing": crypto_billing.status(),
         "telegram_bot": telegram_bot.status(),
     }
 
@@ -10002,9 +10063,14 @@ def main(host: str, port: int, board_path: Path) -> None:
     config = alerts.load_config()
     server = SpreadBoardServer((host, port), SpreadBoardHandler, board_path=board_path, config=config)
     click.echo(f"SpreadBoard serving on http://{host}:{port}")
+    crypto_stop = crypto_watcher.start_background(db_path=server.accounts_path)
+    if crypto_stop is None:
+        click.echo("Crypto billing watcher idle (receiving address or RPC URL not configured)")
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
+        if crypto_stop is not None:
+            crypto_stop.set()
         if server.alert_watcher:
             server.alert_watcher.stop()
         server.server_close()

@@ -249,6 +249,43 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS crypto_invoices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                period_days INTEGER NOT NULL,
+                list_amount_cents INTEGER NOT NULL,
+                slot_index INTEGER NOT NULL,
+                expected_amount_cents INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open'
+                    CHECK (status IN ('open', 'paid', 'expired', 'cancelled')),
+                token TEXT,
+                tx_hash TEXT UNIQUE,
+                from_address TEXT,
+                paid_amount_cents INTEGER,
+                block_number INTEGER,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                settled_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS crypto_payments (
+                tx_hash TEXT NOT NULL,
+                log_index INTEGER NOT NULL,
+                token TEXT NOT NULL,
+                from_address TEXT NOT NULL,
+                amount_cents INTEGER NOT NULL,
+                block_number INTEGER NOT NULL,
+                invoice_id INTEGER REFERENCES crypto_invoices(id) ON DELETE SET NULL,
+                resolution TEXT NOT NULL
+                    CHECK (resolution IN ('settled', 'unmatched', 'ambiguous', 'manual')),
+                note TEXT NOT NULL DEFAULT '',
+                observed_at TEXT NOT NULL,
+                PRIMARY KEY (tx_hash, log_index)
+            );
+            CREATE TABLE IF NOT EXISTS crypto_watcher_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                last_scanned_block INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS sessions_token_hash ON sessions(token_hash);
             CREATE INDEX IF NOT EXISTS sessions_user_expiry ON sessions(user_id, expires_at);
             CREATE INDEX IF NOT EXISTS positions_user_status ON positions(user_id, status, opened_at DESC);
@@ -259,6 +296,9 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS telegram_link_tokens_user ON telegram_link_tokens(user_id, expires_at);
             CREATE INDEX IF NOT EXISTS telegram_memberships_state ON telegram_memberships(state, updated_at);
             CREATE INDEX IF NOT EXISTS market_alert_rules_user ON market_alert_rules(user_id, enabled, updated_at);
+            CREATE INDEX IF NOT EXISTS crypto_invoices_open ON crypto_invoices(status, expected_amount_cents, expires_at);
+            CREATE INDEX IF NOT EXISTS crypto_invoices_user ON crypto_invoices(user_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS crypto_payments_resolution ON crypto_payments(resolution, observed_at DESC);
             """
         )
         _ensure_columns(connection, "users", {

@@ -1,0 +1,142 @@
+"""HTTP boundary for crypto checkout.
+
+The subtle failure this guards against: members buying access have no active
+subscription yet, so if the invoice routes sit behind the subscription gate,
+nobody can ever pay. That is a silent, total revenue outage.
+"""
+
+from __future__ import annotations
+
+import http.client
+import json
+import threading
+
+import pytest
+
+from spreadboard.server import SpreadBoardHandler, SpreadBoardServer
+
+
+RECEIVER = "0xe45cedb238f0a90f111a283eb5f67f7e4d80b937"
+CONSENT = {"terms_accepted": True, "immediate_access_consent": True, "period_days": 30}
+
+
+@pytest.fixture()
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("SPREADBOARD_AUTH_REQUIRED", "1")
+    monkeypatch.setenv("SPREADBOARD_ADMIN_EMAIL", "admin@example.test")
+    monkeypatch.setenv("SPREADBOARD_ADMIN_PASSWORD", "correct-horse-battery-staple")
+    monkeypatch.setenv("SPREADBOARD_CRYPTO_RECEIVING_ADDRESS", RECEIVER)
+    monkeypatch.setenv("SPREADBOARD_CRYPTO_RPC_URL", "https://example.invalid/rpc")
+    server = SpreadBoardServer(
+        ("127.0.0.1", 0), SpreadBoardHandler,
+        board_path=tmp_path / "missing.jsonl", config={},
+        accounts_path=tmp_path / "accounts.sqlite3",
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+    try:
+        yield connection
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+
+
+def register(connection, email: str) -> tuple[str, str]:
+    connection.request(
+        "POST", "/api/register",
+        body=json.dumps({"display_name": "Member", "email": email, "password": "new-member-password"}),
+        headers={"Content-Type": "application/json"},
+    )
+    response = connection.getresponse()
+    assert response.status == 201, response.read()
+    cookie = response.getheader("Set-Cookie")
+    response.read()
+
+    connection.request("GET", "/api/session", headers={"Cookie": cookie})
+    response = connection.getresponse()
+    csrf = json.loads(response.read())["csrf_token"]
+    return cookie, csrf
+
+
+def post(connection, path, cookie, csrf, body):
+    connection.request(
+        "POST", path, body=json.dumps(body),
+        headers={"Cookie": cookie, "Content-Type": "application/json", "X-CSRF-Token": csrf},
+    )
+    return connection.getresponse()
+
+
+def test_member_without_subscription_can_still_create_an_invoice(client):
+    cookie, csrf = register(client, "buyer@example.test")
+
+    client.request("GET", "/api/board", headers={"Cookie": cookie})
+    response = client.getresponse()
+    assert response.status == 402, "precondition: this member has no access yet"
+    response.read()
+
+    response = post(client, "/api/billing/crypto/invoice", cookie, csrf, CONSENT)
+    assert response.status == 201, "checkout must not sit behind the subscription gate"
+    invoice = json.loads(response.read())["invoice"]
+    assert invoice["amount_cents"] == 18_000
+    assert invoice["receiving_address"] == RECEIVER
+    assert invoice["chain_id"] == 42161
+
+
+def test_invoice_polling_is_reachable_without_a_subscription(client):
+    cookie, csrf = register(client, "buyer@example.test")
+    response = post(client, "/api/billing/crypto/invoice", cookie, csrf, CONSENT)
+    invoice_id = json.loads(response.read())["invoice"]["id"]
+
+    client.request("GET", f"/api/billing/crypto/invoice/{invoice_id}", headers={"Cookie": cookie})
+    response = client.getresponse()
+    assert response.status == 200
+    assert json.loads(response.read())["invoice"]["id"] == invoice_id
+
+
+def test_a_member_cannot_poll_someone_elses_invoice(client):
+    first_cookie, first_csrf = register(client, "first@example.test")
+    response = post(client, "/api/billing/crypto/invoice", first_cookie, first_csrf, CONSENT)
+    invoice_id = json.loads(response.read())["invoice"]["id"]
+
+    second_cookie, _ = register(client, "second@example.test")
+    client.request("GET", f"/api/billing/crypto/invoice/{invoice_id}", headers={"Cookie": second_cookie})
+    response = client.getresponse()
+    assert response.status >= 400
+    response.read()
+
+
+def test_consent_is_required_before_an_invoice_is_issued(client):
+    cookie, csrf = register(client, "buyer@example.test")
+    response = post(client, "/api/billing/crypto/invoice", cookie, csrf, {"period_days": 30})
+    assert response.status >= 400
+    assert "consent" in response.read().decode()
+
+
+def test_invalid_period_is_rejected(client):
+    cookie, csrf = register(client, "buyer@example.test")
+    response = post(
+        client, "/api/billing/crypto/invoice", cookie, csrf,
+        {"terms_accepted": True, "immediate_access_consent": True, "period_days": 45},
+    )
+    assert response.status >= 400
+    response.read()
+
+
+def test_admin_only_queue_is_closed_to_members(client):
+    cookie, _ = register(client, "buyer@example.test")
+    client.request("GET", "/api/billing/crypto/pending", headers={"Cookie": cookie})
+    response = client.getresponse()
+    assert response.status >= 400
+    response.read()
+
+
+def test_health_reports_crypto_provider(client):
+    client.request("GET", "/api/health")
+    response = client.getresponse()
+    payload = json.loads(response.read())
+    crypto = payload["crypto_billing"]
+    assert crypto["provider"] == "crypto"
+    assert crypto["chain_id"] == 42161
+    assert crypto["recurring"] is False
+    assert sorted(crypto["tokens"]) == ["USDC", "USDT"]
