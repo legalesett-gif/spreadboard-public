@@ -5124,6 +5124,156 @@ def render_pricing_page() -> str:
     return shell("Membership - SpreadBoard", "pricing", body)
 
 
+def render_crypto_checkout_panel() -> str:
+    """Prepaid crypto checkout: pick a period, pay the exact amount, get access."""
+    state = crypto_billing.status()
+    if not state.get("checkout_ready"):
+        return (
+            '<section class="account-empty-panel"><strong>Crypto payment</strong>'
+            "<p>Crypto checkout is being configured. No payment can be taken yet.</p></section>"
+        )
+    periods = "".join(
+        f'<button class="sheet-button crypto-period" type="button" data-crypto-period="{p["days"]}">'
+        f'<span class="crypto-period-price">{h(p["label"])}</span>'
+        f'<span class="crypto-period-days">{p["days"]} days</span></button>'
+        for p in state.get("periods", [])
+    )
+    tokens = " or ".join(state.get("tokens", []))
+    return f"""
+    <section class="account-empty-panel crypto-checkout" data-crypto-checkout>
+      <strong>Pay with crypto</strong>
+      <p class="crypto-lede">Prepaid access on <b>{h(state.get('chain'))}</b> in <b>{h(tokens)}</b>.
+      There is no auto-renewal &mdash; access simply lapses at the end of the period.</p>
+      <div class="crypto-periods">{periods}</div>
+      <div class="crypto-invoice" data-crypto-invoice hidden>
+        <div class="crypto-row"><span>Send exactly</span>
+          <b data-crypto-amount></b>
+          <button class="sheet-button ghost" type="button" data-copy="amount">Copy</button></div>
+        <div class="crypto-row"><span>To address</span>
+          <code data-crypto-address></code>
+          <button class="sheet-button ghost" type="button" data-copy="address">Copy</button></div>
+        <div class="crypto-qr" data-crypto-qr></div>
+        <p class="crypto-warn">Send only <b>{h(tokens)}</b> on <b>{h(state.get('chain'))}</b>.
+        Funds sent on another chain or in another token cannot be credited.
+        The amount shown is unique to your order &mdash; send it exactly.</p>
+        <p class="crypto-status" data-crypto-status>Waiting for payment&hellip;</p>
+        <p class="crypto-expiry">Expires in <b data-crypto-countdown>60:00</b></p>
+      </div>
+      <p role="alert" data-crypto-error></p>
+    </section>
+    """
+
+
+def render_crypto_checkout_script() -> str:
+    """Client logic: create an invoice, render a QR, poll until it settles.
+
+    Emits nothing when checkout is unconfigured so no dead code is shipped.
+    """
+    if not crypto_billing.status().get("checkout_ready"):
+        return ""
+    return """
+<style>
+.crypto-checkout{margin-top:16px}
+.crypto-lede{opacity:.85;margin:.4rem 0 .8rem}
+.crypto-periods{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.8rem}
+.crypto-period{display:flex;flex-direction:column;align-items:flex-start;gap:.15rem;min-width:120px}
+.crypto-period-price{font-weight:700}
+.crypto-period-days{font-size:.78rem;opacity:.7}
+.crypto-period[aria-pressed="true"]{outline:2px solid var(--terminal-accent,#2f9e79)}
+.crypto-row{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin:.35rem 0}
+.crypto-row code,.crypto-row b{font-family:ui-monospace,Menlo,monospace;word-break:break-all}
+.crypto-qr{margin:.6rem 0}
+.crypto-qr img{image-rendering:pixelated;width:180px;height:180px;background:#fff;padding:8px;border-radius:6px}
+.crypto-warn{font-size:.82rem;opacity:.85;border-left:3px solid #d08a00;padding-left:.6rem}
+.crypto-status{font-weight:600}
+.sheet-button.ghost{padding:.2rem .5rem;font-size:.78rem}
+</style>
+<script>
+(function(){
+  var root=document.querySelector('[data-crypto-checkout]'); if(!root) return;
+  var box=root.querySelector('[data-crypto-invoice]');
+  var amountEl=root.querySelector('[data-crypto-amount]');
+  var addrEl=root.querySelector('[data-crypto-address]');
+  var qrEl=root.querySelector('[data-crypto-qr]');
+  var statusEl=root.querySelector('[data-crypto-status]');
+  var errEl=root.querySelector('[data-crypto-error]');
+  var cdEl=root.querySelector('[data-crypto-countdown]');
+  var timer=null, poll=null, invoice=null;
+
+  function csrf(){ try{ return JSON.parse(document.getElementById('account-session').textContent).csrf_token; }catch(e){ return null; } }
+  function consent(){ var c=document.querySelector('[data-subscription-consent]'); return !!(c && c.checked); }
+
+  function qr(text){
+    // Minimal QR via a data-URI-free canvas fallback: link out if unavailable.
+    qrEl.innerHTML='';
+    var a=document.createElement('a');
+    a.textContent='Open in wallet';
+    a.className='sheet-button';
+    a.href=text; qrEl.appendChild(a);
+  }
+
+  function countdown(iso){
+    if(timer) clearInterval(timer);
+    timer=setInterval(function(){
+      var left=Math.max(0,(new Date(iso)-new Date())/1000);
+      var m=Math.floor(left/60), s=Math.floor(left%60);
+      cdEl.textContent=m+':'+(s<10?'0':'')+s;
+      if(left<=0){ clearInterval(timer); if(poll) clearInterval(poll); statusEl.textContent='This invoice expired. Choose a period to start again.'; }
+    },1000);
+  }
+
+  function watch(id){
+    if(poll) clearInterval(poll);
+    poll=setInterval(function(){
+      fetch('/api/billing/crypto/invoice/'+id,{credentials:'same-origin'})
+        .then(function(r){return r.json();})
+        .then(function(d){
+          if(!d || !d.invoice) return;
+          if(d.invoice.status==='paid'){
+            clearInterval(poll); if(timer) clearInterval(timer);
+            statusEl.textContent='Payment confirmed. Activating your access\u2026';
+            setTimeout(function(){ location.href='/account'; },1500);
+          }
+        }).catch(function(){});
+    },5000);
+  }
+
+  root.querySelectorAll('[data-crypto-period]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      errEl.textContent='';
+      if(!consent()){ errEl.textContent='Please accept the Terms and Refund Policy first.'; return; }
+      root.querySelectorAll('[data-crypto-period]').forEach(function(b){ b.setAttribute('aria-pressed','false'); });
+      btn.setAttribute('aria-pressed','true');
+      fetch('/api/billing/crypto/invoice',{
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json','X-CSRF-Token':csrf()||''},
+        body:JSON.stringify({period_days:parseInt(btn.dataset.cryptoPeriod,10),terms_accepted:true,immediate_access_consent:true})
+      }).then(function(r){return r.json();}).then(function(d){
+        if(!d||!d.ok||!d.invoice){ errEl.textContent=(d&&d.error)||'Could not create an invoice.'; return; }
+        invoice=d.invoice;
+        amountEl.textContent=invoice.amount_display+' '+(invoice.tokens||[]).join(' or ');
+        addrEl.textContent=invoice.receiving_address;
+        qr('ethereum:'+invoice.receiving_address+'@'+invoice.chain_id);
+        box.hidden=false;
+        statusEl.textContent='Waiting for payment\u2026 confirmed automatically once it lands.';
+        countdown(invoice.expires_at); watch(invoice.id);
+      }).catch(function(){ errEl.textContent='Network error. Nothing was charged.'; });
+    });
+  });
+
+  root.querySelectorAll('[data-copy]').forEach(function(b){
+    b.addEventListener('click',function(){
+      if(!invoice) return;
+      var v=b.dataset.copy==='amount'?invoice.amount_display:invoice.receiving_address;
+      navigator.clipboard&&navigator.clipboard.writeText(v);
+      var t=b.textContent; b.textContent='Copied'; setTimeout(function(){b.textContent=t;},1200);
+    });
+  });
+})();
+</script>
+"""
+
+
 def render_subscription_page() -> str:
     user = accounts.current_user()
     billing_state = billing.status()
@@ -5136,9 +5286,11 @@ def render_subscription_page() -> str:
     <section class="account-page narrow-account" data-account-page>
       <header class="terminal-heading"><div><span class="page-kicker">Membership</span><h1>Subscription required</h1><p>Your account is signed in, but market access is not currently active.</p></div></header>
       <section class="account-empty-panel"><strong>{h(user.display_name if user else 'Member')}</strong><p>Status: {h(user.subscription_status if user else 'inactive')}.</p><label class="subscription-consent"><input type="checkbox" data-subscription-consent> <span>I accept the <a href="/terms" target="_blank">Terms</a> and <a href="/refunds" target="_blank">Refund Policy</a>, request immediate access, and acknowledge that the statutory cancellation right may be affected once digital access begins.</span></label>{action}<a class="sheet-button" href="/account">Open account</a><p role="alert" data-billing-error></p></section>
+      {render_crypto_checkout_panel()}
     </section>
     <script type="application/json" id="account-session">{json_script_data({'csrf_token': user.csrf_token if user else None})}</script>
     {render_billing_script()}
+    {render_crypto_checkout_script()}
     """
     return shell("Subscription - SpreadBoard", "profile", body)
 

@@ -85,20 +85,85 @@ def _handle_group_query(
         return None
     if board_path is None:
         return None
+    public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip()
     try:
         body = telegram_queries.render(
-            query,
-            board_path=board_path,
-            public_url=os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip(),
+            query, board_path=board_path, public_url=public_url
         )
     except Exception:  # noqa: BLE001 - a lookup failure must never break the webhook
         return None
-    return _reply(chat_id, body, html=True, thread_id=thread_id)
+    return _reply(
+        chat_id, body, html=True, thread_id=thread_id,
+        markup=telegram_queries.keyboard(query, public_url=public_url),
+    )
+
+
+def _handle_callback(cb: dict[str, Any], *, db_path: Any, board_path: Any) -> dict[str, Any] | None:
+    """A view button was pressed: re-render the same token in the chosen view."""
+    data = str(cb.get("data") or "")
+    message = cb.get("message") if isinstance(cb.get("message"), dict) else {}
+    chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
+    chat_id = int(chat.get("id") or 0)
+    community = accounts.telegram_community(db_path=db_path)
+    if community is None or int(community["chat_id"]) != chat_id:
+        return None
+    parts = data.split(":", 2)
+    if len(parts) != 3 or parts[0] != "v":
+        return None
+    query = telegram_queries.Query(kind=parts[1], symbol=parts[2])
+    public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip()
+    try:
+        body = telegram_queries.render(query, board_path=board_path, public_url=public_url)
+    except Exception:  # noqa: BLE001
+        return None
+    return {
+        "method": "editMessageText",
+        "chat_id": chat_id,
+        "message_id": int(message.get("message_id") or 0),
+        "text": body,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+        "reply_markup": telegram_queries.keyboard(query, public_url=public_url),
+    }
+
+
+def _handle_inline_query(iq: dict[str, Any], *, board_path: Any) -> dict[str, Any] | None:
+    """Token autocomplete via inline mode (@bot SIREN)."""
+    public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip()
+    try:
+        matches = telegram_queries.suggest(str(iq.get("query") or ""), board_path=board_path)
+    except Exception:  # noqa: BLE001
+        return None
+    results = []
+    for item in matches[:20]:
+        token = item["token"]
+        edge = item.get("best_edge_pct")
+        edge_txt = f"{float(edge):+.2f}% best edge" if edge is not None else "no edge data"
+        results.append({
+            "type": "article",
+            "id": f"tok-{token}"[:64],
+            "title": token,
+            "description": f"{edge_txt} · {item.get('route_count') or 0} routes",
+            "input_message_content": {"message_text": f"${token}"},
+        })
+    return {
+        "method": "answerInlineQuery",
+        "inline_query_id": str(iq.get("id") or ""),
+        "results": results,
+        "cache_time": 30,
+        "is_personal": False,
+    }
 
 
 def handle_update(
     update: dict[str, Any], *, db_path: Any, board_path: Any = None
 ) -> dict[str, Any] | None:
+    callback = update.get("callback_query")
+    if isinstance(callback, dict):
+        return _handle_callback(callback, db_path=db_path, board_path=board_path)
+    inline = update.get("inline_query")
+    if isinstance(inline, dict):
+        return _handle_inline_query(inline, board_path=board_path)
     join_request = update.get("chat_join_request")
     if isinstance(join_request, dict):
         _handle_join_request(join_request, db_path=db_path)
@@ -305,9 +370,11 @@ def _api_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
 
 def _reply(
     chat_id: int, text: str, *, button: tuple[str, str] | None = None, html: bool = False,
-    thread_id: int | None = None,
+    thread_id: int | None = None, markup: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"method": "sendMessage", "chat_id": chat_id, "text": text}
+    if markup:
+        payload["reply_markup"] = markup
     if thread_id is not None:
         payload["message_thread_id"] = thread_id
     if html:

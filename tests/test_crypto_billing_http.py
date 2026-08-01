@@ -140,3 +140,31 @@ def test_health_reports_crypto_provider(client):
     assert crypto["chain_id"] == 42161
     assert crypto["recurring"] is False
     assert sorted(crypto["tokens"]) == ["USDC", "USDT"]
+
+
+def test_subscription_page_offers_crypto_checkout(client):
+    cookie, _ = register(client, "buyer@example.test")
+    client.request("GET", "/subscription", headers={"Cookie": cookie})
+    response = client.getresponse()
+    page = response.read().decode()
+    assert response.status == 200
+    assert "Pay with crypto" in page
+    assert "Arbitrum One" in page
+    assert "USDC" in page and "USDT" in page
+    # all three prepaid periods must be offered
+    for label in ("$180.00", "$450.00", "$1,650.00"):
+        assert label in page, f"missing period {label}"
+    for days in ("30", "90", "365"):
+        assert f'data-crypto-period="{days}"' in page
+    # the wrong-chain warning must be present, not buried
+    assert "cannot be credited" in page
+    assert "no auto-renewal" in page.lower()
+
+
+def test_checkout_panel_fails_closed_when_unconfigured(client, monkeypatch):
+    monkeypatch.delenv("SPREADBOARD_CRYPTO_RPC_URL", raising=False)
+    cookie, _ = register(client, "buyer2@example.test")
+    client.request("GET", "/subscription", headers={"Cookie": cookie})
+    page = client.getresponse().read().decode()
+    assert "No payment can be taken yet" in page
+    assert "data-crypto-period" not in page

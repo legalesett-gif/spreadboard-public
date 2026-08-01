@@ -1,0 +1,98 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - link "SpreadBoard" [ref=e4] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=e7]:
+        - link "Arbitrage" [ref=e8] [cursor=pointer]:
+          - /url: /
+        - link "Funding" [ref=e9] [cursor=pointer]:
+          - /url: /funding
+        - link "Charts" [ref=e10] [cursor=pointer]:
+          - /url: /charts
+        - link "Intel" [ref=e11] [cursor=pointer]:
+          - /url: /intel
+        - link "Watchlist" [ref=e12] [cursor=pointer]:
+          - /url: /watchlist
+        - link "Portfolio" [ref=e13] [cursor=pointer]:
+          - /url: /account
+        - link "Membership" [ref=e14] [cursor=pointer]:
+          - /url: /pricing
+      - button "Toggle light and dark mode" [ref=e16] [cursor=pointer]:
+        - generic [ref=e18]: Light
+  - main [ref=e20]:
+    - generic [ref=e21]:
+      - generic [ref=e22]:
+        - generic [ref=e23]:
+          - text: SpreadBoard membership
+          - heading "One terminal for live spread and funding research." [level=1] [ref=e24]
+          - paragraph [ref=e25]: Compare executable CEX and OKX DEX routes, inspect funding and transfer constraints, and follow divergence and convergence without stitching together exchange screens.
+        - complementary [ref=e26]:
+          - generic [ref=e27]: Full access
+          - generic [ref=e28]:
+            - strong [ref=e29]: $180
+            - emphasis [ref=e30]: per month
+          - paragraph [ref=e31]: Recurring monthly membership. Billing and cancellation are managed through Stripe.
+          - generic [ref=e32]:
+            - link "Create account" [ref=e33] [cursor=pointer]:
+              - /url: /register
+            - link "Sign in" [ref=e34] [cursor=pointer]:
+              - /url: /login
+      - generic [ref=e35]:
+        - generic [ref=e36]:
+          - generic [ref=e37]:
+            - text: Included
+            - heading "Built for route verification" [level=2] [ref=e38]
+          - paragraph [ref=e39]: Every view is designed to answer whether a displayed edge is current, liquid enough to inspect, and carrying a funding cost or benefit.
+        - generic [ref=e40]:
+          - article [ref=e41]:
+            - text: Arbitrage
+            - heading "All major route types" [level=3] [ref=e42]
+            - paragraph [ref=e43]: Futures-Futures, Futures-Spot, Spot-Spot, and Futures-DEX opportunities grouped by token, with the strongest route first.
+          - article [ref=e44]:
+            - text: Execution context
+            - heading "Order-book aware spreads" [level=3] [ref=e45]
+            - paragraph [ref=e46]: Top-book entry and exit spreads sit beside matched-size $50 VWAP so a thin quote is not presented as effortless liquidity.
+          - article [ref=e47]:
+            - text: Funding
+            - heading "Paired carry, not isolated rates" [level=3] [ref=e48]
+            - paragraph [ref=e49]: Current funding, settled 24-hour funding, payout cadence, next event, and available history for every futures leg.
+          - article [ref=e50]:
+            - text: Charts
+            - heading "Live spread progression" [level=3] [ref=e51]
+            - paragraph [ref=e52]: Interactive route charts from one minute through seven days, including entry, exit, matched VWAP, and funding series where available.
+          - article [ref=e53]:
+            - text: DEX
+            - heading "OKX DEX-first identity" [level=3] [ref=e54]
+            - paragraph [ref=e55]: Read-only quotes use exact chain and contract identity, with route metadata and quote age instead of ticker-only matching.
+          - article [ref=e56]:
+            - text: Workflow
+            - heading "Alerts, Intel, and journal" [level=3] [ref=e57]
+            - paragraph [ref=e58]: Watchlists, route and funding alerts, anonymized Community Intel, and a position journal that separates price PnL, funding, and fees.
+      - generic [ref=e59]:
+        - generic [ref=e61]:
+          - text: Product standard
+          - heading "What the numbers mean" [level=2] [ref=e62]
+        - generic [ref=e63]:
+          - generic [ref=e64]:
+            - strong [ref=e65]: Continuously refreshed
+            - text: Public exchange and DEX data is collected on the production server.
+          - generic [ref=e66]:
+            - strong [ref=e67]: Freshness visible
+            - text: Unavailable or unresolved inputs are labelled rather than silently estimated.
+          - generic [ref=e68]:
+            - strong [ref=e69]: Read-only by design
+            - text: No orders, transfers, approvals, signatures, or withdrawals are initiated.
+          - generic [ref=e70]:
+            - strong [ref=e71]: Telegram connected
+            - text: Link your account privately to check membership and open the payment flow.
+        - paragraph [ref=e72]:
+          - text: SpreadBoard is a market-information and research product, not an exchange, broker, investment adviser, or execution service. Digital-asset markets are volatile. Displayed spreads can change before either leg is filled, and access does not guarantee profit or execution.
+          - link "Terms" [ref=e73] [cursor=pointer]:
+            - /url: /terms
+          - text: ·
+          - link "Privacy" [ref=e74] [cursor=pointer]:
+            - /url: /privacy
+          - text: ·
+          - link "Refunds" [ref=e75] [cursor=pointer]:
+            - /url: /refunds

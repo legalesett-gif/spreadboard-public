@@ -32,7 +32,7 @@ def main() -> int:
         {
             "url": f"{public_url}/api/telegram/webhook",
             "secret_token": secret,
-            "allowed_updates": ["message", "chat_join_request", "my_chat_member"],
+            "allowed_updates": ["message", "chat_join_request", "my_chat_member", "callback_query", "inline_query"],
             "drop_pending_updates": True,
         },
         separators=(",", ":"),
@@ -47,6 +47,9 @@ def main() -> int:
                 {"command": "subscribe", "description": "Open secure membership checkout"},
                 {"command": "mysubscription", "description": "Check membership status"},
                 {"command": "access", "description": "Request subscriber group access"},
+                {"command": "spread", "description": "Spread across all parsed venues"},
+                {"command": "funding", "description": "Funding rate and APR per route"},
+                {"command": "transfer", "description": "Deposit / withdrawal rails per venue"},
             ],
         },
     )
@@ -56,7 +59,10 @@ def main() -> int:
         {
             "scope": {"type": "all_group_chats"},
             "commands": [
-                {"command": "setupgroup", "description": "Connect this subscriber group"}
+                {"command": "setupgroup", "description": "Connect this subscriber group"},
+                {"command": "spread", "description": "Spread across all parsed venues"},
+                {"command": "funding", "description": "Funding rate and APR per route"},
+                {"command": "transfer", "description": "Deposit / withdrawal rails per venue"}
             ],
         },
     )

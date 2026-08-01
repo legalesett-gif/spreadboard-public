@@ -1,0 +1,330 @@
+{
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_crypto_billing_http.py": {
+    "mtime": 1785586440.543813,
+    "hash": "55faa521398123b5cdee8646eaabda07"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_billing.py": {
+    "mtime": 1785522976.0322635,
+    "hash": "7958dcf9a98bb4b2c8237ef483ae5c0b"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_backup_spreadboard.py": {
+    "mtime": 1785532366.895872,
+    "hash": "20731d2f4540fb492ad4020245477f93"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_user_market_alerts.py": {
+    "mtime": 1785530742.2550635,
+    "hash": "04a67248dbd2858b55dd4394a19c6f05"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_live_charts.py": {
+    "mtime": 1785532194.3930757,
+    "hash": "77d41b60fd09fc16dd0432d7ece1034c"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_accounts.py": {
+    "mtime": 1785516742.3557427,
+    "hash": "6c757b471a0fbc8bfa13f78b80b24a7b"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_crypto_billing.py": {
+    "mtime": 1785586173.939495,
+    "hash": "09ef4bce2fb783e53b467fdaaefd3e5f"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_release_audit.py": {
+    "mtime": 1785605520.7951756,
+    "hash": "e17368d84427d44aa80f5d69732bec60"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_crypto_watcher.py": {
+    "mtime": 1785586285.041231,
+    "hash": "5dba9520b2807253f47214f22f6804c1"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_chart_catalog_history.py": {
+    "mtime": 1785532236.5250459,
+    "hash": "897e2e0415ba7b1c8c87cbf773b4908c"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_telegram_queries.py": {
+    "mtime": 1785602966.5885289,
+    "hash": "7fd7f27285b2d23c39b40280c2793bb7"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_telegram_bot.py": {
+    "mtime": 1785530379.990387,
+    "hash": "152d61f8dc807bd9b32e3536008c9876"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_user_portal.py": {
+    "mtime": 1785531817.3561609,
+    "hash": "d3e34d3dc94c70d90c8b44385be5c17d"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_okx_quotes.py": {
+    "mtime": 1785534254.1753957,
+    "hash": "2b8099192c48e2de6aeafc0207c9e0b5"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/fast_quote_worker.py": {
+    "mtime": 1785356816.7130582,
+    "hash": "b3d71c844a52a989220c412fa7b0fd4d"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/chart_catalog_worker.py": {
+    "mtime": 1785507633.004845,
+    "hash": "ac25bf4acf174294f2b036d42460eea9"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/configure_telegram_webhook.py": {
+    "mtime": 1785534924.6158924,
+    "hash": "1e6996ee73fd73bdb118dcb3c8abd513"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/api_discovery_worker.py": {
+    "mtime": 1785451168.14945,
+    "hash": "3653d4af6d801fe576b9ee7ce8910efe"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/audit_live_charts.py": {
+    "mtime": 1785450178.4720771,
+    "hash": "fa7ccf6426d7e91df5a415935d33837d"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/build_dex_watchlist.py": {
+    "mtime": 1785108849.8806932,
+    "hash": "5a1dcda0f8a5db6fd5ab373b423131b1"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/configure_stripe_webhook.py": {
+    "mtime": 1785528366.9742446,
+    "hash": "6dffdf4c1e7e2ade44b2dc9e8514d076"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/route_quote_worker.py": {
+    "mtime": 1785268324.772521,
+    "hash": "b74050b1a1eb2755a36490e72a79ff1a"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/backup_spreadboard.py": {
+    "mtime": 1785532867.005586,
+    "hash": "99fd4bc1f87f25b1b3bb8130b6791ef8"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/refresh_spreadboard_enrichment.py": {
+    "mtime": 1785265618.1403725,
+    "hash": "3fe6ef3ff36a3f666566203dfa081688"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/run_spreadboard_service.py": {
+    "mtime": 1785604848.9720843,
+    "hash": "234a2d751fcdaf8a1e4896980476c0f3"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/websocket_book_worker.py": {
+    "mtime": 1785502030.351069,
+    "hash": "6f09625cf250db8d2fa244543ba0d847"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/telegram_bot.py": {
+    "mtime": 1785589293.5329125,
+    "hash": "b59e8d22821a31ad2d255066d51ae443"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/alerts.py": {
+    "mtime": 1785530555.1908045,
+    "hash": "a17fa08da3fd77cdc1eede8d8d8f9a88"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/intel.py": {
+    "mtime": 1784989847.4432178,
+    "hash": "7af3014b5e178c479c3bac1c3f43bdca"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/chart_catalog.py": {
+    "mtime": 1785532085.7945487,
+    "hash": "10394d879d919f45717b2284173d1303"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/server.py": {
+    "mtime": 1785605355.7399182,
+    "hash": "3a99c36dc70602cd98be6f4e28f5248a"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/board.py": {
+    "mtime": 1784980620.5965254,
+    "hash": "5ef247dc94039b4719b4ee09b72cbde0"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/telegram_queries.py": {
+    "mtime": 1785602966.5052755,
+    "hash": "ba4d8a2356e89ec535c72ad4e5a25a96"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/api_spreads.py": {
+    "mtime": 1785604848.9709573,
+    "hash": "09b641fe2ef994318809b114c92aa567"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/billing.py": {
+    "mtime": 1785522976.0203524,
+    "hash": "cf9ad1a5facbbd2e21b6c78ed2ce68ce"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/accounts.py": {
+    "mtime": 1785585947.126756,
+    "hash": "1bacb19011f831fe34a1a45e58e0c107"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/historical_spreads.py": {
+    "mtime": 1785532085.8002322,
+    "hash": "4272d4c925588f1736b960ffa80b8e1d"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/crypto_watcher.py": {
+    "mtime": 1785586236.2798884,
+    "hash": "e5f8b6dfda6104e2abd9b25d3247d213"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/__init__.py": {
+    "mtime": 1784980593.5474699,
+    "hash": "94228c162b270c06af871e8640bac8d6"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/exchange_links.py": {
+    "mtime": 1785262503.8820035,
+    "hash": "c3225ce30d93689df087635d635d834b"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/public_rails.py": {
+    "mtime": 1785263294.0590067,
+    "hash": "abf34f99551627b4764b1b063aa83103"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/market_history.py": {
+    "mtime": 1785532122.769408,
+    "hash": "ff21a2cf2ebcea9dba775c43aeb02fa5"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/fast_quotes.py": {
+    "mtime": 1785532122.7727392,
+    "hash": "73d6b83078c2a6ff2ba01ab7ab713a39"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/crypto_billing.py": {
+    "mtime": 1785586070.4566174,
+    "hash": "a6c6a058a2e80b0c3049febe986ba36f"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/live.py": {
+    "mtime": 1785501618.160956,
+    "hash": "0a252514a39df76010232ea4deb54684"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/portfolio.py": {
+    "mtime": 1785515084.2767978,
+    "hash": "1698654b843ecaf78f4d75d7944031d5"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/verified_identity.py": {
+    "mtime": 1785501476.6899052,
+    "hash": "64cc0ef1cce64a10df8577311ca34137"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/field_crypto.py": {
+    "mtime": 1785530455.9311755,
+    "hash": "7c353bb6e824ac08b5f0e974bd5d7c5f"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/live_book_cache.py": {
+    "mtime": 1785501544.2576447,
+    "hash": "af9c3485f376fb305ba1ecbd37374b9b"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/static/lightweight-charts.standalone.production.js": {
+    "mtime": 1785272003.9039192,
+    "hash": "7fc4e0c30337a99638e7b85ffdc9fe34"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/__init__.py": {
+    "mtime": 1784980374.0815945,
+    "hash": "f14890aace7854d952e80b90531292b6"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/public_runtime.py": {
+    "mtime": 1785281967.8613815,
+    "hash": "4765eb618aa89ca512ab186f9601da9a"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/util/__init__.py": {
+    "mtime": 1784980374.1190047,
+    "hash": "42c0fef6e3df71504206e01a792f2de0"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/util/bitget_dns.py": {
+    "mtime": 1784980374.1196196,
+    "hash": "b86b57a8ac3c7b0a53a9ebe42508bd87"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/live/__init__.py": {
+    "mtime": 1784980374.0911467,
+    "hash": "05e90f6efadb69f1abb4bcfe01c96d3a"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/live/candidate_state.py": {
+    "mtime": 1784980374.0917287,
+    "hash": "d2de055d48261430f2a8e408188ae881"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/live/demo_blacklist.py": {
+    "mtime": 1784980374.092184,
+    "hash": "d0f7f2ffe09894c65ca18a05417245bd"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/dex/okx_quotes.py": {
+    "mtime": 1785534046.260489,
+    "hash": "c3a3bddfed7b199e510a493a7c35873b"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/dex/__init__.py": {
+    "mtime": 1784980593.5579424,
+    "hash": "c9c0766a4d8ccb4dfb48b315fce6343f"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/api_discovery/worker.py": {
+    "mtime": 1785283285.9847345,
+    "hash": "dccba91bc9ebe768d2c157dc7debc4d3"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/api_discovery/runner.py": {
+    "mtime": 1785358923.9888053,
+    "hash": "8ead240450f8bd993d2e733df7fc4b0d"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/api_discovery/models.py": {
+    "mtime": 1785447441.5567303,
+    "hash": "600cefd43bcb2649b52bd8825dc4d01a"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/api_discovery/__init__.py": {
+    "mtime": 1784980374.0920858,
+    "hash": "656b7a70db939b051c79cf77ac12ce3e"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/api_discovery/orderbook.py": {
+    "mtime": 1784999995.2524958,
+    "hash": "87e50a626099c0c2bbeaef0eb2dd15be"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/api_discovery/sources.py": {
+    "mtime": 1785605444.3413925,
+    "hash": "2fabb1dcdf06c460676df74dc4eafff0"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/api_discovery/broad_dex.py": {
+    "mtime": 1784980374.09355,
+    "hash": "23b46b1be3712f1bdd7a9aba2981006f"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/api_discovery/attestations.py": {
+    "mtime": 1784980374.0925832,
+    "hash": "4ac6c5c2b7bca6da33674ebea4c7bce3"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/api_discovery/blacklist_filter.py": {
+    "mtime": 1784980374.093034,
+    "hash": "e2fca15082409c731384419262cf905c"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/api_discovery/storage.py": {
+    "mtime": 1784980374.097523,
+    "hash": "90859057d6888f5abe2db861e665291c"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/api_discovery/identity.py": {
+    "mtime": 1785501627.191145,
+    "hash": "20d5be45a694703d4309a0f76ccde649"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/render.yaml": {
+    "mtime": 1785362763.1669972,
+    "hash": "f6672b452aa63b08ba89563cbedf80bd"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/README.md": {
+    "mtime": 1785528366.9753244,
+    "hash": "db79a91d2253e2a284862dc29ef6aadd"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/compose.production.yml": {
+    "mtime": 1785530580.322038,
+    "hash": "109883caae353282e9dace390fc7112c"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/static/LIGHTWEIGHT_CHARTS_LICENSE.txt": {
+    "mtime": 1785272014.5598867,
+    "hash": "6ea2c1e51e97404c7a5b5b2dc768a45e"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/artifacts/screenshots/production-portfolio.png": {
+    "mtime": 1785512782.7997494,
+    "hash": "d9eaf5a9120565c4c087396de785f79c"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/artifacts/screenshots/portfolio-desktop.png": {
+    "mtime": 1785511815.6945624,
+    "hash": "69f512d927702026acff545093193813"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/artifacts/screenshots/portfolio-mobile.png": {
+    "mtime": 1785511817.2435937,
+    "hash": "6c70570eb8e95cfc1f72fb6c0c973a78"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/artifacts/screenshots/custom-chart-live-desktop.png": {
+    "mtime": 1785511608.1172094,
+    "hash": "f90031cfa5ab1573c191e424608d1c21"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/artifacts/screenshots/production-custom-chart.png": {
+    "mtime": 1785512780.7729654,
+    "hash": "9d67c20135ea3579890258f69b73017e"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/output/playwright/pricing-mobile.png": {
+    "mtime": 1785533680.299502,
+    "hash": "9796a21fc8f7feb747af5eff1032be17"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/output/playwright/pricing-desktop.png": {
+    "mtime": 1785533668.5632691,
+    "hash": "a59bee2f675250d31b6bc48f62902c06"
+  },
+  "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/output/playwright/pricing-mobile-fixed.png": {
+    "mtime": 1785534692.5506797,
+    "hash": "735c70fd299b60dab4f4b600597600e1"
+  }
+}

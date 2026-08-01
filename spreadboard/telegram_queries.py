@@ -37,6 +37,7 @@ PUBLIC_URL_ENV = "SPREADBOARD_PUBLIC_URL"
 # dollar amounts and stray punctuation.
 CASHTAG = re.compile(r"(?:^|\s)\$([A-Za-z][A-Za-z0-9._-]{1,11})\b")
 COMMANDS = {"/spread": "spread", "/funding": "funding", "/transfer": "transfer", "/token": "spread"}
+VIEW_LABELS = {"spread": "Spread", "funding": "Funding", "transfer": "Deposits / Withdrawals"}
 # Bare intent words, accepted alongside a cashtag ("$SIREN funding").
 KIND_WORDS = {"spread": "spread", "funding": "funding", "transfer": "transfer",
               "rails": "transfer", "deposit": "transfer", "withdraw": "transfer"}
@@ -155,6 +156,47 @@ def _table(header: tuple[str, ...], widths: tuple[int, ...], lines: list[tuple[s
     for line in lines:
         out.append(" ".join(str(c).ljust(w) for c, w in zip(line, widths)).rstrip())
     return "\n".join(out)
+
+
+def keyboard(query: Query, *, public_url: str = "") -> dict[str, Any]:
+    """Buttons to switch view without retyping the token.
+
+    Telegram has no hook for autocompleting a bare "$", so the discoverable
+    equivalent is to offer the other views right under the answer.
+    """
+    others = [(k, l) for k, l in VIEW_LABELS.items() if k != query.kind]
+    rows = [[
+        {"text": label, "callback_data": f"v:{kind}:{query.symbol}"[:64]}
+        for kind, label in others
+    ]]
+    if public_url:
+        rows.append([{
+            "text": "Open on SpreadBoard",
+            "url": f"{public_url.rstrip('/')}/markets?q={query.symbol}",
+        }])
+    return {"inline_keyboard": rows}
+
+
+def suggest(prefix: str, *, board_path: Path | str = "", limit: int = 20) -> list[dict[str, Any]]:
+    """Token suggestions for inline mode, ranked by best edge."""
+    try:
+        payload = api_spreads.load_spreads(limit=None)
+    except Exception:  # noqa: BLE001
+        return []
+    needle = _normalise(prefix)
+    out = []
+    for group in payload.get("groups") or []:
+        token = str(group.get("token") or "").upper()
+        if needle and not token.startswith(needle):
+            continue
+        out.append({
+            "token": token,
+            "best_edge_pct": group.get("best_edge_pct"),
+            "route_count": group.get("route_count"),
+            "venues": group.get("venues") or [],
+        })
+    out.sort(key=lambda r: -(float(r.get("best_edge_pct") or 0)))
+    return out[:limit]
 
 
 def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str:

@@ -304,3 +304,76 @@ def test_intent_word_wins_regardless_of_order(text, kind):
     assert query is not None
     assert query.symbol == "SIREN" or query.symbol == "VANRY"
     assert query.kind == kind
+
+
+# --------------------------------------------------------------------------
+# View buttons and inline suggestions
+# --------------------------------------------------------------------------
+
+
+def test_answer_offers_the_other_views_as_buttons(db, board_file):
+    accounts.configure_telegram_community(
+        GROUP_ID, title="Spread", configured_by_telegram_user_id=1,
+        invite_link="https://t.me/+abc", db_path=db,
+    )
+    reply = telegram_bot.handle_update(
+        message(GROUP_ID, "$SIREN"), db_path=db, board_path=board_file
+    )
+    rows = reply["reply_markup"]["inline_keyboard"]
+    labels = [b["text"] for row in rows for b in row]
+    assert "Funding" in labels
+    assert "Deposits / Withdrawals" in labels
+    assert "Spread" not in labels, "the current view should not be offered again"
+
+
+def test_pressing_a_view_button_edits_in_place(db, board_file):
+    accounts.configure_telegram_community(
+        GROUP_ID, title="Spread", configured_by_telegram_user_id=1,
+        invite_link="https://t.me/+abc", db_path=db,
+    )
+    update = {"callback_query": {
+        "id": "1", "data": "v:funding:SIREN",
+        "message": {"message_id": 55, "chat": {"id": GROUP_ID, "type": "supergroup"}},
+    }}
+    reply = telegram_bot.handle_update(update, db_path=db, board_path=board_file)
+    assert reply["method"] == "editMessageText"
+    assert reply["message_id"] == 55
+    assert "funding" in reply["text"]
+    assert "Spread" in [b["text"] for r in reply["reply_markup"]["inline_keyboard"] for b in r]
+
+
+def test_callback_from_an_unregistered_chat_is_ignored(db, board_file):
+    update = {"callback_query": {
+        "id": "1", "data": "v:funding:SIREN",
+        "message": {"message_id": 55, "chat": {"id": -999, "type": "supergroup"}},
+    }}
+    assert telegram_bot.handle_update(update, db_path=db, board_path=board_file) is None
+
+
+def test_inline_query_suggests_tokens(db, board_file, monkeypatch):
+    monkeypatch.setattr(
+        telegram_queries.api_spreads, "load_spreads",
+        lambda **kw: {"groups": [
+            {"token": "SIREN", "best_edge_pct": 1.7, "route_count": 3, "venues": ["Bybit"]},
+            {"token": "SILVER", "best_edge_pct": 2.9, "route_count": 2, "venues": ["Xt"]},
+            {"token": "GUA", "best_edge_pct": 0.7, "route_count": 1, "venues": ["MEXC"]},
+        ]},
+    )
+    reply = telegram_bot.handle_update(
+        {"inline_query": {"id": "q1", "query": "SI"}}, db_path=db, board_path=board_file
+    )
+    assert reply["method"] == "answerInlineQuery"
+    titles = [r["title"] for r in reply["results"]]
+    assert titles == ["SILVER", "SIREN"], "prefix filtered, ranked by best edge"
+    assert reply["results"][0]["input_message_content"]["message_text"] == "$SILVER"
+
+
+def test_inline_query_with_empty_prefix_returns_top_tokens(db, board_file, monkeypatch):
+    monkeypatch.setattr(
+        telegram_queries.api_spreads, "load_spreads",
+        lambda **kw: {"groups": [{"token": "AAA", "best_edge_pct": 0.5, "route_count": 1}]},
+    )
+    reply = telegram_bot.handle_update(
+        {"inline_query": {"id": "q1", "query": ""}}, db_path=db, board_path=board_file
+    )
+    assert [r["title"] for r in reply["results"]] == ["AAA"]
