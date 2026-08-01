@@ -194,7 +194,9 @@ def load_spreads(
     rankable_funding_universe = [
         row
         for row in public_universe
-        if not price_ratio_implausible(row) and not leg_volume_too_thin(row)
+        if not price_ratio_implausible(row)
+        and not leg_volume_too_thin(row)
+        and funding_intervals_known(row)
     ]
     route_kind_token_counts = _route_kind_token_counts(public_universe)
     release_lane_token_counts = _release_lane_token_counts(public_universe)
@@ -1342,6 +1344,18 @@ def _per_day(rate_pct: float | None, interval_hours: float | None) -> float | No
     return rate * (24.0 / hours)
 
 
+def funding_intervals_known(row: "SpreadTerminalRow") -> bool:
+    """Both settlement intervals published, so the per-day conversion is sound.
+
+    With an unknown interval the 8h fallback can be wrong by 8x, which is how
+    AGLD reached a 3570% APR. Such routes still display, but must not be ranked.
+    """
+    for attr in ("long_funding_interval_hours", "short_funding_interval_hours"):
+        if not _float_or_none(getattr(row, attr, None)):
+            return False
+    return True
+
+
 def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | None]:
     """Net carry as (percent per day, APR percent), both legs on a common basis.
 
@@ -1372,6 +1386,7 @@ def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload["requires_transfer"] = getattr(row, "route_kind", None) in TRANSFER_ROUTE_KINDS
     payload["identity_mismatch"] = price_ratio_implausible(row)
     payload["thin_book"] = leg_volume_too_thin(row)
+    payload["funding_intervals_known"] = funding_intervals_known(row)
     payload["requires_spot_inventory"] = requires_existing_spot_inventory(row)
     daily, apr = normalised_funding(row)
     if daily is not None:

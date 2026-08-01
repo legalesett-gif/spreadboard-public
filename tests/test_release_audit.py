@@ -1815,3 +1815,14 @@ def test_missing_interval_falls_back_to_the_exchange_default() -> None:
 
 def test_no_funding_data_returns_none() -> None:
     assert api_spreads.normalised_funding(_frow()) == (None, None)
+
+
+def test_unknown_funding_interval_is_not_rankable() -> None:
+    """AGLD reached 3570% APR with one leg's interval unpublished; the 8h
+    fallback can be wrong by 8x, so such routes display but do not rank."""
+    assert api_spreads.funding_intervals_known(
+        _frow(long_funding_interval_hours=8.0, short_funding_interval_hours=1.0)
+    ) is True
+    assert api_spreads.funding_intervals_known(
+        _frow(long_funding_interval_hours=None, short_funding_interval_hours=1.0)
+    ) is False
