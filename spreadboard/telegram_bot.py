@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from spreadboard import accounts, billing
+from spreadboard import accounts, billing, telegram_queries
 
 
 class TelegramBotError(RuntimeError):
@@ -68,7 +68,36 @@ def verify_webhook(secret_header: str) -> None:
         raise TelegramBotError("invalid_telegram_webhook_secret")
 
 
-def handle_update(update: dict[str, Any], *, db_path: Any) -> dict[str, Any] | None:
+def _handle_group_query(
+    chat_id: int, text: str, *, db_path: Any, board_path: Any
+) -> dict[str, Any] | None:
+    """Answer $TOKEN lookups, but only inside the registered subscriber group.
+
+    Membership is enforced at the door by join approval and expiry removal, so
+    everyone here is a paying member. Any other group is ignored outright.
+    """
+    community = accounts.telegram_community(db_path=db_path)
+    if community is None or int(community["chat_id"]) != int(chat_id):
+        return None
+    query = telegram_queries.parse_query(text)
+    if query is None or not telegram_queries.allow(chat_id, query):
+        return None
+    if board_path is None:
+        return None
+    try:
+        body = telegram_queries.render(
+            query,
+            board_path=board_path,
+            public_url=os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip(),
+        )
+    except Exception:  # noqa: BLE001 - a lookup failure must never break the webhook
+        return None
+    return _reply(chat_id, body, html=True)
+
+
+def handle_update(
+    update: dict[str, Any], *, db_path: Any, board_path: Any = None
+) -> dict[str, Any] | None:
     join_request = update.get("chat_join_request")
     if isinstance(join_request, dict):
         _handle_join_request(join_request, db_path=db_path)
@@ -86,10 +115,10 @@ def handle_update(update: dict[str, Any], *, db_path: Any) -> dict[str, Any] | N
     command = command.split("@", 1)[0].casefold()
 
     if chat.get("type") in {"group", "supergroup"}:
-        if command != "/setupgroup":
-            return None
-        _configure_group(chat, sender_id=sender_id, db_path=db_path)
-        return _reply(chat_id, "SpreadBoard subscriber access is now connected to this group. Payments and account details remain private.")
+        if command == "/setupgroup":
+            _configure_group(chat, sender_id=sender_id, db_path=db_path)
+            return _reply(chat_id, "SpreadBoard subscriber access is now connected to this group. Payments and account details remain private.")
+        return _handle_group_query(chat_id, text, db_path=db_path, board_path=board_path)
     if chat.get("type") != "private":
         return None
 
@@ -268,8 +297,13 @@ def _api_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _reply(chat_id: int, text: str, *, button: tuple[str, str] | None = None) -> dict[str, Any]:
+def _reply(
+    chat_id: int, text: str, *, button: tuple[str, str] | None = None, html: bool = False
+) -> dict[str, Any]:
     payload: dict[str, Any] = {"method": "sendMessage", "chat_id": chat_id, "text": text}
+    if html:
+        payload["parse_mode"] = "HTML"
+        payload["disable_web_page_preview"] = True
     if button:
         payload["reply_markup"] = {"inline_keyboard": [[{"text": button[0], "url": button[1]}]]}
     return payload

@@ -452,6 +452,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 telegram_bot.verify_webhook(self.headers.get("X-Telegram-Bot-Api-Secret-Token", ""))
                 response = telegram_bot.handle_update(
                     telegram_bot.parse_update(self._read_raw_body()),
+                    board_path=self.server.board_path,
                     db_path=self.server.accounts_path,
                 )
                 self._send_json(response or {"ok": True})
