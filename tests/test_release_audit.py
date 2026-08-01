@@ -1630,3 +1630,21 @@ def test_futures_lanes_are_always_deliverable() -> None:
         assert api_spreads.route_deliverable(
             _row(route_kind=kind, long_withdraw_enabled=False, short_deposit_enabled=False)
         ) is True, f"{kind} needs no transfer and must not be filtered"
+
+
+def test_absurd_price_ratio_is_flagged_as_a_different_asset() -> None:
+    """CAT: 0.000001366 on Kucoin spot vs 806.75 on Bitget futures."""
+    assert api_spreads.price_ratio_implausible(
+        _row(long_price=1.366e-06, short_price=806.75)
+    ) is True
+
+
+def test_genuine_large_spreads_survive_the_ratio_rule() -> None:
+    """SIREN at ~2x and even a 900% edge are about opportunity, not identity."""
+    assert api_spreads.price_ratio_implausible(_row(long_price=0.0280, short_price=0.0565)) is False
+    assert api_spreads.price_ratio_implausible(_row(long_price=1.0, short_price=9.5)) is False
+
+
+def test_missing_prices_do_not_trigger_the_ratio_rule() -> None:
+    assert api_spreads.price_ratio_implausible(_row(long_price=None, short_price=1.0)) is False
+    assert api_spreads.price_ratio_implausible(_row(long_price=0.0, short_price=1.0)) is False

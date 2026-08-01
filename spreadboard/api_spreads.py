@@ -180,7 +180,11 @@ def load_spreads(
     # Undeliverable routes stay visible and filterable, but must never occupy a
     # headline slot -- a 100% edge you cannot settle is not the best opportunity
     # on the board, and ranking it as one pushes real tokens off the page.
-    rankable_universe = [row for row in public_universe if route_deliverable(row) is not False]
+    rankable_universe = [
+        row
+        for row in public_universe
+        if route_deliverable(row) is not False and not price_ratio_implausible(row)
+    ]
     route_kind_token_counts = _route_kind_token_counts(public_universe)
     release_lane_token_counts = _release_lane_token_counts(public_universe)
     filtered = _filter_rows(
@@ -979,6 +983,24 @@ def _hide_guarded_rows() -> bool:
     }
 
 
+# Two venues quoting the same asset cannot be an order of magnitude apart -- that
+# would be free money at absurd scale. CAT was seen at 0.000001366 on Kucoin spot
+# and 806.75 on Bitget futures: a 590,000,000x ratio, i.e. two unrelated tokens
+# sharing a ticker. This is a statement about identity, not about opportunity
+# size, so it leaves genuine large spreads (SIREN at 2x, even 900%) untouched.
+MAX_CROSS_VENUE_PRICE_RATIO = 10.0
+
+
+def price_ratio_implausible(row: "SpreadTerminalRow") -> bool:
+    """True when the two legs are too far apart to be the same asset."""
+    long_price = _float_or_none(getattr(row, "long_price", None))
+    short_price = _float_or_none(getattr(row, "short_price", None))
+    if not long_price or not short_price or long_price <= 0 or short_price <= 0:
+        return False
+    ratio = max(long_price, short_price) / min(long_price, short_price)
+    return ratio > MAX_CROSS_VENUE_PRICE_RATIO
+
+
 # Only these lanes require the coin to physically move between venues. Futures
 # legs settle in margin, and a DEX leg sits in your own wallet, so neither needs
 # a transfer rail.
@@ -1049,11 +1071,15 @@ def _summary(
                 _float_or_none(row.executable_spread_pct) or 0.0
                 for row in filtered
                 if route_deliverable(row) is not False
+                and not price_ratio_implausible(row)
             ),
             default=None,
         ),
         "undeliverable_rows": len(
             [row for row in filtered if route_deliverable(row) is False]
+        ),
+        "identity_mismatch_rows": len(
+            [row for row in filtered if price_ratio_implausible(row)]
         ),
         "max_depth_weighted_spread_pct": max(
             (_entrance_spread(row) for row in filtered),
@@ -1241,6 +1267,7 @@ def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload = row.to_dict()
     payload["deliverable"] = route_deliverable(row)
     payload["requires_transfer"] = getattr(row, "route_kind", None) in TRANSFER_ROUTE_KINDS
+    payload["identity_mismatch"] = price_ratio_implausible(row)
     payload["conditions"] = [
         item.removeprefix("mirage_guard:").removeprefix("condition:")
         for item in row.blockers
