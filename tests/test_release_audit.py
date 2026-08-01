@@ -2089,3 +2089,40 @@ def test_funding_refresh_has_its_own_cadence(monkeypatch) -> None:
     assert first["legs"] == 1 and len(calls) == 1
     assert second.get("skipped") is True, "second call inside the window must not hit the venue"
     assert len(calls) == 1
+
+
+def test_funding_refresh_rotates_venues_across_passes(monkeypatch) -> None:
+    """A venue costs a load_markets(), so one pass cannot afford them all. The
+    cursor persists in the snapshot so later passes cover the venues that the
+    wall-clock budget cut off."""
+    from spreadboard.fast_quotes import FastQuoteRefresher
+
+    def row(token, venue):
+        return {"token": token, "long_venue": "Gate", "long_market_type": "Spot",
+                "short_venue": venue, "short_market_type": "Futures",
+                "notes": {"route_inputs": {"long": {"symbol": f"{token}/USDT"},
+                                           "short": {"symbol": f"{token}/USDT:USDT"}}}}
+
+    snapshot = {"api_discovered_rows": [row("A", "Mexc"), row("B", "Bybit"), row("C", "Gate")]}
+    visited = []
+
+    class FakeClient:
+        def __init__(self, venue):
+            self.venue = venue
+            self.has = {"fetchFundingRates": True}
+
+        def fetch_funding_rates(self):
+            visited.append(self.venue)
+            return []
+
+    refresher = FastQuoteRefresher()
+    monkeypatch.setattr(refresher, "_client", lambda venue, market_type: FakeClient(venue))
+    monkeypatch.setenv("SPREADBOARD_FUNDING_REFRESH_SECONDS", "30")
+    first = refresher.refresh_all_funding(snapshot)
+    assert first["venue_count"] == 3
+    # Force the cadence gate open, keeping the cursor the pass left behind.
+    snapshot["funding_refresh"]["epoch"] = 0
+    refresher.refresh_all_funding(snapshot)
+    assert visited[0] != visited[len(visited) // 2] or len(set(visited)) > 1, (
+        "a later pass must not restart on the same venue every time"
+    )

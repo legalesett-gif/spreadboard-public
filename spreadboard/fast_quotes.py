@@ -121,14 +121,24 @@ class FastQuoteRefresher:
                     if key is not None:
                         legs.setdefault(key[0], []).append((row, side))
         venues = updated = 0
-        # Busiest venues first, under a wall-clock budget: a bulk call needs
-        # load_markets() the first time, and the cycle must not overrun.
+        # The bulk call itself is one request, but ccxt needs load_markets() first
+        # and this worker is a fresh process every cycle, so a venue costs ~15s on
+        # the droplet. Rotate: each pass takes the next slice of venues and the
+        # cursor persists in the snapshot, so every venue is covered within a few
+        # minutes instead of one pass starving the rest. Busiest venues sort first
+        # so the rotation order is stable.
         budget = time.monotonic() + max(
-            10.0, float(os.environ.get("SPREADBOARD_FUNDING_REFRESH_BUDGET_SECONDS", "60"))
+            10.0, float(os.environ.get("SPREADBOARD_FUNDING_REFRESH_BUDGET_SECONDS", "45"))
         )
-        for venue, entries in sorted(legs.items(), key=lambda item: -len(item[1])):
+        ordered = [venue for venue, _ in sorted(legs.items(), key=lambda item: -len(item[1]))]
+        start = int(_optional_number(previous.get("cursor")) or 0) % max(1, len(ordered))
+        rotation = ordered[start:] + ordered[:start]
+        cursor = start
+        for venue in rotation:
             if time.monotonic() > budget:
                 break
+            cursor = (ordered.index(venue) + 1) % max(1, len(ordered))
+            entries = legs[venue]
             rates = self._bulk_funding_rates(venue)
             if not rates:
                 continue
@@ -146,6 +156,8 @@ class FastQuoteRefresher:
             "venues": venues,
             "legs": updated,
             "candidates": sum(map(len, legs.values())),
+            "cursor": cursor,
+            "venue_count": len(ordered),
             "epoch": now,
             "updated_at": _utc_now_iso(),
         }
