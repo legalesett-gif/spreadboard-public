@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import time
 from typing import Any
+from urllib.request import Request, urlopen
 
 import ccxt
 
@@ -142,6 +143,13 @@ def refresh_public_rails(
                 rails[venue] = future.result()
             except Exception as exc:  # noqa: BLE001 - partial venue coverage is expected.
                 errors[venue] = f"{type(exc).__name__}: {str(exc)[:160]}"
+        # An empty result is not the same as "this venue lists none of our
+        # tokens": on Binance, Bybit, MEXC, BingX and OKX it means CCXT hit a
+        # credentialed endpoint and returned nothing. Say so, so a blind venue
+        # is visible instead of looking like a venue with no shut rails.
+        for venue, requested in tokens_by_venue.items():
+            if requested and not rails.get(venue) and venue not in errors:
+                errors[venue] = "no_public_rail_data:credentials_required"
 
     payload = {
         "schema": "spreadboard.public_transfer_rails.v1",
@@ -179,7 +187,64 @@ def _tokens_by_venue(snapshot: dict[str, Any]) -> dict[str, set[str]]:
     return tokens_by_venue
 
 
+# CCXT routes fetch_currencies to a PRIVATE endpoint on several venues and, with
+# no keys, returns an empty dict rather than raising. That is indistinguishable
+# from "this venue lists none of our tokens", so Binance, Bybit, MEXC, BingX and
+# OKX silently carried no rail data at all -- MEXC alone has 403 spot legs on the
+# board. Where a venue publishes the same data without credentials, use that.
+NATIVE_RAIL_SOURCES: dict[str, str] = {
+    "Binance": "https://www.binance.com/bapi/capital/v1/public/capital/getNetworkCoinAll",
+}
+
+
+def _fetch_native_venue_rails(venue: str, tokens: set[str]) -> dict[str, Any] | None:
+    """Public per-venue rail data, or None when the venue has no public source."""
+    url = NATIVE_RAIL_SOURCES.get(venue)
+    if url is None:
+        return None
+    try:
+        request = Request(url, headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"})
+        with urlopen(request, timeout=20) as response:  # noqa: S310 - fixed public origin
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 - a blind venue must not stop the others.
+        return None
+    coins = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(coins, list):
+        return None
+    output: dict[str, Any] = {}
+    for coin in coins:
+        if not isinstance(coin, dict):
+            continue
+        token = str(coin.get("coin") or "").upper()
+        if token not in tokens:
+            continue
+        networks = [
+            {
+                "network": str(item.get("network") or ""),
+                "deposit": _bool_or_none(item.get("depositEnable")),
+                "withdraw": _bool_or_none(item.get("withdrawEnable")),
+                # The contract address is what the identity registry needs to
+                # prove two venues list the same asset, not merely the same ticker.
+                "contract": str(item.get("contractAddress") or "") or None,
+            }
+            for item in coin.get("networkList") or []
+            if isinstance(item, dict)
+        ]
+        output[token] = {
+            "name": str(coin.get("name") or "").strip() or None,
+            "currency_id": token,
+            "deposit": _bool_or_none(coin.get("depositAllEnable")),
+            "withdraw": _bool_or_none(coin.get("withdrawAllEnable")),
+            "network_count": len(networks),
+            "networks": networks,
+        }
+    return output
+
+
 def _fetch_venue_rails(venue: str, tokens: set[str]) -> dict[str, Any]:
+    native = _fetch_native_venue_rails(venue, tokens)
+    if native:
+        return native
     exchange_id = VENUE_IDS[venue]
     if exchange_id == "gateio" and not hasattr(ccxt, exchange_id):
         exchange_id = "gate"
