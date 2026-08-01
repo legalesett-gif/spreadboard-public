@@ -1733,3 +1733,28 @@ def test_vanry_style_real_books_survive() -> None:
 
 def test_unknown_volume_is_not_treated_as_thin() -> None:
     assert api_spreads.leg_volume_too_thin(_vrow(short_volume_24h_usd=None)) is False
+
+
+def test_funding_ranking_ignores_transfer_rails() -> None:
+    """A funding farm holds both legs and never moves the coin between venues.
+
+    SIREN's funding is real even though Kucoin deposits are shut, because
+    collecting carry does not require delivering the coin anywhere.
+    """
+    import inspect
+    source = inspect.getsource(api_spreads.load_spreads)
+    assert "rankable_funding_universe" in source
+    assert 'metric="funding"' in source
+    funding_block = source.split("rankable_funding_universe = [")[1].split("]")[0]
+    assert "route_deliverable" not in funding_block, (
+        "funding must not inherit the transfer-rail test"
+    )
+    assert "price_ratio_implausible" in funding_block
+    assert "leg_volume_too_thin" in funding_block
+
+
+def test_long_futures_short_spot_is_flagged_as_inventory_required() -> None:
+    """Spot cannot be shorted; that leg is held long and the futures leg shorted."""
+    assert api_spreads.requires_existing_spot_inventory(_vrow(route_kind="FUTURES-SPOT")) is True
+    for kind in ("SPOT-FUTURES", "FUTURES", "SPOT", "DEX-FUTURES", "DEX-SPOT"):
+        assert api_spreads.requires_existing_spot_inventory(_vrow(route_kind=kind)) is False

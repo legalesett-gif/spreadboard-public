@@ -187,6 +187,15 @@ def load_spreads(
         and not price_ratio_implausible(row)
         and not leg_volume_too_thin(row)
     ]
+    # A funding farm holds both legs -- long spot on one venue, short futures on
+    # another -- and never moves the coin between them, so transfer rails are
+    # irrelevant to whether the carry is collectable. Only quote trustworthiness
+    # matters: the two legs must be the same asset, on books deep enough to price.
+    rankable_funding_universe = [
+        row
+        for row in public_universe
+        if not price_ratio_implausible(row) and not leg_volume_too_thin(row)
+    ]
     route_kind_token_counts = _route_kind_token_counts(public_universe)
     release_lane_token_counts = _release_lane_token_counts(public_universe)
     filtered = _filter_rows(
@@ -295,7 +304,7 @@ def load_spreads(
         "route_kind_token_counts": route_kind_token_counts,
         "lane_token_counts": release_lane_token_counts,
         "top_edges": _top_unique_groups(rankable_universe, metric="edge"),
-        "top_funding": _top_unique_groups(rankable_universe, metric="funding"),
+        "top_funding": _top_unique_groups(rankable_funding_universe, metric="funding"),
         "groups": visible_groups,
         "rows": [_public_row(row) for row in visible],
     }
@@ -1010,10 +1019,16 @@ def price_ratio_implausible(row: "SpreadTerminalRow") -> bool:
 # a transfer rail.
 TRANSFER_ROUTE_KINDS = frozenset({"SPOT", "DEX-SPOT"})
 
-# Shorting the spot leg means owning the coin on that venue, so a shut deposit
-# blocks the trade just as surely as on a spot-spot transfer. SIREN sat at 101%
-# as Gate futures long / Kucoin spot short with Kucoin deposits closed.
+# Spot cannot be shorted. In a futures/spot pair the futures leg is the one that
+# gets shorted and the spot leg is simply held long. So a route printed as "long
+# futures / short spot" is not a fresh entry at all -- it requires spot inventory
+# you already hold. That is a stronger constraint than any deposit rail.
 SHORT_SPOT_ROUTE_KINDS = frozenset({"FUTURES-SPOT"})
+
+
+def requires_existing_spot_inventory(row: "SpreadTerminalRow") -> bool:
+    """True when capturing this route would mean selling spot you must already own."""
+    return getattr(row, "route_kind", None) in SHORT_SPOT_ROUTE_KINDS
 
 # A price from a book with almost no turnover is noise. U2U ranked at 124%
 # against a Kraken leg doing $14.78 of daily volume; LRC at 81% against an HTX
@@ -1316,6 +1331,7 @@ def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload["requires_transfer"] = getattr(row, "route_kind", None) in TRANSFER_ROUTE_KINDS
     payload["identity_mismatch"] = price_ratio_implausible(row)
     payload["thin_book"] = leg_volume_too_thin(row)
+    payload["requires_spot_inventory"] = requires_existing_spot_inventory(row)
     payload["conditions"] = [
         item.removeprefix("mirage_guard:").removeprefix("condition:")
         for item in row.blockers
