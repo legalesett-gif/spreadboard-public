@@ -168,3 +168,20 @@ def test_checkout_panel_fails_closed_when_unconfigured(client, monkeypatch):
     page = client.getresponse().read().decode()
     assert "No payment can be taken yet" in page
     assert "data-crypto-period" not in page
+
+
+def test_guide_page_is_public_and_covers_all_four_lanes(client):
+    """The tutorial must be reachable without an account -- it is a conversion page."""
+    client.request("GET", "/guide")
+    response = client.getresponse()
+    page = response.read().decode()
+    assert response.status == 200
+    for lane in ("Futures / Futures", "Futures / Spot", "Spot / Spot", "Futures / DEX"):
+        assert lane in page, f"missing lane: {lane}"
+    # the two ideas a beginner must not miss
+    assert "delta neutral" in page
+    assert "SHUT" in page, "closed transfer rails must be explained"
+    # large spreads are shown deliberately, and must carry the caveat
+    assert "Very large spreads" in page
+    assert "financial advice" in page.lower()
+    assert "research tool" in page.lower()

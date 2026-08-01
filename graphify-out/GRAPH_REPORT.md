@@ -1,11 +1,11 @@
 # Graph Report - spreadboard-public-release-clean  (2026-08-01)
 
 ## Corpus Check
-- 70 files · ~154,173 words
+- 70 files · ~154,274 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 2885 nodes · 7120 edges · 45 communities detected
+- 2887 nodes · 7122 edges · 45 communities detected
 - Extraction: 96% EXTRACTED · 4% INFERRED · 0% AMBIGUOUS · INFERRED: 254 edges (avg confidence: 0.71)
 - Token cost: 0 input · 0 output
 
@@ -84,55 +84,55 @@
 
 ### Community 0 - "Community 0"
 Cohesion: 0.01
-Nodes (49): a(), ae, ai, as(), bi(), ce, ci, ee() (+41 more)
+Nodes (37): a(), ae, ar(), as(), bi(), ci, ds(), ge (+29 more)
 
 ### Community 1 - "Community 1"
+Cohesion: 0.01
+Nodes (29): _(), bn(), ct, En, fi, g(), gi, gn (+21 more)
+
+### Community 2 - "Community 2"
 Cohesion: 0.02
 Nodes (311): active_class(), api_alert_context(), api_alert_preview(), api_board(), api_community(), api_funding_watch(), api_health(), api_history() (+303 more)
 
-### Community 2 - "Community 2"
-Cohesion: 0.01
-Nodes (28): _(), bn(), ct, e(), En, fs(), g(), gi (+20 more)
-
 ### Community 3 - "Community 3"
-Cohesion: 0.02
-Nodes (205): _checks_from_payload(), empty(), ExecutorAttestation, ExecutorAttestationRegistry, load_executor_attestations(), Read-only executor/preflight attestations for API discovery rows., route_key(), BlacklistFilterResult (+197 more)
+Cohesion: 0.01
+Nodes (62): an(), At, b(), be, Bt, c(), cn(), d() (+54 more)
 
 ### Community 4 - "Community 4"
-Cohesion: 0.01
-Nodes (51): an(), At, b(), be, bs(), Bt, c(), cn() (+43 more)
+Cohesion: 0.02
+Nodes (192): _checks_from_payload(), empty(), ExecutorAttestation, ExecutorAttestationRegistry, load_executor_attestations(), Read-only executor/preflight attestations for API discovery rows., route_key(), BlacklistFilterResult (+184 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.02
-Nodes (12): ar(), ds(), fi, gs(), hs(), ii(), ls, q() (+4 more)
-
-### Community 6 - "Community 6"
 Cohesion: 0.04
 Nodes (89): depth_weighted_price(), Small read-only order-book math helpers., main(), main(), _atomic_write(), _ccxt_current_funding(), _dex_chain_contract(), _expanded_token_rows() (+81 more)
 
-### Community 7 - "Community 7"
+### Community 6 - "Community 6"
 Cohesion: 0.02
-Nodes (46): Every lane that carries data must be reachable in the UI.      Spot-DEX had rows, Every lane that carries data must be reachable in the UI.      Spot-DEX had rows, Ourbit has no ccxt adapter; it is an MEXC white-label we retarget., A retarget bug would silently quote MEXC prices under the Ourbit name., The repo data/ dir is read-only in the container.      Enabling broad DEX-spot d, Contract changed 2026-08-01 by operator request.      Spot-DEX was retired, whic, test_all_five_lanes_have_a_markets_tab(), test_broad_dex_output_goes_to_the_writable_runtime_dir() (+38 more)
+Nodes (48): Every lane that carries data must be reachable in the UI.      Spot-DEX had rows, Every lane that carries data must be reachable in the UI.      Spot-DEX had rows, Ourbit has no ccxt adapter; it is an MEXC white-label we retarget., A retarget bug would silently quote MEXC prices under the Ourbit name., The repo data/ dir is read-only in the container.      Enabling broad DEX-spot d, Discovery rows must survive between scans or they are never shown.      High-spr, Contract changed 2026-08-01 by operator request.      Spot-DEX was retired, whic, test_all_five_lanes_have_a_markets_tab() (+40 more)
+
+### Community 7 - "Community 7"
+Cohesion: 0.03
+Nodes (13): bs(), er, es(), is(), js(), rr(), rt, se (+5 more)
 
 ### Community 8 - "Community 8"
+Cohesion: 0.03
+Nodes (12): ft, ht, In(), ir, Ks, lr, nt, ot (+4 more)
+
+### Community 9 - "Community 9"
 Cohesion: 0.06
 Nodes (80): _action_badges(), _action_next(), _action_priority(), _action_reason(), _action_status(), _age_min(), _alert_example_with_freshness(), _alert_freshness() (+72 more)
 
-### Community 9 - "Community 9"
+### Community 10 - "Community 10"
 Cohesion: 0.04
 Nodes (67): _allocate_amount(), config(), create_invoice(), CryptoBillingError, CryptoConfig, format_amount(), get_invoice(), _invoice_dict() (+59 more)
 
-### Community 10 - "Community 10"
+### Community 11 - "Community 11"
 Cohesion: 0.05
 Nodes (38): BaseHTTPRequestHandler, _atomic_write_snapshot(), _env_bool(), _funding_lane(), _funding_refresh_route_keys(), _log(), main(), _merge_newer_fast_quotes() (+30 more)
 
-### Community 11 - "Community 11"
+### Community 12 - "Community 12"
 Cohesion: 0.07
 Nodes (65): add_alert_rule(), add_funding_cashflow(), add_market_alert_rule(), apply_billing_event(), _assert_customer_owner(), _billing_user_id(), bind_telegram_chat(), _bootstrap_admin() (+57 more)
-
-### Community 12 - "Community 12"
-Cohesion: 0.04
-Nodes (12): d(), gn, is(), ji(), Ki, l(), ni(), ns() (+4 more)
 
 ### Community 13 - "Community 13"
 Cohesion: 0.07
@@ -147,20 +147,20 @@ Cohesion: 0.06
 Nodes (57): chain_index(), _decimal_or_none(), erc20_decimals(), _eth_call(), _http_get(), _is_rate_limited(), list_tokens(), load_okx_dex_credentials() (+49 more)
 
 ### Community 16 - "Community 16"
-Cohesion: 0.04
-Nodes (6): es(), js(), nt, qs(), tt, y
-
-### Community 17 - "Community 17"
 Cohesion: 0.1
 Nodes (34): _age_min(), _apply_filters(), BoardRow, BoardSnapshot, _bool_or_none(), build_source_health(), _chart_url(), _depth_usd() (+26 more)
 
-### Community 18 - "Community 18"
+### Community 17 - "Community 17"
 Cohesion: 0.11
 Nodes (30): make_user(), pay(), Crypto (Arbitrum USDC/USDT) prepaid billing.  The invariant that matters most: a, An exchange withdrawal fee must not cost the member their access., A token calling itself USDC must not buy access., Renewing with time left must not forfeit the days already paid for., Dollars -> raw 6-decimal token units., test_admin_can_settle_a_parked_payment() (+22 more)
 
-### Community 19 - "Community 19"
+### Community 18 - "Community 18"
 Cohesion: 0.1
 Nodes (28): _api_call(), config(), _configure_group(), _create_join_request_link(), _handle_callback(), _handle_group_query(), _handle_inline_query(), _handle_join_request() (+20 more)
+
+### Community 19 - "Community 19"
+Cohesion: 0.08
+Nodes (5): ai, ce, q(), v(), we
 
 ### Community 20 - "Community 20"
 Cohesion: 0.12
@@ -191,12 +191,12 @@ Cohesion: 0.32
 Nodes (11): fake_rpc(), make_user(), Arbitrum log watcher. No network access -- the RPC transport is injected., test_cursor_advances_and_prevents_reprocessing(), test_filter_is_scoped_to_allowlisted_tokens_and_receiver(), test_impostor_token_in_logs_is_ignored(), test_one_malformed_log_does_not_stall_the_cursor(), test_only_scans_confirmed_blocks() (+3 more)
 
 ### Community 28 - "Community 28"
-Cohesion: 0.22
-Nodes (1): ir
+Cohesion: 0.27
+Nodes (13): _asset_from_watchlist(), _atomic_write(), build_verified_identity_registry(), _has_market(), _load_dict(), _norm_contract(), _norm_network(), _rail_asset_matches() (+5 more)
 
 ### Community 29 - "Community 29"
-Cohesion: 0.27
-Nodes (1): we
+Cohesion: 0.18
+Nodes (2): di(), o
 
 ### Community 30 - "Community 30"
 Cohesion: 0.35
@@ -263,11 +263,9 @@ Cohesion: 1.0
 Nodes (1): Read-only API discovery for Telegram opportunity visibility.  The package is int
 
 ## Knowledge Gaps
-- **254 isolated node(s):** `HTTP boundary for crypto checkout.  The subtle failure this guards against: memb`, `Crypto (Arbitrum USDC/USDT) prepaid billing.  The invariant that matters most: a`, `Dollars -> raw 6-decimal token units.`, `An exchange withdrawal fee must not cost the member their access.`, `A token calling itself USDC must not buy access.` (+249 more)
+- **255 isolated node(s):** `HTTP boundary for crypto checkout.  The subtle failure this guards against: memb`, `Crypto (Arbitrum USDC/USDT) prepaid billing.  The invariant that matters most: a`, `Dollars -> raw 6-decimal token units.`, `An exchange withdrawal fee must not cost the member their access.`, `A token calling itself USDC must not buy access.` (+250 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **Thin community `Community 28`** (13 nodes): `.sb()`, `.yb()`, `ir`, `._b()`, `.constructor()`, `.fb()`, `.lb()`, `.mb()`, `.ob()`, `.pb()`, `.clearMarkers()`, `.markers()`, `.markers()`
-  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 29`** (12 nodes): `.constructor()`, `we`, `.applyOptions()`, `.constructor()`, `.et()`, `.getSeries()`, `.ht()`, `.jp()`, `._M()`, `.mM()`, `.oM()`, `.uM()`
+- **Thin community `Community 29`** (12 nodes): `di()`, `o`, `.constructor()`, `.hi()`, `.ht()`, `.i()`, `.m()`, `.p()`, `.st()`, `.$t()`, `.u()`, `.v()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 40`** (3 nodes): `main()`, `configure_telegram_webhook.py`, `telegram_call()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
@@ -287,17 +285,17 @@ Nodes (1): Read-only API discovery for Telegram opportunity visibility.  The pac
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `FastQuoteRefresher` connect `Community 6` to `Community 1`, `Community 10`?**
+- **Why does `FastQuoteRefresher` connect `Community 5` to `Community 2`, `Community 11`?**
   _High betweenness centrality (0.071) - this node is a cross-community bridge._
-- **Why does `SpreadBoardHandler` connect `Community 10` to `Community 1`, `Community 6`?**
-  _High betweenness centrality (0.032) - this node is a cross-community bridge._
-- **Why does `SpreadBoardServer` connect `Community 10` to `Community 1`, `Community 6`?**
+- **Why does `SpreadBoardHandler` connect `Community 11` to `Community 2`, `Community 5`?**
+  _High betweenness centrality (0.033) - this node is a cross-community bridge._
+- **Why does `SpreadBoardServer` connect `Community 11` to `Community 2`, `Community 5`?**
   _High betweenness centrality (0.032) - this node is a cross-community bridge._
 - **What connects `HTTP boundary for crypto checkout.  The subtle failure this guards against: memb`, `Crypto (Arbitrum USDC/USDT) prepaid billing.  The invariant that matters most: a`, `Dollars -> raw 6-decimal token units.` to the rest of the system?**
-  _254 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _255 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.01 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
-  _Cohesion score 0.02 - nodes in this community are weakly interconnected._
-- **Should `Community 2` be split into smaller, more focused modules?**
   _Cohesion score 0.01 - nodes in this community are weakly interconnected._
+- **Should `Community 2` be split into smaller, more focused modules?**
+  _Cohesion score 0.02 - nodes in this community are weakly interconnected._

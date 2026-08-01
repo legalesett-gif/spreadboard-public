@@ -231,6 +231,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             "/terms",
             "/privacy",
             "/refunds",
+            "/guide",
             "/subscription",
             "/register",
             "/account",
@@ -271,6 +272,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_legal_page("terms"))
             elif parsed.path == "/privacy":
                 self._send_html(render_legal_page("privacy"))
+            elif parsed.path == "/guide":
+                self._send_html(render_guide_page())
             elif parsed.path == "/refunds":
                 self._send_html(render_legal_page("refunds"))
             elif parsed.path == "/subscription":
@@ -638,7 +641,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.current_user = None
         if not accounts.auth_required():
             return True
-        public = path in {"/login", "/register", "/pricing", "/terms", "/privacy", "/refunds", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico"} or path.startswith("/assets/")
+        public = path in {"/login", "/register", "/pricing", "/guide", "/terms", "/privacy", "/refunds", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico"} or path.startswith("/assets/")
         token = self._session_token()
         user = accounts.user_for_session(token, self.server.accounts_path) if token else None
         self.current_user = user
@@ -5293,6 +5296,189 @@ def render_subscription_page() -> str:
     {render_crypto_checkout_script()}
     """
     return shell("Subscription - SpreadBoard", "profile", body)
+
+
+GUIDE_LANES = [
+    {
+        "id": "futures-futures",
+        "title": "Futures / Futures",
+        "one_line": "The same coin costs different amounts on two futures exchanges. You buy the cheap one and sell the expensive one at the same time.",
+        "how": [
+            "Find a row on the <b>Futures-Futures</b> tab with an edge you are happy with.",
+            "On the cheaper exchange, open a <b>long</b> futures position.",
+            "On the more expensive exchange, open a <b>short</b> futures position of the <b>same size</b>.",
+            "You now own nothing on net. If the coin doubles or halves, you neither win nor lose from that.",
+            "You wait. The two prices drift back together. When the gap is near zero you close both legs and keep the difference.",
+        ],
+        "earn": "Two ways. The gap closing is one. <b>Funding</b> is the other: every few hours one side pays the other, and if your short is on the side that receives, you get paid just for holding.",
+        "watch": [
+            "<b>Both legs must be the same size.</b> If they are not, you are quietly betting on the price direction.",
+            "<b>Liquidation.</b> Use low leverage. A 1x position on each side is the safe default. High leverage can liquidate one leg and leave you exposed.",
+            "<b>Funding can flip</b> and start costing you instead of paying you. Check the funding column, not just the spread.",
+            "<b>The gap can widen before it closes.</b> You need enough spare margin to sit through that.",
+        ],
+        "shot": "The Futures-Futures tab with a row expanded, showing both venues, the edge, and the funding column.",
+    },
+    {
+        "id": "futures-spot",
+        "title": "Futures / Spot",
+        "one_line": "The futures price and the ordinary (spot) price of the same coin have drifted apart. You buy the cheap side and sell the expensive side.",
+        "how": [
+            "Find a row on the <b>Futures-Spot</b> tab.",
+            "If futures are more expensive: <b>buy the coin on spot</b> and <b>short the futures</b>, same size.",
+            "If spot is more expensive: the trade reverses, but that needs borrowing, so beginners should skip it.",
+            "Hold. Futures and spot always converge as the contract settles or funding drags them together.",
+            "Close both sides when the gap is gone.",
+        ],
+        "earn": "Mostly funding. When futures trade above spot, longs pay shorts, so your short leg collects a fee every few hours while you simply hold the coin. This is the calmest trade on the board and is often held for days.",
+        "watch": [
+            "<b>You actually own the coin</b> on the spot side. It must sit on that exchange.",
+            "<b>Same size on both sides</b>, or you are exposed to the price.",
+            "<b>Funding is not guaranteed.</b> It is reset every few hours and can turn negative.",
+            "<b>Check the coin is the same coin.</b> Some exchanges list a different token under the same ticker.",
+        ],
+        "shot": "The Futures-Spot tab, plus one exchange screen showing the spot buy and the futures short side by side.",
+    },
+    {
+        "id": "spot-spot",
+        "title": "Spot / Spot",
+        "one_line": "The same coin is simply cheaper on one exchange than another. You buy it where it is cheap, move it, and sell it where it is expensive.",
+        "how": [
+            "Find a row on the <b>Spot-Spot</b> tab.",
+            "<b>Check the deposit / withdrawal column first.</b> Both must be open. This is the step beginners skip and it is the one that loses money.",
+            "Buy the coin on the cheap exchange.",
+            "Withdraw it to the expensive exchange. Pick the same network on both ends.",
+            "When it arrives, sell it. The difference is yours.",
+        ],
+        "earn": "Only the price gap. There is no funding here.",
+        "watch": [
+            "<b>This is the only trade where you are exposed while it happens.</b> The coin is in transit and the price can move against you.",
+            "<b>If withdrawals are shut, you cannot do this trade at all</b> -- your money is stuck on the cheap exchange. Our board marks a closed rail as <b>SHUT</b>.",
+            "<b>Withdrawal fees and network fees</b> come out of your profit. A 0.3% gap can easily be nothing after fees.",
+            "<b>Wrong network = lost coins.</b> Always match the network on both sides.",
+        ],
+        "shot": "The Spot-Spot tab with the D/W status column clearly visible, plus an exchange withdrawal screen showing the network selector.",
+    },
+    {
+        "id": "futures-dex",
+        "title": "Futures / DEX",
+        "one_line": "The coin trades at one price on a decentralised exchange (on-chain) and another on a normal futures exchange. You take both sides.",
+        "how": [
+            "Find a row on the <b>Futures-DEX</b> tab.",
+            "Buy the coin on the DEX with your own wallet, or sell it there if the DEX is the expensive side.",
+            "Take the opposite side as a futures position on the exchange, same size.",
+            "Hold, collect funding, and close both when the gap closes.",
+        ],
+        "earn": "Funding is usually the main prize here, and it is often the largest on the board, because fewer people can be bothered with the on-chain leg.",
+        "watch": [
+            "<b>Check the contract address</b>, not the name. Anyone can create a token called anything. Our board marks routes where we have not confirmed the token identity with a <b>?</b>.",
+            "<b>Gas fees</b> are paid in the chain's own coin and come out of your profit.",
+            "<b>Slippage.</b> On-chain, a large order moves the price against you. The quoted price is for a small size.",
+            "<b>You need a wallet</b> and the coin must actually be withdrawable to it.",
+        ],
+        "shot": "The Futures-DEX tab, plus a wallet swap screen showing the token contract address.",
+    },
+]
+
+
+def render_guide_page() -> str:
+    """Plain-language tutorial on how each spread type is actually traded."""
+    lanes = ""
+    for lane in GUIDE_LANES:
+        steps = "".join(f"<li>{step}</li>" for step in lane["how"])
+        risks = "".join(f"<li>{item}</li>" for item in lane["watch"])
+        lanes += f"""
+        <article class="guide-lane" id="{lane['id']}">
+          <h2>{h(lane['title'])}</h2>
+          <p class="guide-lede">{lane['one_line']}</p>
+          <h3>How you do it</h3>
+          <ol class="guide-steps">{steps}</ol>
+          <h3>Where the money comes from</h3>
+          <p>{lane['earn']}</p>
+          <h3>What can go wrong</h3>
+          <ul class="guide-risks">{risks}</ul>
+        </article>
+        """
+    return shell("How to trade spreads - SpreadBoard", "guide", f"""
+    <section class="guide-page">
+      <header class="terminal-heading">
+        <div><span class="page-kicker">Tutorial</span>
+        <h1>How to actually trade a spread</h1>
+        <p>Written for someone who has never done this before. No jargon, and nothing assumed.</p></div>
+      </header>
+
+      <article class="guide-lane">
+        <h2>The idea in one paragraph</h2>
+        <p class="guide-lede">The same coin does not cost the same everywhere. SpreadBoard watches many
+        exchanges at once and shows you where the prices disagree. The trade is almost always the same
+        shape: <b>buy the cheap side and sell the expensive side at the same time, in the same size</b>.
+        Because you are long and short at once, it does not matter to you whether the coin goes up or
+        down. You are only betting that the two prices come back together -- which they almost always do.</p>
+        <p>That "same size, both directions" idea is called being <b>delta neutral</b>. It is the whole
+        game. If you remember one thing, remember that.</p>
+      </article>
+
+      <article class="guide-lane">
+        <h2>How to read a row on the board</h2>
+        <ul class="guide-risks">
+          <li><b>Edge %</b> -- how far apart the two prices are right now. Bigger is better, but see the warnings below.</li>
+          <li><b>Funding</b> -- a fee paid every few hours between longs and shorts. A positive number on your route means you get paid while you wait. This is often worth more than the gap itself.</li>
+          <li><b>APR</b> -- what that funding works out to per year if it stayed the same. It will not stay the same, so treat it as a hint, not a promise.</li>
+          <li><b>Depth</b> -- roughly how much you can trade before you move the price. A big edge with tiny depth is not a real opportunity.</li>
+          <li><b>Age</b> -- how old the quote is. Older quotes are less reliable.</li>
+          <li><b>D / W</b> -- whether deposits and withdrawals are open. <b>SHUT</b> means you cannot move the coin, which kills any trade that needs a transfer.</li>
+          <li><b>?</b> -- we have not confirmed that both venues list the same underlying token. Check the contract yourself before trusting the number.</li>
+        </ul>
+      </article>
+
+      <article class="guide-lane">
+        <h2>Before your first trade</h2>
+        <ol class="guide-steps">
+          <li><b>Start small.</b> Do the whole thing once with an amount you would not mind losing entirely. The goal of trade one is to learn the mechanics, not to make money.</li>
+          <li><b>Use 1x leverage.</b> No borrowing. It removes liquidation risk almost entirely.</li>
+          <li><b>Open both legs quickly.</b> The time between opening one and the other is the only moment you are truly exposed.</li>
+          <li><b>Write down your entry.</b> You need to know what the gap was when you entered to know when to exit.</li>
+          <li><b>Have a plan for the gap widening.</b> It often gets worse before it gets better. Decide in advance how much you can sit through.</li>
+        </ol>
+      </article>
+
+      {lanes}
+
+      <article class="guide-lane">
+        <h2>Very large spreads</h2>
+        <p class="guide-lede">You will sometimes see edges of 20%, 50%, even over 100%. These are real and
+        they are shown deliberately -- some of the best opportunities on the board look like this, and they
+        can last only a minute or two.</p>
+        <p>But a very large gap is also the shape a mistake makes. Before trading one, check three things:
+        that <b>both venues list the same token</b> (watch for the <b>?</b> marker), that there is
+        <b>real depth</b> behind the quote, and that you can actually <b>get in and out</b> -- deposits and
+        withdrawals open, and a way to close both legs. If any of those fails, the number is not money.</p>
+      </article>
+
+      <article class="guide-lane">
+        <h2>The honest warnings</h2>
+        <ul class="guide-risks">
+          <li>SpreadBoard is a <b>research tool</b>. It does not place trades, hold your money, or tell you what to buy.</li>
+          <li>A displayed spread can disappear before you finish opening both legs.</li>
+          <li>Fees, funding, slippage and withdrawal costs all come out of your profit. Work them out before you enter, not after.</li>
+          <li>Nothing here is financial advice. If you are unsure, trade smaller than you think you should.</li>
+        </ul>
+      </article>
+
+      <p class="pricing-disclaimer">Questions? Ask in the subscriber group.
+      <a href="/markets">Open the board</a> &middot; <a href="/pricing">Membership</a> &middot; <a href="/terms">Terms</a></p>
+    </section>
+    <style>
+    .guide-page{{max-width:820px;margin:0 auto;padding-bottom:48px}}
+    .guide-lane{{margin:26px 0;padding:18px 20px;border:1px solid rgba(128,128,128,.25);border-radius:10px}}
+    .guide-lane h2{{margin:0 0 .4rem}}
+    .guide-lane h3{{margin:1.1rem 0 .35rem;font-size:.95rem;opacity:.8;text-transform:uppercase;letter-spacing:.04em}}
+    .guide-lede{{font-size:1.02rem;line-height:1.6}}
+    .guide-steps li,.guide-risks li{{margin:.4rem 0;line-height:1.55}}
+    .guide-steps{{padding-left:1.2rem}}
+    .guide-risks{{padding-left:1.1rem}}
+    </style>
+    """)
 
 
 def render_legal_page(page: str) -> str:
