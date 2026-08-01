@@ -1377,7 +1377,14 @@ def test_validated_reference_venues_are_enabled() -> None:
 
     assert {"HTX", "Phemex", "CoinEx", "WhiteBIT", "BitMart", "XT"} <= set(spot)
     assert {"HTX", "Phemex", "CoinEx", "WhiteBIT", "BitMart", "XT"} <= set(futures)
-    assert "Upbit" not in spot
+    # Upbit was previously excluded, most likely because Korean venues carry a
+    # persistent local premium that is not arbitrageable across capital
+    # controls. Re-enabled 2026-08-01 by operator request for venue parity with
+    # the reference product, which does quote Upbit. Only its USDT markets are
+    # used, not KRW. If its rows prove to be non-capturable premium rather than
+    # real edge, drop "Upbit" from default_enabled_cex_source() again.
+    assert "Upbit" in spot
+    assert "Lighter" in futures
 
 
 @pytest.mark.parametrize(
