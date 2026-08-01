@@ -1149,7 +1149,17 @@ def quote_candidate_pairs(
     for token, token_quotes in by_token.items():
         for long_quote in token_quotes:
             for short_quote in token_quotes:
-                if long_quote.venue == short_quote.venue:
+                # Same venue, same market type is the same contract -- meaningless.
+                # Same venue, DIFFERENT market type is cash-and-carry: buy the spot
+                # and short the perp in one account, collect funding, move nothing.
+                # It needs no transfer rail at all, so it is the safest farm on the
+                # board, and excluding it cost us 4 of the reference product's top
+                # 15 Spot-Futures rows (MEXC spot -> MEXC perp on UAI, US, CLANKER,
+                # BLESS) plus every venue-exclusive token such as GEOD and HOODRAT.
+                if (
+                    long_quote.venue == short_quote.venue
+                    and long_quote.market_type == short_quote.market_type
+                ):
                     continue
                 executable = spread_pct(long_quote.ask, short_quote.bid)
                 depth = spread_pct(long_quote.ask_vwap, short_quote.bid_vwap)

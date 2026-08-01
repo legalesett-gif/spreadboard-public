@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import gc
 import json
+import os
 from pathlib import Path
 from threading import Lock
 import time
@@ -88,6 +89,78 @@ class FastQuoteRefresher:
         self._client_lock = Lock()
         self._client_request_locks: dict[tuple[str, str], Lock] = {}
 
+    def refresh_all_funding(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Re-quote funding for EVERY futures leg in the snapshot, not just the top routes.
+
+        Order books cost one request per symbol, so they have to be rationed to
+        `route_limit` routes. Funding does not: one bulk call per venue returns
+        every symbol at once. Rationing it anyway left most legs carrying rates
+        from the 20-45 minute discovery scan -- MEXC SWARMS read 0.0352%/4h here
+        while the exchange was live at 0.0506%/4h and the reference board showed
+        0.05%. The parser was right; the number was simply old.
+        """
+        legs: dict[str, list[tuple[dict[str, Any], str]]] = {}
+        for bucket in ("api_discovered_rows", "dex_discovered_rows"):
+            for row in payload.get(bucket) or []:
+                if not isinstance(row, dict):
+                    continue
+                for side in ("long", "short"):
+                    if row.get(f"{side}_market_type") != "Futures":
+                        continue
+                    key = _route_leg_key(row, side)
+                    if key is not None:
+                        legs.setdefault(key[0], []).append((row, side))
+        venues = updated = 0
+        # Busiest venues first, under a wall-clock budget: a bulk call needs
+        # load_markets() the first time, and the cycle must not overrun.
+        budget = time.monotonic() + max(
+            10.0, float(os.environ.get("SPREADBOARD_FUNDING_REFRESH_BUDGET_SECONDS", "60"))
+        )
+        for venue, entries in sorted(legs.items(), key=lambda item: -len(item[1])):
+            if time.monotonic() > budget:
+                break
+            rates = self._bulk_funding_rates(venue)
+            if not rates:
+                continue
+            venues += 1
+            for row, side in entries:
+                key = _route_leg_key(row, side)
+                fields = rates.get(key[2]) if key else None
+                if not fields:
+                    continue
+                notes = row.setdefault("notes", {})
+                route_inputs = notes.setdefault("route_inputs", {})
+                route_inputs[side] = {**(route_inputs.get(side) or {}), **fields}
+                updated += 1
+        return {"venues": venues, "legs": updated, "candidates": sum(map(len, legs.values()))}
+
+    def _bulk_funding_rates(self, venue: str) -> dict[str, dict[str, Any]]:
+        """One call per venue for every perpetual it lists."""
+        try:
+            client = self._client(venue, "Futures")
+            if client is None or not getattr(client, "has", {}).get("fetchFundingRates"):
+                return {}
+            with self._client_request_lock(venue, "Futures"):
+                payload = client.fetch_funding_rates()
+        except Exception:  # noqa: BLE001 - one venue must not stop the cycle.
+            return {}
+        items = payload.values() if isinstance(payload, dict) else payload
+        rates: dict[str, dict[str, Any]] = {}
+        for item in items or []:
+            if not isinstance(item, dict) or not item.get("symbol"):
+                continue
+            interval = item.get("interval")
+            if isinstance(interval, str) and interval.casefold().endswith("h"):
+                interval = interval[:-1]
+            fields = _funding_fields(
+                item.get("fundingRate"),
+                interval_hours=interval,
+                next_funding_ms=item.get("fundingTimestamp") or item.get("nextFundingTimestamp"),
+            )
+            if fields:
+                rates[str(item["symbol"])] = fields
+        return rates
+
     def refresh(
         self, snapshot_path: Path, *, route_limit: int = 100, target_notional_usd: float = 50.0
     ) -> dict[str, Any]:
@@ -95,6 +168,7 @@ class FastQuoteRefresher:
             payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             return {"status": "unavailable", "updated": 0, "error": type(exc).__name__}
+        funding_summary = self.refresh_all_funding(payload)
         rows_by_lane: dict[str, list[dict[str, Any]]] = {lane: [] for lane in FAST_QUOTE_LANES}
         for bucket in ("api_discovered_rows", "dex_discovered_rows"):
             for row in payload.get(bucket) or []:
@@ -206,6 +280,8 @@ class FastQuoteRefresher:
             "failed_routes": failed,
             "selected_routes": len(selected),
             "target_notional_usd": target_notional_usd,
+            "funding_legs_refreshed": funding_summary.get("legs", 0),
+            "funding_venues": funding_summary.get("venues", 0),
         }
         _atomic_write(snapshot_path, payload)
         return payload["fast_quote_refresh"]

@@ -1071,6 +1071,10 @@ def route_deliverable(row: "SpreadTerminalRow") -> bool | None:
     with a byte-identical BEP20 contract purely because Kucoin deposits were
     shut. Returns None when the rail status is unknown.
     """
+    long_venue = getattr(row, "long_venue", None)
+    if long_venue and long_venue == getattr(row, "short_venue", None):
+        # Cash-and-carry inside one account: there is nothing to deliver anywhere.
+        return True
     kind = getattr(row, "route_kind", None)
     if kind in SHORT_SPOT_ROUTE_KINDS:
         # Only the short spot leg needs delivering into.

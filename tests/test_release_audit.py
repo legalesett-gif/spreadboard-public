@@ -1975,3 +1975,87 @@ def _iso(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
+
+
+def _mq(**kw):
+    from spreadarb.api_discovery.models import MarketQuote
+    base = dict(token="GEOD", venue="Mexc", market_type="Futures", symbol="GEOD/USDT:USDT",
+                bid=0.219, ask=0.2192, bid_vwap=0.219, ask_vwap=0.2192,
+                quote_ts_us=int(time.time() * 1_000_000), source_name="test")
+    base.update(kw)
+    import inspect
+    allowed = set(inspect.signature(MarketQuote).parameters)
+    return MarketQuote(**{k: v for k, v in base.items() if k in allowed})
+
+
+def test_same_venue_cash_and_carry_is_a_real_route() -> None:
+    """Buy MEXC spot, short the MEXC perp: one account, no transfer, collect funding.
+
+    The reference product carries these -- 4 of its top 15 Spot-Futures rows were
+    MEXC spot -> MEXC perp -- and venue-exclusive tokens like GEOD have no other
+    route at all. Same venue AND same market type is still the same contract.
+    """
+    spot = _mq(market_type="Spot", symbol="GEOD/USDT", bid=0.2174, ask=0.2176,
+               bid_vwap=0.2174, ask_vwap=0.2176)
+    perp = _mq(market_type="Futures")
+    pairs = sources.quote_candidate_pairs([spot, perp], min_spread_pct=0.0)
+    routes = {(p.long_quote.market_type, p.short_quote.market_type) for p in pairs}
+    assert ("Spot", "Futures") in routes, "cash-and-carry must survive"
+    assert not [p for p in pairs
+                if p.long_quote.market_type == p.short_quote.market_type], (
+        "same venue and same market type is the same contract"
+    )
+
+
+def test_same_venue_routes_need_no_transfer_rail() -> None:
+    """Nothing moves between accounts, so a shut deposit rail cannot block it."""
+    assert api_spreads.route_deliverable(
+        _vrow(route_kind="SPOT", long_venue="Mexc", short_venue="Mexc",
+              long_withdraw_enabled=False, short_deposit_enabled=False)
+    ) is True
+
+
+def test_funding_refresh_covers_every_leg_not_just_top_routes(monkeypatch) -> None:
+    """MEXC SWARMS sat at 0.0352%/4h from the discovery scan while the exchange was
+    live at 0.0506% -- the parser was right, the number was stale. Order books must
+    be rationed; funding is one bulk call per venue, so it must not be."""
+    from spreadboard.fast_quotes import FastQuoteRefresher
+
+    def leg(venue, symbol):
+        return {"symbol": symbol}
+
+    snapshot = {"api_discovered_rows": [
+        {"token": "SWARMS", "long_venue": "Gate", "long_market_type": "Spot",
+         "short_venue": "Mexc", "short_market_type": "Futures",
+         "notes": {"route_inputs": {"long": leg("Gate", "SWARMS/USDT"),
+                                    "short": leg("Mexc", "SWARMS/USDT:USDT")}}},
+        {"token": "GEOD", "long_venue": "Mexc", "long_market_type": "Spot",
+         "short_venue": "Mexc", "short_market_type": "Futures",
+         "notes": {"route_inputs": {"long": leg("Mexc", "GEOD/USDT"),
+                                    "short": leg("Mexc", "GEOD/USDT:USDT")}}},
+    ]}
+    calls = []
+
+    class FakeClient:
+        has = {"fetchFundingRates": True}
+
+        def fetch_funding_rates(self):
+            calls.append("Mexc")
+            return {
+                "SWARMS/USDT:USDT": {"symbol": "SWARMS/USDT:USDT", "fundingRate": 0.000506,
+                                     "interval": "4h", "fundingTimestamp": 1785628800000},
+                "GEOD/USDT:USDT": {"symbol": "GEOD/USDT:USDT", "fundingRate": 0.0002,
+                                   "interval": "4h", "fundingTimestamp": 1785628800000},
+            }
+
+    refresher = FastQuoteRefresher()
+    monkeypatch.setattr(refresher, "_client", lambda venue, market_type: FakeClient())
+    summary = refresher.refresh_all_funding(snapshot)
+
+    assert calls == ["Mexc"], "one bulk call per venue, not one per symbol"
+    assert summary["legs"] == 2
+    short = snapshot["api_discovered_rows"][0]["notes"]["route_inputs"]["short"]
+    assert short["current_funding_pct"] == pytest.approx(0.0506)
+    assert short["funding_interval_hours"] == 4.0
+    # 0.0506%/4h -> 0.1012%/8h -> the reference product's 111% APR band.
+    assert 0.0506 * 6 * 365 == pytest.approx(110.814)
