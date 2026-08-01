@@ -1570,3 +1570,14 @@ def test_ourbit_exchange_points_at_ourbit_hosts_not_mexc() -> None:
     assert "ourbit.com" in flat
     assert "mexc.com" not in flat, "must not fall back to MEXC hosts"
     assert exchange.id == "ourbit"
+
+
+def test_broad_dex_output_goes_to_the_writable_runtime_dir() -> None:
+    """The repo data/ dir is read-only in the container.
+
+    Enabling broad DEX-spot discovery without redirecting this path made every
+    refresh die with PermissionError, freezing the whole board.
+    """
+    source = (Path(__file__).resolve().parents[1] / "scripts/run_spreadboard_service.py").read_text(encoding="utf-8")
+    assert "--broad-dex-output-path" in source
+    assert 'RUNTIME_DIR / "api_discovery_broad_dex_latest.json"' in source

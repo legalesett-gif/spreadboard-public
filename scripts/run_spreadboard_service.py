@@ -155,7 +155,13 @@ class RefreshLoop:
                 ["--skip-broad-dex-spot"]
                 if os.environ.get("SPREADBOARD_SKIP_BROAD_DEX_SPOT", "").strip().lower()
                 in {"1", "true", "yes", "on"}
-                else []
+                else [
+                    # The repo's data/ dir is read-only in the container; only the
+                    # runtime volume is writable. Without this the broad DEX scan
+                    # dies with PermissionError and takes the whole refresh with it.
+                    "--broad-dex-output-path",
+                    str(RUNTIME_DIR / "api_discovery_broad_dex_latest.json"),
+                ]
             ),
             "--dex-spot-timeout-s",
             os.environ.get("SPREADBOARD_DEX_SPOT_TIMEOUT_SECONDS", "240"),
