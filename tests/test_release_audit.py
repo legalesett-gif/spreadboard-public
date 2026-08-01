@@ -2126,3 +2126,39 @@ def test_funding_refresh_rotates_venues_across_passes(monkeypatch) -> None:
     assert visited[0] != visited[len(visited) // 2] or len(set(visited)) > 1, (
         "a later pass must not restart on the same venue every time"
     )
+
+
+def test_discovery_floors_admit_any_positive_carry_and_small_spreads(monkeypatch) -> None:
+    """The reference product's whole Spot lane sits at 0.10-0.16% and its funding
+    rows start around 9.64% APR. A 1% spread floor and a 25% funding floor made
+    both structurally unreachable -- we were not missing them, we declined to look."""
+    from spreadarb import public_runtime
+
+    monkeypatch.delenv("SPREADARB_MIN_SPREAD_PCT", raising=False)
+    monkeypatch.delenv("SPREADARB_MIN_FUNDING_APR_PCT", raising=False)
+    assert public_runtime.discovery_min_spread_pct() <= 0.1
+    assert 0 < public_runtime.discovery_min_funding_apr_pct() <= 10.0
+
+    quotes = [
+        _mq(token="BAN", venue="Gate", market_type="Futures", symbol="BAN/USDT:USDT",
+            bid=0.0715, ask=0.07152, bid_vwap=0.0715, ask_vwap=0.07152),
+        _mq(token="BAN", venue="Bybit", market_type="Futures", symbol="BAN/USDT:USDT",
+            bid=0.07160, ask=0.07162, bid_vwap=0.07160, ask_vwap=0.07162),
+    ]
+    # 0.11% -- exactly the band their Spot lane lives in, rejected by the old 1% floor.
+    pairs = sources.quote_candidate_pairs(
+        quotes, min_spread_pct=public_runtime.discovery_min_spread_pct()
+    )
+    assert pairs, "a sub-1% spread must still be a candidate"
+
+
+def test_snapshot_is_not_reparsed_for_every_request(tmp_path) -> None:
+    """Carrying the full positive-funding universe multiplies the snapshot, and
+    re-parsing tens of megabytes per page view is not affordable."""
+    path = tmp_path / "snap.json"
+    path.write_text(json.dumps({"api_discovered_rows": [], "updated_at": "2026-08-01T00:00:00Z"}))
+    first = api_spreads._cached_snapshot(path)
+    second = api_spreads._cached_snapshot(path)
+    assert first is second, "same file must not be parsed twice"
+    path.write_text(json.dumps({"api_discovered_rows": [], "updated_at": "2026-08-01T00:01:00Z"}))
+    assert api_spreads._cached_snapshot(path) is not first, "a rewritten file must re-parse"

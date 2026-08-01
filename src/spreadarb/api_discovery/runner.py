@@ -34,7 +34,11 @@ from spreadarb.api_discovery.sources import (
 )
 from spreadarb.api_discovery.storage import append_archive, atomic_write_json
 from spreadarb.live.demo_blacklist import blacklisted_tokens
-from spreadarb.public_runtime import discovery_max_spread_pct
+from spreadarb.public_runtime import (
+    discovery_max_spread_pct,
+    discovery_min_funding_apr_pct,
+    discovery_min_spread_pct,
+)
 
 
 def run_discovery(
@@ -96,6 +100,8 @@ def run_discovery(
             all_platform_tokens=all_platform_tokens,
             max_orderbook_candidates=max_orderbook_candidates,
             max_spread_pct=discovery_max_spread_pct(),
+            min_spread_pct=discovery_min_spread_pct(),
+            min_funding_apr_pct=discovery_min_funding_apr_pct(),
             identity_registry=identity_registry,
             executor_attestations=executor_attestations,
         )

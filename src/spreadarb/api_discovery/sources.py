@@ -438,6 +438,7 @@ class DiscoveryContext:
     deadline_monotonic: float | None
     target_notional_usd: float = 50.0
     min_spread_pct: float = 1.0
+    min_funding_apr_pct: float = 25.0
     max_spread_pct: float = 0.0
     reference_quotes: tuple[MarketQuote, ...] = ()
     all_platform_tokens: bool = False
@@ -606,6 +607,7 @@ class CexCcxtSource:
             source_kind=self.source_kind,
             source_name=self.name,
             min_spread_pct=context.min_spread_pct,
+            min_net_funding_apr_pct=context.min_funding_apr_pct,
             max_spread_pct=context.max_spread_pct,
             identity_registry=context.identity_registry,
             executor_attestations=context.executor_attestations,
@@ -2190,7 +2192,7 @@ def _verify_top_candidate_books(
         candidate_quotes or quotes,
         min_spread_pct=min_spread_pct,
         max_spread_pct=context.max_spread_pct,
-        min_net_funding_apr_pct=25.0,
+        min_net_funding_apr_pct=context.min_funding_apr_pct,
     )
     pairs = [
         pair

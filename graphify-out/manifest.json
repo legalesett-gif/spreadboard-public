@@ -28,8 +28,8 @@
     "hash": "09ef4bce2fb783e53b467fdaaefd3e5f"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_release_audit.py": {
-    "mtime": 1785614524.2414896,
-    "hash": "155fb22a033472916663f99ac392c21d"
+    "mtime": 1785623549.7715743,
+    "hash": "82d08f0a924a6dd72b0bc5311885f879"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_crypto_watcher.py": {
     "mtime": 1785586285.041231,
@@ -132,8 +132,8 @@
     "hash": "c50f6407d6eb8dcbc7de90f28d60e017"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/api_spreads.py": {
-    "mtime": 1785614509.5982094,
-    "hash": "c00fa4507bb2a3784dee3d0b2aa67269"
+    "mtime": 1785623063.2252185,
+    "hash": "7b98956fde019908a10c3a32762bbd20"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/billing.py": {
     "mtime": 1785522976.0203524,
@@ -168,16 +168,16 @@
     "hash": "ff21a2cf2ebcea9dba775c43aeb02fa5"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/fast_quotes.py": {
-    "mtime": 1785532122.7727392,
-    "hash": "73d6b83078c2a6ff2ba01ab7ab713a39"
+    "mtime": 1785623538.14516,
+    "hash": "5b5f32dba2b01ce678d57d4c1b87dd94"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/crypto_billing.py": {
     "mtime": 1785586070.4566174,
     "hash": "a6c6a058a2e80b0c3049febe986ba36f"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/live.py": {
-    "mtime": 1785501618.160956,
-    "hash": "0a252514a39df76010232ea4deb54684"
+    "mtime": 1785615860.3496983,
+    "hash": "ce7b96afe81f120dfb90d15782049444"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/portfolio.py": {
     "mtime": 1785515084.2767978,
@@ -256,8 +256,8 @@
     "hash": "87e50a626099c0c2bbeaef0eb2dd15be"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/api_discovery/sources.py": {
-    "mtime": 1785606145.5796332,
-    "hash": "2f0e0605b8b61e75859354a165805d09"
+    "mtime": 1785623063.2260163,
+    "hash": "c177e9e4bb517e3797283b584cd67de0"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/src/spreadarb/api_discovery/broad_dex.py": {
     "mtime": 1784980374.09355,
@@ -288,8 +288,8 @@
     "hash": "db79a91d2253e2a284862dc29ef6aadd"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/compose.production.yml": {
-    "mtime": 1785607458.0162618,
-    "hash": "96a7853a181b065c912fc15febcefd7e"
+    "mtime": 1785623674.923945,
+    "hash": "3b2f90ca7ba3918237d4de511d10d510"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/spreadboard/static/LIGHTWEIGHT_CHARTS_LICENSE.txt": {
     "mtime": 1785272014.5598867,

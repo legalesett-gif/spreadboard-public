@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import json
 import os
+from threading import Lock
 import time
 from typing import Any
 
@@ -342,6 +343,31 @@ def _release_lane_token_counts(
     return {kind: len(values) for kind, values in tokens.items()}
 
 
+# The snapshot is re-read on every request. That was affordable at 4.7MB, but
+# carrying the full positive-funding universe multiplies it, and re-parsing tens
+# of megabytes per page view is not. The file is rewritten wholesale, so its
+# mtime is a sound cache key; _propagate_funding_by_leg is idempotent, so reusing
+# an already-propagated payload is safe.
+_SNAPSHOT_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
+_SNAPSHOT_CACHE_LOCK = Lock()
+_ROW_CACHE: dict[tuple[str, int], tuple[float, list["SpreadTerminalRow"]]] = {}
+_ROW_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_ROW_CACHE_SECONDS", "5"))
+
+
+def _cached_snapshot(path: Path) -> dict[str, Any]:
+    key = str(path)
+    stat = path.stat()
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    with _SNAPSHOT_CACHE_LOCK:
+        cached = _SNAPSHOT_CACHE.get(key)
+        if cached is not None and (cached[0], cached[1]) == stamp:
+            return cached[2]
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    with _SNAPSHOT_CACHE_LOCK:
+        _SNAPSHOT_CACHE[key] = (stamp[0], stamp[1], payload)
+    return payload
+
+
 def _load_api_discovery_rows(
     path: Path,
     *,
@@ -350,7 +376,7 @@ def _load_api_discovery_rows(
     rails: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[SpreadTerminalRow], dict[str, Any]]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = _cached_snapshot(path)
     except OSError as exc:
         return [], {
             "status": "missing",
@@ -366,20 +392,31 @@ def _load_api_discovery_rows(
             "row_count": 0,
         }
 
-    _propagate_funding_by_leg(payload)
-    rows: list[SpreadTerminalRow] = []
-    for bucket in ("api_discovered_rows", "dex_discovered_rows"):
-        for raw in payload.get(bucket) or []:
-            if isinstance(raw, dict):
-                rows.append(
-                    _row_from_api(
-                        raw,
-                        bucket=bucket,
-                        now=now,
-                        metadata=metadata or {},
-                        rails=rails or {},
-                    )
-                )
+    # Building a dataclass per row is the other per-request cost, and it grows
+    # with the universe. Only freshness and age depend on `now`, and the board
+    # itself only moves every 20s, so a few seconds of reuse is invisible.
+    cache_key = (str(path), path.stat().st_mtime_ns)
+    with _SNAPSHOT_CACHE_LOCK:
+        cached_rows = _ROW_CACHE.get(cache_key)
+    if cached_rows is not None and 0.0 <= now - cached_rows[0] < _ROW_CACHE_TTL_SECONDS:
+        rows = cached_rows[1]
+    else:
+        _propagate_funding_by_leg(payload)
+        rows = [
+            _row_from_api(
+                raw,
+                bucket=bucket,
+                now=now,
+                metadata=metadata or {},
+                rails=rails or {},
+            )
+            for bucket in ("api_discovered_rows", "dex_discovered_rows")
+            for raw in payload.get(bucket) or []
+            if isinstance(raw, dict)
+        ]
+        with _SNAPSHOT_CACHE_LOCK:
+            _ROW_CACHE.clear()
+            _ROW_CACHE[cache_key] = (now, rows)
     updated_at = _str_or_none(payload.get("updated_at"))
     discovery_age = _iso_age_min(updated_at, now=now)
     fast_refresh = (
