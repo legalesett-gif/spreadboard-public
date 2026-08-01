@@ -1581,3 +1581,21 @@ def test_broad_dex_output_goes_to_the_writable_runtime_dir() -> None:
     source = (Path(__file__).resolve().parents[1] / "scripts/run_spreadboard_service.py").read_text(encoding="utf-8")
     assert "--broad-dex-output-path" in source
     assert 'RUNTIME_DIR / "api_discovery_broad_dex_latest.json"' in source
+
+
+def test_freshness_window_exceeds_the_discovery_cadence() -> None:
+    """Discovery rows must survive between scans or they are never shown.
+
+    High-spread routes (SIREN at 100%+) come from the discovery scan, which
+    runs every 20-45 minutes -- not from the 95-second fast-quote worker. A
+    freshness window shorter than that cadence silently expires exactly the
+    opportunities the product exists to surface.
+    """
+    compose = (Path(__file__).resolve().parents[1] / "compose.production.yml").read_text(encoding="utf-8")
+    import re
+    window = float(re.search(r'SPREADBOARD_LIVE_MAX_AGE_MIN:\s*"(\d+)"', compose).group(1))
+    cadence = float(re.search(r'SPREADBOARD_REFRESH_SECONDS:\s*"(\d+)"', compose).group(1)) / 60.0
+    assert window > cadence * 2, (
+        f"freshness window {window}min must comfortably exceed the {cadence}min "
+        "scan cadence, or discovery rows expire before they are displayed"
+    )

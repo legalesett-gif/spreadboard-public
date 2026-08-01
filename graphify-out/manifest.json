@@ -28,8 +28,8 @@
     "hash": "09ef4bce2fb783e53b467fdaaefd3e5f"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_release_audit.py": {
-    "mtime": 1785606156.4028547,
-    "hash": "61eaedcffceb95eae1412cb2c293524a"
+    "mtime": 1785606710.646104,
+    "hash": "ad7e2fb74424d5493529dd7000727eb0"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/tests/test_crypto_watcher.py": {
     "mtime": 1785586285.041231,
@@ -96,8 +96,8 @@
     "hash": "3fe6ef3ff36a3f666566203dfa081688"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/run_spreadboard_service.py": {
-    "mtime": 1785604848.9720843,
-    "hash": "234a2d751fcdaf8a1e4896980476c0f3"
+    "mtime": 1785606677.40806,
+    "hash": "46a4626c82718724dd35d214519c6f83"
   },
   "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/scripts/websocket_book_worker.py": {
     "mtime": 1785502030.351069,
