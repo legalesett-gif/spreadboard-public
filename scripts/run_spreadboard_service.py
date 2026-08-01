@@ -31,6 +31,7 @@ from spreadboard import (
     market_history,
     portfolio,
     public_rails,
+    rail_watch,
     telegram_bot,
     token_metadata,
     verified_identity,
@@ -415,6 +416,9 @@ def main() -> int:
         accounts_path=server.accounts_path,
         poll_seconds=float(os.environ.get("SPREADBOARD_MARKET_ALERT_SECONDS", "10")),
     )
+    rail_reopen_worker = rail_watch.RailReopenWatcher(
+        poll_seconds=float(os.environ.get("SPREADBOARD_RAIL_REOPEN_SECONDS", "300")),
+    )
 
     def stop_service(_signum: int, _frame: Any) -> None:
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -425,6 +429,7 @@ def main() -> int:
     position_alert_worker.start()
     membership_worker.start()
     market_alert_worker.start()
+    rail_reopen_worker.start()
     _log(f"serving http://{host}:{port}")
     try:
         server.serve_forever(poll_interval=0.5)
@@ -432,6 +437,7 @@ def main() -> int:
         position_alert_worker.stop()
         membership_worker.stop()
         market_alert_worker.stop()
+        rail_reopen_worker.stop()
         refresh_loop.stop()
         server.server_close()
     return 0

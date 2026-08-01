@@ -385,6 +385,11 @@ def _reply(
     return payload
 
 
+def send_group_message(chat_id: str | int, text: str) -> dict[str, Any]:
+    """Push an unsolicited message to the subscriber group."""
+    return _api_call("sendMessage", {"chat_id": chat_id, "text": text, "disable_web_page_preview": True})
+
+
 def parse_update(raw: bytes) -> dict[str, Any]:
     try:
         payload = json.loads(raw.decode("utf-8"))
