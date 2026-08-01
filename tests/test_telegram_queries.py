@@ -152,7 +152,7 @@ def test_spread_reply_lists_every_route_best_first(board_file):
     body = telegram_queries.render(
         telegram_queries.Query("spread", "SIREN"), board_path=board_file
     )
-    assert "SIREN" in body and "2 routes" in body
+    assert "SIREN" in body and "3 routes" in body
     assert "OKX DEX&gt;Bybit" in body and "Gate&gt;Bybit" in body
     assert body.index("+1.70%") < body.index("+1.10%"), "best edge must come first"
     assert "$142K" in body
@@ -275,13 +275,15 @@ def test_non_forum_reply_omits_thread_id(db, board_file):
     assert reply is not None and "message_thread_id" not in reply
 
 
-def test_mirage_guarded_routes_are_never_shown(board_file):
-    """The guard exists to stop members chasing dislocation traps."""
+def test_unverified_routes_are_shown_but_marked(board_file):
+    """Big spreads are real; hide nothing, but flag unconfirmed identity."""
     body = telegram_queries.render(
         telegram_queries.Query("spread", "SIREN"), board_path=board_file
     )
-    assert "Ghost" not in body and "9999" not in body
-    assert "2 routes" in body, "only the two real routes should count"
+    assert "Ghost" in body, "an unverified route must still reach the member"
+    assert "Ghost&gt;Phantom?" in body, "and must carry the ? identity marker"
+    assert "identity unverified" in body
+    assert "3 routes" in body
 
 
 @pytest.mark.parametrize(

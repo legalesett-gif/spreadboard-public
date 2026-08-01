@@ -149,9 +149,15 @@ def load_spreads(
     # Headline rankings must be executable research leads, not ticker
     # dislocations with unresolved identity, inventory, or transfer rails.
     # Guarded rows remain available through the explicit audit switch.
+    # Operator correction 2026-08-01: large spreads on this board are REAL --
+    # he has captured a 150% spread for real money -- so hiding them loses the
+    # very opportunities the product exists to surface. Guarded rows are now
+    # shown by default and carry `mirage_guarded` so the UI can badge them as
+    # unverified rather than silently dropping them. Set
+    # SPREADBOARD_HIDE_GUARDED_ROWS=1 to restore the old hide-by-default.
     ranked_rows = (
         all_rows
-        if include_unverified
+        if include_unverified or not _hide_guarded_rows()
         else [
             row
             for row in all_rows
@@ -952,6 +958,13 @@ def _dex_contract_mirage_reasons(
             expected = ""
         matches = bool(expected) and expected.casefold() == contract.casefold()
     return [] if matches else ["mirage_guard:dex_contract_mismatch"]
+
+
+def _hide_guarded_rows() -> bool:
+    """Whether identity-unverified rows are dropped instead of badged."""
+    return str(os.environ.get("SPREADBOARD_HIDE_GUARDED_ROWS", "")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 
 def _is_mirage_guarded(row: SpreadTerminalRow) -> bool:

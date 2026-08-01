@@ -122,7 +122,13 @@ def _usd(value: Any) -> str:
 
 
 def _route(row: dict[str, Any]) -> str:
-    return f"{row.get('long_venue') or '?'}>{row.get('short_venue') or '?'}"[:22]
+    """Route label, suffixed with ? when identity is unverified.
+
+    Large spreads here are real, so they are shown -- but a member must be able
+    to see at a glance which legs have not had their token identity confirmed.
+    """
+    mark = "?" if row.get("mirage_guarded") else ""
+    return f"{row.get('long_venue') or '?'}>{row.get('short_venue') or '?'}{mark}"[:22]
 
 
 def _rows_for(symbol: str, board_path: Path | str) -> list[dict[str, Any]]:
@@ -140,10 +146,7 @@ def _rows_for(symbol: str, board_path: Path | str) -> list[dict[str, Any]]:
     for group in payload.get("groups") or []:
         if str(group.get("token") or "").upper() != symbol:
             continue
-        for route in group.get("routes") or []:
-            if route.get("mirage_guarded"):
-                continue
-            rows.append(route)
+        rows.extend(group.get("routes") or [])
     return rows
 
 
@@ -205,6 +208,6 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
     return (
         f"<b>{escape(title)}</b>\n<pre>{escape(body)}</pre>"
         f"{extra}"
-        "\n<i>Research data, not advice. Verify identity and rails before trading.</i>"
+        "\n<i>? = token identity unverified on that route. Research data, not advice.</i>"
         f"{link}"
     )
