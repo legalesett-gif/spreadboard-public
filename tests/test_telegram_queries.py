@@ -282,3 +282,23 @@ def test_mirage_guarded_routes_are_never_shown(board_file):
     )
     assert "Ghost" not in body and "9999" not in body
     assert "2 routes" in body, "only the two real routes should count"
+
+
+@pytest.mark.parametrize(
+    "text,kind",
+    [
+        ("$Vanry /funding", "funding"),      # the exact message that failed
+        ("$SIREN funding", "funding"),
+        ("$SIREN /transfer", "transfer"),
+        ("$SIREN rails", "transfer"),
+        ("/funding $SIREN", "funding"),
+        ("$SIREN", "spread"),
+        ("$SIREN spread", "spread"),
+        ("what is $siren funding like", "funding"),
+    ],
+)
+def test_intent_word_wins_regardless_of_order(text, kind):
+    query = telegram_queries.parse_query(text)
+    assert query is not None
+    assert query.symbol == "SIREN" or query.symbol == "VANRY"
+    assert query.kind == kind

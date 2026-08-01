@@ -37,6 +37,9 @@ PUBLIC_URL_ENV = "SPREADBOARD_PUBLIC_URL"
 # dollar amounts and stray punctuation.
 CASHTAG = re.compile(r"(?:^|\s)\$([A-Za-z][A-Za-z0-9._-]{1,11})\b")
 COMMANDS = {"/spread": "spread", "/funding": "funding", "/transfer": "transfer", "/token": "spread"}
+# Bare intent words, accepted alongside a cashtag ("$SIREN funding").
+KIND_WORDS = {"spread": "spread", "funding": "funding", "transfer": "transfer",
+              "rails": "transfer", "deposit": "transfer", "withdraw": "transfer"}
 
 
 @dataclass(frozen=True)
@@ -55,17 +58,28 @@ def parse_query(text: str) -> Query | None:
     if not raw:
         return None
 
-    head, _, rest = raw.partition(" ")
-    command = head.split("@", 1)[0].casefold()
-    if command in COMMANDS:
-        symbol = rest.strip().lstrip("$").split(" ")[0]
-        if not symbol:
-            return None
-        return Query(kind=COMMANDS[command], symbol=_normalise(symbol))
+    # Members write these in any order: "/funding SIREN", "$SIREN /funding",
+    # "$SIREN funding". Scan the whole message for an intent word rather than
+    # trusting the first token, or "$Vanry /funding" silently returns a spread.
+    words = [w.split("@", 1)[0].casefold() for w in raw.split()]
+    kind = next((COMMANDS[w] for w in words if w in COMMANDS), None)
+    if kind is None:
+        kind = next((KIND_WORDS[w] for w in words if w in KIND_WORDS), None)
 
     match = CASHTAG.search(raw)
     if match:
-        return Query(kind="spread", symbol=_normalise(match.group(1)))
+        return Query(kind=kind or "spread", symbol=_normalise(match.group(1)))
+
+    head = words[0] if words else ""
+    if head in COMMANDS:
+        _, _, rest = raw.partition(" ")
+        symbol = rest.strip().lstrip("$").split(" ")[0] if rest.strip() else ""
+        # Strip a trailing intent word: "/spread SIREN funding"
+        if symbol.casefold() in KIND_WORDS or symbol.casefold() in COMMANDS:
+            symbol = ""
+        if not symbol:
+            return None
+        return Query(kind=COMMANDS[head], symbol=_normalise(symbol))
     return None
 
 
