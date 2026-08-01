@@ -1656,3 +1656,30 @@ def test_ratio_bound_catches_the_anthropic_tier() -> None:
 def test_missing_prices_do_not_trigger_the_ratio_rule() -> None:
     assert api_spreads.price_ratio_implausible(_row(long_price=None, short_price=1.0)) is False
     assert api_spreads.price_ratio_implausible(_row(long_price=0.0, short_price=1.0)) is False
+
+
+def test_group_headline_prefers_a_tradeable_route() -> None:
+    """A shut rail must not buy a token its top-25 slot.
+
+    Before this, a token whose only huge edge was undeliverable still ranked by
+    that edge, displacing tokens someone could actually trade.
+    """
+    from spreadboard.api_spreads import SpreadTerminalRow
+
+    def row(edge, kind="SPOT", withdraw=True, deposit=True, lp=1.0, sp=None):
+        base = {f.name: None for f in __import__("dataclasses").fields(SpreadTerminalRow)}
+        base.update(
+            token="TKN", route_kind=kind, executable_spread_pct=edge,
+            displayed_open_spread_pct=edge, depth_weighted_spread_pct=edge,
+            long_withdraw_enabled=withdraw, short_deposit_enabled=deposit,
+            long_price=lp, short_price=sp if sp is not None else lp * (1 + edge / 100),
+            blockers=[], freshness="fresh", age_min=1.0, route_key=f"TKN|{edge}",
+        )
+        return SpreadTerminalRow(**base)
+
+    groups = api_spreads._group_rows([
+        row(500.0, deposit=False),   # huge but the rail is shut
+        row(4.0),                    # modest and actually tradeable
+    ])
+    assert len(groups) == 1
+    assert groups[0]["best_edge_pct"] == 4.0, "headline must ignore the shut-rail route"

@@ -1146,10 +1146,16 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
             reverse=True,
         )
         routes = [_public_row(row) for row in token_rows]
-        best = max(
-            token_rows,
-            key=_entrance_spread,
-        )
+        # A token's headline -- and therefore its rank in every lane listing --
+        # must come from a route someone could actually take. Otherwise a shut
+        # rail or a ticker collision buys a top-25 slot and pushes a genuinely
+        # tradeable token off the page entirely.
+        tradeable_rows = [
+            row
+            for row in token_rows
+            if route_deliverable(row) is not False and not price_ratio_implausible(row)
+        ]
+        best = max(tradeable_rows or token_rows, key=_entrance_spread)
         funding_rows = [
             row for row in token_rows if _effective_funding_24h(row) is not None
         ]
