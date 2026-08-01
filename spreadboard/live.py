@@ -1149,6 +1149,36 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
             since_ms=since_ms,
         )
         return _native_funding_result(history, exchange_id=exchange_id)
+    if exchange_id == "krakenfutures":
+        # Kraken settles funding HOURLY and caps the rate at +/-0.5%/h, so the
+        # single current print annualises to absurdity: AGLD extrapolated to
+        # 3570% APR while the 24 rates it actually paid summed to 5.66%/day.
+        # Without this branch every Kraken leg fell through to that one print,
+        # because production runs with SPREADBOARD_NATIVE_FUNDING_ONLY=1.
+        # Kraken lists PF_XBTUSD but PF_DOGEUSD, so BTC is the only alias needed.
+        kraken_base = "XBT" if base == "BTC" else base
+        url = (
+            "https://futures.kraken.com/derivatives/api/v4/historicalfundingrates?"
+            + urllib.parse.urlencode({"symbol": f"PF_{kraken_base}USD"})
+        )
+        data = _public_json(url)
+        rows = []
+        for item in (data or {}).get("rates") or []:
+            if not isinstance(item, dict):
+                continue
+            timestamp_ms = _iso_timestamp_ms(item.get("timestamp"))
+            if timestamp_ms is None:
+                continue
+            rows.append({**item, "timestamp_ms": timestamp_ms})
+        history = _normalize_native_funding_rows(
+            rows,
+            timestamp_key="timestamp_ms",
+            # relativeFundingRate is the fraction of mark price; the absolute
+            # `fundingRate` is quote currency per contract and is not a percent.
+            rate_key="relativeFundingRate",
+            since_ms=since_ms,
+        )
+        return _native_funding_result(history, exchange_id=exchange_id)
     return None
 
 

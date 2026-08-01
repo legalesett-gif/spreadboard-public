@@ -1819,10 +1819,159 @@ def test_no_funding_data_returns_none() -> None:
 
 def test_unknown_funding_interval_is_not_rankable() -> None:
     """AGLD reached 3570% APR with one leg's interval unpublished; the 8h
-    fallback can be wrong by 8x, so such routes display but do not rank."""
+    fallback can be wrong by 8x, so such routes display but do not rank.
+
+    Updated deliberately: the leg with the missing interval now has to publish a
+    RATE for the route to be unrankable. A leg with no rate is a spot leg, which
+    is covered by the companion test below.
+    """
     assert api_spreads.funding_intervals_known(
-        _frow(long_funding_interval_hours=8.0, short_funding_interval_hours=1.0)
+        _frow(
+            long_funding_pct=0.01, long_funding_interval_hours=8.0,
+            short_funding_pct=0.02, short_funding_interval_hours=1.0,
+        )
     ) is True
     assert api_spreads.funding_intervals_known(
-        _frow(long_funding_interval_hours=None, short_funding_interval_hours=1.0)
+        _frow(
+            long_funding_pct=0.01, long_funding_interval_hours=None,
+            short_funding_pct=0.02, short_funding_interval_hours=1.0,
+        )
     ) is False
+
+
+def test_a_spot_leg_does_not_block_funding_ranking() -> None:
+    """Spot pays no funding, so it has no interval to publish -- that is known,
+    not unknown. Demanding one excluded every spot-futures farm (the classic
+    funding farm) from the ranking, leaving the top-funding list all-futures."""
+    assert api_spreads.funding_intervals_known(
+        _frow(short_funding_pct=0.0366, short_funding_interval_hours=4.0)
+    ) is True
+
+
+def test_short_dex_spot_leg_also_requires_existing_inventory() -> None:
+    """DEX-FUTURES rows appear in both directions. `long Kucoin Futures /
+    short OKX DEX 1(Spot)` sells a spot leg out of your own wallet, which the
+    route_kind name does not say, so the direction must come from the legs."""
+    assert api_spreads.requires_existing_spot_inventory(
+        _frow(route_kind="DEX-FUTURES", long_market_type="Futures", short_market_type="Spot")
+    ) is True
+    assert api_spreads.requires_existing_spot_inventory(
+        _frow(route_kind="DEX-FUTURES", long_market_type="Spot", short_market_type="Futures")
+    ) is False
+
+
+def test_a_measured_24h_sum_outranks_the_annualised_instantaneous_print() -> None:
+    """Kraken settles hourly and caps at 0.5%/h: AGLD's print extrapolated to
+    9.78%/day while the 24 rates it actually paid summed to 5.66%/day."""
+    daily, apr = api_spreads.normalised_funding(_frow(
+        funding_24h_pct=5.66,
+        long_funding_pct=0.0, long_funding_interval_hours=8.0,
+        short_funding_pct=0.4076, short_funding_interval_hours=1.0,
+    ))
+    assert round(daily, 2) == 5.66
+    assert round(apr, 1) == round(5.66 * 365.0, 1)
+
+
+def _funding_row(token: str, *, long_venue: str, long_type: str, short_venue: str,
+                 short_type: str, long_pct=None, long_iv=None, short_pct=None, short_iv=None):
+    quote_ts_us = int(time.time() * 1_000_000)
+    return api_spreads._row_from_api(
+        {
+            "token": token,
+            "long_venue": long_venue,
+            "long_market_type": long_type,
+            "short_venue": short_venue,
+            "short_market_type": short_type,
+            "quote_ts_us": quote_ts_us,
+            "executable_spread_pct": 1.0,
+            "notes": {
+                "funding": {
+                    "long": {"rate_pct": long_pct, "interval_hours": long_iv},
+                    "short": {"rate_pct": short_pct, "interval_hours": short_iv},
+                }
+            },
+        },
+        bucket="api_discovered",
+        now=quote_ts_us / 1_000_000,
+    )
+
+
+def test_best_funding_route_is_the_one_that_receives_not_its_mirror() -> None:
+    """ESPORTS' only funding source is Gate at +0.0366%/4h, so the receive-side
+    route pays +0.2196%/day and its mirror -0.2196%/day. Ranking by magnitude
+    headlined the mirror: production showed -119.57% APR where the reference
+    product showed +91.76%."""
+    receives = _funding_row(
+        "ESPORTS", long_venue="Kucoin", long_type="Spot",
+        short_venue="Gate", short_type="Futures", short_pct=0.0366, short_iv=4.0,
+    )
+    pays = _funding_row(
+        "ESPORTS", long_venue="Gate", long_type="Futures",
+        short_venue="Binance", short_type="Futures", long_pct=0.0366, long_iv=4.0,
+    )
+    group = api_spreads._group_rows([pays, receives])[0]
+    assert group["best_funding_24h_pct"] > 0
+    assert round(group["best_funding_apr_pct"], 2) == 80.15
+
+
+def test_best_funding_apr_and_24h_never_disagree_in_sign() -> None:
+    """A FUTURES-SPOT row flips direction, and the raw 24h field does not. The
+    group used to publish the two with opposite signs."""
+    row = _funding_row(
+        "ESPORTS", long_venue="Gate", long_type="Futures",
+        short_venue="Mexc", short_type="Spot", long_pct=0.0366, long_iv=4.0,
+    )
+    group = api_spreads._group_rows([row])[0]
+    assert group["best_funding_apr_pct"] > 0
+    assert group["best_funding_24h_pct"] > 0
+
+
+def test_kraken_native_funding_sums_relative_rates_over_24h(monkeypatch) -> None:
+    """Kraken publishes ISO timestamps and both an absolute rate (quote currency
+    per contract) and relativeFundingRate (a fraction of mark). Only the
+    relative one is a percent once scaled."""
+    now_ms = int(time.time() * 1000)
+    rates = [
+        {
+            "timestamp": _iso(now_ms - hour * 3_600_000),
+            "fundingRate": 0.00072,
+            "relativeFundingRate": 0.005,
+        }
+        for hour in range(3, 0, -1)
+    ]
+    captured: list[str] = []
+
+    def fake_public_json(url: str, **_kwargs: object) -> dict[str, object]:
+        captured.append(url)
+        return {"rates": rates}
+
+    monkeypatch.setattr(live, "_public_json", fake_public_json)
+    result = live._fetch_native_funding_24h("krakenfutures", "AGLD/USD:USD")
+    assert "PF_AGLDUSD" in captured[0]
+    assert result["status"] == "ok"
+    assert result["samples"] == 3
+    assert round(result["funding_24h_pct"], 6) == 1.5  # 3 x 0.5%
+    assert result["funding_interval_hours"] == 1.0
+
+
+def test_kraken_native_funding_uses_the_xbt_alias(monkeypatch) -> None:
+    """Kraken lists PF_XBTUSD but PF_DOGEUSD, so BTC is the only alias needed."""
+    captured: list[str] = []
+
+    def fake_public_json(url: str, **_kwargs: object) -> dict[str, object]:
+        captured.append(url)
+        return {"rates": []}
+
+    monkeypatch.setattr(live, "_public_json", fake_public_json)
+    live._fetch_native_funding_24h("krakenfutures", "BTC/USD:USD")
+    live._fetch_native_funding_24h("krakenfutures", "DOGE/USD:USD")
+    assert "PF_XBTUSD" in captured[0]
+    assert "PF_DOGEUSD" in captured[1]
+
+
+def _iso(timestamp_ms: int) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )

@@ -1029,8 +1029,20 @@ SHORT_SPOT_ROUTE_KINDS = frozenset({"FUTURES-SPOT"})
 
 
 def requires_existing_spot_inventory(row: "SpreadTerminalRow") -> bool:
-    """True when capturing this route would mean selling spot you must already own."""
-    return getattr(row, "route_kind", None) in SHORT_SPOT_ROUTE_KINDS
+    """True when capturing this route would mean selling spot you must already own.
+
+    route_kind alone is not enough: DEX-FUTURES rows appear in BOTH directions.
+    `long OKX DEX 1(Spot) / short Kraken Futures` is a normal farm, but
+    `long Kucoin Futures / short OKX DEX 1(Spot)` shorts a spot leg sitting in
+    your own wallet -- the same constraint as FUTURES-SPOT, under a kind name
+    that does not say so. Decide on the leg market types.
+    """
+    if getattr(row, "route_kind", None) in SHORT_SPOT_ROUTE_KINDS:
+        return True
+    return (
+        getattr(row, "short_market_type", None) == "Spot"
+        and getattr(row, "long_market_type", None) == "Futures"
+    )
 
 # A price from a book with almost no turnover is noise. U2U ranked at 124%
 # against a Kraken leg doing $14.78 of daily volume; LRC at 81% against an HTX
@@ -1141,8 +1153,10 @@ def _summary(
             (_entrance_spread(row) for row in filtered),
             default=None,
         ),
+        # The raw funding_apr_pct is the un-normalised source value; the summary
+        # must report the same basis the board ranks and displays.
         "max_abs_funding_apr_pct": max(
-            (abs(_float_or_none(row.funding_apr_pct) or 0.0) for row in filtered),
+            (abs(normalised_funding(row)[1] or 0.0) for row in filtered),
             default=None,
         ),
         "max_abs_funding_24h_pct": max(
@@ -1215,9 +1229,14 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
         funding_rows = [
             row for row in token_rows if _effective_funding_24h(row) is not None
         ]
+        # Rank by the SIGNED carry: the farm you would put on receives funding.
+        # Every route has a mirror -- ESPORTS' only funding source is Gate at
+        # +0.0366%/4h, giving +0.2196%/day one way and -0.2196%/day the other --
+        # so picking by magnitude can headline the leg that PAYS. Production
+        # reported -119.57% APR where the reference product showed +91.76%.
         best_funding = max(
             funding_rows,
-            key=lambda row: abs(_effective_funding_24h(row) or 0.0),
+            key=lambda row: (_effective_funding_24h(row) or 0.0),
             default=None,
         )
         output.append(
@@ -1345,13 +1364,21 @@ def _per_day(rate_pct: float | None, interval_hours: float | None) -> float | No
 
 
 def funding_intervals_known(row: "SpreadTerminalRow") -> bool:
-    """Both settlement intervals published, so the per-day conversion is sound.
+    """Every leg that pays funding published its interval, so the conversion is sound.
 
     With an unknown interval the 8h fallback can be wrong by 8x, which is how
     AGLD reached a 3570% APR. Such routes still display, but must not be ranked.
+
+    A leg that publishes no funding rate at all is a spot leg: it pays nothing,
+    which is known, not unknown. Demanding an interval from it excluded every
+    SPOT-FUTURES / FUTURES-SPOT / DEX-FUTURES row -- i.e. the classic funding
+    farm -- from the ranking, which is why the top-funding list was entirely
+    futures-futures while the reference product's is mostly spot-futures.
     """
-    for attr in ("long_funding_interval_hours", "short_funding_interval_hours"):
-        if not _float_or_none(getattr(row, attr, None)):
+    for side in ("long", "short"):
+        if _float_or_none(getattr(row, f"{side}_funding_pct", None)) is None:
+            continue
+        if not _float_or_none(getattr(row, f"{side}_funding_interval_hours", None)):
             return False
     return True
 
@@ -1363,18 +1390,29 @@ def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | 
     short leg, so the net is short-minus-long. For routes that would require
     selling spot you do not own, the executable trade is the mirror image (hold
     spot long, short the futures), so the carry flips sign with it.
+
+    A settled 24h sum is a measurement; annualising one instantaneous print is a
+    forecast, so the measurement wins whenever we have it. Kraken Futures settles
+    HOURLY and caps at +/-0.5%/h: AGLD's current print extrapolated to 9.78%/day
+    (3570% APR) while the 24 rates it actually paid summed to 5.66%/day.
     """
-    long_daily = _per_day(
-        getattr(row, "long_funding_pct", None),
-        getattr(row, "long_funding_interval_hours", None),
-    )
-    short_daily = _per_day(
-        getattr(row, "short_funding_pct", None),
-        getattr(row, "short_funding_interval_hours", None),
-    )
-    if long_daily is None and short_daily is None:
+    net_daily = _float_or_none(getattr(row, "funding_24h_pct", None))
+    if net_daily is None:
+        long_daily = _per_day(
+            getattr(row, "long_funding_pct", None),
+            getattr(row, "long_funding_interval_hours", None),
+        )
+        short_daily = _per_day(
+            getattr(row, "short_funding_pct", None),
+            getattr(row, "short_funding_interval_hours", None),
+        )
+        if long_daily is not None or short_daily is not None:
+            net_daily = (short_daily or 0.0) - (long_daily or 0.0)
+        else:
+            # Fast-quote and board rows carry only a pre-computed projection.
+            net_daily = _float_or_none(getattr(row, "funding_projected_24h_pct", None))
+    if net_daily is None:
         return None, None
-    net_daily = (short_daily or 0.0) - (long_daily or 0.0)
     if requires_existing_spot_inventory(row):
         net_daily = -net_daily
     return net_daily, net_daily * 365.0
@@ -1468,12 +1506,19 @@ def _entrance_spread_dict(row: dict[str, Any]) -> float:
     return -999999.0
 
 
+# Selection, sorting and display must all read the SAME number. The raw
+# funding_24h_pct fields carry the route as printed, without the spot-inventory
+# direction flip that normalised_funding applies, so a FUTURES-SPOT row used to
+# publish best_funding_apr_pct and best_funding_24h_pct with opposite signs.
 def _effective_funding_24h(row: SpreadTerminalRow) -> float | None:
-    settled = _float_or_none(row.funding_24h_pct)
-    return settled if settled is not None else _float_or_none(row.funding_projected_24h_pct)
+    return normalised_funding(row)[0]
 
 
 def _effective_funding_24h_dict(row: dict[str, Any]) -> float | None:
+    # _public_row already writes the normalised per-day carry here.
+    normalised = _float_or_none(row.get("funding_daily_pct"))
+    if normalised is not None:
+        return normalised
     settled = _float_or_none(row.get("funding_24h_pct"))
     return settled if settled is not None else _float_or_none(row.get("funding_projected_24h_pct"))
 
