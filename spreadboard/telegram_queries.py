@@ -118,9 +118,10 @@ def _rows_for(symbol: str, board_path: Path | str) -> list[dict[str, Any]]:
     separate, currently-empty legacy source. Reading the wrong one makes the bot
     disagree with the site, which is worse than being silent.
     """
-    payload = api_spreads.load_spreads(
-        q=symbol, include_stale=True, max_age_min=None, limit=None
-    )
+    # Use the website's own defaults. Forcing include_stale/max_age_min=None
+    # surfaces stale quotes with absurd edges (+95%, -778% APR) that the site
+    # deliberately withholds -- the bot must not be more permissive than the UI.
+    payload = api_spreads.load_spreads(q=symbol)
     rows: list[dict[str, Any]] = []
     for group in payload.get("groups") or []:
         if str(group.get("token") or "").upper() != symbol:
@@ -159,7 +160,7 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
         )
         title = f"{symbol} · funding · {len(rows)} routes"
     elif query.kind == "transfer":
-        venues: dict[str, tuple[Any, Any]] = {}
+        venues: dict[str, tuple[Any, Any]] = {}  # noqa: F841 - used in the count below
         for r in rows:
             if r.get("long_venue"):
                 venues.setdefault(r.get("long_venue"), (r.get("long_deposit_enabled"), r.get("long_withdraw_enabled")))
@@ -182,7 +183,8 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
         )
         title = f"{symbol} · spread · {len(rows)} routes"
 
-    extra = f"\n<i>Showing top {MAX_ROWS} of {len(rows)}.</i>" if len(rows) > MAX_ROWS else ""
+    total = len(venues) if query.kind == "transfer" else len(rows)
+    extra = f"\n<i>Showing top {MAX_ROWS} of {total}.</i>" if total > MAX_ROWS else ""
     link = ""
     if public_url:
         link = f'\n\n<a href="{escape(public_url.rstrip("/"))}/markets?q={escape(symbol)}">Open full detail on SpreadBoard</a>'

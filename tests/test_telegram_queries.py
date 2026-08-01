@@ -53,6 +53,8 @@ SIREN_ROUTES = [
 def board_file(tmp_path, monkeypatch):
     """Patch the real feed loader; the returned path is unused but kept for the API."""
     def fake_load_spreads(*, q=None, **kwargs):
+        assert 'include_stale' not in kwargs, 'bot must not be laxer than the site'
+        assert 'max_age_min' not in kwargs, 'bot must not bypass freshness filters'
         token = str(q or "").upper()
         groups = []
         if token == "SIREN":
