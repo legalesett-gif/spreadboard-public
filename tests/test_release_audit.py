@@ -1492,13 +1492,17 @@ def test_release_lane_counts_merge_spot_futures_directions() -> None:
         SimpleNamespace(route_kind="SPOT-FUTURES", token="TWO"),
         SimpleNamespace(route_kind="SPOT", token="THREE"),
         SimpleNamespace(route_kind="DEX-FUTURES", token="FOUR"),
+        SimpleNamespace(route_kind="DEX-SPOT", token="FIVE"),
     ]
 
+    # DEX-SPOT added deliberately: the public contract advertises five lanes and
+    # the reference product shows Spot-Dex, but this counter tracked only four.
     assert api_spreads._release_lane_token_counts(rows) == {
         "FUTURES": 1,
         "FUTURES-SPOT": 2,
         "SPOT": 1,
         "DEX-FUTURES": 1,
+        "DEX-SPOT": 1,
     }
     assert (
         server.market_kind_count(
@@ -2192,3 +2196,24 @@ def test_identical_queries_reuse_the_last_result(tmp_path, monkeypatch) -> None:
     third = api_spreads.load_spreads(**kwargs)
     assert third is not first, "a rewritten snapshot must invalidate the result"
     assert len(calls) > before
+
+
+def test_lane_counts_exclude_routes_nobody_can_take() -> None:
+    """"Top 25 ready" was satisfiable by rows with a shut rail, a ticker
+    collision, or a book too thin to price. A lane count is a promise."""
+    shut = _vrow(route_kind="SPOT", token="SHUT", short_deposit_enabled=False)
+    collision = _vrow(route_kind="SPOT", token="CAT", long_price=1.4e-06, short_price=808.0)
+    thin = _vrow(route_kind="SPOT", token="U2U", short_volume_24h_usd=14.78)
+    good = _vrow(route_kind="SPOT", token="REAL", long_withdraw_enabled=True,
+                 short_deposit_enabled=True)
+    counts = api_spreads._release_lane_token_counts([shut, collision, thin, good])
+    assert counts["SPOT"] == 1
+
+
+def test_a_shut_rail_does_not_disqualify_a_funding_farm() -> None:
+    """A farm holds both legs where it bought them. SIREN's carry was real even
+    while Kucoin deposits were shut, because collecting it moves no coin."""
+    farm = _vrow(route_kind="FUTURES-SPOT", token="SIREN", short_deposit_enabled=False)
+    assert api_spreads.lane_rankable(farm) is True
+    transfer = _vrow(route_kind="SPOT", token="SIREN", short_deposit_enabled=False)
+    assert api_spreads.lane_rankable(transfer) is False

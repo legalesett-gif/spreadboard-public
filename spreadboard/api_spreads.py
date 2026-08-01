@@ -348,6 +348,25 @@ def _route_kind_token_counts(
     return {kind: len(values) for kind, values in sorted(tokens.items())}
 
 
+def lane_rankable(row: "SpreadTerminalRow") -> bool:
+    """Would a member actually be able to take this route in its lane?
+
+    The headline lists already rank on deliverability and trustworthiness, but
+    the per-lane counts did not, so "top 25 ready" could be satisfied by rows
+    with a shut rail, a ticker collision, or a book too thin to price.
+
+    Only SPOT and DEX-SPOT move the coin between venues. A funding farm holds
+    both legs where it bought them, so a transfer rail says nothing about
+    whether its carry is collectable -- which is why deliverability is applied
+    per lane rather than across the board.
+    """
+    if price_ratio_implausible(row) or leg_volume_too_thin(row):
+        return False
+    if getattr(row, "route_kind", None) in TRANSFER_ROUTE_KINDS:
+        return route_deliverable(row) is not False
+    return True
+
+
 def _release_lane_token_counts(
     rows: list[SpreadTerminalRow],
 ) -> dict[str, int]:
@@ -356,9 +375,14 @@ def _release_lane_token_counts(
         "FUTURES-SPOT": set(),
         "SPOT": set(),
         "DEX-FUTURES": set(),
+        "DEX-SPOT": set(),
     }
     for row in rows:
-        if row.route_kind == "FUTURES":
+        if not lane_rankable(row):
+            continue
+        if row.route_kind == "DEX-SPOT":
+            tokens["DEX-SPOT"].add(row.token)
+        elif row.route_kind == "FUTURES":
             tokens["FUTURES"].add(row.token)
         elif row.route_kind in {"FUTURES-SPOT", "SPOT-FUTURES"}:
             tokens["FUTURES-SPOT"].add(row.token)
