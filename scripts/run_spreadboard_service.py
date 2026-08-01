@@ -151,7 +151,12 @@ class RefreshLoop:
                 if GENERATED_IDENTITY_PATH.exists()
                 else ROOT / "data/api_discovery_identity_registry.json"
             ),
-            "--skip-broad-dex-spot",
+            *(
+                ["--skip-broad-dex-spot"]
+                if os.environ.get("SPREADBOARD_SKIP_BROAD_DEX_SPOT", "").strip().lower()
+                in {"1", "true", "yes", "on"}
+                else []
+            ),
             "--dex-spot-timeout-s",
             os.environ.get("SPREADBOARD_DEX_SPOT_TIMEOUT_SECONDS", "240"),
             "--include-blacklisted",

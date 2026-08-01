@@ -23,7 +23,15 @@ DEFAULT_LIMIT = 25
 
 # Spot-DEX is outside the current public product. Spot-Spot remains a first-class
 # arbitrage lane and must participate in grouping and top-25 ranking.
-RETIRED_ROUTE_KINDS = frozenset({"DEX-SPOT"})
+# Spot-DEX was retired, which zeroed a lane uacryptoinvest populates with 20+
+# tokens. Re-enabled; set SPREADBOARD_RETIRE_DEX_SPOT=1 to restore the old
+# behaviour if the lane proves noisy.
+RETIRED_ROUTE_KINDS = frozenset(
+    {"DEX-SPOT"}
+    if str(os.environ.get("SPREADBOARD_RETIRE_DEX_SPOT", "")).strip().lower()
+    in {"1", "true", "yes", "on"}
+    else set()
+)
 
 
 @dataclass(frozen=True)

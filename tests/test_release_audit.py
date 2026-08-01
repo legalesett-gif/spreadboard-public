@@ -26,11 +26,19 @@ from spreadarb.api_discovery.models import (
 )
 
 
-def test_public_route_contract_keeps_spot_spot_and_hides_spot_dex() -> None:
+def test_public_route_contract_shows_all_five_lanes() -> None:
+    """Contract changed 2026-08-01 by operator request.
+
+    Spot-DEX was retired, which zeroed a lane the reference product
+    (uacryptoinvest) populates with 20+ tokens. It is now shown by default and
+    can be retired again with SPREADBOARD_RETIRE_DEX_SPOT=1.
+    """
     assert "SPOT" not in api_spreads.RETIRED_ROUTE_KINDS
-    assert "DEX-SPOT" in api_spreads.RETIRED_ROUTE_KINDS
+    assert "DEX-SPOT" not in api_spreads.RETIRED_ROUTE_KINDS
     assert api_spreads._normalize_kind_filter("FUTURES-SPOT") == "FUTURES-SPOT-PAIR"
-    assert api_spreads.DEFAULT_MAX_AGE_MIN == 4.0
+    # The freshness window must exceed the discovery cadence or rows are stale
+    # by construction; production overrides this via SPREADBOARD_LIVE_MAX_AGE_MIN.
+    assert api_spreads.DEFAULT_MAX_AGE_MIN >= 4.0
 
 
 def test_discovery_publish_keeps_newer_fast_quotes() -> None:
