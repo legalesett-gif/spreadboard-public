@@ -2162,3 +2162,33 @@ def test_snapshot_is_not_reparsed_for_every_request(tmp_path) -> None:
     assert first is second, "same file must not be parsed twice"
     path.write_text(json.dumps({"api_discovered_rows": [], "updated_at": "2026-08-01T00:01:00Z"}))
     assert api_spreads._cached_snapshot(path) is not first, "a rewritten file must re-parse"
+
+
+def test_identical_queries_reuse_the_last_result(tmp_path, monkeypatch) -> None:
+    """Grouping every route dominates the request: 1-3s at 2.5k rows, and the
+    universe we now carry is far larger. The board only moves every 20s."""
+    path = tmp_path / "snap.json"
+    quote_ts_us = int(time.time() * 1_000_000)
+    path.write_text(json.dumps({
+        "updated_at": "2026-08-01T22:00:00Z",
+        "api_discovered_rows": [{
+            "token": "AAA", "long_venue": "Gate", "long_market_type": "Futures",
+            "short_venue": "Bybit", "short_market_type": "Futures",
+            "quote_ts_us": quote_ts_us, "executable_spread_pct": 1.0,
+        }],
+        "dex_discovered_rows": [],
+    }))
+    api_spreads._RESULT_CACHE.clear()
+    calls = []
+    original = api_spreads._group_rows
+    monkeypatch.setattr(api_spreads, "_group_rows",
+                        lambda rows: (calls.append(1), original(rows))[1])
+    kwargs = dict(api_path=path, board_path=tmp_path / "none.jsonl", include_stale=True)
+    first = api_spreads.load_spreads(**kwargs)
+    second = api_spreads.load_spreads(**kwargs)
+    assert second is first, "an unchanged snapshot must not be regrouped"
+    before = len(calls)
+    path.write_text(path.read_text().replace("22:00:00", "22:00:30"))
+    third = api_spreads.load_spreads(**kwargs)
+    assert third is not first, "a rewritten snapshot must invalidate the result"
+    assert len(calls) > before

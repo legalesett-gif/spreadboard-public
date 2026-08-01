@@ -130,6 +130,27 @@ def load_spreads(
     current_time = time.time() if now is None else now
     api_path = Path(api_path)
     board_path = Path(board_path)
+    # Grouping every route into a public payload is the dominant per-request
+    # cost -- 1-3s at 2.5k rows, and it scales with the universe we now carry.
+    # The board only moves every 20s, so identical queries against an unchanged
+    # snapshot are served from the last result.
+    cache_key = (
+        str(api_path), str(board_path), q, exchange, kind, source, min_spread_pct,
+        min_abs_funding_24h_pct, min_abs_funding_apr_pct, funding_only, include_stale,
+        include_unverified, max_age_min, sort_by, direction, offset, limit,
+    )
+    try:
+        stamp = api_path.stat().st_mtime_ns
+    except OSError:
+        stamp = 0
+    with _SNAPSHOT_CACHE_LOCK:
+        cached = _RESULT_CACHE.get(cache_key)
+    if (
+        cached is not None
+        and cached[0] == stamp
+        and 0.0 <= current_time - cached[1] < _RESULT_CACHE_TTL_SECONDS
+    ):
+        return cached[2]
     metadata = token_metadata.load_token_metadata()
     rails = public_rails.load_public_rails()
     api_rows, api_meta = _load_api_discovery_rows(
@@ -259,7 +280,7 @@ def load_spreads(
     )
     _ = _reconciliation_summary(all_rows, board_rows, board_meta)
 
-    return {
+    payload = {
         "ok": not api_meta.get("error") and api_meta.get("status") == "fresh",
         "mode": "canonical_public_api_spreads",
         "filters": {
@@ -311,6 +332,11 @@ def load_spreads(
         "groups": visible_groups,
         "rows": [_public_row(row) for row in visible],
     }
+    with _SNAPSHOT_CACHE_LOCK:
+        if len(_RESULT_CACHE) > 24:
+            _RESULT_CACHE.clear()
+        _RESULT_CACHE[cache_key] = (stamp, current_time, payload)
+    return payload
 
 
 def _route_kind_token_counts(
@@ -352,6 +378,8 @@ _SNAPSHOT_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
 _SNAPSHOT_CACHE_LOCK = Lock()
 _ROW_CACHE: dict[tuple[str, int], tuple[float, list["SpreadTerminalRow"]]] = {}
 _ROW_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_ROW_CACHE_SECONDS", "5"))
+_RESULT_CACHE: dict[tuple[Any, ...], tuple[int, float, dict[str, Any]]] = {}
+_RESULT_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_RESULT_CACHE_SECONDS", "10"))
 
 
 def _cached_snapshot(path: Path) -> dict[str, Any]:
