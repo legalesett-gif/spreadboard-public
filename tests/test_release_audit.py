@@ -1625,8 +1625,15 @@ def test_unknown_rail_status_is_not_treated_as_broken() -> None:
     assert api_spreads.route_deliverable(_row(short_deposit_enabled=None)) is None
 
 
-def test_futures_lanes_are_always_deliverable() -> None:
-    for kind in ("FUTURES", "FUTURES-SPOT", "SPOT-FUTURES", "DEX-FUTURES"):
+def test_margin_only_lanes_need_no_rail() -> None:
+    """Corrected 2026-08-01: FUTURES-SPOT is NOT margin-only.
+
+    Its short leg is spot, which means owning the coin on that venue, so a shut
+    deposit blocks it. The genuinely margin-only lanes are these three: you buy
+    the spot leg on the venue you already hold funds on, or the DEX leg sits in
+    your own wallet.
+    """
+    for kind in ("FUTURES", "SPOT-FUTURES", "DEX-FUTURES"):
         assert api_spreads.route_deliverable(
             _row(route_kind=kind, long_withdraw_enabled=False, short_deposit_enabled=False)
         ) is True, f"{kind} needs no transfer and must not be filtered"
@@ -1683,3 +1690,46 @@ def test_group_headline_prefers_a_tradeable_route() -> None:
     ])
     assert len(groups) == 1
     assert groups[0]["best_edge_pct"] == 4.0, "headline must ignore the shut-rail route"
+
+
+def _vrow(**kw):
+    from types import SimpleNamespace
+    base = dict(route_kind="SPOT", long_withdraw_enabled=None, short_deposit_enabled=None,
+                long_volume_24h_usd=1e5, short_volume_24h_usd=1e5)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_a_single_shut_rail_blocks_even_if_the_other_is_unknown() -> None:
+    """Treating unknown as fine let shut rails through; only 30 of 2718 rows fired."""
+    assert api_spreads.route_deliverable(_vrow(short_deposit_enabled=False)) is False
+    assert api_spreads.route_deliverable(_vrow(long_withdraw_enabled=False)) is False
+    assert api_spreads.route_deliverable(_vrow()) is None
+
+
+def test_shorting_spot_needs_a_deposit_rail() -> None:
+    """SIREN: Gate futures long / Kucoin spot short, Kucoin deposits shut.
+
+    Shorting the spot leg means owning the coin there, so this is not a
+    margin-only trade and must not be exempt.
+    """
+    assert api_spreads.route_deliverable(
+        _vrow(route_kind="FUTURES-SPOT", short_deposit_enabled=False)
+    ) is False
+
+
+def test_thin_books_are_rejected() -> None:
+    """U2U ranked at 124% against a Kraken leg doing $14.78 of daily volume."""
+    assert api_spreads.leg_volume_too_thin(_vrow(short_volume_24h_usd=14.78)) is True
+    assert api_spreads.leg_volume_too_thin(_vrow(long_volume_24h_usd=0.0)) is True
+
+
+def test_vanry_style_real_books_survive() -> None:
+    """The one genuine 100%+ edge has real turnover on both sides."""
+    assert api_spreads.leg_volume_too_thin(
+        _vrow(long_volume_24h_usd=281_292.0, short_volume_24h_usd=234_243.0)
+    ) is False
+
+
+def test_unknown_volume_is_not_treated_as_thin() -> None:
+    assert api_spreads.leg_volume_too_thin(_vrow(short_volume_24h_usd=None)) is False

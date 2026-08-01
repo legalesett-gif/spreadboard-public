@@ -183,7 +183,9 @@ def load_spreads(
     rankable_universe = [
         row
         for row in public_universe
-        if route_deliverable(row) is not False and not price_ratio_implausible(row)
+        if route_deliverable(row) is not False
+        and not price_ratio_implausible(row)
+        and not leg_volume_too_thin(row)
     ]
     route_kind_token_counts = _route_kind_token_counts(public_universe)
     release_lane_token_counts = _release_lane_token_counts(public_universe)
@@ -1008,6 +1010,28 @@ def price_ratio_implausible(row: "SpreadTerminalRow") -> bool:
 # a transfer rail.
 TRANSFER_ROUTE_KINDS = frozenset({"SPOT", "DEX-SPOT"})
 
+# Shorting the spot leg means owning the coin on that venue, so a shut deposit
+# blocks the trade just as surely as on a spot-spot transfer. SIREN sat at 101%
+# as Gate futures long / Kucoin spot short with Kucoin deposits closed.
+SHORT_SPOT_ROUTE_KINDS = frozenset({"FUTURES-SPOT"})
+
+# A price from a book with almost no turnover is noise. U2U ranked at 124%
+# against a Kraken leg doing $14.78 of daily volume; LRC at 81% against an HTX
+# leg doing zero. VANRY, the one genuine 100%+ edge, has real volume both sides.
+MIN_LEG_VOLUME_24H_USD = 10_000.0
+
+
+def leg_volume_too_thin(row: "SpreadTerminalRow") -> bool:
+    """True when either leg's 24h turnover is too small to trust the quote."""
+    for value in (
+        getattr(row, "long_volume_24h_usd", None),
+        getattr(row, "short_volume_24h_usd", None),
+    ):
+        volume = _float_or_none(value)
+        if volume is not None and volume < MIN_LEG_VOLUME_24H_USD:
+            return True
+    return False
+
 
 def route_deliverable(row: "SpreadTerminalRow") -> bool | None:
     """Can the coin actually be moved from the buy venue to the sell venue?
@@ -1018,13 +1042,24 @@ def route_deliverable(row: "SpreadTerminalRow") -> bool | None:
     with a byte-identical BEP20 contract purely because Kucoin deposits were
     shut. Returns None when the rail status is unknown.
     """
-    if getattr(row, "route_kind", None) not in TRANSFER_ROUTE_KINDS:
+    kind = getattr(row, "route_kind", None)
+    if kind in SHORT_SPOT_ROUTE_KINDS:
+        # Only the short spot leg needs delivering into.
+        dest_in = getattr(row, "short_deposit_enabled", None)
+        return None if dest_in is None else bool(dest_in)
+    if kind not in TRANSFER_ROUTE_KINDS:
         return True
     source_out = getattr(row, "long_withdraw_enabled", None)
     dest_in = getattr(row, "short_deposit_enabled", None)
+    if source_out is None and dest_in is None:
+        return None
+    # A single known-shut rail is enough to block the trade, even if the other
+    # side is unknown -- treating "unknown" as fine let shut rails through.
+    if source_out is False or dest_in is False:
+        return False
     if source_out is None or dest_in is None:
         return None
-    return bool(source_out) and bool(dest_in)
+    return True
 
 
 def _is_mirage_guarded(row: SpreadTerminalRow) -> bool:
@@ -1074,6 +1109,7 @@ def _summary(
                 for row in filtered
                 if route_deliverable(row) is not False
                 and not price_ratio_implausible(row)
+                and not leg_volume_too_thin(row)
             ),
             default=None,
         ),
@@ -1083,6 +1119,7 @@ def _summary(
         "identity_mismatch_rows": len(
             [row for row in filtered if price_ratio_implausible(row)]
         ),
+        "thin_book_rows": len([row for row in filtered if leg_volume_too_thin(row)]),
         "max_depth_weighted_spread_pct": max(
             (_entrance_spread(row) for row in filtered),
             default=None,
@@ -1153,7 +1190,9 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
         tradeable_rows = [
             row
             for row in token_rows
-            if route_deliverable(row) is not False and not price_ratio_implausible(row)
+            if route_deliverable(row) is not False
+            and not price_ratio_implausible(row)
+            and not leg_volume_too_thin(row)
         ]
         best = max(tradeable_rows or token_rows, key=_entrance_spread)
         funding_rows = [
@@ -1276,6 +1315,7 @@ def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload["deliverable"] = route_deliverable(row)
     payload["requires_transfer"] = getattr(row, "route_kind", None) in TRANSFER_ROUTE_KINDS
     payload["identity_mismatch"] = price_ratio_implausible(row)
+    payload["thin_book"] = leg_volume_too_thin(row)
     payload["conditions"] = [
         item.removeprefix("mirage_guard:").removeprefix("condition:")
         for item in row.blockers
