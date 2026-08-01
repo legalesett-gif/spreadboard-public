@@ -177,6 +177,10 @@ def load_spreads(
         if include_stale
         else [row for row in ranked_rows if row.freshness == "fresh"]
     )
+    # Undeliverable routes stay visible and filterable, but must never occupy a
+    # headline slot -- a 100% edge you cannot settle is not the best opportunity
+    # on the board, and ranking it as one pushes real tokens off the page.
+    rankable_universe = [row for row in public_universe if route_deliverable(row) is not False]
     route_kind_token_counts = _route_kind_token_counts(public_universe)
     release_lane_token_counts = _release_lane_token_counts(public_universe)
     filtered = _filter_rows(
@@ -284,8 +288,8 @@ def load_spreads(
         ),
         "route_kind_token_counts": route_kind_token_counts,
         "lane_token_counts": release_lane_token_counts,
-        "top_edges": _top_unique_groups(public_universe, metric="edge"),
-        "top_funding": _top_unique_groups(public_universe, metric="funding"),
+        "top_edges": _top_unique_groups(rankable_universe, metric="edge"),
+        "top_funding": _top_unique_groups(rankable_universe, metric="funding"),
         "groups": visible_groups,
         "rows": [_public_row(row) for row in visible],
     }
@@ -975,6 +979,30 @@ def _hide_guarded_rows() -> bool:
     }
 
 
+# Only these lanes require the coin to physically move between venues. Futures
+# legs settle in margin, and a DEX leg sits in your own wallet, so neither needs
+# a transfer rail.
+TRANSFER_ROUTE_KINDS = frozenset({"SPOT", "DEX-SPOT"})
+
+
+def route_deliverable(row: "SpreadTerminalRow") -> bool | None:
+    """Can the coin actually be moved from the buy venue to the sell venue?
+
+    A persistently huge spread on an identical contract is almost always a
+    closed rail, not an opportunity: if it were deliverable, arbitrage would
+    have closed it in minutes. SIREN sat at ~100% between OKX DEX and Kucoin
+    with a byte-identical BEP20 contract purely because Kucoin deposits were
+    shut. Returns None when the rail status is unknown.
+    """
+    if getattr(row, "route_kind", None) not in TRANSFER_ROUTE_KINDS:
+        return True
+    source_out = getattr(row, "long_withdraw_enabled", None)
+    dest_in = getattr(row, "short_deposit_enabled", None)
+    if source_out is None or dest_in is None:
+        return None
+    return bool(source_out) and bool(dest_in)
+
+
 def _is_mirage_guarded(row: SpreadTerminalRow) -> bool:
     return any(str(item).startswith("mirage_guard:") for item in row.blockers)
 
@@ -1017,8 +1045,15 @@ def _summary(
         "dex_rows": len([row for row in all_rows if row.raw_source_kind == "dex_discovered"]),
         "funding_rows": len([row for row in filtered if _effective_funding_24h(row) is not None]),
         "max_executable_spread_pct": max(
-            (_float_or_none(row.executable_spread_pct) or 0.0 for row in filtered),
+            (
+                _float_or_none(row.executable_spread_pct) or 0.0
+                for row in filtered
+                if route_deliverable(row) is not False
+            ),
             default=None,
+        ),
+        "undeliverable_rows": len(
+            [row for row in filtered if route_deliverable(row) is False]
         ),
         "max_depth_weighted_spread_pct": max(
             (_entrance_spread(row) for row in filtered),
@@ -1204,6 +1239,8 @@ def _row_sort_key(row: SpreadTerminalRow) -> tuple[float, float, float, float]:
 
 def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload = row.to_dict()
+    payload["deliverable"] = route_deliverable(row)
+    payload["requires_transfer"] = getattr(row, "route_kind", None) in TRANSFER_ROUTE_KINDS
     payload["conditions"] = [
         item.removeprefix("mirage_guard:").removeprefix("condition:")
         for item in row.blockers

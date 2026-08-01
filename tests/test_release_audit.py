@@ -1599,3 +1599,34 @@ def test_freshness_window_exceeds_the_discovery_cadence() -> None:
         f"freshness window {window}min must comfortably exceed the {cadence}min "
         "scan cadence, or discovery rows expire before they are displayed"
     )
+
+
+def test_only_transfer_lanes_need_a_rail() -> None:
+    """Futures legs settle in margin and a DEX leg sits in your own wallet."""
+    assert api_spreads.TRANSFER_ROUTE_KINDS == frozenset({"SPOT", "DEX-SPOT"})
+
+
+def _row(**kw):
+    from types import SimpleNamespace
+    base = dict(route_kind="SPOT", long_withdraw_enabled=True, short_deposit_enabled=True)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_shut_destination_deposit_makes_a_route_undeliverable() -> None:
+    """SIREN sat at ~100% DEX->Kucoin on an identical contract purely because
+    Kucoin deposits were closed. That is a shut rail, not an opportunity."""
+    assert api_spreads.route_deliverable(_row(short_deposit_enabled=False)) is False
+    assert api_spreads.route_deliverable(_row(long_withdraw_enabled=False)) is False
+    assert api_spreads.route_deliverable(_row()) is True
+
+
+def test_unknown_rail_status_is_not_treated_as_broken() -> None:
+    assert api_spreads.route_deliverable(_row(short_deposit_enabled=None)) is None
+
+
+def test_futures_lanes_are_always_deliverable() -> None:
+    for kind in ("FUTURES", "FUTURES-SPOT", "SPOT-FUTURES", "DEX-FUTURES"):
+        assert api_spreads.route_deliverable(
+            _row(route_kind=kind, long_withdraw_enabled=False, short_deposit_enabled=False)
+        ) is True, f"{kind} needs no transfer and must not be filtered"
