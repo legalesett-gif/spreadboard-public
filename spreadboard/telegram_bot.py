@@ -69,7 +69,8 @@ def verify_webhook(secret_header: str) -> None:
 
 
 def _handle_group_query(
-    chat_id: int, text: str, *, db_path: Any, board_path: Any
+    chat_id: int, text: str, *, db_path: Any, board_path: Any,
+    thread_id: int | None = None,
 ) -> dict[str, Any] | None:
     """Answer $TOKEN lookups, but only inside the registered subscriber group.
 
@@ -92,7 +93,7 @@ def _handle_group_query(
         )
     except Exception:  # noqa: BLE001 - a lookup failure must never break the webhook
         return None
-    return _reply(chat_id, body, html=True)
+    return _reply(chat_id, body, html=True, thread_id=thread_id)
 
 
 def handle_update(
@@ -111,6 +112,8 @@ def handle_update(
     chat_id = int(chat.get("id") or 0)
     sender_id = int(sender.get("id") or 0)
     text = str(message.get("text") or "").strip()
+    raw_thread = message.get("message_thread_id")
+    thread_id = int(raw_thread) if isinstance(raw_thread, int) else None
     command, _, argument = text.partition(" ")
     command = command.split("@", 1)[0].casefold()
 
@@ -118,7 +121,10 @@ def handle_update(
         if command == "/setupgroup":
             _configure_group(chat, sender_id=sender_id, db_path=db_path)
             return _reply(chat_id, "SpreadBoard subscriber access is now connected to this group. Payments and account details remain private.")
-        return _handle_group_query(chat_id, text, db_path=db_path, board_path=board_path)
+        return _handle_group_query(
+            chat_id, text, db_path=db_path, board_path=board_path,
+            thread_id=thread_id,
+        )
     if chat.get("type") != "private":
         return None
 
@@ -298,9 +304,12 @@ def _api_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _reply(
-    chat_id: int, text: str, *, button: tuple[str, str] | None = None, html: bool = False
+    chat_id: int, text: str, *, button: tuple[str, str] | None = None, html: bool = False,
+    thread_id: int | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"method": "sendMessage", "chat_id": chat_id, "text": text}
+    if thread_id is not None:
+        payload["message_thread_id"] = thread_id
     if html:
         payload["parse_mode"] = "HTML"
         payload["disable_web_page_preview"] = True

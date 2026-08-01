@@ -262,3 +262,27 @@ def test_chatter_in_the_registered_group_is_ignored(db, board_file):
     assert telegram_bot.handle_update(
         message(GROUP_ID, "morning all"), db_path=db, board_path=board_file
     ) is None
+
+
+def test_reply_stays_in_the_forum_topic_it_was_asked_in(db, board_file):
+    """Forum groups deliver messages per topic; answering in General is wrong."""
+    accounts.configure_telegram_community(
+        GROUP_ID, title="Spread", configured_by_telegram_user_id=1,
+        invite_link="https://t.me/+abc", db_path=db,
+    )
+    update = message(GROUP_ID, "$SIREN")
+    update["message"]["message_thread_id"] = 77
+    reply = telegram_bot.handle_update(update, db_path=db, board_path=board_file)
+    assert reply is not None
+    assert reply["message_thread_id"] == 77
+
+
+def test_non_forum_reply_omits_thread_id(db, board_file):
+    accounts.configure_telegram_community(
+        GROUP_ID, title="Spread", configured_by_telegram_user_id=1,
+        invite_link="https://t.me/+abc", db_path=db,
+    )
+    reply = telegram_bot.handle_update(
+        message(GROUP_ID, "$SIREN"), db_path=db, board_path=board_file
+    )
+    assert reply is not None and "message_thread_id" not in reply
