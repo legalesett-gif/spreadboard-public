@@ -2059,3 +2059,33 @@ def test_funding_refresh_covers_every_leg_not_just_top_routes(monkeypatch) -> No
     assert short["funding_interval_hours"] == 4.0
     # 0.0506%/4h -> 0.1012%/8h -> the reference product's 111% APR band.
     assert 0.0506 * 6 * 365 == pytest.approx(110.814)
+
+
+def test_funding_refresh_has_its_own_cadence(monkeypatch) -> None:
+    """A bulk call costs a load_markets() per venue. Running that on every 20s
+    quote cycle competed with the websocket book worker for the same upstream
+    metadata endpoints, so a second call inside the window must be a no-op."""
+    from spreadboard.fast_quotes import FastQuoteRefresher
+
+    snapshot = {"api_discovered_rows": [
+        {"token": "GEOD", "long_venue": "Mexc", "long_market_type": "Spot",
+         "short_venue": "Mexc", "short_market_type": "Futures",
+         "notes": {"route_inputs": {"long": {"symbol": "GEOD/USDT"},
+                                    "short": {"symbol": "GEOD/USDT:USDT"}}}},
+    ]}
+    calls = []
+
+    class FakeClient:
+        has = {"fetchFundingRates": True}
+
+        def fetch_funding_rates(self):
+            calls.append(1)
+            return [{"symbol": "GEOD/USDT:USDT", "fundingRate": 0.0002, "interval": "4h"}]
+
+    refresher = FastQuoteRefresher()
+    monkeypatch.setattr(refresher, "_client", lambda venue, market_type: FakeClient())
+    first = refresher.refresh_all_funding(snapshot)
+    second = refresher.refresh_all_funding(snapshot)
+    assert first["legs"] == 1 and len(calls) == 1
+    assert second.get("skipped") is True, "second call inside the window must not hit the venue"
+    assert len(calls) == 1

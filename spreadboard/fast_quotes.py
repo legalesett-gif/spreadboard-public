@@ -99,6 +99,16 @@ class FastQuoteRefresher:
         while the exchange was live at 0.0506%/4h and the reference board showed
         0.05%. The parser was right; the number was simply old.
         """
+        # Funding drifts over minutes, not seconds, and a bulk call costs a
+        # load_markets() per venue. Running it on every 20s quote cycle put real
+        # pressure on the same upstream metadata endpoints the websocket book
+        # worker uses, so it gets its own slower cadence.
+        interval = max(30.0, float(os.environ.get("SPREADBOARD_FUNDING_REFRESH_SECONDS", "120")))
+        previous = payload.get("funding_refresh") or {}
+        last = _optional_number(previous.get("epoch"))
+        now = time.time()
+        if last is not None and now - last < interval:
+            return {**previous, "skipped": True}
         legs: dict[str, list[tuple[dict[str, Any], str]]] = {}
         for bucket in ("api_discovered_rows", "dex_discovered_rows"):
             for row in payload.get(bucket) or []:
@@ -132,7 +142,15 @@ class FastQuoteRefresher:
                 route_inputs = notes.setdefault("route_inputs", {})
                 route_inputs[side] = {**(route_inputs.get(side) or {}), **fields}
                 updated += 1
-        return {"venues": venues, "legs": updated, "candidates": sum(map(len, legs.values()))}
+        summary = {
+            "venues": venues,
+            "legs": updated,
+            "candidates": sum(map(len, legs.values())),
+            "epoch": now,
+            "updated_at": _utc_now_iso(),
+        }
+        payload["funding_refresh"] = summary
+        return summary
 
     def _bulk_funding_rates(self, venue: str) -> dict[str, dict[str, Any]]:
         """One call per venue for every perpetual it lists."""
