@@ -931,6 +931,8 @@ def default_enabled_cex_source() -> CexCcxtSource:
             "WhiteBIT": "whitebit",
             "BitMart": "bitmart",
             "XT": "xt",
+            # Added 2026-08-01: venues the reference product quotes that we did not scan.
+            "Upbit": "upbit",
         }
     )
 
@@ -954,6 +956,8 @@ def default_enabled_cex_futures_source() -> CexCcxtSource:
             "WhiteBIT": "whitebit",
             "BitMart": "bitmart",
             "XT": "xt",
+            # Added 2026-08-01. Lighter is a perp DEX the reference product quotes.
+            "Lighter": "lighter",
         },
         name="cex_futures_ccxt",
         market_type="Futures",

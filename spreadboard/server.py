@@ -2466,6 +2466,7 @@ def render_market_filter_bar(data: dict[str, Any], query: dict[str, list[str]]) 
         ("FUTURES-SPOT-PAIR", "Futures-Spot"),
         ("SPOT", "Spot-Spot"),
         ("DEX-FUTURES", "Futures-DEX"),
+        ("DEX-SPOT", "Spot-DEX"),
         ("", "All routes"),
     ]
     exchange_options = data.get("exchange_options") or []

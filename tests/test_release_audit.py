@@ -1525,3 +1525,22 @@ def test_current_snapshot_can_seed_a_new_route_chart() -> None:
     assert point["depth_weighted_spread_pct"] == 1.1
     assert point["long_ask_price"] == 11
     assert point["short_bid_price"] == 12
+
+
+def test_all_five_lanes_have_a_markets_tab() -> None:
+    """Every lane that carries data must be reachable in the UI.
+
+    Spot-DEX had rows but no tab, so the lane was invisible to members.
+    """
+    import inspect
+    from spreadboard import server
+
+    source = inspect.getsource(server.render_market_filter_bar)
+    for value, label in [
+        ("FUTURES", "Futures-Futures"),
+        ("FUTURES-SPOT-PAIR", "Futures-Spot"),
+        ("SPOT", "Spot-Spot"),
+        ("DEX-FUTURES", "Futures-DEX"),
+        ("DEX-SPOT", "Spot-DEX"),
+    ]:
+        assert f'("{value}", "{label}")' in source, f"missing markets tab for {label}"
