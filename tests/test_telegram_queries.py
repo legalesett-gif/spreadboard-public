@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import time
 from pathlib import Path
 import sys
 
@@ -24,61 +22,48 @@ def _clear_cooldowns():
     telegram_queries.reset_cooldowns()
 
 
-def board_event(
-    symbol, kind, long_venue, short_venue, edge, funding, apr, depth,
-    *, long_types=("Dex", "Futures"), rails=None,
-):
-    """One board JSONL event in the real ingest envelope shape."""
+def route(token, kind, long_venue, short_venue, edge, funding, apr, depth,
+          *, rails=(None, None, None, None), guarded=False):
+    """One route dict in the shape api_spreads.load_spreads actually returns."""
+    ld, lw, sd, sw = rails
     return {
-        "ingested_at_us": int(time.time() * 1_000_000),
-        "result": {
-            "status": "ok",
-            "kind": kind,
-            "symbol": symbol,
-            "api_executable_spread_pct": edge,
-            "displayed_headline_spread_pct": edge,
-            "displayed_open_spread_pct": edge,
-            "funding_spread_pct": funding,
-            "funding_spread_apr_pct": apr,
-            "quote": {
-                "long_venue": long_venue,
-                "short_venue": short_venue,
-                "long_market_type": long_types[0],
-                "short_market_type": long_types[1],
-                "long_top_depth_usd": depth,
-                "short_top_depth_usd": depth,
-            },
-            "raw_strategy_digest": {"exchange_rows": rails or []},
-        },
+        "token": token, "route_kind": kind,
+        "long_venue": long_venue, "short_venue": short_venue,
+        "executable_spread_pct": edge,
+        "displayed_open_spread_pct": edge,
+        "funding_daily_pct": funding, "funding_spread_pct": funding,
+        "funding_apr_pct": apr, "depth_usd": depth,
+        "long_deposit_enabled": ld, "long_withdraw_enabled": lw,
+        "short_deposit_enabled": sd, "short_withdraw_enabled": sw,
+        "mirage_guarded": guarded, "freshness": "fresh", "age_min": 0.2,
     }
 
 
+SIREN_ROUTES = [
+    route("SIREN", "DEX-FUTURES", "OKX DEX", "Bybit", 1.70, 0.051, 18.6, 142_000,
+          rails=(True, True, True, False)),
+    route("SIREN", "SPOT-FUTURES", "Gate", "Bybit", 1.10, 0.020, 7.3, 88_000,
+          rails=(False, True, True, True)),
+    # A guarded mirage must never reach a member.
+    route("SIREN", "FUTURES", "Ghost", "Phantom", 9999.0, 0.0, 0.0, None, guarded=True),
+]
+
+
 @pytest.fixture()
-def board_file(tmp_path):
-    """Two SIREN routes and one GUA route, newest-wins per route."""
-    path = tmp_path / "board.jsonl"
-    events = [
-        board_event(
-            "SIREN", "DEX-FUTURES", "OKX DEX", "Bybit", 1.70, 0.051, 18.6, 142_000,
-            rails=[
-                {"exchange": "OKX DEX", "deposit_enabled": True, "withdraw_enabled": True},
-                {"exchange": "Bybit", "deposit_enabled": True, "withdraw_enabled": False},
-            ],
-        ),
-        board_event(
-            "SIREN", "SPOT-FUTURES", "Gate", "Bybit", 1.10, 0.020, 7.3, 88_000,
-            long_types=("Spot", "Futures"),
-            rails=[{"exchange": "Gate", "deposit_enabled": False, "withdraw_enabled": True}],
-        ),
-        board_event(
-            "GUA", "FUTURES", "MEXC", "KuCoin", 0.74, -0.021, -7.6, 51_000,
-            long_types=("Futures", "Futures"),
-        ),
-    ]
-    with path.open("w", encoding="utf-8") as handle:
-        for event in events:
-            handle.write(json.dumps(event) + "\n")
-    return path
+def board_file(tmp_path, monkeypatch):
+    """Patch the real feed loader; the returned path is unused but kept for the API."""
+    def fake_load_spreads(*, q=None, **kwargs):
+        token = str(q or "").upper()
+        groups = []
+        if token == "SIREN":
+            groups = [{"token": "SIREN", "routes": list(SIREN_ROUTES)}]
+        elif token == "GUA":
+            groups = [{"token": "GUA", "routes": [
+                route("GUA", "FUTURES", "MEXC", "KuCoin", 0.74, -0.021, -7.6, 51_000)]}]
+        return {"groups": groups}
+
+    monkeypatch.setattr(telegram_queries.api_spreads, "load_spreads", fake_load_spreads)
+    return tmp_path / "unused.jsonl"
 
 
 # --------------------------------------------------------------------------
@@ -286,3 +271,12 @@ def test_non_forum_reply_omits_thread_id(db, board_file):
         message(GROUP_ID, "$SIREN"), db_path=db, board_path=board_file
     )
     assert reply is not None and "message_thread_id" not in reply
+
+
+def test_mirage_guarded_routes_are_never_shown(board_file):
+    """The guard exists to stop members chasing dislocation traps."""
+    body = telegram_queries.render(
+        telegram_queries.Query("spread", "SIREN"), board_path=board_file
+    )
+    assert "Ghost" not in body and "9999" not in body
+    assert "2 routes" in body, "only the two real routes should count"

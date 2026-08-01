@@ -26,7 +26,7 @@ import threading
 import time
 from typing import Any
 
-from . import board
+from . import api_spreads
 
 
 MAX_ROWS = 8
@@ -107,15 +107,28 @@ def _usd(value: Any) -> str:
     return f"${amount:.0f}"
 
 
-def _route(row: Any) -> str:
-    return f"{row.long_venue or '?'}>{row.short_venue or '?'}"[:22]
+def _route(row: dict[str, Any]) -> str:
+    return f"{row.get('long_venue') or '?'}>{row.get('short_venue') or '?'}"[:22]
 
 
-def _rows_for(symbol: str, board_path: Path | str) -> list[Any]:
-    snapshot = board.load_board(
-        board_path, q=symbol, include_stale=True, max_age_min=None, limit=None
+def _rows_for(symbol: str, board_path: Path | str) -> list[dict[str, Any]]:
+    """Routes for one token, from the same feed the website renders.
+
+    The website serves api_spreads (api_discovery_latest.json); board.jsonl is a
+    separate, currently-empty legacy source. Reading the wrong one makes the bot
+    disagree with the site, which is worse than being silent.
+    """
+    payload = api_spreads.load_spreads(
+        q=symbol, include_stale=True, max_age_min=None, limit=None
     )
-    rows = [r for r in snapshot.rows if str(r.symbol).upper() == symbol]
+    rows: list[dict[str, Any]] = []
+    for group in payload.get("groups") or []:
+        if str(group.get("token") or "").upper() != symbol:
+            continue
+        for route in group.get("routes") or []:
+            if route.get("mirage_guarded"):
+                continue
+            rows.append(route)
     return rows
 
 
@@ -139,19 +152,19 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
         )
 
     if query.kind == "funding":
-        rows = sorted(rows, key=lambda r: (r.funding_spread_pct is None, -(r.funding_spread_pct or 0)))
+        rows = sorted(rows, key=lambda r: -abs(float(r.get("funding_daily_pct") or r.get("funding_spread_pct") or 0)))
         body = _table(
             ("ROUTE", "NET/DAY", "APR"), (22, 9, 8),
-            [(_route(r), _pct(r.funding_spread_pct, 3), _pct(r.funding_apr_pct, 1)) for r in rows[:MAX_ROWS]],
+            [(_route(r), _pct(r.get("funding_daily_pct") or r.get("funding_spread_pct"), 3), _pct(r.get("funding_apr_pct"), 1)) for r in rows[:MAX_ROWS]],
         )
         title = f"{symbol} · funding · {len(rows)} routes"
     elif query.kind == "transfer":
         venues: dict[str, tuple[Any, Any]] = {}
         for r in rows:
-            if r.long_venue:
-                venues.setdefault(r.long_venue, (r.long_deposit_enabled, r.long_withdraw_enabled))
-            if r.short_venue:
-                venues.setdefault(r.short_venue, (r.short_deposit_enabled, r.short_withdraw_enabled))
+            if r.get("long_venue"):
+                venues.setdefault(r.get("long_venue"), (r.get("long_deposit_enabled"), r.get("long_withdraw_enabled")))
+            if r.get("short_venue"):
+                venues.setdefault(r.get("short_venue"), (r.get("short_deposit_enabled"), r.get("short_withdraw_enabled")))
         flag = {True: "open", False: "SHUT", None: "?"}
         body = _table(
             ("VENUE", "DEPOSIT", "WITHDRAW"), (16, 8, 9),
@@ -161,11 +174,11 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
     else:
         rows = sorted(
             rows,
-            key=lambda r: (r.displayed_headline_spread_pct is None, -(r.displayed_headline_spread_pct or 0)),
+            key=lambda r: -(float(r.get("executable_spread_pct") or 0)),
         )
         body = _table(
             ("ROUTE", "EDGE", "DEPTH"), (22, 8, 7),
-            [(_route(r), _pct(r.displayed_headline_spread_pct), _usd(r.depth_usd)) for r in rows[:MAX_ROWS]],
+            [(_route(r), _pct(r.get("executable_spread_pct")), _usd(r.get("depth_usd"))) for r in rows[:MAX_ROWS]],
         )
         title = f"{symbol} · spread · {len(rows)} routes"
 
