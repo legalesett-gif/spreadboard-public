@@ -658,6 +658,132 @@ class CexCcxtSource:
         return SourceResult(status=status, rows=tuple(rows), quotes=tuple(quotes))
 
 
+class HyperliquidBuilderDexSource:
+    """Hyperliquid's builder DEXes, which plain CCXT cannot see.
+
+    The tokenized equities the reference product carries -- AMZNSTOCK, SKHYSTOCK,
+    MUSTOCK, METASTOCK, SNDKSTOCK -- trade on Hyperliquid builder DEXes under
+    prefixed symbols (`xyz:AMZN`), enumerable only through the info API. CCXT's
+    hyperliquid adapter returns the main perp DEX alone: 774 markets, none of
+    these. MEXC lists the same assets as `<TICKER>STOCK`, so without this source
+    the pair can never form and the token is absent from the board entirely.
+    """
+
+    kind = "dex_derivative"
+    name = "hyperliquid_builder_dex"
+    market_type = "Futures"
+    source_kind = SOURCE_DEX_DISCOVERED
+    venue = "Hyperliquid"
+    endpoint = "https://api.hyperliquid.xyz/info"
+
+    def _info(self, payload: dict[str, Any], timeout: float) -> Any:
+        request = Request(
+            self.endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+        )
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed public origin
+            return json.loads(response.read().decode("utf-8"))
+
+    def collect(self, context: DiscoveryContext) -> SourceResult:
+        started_at = utc_now_iso()
+        started = monotonic()
+        errors: list[str] = []
+        quotes: list[MarketQuote] = []
+        # Only name a token the CEX side already quotes. Inventing `<TICKER>STOCK`
+        # for every builder market would fabricate assets nobody lists.
+        known = {quote.token.upper() for quote in context.reference_quotes}
+        dex_names: list[str] = []
+        try:
+            for entry in self._info({"type": "perpDexs"}, context.remaining_timeout(15.0)) or []:
+                label = entry.get("name") if isinstance(entry, Mapping) else entry
+                if label:
+                    dex_names.append(str(label))
+        except Exception as exc:
+            errors.append(f"{self.venue}:perp_dexs:{clean_error(exc)}")
+
+        for dex in dex_names:
+            if context.timed_out():
+                errors.append("time_budget_exhausted")
+                break
+            try:
+                payload = self._info(
+                    {"type": "metaAndAssetCtxs", "dex": dex}, context.remaining_timeout(15.0)
+                )
+                universe = (payload[0] or {}).get("universe") or []
+                contexts = payload[1] or []
+            except Exception as exc:
+                errors.append(f"{self.venue}:{dex}:meta:{clean_error(exc)}")
+                continue
+            for index, market in enumerate(universe):
+                if index >= len(contexts):
+                    break
+                symbol = str((market or {}).get("name") or "")
+                ticker = symbol.split(":")[-1].upper()
+                if not ticker:
+                    continue
+                token = f"{ticker}STOCK" if f"{ticker}STOCK" in known else ticker
+                if token not in known:
+                    continue
+                asset = contexts[index] or {}
+                mid = as_float(asset.get("midPx")) or as_float(asset.get("markPx"))
+                if not mid or mid <= 0:
+                    continue
+                funding_rate = as_float(asset.get("funding"))
+                quotes.append(
+                    MarketQuote(
+                        token=token,
+                        venue=self.venue,
+                        market_type=self.market_type,
+                        bid=mid,
+                        ask=mid,
+                        bid_vwap=mid,
+                        ask_vwap=mid,
+                        quote_ts_us=now_us(),
+                        source_name=self.name,
+                        symbol=symbol,
+                        # Hyperliquid funding settles hourly.
+                        funding_rate_pct=funding_rate * 100.0 if funding_rate is not None else None,
+                        funding_interval_hours=1.0,
+                        funding_apr_pct=(
+                            funding_rate * 100.0 * 24.0 * 365.0
+                            if funding_rate is not None
+                            else None
+                        ),
+                        volume_24h_usd=as_float(asset.get("dayNtlVlm")),
+                        blockers=(DEPTH_UNVERIFIED_BLOCKER,),
+                    )
+                )
+
+        rows = pairwise_candidates(
+            [*context.reference_quotes, *quotes],
+            source_kind=self.source_kind,
+            source_name=self.name,
+            min_spread_pct=context.min_spread_pct,
+            max_spread_pct=context.max_spread_pct,
+            identity_registry=context.identity_registry,
+            executor_attestations=context.executor_attestations,
+            min_net_funding_apr_pct=context.min_funding_apr_pct,
+        )
+        rows = [
+            row
+            for row in rows
+            if self.venue in {row.get("long_venue"), row.get("short_venue")}
+        ]
+        status = SourceStatus(
+            name=self.name,
+            kind=self.kind,
+            status="partial" if errors else "ok",
+            started_at=started_at,
+            finished_at=utc_now_iso(),
+            elapsed_seconds=monotonic() - started,
+            rows=len(rows),
+            errors=tuple(errors[:12]),
+            details={"builder_dexes": dex_names, "quote_count": len(quotes)},
+        )
+        return SourceResult(status=status, rows=tuple(rows), quotes=tuple(quotes))
+
+
 class DexDerivativeCcxtSource(CexCcxtSource):
     kind = "dex_derivative"
 
@@ -1005,6 +1131,7 @@ def default_sources(
             *futures_batches[len(spot_batches) :],
             OkxDexQuoteSource(),
             DexDerivativeCcxtSource(venues={"Hyperliquid": "hyperliquid", "Aster": "aster"}),
+            HyperliquidBuilderDexSource(),
         ]
         enabled.extend(source for source in source_specs if _source_enabled(source, source_filter))
     disabled_specs = [

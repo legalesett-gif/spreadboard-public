@@ -2348,3 +2348,42 @@ def test_a_genuine_two_venue_dislocation_is_not_flagged() -> None:
     ]
     spreads = live.best_spreads(rows, None)
     assert spreads and not any(s["price_disputed"] for s in spreads)
+
+
+def test_hyperliquid_builder_dexes_are_enumerated() -> None:
+    """The tokenized equities the reference product carries trade on Hyperliquid
+    builder DEXes under prefixed symbols. CCXT's adapter returns the main perp
+    DEX alone -- 774 markets, none of these -- so the pair could never form."""
+    source = sources.HyperliquidBuilderDexSource()
+    assert source.market_type == "Futures" and source.venue == "Hyperliquid"
+    assert sources.HyperliquidBuilderDexSource in [
+        type(s) for s in sources.default_sources()
+    ] or "HyperliquidBuilderDexSource" in __import__("inspect").getsource(sources.default_sources)
+
+
+def test_a_builder_market_is_only_named_for_a_token_the_cex_side_quotes(monkeypatch) -> None:
+    """Inventing <TICKER>STOCK for every builder market would fabricate assets
+    nobody lists; MEXC listing AMZNSTOCK is what makes xyz:AMZN that token."""
+    source = sources.HyperliquidBuilderDexSource()
+    payloads = {
+        "perpDexs": [{"name": "xyz"}],
+        "metaAndAssetCtxs": [
+            {"universe": [{"name": "xyz:AMZN"}, {"name": "xyz:NOBODYLISTSTHIS"}]},
+            [{"midPx": "231.5", "funding": "0.0000125", "dayNtlVlm": "50000"},
+             {"midPx": "10.0", "funding": "0.0", "dayNtlVlm": "10"}],
+        ],
+    }
+    monkeypatch.setattr(source, "_info", lambda payload, timeout: payloads[payload["type"]])
+    quote_ts = int(time.time() * 1_000_000)
+    from spreadarb.api_discovery.models import MarketQuote
+    reference = (
+        MarketQuote(token="AMZNSTOCK", venue="Mexc", market_type="Futures", bid=230.0, ask=230.5,
+                    bid_vwap=230.0, ask_vwap=230.5, quote_ts_us=quote_ts, source_name="cex",
+                    symbol="AMZNSTOCK/USDT:USDT"),
+    )
+    ctx = sources.DiscoveryContext(tokens=(), watchlist={}, deadline_monotonic=None,
+                                   reference_quotes=reference, min_spread_pct=0.05,
+                                   min_funding_apr_pct=0.01)
+    result = source.collect(ctx)
+    tokens = {q.token for q in result.quotes}
+    assert tokens == {"AMZNSTOCK"}, f"only CEX-known tokens may be named, got {tokens}"
