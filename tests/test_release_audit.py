@@ -2439,3 +2439,9 @@ def test_a_builder_market_must_agree_with_the_price_the_cex_quotes(monkeypatch) 
     result = source.collect(ctx)
     symbols = {q.symbol for q in result.quotes}
     assert symbols == {"xyz:MU"}, f"only the market that agrees on price may pair, got {symbols}"
+
+
+def test_an_equity_gap_of_ten_percent_is_a_different_instrument() -> None:
+    """Real cross-venue gaps on a tokenized equity run 0.1-0.5%. A 25% bound
+    admitted cash:AMZN at 241.75 against MEXC's 273.36 and printed a 13% spread."""
+    assert sources.BUILDER_DEX_PRICE_TOLERANCE <= 0.05

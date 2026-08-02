@@ -659,8 +659,10 @@ class CexCcxtSource:
 
 
 # A builder market more than this away from what the CEX side quotes for the same
-# token is a different instrument wearing the same ticker.
-BUILDER_DEX_PRICE_TOLERANCE = 0.25
+# token is a different instrument wearing the same ticker. Tight on purpose: real
+# cross-venue gaps on a tokenized equity run 0.1-0.5%, so 25% still admitted
+# cash:AMZN at 241.75 against MEXC's 273.36 and printed a 13% "spread" from it.
+BUILDER_DEX_PRICE_TOLERANCE = 0.05
 
 
 def _quote_mid(quote: "MarketQuote") -> float | None:
