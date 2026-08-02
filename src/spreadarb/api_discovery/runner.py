@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -29,6 +30,7 @@ from spreadarb.api_discovery.models import (
 )
 from spreadarb.api_discovery.sources import (
     DiscoveryContext,
+    _row_strength,
     DiscoverySource,
     default_sources,
 )
@@ -39,6 +41,9 @@ from spreadarb.public_runtime import (
     discovery_min_funding_apr_pct,
     discovery_min_spread_pct,
 )
+
+
+MAX_SNAPSHOT_ROWS_PER_TOKEN = int(os.environ.get("SPREADARB_MAX_SNAPSHOT_ROWS_PER_TOKEN", "10"))
 
 
 def run_discovery(
@@ -307,13 +312,34 @@ def _build_filtered_snapshot(
         load_error=blacklist_load_error,
     )
     snapshot = build_snapshot(
-        api_rows=filtered.api_rows[:row_limit],
-        dex_rows=filtered.dex_rows[:row_limit],
+        api_rows=_cap_rows_per_token(filtered.api_rows)[:row_limit],
+        dex_rows=_cap_rows_per_token(filtered.dex_rows)[:row_limit],
         source_statuses=[result.status for result in source_results],
         ttl_seconds=ttl_seconds,
     )
     snapshot["source_refresh"]["blacklist_filter"] = filtered.metadata
     return snapshot
+
+
+def _cap_rows_per_token(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Bound the snapshot per token, before the row limit slices it blindly.
+
+    Each source caps its own output, but a token quoted by ten sources still
+    arrives ten times over, and the row limit is a plain slice -- so an oversized
+    snapshot loses whole tokens at the tail rather than surplus routes. Coverage
+    is about which tokens are present, so trim the surplus routes instead.
+    """
+    limit = MAX_SNAPSHOT_ROWS_PER_TOKEN
+    if limit <= 0:
+        return rows
+    by_token: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_token.setdefault(str(row.get("token") or "").upper(), []).append(row)
+    kept: list[dict[str, Any]] = []
+    for token_rows in by_token.values():
+        token_rows.sort(key=_row_strength, reverse=True)
+        kept.extend(token_rows[:limit])
+    return kept
 
 
 def _empty_token_status(started_at: str) -> SourceResult:

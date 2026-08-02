@@ -2282,3 +2282,21 @@ def test_each_token_keeps_only_its_strongest_routes() -> None:
              "notes": {"funding": {"net_apr_pct": 900.0}}}
     assert sources._row_strength(strong) > sources._row_strength(weak)
     assert sources._row_strength(carry) > sources._row_strength(weak)
+
+
+def test_the_snapshot_trims_surplus_routes_not_whole_tokens() -> None:
+    """Each source caps its own output, but a token quoted by ten sources arrives
+    ten times over, and the row limit is a plain slice -- so an oversized snapshot
+    used to lose whole tokens at the tail rather than surplus routes."""
+    from spreadarb.api_discovery import runner
+
+    rows = (
+        [{"token": "BTC", "depth_weighted_spread_pct": float(i), "notes": {}} for i in range(40)]
+        + [{"token": "RARE", "depth_weighted_spread_pct": 9.0, "notes": {}}]
+    )
+    capped = runner._cap_rows_per_token(rows)
+    tokens = {row["token"] for row in capped}
+    assert "RARE" in tokens, "a thinly quoted token must survive a crowded snapshot"
+    assert sum(1 for row in capped if row["token"] == "BTC") == runner.MAX_SNAPSHOT_ROWS_PER_TOKEN
+    kept = sorted(row["depth_weighted_spread_pct"] for row in capped if row["token"] == "BTC")
+    assert kept[-1] == 39.0, "the strongest routes are the ones kept"
