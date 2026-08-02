@@ -1542,6 +1542,12 @@ def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload["identity_mismatch"] = price_ratio_implausible(row)
     payload["thin_book"] = leg_volume_too_thin(row)
     payload["funding_intervals_known"] = funding_intervals_known(row)
+    # A route built from ticker quotes has a top-of-book "depth" nobody measured.
+    # Showing that number unqualified is the same lie as showing a shut rail as
+    # an opportunity, so the UI must be able to say which is which.
+    payload["depth_unverified"] = any(
+        str(item) == "depth_unverified" for item in row.blockers
+    )
     payload["requires_spot_inventory"] = requires_existing_spot_inventory(row)
     daily, apr = normalised_funding(row)
     if daily is not None:

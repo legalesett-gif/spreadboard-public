@@ -2582,7 +2582,7 @@ def render_market_row(row: dict[str, Any]) -> str:
       <div class="market-number-cell"><strong>{fmt_pct(headline)}</strong><span>open</span></div>
       <div class="market-number-cell"><strong>{fmt_signed_pct(row.get('executable_spread_pct'))}</strong><span>{fmt_signed_pct(row.get('depth_weighted_spread_pct'))} vwap</span></div>
       <div class="market-funding-cell">{render_market_funding(row)}</div>
-      <div class="market-number-cell"><strong>{fmt_money(row.get('depth_usd'))}</strong><span>min leg</span></div>
+      <div class="market-number-cell"><strong>{fmt_money(row.get('depth_usd'))}</strong><span>{'top of book' if row.get('depth_unverified') else 'min leg'}</span></div>
       <div class="market-age-cell"><strong>{fmt_age(row.get('age_min'))}</strong><span>{label_text(row.get('freshness'))}</span></div>
       <div class="market-dw-cell">{render_market_dw(row)}</div>
       <div class="market-blocker-cell">

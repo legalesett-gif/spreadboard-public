@@ -2300,3 +2300,25 @@ def test_the_snapshot_trims_surplus_routes_not_whole_tokens() -> None:
     assert sum(1 for row in capped if row["token"] == "BTC") == runner.MAX_SNAPSHOT_ROWS_PER_TOKEN
     kept = sorted(row["depth_weighted_spread_pct"] for row in capped if row["token"] == "BTC")
     assert kept[-1] == 39.0, "the strongest routes are the ones kept"
+
+
+def test_unmeasured_depth_says_so_on_the_board() -> None:
+    """Ticker-only routes carry a top-of-book figure nobody measured. Showing it
+    unqualified is the same lie as showing a shut rail as an opportunity."""
+    from types import SimpleNamespace
+
+    quote_ts_us = int(time.time() * 1_000_000)
+
+    def build(blockers):
+        return api_spreads._row_from_api(
+            {"token": "AAA", "long_venue": "Gate", "long_market_type": "Futures",
+             "short_venue": "Bybit", "short_market_type": "Futures",
+             "quote_ts_us": quote_ts_us, "executable_spread_pct": 1.0,
+             "blockers": blockers},
+            bucket="api_discovered", now=quote_ts_us / 1_000_000,
+        )
+
+    assert api_spreads._public_row(build(["depth_unverified"]))["depth_unverified"] is True
+    assert api_spreads._public_row(build([]))["depth_unverified"] is False
+    import inspect
+    assert "top of book" in inspect.getsource(server), "the board must label an unmeasured depth"
