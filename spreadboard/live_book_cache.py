@@ -118,6 +118,39 @@ class LiveBookStore:
             quote_ts_us=int(row[0]),
         )
 
+    def load_all(self, *, max_age_seconds: float = 30.0) -> dict[str, "CachedBook"]:
+        """Every book fresh enough to price with, in one query.
+
+        The board serves thousands of routes; asking per leg would be thousands
+        of round trips. The websocket worker only tracks a few hundred legs, so
+        the whole set fits comfortably in memory.
+        """
+        cutoff_us = int((time.time() - max(0.1, max_age_seconds)) * 1_000_000)
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT cache_key, quote_ts_us, bids_json, asks_json
+                FROM live_books
+                WHERE quote_ts_us >= ?
+                """,
+                (cutoff_us,),
+            ).fetchall()
+        books: dict[str, CachedBook] = {}
+        for key, quote_ts_us, bids_json, asks_json in rows:
+            try:
+                bids = _levels(json.loads(bids_json))
+                asks = _levels(json.loads(asks_json))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not bids or not asks:
+                continue
+            books[str(key)] = CachedBook(
+                bids=sorted(bids, key=lambda item: item[0], reverse=True),
+                asks=sorted(asks, key=lambda item: item[0]),
+                quote_ts_us=int(quote_ts_us),
+            )
+        return books
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             row = self._conn.execute("SELECT COUNT(*), MAX(quote_ts_us) FROM live_books").fetchone()

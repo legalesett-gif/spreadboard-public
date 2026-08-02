@@ -2793,3 +2793,58 @@ def test_a_delta_route_absent_from_the_snapshot_is_still_shown(tmp_path) -> None
     d = api_spreads.load_spreads(api_path=snapshot, board_path=tmp_path / "n.jsonl",
                                  limit=None, include_stale=True)
     assert [g for g in d["groups"] if g["token"] == "NEW"]
+
+
+class _Book:
+    def __init__(self, bids, asks, quote_ts_us):
+        self.bids, self.asks, self.quote_ts_us = bids, asks, quote_ts_us
+
+
+def _live_row(**kw):
+    quote_ts_us = int((time.time() - 1200) * 1_000_000)   # twenty minutes old
+    raw = {"token": "AAA", "long_venue": "Gate", "long_market_type": "Futures",
+           "short_venue": "Bybit", "short_market_type": "Futures",
+           "quote_ts_us": quote_ts_us, "executable_spread_pct": 1.0,
+           "depth_weighted_spread_pct": 1.0,
+           "notes": {"route_inputs": {"long": {"symbol": "AAA/USDT:USDT"},
+                                      "short": {"symbol": "AAA/USDT:USDT"}}}}
+    raw.update(kw)
+    return api_spreads._row_from_api(raw, bucket="api_discovered", now=time.time())
+
+
+def test_a_streaming_route_is_priced_from_the_feed_not_the_file() -> None:
+    """The websocket worker already streamed these books; the board only ever saw
+    them indirectly, through whatever the fast-quote worker last wrote to disk.
+    That is what made a route minutes old on a page load."""
+    from spreadboard import live_book_cache
+    now = time.time()
+    ts = int(now * 1_000_000)
+    books = {
+        live_book_cache.cache_key("Gate", "Futures", "AAA/USDT:USDT"):
+            _Book([[100.0, 50.0]], [[100.0, 50.0]], ts),
+        live_book_cache.cache_key("Bybit", "Futures", "AAA/USDT:USDT"):
+            _Book([[110.0, 50.0]], [[110.5, 50.0]], ts),
+    }
+    row = _live_row()
+    assert row.age_min > 15, "the stored row is twenty minutes old"
+    live = api_spreads.apply_live_books([row], books, now=now)[0]
+    assert live.live_book is True
+    assert live.age_min < 1, "a streamed route must not read as minutes old"
+    assert live.executable_spread_pct == pytest.approx(10.0), "priced from the feed"
+    assert live.freshness == "fresh"
+
+
+def test_a_route_with_only_one_leg_streaming_is_left_alone() -> None:
+    """Half a live price is worse than none: it would compare a fresh bid against
+    an old ask and invent a spread that never existed."""
+    from spreadboard import live_book_cache
+    now = time.time()
+    books = {live_book_cache.cache_key("Gate", "Futures", "AAA/USDT:USDT"):
+             _Book([[100.0, 50.0]], [[100.0, 50.0]], int(now * 1_000_000))}
+    row = _live_row()
+    assert api_spreads.apply_live_books([row], books, now=now)[0] is row
+
+
+def test_no_live_feed_leaves_the_board_untouched() -> None:
+    row = _live_row()
+    assert api_spreads.apply_live_books([row], {}, now=time.time())[0] is row

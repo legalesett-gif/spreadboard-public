@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 import gc
@@ -98,6 +98,7 @@ class SpreadTerminalRow:
     dex_contract: str | None = None
     raw_source_kind: str | None = None
     mirage_guarded: bool = False
+    live_book: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         # asdict() recurses and deep-copies; every field on this row is a scalar
@@ -166,6 +167,9 @@ def load_spreads(
         rails=rails,
     )
     board_rows, board_meta = _load_board_rows(board_path, now=current_time)
+    # Applied per request rather than inside the row cache: a cached price is a
+    # stale price, and this is the whole point of streaming the books.
+    api_rows = apply_live_books(api_rows, _live_books(), now=current_time)
     all_rows = _dedupe_rows(api_rows)
     # Diagnostic: how DEX-sourced rows classify BEFORE retirement is applied.
     # Futures-DEX is currently empty on the public board while discovery still
@@ -439,6 +443,101 @@ _RESULT_CACHE_MAX_ENTRIES = int(os.environ.get("SPREADBOARD_RESULT_CACHE_ENTRIES
 # Shortlist a few more tokens than we display so lane filtering inside the
 # grouping cannot leave the headline short.
 TOP_GROUP_SHORTLIST = 24
+
+
+# The websocket worker already streams order books for the busiest legs, but the
+# board only ever read them indirectly, through whatever the fast-quote worker
+# last wrote to disk. That is what made a route minutes old on a page load.
+# Prices are now taken from the live store at request time, so a streamed route
+# is as current as the exchange feed rather than as current as the last file.
+LIVE_BOOK_MAX_AGE_SECONDS = float(os.environ.get("SPREADBOARD_LIVE_BOOK_AGE_SECONDS", "30"))
+LIVE_BOOK_TARGET_NOTIONAL_USD = float(
+    os.environ.get("SPREADBOARD_LIVE_BOOK_NOTIONAL_USD", "50")
+)
+
+
+def _live_books() -> dict[str, Any]:
+    try:
+        from spreadboard import live_book_cache
+
+        if not live_book_cache.DEFAULT_PATH.exists():
+            return {}
+        return live_book_cache.LiveBookStore().load_all(
+            max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS
+        )
+    except Exception:  # noqa: BLE001 - a missing feed must not take the board down.
+        return {}
+
+
+def _book_side(book: Any, side: str) -> tuple[float | None, float | None]:
+    """Top of book and the depth-weighted price at the standard probe size."""
+    from spreadarb.api_discovery.orderbook import depth_weighted_price
+
+    levels = book.asks if side == "ask" else book.bids
+    if not levels:
+        return None, None
+    top = _float_or_none(levels[0][0])
+    try:
+        vwap = _float_or_none(
+            depth_weighted_price(levels, LIVE_BOOK_TARGET_NOTIONAL_USD)
+        )
+    except Exception:  # noqa: BLE001
+        vwap = None
+    return top, vwap or top
+
+
+def apply_live_books(
+    rows: list["SpreadTerminalRow"], books: dict[str, Any], *, now: float
+) -> list["SpreadTerminalRow"]:
+    """Re-price every route whose two legs are both streaming right now."""
+    if not books or not rows:
+        return rows
+    from spreadboard import live_book_cache
+
+    updated: list[SpreadTerminalRow] = []
+    for row in rows:
+        long_key = live_book_cache.cache_key(
+            str(row.long_venue or ""), str(row.long_market_type or ""),
+            str(row.long_market_symbol or ""),
+        )
+        short_key = live_book_cache.cache_key(
+            str(row.short_venue or ""), str(row.short_market_type or ""),
+            str(row.short_market_symbol or ""),
+        )
+        long_book = books.get(long_key)
+        short_book = books.get(short_key)
+        if long_book is None or short_book is None:
+            updated.append(row)
+            continue
+        ask, ask_vwap = _book_side(long_book, "ask")
+        bid, bid_vwap = _book_side(short_book, "bid")
+        if not ask or not bid or ask <= 0 or bid <= 0:
+            updated.append(row)
+            continue
+        executable = (bid / ask - 1.0) * 100.0
+        depth = (
+            (bid_vwap / ask_vwap - 1.0) * 100.0
+            if ask_vwap and bid_vwap and ask_vwap > 0
+            else executable
+        )
+        quote_ts_us = min(int(long_book.quote_ts_us), int(short_book.quote_ts_us))
+        age_min = max(0.0, (now - quote_ts_us / 1_000_000) / 60.0)
+        updated.append(
+            replace(
+                row,
+                long_price=ask,
+                short_price=bid,
+                executable_spread_pct=executable,
+                depth_weighted_spread_pct=depth,
+                displayed_open_spread_pct=executable,
+                quote_ts_us=quote_ts_us,
+                age_min=age_min,
+                freshness="fresh",
+                status="live",
+                live_book=True,
+            )
+        )
+    return updated
 
 
 def _fast_quote_delta_path(path: Path) -> Path:
