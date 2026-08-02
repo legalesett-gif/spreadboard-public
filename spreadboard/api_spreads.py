@@ -1024,7 +1024,9 @@ def _filter_rows(rows: list[SpreadTerminalRow], **filters: Any) -> list[SpreadTe
         if min_spread is not None and spread < float(min_spread):
             continue
         effective_funding = _effective_funding_24h(row)
-        if funding_only and effective_funding is None:
+        # The funding lane is about carry you RECEIVE. A route that pays is not a
+        # farm, and ranking on magnitude put a -500% payer above a +200% earner.
+        if funding_only and not (effective_funding is not None and effective_funding > 0):
             continue
         if (
             min_funding is not None

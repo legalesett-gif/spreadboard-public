@@ -3122,7 +3122,8 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
         query,
         funding_only="1",
         kind=farm_kinds[selected_farm],
-        sort="funding_abs",
+        # Signed, not magnitude: the best carry to collect belongs at the top.
+        sort="funding",
         direction=_query_first(query, "direction") or "desc",
         limit=_query_first(query, "limit") or "25",
     )

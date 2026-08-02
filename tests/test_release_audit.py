@@ -2705,3 +2705,28 @@ def test_the_result_cache_is_bounded_by_entry_count() -> None:
     import inspect
     source = inspect.getsource(api_spreads.load_spreads)
     assert "_RESULT_CACHE_MAX_ENTRIES" in source
+
+
+def test_the_funding_lane_only_lists_carry_you_receive() -> None:
+    """A route that PAYS funding is not a farm. Ranking on magnitude put a -500%
+    payer above a +200% earner."""
+    quote_ts_us = int(time.time() * 1_000_000)
+
+    def row(token, funding):
+        return api_spreads._row_from_api(
+            {"token": token, "long_venue": "Gate", "long_market_type": "Futures",
+             "short_venue": "Bybit", "short_market_type": "Futures",
+             "quote_ts_us": quote_ts_us, "executable_spread_pct": 0.5,
+             "funding_24h_pct": funding},
+            bucket="api_discovered", now=quote_ts_us / 1_000_000,
+        )
+
+    rows = [row("EARNS", 0.55), row("PAYS", -1.4), row("NONE", None)]
+    kept = api_spreads._filter_rows(rows, funding_only=True, include_stale=True)
+    assert {r.token for r in kept} == {"EARNS"}
+
+
+def test_the_funding_page_ranks_by_signed_carry() -> None:
+    import inspect
+    source = inspect.getsource(server.render_funding_page)
+    assert 'sort="funding"' in source and 'sort="funding_abs"' not in source
