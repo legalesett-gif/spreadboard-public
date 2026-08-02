@@ -2578,3 +2578,41 @@ def test_a_venues_own_leveraged_spot_against_its_own_perp_is_left_alone() -> Non
     assert api_spreads.is_venue_specific_leveraged_token(
         _vrow(token="ETH3L", long_venue="Gate", short_venue="Gate")
     ) is False
+
+
+def test_a_ticker_collision_never_reaches_the_snapshot() -> None:
+    """Emitting it did more than clutter: ranked by spread magnitude it EVICTED
+    the real route under the per-token cap. NXT is quoted on MEXC and Kucoin
+    spot, but all three rows kept paired against a Gate futures leg at 84,674%
+    and the genuine 0.12% MEXC->Kucoin pair never survived."""
+    ts = int(time.time() * 1_000_000)
+    from spreadarb.api_discovery.models import MarketQuote
+
+    def q(venue, price, market_type="Spot"):
+        return MarketQuote(token="NXT", venue=venue, market_type=market_type,
+                           bid=price * 0.999, ask=price * 1.001,
+                           bid_vwap=price * 0.999, ask_vwap=price * 1.001,
+                           quote_ts_us=ts, source_name="t", symbol="NXT/USDT")
+
+    quotes = [q("Mexc", 0.0100), q("Kucoin", 0.0101), q("Gate", 9.0, "Futures")]
+    pairs = sources.quote_candidate_pairs(quotes, min_spread_pct=0.0)
+    venues = {(p.long_quote.venue, p.short_quote.venue) for p in pairs}
+    assert ("Mexc", "Kucoin") in venues, "the genuine spot pair must survive"
+    assert not any("Gate" in pair for pair in venues), "the collision must not be emitted"
+
+
+def test_a_real_dislocation_is_still_paired() -> None:
+    """VANRY and SIREN both sit near 2x and are real captures."""
+    ts = int(time.time() * 1_000_000)
+    from spreadarb.api_discovery.models import MarketQuote
+
+    def q(venue, price):
+        return MarketQuote(token="VANRY", venue=venue, market_type="Spot",
+                           bid=price * 0.999, ask=price * 1.001,
+                           bid_vwap=price * 0.999, ask_vwap=price * 1.001,
+                           quote_ts_us=ts, source_name="t", symbol="VANRY/USDT")
+
+    # max_spread_pct=0 is what production passes: no ceiling at all.
+    pairs = sources.quote_candidate_pairs([q("Gate", 0.0100), q("Bybit", 0.0198)],
+                                          min_spread_pct=0.0, max_spread_pct=0.0)
+    assert pairs, "a ~2x genuine dislocation must still pair"

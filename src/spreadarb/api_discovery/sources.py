@@ -1344,6 +1344,21 @@ class QuoteCandidatePair:
     depth_weighted_spread_pct: float
 
 
+# Mirrors the board's identity bound: beyond this the two legs are different
+# assets sharing a ticker, never an opportunity of any size. Kept generous so a
+# genuine dislocation -- VANRY and SIREN both sit near 2x -- is untouched.
+MAX_PAIR_PRICE_RATIO = 3.0
+
+
+def _price_ratio_implausible(long_quote: MarketQuote, short_quote: MarketQuote) -> bool:
+    long_price = as_float(long_quote.ask) or as_float(long_quote.bid)
+    short_price = as_float(short_quote.bid) or as_float(short_quote.ask)
+    if not long_price or not short_price or long_price <= 0 or short_price <= 0:
+        return False
+    ratio = max(long_price, short_price) / min(long_price, short_price)
+    return ratio > MAX_PAIR_PRICE_RATIO
+
+
 def quote_candidate_pairs(
     quotes: Iterable[MarketQuote],
     *,
@@ -1369,6 +1384,15 @@ def quote_candidate_pairs(
                     long_quote.venue == short_quote.venue
                     and long_quote.market_type == short_quote.market_type
                 ):
+                    continue
+                if _price_ratio_implausible(long_quote, short_quote):
+                    # Two venues quoting prices this far apart are not quoting the
+                    # same asset. Emitting the row anyway did more than clutter:
+                    # ranking by spread magnitude let it EVICT the real route
+                    # under the per-token cap. NXT is quoted on MEXC and Kucoin
+                    # spot, but all three rows we kept paired against a Gate
+                    # futures leg at 84,674%, and the genuine 0.12% MEXC->Kucoin
+                    # pair never survived.
                     continue
                 executable = spread_pct(long_quote.ask, short_quote.bid)
                 depth = spread_pct(long_quote.ask_vwap, short_quote.bid_vwap)
