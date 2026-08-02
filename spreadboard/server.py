@@ -402,6 +402,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path.startswith("/api/history/"):
                 route_key = unquote(parsed.path.removeprefix("/api/history/"))
                 self._send_json(api_history(route_key, self.server.board_path, query))
+            elif parsed.path == "/api/stream/board":
+                self._send_board_stream(query)
             elif parsed.path.startswith("/api/stream/"):
                 route_key = unquote(parsed.path.removeprefix("/api/stream/"))
                 self._send_chart_stream(route_key, query)
@@ -824,6 +826,51 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 event = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
                 self.wfile.write(b"event: quote\n")
                 self.wfile.write(b"data: " + event + b"\n\n")
+                self.wfile.flush()
+                time.sleep(interval)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
+    def _send_board_stream(self, query: dict[str, list[str]]) -> None:
+        """Push price changes to an open board instead of waiting for a reload.
+
+        The data went live once routes were priced from the streaming books, but
+        a member still only saw it by refreshing. On a spread that lasts minutes
+        that is the difference between a trade and a screenshot.
+        """
+        interval = max(
+            1.0, min(15.0, float(os.environ.get("SPREADBOARD_BOARD_STREAM_SECONDS", "3")))
+        )
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self._send_security_headers()
+        self.end_headers()
+        previous: dict[str, tuple[Any, Any]] = {}
+        try:
+            self.wfile.write(b"retry: 3000\n\n")
+            self.wfile.flush()
+            for _ in range(600):
+                rows = _board_stream_rows(self.server.board_path, query)
+                changed = {
+                    key: value for key, value in rows.items() if previous.get(key) != value
+                }
+                previous = rows
+                if changed:
+                    payload = {
+                        "updated_at": _utc_now_iso(),
+                        "routes": [
+                            {"route_key": key, "spread_pct": value[0], "funding_pct": value[1]}
+                            for key, value in changed.items()
+                        ],
+                    }
+                    event = json.dumps(payload, separators=(",", ":"), default=str).encode()
+                    self.wfile.write(b"event: board\n")
+                    self.wfile.write(b"data: " + event + b"\n\n")
+                else:
+                    self.wfile.write(b": keepalive\n\n")
                 self.wfile.flush()
                 time.sleep(interval)
         except (BrokenPipeError, ConnectionResetError):
@@ -2187,6 +2234,84 @@ def api_health(
     }
 
 
+def render_board_stream_script(query: dict[str, list[str]]) -> str:
+    """Subscribe the open page to price changes and patch them in place.
+
+    Without this the numbers are live but a member only sees them by reloading,
+    which is no use on a spread that lasts minutes.
+    """
+    params = []
+    for name in ("kind", "limit", "sort"):
+        value = _query_first(query, name)
+        if value:
+            params.append(f"{name}={quote(str(value))}")
+    suffix = ("?" + "&".join(params)) if params else ""
+    return """
+    <script>
+    (function(){
+      if (!window.EventSource) return;
+      const source = new EventSource("/api/stream/board__SUFFIX__");
+      const pct = (value, digits) => {
+        if (value === null || value === undefined || value === "") return null;
+        const number = Number(value);
+        if (!Number.isFinite(number)) return null;
+        return (number >= 0 ? "+" : "") + number.toFixed(digits) + "%";
+      };
+      const flash = (node) => {
+        if (!node) return;
+        node.classList.remove("live-tick");
+        void node.offsetWidth;
+        node.classList.add("live-tick");
+      };
+      source.addEventListener("board", (event) => {
+        let payload;
+        try { payload = JSON.parse(event.data); } catch (error) { return; }
+        for (const route of payload.routes || []) {
+          const row = document.querySelector(
+            '[data-route-key="' + (window.CSS && CSS.escape ? CSS.escape(route.route_key) : route.route_key) + '"]');
+          if (!row) continue;
+          const spread = row.querySelector("[data-live-spread]");
+          const text = pct(route.spread_pct, 2);
+          if (spread && text && spread.textContent.trim() !== text) {
+            spread.textContent = text;
+            flash(spread);
+          }
+          const funding = row.querySelector("[data-live-funding]");
+          const carry = pct(route.funding_pct, 3);
+          if (funding && carry && funding.textContent.trim() !== carry) {
+            funding.textContent = carry;
+            flash(funding);
+          }
+        }
+        const stamp = document.querySelector("[data-live-stamp]");
+        if (stamp) stamp.textContent = "live";
+      });
+    })();
+    </script>""".replace("__SUFFIX__", suffix)
+
+
+def _board_stream_rows(
+    board_path: Path, query: dict[str, list[str]]
+) -> dict[str, tuple[Any, Any]]:
+    """Current spread and funding per route, for the lane the member is viewing."""
+    payload = api_market_spreads(
+        board_path,
+        _query_lists_with(
+            query,
+            limit=_query_first(query, "limit") or "25",
+            kind=_query_first(query, "kind") or "",
+            sort=_query_first(query, "sort") or "rank",
+        ),
+    )
+    rows: dict[str, tuple[Any, Any]] = {}
+    for group in payload.get("groups") or []:
+        for route in group.get("routes") or []:
+            key = str(route.get("route_key") or "")
+            if key:
+                rows[key] = (route.get("executable_spread_pct"), route.get("funding_daily_pct"))
+    return rows
+
+
 def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
     del config
     data = api_market_spreads(board_path, query)
@@ -2435,7 +2560,7 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         else "history unavailable"
     )
     return f"""
-    <article class="route-detail-row">
+    <article class="route-detail-row" data-route-key="{h(row.get('route_key') or '')}">
       <div class="route-leg buy">
         <span>Buy</span>{render_exchange_link(row, 'long')}<em>{h(row.get('long_market_type'))}</em>
       </div>
@@ -2446,11 +2571,11 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         <strong>{fmt_price(row.get('long_price'))}</strong><span>→</span><strong>{fmt_price(row.get('short_price'))}</strong>
       </div>
       <div class="route-edge">
-        <strong class="{spread_class(row.get('depth_weighted_spread_pct'))}">{fmt_pct(row.get('depth_weighted_spread_pct'))}</strong>
+        <strong class="{spread_class(row.get('depth_weighted_spread_pct'))}" data-live-spread>{fmt_pct(row.get('depth_weighted_spread_pct'))}</strong>
         <span>{fmt_pct(row.get('executable_spread_pct'))} top book{' · depth not measured' if row.get('depth_unverified') else ''}</span>
       </div>
       <div class="route-funding">
-        <strong>{fmt_signed_pct(shown_funding, digits=3) if shown_funding is not None else '—'}</strong>
+        <strong data-live-funding>{fmt_signed_pct(shown_funding, digits=3) if shown_funding is not None else '—'}</strong>
         <b>{h(funding_basis)} · {h(funding_economic_label(shown_funding, row))}</b>
         <span>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)} / {fmt_signed_pct(row.get('short_funding_pct'), digits=4)}</span>
         <em>{h(funding_cadence_pair(row))}</em>
@@ -3138,6 +3263,7 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
     ]
     body = f"""
     <section class="funding-page terminal-page" data-refresh="30">
+      {render_board_stream_script(funding_query)}
       <div class="terminal-heading">
         <div>
           <span class="page-kicker">Funding</span>
@@ -9008,6 +9134,8 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .terminal-leg small {{ color: var(--terminal-muted); font-size: 10px; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 .market-number-cell, .market-age-cell {{ gap: 2px; }}
 .profile-note {{ margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; font-size: 0.92rem; line-height: 1.45; }}
+@keyframes live-tick-flash {{ from {{ background: rgba(47,158,107,0.28); }} to {{ background: transparent; }} }}
+.live-tick {{ animation: live-tick-flash 900ms ease-out; border-radius: 4px; }}
 .member-alerts {{ margin: 0 0 18px; }}
 .member-alert-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }}
 .member-alert-card {{ display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 12px; border: 1px solid #dedede; background: #fff; }}

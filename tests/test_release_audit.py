@@ -2848,3 +2848,40 @@ def test_a_route_with_only_one_leg_streaming_is_left_alone() -> None:
 def test_no_live_feed_leaves_the_board_untouched() -> None:
     row = _live_row()
     assert api_spreads.apply_live_books([row], {}, now=time.time())[0] is row
+
+
+def test_the_board_page_subscribes_to_price_pushes() -> None:
+    """The data went live once routes were priced from the streaming books, but a
+    member still only saw it by reloading. On a spread that lasts minutes that is
+    the difference between a trade and a screenshot."""
+    script = server.render_board_stream_script({"kind": ["FUTURES"]})
+    assert "/api/stream/board" in script and "kind=FUTURES" in script
+    assert "EventSource" in script and 'addEventListener("board"' in script
+    assert "data-live-spread" in script and "data-live-funding" in script
+
+
+def test_rows_carry_the_hooks_the_stream_patches() -> None:
+    """A push with nothing to patch is a push into the void."""
+    import inspect
+    source = inspect.getsource(server.render_market_group_route)
+    assert "data-route-key" in source
+    assert "data-live-spread" in source and "data-live-funding" in source
+
+
+def test_the_stream_reports_only_what_changed(tmp_path, monkeypatch) -> None:
+    """Re-sending every route every few seconds would push megabytes to every
+    open page for no reason."""
+    calls = {"n": 0}
+
+    def market(_board_path, _query):
+        calls["n"] += 1
+        spread = 1.0 if calls["n"] == 1 else 2.0
+        return {"groups": [{"routes": [
+            {"route_key": "A|x", "executable_spread_pct": spread, "funding_daily_pct": 0.1},
+            {"route_key": "B|y", "executable_spread_pct": 5.0, "funding_daily_pct": 0.2}]}]}
+
+    monkeypatch.setattr(server, "api_market_spreads", market)
+    first = server._board_stream_rows(tmp_path / "b.jsonl", {})
+    second = server._board_stream_rows(tmp_path / "b.jsonl", {})
+    changed = {k: v for k, v in second.items() if first.get(k) != v}
+    assert set(changed) == {"A|x"}, "only the route that moved is worth sending"

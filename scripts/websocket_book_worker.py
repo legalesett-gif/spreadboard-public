@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import os
 from pathlib import Path
@@ -39,10 +40,12 @@ class BookWorker:
         self.store = LiveBookStore()
         self.clients: dict[tuple[str, str], Any] = {}
         self.tasks: dict[LegKey, asyncio.Task[None]] = {}
+        self._desired: set[LegKey] = set()
+        self._desired_stamp: int | None = None
 
     async def run(self) -> None:
         while not self.stop.is_set():
-            desired = _desired_legs(SNAPSHOT_PATH, limit=MAX_SUBSCRIPTIONS)
+            desired = self._desired_legs_cached()
             for key in set(self.tasks) - desired:
                 self.tasks.pop(key).cancel()
             for key in desired - set(self.tasks):
@@ -53,6 +56,25 @@ class BookWorker:
             except TimeoutError:
                 pass
         await self.close()
+
+    def _desired_legs_cached(self) -> set[LegKey]:
+        """Re-read the subscription list only when the snapshot actually changes.
+
+        This ran every reconcile tick, parsing the whole snapshot each time. Once
+        the board grew that meant re-parsing 77MB every ten seconds -- seconds of
+        CPU and hundreds of megabytes of allocation per cycle -- and the worker
+        spent all its time doing that instead of streaming. The feed went silent
+        for thirteen minutes while the file kept being re-read.
+        """
+        try:
+            stamp = SNAPSHOT_PATH.stat().st_mtime_ns
+        except OSError:
+            return self._desired
+        if stamp != self._desired_stamp:
+            self._desired = _desired_legs(SNAPSHOT_PATH, limit=MAX_SUBSCRIPTIONS)
+            self._desired_stamp = stamp
+            gc.collect()
+        return self._desired
 
     async def _watch(self, key: LegKey) -> None:
         venue, market_type, symbol = key
