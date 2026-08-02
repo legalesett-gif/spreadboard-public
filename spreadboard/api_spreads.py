@@ -360,7 +360,10 @@ def load_spreads(
         "rows": [_public_row(row) for row in visible],
     }
     with _SNAPSHOT_CACHE_LOCK:
-        if len(_RESULT_CACHE) > 24:
+        # Each entry is a fully materialised payload. At 34k rows a handful of
+        # them is hundreds of megabytes, which took a 4GB box to 156MB free and
+        # left the container unhealthy. Keep only the few most recent queries.
+        if len(_RESULT_CACHE) >= _RESULT_CACHE_MAX_ENTRIES:
             _RESULT_CACHE.clear()
         _RESULT_CACHE[cache_key] = (stamp, current_time, payload)
     return payload
@@ -431,6 +434,7 @@ _ROW_CACHE: dict[tuple[str, int], tuple[float, list["SpreadTerminalRow"]]] = {}
 _ROW_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_ROW_CACHE_SECONDS", "5"))
 _RESULT_CACHE: dict[tuple[Any, ...], tuple[int, float, dict[str, Any]]] = {}
 _RESULT_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_RESULT_CACHE_SECONDS", "90"))
+_RESULT_CACHE_MAX_ENTRIES = int(os.environ.get("SPREADBOARD_RESULT_CACHE_ENTRIES", "4"))
 # Shortlist a few more tokens than we display so lane filtering inside the
 # grouping cannot leave the headline short.
 TOP_GROUP_SHORTLIST = 24

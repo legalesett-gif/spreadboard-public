@@ -2696,3 +2696,12 @@ def test_a_positive_carry_alone_is_enough() -> None:
     """A basis farm is entered at a NEGATIVE spread and paid in funding: SIREN
     sits at -53% open with +138% APR."""
     assert api_spreads.pays_something(_erow(spread=-53.05, funding=0.377)) is True
+
+
+def test_the_result_cache_is_bounded_by_entry_count() -> None:
+    """Each entry is a fully materialised payload; at 34k rows a handful of them
+    took a 4GB box to 156MB free and left the container unhealthy."""
+    assert api_spreads._RESULT_CACHE_MAX_ENTRIES <= 8
+    import inspect
+    source = inspect.getsource(api_spreads.load_spreads)
+    assert "_RESULT_CACHE_MAX_ENTRIES" in source
