@@ -108,3 +108,22 @@ def test_the_watcher_is_actually_wired_into_the_service() -> None:
     assert "rail_watch.RailReopenWatcher" in source
     assert "rail_reopen_worker.start()" in source
     assert "rail_reopen_worker.stop()" in source
+
+
+def test_reopen_alerts_reach_the_configured_subscriber_group(monkeypatch) -> None:
+    """The group is already configured by the Telegram setup flow. Requiring a
+    separate env var meant the watcher ran and reached nobody."""
+    monkeypatch.delenv("SPREADBOARD_TELEGRAM_GROUP_CHAT_ID", raising=False)
+    from spreadboard import accounts
+
+    monkeypatch.setattr(
+        accounts, "telegram_community",
+        lambda *a, **k: {"chat_id": -1004373383074, "title": "Spread", "active": 1},
+    )
+    assert rail_watch._group_chat_id() == "-1004373383074"
+
+    monkeypatch.setattr(accounts, "telegram_community", lambda *a, **k: None)
+    assert rail_watch._group_chat_id() is None
+
+    monkeypatch.setenv("SPREADBOARD_TELEGRAM_GROUP_CHAT_ID", "-100999")
+    assert rail_watch._group_chat_id() == "-100999", "the env var stays an override"

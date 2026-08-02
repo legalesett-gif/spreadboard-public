@@ -178,7 +178,7 @@ class RailReopenWatcher:
         if self.notify is not None:
             self.notify(message)
             return
-        chat_id = os.environ.get("SPREADBOARD_TELEGRAM_GROUP_CHAT_ID", "").strip()
+        chat_id = _group_chat_id()
         if not chat_id:
             print(f"spreadboard-rail-reopen: {message}", flush=True)
             return
@@ -199,6 +199,28 @@ class RailReopenWatcher:
         temporary = self.state_path.with_suffix(".tmp")
         temporary.write_text(json.dumps({"rails": rails}, sort_keys=True), encoding="utf-8")
         temporary.replace(self.state_path)
+
+
+def _group_chat_id() -> str | None:
+    """Where a reopen announcement goes.
+
+    The subscriber group is already configured in the database by the Telegram
+    setup flow, so requiring a separate env var meant the alerts ran but reached
+    nobody. Fall back to that record; the env var stays as an override.
+    """
+    override = os.environ.get("SPREADBOARD_TELEGRAM_GROUP_CHAT_ID", "").strip()
+    if override:
+        return override
+    try:
+        from spreadboard import accounts
+
+        community = accounts.telegram_community()
+    except Exception:  # noqa: BLE001 - a missing table must not stop the watch.
+        return None
+    if not community or not community.get("active"):
+        return None
+    chat_id = community.get("chat_id")
+    return str(chat_id) if chat_id else None
 
 
 def _float(value: Any) -> float | None:
