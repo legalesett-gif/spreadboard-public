@@ -1293,10 +1293,17 @@ def pairwise_candidates(
 
 
 def _row_strength(row: dict[str, Any]) -> float:
-    """Rank a token's own routes: the wider edge or the richer carry wins."""
+    """Rank a token's own routes: the wider edge or the richer carry wins.
+
+    Carry counts only when it is RECEIVED. Ranking on magnitude kept the mirror
+    route that pays and discarded the one that collects, so tokens surfaced with
+    a negative headline while the reference product showed the same token paying
+    well -- BEAT at -38% here against +143% there, HOME at -70% against +444%.
+    A spread is symmetric between the two directions, so its magnitude stands.
+    """
     spread = as_float(row.get("depth_weighted_spread_pct")) or 0.0
     funding = as_float((row.get("notes") or {}).get("funding", {}).get("net_apr_pct")) or 0.0
-    return max(abs(spread), abs(funding) / 365.0)
+    return max(abs(spread), max(funding, 0.0) / 365.0)
 
 
 @dataclass(frozen=True, slots=True)

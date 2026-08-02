@@ -2387,3 +2387,21 @@ def test_a_builder_market_is_only_named_for_a_token_the_cex_side_quotes(monkeypa
     result = source.collect(ctx)
     tokens = {q.token for q in result.quotes}
     assert tokens == {"AMZNSTOCK"}, f"only CEX-known tokens may be named, got {tokens}"
+
+
+def test_route_trimming_keeps_the_carry_you_receive() -> None:
+    """Ranking a token's routes on funding MAGNITUDE kept the mirror that pays
+    and discarded the one that collects: BEAT surfaced at -38% here while the
+    reference product showed the same token at +143%."""
+    receives = {"token": "BEAT", "depth_weighted_spread_pct": 0.1,
+                "notes": {"funding": {"net_apr_pct": 143.0}}}
+    pays = {"token": "BEAT", "depth_weighted_spread_pct": 0.1,
+            "notes": {"funding": {"net_apr_pct": -600.0}}}
+    assert sources._row_strength(receives) > sources._row_strength(pays)
+
+
+def test_a_wide_spread_still_wins_on_magnitude() -> None:
+    """A spread is symmetric between the two directions, so its size stands."""
+    wide = {"token": "X", "depth_weighted_spread_pct": -80.0, "notes": {}}
+    narrow = {"token": "X", "depth_weighted_spread_pct": 0.2, "notes": {}}
+    assert sources._row_strength(wide) > sources._row_strength(narrow)
