@@ -2296,9 +2296,14 @@ def test_the_snapshot_trims_surplus_routes_not_whole_tokens() -> None:
     used to lose whole tokens at the tail rather than surplus routes."""
     from spreadarb.api_discovery import runner
 
+    # Distinct venue pairs, since duplicates of one route now collapse first.
     rows = (
-        [{"token": "BTC", "depth_weighted_spread_pct": float(i), "notes": {}} for i in range(40)]
-        + [{"token": "RARE", "depth_weighted_spread_pct": 9.0, "notes": {}}]
+        [{"token": "BTC", "long_venue": f"V{i}", "short_venue": "Bybit",
+          "long_market_type": "Spot", "short_market_type": "Futures",
+          "depth_weighted_spread_pct": float(i), "notes": {}} for i in range(40)]
+        + [{"token": "RARE", "long_venue": "Gate", "short_venue": "Mexc",
+            "long_market_type": "Spot", "short_market_type": "Futures",
+            "depth_weighted_spread_pct": 9.0, "notes": {}}]
     )
     capped = runner._cap_rows_per_token(rows)
     tokens = {row["token"] for row in capped}
@@ -2616,3 +2621,21 @@ def test_a_real_dislocation_is_still_paired() -> None:
     pairs = sources.quote_candidate_pairs([q("Gate", 0.0100), q("Bybit", 0.0198)],
                                           min_spread_pct=0.0, max_spread_pct=0.0)
     assert pairs, "a ~2x genuine dislocation must still pair"
+
+
+def test_duplicate_routes_do_not_eat_a_tokens_slots() -> None:
+    """NXT's Mexc->Gate arrived from both cex_spot_ccxt_2 and cex_futures_ccxt_2,
+    and every duplicate consumed a slot a distinct venue pair could have used."""
+    from spreadarb.api_discovery import runner
+
+    def row(long_venue, short_venue, ts, spread=1.0):
+        return {"token": "NXT", "long_venue": long_venue, "long_market_type": "Spot",
+                "short_venue": short_venue, "short_market_type": "Futures",
+                "quote_ts_us": ts, "depth_weighted_spread_pct": spread, "notes": {}}
+
+    rows = [row("Mexc", "Gate", 100), row("Mexc", "Gate", 200), row("Kucoin", "Gate", 100)]
+    capped = runner._cap_rows_per_token(rows)
+    identities = {runner._route_identity(r) for r in capped}
+    assert len(capped) == 2 and len(identities) == 2, "one row per distinct route"
+    kept = [r for r in capped if r["long_venue"] == "Mexc"][0]
+    assert kept["quote_ts_us"] == 200, "the freshest duplicate is the one kept"

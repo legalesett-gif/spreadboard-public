@@ -321,6 +321,20 @@ def _build_filtered_snapshot(
     return snapshot
 
 
+def _route_identity(row: dict[str, Any]) -> str:
+    return "|".join(
+        str(row.get(key) or "")
+        for key in ("token", "long_venue", "long_market_type", "short_venue", "short_market_type")
+    )
+
+
+def _quote_age(row: dict[str, Any]) -> float:
+    try:
+        return float(row.get("quote_ts_us") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _cap_rows_per_token(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Bound the snapshot per token, before the row limit slices it blindly.
 
@@ -332,8 +346,18 @@ def _cap_rows_per_token(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     limit = MAX_SNAPSHOT_ROWS_PER_TOKEN
     if limit <= 0:
         return rows
-    by_token: dict[str, list[dict[str, Any]]] = {}
+    # The same route arrives from more than one source -- NXT's Mexc->Gate came
+    # from both cex_spot_ccxt_2 and cex_futures_ccxt_2 -- and every duplicate ate
+    # a slot that a distinct venue pair could have used. Dedupe on the route
+    # before trimming, keeping the freshest quote.
+    unique: dict[str, dict[str, Any]] = {}
     for row in rows:
+        key = _route_identity(row)
+        current = unique.get(key)
+        if current is None or _quote_age(row) > _quote_age(current):
+            unique[key] = row
+    by_token: dict[str, list[dict[str, Any]]] = {}
+    for row in unique.values():
         by_token.setdefault(str(row.get("token") or "").upper(), []).append(row)
     kept: list[dict[str, Any]] = []
     for token_rows in by_token.values():
