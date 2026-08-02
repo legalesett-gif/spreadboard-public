@@ -13,6 +13,8 @@ from urllib.request import Request, urlopen
 
 import ccxt
 
+from spreadarb.public_runtime import keychain
+
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_CACHE_PATH = RUNTIME_DIR / "public_transfer_rails.json"
@@ -241,6 +243,38 @@ def _fetch_native_venue_rails(venue: str, tokens: set[str]) -> dict[str, Any] | 
     return output
 
 
+# Bybit, MEXC, OKX and BingX serve currency status only to an authenticated
+# caller, and CCXT returns an empty dict rather than raising when it has no
+# keys -- which reads as "nothing is shut" instead of "we cannot see". Read-only
+# credentials turn those venues from blind into covered.
+RAIL_CREDENTIAL_SERVICES: dict[str, str] = {
+    "Mexc": "mexc",
+    "Bybit": "bybit",
+    "OKX": "okx",
+    "Bingx": "bingx",
+    "Binance": "binance",
+    "Kucoin": "kucoin",
+    "Gate": "gate",
+    "Bitget": "bitget",
+    "Kraken": "kraken",
+}
+
+
+def _venue_credentials(venue: str) -> dict[str, str]:
+    service = RAIL_CREDENTIAL_SERVICES.get(venue)
+    if not service:
+        return {}
+    api_key = keychain(f"SPREADARB/{service}/api_key")
+    secret = keychain(f"SPREADARB/{service}/secret")
+    if not api_key or not secret:
+        return {}
+    credentials = {"apiKey": api_key, "secret": secret}
+    passphrase = keychain(f"SPREADARB/{service}/passphrase")
+    if passphrase:
+        credentials["password"] = passphrase
+    return credentials
+
+
 def _fetch_venue_rails(venue: str, tokens: set[str]) -> dict[str, Any]:
     native = _fetch_native_venue_rails(venue, tokens)
     if native:
@@ -254,6 +288,7 @@ def _fetch_venue_rails(venue: str, tokens: set[str]) -> dict[str, Any]:
             "enableRateLimit": True,
             "timeout": 8_000,
             "options": {"defaultType": "spot"},
+            **_venue_credentials(venue),
         }
     )
     if not exchange.has.get("fetchCurrencies"):
