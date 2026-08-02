@@ -2322,3 +2322,29 @@ def test_unmeasured_depth_says_so_on_the_board() -> None:
     assert api_spreads._public_row(build([]))["depth_unverified"] is False
     import inspect
     assert "depth not measured" in inspect.getsource(server.render_market_group_route), "the live route row must label an unmeasured depth"
+
+
+def test_a_lone_disagreeing_price_is_flagged_not_headlined() -> None:
+    """BTC was reported at a 26% spread: BingX perp 63,298 against a DEX leg
+    reading 79,828. With enough venues quoting, a price far from all of them is a
+    broken feed. It is flagged, never dropped -- big spreads here have been real."""
+    rows = [
+        {"venue": "BingX", "spot_price": 63298.0, "perp_price": 63290.0},
+        {"venue": "Bybit", "spot_price": 63310.0, "perp_price": 63305.0},
+        {"venue": "Gate", "spot_price": 63280.0, "perp_price": 63275.0},
+    ]
+    spreads = live.best_spreads(rows, {"price_usd": 79828.0})
+    assert spreads, "the route must still be shown, not hidden"
+    dex_rows = [s for s in spreads if "DEX" in (s["sell_venue"], s["buy_venue"])]
+    assert dex_rows and all(s["price_disputed"] for s in dex_rows)
+
+
+def test_a_genuine_two_venue_dislocation_is_not_flagged() -> None:
+    """With only a couple of quotes there is no consensus to disagree with, and
+    the operator has captured a 150% spread for real money."""
+    rows = [
+        {"venue": "Kucoin", "spot_price": 0.0576},
+        {"venue": "Mexc", "spot_price": 0.0281},
+    ]
+    spreads = live.best_spreads(rows, None)
+    assert spreads and not any(s["price_disputed"] for s in spreads)

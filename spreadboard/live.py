@@ -1643,6 +1643,13 @@ def fetch_dexscreener(symbol: str, cex_median_price: float | None) -> dict[str, 
     }
 
 
+# A quote this far from what everyone else is quoting is a broken feed. The bound
+# is generous on purpose: the operator has captured a 150% spread for real money,
+# so the guard labels rather than removes.
+PRICE_CONSENSUS_TOLERANCE = 0.25
+PRICE_CONSENSUS_MIN_QUOTES = 4
+
+
 def best_spreads(rows: list[dict[str, Any]], dex: dict[str, Any] | None) -> list[dict[str, Any]]:
     quotes: list[dict[str, Any]] = []
     for row in rows:
@@ -1677,6 +1684,18 @@ def best_spreads(rows: list[dict[str, Any]], dex: dict[str, Any] | None) -> list
             }
         )
 
+    # One bad quote used to become a headline opportunity: BTC was reported at a
+    # 26% spread, BingX perp 63,298 against a DEX leg reading 79,828. With enough
+    # venues quoting, a price far from all of them is a broken feed, not an edge.
+    # It is FLAGGED rather than dropped -- large spreads on this board have been
+    # real before, and hiding them is the worse failure.
+    reference = statistics.median([quote["price"] for quote in quotes]) if quotes else None
+
+    def _disputed(quote: dict[str, Any]) -> bool:
+        if reference is None or len(quotes) < PRICE_CONSENSUS_MIN_QUOTES or reference <= 0:
+            return False
+        return abs(quote["price"] / reference - 1.0) > PRICE_CONSENSUS_TOLERANCE
+
     pairs = []
     for buy in quotes:
         for sell in quotes:
@@ -1701,6 +1720,7 @@ def best_spreads(rows: list[dict[str, Any]], dex: dict[str, Any] | None) -> list
                     "withdraw_open": transfer["withdraw_open"],
                     "deposit_open": transfer["deposit_open"],
                     "needs_transfer": transfer["needs_transfer"],
+                    "price_disputed": _disputed(buy) or _disputed(sell),
                 }
             )
     pairs.sort(key=lambda item: item["spread_pct"], reverse=True)

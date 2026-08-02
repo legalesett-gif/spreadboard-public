@@ -4828,7 +4828,8 @@ def render_token_market_script(symbol: str) -> str:
         }}
         spreadsBody.innerHTML = `<ol class="spread-list">${{spreads.map((spread) => {{
           const transfer = spread.transfer_note ? ` <span class="muted">${{escapeHtml(spread.transfer_note)}}</span>` : "";
-          return `<li>Buy on <strong>${{escapeHtml(spread.buy_venue)}} ${{escapeHtml(spread.buy_leg)}}</strong> at ${{escapeHtml(formatPrice(spread.buy_price))}}; sell on <strong>${{escapeHtml(spread.sell_venue)}} ${{escapeHtml(spread.sell_leg)}}</strong> at ${{escapeHtml(formatPrice(spread.sell_price))}}. <strong>${{escapeHtml(formatPct(spread.spread_pct))}}</strong>${{transfer}}</li>`;
+          const disputed = spread.price_disputed ? ` <span class="pill warn">one venue's price disagrees with the rest — verify before trading</span>` : "";
+          return `<li>Buy on <strong>${{escapeHtml(spread.buy_venue)}} ${{escapeHtml(spread.buy_leg)}}</strong> at ${{escapeHtml(formatPrice(spread.buy_price))}}; sell on <strong>${{escapeHtml(spread.sell_venue)}} ${{escapeHtml(spread.sell_leg)}}</strong> at ${{escapeHtml(formatPrice(spread.sell_price))}}. <strong>${{escapeHtml(formatPct(spread.spread_pct))}}</strong>${{transfer}}${{disputed}}</li>`;
         }}).join("")}}</ol>`;
       }}
 
