@@ -1818,7 +1818,15 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _float_or_none(*values: Any) -> float | None:
+    # Called 1.6M times per snapshot rebuild, almost always through a coalescing
+    # chain whose leading arguments are None. Raising and catching TypeError for
+    # each of those cost 8.6s a rebuild on the droplet; None and float are the
+    # two overwhelmingly common cases, so test them before reaching for float().
     for value in values:
+        if value is None:
+            continue
+        if type(value) is float:
+            return value
         try:
             return float(value)
         except (TypeError, ValueError):
