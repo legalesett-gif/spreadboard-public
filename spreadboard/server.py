@@ -5915,12 +5915,24 @@ def render_profile_telegram() -> str:
 
 def render_profile_pushover(flags: dict[str, Any]) -> str:
     sounds = ["default", "pushover", "siren", "magic", "cashregister", "vibrate"]
+    # A member who saves a key and then hears nothing has no way to tell whether
+    # their key is wrong or the server simply cannot send. Say which it is.
+    ready = bool(os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip())
+    delivery_note = (
+        '<p class="profile-note ok">Alerts are delivered to your Pushover account. '
+        'Save your user key below and keep Enabled switched on.</p>'
+        if ready
+        else '<p class="profile-note warn"><strong>Delivery is not active yet.</strong> '
+        'Your key is stored safely, but this server has no Pushover application token, '
+        'so nothing can be sent until the operator adds one. You do not need to do anything else.</p>'
+    )
     return f"""
     <section class="profile-section">
       <div class="profile-section-title">
-        <div><span class="page-kicker">Pushover</span><h2>Pushover notifications</h2><p>Route-aware spread and funding templates with local trigger evaluation.</p></div>
-        <span class="profile-state neutral">No send</span>
+        <div><span class="page-kicker">Pushover</span><h2>Pushover notifications</h2><p>Spread, funding and rail-reopen alerts sent to your own phone.</p></div>
+        <span class="profile-state {'ok' if ready else 'warn'}">{'Delivery ready' if ready else 'Delivery inactive'}</span>
       </div>
+      {delivery_note}
       <form class="profile-form" data-profile-form="pushover">
         <section class="profile-panel">
           <div class="profile-panel-head"><div><h3>Personal configuration</h3><p>Credential values are never exposed or persisted by this page.</p></div><span>{h(flags.get('pushover_user_count') or 0)} server recipients hidden</span></div>
@@ -8841,6 +8853,11 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .terminal-leg i {{ color: var(--terminal-text); font-size: 12px; font-style: normal; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 .terminal-leg small {{ color: var(--terminal-muted); font-size: 10px; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 .market-number-cell, .market-age-cell {{ gap: 2px; }}
+.profile-note {{ margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; font-size: 0.92rem; line-height: 1.45; }}
+.profile-note.ok {{ background: #eefaf3; border: 1px solid #bfe6d2; color: #1d5c3c; }}
+.profile-note.warn {{ background: #fff6e8; border: 1px solid #f0d3a1; color: #7a4c07; }}
+.profile-state.ok {{ background: #eefaf3; color: #1d5c3c; }}
+.profile-state.warn {{ background: #fff6e8; color: #7a4c07; }}
 .market-number-cell strong, .market-age-cell strong {{ color: var(--terminal-text); font-size: 14px; }}
 .market-number-cell span, .market-age-cell span {{ color: var(--terminal-muted); font-size: 10px; font-weight: 900; text-transform: uppercase; }}
 .market-funding-cell strong {{ color: var(--terminal-text); font-size: 13px; }}

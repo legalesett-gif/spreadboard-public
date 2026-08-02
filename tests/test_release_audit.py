@@ -2445,3 +2445,35 @@ def test_an_equity_gap_of_ten_percent_is_a_different_instrument() -> None:
     """Real cross-venue gaps on a tokenized equity run 0.1-0.5%. A 25% bound
     admitted cash:AMZN at 241.75 against MEXC's 273.36 and printed a 13% spread."""
     assert sources.BUILDER_DEX_PRICE_TOLERANCE <= 0.05
+
+
+def test_the_profile_tells_a_member_whether_pushover_can_actually_send(monkeypatch) -> None:
+    """A member who saves a key and hears nothing cannot tell whether the key is
+    wrong or the server simply has no application token."""
+    monkeypatch.delenv("SPREADBOARD_PUSHOVER_APP_TOKEN", raising=False)
+    blocked = server.render_profile_pushover({})
+    assert "Delivery is not active yet" in blocked and "Delivery inactive" in blocked
+
+    monkeypatch.setenv("SPREADBOARD_PUSHOVER_APP_TOKEN", "token")
+    ready = server.render_profile_pushover({})
+    assert "delivered to your Pushover account" in ready and "Delivery ready" in ready
+
+
+def test_rail_reopens_reach_each_member_not_only_the_group(monkeypatch) -> None:
+    """The operator's requirement: alerts land on individual phones via Pushover."""
+    from spreadboard import rail_watch, accounts, alerts as alerts_module
+
+    monkeypatch.setenv("SPREADBOARD_PUSHOVER_APP_TOKEN", "app-token")
+    monkeypatch.setattr(accounts, "list_pushover_user_ids", lambda **k: [7])
+    monkeypatch.setattr(accounts, "get_user_object",
+                        lambda uid, **k: SimpleNamespace(subscription_active=True))
+    monkeypatch.setattr(accounts, "notification_delivery",
+                        lambda uid, **k: {"user_key": "u-key", "device": "", "sound": "pushover"})
+    sent = []
+    monkeypatch.setattr(alerts_module, "send_pushover_message",
+                        lambda **kw: (sent.append(kw), {"ok": True})[1])
+    watcher = rail_watch.RailReopenWatcher(state_path="/tmp/unused-state.json")
+    alert = {"token": "SIREN", "venue": "Kucoin", "direction": "deposit", "edge_pct": 98.0,
+             "route": {"long_venue": "OKX DEX 1", "short_venue": "Kucoin"}}
+    assert watcher._push_to_members(alert, rail_watch.format_alert(alert)) == 1
+    assert sent and sent[0]["user_key"] == "u-key" and "SIREN" in sent[0]["title"]

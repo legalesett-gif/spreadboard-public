@@ -178,13 +178,44 @@ class RailReopenWatcher:
         if self.notify is not None:
             self.notify(message)
             return
+        delivered = self._push_to_members(alert, message)
         chat_id = _group_chat_id()
-        if not chat_id:
-            print(f"spreadboard-rail-reopen: {message}", flush=True)
-            return
-        from spreadboard import telegram_bot
+        if chat_id:
+            from spreadboard import telegram_bot
 
-        telegram_bot.send_group_message(chat_id, message)
+            try:
+                telegram_bot.send_group_message(chat_id, message)
+                delivered += 1
+            except Exception as exc:  # noqa: BLE001 - one channel must not block the other.
+                print(f"spreadboard-rail-reopen: telegram {type(exc).__name__}: {exc}", flush=True)
+        if not delivered:
+            print(f"spreadboard-rail-reopen: {message}", flush=True)
+
+    def _push_to_members(self, alert: dict[str, Any], message: str) -> int:
+        """A reopen window is short, so it goes to each member's own phone."""
+        app_token = os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
+        if not app_token:
+            return 0
+        from spreadboard import accounts, alerts as alerts_module
+
+        delivered = 0
+        for user_id in accounts.list_pushover_user_ids():
+            user = accounts.get_user_object(user_id)
+            if user is None or not user.subscription_active:
+                continue
+            delivery = accounts.notification_delivery(user_id)
+            if not delivery:
+                continue
+            result = alerts_module.send_pushover_message(
+                app_token=app_token,
+                user_key=delivery["user_key"],
+                title=f"{alert['token']} rail reopened",
+                message=message,
+                device=delivery.get("device"),
+                sound=delivery.get("sound"),
+            )
+            delivered += int(bool(result.get("ok")))
+        return delivered
 
     def _load_state(self) -> dict[str, dict[str, Any]]:
         try:

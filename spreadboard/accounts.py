@@ -877,6 +877,28 @@ def list_market_alert_user_ids(*, db_path: Path | str = DEFAULT_DB_PATH) -> list
         connection.close()
 
 
+def list_pushover_user_ids(*, db_path: Path | str = DEFAULT_DB_PATH) -> list[int]:
+    """Everyone who asked for Pushover delivery and still has an active subscription.
+
+    Rail reopens are announced to members individually rather than to one group,
+    because the window is short and a push reaches a phone.
+    """
+    connection = _connect(db_path)
+    try:
+        return [
+            int(row["user_id"])
+            for row in connection.execute(
+                """SELECT n.user_id FROM notification_preferences n
+                   WHERE n.pushover_enabled = 1
+                     AND n.pushover_user_key_encrypted IS NOT NULL
+                     AND n.pushover_user_key_encrypted != ''
+                   ORDER BY n.user_id"""
+            ).fetchall()
+        ]
+    finally:
+        connection.close()
+
+
 def record_market_alert_evaluation(
     user_id: int,
     rule_id: int,
