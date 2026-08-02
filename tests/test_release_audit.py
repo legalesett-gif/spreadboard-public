@@ -2162,16 +2162,20 @@ def test_discovery_floors_admit_any_positive_carry_and_small_spreads(monkeypatch
     assert pairs, "a sub-1% spread must still be a candidate"
 
 
-def test_snapshot_is_not_reparsed_for_every_request(tmp_path) -> None:
-    """Carrying the full positive-funding universe multiplies the snapshot, and
-    re-parsing tens of megabytes per page view is not affordable."""
+def test_the_parsed_tree_is_not_held_alongside_the_rows(tmp_path) -> None:
+    """Caching the payload AND the rows built from it carried the same data
+    twice: a 77MB snapshot became ~700MB of Python and the droplet sat at 177MB
+    free three minutes after a restart, leaving the scan no room to finish.
+
+    Re-parsing is cheap by comparison and only happens when the rows cache misses.
+    """
     path = tmp_path / "snap.json"
     path.write_text(json.dumps({"api_discovered_rows": [], "updated_at": "2026-08-01T00:00:00Z"}))
     first = api_spreads._cached_snapshot(path)
     second = api_spreads._cached_snapshot(path)
-    assert first is second, "same file must not be parsed twice"
-    path.write_text(json.dumps({"api_discovered_rows": [], "updated_at": "2026-08-01T00:01:00Z"}))
-    assert api_spreads._cached_snapshot(path) is not first, "a rewritten file must re-parse"
+    assert first == second
+    assert first is not second, "the tree must not be retained between calls"
+    assert not hasattr(api_spreads, "_SNAPSHOT_CACHE"), "no payload cache may exist"
 
 
 def test_identical_queries_reuse_the_last_result(tmp_path, monkeypatch) -> None:

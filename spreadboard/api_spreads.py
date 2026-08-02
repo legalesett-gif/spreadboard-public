@@ -6,6 +6,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import gc
 import json
 import os
 import re
@@ -428,7 +429,7 @@ def _release_lane_token_counts(
 # of megabytes per page view is not. The file is rewritten wholesale, so its
 # mtime is a sound cache key; _propagate_funding_by_leg is idempotent, so reusing
 # an already-propagated payload is safe.
-_SNAPSHOT_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
+_BULK_KEYS = ("api_discovered_rows", "dex_discovered_rows")
 _SNAPSHOT_CACHE_LOCK = Lock()
 _ROW_CACHE: dict[tuple[str, int], tuple[float, list["SpreadTerminalRow"]]] = {}
 _ROW_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_ROW_CACHE_SECONDS", "5"))
@@ -441,17 +442,15 @@ TOP_GROUP_SHORTLIST = 24
 
 
 def _cached_snapshot(path: Path) -> dict[str, Any]:
-    key = str(path)
-    stat = path.stat()
-    stamp = (stat.st_mtime_ns, stat.st_size)
-    with _SNAPSHOT_CACHE_LOCK:
-        cached = _SNAPSHOT_CACHE.get(key)
-        if cached is not None and (cached[0], cached[1]) == stamp:
-            return cached[2]
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    with _SNAPSHOT_CACHE_LOCK:
-        _SNAPSHOT_CACHE[key] = (stamp[0], stamp[1], payload)
-    return payload
+    """Parse the snapshot without holding onto the raw tree.
+
+    Caching the parsed payload AND the row objects built from it meant carrying
+    the same data twice: a 77MB snapshot became roughly 700MB of Python, and the
+    droplet sat at 177MB free three minutes after a restart, leaving no room for
+    the discovery worker to finish. The rows are what every caller actually uses,
+    and they have their own cache, so the tree is released as soon as they exist.
+    """
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _load_api_discovery_rows(
@@ -503,6 +502,9 @@ def _load_api_discovery_rows(
         with _SNAPSHOT_CACHE_LOCK:
             _ROW_CACHE.clear()
             _ROW_CACHE[cache_key] = (now, rows)
+        # The tree is no longer referenced by anything but this frame.
+        payload = {key: value for key, value in payload.items() if key not in _BULK_KEYS}
+        gc.collect()
     updated_at = _str_or_none(payload.get("updated_at"))
     discovery_age = _iso_age_min(updated_at, now=now)
     fast_refresh = (
