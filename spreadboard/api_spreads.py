@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import json
 import os
+import statistics
 from threading import Lock
 import time
 from typing import Any
@@ -244,6 +245,26 @@ def load_spreads(
         funding_only=funding_only,
         include_stale=include_stale,
     )
+    # Executability is not a ranking preference, it is a condition of being shown
+    # at all. The headline lists were filtered while the board itself was not, so
+    # SNOW printed 873,150,483,949,072% between an OKX DEX quote at 3.4e-11 and
+    # an Ourbit quote at 299 -- two different assets wearing one ticker, already
+    # flagged identity_mismatch and displayed anyway. 1,112 rows were above 100%
+    # and 578 above 1000% on that basis.
+    #
+    # This is an identity and liquidity test, never a size ceiling: VANRY's
+    # genuine ~100% edge has both legs within a sane price ratio on real books
+    # and survives untouched. include_unverified=1 still shows everything for
+    # auditing.
+    if not include_unverified:
+        unverifiable = unverifiable_price_outliers(filtered)
+        filtered = [
+            row
+            for row in filtered
+            if not price_ratio_implausible(row)
+            and not leg_volume_too_thin(row)
+            and row.route_key not in unverifiable
+        ]
     normalized_sort = _normalize_sort(sort_by)
     normalized_direction = "asc" if str(direction).casefold() == "asc" else "desc"
     filtered.sort(
@@ -1146,15 +1167,61 @@ MIN_LEG_VOLUME_24H_USD = 10_000.0
 
 
 def leg_volume_too_thin(row: "SpreadTerminalRow") -> bool:
-    """True when either leg's 24h turnover is too small to trust the quote."""
+    """True when either leg's 24h turnover is too small to trust the quote.
+
+    An exact zero means the venue published nothing, not that a live order book
+    traded nothing all day: Upbit reports 0 for every market, which was deleting
+    KAITO from the board entirely. Unknown turnover is handled by the price
+    consensus test instead, which needs no volume to spot a lone bad quote.
+    """
     for value in (
         getattr(row, "long_volume_24h_usd", None),
         getattr(row, "short_volume_24h_usd", None),
     ):
         volume = _float_or_none(value)
-        if volume is not None and volume < MIN_LEG_VOLUME_24H_USD:
+        if volume is not None and 0.0 < volume < MIN_LEG_VOLUME_24H_USD:
             return True
     return False
+
+
+# A leg nobody can corroborate -- no turnover published and a price far from what
+# every other venue quotes -- is a broken feed. IOTX sat at 0.00669 on Coinbase
+# against 0.0023 everywhere else, printing 190% across 36 routes, and slipped
+# under the 3x identity bar. The test needs BOTH conditions: VANRY's real ~100%
+# edge is roughly 2x apart too, but its legs carry genuine turnover, so it stays.
+PRICE_CONSENSUS_DEVIATION = 0.5
+
+
+def unverifiable_price_outliers(rows: list["SpreadTerminalRow"]) -> set[str]:
+    """Route keys whose quote disagrees with the market and cannot be vouched for."""
+    trusted: dict[str, list[float]] = {}
+    for row in rows:
+        for side in ("long", "short"):
+            price = _float_or_none(getattr(row, f"{side}_price", None))
+            volume = _float_or_none(getattr(row, f"{side}_volume_24h_usd", None))
+            if price and price > 0 and volume and volume >= MIN_LEG_VOLUME_24H_USD:
+                trusted.setdefault(row.token, []).append(price)
+    reference = {
+        token: statistics.median(prices)
+        for token, prices in trusted.items()
+        if len(prices) >= 3
+    }
+    flagged: set[str] = set()
+    for row in rows:
+        anchor = reference.get(row.token)
+        if not anchor or anchor <= 0:
+            continue
+        for side in ("long", "short"):
+            price = _float_or_none(getattr(row, f"{side}_price", None))
+            volume = _float_or_none(getattr(row, f"{side}_volume_24h_usd", None))
+            if not price or price <= 0:
+                continue
+            if volume and volume >= MIN_LEG_VOLUME_24H_USD:
+                continue
+            if abs(price / anchor - 1.0) > PRICE_CONSENSUS_DEVIATION:
+                flagged.add(row.route_key)
+                break
+    return flagged
 
 
 def route_deliverable(row: "SpreadTerminalRow") -> bool | None:

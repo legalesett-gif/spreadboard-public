@@ -1725,7 +1725,13 @@ def test_shorting_spot_needs_a_deposit_rail() -> None:
 def test_thin_books_are_rejected() -> None:
     """U2U ranked at 124% against a Kraken leg doing $14.78 of daily volume."""
     assert api_spreads.leg_volume_too_thin(_vrow(short_volume_24h_usd=14.78)) is True
-    assert api_spreads.leg_volume_too_thin(_vrow(long_volume_24h_usd=0.0)) is True
+
+
+def test_an_exact_zero_is_a_silent_venue_not_a_dead_market() -> None:
+    """Upbit publishes 0 for every market, which deleted KAITO from the board.
+    A live order book does not trade nothing all day; that is a missing field."""
+    assert api_spreads.leg_volume_too_thin(_vrow(long_volume_24h_usd=0.0)) is False
+    assert api_spreads.leg_volume_too_thin(_vrow(long_volume_24h_usd=1.0)) is True
 
 
 def test_vanry_style_real_books_survive() -> None:
@@ -2505,3 +2511,44 @@ def test_the_alerts_page_no_longer_claims_it_cannot_send() -> None:
     source = inspect.getsource(server.render_alerts_page)
     assert "does not send Pushover" not in source
     assert "render_member_alert_rules" in source
+
+
+def _prow(token, lv, sv, lp, sp, lvol, svol, key=None):
+    from types import SimpleNamespace
+    return SimpleNamespace(token=token, route_key=key or f"{token}|{lv}|{sv}",
+                           long_venue=lv, short_venue=sv, long_price=lp, short_price=sp,
+                           long_volume_24h_usd=lvol, short_volume_24h_usd=svol)
+
+
+def test_a_lone_unbacked_quote_is_dropped_from_the_board() -> None:
+    """IOTX sat at 0.00669 on Coinbase against 0.0023 everywhere else, printing
+    190% across 36 routes, and slipped under the 3x identity bar because the
+    ratio is only 2.9x. Coinbase published no turnover for it either."""
+    rows = [
+        _prow("IOTX", "Binance", "Bybit", 0.00231, 0.00232, 213461.0, 141372.0, "a"),
+        _prow("IOTX", "Mexc", "Gate", 0.00232, 0.00232, 82433.0, 16382.0, "b"),
+        _prow("IOTX", "Bitget", "Kucoin", 0.00232, 0.00233, 70666.0, 23508.0, "c"),
+        _prow("IOTX", "Binance", "Coinbase", 0.00231, 0.00669, 213461.0, None, "bad"),
+    ]
+    assert api_spreads.unverifiable_price_outliers(rows) == {"bad"}
+
+
+def test_a_real_dislocation_with_turnover_on_both_legs_survives() -> None:
+    """VANRY's genuine ~100% edge is roughly 2x apart too. Turnover is what
+    separates a captured edge from a broken feed."""
+    rows = [
+        _prow("VANRY", "Gate", "Bybit", 0.0100, 0.0198, 281292.0, 234243.0, "v1"),
+        _prow("VANRY", "Mexc", "Kucoin", 0.0101, 0.0102, 120000.0, 90000.0, "v2"),
+        _prow("VANRY", "Bitget", "HTX", 0.0100, 0.0101, 110000.0, 95000.0, "v3"),
+    ]
+    assert api_spreads.unverifiable_price_outliers(rows) == set()
+
+
+def test_a_shut_rail_still_shows_because_the_price_is_real() -> None:
+    """A closed rail is why a fat spread survives, and the reopen watcher needs
+    those tokens tracked. It is marked, not deleted."""
+    import inspect
+    source = inspect.getsource(api_spreads.load_spreads)
+    gate = source.split("if not include_unverified:")[1].split("normalized_sort")[0]
+    assert "route_deliverable" not in gate, "deliverability must not remove a row from the board"
+    assert "price_ratio_implausible" in gate and "leg_volume_too_thin" in gate
