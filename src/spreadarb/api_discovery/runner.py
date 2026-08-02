@@ -312,8 +312,8 @@ def _build_filtered_snapshot(
         load_error=blacklist_load_error,
     )
     snapshot = build_snapshot(
-        api_rows=_cap_rows_per_token(filtered.api_rows)[:row_limit],
-        dex_rows=_cap_rows_per_token(filtered.dex_rows)[:row_limit],
+        api_rows=_cap_rows_per_token(filtered.api_rows, budget=row_limit),
+        dex_rows=_cap_rows_per_token(filtered.dex_rows, budget=row_limit),
         source_statuses=[result.status for result in source_results],
         ttl_seconds=ttl_seconds,
     )
@@ -335,17 +335,24 @@ def _quote_age(row: dict[str, Any]) -> float:
         return 0.0
 
 
-def _cap_rows_per_token(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Bound the snapshot per token, before the row limit slices it blindly.
+def _cap_rows_per_token(
+    rows: list[dict[str, Any]], *, budget: int | None = None
+) -> list[dict[str, Any]]:
+    """Share the row budget between tokens instead of slicing off the tail.
 
     Each source caps its own output, but a token quoted by ten sources still
-    arrives ten times over, and the row limit is a plain slice -- so an oversized
-    snapshot loses whole tokens at the tail rather than surplus routes. Coverage
-    is about which tokens are present, so trim the surplus routes instead.
+    arrives ten times over, and a plain [:row_limit] slice loses whole tokens at
+    the tail rather than surplus routes -- raising the per-token cap to 90 cut
+    the board from 1,637 tokens to 777 for exactly that reason.
+
+    Every token keeps at least one route, and the per-token allowance is lowered
+    until the whole set fits. Breadth is decided first, depth with what is left.
     """
     limit = MAX_SNAPSHOT_ROWS_PER_TOKEN
-    if limit <= 0:
+    if limit <= 0 and budget is None:
         return rows
+    if limit <= 0:
+        limit = len(rows) or 1
     # The same route arrives from more than one source -- NXT's Mexc->Gate came
     # from both cex_spot_ccxt_2 and cex_futures_ccxt_2 -- and every duplicate ate
     # a slot that a distinct venue pair could have used. Dedupe on the route
@@ -359,9 +366,17 @@ def _cap_rows_per_token(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_token: dict[str, list[dict[str, Any]]] = {}
     for row in unique.values():
         by_token.setdefault(str(row.get("token") or "").upper(), []).append(row)
-    kept: list[dict[str, Any]] = []
     for token_rows in by_token.values():
         token_rows.sort(key=_row_strength, reverse=True)
+
+    if budget is not None and budget > 0:
+        # Lower the allowance until the set fits, never below one route a token,
+        # so a crowded snapshot loses depth rather than whole tokens.
+        while limit > 1 and sum(min(len(v), limit) for v in by_token.values()) > budget:
+            limit -= 1
+
+    kept: list[dict[str, Any]] = []
+    for token_rows in by_token.values():
         kept.extend(token_rows[:limit])
     return kept
 

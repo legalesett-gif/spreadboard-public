@@ -2639,3 +2639,30 @@ def test_duplicate_routes_do_not_eat_a_tokens_slots() -> None:
     assert len(capped) == 2 and len(identities) == 2, "one row per distinct route"
     kept = [r for r in capped if r["long_venue"] == "Mexc"][0]
     assert kept["quote_ts_us"] == 200, "the freshest duplicate is the one kept"
+
+
+def test_a_crowded_snapshot_loses_depth_not_tokens() -> None:
+    """Raising the per-token cap to 90 cut the board from 1,637 tokens to 777,
+    because the row limit was a plain slice off the tail."""
+    from spreadarb.api_discovery import runner
+
+    def row(token, i):
+        return {"token": token, "long_venue": f"V{i}", "short_venue": "Bybit",
+                "long_market_type": "Spot", "short_market_type": "Futures",
+                "depth_weighted_spread_pct": float(i), "notes": {}}
+
+    rows = [row(t, i) for t in ("AAA", "BBB", "CCC", "DDD") for i in range(30)]
+    capped = runner._cap_rows_per_token(rows, budget=20)
+    tokens = {r["token"] for r in capped}
+    assert tokens == {"AAA", "BBB", "CCC", "DDD"}, "every token must survive the squeeze"
+    assert len(capped) <= 20, "the budget must be respected"
+
+
+def test_every_token_keeps_at_least_one_route() -> None:
+    from spreadarb.api_discovery import runner
+
+    rows = [{"token": f"T{i}", "long_venue": "A", "short_venue": "B",
+             "long_market_type": "Spot", "short_market_type": "Futures",
+             "depth_weighted_spread_pct": 1.0, "notes": {}} for i in range(50)]
+    capped = runner._cap_rows_per_token(rows, budget=10)
+    assert len({r["token"] for r in capped}) == 50
