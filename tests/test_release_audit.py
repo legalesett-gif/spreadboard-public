@@ -2666,3 +2666,33 @@ def test_every_token_keeps_at_least_one_route() -> None:
              "depth_weighted_spread_pct": 1.0, "notes": {}} for i in range(50)]
     capped = runner._cap_rows_per_token(rows, budget=10)
     assert len({r["token"] for r in capped}) == 50
+
+
+def _erow(spread=None, funding=None, **kw):
+    from types import SimpleNamespace
+    base = dict(token="X", route_key="X|A|B", executable_spread_pct=spread,
+                funding_24h_pct=funding, funding_projected_24h_pct=None,
+                long_funding_pct=None, short_funding_pct=None,
+                long_funding_interval_hours=None, short_funding_interval_hours=None,
+                route_kind="FUTURES", long_market_type="Futures", short_market_type="Futures",
+                long_venue="A", short_venue="B")
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_a_route_that_loses_on_both_counts_is_not_shown() -> None:
+    """Every pair is emitted in both directions, so half the board was the mirror
+    of a real route and lost money by construction."""
+    assert api_spreads.pays_something(_erow(spread=-0.4, funding=-0.2)) is False
+
+
+def test_a_positive_spread_alone_is_enough() -> None:
+    """A spread trade can be worth taking with funding against it -- COTI shows
+    +2.36% open against -169% APR on the reference board."""
+    assert api_spreads.pays_something(_erow(spread=2.36, funding=-0.46)) is True
+
+
+def test_a_positive_carry_alone_is_enough() -> None:
+    """A basis farm is entered at a NEGATIVE spread and paid in funding: SIREN
+    sits at -53% open with +138% APR."""
+    assert api_spreads.pays_something(_erow(spread=-53.05, funding=0.377)) is True

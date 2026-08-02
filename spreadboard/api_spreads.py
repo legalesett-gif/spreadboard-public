@@ -266,6 +266,7 @@ def load_spreads(
             and not leg_volume_too_thin(row)
             and not is_venue_specific_leveraged_token(row)
             and row.route_key not in unverifiable
+            and pays_something(row)
         ]
     normalized_sort = _normalize_sort(sort_by)
     normalized_direction = "asc" if str(direction).casefold() == "asc" else "desc"
@@ -1214,6 +1215,25 @@ def is_venue_specific_leveraged_token(row: "SpreadTerminalRow") -> bool:
         return False
     # Same venue, both legs: a venue's own spot against its own perp is fine.
     return getattr(row, "long_venue", None) != getattr(row, "short_venue", None)
+
+
+def pays_something(row: "SpreadTerminalRow") -> bool:
+    """Is there anything to earn on this route, either leg of it?
+
+    Every pair is emitted in both directions, so half of all rows are the mirror
+    of a real one and lose money by construction. Showing them doubled the board
+    for no one's benefit.
+
+    Either side qualifies on its own, because the two are independent: a basis
+    farm is entered at a NEGATIVE spread and paid in funding -- SIREN sits at
+    -53% open with +138% APR -- while a spread trade can be worth taking with
+    funding against it. Only a route where both are against you is dead.
+    """
+    spread = _float_or_none(getattr(row, "executable_spread_pct", None))
+    if spread is not None and spread > 0:
+        return True
+    carry = _effective_funding_24h(row)
+    return carry is not None and carry > 0
 
 
 def unverifiable_price_outliers(rows: list["SpreadTerminalRow"]) -> set[str]:
