@@ -2552,3 +2552,29 @@ def test_a_shut_rail_still_shows_because_the_price_is_real() -> None:
     gate = source.split("if not include_unverified:")[1].split("normalized_sort")[0]
     assert "route_deliverable" not in gate, "deliverability must not remove a row from the board"
     assert "price_ratio_implausible" in gate and "leg_volume_too_thin" in gate
+
+
+def test_cross_venue_leveraged_tokens_are_not_arbitrage() -> None:
+    """Gate's ETH3L and XT's ETH3L are different products with their own NAV and
+    rebalancing, and the token cannot move between venues. They were every
+    remaining route above 100%."""
+    for token in ("ETH3L", "LTC3S", "BTC5L", "NVDA3S", "SPCX3L"):
+        assert api_spreads.is_venue_specific_leveraged_token(
+            _vrow(token=token, long_venue="Gate", short_venue="XT")
+        ) is True, token
+
+
+def test_a_tokenized_equity_is_not_mistaken_for_a_leveraged_product() -> None:
+    """SOXL is one underlying that several venues wrap; the letters before the L
+    are not a leverage multiple."""
+    for token in ("SOXL", "AMZNSTOCK", "SIREN", "VANRY", "ESPORTS", "10000SATS"):
+        assert api_spreads.is_venue_specific_leveraged_token(
+            _vrow(token=token, long_venue="Gate", short_venue="XT")
+        ) is False, token
+
+
+def test_a_venues_own_leveraged_spot_against_its_own_perp_is_left_alone() -> None:
+    """That pair is internally consistent -- one issuer, one NAV."""
+    assert api_spreads.is_venue_specific_leveraged_token(
+        _vrow(token="ETH3L", long_venue="Gate", short_venue="Gate")
+    ) is False

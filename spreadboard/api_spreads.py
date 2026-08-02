@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import json
 import os
+import re
 import statistics
 from threading import Lock
 import time
@@ -263,6 +264,7 @@ def load_spreads(
             for row in filtered
             if not price_ratio_implausible(row)
             and not leg_volume_too_thin(row)
+            and not is_venue_specific_leveraged_token(row)
             and row.route_key not in unverifiable
         ]
     normalized_sort = _normalize_sort(sort_by)
@@ -1190,6 +1192,28 @@ def leg_volume_too_thin(row: "SpreadTerminalRow") -> bool:
 # under the 3x identity bar. The test needs BOTH conditions: VANRY's real ~100%
 # edge is roughly 2x apart too, but its legs carry genuine turnover, so it stays.
 PRICE_CONSENSUS_DEVIATION = 0.5
+
+
+# Gate's ETH3L and XT's ETH3L are not the same instrument. Each venue mints its
+# own leveraged product with its own NAV, rebalancing schedule and inception
+# price, so the gap between them is a naming coincidence rather than an edge --
+# and it cannot be closed, because the token cannot move between venues. These
+# were every remaining route above 100%: SPCX3L, LTC3S, TSLA3L, ARB3L, LINK3L,
+# ETH3L, ETH5S, SUI3L, NVDA3S, BTC5L, CFX3L, all Gate against XT.
+#
+# SOXL and the other tokenized equities are NOT caught: they are one underlying
+# that several venues wrap, and the letters before the L are not a leverage
+# multiple.
+LEVERAGED_TOKEN_PATTERN = re.compile(r"^[A-Z0-9]+[2-5][LS]$")
+
+
+def is_venue_specific_leveraged_token(row: "SpreadTerminalRow") -> bool:
+    """True for a leveraged product that only exists inside one venue."""
+    token = str(getattr(row, "token", "") or "").upper()
+    if not LEVERAGED_TOKEN_PATTERN.match(token):
+        return False
+    # Same venue, both legs: a venue's own spot against its own perp is fine.
+    return getattr(row, "long_venue", None) != getattr(row, "short_venue", None)
 
 
 def unverifiable_price_outliers(rows: list["SpreadTerminalRow"]) -> set[str]:
