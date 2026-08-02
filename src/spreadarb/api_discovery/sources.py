@@ -586,7 +586,7 @@ class CexCcxtSource:
             [*context.reference_quotes, *quotes] if self.include_reference_quotes else quotes
         )
         if context.all_platform_tokens and quotes:
-            quotes = _verify_top_candidate_books(
+            verified = _verify_top_candidate_books(
                 quotes,
                 candidate_quotes=candidate_quotes,
                 exchange_ids=self.venues,
@@ -599,6 +599,24 @@ class CexCcxtSource:
                 errors=errors,
                 context=context,
             )
+            # Book verification used to REPLACE the quote list, so every market
+            # that lost a candidate slot was thrown away even though its ticker
+            # bid/ask was already in hand. That is why six of the ten largest
+            # coins -- XRP, DOGE, ADA, LINK, LTC, AVAX -- were absent from the
+            # board entirely, and why 54% of the reference product's rows named
+            # a venue pair we simply never emitted. Order books are expensive
+            # and stay rationed; keeping the cheap quotes costs nothing.
+            merged = {
+                (quote.venue, quote.market_type, quote.token.upper()): quote
+                for quote in quotes
+            }
+            merged.update(
+                {
+                    (quote.venue, quote.market_type, quote.token.upper()): quote
+                    for quote in verified
+                }
+            )
+            quotes = list(merged.values())
             candidate_quotes = (
                 [*context.reference_quotes, *quotes] if self.include_reference_quotes else quotes
             )
@@ -1027,6 +1045,13 @@ def _batched_cex_sources(
     return batches
 
 
+DEPTH_UNVERIFIED_BLOCKER = "depth_unverified"
+
+# Keeping every ticker quote means a token listed on ten venues yields ninety
+# ordered pairs. Coverage needs the token present, not every permutation of it.
+MAX_ROWS_PER_TOKEN = int(os.environ.get("SPREADARB_MAX_ROWS_PER_TOKEN", "8"))
+
+
 def pairwise_candidates(
     quotes: Iterable[MarketQuote],
     *,
@@ -1125,7 +1150,26 @@ def pairwise_candidates(
             ).to_row(allow_executor_ready=True)
         )
     rows.sort(key=lambda row: as_float(row.get("depth_weighted_spread_pct")) or -999, reverse=True)
+    if MAX_ROWS_PER_TOKEN > 0:
+        # Keep each token's strongest routes rather than every permutation of the
+        # venues it trades on: presence is what coverage needs, and an unbounded
+        # cross product would put a quarter of a million rows in the snapshot.
+        by_token: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            by_token.setdefault(str(row.get("token") or "").upper(), []).append(row)
+        kept: list[dict[str, Any]] = []
+        for token_rows in by_token.values():
+            token_rows.sort(key=_row_strength, reverse=True)
+            kept.extend(token_rows[:MAX_ROWS_PER_TOKEN])
+        rows = kept
     return rows
+
+
+def _row_strength(row: dict[str, Any]) -> float:
+    """Rank a token's own routes: the wider edge or the richer carry wins."""
+    spread = as_float(row.get("depth_weighted_spread_pct")) or 0.0
+    funding = as_float((row.get("notes") or {}).get("funding", {}).get("net_apr_pct")) or 0.0
+    return max(abs(spread), abs(funding) / 365.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1822,7 +1866,10 @@ def _ticker_quotes_for_symbols(
                 next_funding_ts_us=_as_int(funding.get("next_funding_ts_us")),
                 funding_interval_assumed=bool(funding.get("interval_assumed", False)),
                 volume_24h_usd=volume_24h_usd,
-                blockers=identity.blockers,
+                # bid_vwap/ask_vwap here are the top of book, not a depth-weighted
+                # ladder, so any route built from this quote must say so rather
+                # than imply a size that was never measured.
+                blockers=tuple([*identity.blockers, DEPTH_UNVERIFIED_BLOCKER]),
             )
         )
     return quotes

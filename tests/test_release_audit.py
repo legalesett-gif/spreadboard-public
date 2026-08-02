@@ -2249,3 +2249,36 @@ def test_the_service_warms_the_board_cache_after_writing() -> None:
     from scripts import run_spreadboard_service
 
     assert "_warm_board_cache()" in inspect.getsource(run_spreadboard_service.RefreshLoop.run_fast_quotes)
+
+
+def test_book_verification_upgrades_quotes_it_does_not_discard_them() -> None:
+    """Replacing the quote list with the verified subset threw away every market
+    that lost a candidate slot -- six of the ten largest coins were absent from
+    the board entirely, and 54% of the reference product's rows named a venue
+    pair we never emitted."""
+    import inspect
+    source = inspect.getsource(sources.CexCcxtSource.collect)
+    assert "verified = _verify_top_candidate_books" in source
+    assert "merged.update" in source
+    assert "quotes = _verify_top_candidate_books" not in source
+
+
+def test_ticker_only_quotes_declare_their_depth_unverified() -> None:
+    """Their vwap is the top of book, not a measured ladder; a route built from
+    one must not imply a size nobody checked."""
+    assert sources.DEPTH_UNVERIFIED_BLOCKER == "depth_unverified"
+    import inspect
+    source = inspect.getsource(sources._ticker_quotes_for_symbols)
+    assert "DEPTH_UNVERIFIED_BLOCKER" in source
+
+
+def test_each_token_keeps_only_its_strongest_routes() -> None:
+    """A token on ten venues yields ninety ordered pairs. Coverage needs the
+    token present, not every permutation of it."""
+    assert sources.MAX_ROWS_PER_TOKEN > 0
+    strong = {"token": "AAA", "depth_weighted_spread_pct": 5.0, "notes": {}}
+    weak = {"token": "AAA", "depth_weighted_spread_pct": 0.01, "notes": {}}
+    carry = {"token": "AAA", "depth_weighted_spread_pct": 0.0,
+             "notes": {"funding": {"net_apr_pct": 900.0}}}
+    assert sources._row_strength(strong) > sources._row_strength(weak)
+    assert sources._row_strength(carry) > sources._row_strength(weak)
