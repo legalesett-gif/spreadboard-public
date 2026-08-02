@@ -2405,3 +2405,37 @@ def test_a_wide_spread_still_wins_on_magnitude() -> None:
     wide = {"token": "X", "depth_weighted_spread_pct": -80.0, "notes": {}}
     narrow = {"token": "X", "depth_weighted_spread_pct": 0.2, "notes": {}}
     assert sources._row_strength(wide) > sources._row_strength(narrow)
+
+
+def test_a_builder_market_must_agree_with_the_price_the_cex_quotes(monkeypatch) -> None:
+    """xyz:MU, km:MU and mkts:MU are different instruments wearing one ticker.
+    Pairing the wrong one against MEXC's MUSTOCK invented a 27% spread where the
+    real gap is 0.1%."""
+    from spreadarb.api_discovery.models import MarketQuote
+
+    source = sources.HyperliquidBuilderDexSource()
+    payloads = {
+        "perpDexs": [{"name": "xyz"}, {"name": "km"}],
+        "metaAndAssetCtxs": None,
+    }
+    calls = {"n": 0}
+
+    def fake_info(payload, timeout):
+        if payload["type"] == "perpDexs":
+            return payloads["perpDexs"]
+        calls["n"] += 1
+        price = "848.0" if calls["n"] == 1 else "1080.0"   # km:MU trades elsewhere
+        return [{"universe": [{"name": f"{payload['dex']}:MU"}]},
+                [{"midPx": price, "funding": "0.00001", "dayNtlVlm": "90000"}]]
+
+    monkeypatch.setattr(source, "_info", fake_info)
+    ts = int(time.time() * 1_000_000)
+    ref = (MarketQuote(token="MUSTOCK", venue="Mexc", market_type="Futures", bid=848.0, ask=849.0,
+                       bid_vwap=848.0, ask_vwap=849.0, quote_ts_us=ts, source_name="cex",
+                       symbol="MUSTOCK/USDT:USDT"),)
+    ctx = sources.DiscoveryContext(tokens=(), watchlist={}, deadline_monotonic=None,
+                                   reference_quotes=ref, min_spread_pct=0.05,
+                                   min_funding_apr_pct=0.01)
+    result = source.collect(ctx)
+    symbols = {q.symbol for q in result.quotes}
+    assert symbols == {"xyz:MU"}, f"only the market that agrees on price may pair, got {symbols}"

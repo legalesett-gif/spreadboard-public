@@ -658,6 +658,19 @@ class CexCcxtSource:
         return SourceResult(status=status, rows=tuple(rows), quotes=tuple(quotes))
 
 
+# A builder market more than this away from what the CEX side quotes for the same
+# token is a different instrument wearing the same ticker.
+BUILDER_DEX_PRICE_TOLERANCE = 0.25
+
+
+def _quote_mid(quote: "MarketQuote") -> float | None:
+    bid = as_float(getattr(quote, "bid", None))
+    ask = as_float(getattr(quote, "ask", None))
+    if bid and ask:
+        return (bid + ask) / 2.0
+    return bid or ask
+
+
 class HyperliquidBuilderDexSource:
     """Hyperliquid's builder DEXes, which plain CCXT cannot see.
 
@@ -693,6 +706,16 @@ class HyperliquidBuilderDexSource:
         # Only name a token the CEX side already quotes. Inventing `<TICKER>STOCK`
         # for every builder market would fabricate assets nobody lists.
         known = {quote.token.upper() for quote in context.reference_quotes}
+        # Several builder DEXes list the same ticker as different instruments:
+        # xyz:MU, km:MU and mkts:MU are not the same product and do not trade at
+        # the same price. Pairing the wrong one against MEXC's MUSTOCK invented a
+        # 27% spread where the real gap is 0.1%. Same asset means same price, so
+        # anchor on what the CEX side is quoting and reject the rest.
+        reference_price: dict[str, float] = {}
+        for quote in context.reference_quotes:
+            mid = _quote_mid(quote)
+            if mid:
+                reference_price.setdefault(quote.token.upper(), mid)
         dex_names: list[str] = []
         try:
             for entry in self._info({"type": "perpDexs"}, context.remaining_timeout(15.0)) or []:
@@ -728,6 +751,10 @@ class HyperliquidBuilderDexSource:
                 asset = contexts[index] or {}
                 mid = as_float(asset.get("midPx")) or as_float(asset.get("markPx"))
                 if not mid or mid <= 0:
+                    continue
+                anchor = reference_price.get(token)
+                if anchor and abs(mid / anchor - 1.0) > BUILDER_DEX_PRICE_TOLERANCE:
+                    errors.append(f"{self.venue}:{symbol}:price_disagrees_with_{token}")
                     continue
                 funding_rate = as_float(asset.get("funding"))
                 quotes.append(
