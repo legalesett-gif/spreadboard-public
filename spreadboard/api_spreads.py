@@ -97,7 +97,10 @@ class SpreadTerminalRow:
     mirage_guarded: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        # asdict() recurses and deep-copies; every field on this row is a scalar
+        # or a flat list, so the recursion was 9.8s of pure waste per request at
+        # 34k rows. Callers treat the result as read-only.
+        return dict(self.__dict__)
 
 
 def load_spreads(
@@ -403,7 +406,10 @@ _SNAPSHOT_CACHE_LOCK = Lock()
 _ROW_CACHE: dict[tuple[str, int], tuple[float, list["SpreadTerminalRow"]]] = {}
 _ROW_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_ROW_CACHE_SECONDS", "5"))
 _RESULT_CACHE: dict[tuple[Any, ...], tuple[int, float, dict[str, Any]]] = {}
-_RESULT_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_RESULT_CACHE_SECONDS", "10"))
+_RESULT_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_RESULT_CACHE_SECONDS", "90"))
+# Shortlist a few more tokens than we display so lane filtering inside the
+# grouping cannot leave the headline short.
+TOP_GROUP_SHORTLIST = 24
 
 
 def _cached_snapshot(path: Path) -> dict[str, Any]:
@@ -1260,14 +1266,32 @@ def _summary(
 
 
 def _top_unique_groups(rows: list[SpreadTerminalRow], *, metric: str) -> list[dict[str, Any]]:
-    groups = _group_rows(
-        [
-            row
-            for row in rows
-            if row.freshness == "fresh"
-            and (metric != "funding" or _effective_funding_24h(row) is not None)
+    candidates = [
+        row
+        for row in rows
+        if row.freshness == "fresh"
+        and (metric != "funding" or _effective_funding_24h(row) is not None)
+    ]
+    # Grouping builds a public dict for every route of every token. Keeping only
+    # the top 8 afterwards meant doing that for the whole universe three times a
+    # request -- 17s at 12k rows. Rank tokens on the cheap row-level metric
+    # first, then group just those.
+    best_by_token: dict[str, float] = {}
+    for row in candidates:
+        value = (
+            (_effective_funding_24h(row) or 0.0)
+            if metric == "funding"
+            else _entrance_spread(row)
+        )
+        if value > best_by_token.get(row.token, float("-inf")):
+            best_by_token[row.token] = value
+    shortlist = {
+        token
+        for token, _ in sorted(best_by_token.items(), key=lambda item: -item[1])[
+            : TOP_GROUP_SHORTLIST
         ]
-    )
+    }
+    groups = _group_rows([row for row in candidates if row.token in shortlist])
     if metric == "edge":
         groups = [
             group

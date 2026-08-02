@@ -2217,3 +2217,35 @@ def test_a_shut_rail_does_not_disqualify_a_funding_farm() -> None:
     assert api_spreads.lane_rankable(farm) is True
     transfer = _vrow(route_kind="SPOT", token="SIREN", short_deposit_enabled=False)
     assert api_spreads.lane_rankable(transfer) is False
+
+
+def test_row_dicts_are_not_deep_copied() -> None:
+    """asdict() recursed over every field of 34k rows -- 9.8s a request of pure
+    waste, since every field here is a scalar or a flat list."""
+    row = api_spreads._row_from_api(
+        {"token": "AAA", "long_venue": "Gate", "long_market_type": "Futures",
+         "short_venue": "Bybit", "short_market_type": "Futures",
+         "quote_ts_us": int(time.time() * 1_000_000), "executable_spread_pct": 1.0},
+        bucket="api_discovered", now=time.time(),
+    )
+    payload = row.to_dict()
+    assert payload["token"] == "AAA"
+    assert payload is not row.__dict__, "callers must not be handed the row's own dict"
+
+
+def test_headline_lists_do_not_group_the_whole_universe() -> None:
+    """Grouping builds a public dict per route; keeping only the top 8 afterwards
+    meant paying that for every token, three times a request."""
+    import inspect
+    source = inspect.getsource(api_spreads._top_unique_groups)
+    assert "TOP_GROUP_SHORTLIST" in source
+    assert api_spreads.TOP_GROUP_SHORTLIST >= api_spreads.DEFAULT_LIMIT // 2
+
+
+def test_the_service_warms_the_board_cache_after_writing() -> None:
+    """Every snapshot write invalidates the request cache; the warm must happen
+    off the request path or a member pays the rebuild."""
+    import inspect
+    from scripts import run_spreadboard_service
+
+    assert "_warm_board_cache()" in inspect.getsource(run_spreadboard_service.RefreshLoop.run_fast_quotes)

@@ -25,6 +25,7 @@ for import_path in (ROOT / "src", ROOT):
 
 from spreadboard import (
     alerts,
+    api_spreads,
     board,
     chart_catalog,
     live,
@@ -275,6 +276,7 @@ class RefreshLoop:
                     else:
                         inserted = 0
             _log(f"fast quotes {summary} history_inserted={inserted}")
+            _warm_board_cache()
             self.stop_event.wait(interval)
 
     def _refresh_fast_quotes(self) -> dict[str, Any]:
@@ -441,6 +443,19 @@ def main() -> int:
         refresh_loop.stop()
         server.server_close()
     return 0
+
+
+def _warm_board_cache() -> None:
+    """Pay the grouping cost here, not in a member's page load.
+
+    Every snapshot write invalidates the request cache, and rebuilding 12k rows
+    into a public payload takes seconds. Doing it right after the write means the
+    first real request finds it already done.
+    """
+    try:
+        api_spreads.load_spreads(limit=api_spreads.DEFAULT_LIMIT)
+    except Exception as exc:  # noqa: BLE001 - warming is best effort.
+        _log(f"board cache warm skipped: {type(exc).__name__}: {exc}")
 
 
 def _log(message: str) -> None:
