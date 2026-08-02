@@ -2885,3 +2885,34 @@ def test_the_stream_reports_only_what_changed(tmp_path, monkeypatch) -> None:
     second = server._board_stream_rows(tmp_path / "b.jsonl", {})
     changed = {k: v for k, v in second.items() if first.get(k) != v}
     assert set(changed) == {"A|x"}, "only the route that moved is worth sending"
+
+
+def test_a_venues_markets_are_loaded_once_not_once_per_subscription() -> None:
+    """CCXT Pro loads markets implicitly on the first watch call. With hundreds
+    of tasks starting together they all fired the same metadata request at the
+    same venue -- 114 Gate timeouts, 42 Binance, 32 Bybit, 30 XT in eight
+    minutes, every one retrying with backoff, and not a single book written."""
+    import asyncio, inspect
+    from scripts import websocket_book_worker
+
+    source = inspect.getsource(websocket_book_worker.BookWorker._watch)
+    assert "_ensure_markets" in source, "markets must be loaded before watching"
+
+    worker = websocket_book_worker.BookWorker.__new__(websocket_book_worker.BookWorker)
+    worker._market_locks = {}
+    worker._markets_ready = set()
+    calls = {"n": 0}
+
+    class Client:
+        async def load_markets(self):
+            calls["n"] += 1
+            await asyncio.sleep(0.01)
+
+    async def drive():
+        client = Client()
+        await asyncio.gather(*[
+            worker._ensure_markets("Gate", "Spot", client) for _ in range(25)
+        ])
+
+    asyncio.run(drive())
+    assert calls["n"] == 1, f"one request per venue, not {calls['n']}"

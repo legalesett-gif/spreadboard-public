@@ -42,6 +42,8 @@ class BookWorker:
         self.tasks: dict[LegKey, asyncio.Task[None]] = {}
         self._desired: set[LegKey] = set()
         self._desired_stamp: int | None = None
+        self._market_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._markets_ready: set[tuple[str, str]] = set()
 
     async def run(self) -> None:
         while not self.stop.is_set():
@@ -83,6 +85,7 @@ class BookWorker:
         while not self.stop.is_set():
             try:
                 client = self._client(venue, market_type)
+                await self._ensure_markets(venue, market_type, client)
                 book = await client.watch_order_book(
                     symbol,
                     limit=_websocket_depth_limit(venue, market_type),
@@ -118,6 +121,26 @@ class BookWorker:
                 await asyncio.sleep(delay)
                 delay = min(30.0, delay * 2)
 
+    async def _ensure_markets(self, venue: str, market_type: str, client: Any) -> None:
+        """Load a venue's markets once, not once per subscription.
+
+        CCXT Pro loads markets implicitly on the first watch call. With hundreds
+        of tasks starting together they all fired the same metadata request at
+        the same venue: 114 Gate timeouts, 42 Binance, 32 Bybit and 30 XT in
+        eight minutes, every one retrying with backoff, and not a single book
+        written. Serialising it per venue turns a thundering herd into one
+        request.
+        """
+        key = (venue, market_type)
+        if key in self._markets_ready:
+            return
+        lock = self._market_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            if key in self._markets_ready:
+                return
+            await client.load_markets()
+            self._markets_ready.add(key)
+
     def _client(self, venue: str, market_type: str) -> Any:
         key = (venue, market_type)
         current = self.clients.get(key)
@@ -142,7 +165,7 @@ class BookWorker:
         current = klass(
             {
                 "enableRateLimit": True,
-                "timeout": 15_000,
+                "timeout": 45_000,
                 "options": {"defaultType": "spot" if market_type == "Spot" else "swap"},
             }
         )
