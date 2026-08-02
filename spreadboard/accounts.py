@@ -856,6 +856,81 @@ def add_market_alert_rule(
         connection.close()
 
 
+def update_market_alert_rule(
+    user_id: int,
+    rule_id: int,
+    payload: dict[str, Any],
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    """Edit a member's own alert: threshold, direction, stability, on/off.
+
+    Changing what an alert watches resets its trigger state, otherwise a rule
+    edited while already met would stay silent until it lapsed and re-armed.
+    """
+    fields: list[str] = []
+    values: list[Any] = []
+    if "threshold" in payload:
+        fields.append("threshold = ?")
+        values.append(float(payload["threshold"]))
+    if "direction" in payload:
+        fields.append("operator = ?")
+        values.append("lte" if str(payload["direction"]) == "below" else "gte")
+    if "stability_seconds" in payload:
+        fields.append("stability_seconds = ?")
+        values.append(max(0, min(3600, int(payload["stability_seconds"] or 0))))
+    if "enabled" in payload:
+        fields.append("enabled = ?")
+        values.append(int(bool(payload["enabled"])))
+    if not fields:
+        return get_market_alert_rule(user_id, rule_id, db_path=db_path)
+    fields.extend(["condition_since = NULL", "last_condition_met = 0", "updated_at = ?"])
+    values.append(_utc_iso())
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            f"UPDATE market_alert_rules SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
+            (*values, int(rule_id), int(user_id)),
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM market_alert_rules WHERE id = ? AND user_id = ?",
+            (int(rule_id), int(user_id)),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        connection.close()
+
+
+def get_market_alert_rule(
+    user_id: int, rule_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> dict[str, Any] | None:
+    connection = _connect(db_path)
+    try:
+        row = connection.execute(
+            "SELECT * FROM market_alert_rules WHERE id = ? AND user_id = ?",
+            (int(rule_id), int(user_id)),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        connection.close()
+
+
+def delete_market_alert_rule(
+    user_id: int, rule_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> bool:
+    connection = _connect(db_path)
+    try:
+        cursor = connection.execute(
+            "DELETE FROM market_alert_rules WHERE id = ? AND user_id = ?",
+            (int(rule_id), int(user_id)),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    finally:
+        connection.close()
+
+
 def list_market_alert_rules(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     connection = _connect(db_path)
     try:

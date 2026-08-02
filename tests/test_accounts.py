@@ -129,3 +129,57 @@ def test_telegram_link_is_one_time_and_chat_cannot_be_reassigned(
     second_token = accounts.create_telegram_link_token(second["id"], db_path=path)
     with pytest.raises(ValueError, match="telegram_chat_already_linked"):
         accounts.bind_telegram_chat(second_token, 12345, db_path=path)
+
+
+def _alert_user(tmp_path, monkeypatch):
+    path = _database(tmp_path, monkeypatch)
+    user = accounts.create_user(email="a@b.c", display_name="A", password="member-password-strong",
+                                subscription_status="active", subscription_days=30, db_path=path)
+    return path, user
+
+
+def test_a_member_can_edit_and_delete_their_own_alert(tmp_path, monkeypatch) -> None:
+    """Members create alerts against a route and must be able to change the
+    threshold, the stability window, turn one off, or remove it."""
+    db, user = _alert_user(tmp_path, monkeypatch)
+    rule = accounts.add_market_alert_rule(user["id"] if isinstance(user, dict) else user.id, {
+        "route_key": "SIREN|Kucoin|Spot|Gate|Futures", "symbol": "SIREN",
+        "type": "token_spread", "direction": "above", "threshold": 32.0,
+        "stability_seconds": 10, "enabled": True}, db_path=db)
+    uid = user["id"] if isinstance(user, dict) else user.id
+
+    updated = accounts.update_market_alert_rule(uid, rule["id"],
+        {"threshold": 45.0, "stability_seconds": 21, "enabled": False}, db_path=db)
+    assert updated["threshold"] == 45.0
+    assert updated["stability_seconds"] == 21
+    assert updated["enabled"] == 0
+
+    assert accounts.delete_market_alert_rule(uid, rule["id"], db_path=db) is True
+    assert accounts.get_market_alert_rule(uid, rule["id"], db_path=db) is None
+
+
+def test_editing_an_alert_rearms_it(tmp_path, monkeypatch) -> None:
+    """A rule edited while its condition was already met would otherwise stay
+    silent until it lapsed and re-armed itself."""
+    db, user = _alert_user(tmp_path, monkeypatch)
+    uid = user["id"] if isinstance(user, dict) else user.id
+    rule = accounts.add_market_alert_rule(uid, {
+        "route_key": "X|A|Spot|B|Futures", "symbol": "X", "type": "token_spread",
+        "direction": "above", "threshold": 5.0, "stability_seconds": 0, "enabled": True}, db_path=db)
+    accounts.record_market_alert_evaluation(uid, rule["id"], value=9.0, title="t", body="b", db_path=db)
+    assert accounts.get_market_alert_rule(uid, rule["id"], db_path=db)["last_condition_met"] == 1
+    updated = accounts.update_market_alert_rule(uid, rule["id"], {"threshold": 6.0}, db_path=db)
+    assert updated["last_condition_met"] == 0 and updated["condition_since"] is None
+
+
+def test_a_member_cannot_touch_someone_elses_alert(tmp_path, monkeypatch) -> None:
+    db, user = _alert_user(tmp_path, monkeypatch)
+    uid = user["id"] if isinstance(user, dict) else user.id
+    rule = accounts.add_market_alert_rule(uid, {
+        "route_key": "X|A|Spot|B|Futures", "symbol": "X", "type": "token_spread",
+        "direction": "above", "threshold": 5.0, "stability_seconds": 0, "enabled": True}, db_path=db)
+    other = accounts.create_user(email="c@d.e", display_name="C", password="member-password-strong",
+                                 subscription_status="active", subscription_days=30, db_path=db)
+    other_id = other["id"] if isinstance(other, dict) else other.id
+    assert accounts.update_market_alert_rule(other_id, rule["id"], {"threshold": 1.0}, db_path=db) is None
+    assert accounts.delete_market_alert_rule(other_id, rule["id"], db_path=db) is False

@@ -2477,3 +2477,31 @@ def test_rail_reopens_reach_each_member_not_only_the_group(monkeypatch) -> None:
              "route": {"long_venue": "OKX DEX 1", "short_venue": "Kucoin"}}
     assert watcher._push_to_members(alert, rail_watch.format_alert(alert)) == 1
     assert sent and sent[0]["user_key"] == "u-key" and "SIREN" in sent[0]["title"]
+
+
+def test_a_member_sees_their_alerts_against_the_live_value(tmp_path, monkeypatch) -> None:
+    """Creating an alert was possible but nothing showed it afterwards: a member
+    could not tell what they had armed or how far the market was from it."""
+    rules = [{"id": 4, "symbol": "SIREN", "route_key": "SIREN|Kucoin|Spot|Gate|Futures",
+              "metric": "open_spread_pct", "operator": "gte", "threshold": 32.0,
+              "stability_seconds": 10, "enabled": 1}]
+    monkeypatch.setattr(server.accounts, "current_user",
+                        lambda *a, **k: SimpleNamespace(id=1))
+    monkeypatch.setattr(server.accounts, "list_market_alert_rules", lambda *a, **k: rules)
+    monkeypatch.setattr(server, "api_market_spreads", lambda *a, **k: {"rows": [
+        {"route_key": "SIREN|Kucoin|Spot|Gate|Futures", "executable_spread_pct": 15.13}]})
+    html = server.render_member_alert_rules(tmp_path / "board.jsonl")
+    assert "SIREN" in html
+    assert "Kucoin Spot -&gt; Gate Futures" in html, "the member must see which route"
+    assert "15.13" in html.replace(",", "."), "the live value must be shown next to the level"
+    assert 'value="32.0"' in html and "3600" in html, "threshold and hold window are editable"
+    assert "data-alert-save" in html and "data-alert-delete" in html
+
+
+def test_the_alerts_page_no_longer_claims_it_cannot_send() -> None:
+    """It said 'This page does not send Pushover messages', which stopped being
+    true once per-member delivery landed."""
+    import inspect
+    source = inspect.getsource(server.render_alerts_page)
+    assert "does not send Pushover" not in source
+    assert "render_member_alert_rules" in source

@@ -558,6 +558,29 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/market-alert-rules":
                 rule = accounts.add_market_alert_rule(user.id, payload, db_path=self.server.accounts_path)
                 self._send_json({"ok": True, "rule": rule}, status=HTTPStatus.CREATED)
+            elif parsed.path.startswith("/api/market-alert-rules/"):
+                # This server speaks GET and POST only, so a member's edits and
+                # deletes ride on POST sub-paths rather than PATCH/DELETE.
+                tail = parsed.path.removeprefix("/api/market-alert-rules/")
+                rule_id, _, action = tail.partition("/")
+                if not rule_id.isdigit():
+                    self._send_json({"ok": False, "error": "unknown_rule"}, status=HTTPStatus.NOT_FOUND)
+                elif action == "delete":
+                    removed = accounts.delete_market_alert_rule(
+                        user.id, int(rule_id), db_path=self.server.accounts_path
+                    )
+                    self._send_json(
+                        {"ok": removed},
+                        status=HTTPStatus.OK if removed else HTTPStatus.NOT_FOUND,
+                    )
+                else:
+                    rule = accounts.update_market_alert_rule(
+                        user.id, int(rule_id), payload, db_path=self.server.accounts_path
+                    )
+                    self._send_json(
+                        {"ok": rule is not None, "rule": rule},
+                        status=HTTPStatus.OK if rule else HTTPStatus.NOT_FOUND,
+                    )
             elif parsed.path == "/api/notifications/read":
                 count = accounts.mark_notifications_read(user.id, db_path=self.server.accounts_path)
                 self._send_json({"ok": True, "updated": count})
@@ -5991,6 +6014,135 @@ def render_profile_pushover(flags: dict[str, Any]) -> str:
     """
 
 
+def render_member_alert_rules(board_path: Path) -> str:
+    """A member's own alerts, each against the value it is watching right now.
+
+    Creating an alert was possible but nothing showed it afterwards, so a member
+    could not tell what they had armed, how far the market was from it, or change
+    their mind. Threshold, direction, stability and on/off are all editable here.
+    """
+    user = accounts.current_user()
+    if user is None:
+        return ""
+    rules = accounts.list_market_alert_rules(user.id)
+    if not rules:
+        return """
+    <section class="member-alerts">
+      <div class="profile-section-title"><div><span class="page-kicker">My alerts</span>
+        <h2>You have no alerts yet</h2>
+        <p>Open any route on the board and use "Alert" to watch its spread or funding.
+           Alerts are delivered to your own Pushover account.</p></div></div>
+    </section>"""
+    market = api_market_spreads(board_path, {"limit": ["0"]})
+    current: dict[str, dict[str, Any]] = {
+        str(row.get("route_key") or ""): row
+        for row in (market.get("rows") or [])
+        if isinstance(row, dict)
+    }
+    cards = "".join(
+        render_member_alert_card(rule, current.get(str(rule.get("route_key") or "")))
+        for rule in rules
+    )
+    return f"""
+    <section class="member-alerts">
+      <div class="profile-section-title">
+        <div><span class="page-kicker">My alerts</span><h2>{len(rules)} alert{"s" if len(rules) != 1 else ""} armed</h2>
+        <p>Delivered to your Pushover account. An alert fires once when the level holds
+           for its stability window, and re-arms after the market moves back.</p></div>
+      </div>
+      <div class="member-alert-grid">{cards}</div>
+    </section>
+    {render_member_alert_script()}"""
+
+
+def render_member_alert_card(rule: dict[str, Any], row: dict[str, Any] | None) -> str:
+    metric = str(rule.get("metric") or "")
+    is_funding = metric == "funding_24h_pct"
+    label = "24h funding" if is_funding else "open spread"
+    value = None
+    if row is not None:
+        value = row.get("funding_24h_pct") if is_funding else row.get("executable_spread_pct")
+    threshold = _float_or_none(rule.get("threshold")) or 0.0
+    above = str(rule.get("operator") or "gte") == "gte"
+    enabled = bool(rule.get("enabled"))
+    live = _float_or_none(value)
+    met = live is not None and ((live >= threshold) if above else (live <= threshold))
+    state = "armed" if enabled else "paused"
+    return f"""
+    <article class="member-alert-card {h(state)} {'met' if met and enabled else ''}" data-alert-id="{h(rule.get('id'))}">
+      <div class="member-alert-head">
+        <span class="member-alert-state">{'Armed' if enabled else 'Paused'}</span>
+        <span class="member-alert-kind">{h(label)}</span>
+      </div>
+      <strong class="member-alert-token">{h(rule.get('symbol'))}</strong>
+      <div class="member-alert-route">{h(route_label_from_key(str(rule.get('route_key') or '')))}</div>
+      <div class="member-alert-now">Now <strong>{fmt_signed_pct(live, digits=3) if live is not None else 'no live quote'}</strong></div>
+      <label><span>Fires when {'at or above' if above else 'at or below'}</span>
+        <input type="number" step="0.0001" name="threshold" value="{h(threshold)}"></label>
+      <label><span>Direction</span>
+        <select name="direction">
+          <option value="above" {'selected' if above else ''}>at or above</option>
+          <option value="below" {'selected' if not above else ''}>at or below</option>
+        </select></label>
+      <label><span>Hold for (seconds)</span>
+        <input type="number" min="0" max="3600" name="stability_seconds" value="{h(rule.get('stability_seconds') or 0)}"></label>
+      <label class="member-alert-toggle"><span>Enabled</span>
+        <input type="checkbox" name="enabled" {'checked' if enabled else ''}></label>
+      <div class="member-alert-actions">
+        <button type="button" data-alert-save>Save</button>
+        <button type="button" data-alert-delete>Delete</button>
+      </div>
+      <em data-alert-status></em>
+    </article>"""
+
+
+def route_label_from_key(route_key: str) -> str:
+    parts = [part for part in route_key.split("|") if part]
+    if len(parts) >= 5:
+        return f"{parts[1]} {parts[2]} -> {parts[3]} {parts[4]}"
+    return route_key or "route"
+
+
+def render_member_alert_script() -> str:
+    return """
+    <script>
+    (function(){
+      const csrf = () => document.querySelector('[data-logout]')?.dataset.csrf
+        || JSON.parse(document.getElementById('account-session')?.textContent || '{}').csrf_token || '';
+      async function send(path, body){
+        const response = await fetch(path, {method:'POST',
+          headers:{'Content-Type':'application/json','X-CSRF-Token':csrf()},
+          body: JSON.stringify(body || {})});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || data.ok === false) throw new Error(data.error || 'Could not save');
+        return data;
+      }
+      document.addEventListener('click', async (event) => {
+        const card = event.target.closest('[data-alert-id]');
+        if(!card) return;
+        const id = card.dataset.alertId;
+        const status = card.querySelector('[data-alert-status]');
+        if(event.target.matches('[data-alert-save]')){
+          try{
+            await send(`/api/market-alert-rules/${id}`, {
+              threshold: Number(card.querySelector('[name=threshold]').value),
+              direction: card.querySelector('[name=direction]').value,
+              stability_seconds: Number(card.querySelector('[name=stability_seconds]').value || 0),
+              enabled: card.querySelector('[name=enabled]').checked});
+            status.textContent = 'Saved.';
+          }catch(error){ status.textContent = error.message; }
+        }
+        if(event.target.matches('[data-alert-delete]')){
+          try{
+            await send(`/api/market-alert-rules/${id}/delete`, {});
+            card.remove();
+          }catch(error){ status.textContent = error.message; }
+        }
+      });
+    })();
+    </script>"""
+
+
 def render_alerts_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
     flags = alerts.config_flags(config)
     preview = api_alert_preview(board_path, query)
@@ -6002,11 +6154,12 @@ def render_alerts_page(board_path: Path, config: dict[str, Any], query: dict[str
     )
     body = f"""
     <section class="alerts-page" data-refresh="30">
+      {render_member_alert_rules(board_path)}
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Alerts</span>
-          <h1>Preview-only alert planner</h1>
-          <p>Spread, funding, freshness, route-change, and community-call triggers. This page does not send Pushover messages.</p>
+          <h1>Your alerts</h1>
+          <p>Watch any route's spread or funding and get a push on your own phone when it hits your level.</p>
         </div>
         <div class="intel-actions">
           {telegram_button}
@@ -8854,6 +9007,24 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .terminal-leg small {{ color: var(--terminal-muted); font-size: 10px; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 .market-number-cell, .market-age-cell {{ gap: 2px; }}
 .profile-note {{ margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; font-size: 0.92rem; line-height: 1.45; }}
+.member-alerts {{ margin: 0 0 18px; }}
+.member-alert-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }}
+.member-alert-card {{ display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 12px; border: 1px solid #dedede; background: #fff; }}
+.member-alert-card.paused {{ opacity: 0.66; }}
+.member-alert-card.met {{ border-color: #2f9e6b; box-shadow: 0 0 0 2px rgba(47,158,107,0.16); }}
+.member-alert-head {{ display: flex; justify-content: space-between; font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.04em; color: #6a6a6a; }}
+.member-alert-state {{ font-weight: 700; }}
+.member-alert-card.met .member-alert-state {{ color: #2f9e6b; }}
+.member-alert-token {{ font-size: 1.18rem; }}
+.member-alert-route {{ font-size: 0.82rem; color: #666; }}
+.member-alert-now {{ font-size: 0.9rem; }}
+.member-alert-card label {{ display: flex; flex-direction: column; gap: 3px; font-size: 0.8rem; color: #555; }}
+.member-alert-card input, .member-alert-card select {{ padding: 6px 8px; border-radius: 6px; border: 1px solid #d5d5d5; }}
+.member-alert-toggle {{ flex-direction: row; align-items: center; justify-content: space-between; }}
+.member-alert-actions {{ display: flex; gap: 8px; }}
+.member-alert-actions button {{ flex: 1; padding: 7px 10px; border-radius: 7px; border: 1px solid #d5d5d5; background: #f7f7f7; cursor: pointer; }}
+.member-alert-actions button[data-alert-delete] {{ color: #a12; }}
+.member-alert-card em {{ font-size: 0.78rem; color: #2f9e6b; min-height: 1em; }}
 .profile-note.ok {{ background: #eefaf3; border: 1px solid #bfe6d2; color: #1d5c3c; }}
 .profile-note.warn {{ background: #fff6e8; border: 1px solid #f0d3a1; color: #7a4c07; }}
 .profile-state.ok {{ background: #eefaf3; color: #1d5c3c; }}
