@@ -886,7 +886,16 @@ def test_fast_quote_refresh_preserves_broad_snapshot_freshness(
     assert result["updated_at"] != "2020-01-01T00:00:00Z"
     assert saved["updated_at"] == "2020-01-01T00:00:00Z"
     assert saved["expires_at"] == "2020-01-01T00:01:00Z"
-    assert saved["fast_quote_refresh"]["updated_at"] == result["updated_at"]
+
+    # The refreshed routes now land in a delta beside the snapshot instead of
+    # rewriting it. Rewriting a 50-77MB file every 60s to change a few hundred
+    # rows invalidated every cache and forced a full rebuild each time.
+    delta = json.loads(
+        (snapshot_path.with_name("api_discovery_fast_quotes.json")).read_text(encoding="utf-8")
+    )
+    assert delta["fast_quote_refresh"]["updated_at"] == result["updated_at"]
+    assert delta["rows"], "the routes that were re-quoted must be in the delta"
+    assert saved.get("fast_quote_refresh") is None, "the snapshot must not be rewritten"
 
 
 def test_history_hides_legacy_dex_identity_outliers(tmp_path: Path) -> None:
@@ -1048,8 +1057,12 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
 
     monkeypatch.setattr(refresher, "_leg_quote", quote_leg)
     result = refresher.refresh(snapshot_path, route_limit=200)
-    saved = json.loads(snapshot_path.read_text(encoding="utf-8"))
-    updated = [row for row in saved["api_discovered_rows"] if row.get("fast_quote_verified_at")]
+    # Re-quoted routes are published as a delta rather than by rewriting the
+    # snapshot, so lane coverage is asserted against that.
+    saved = json.loads(
+        (snapshot_path.with_name("api_discovery_fast_quotes.json")).read_text(encoding="utf-8")
+    )
+    updated = [row for row in saved["rows"] if row.get("fast_quote_verified_at")]
 
     assert result["selected_routes"] == 142
     assert result["updated_routes"] == 142

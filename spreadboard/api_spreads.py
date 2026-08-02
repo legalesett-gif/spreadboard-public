@@ -441,6 +441,53 @@ _RESULT_CACHE_MAX_ENTRIES = int(os.environ.get("SPREADBOARD_RESULT_CACHE_ENTRIES
 TOP_GROUP_SHORTLIST = 24
 
 
+def _fast_quote_delta_path(path: Path) -> Path:
+    return Path(path).with_name("api_discovery_fast_quotes.json")
+
+
+def _mtime_ns(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def _apply_fast_quote_delta(
+    rows: list["SpreadTerminalRow"],
+    delta_path: Path,
+    *,
+    now: float,
+    metadata: dict[str, dict[str, Any]],
+    rails: dict[str, dict[str, Any]],
+) -> list["SpreadTerminalRow"]:
+    """Overlay the routes the fast worker just re-quoted.
+
+    Only a few hundred routes move each minute. Rebuilding all of them from a
+    rewritten snapshot cost a full parse and re-materialisation every 60s, which
+    is what kept the board pinned at 100% of a small machine.
+    """
+    try:
+        payload = json.loads(delta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return rows
+    fresh: dict[str, SpreadTerminalRow] = {}
+    for raw in payload.get("rows") or []:
+        if not isinstance(raw, dict):
+            continue
+        bucket = (
+            "dex_discovered_rows"
+            if str(raw.get("source_kind") or "") == "dex_discovered"
+            else "api_discovered_rows"
+        )
+        row = _row_from_api(raw, bucket=bucket, now=now, metadata=metadata, rails=rails)
+        fresh[row.route_key] = row
+    if not fresh:
+        return rows
+    merged = [fresh.pop(row.route_key, row) for row in rows]
+    merged.extend(fresh.values())
+    return merged
+
+
 def _cached_snapshot(path: Path) -> dict[str, Any]:
     """Parse the snapshot without holding onto the raw tree.
 
@@ -480,7 +527,12 @@ def _load_api_discovery_rows(
     # Building a dataclass per row is the other per-request cost, and it grows
     # with the universe. Only freshness and age depend on `now`, and the board
     # itself only moves every 20s, so a few seconds of reuse is invisible.
-    cache_key = (str(path), path.stat().st_mtime_ns)
+    #
+    # The delta is keyed separately: the discovery snapshot changes every 20
+    # minutes, the fast-quote delta every minute. Keying on both means a price
+    # refresh no longer forces the whole board to be rebuilt.
+    delta_path = _fast_quote_delta_path(path)
+    cache_key = (str(path), path.stat().st_mtime_ns, _mtime_ns(delta_path))
     with _SNAPSHOT_CACHE_LOCK:
         cached_rows = _ROW_CACHE.get(cache_key)
     if cached_rows is not None and 0.0 <= now - cached_rows[0] < _ROW_CACHE_TTL_SECONDS:
@@ -499,6 +551,9 @@ def _load_api_discovery_rows(
             for raw in payload.get(bucket) or []
             if isinstance(raw, dict)
         ]
+        rows = _apply_fast_quote_delta(
+            rows, delta_path, now=now, metadata=metadata or {}, rails=rails or {}
+        )
         with _SNAPSHOT_CACHE_LOCK:
             _ROW_CACHE.clear()
             _ROW_CACHE[cache_key] = (now, rows)

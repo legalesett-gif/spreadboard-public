@@ -313,7 +313,31 @@ class FastQuoteRefresher:
             "funding_legs_refreshed": funding_summary.get("legs", 0),
             "funding_venues": funding_summary.get("venues", 0),
         }
-        _atomic_write(snapshot_path, payload)
+        # Rewriting the whole snapshot to update a few hundred routes invalidated
+        # every cache and forced a full rebuild -- a 50-77MB file rewritten every
+        # 60s to change ~400 rows. The refreshed rows go to a small delta file
+        # that readers overlay instead, so the expensive file only changes when
+        # discovery finishes.
+        touched = {row_id for row_id in (_snapshot_row_key(row) for row in selected) if row_id}
+        delta_rows = [
+            row
+            for bucket in ("api_discovered_rows", "dex_discovered_rows")
+            for row in payload.get(bucket) or []
+            if isinstance(row, dict) and _snapshot_row_key(row) in touched
+        ]
+        _atomic_write(
+            _fast_quote_delta_path(snapshot_path),
+            {
+                "schema": "spreadboard.fast_quote_delta.v1",
+                "updated_at": refreshed_at,
+                "fast_quote_refresh": payload["fast_quote_refresh"],
+                "rows": delta_rows,
+            },
+        )
+        if funding_summary.get("legs"):
+            # A funding sweep touches legs across the whole board, which a delta
+            # cannot express, so that one still lands in the snapshot itself.
+            _atomic_write(snapshot_path, payload)
         return payload["fast_quote_refresh"]
 
     def _quote_venue_jobs(
@@ -582,6 +606,17 @@ class FastQuoteRefresher:
             except Exception:
                 pass
         gc.collect()
+
+
+def _fast_quote_delta_path(snapshot_path: Path) -> Path:
+    return Path(snapshot_path).with_name("api_discovery_fast_quotes.json")
+
+
+def _snapshot_row_key(row: dict[str, Any]) -> str:
+    return "|".join(
+        str(row.get(key) or "")
+        for key in ("token", "long_venue", "long_market_type", "short_venue", "short_market_type")
+    )
 
 
 def _levels(value: Any) -> list[list[float]]:

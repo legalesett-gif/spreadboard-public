@@ -2734,3 +2734,62 @@ def test_the_funding_page_ranks_by_signed_carry() -> None:
     import inspect
     source = inspect.getsource(server.render_funding_page)
     assert 'sort="funding"' in source and 'sort="funding_abs"' not in source
+
+
+def test_a_price_refresh_does_not_invalidate_the_whole_board(tmp_path) -> None:
+    """Rewriting a 50-77MB snapshot every 60s to change a few hundred routes
+    forced a full parse and re-materialisation each time, which is what pinned a
+    small machine at 100% and stopped discovery scans from ever finishing."""
+    quote_ts_us = int(time.time() * 1_000_000)
+    snapshot = tmp_path / "api_discovery_latest.json"
+
+    def raw(token, spread):
+        return {"token": token, "long_venue": "Gate", "long_market_type": "Futures",
+                "short_venue": "Bybit", "short_market_type": "Futures",
+                "quote_ts_us": quote_ts_us, "executable_spread_pct": spread,
+                "depth_weighted_spread_pct": spread}
+
+    snapshot.write_text(json.dumps({
+        "updated_at": "2026-08-02T00:00:00Z",
+        "api_discovered_rows": [raw("AAA", 1.0), raw("BBB", 2.0)],
+        "dex_discovered_rows": [],
+    }))
+    api_spreads._ROW_CACHE.clear()
+    api_spreads._RESULT_CACHE.clear()
+
+    before = api_spreads.load_spreads(api_path=snapshot, board_path=tmp_path / "n.jsonl",
+                                      limit=None, include_stale=True)
+    aaa = [r for g in before["groups"] for r in g["routes"] if r["token"] == "AAA"]
+    assert aaa and float(aaa[0]["executable_spread_pct"]) == 1.0
+
+    # Only the delta changes; the snapshot file is untouched.
+    stamp_before = snapshot.stat().st_mtime_ns
+    (tmp_path / "api_discovery_fast_quotes.json").write_text(json.dumps({
+        "updated_at": "2026-08-02T00:01:00Z", "rows": [raw("AAA", 7.5)]}))
+    api_spreads._ROW_CACHE.clear()
+    api_spreads._RESULT_CACHE.clear()
+
+    after = api_spreads.load_spreads(api_path=snapshot, board_path=tmp_path / "n.jsonl",
+                                     limit=None, include_stale=True)
+    aaa = [r for g in after["groups"] for r in g["routes"] if r["token"] == "AAA"]
+    assert aaa and float(aaa[0]["executable_spread_pct"]) == 7.5, "the delta must be applied"
+    assert snapshot.stat().st_mtime_ns == stamp_before, "the snapshot must not be rewritten"
+    bbb = [r for g in after["groups"] for r in g["routes"] if r["token"] == "BBB"]
+    assert bbb, "routes outside the delta must survive untouched"
+
+
+def test_a_delta_route_absent_from_the_snapshot_is_still_shown(tmp_path) -> None:
+    quote_ts_us = int(time.time() * 1_000_000)
+    snapshot = tmp_path / "api_discovery_latest.json"
+    snapshot.write_text(json.dumps({"updated_at": "2026-08-02T00:00:00Z",
+                                    "api_discovered_rows": [], "dex_discovered_rows": []}))
+    (tmp_path / "api_discovery_fast_quotes.json").write_text(json.dumps({"rows": [
+        {"token": "NEW", "long_venue": "Gate", "long_market_type": "Futures",
+         "short_venue": "Bybit", "short_market_type": "Futures",
+         "quote_ts_us": quote_ts_us, "executable_spread_pct": 3.0,
+         "depth_weighted_spread_pct": 3.0}]}))
+    api_spreads._ROW_CACHE.clear()
+    api_spreads._RESULT_CACHE.clear()
+    d = api_spreads.load_spreads(api_path=snapshot, board_path=tmp_path / "n.jsonl",
+                                 limit=None, include_stale=True)
+    assert [g for g in d["groups"] if g["token"] == "NEW"]
