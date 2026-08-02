@@ -2321,4 +2321,4 @@ def test_unmeasured_depth_says_so_on_the_board() -> None:
     assert api_spreads._public_row(build(["depth_unverified"]))["depth_unverified"] is True
     assert api_spreads._public_row(build([]))["depth_unverified"] is False
     import inspect
-    assert "top of book" in inspect.getsource(server), "the board must label an unmeasured depth"
+    assert "depth not measured" in inspect.getsource(server.render_market_group_route), "the live route row must label an unmeasured depth"
