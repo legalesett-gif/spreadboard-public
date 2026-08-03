@@ -530,10 +530,22 @@ def live_prices_for(routes: list[dict[str, Any]]) -> dict[str, tuple[float | Non
                 str(route.get("short_venue") or ""), str(route.get("short_market_type") or ""),
                 str(route.get("short_market_symbol") or ""))
         )
-        if long_book is None or short_book is None:
+        # One live leg is enough. Requiring both meant a route could only move
+        # if every venue on it streamed, which left Futures-Spot and DEX lanes
+        # frozen -- and a DEX leg has no websocket to stream from at all, so
+        # those could never have moved. The leg that is live is re-priced and
+        # the other keeps its last quoted price, which is strictly closer to the
+        # market than leaving the whole row stale.
+        if long_book is None and short_book is None:
             continue
-        ask, _ = _book_side(long_book, "ask")
-        bid, _ = _book_side(short_book, "bid")
+        if long_book is not None:
+            ask, _ = _book_side(long_book, "ask")
+        else:
+            ask = _float_or_none(route.get("long_ask")) or _float_or_none(route.get("long_price"))
+        if short_book is not None:
+            bid, _ = _book_side(short_book, "bid")
+        else:
+            bid = _float_or_none(route.get("short_bid")) or _float_or_none(route.get("short_price"))
         if not ask or not bid or ask <= 0:
             continue
         out[str(route["route_key"])] = (
