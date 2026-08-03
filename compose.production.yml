@@ -21,6 +21,9 @@ services:
       SPREADBOARD_FAST_QUOTE_ROUTES: "150"
       SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS: "300"
       SPREADBOARD_RESULT_CACHE_SECONDS: "1200"
+      # Thirteen warmed views plus room for ad-hoc queries, so ordinary
+      # traffic cannot evict what the warmer just built.
+      SPREADBOARD_MARKET_CACHE_ENTRIES: "24"
       SPREADBOARD_WS_BOOKS: "320"
       SPREADBOARD_WS_RECONCILE_SECONDS: "10"
       SPREADBOARD_WS_WRITE_SECONDS: "0.25"

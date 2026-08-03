@@ -465,9 +465,14 @@ WARM_QUERIES: tuple[dict[str, list[str]], ...] = (
     {"kind": ["SPOT"]},
     {"kind": ["DEX-FUTURES"]},
     {"kind": ["DEX-SPOT"]},
+    # The funding page carries its `farm` parameter into the query, so warming
+    # without it builds a different cache key and the tab stays cold -- which is
+    # exactly what left /funding?farm=futures-spot at 27s while /funding was
+    # 0.20s. Each tab is warmed as the page actually asks for it.
     {"funding_only": ["1"], "kind": ["FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
-    {"funding_only": ["1"], "kind": ["FUTURES-SPOT-PAIR"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
-    {"funding_only": ["1"], "kind": ["DEX-FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
+    {"farm": ["futures-futures"], "funding_only": ["1"], "kind": ["FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
+    {"farm": ["futures-spot"], "funding_only": ["1"], "kind": ["FUTURES-SPOT-PAIR"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
+    {"farm": ["futures-dex"], "funding_only": ["1"], "kind": ["DEX-FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
 )
 
 
