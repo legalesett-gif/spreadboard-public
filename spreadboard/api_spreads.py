@@ -763,6 +763,7 @@ def _load_api_discovery_rows(
         rows = cached_rows[1]
     else:
         _propagate_funding_by_leg(payload)
+        live_funding = bulk_quotes.load_funding()
         rows = [
             _row_from_api(
                 raw,
@@ -770,6 +771,7 @@ def _load_api_discovery_rows(
                 now=now,
                 metadata=metadata or {},
                 rails=rails or {},
+                live_funding=live_funding,
             )
             for bucket in ("api_discovered_rows", "dex_discovered_rows")
             for raw in payload.get(bucket) or []
@@ -983,7 +985,9 @@ def _public_source_health(meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _apply_live_funding(raw: dict[str, Any]) -> dict[str, Any]:
+def _apply_live_funding(
+    raw: dict[str, Any], legs: dict[str, dict[str, Any]] | None = None
+) -> dict[str, Any]:
     """Overlay the current funding rate the bulk sweep fetched for each leg.
 
     The rate a row carries otherwise comes from whenever the discovery scan or
@@ -992,9 +996,10 @@ def _apply_live_funding(raw: dict[str, Any]) -> dict[str, Any]:
     more disagreed, because the quote worker is a fresh process each cycle and
     covers about three venues of eighteen per pass.
     """
-    from spreadboard import bulk_quotes
+    if legs is None:
+        from spreadboard import bulk_quotes
 
-    legs = bulk_quotes.load_funding()
+        legs = bulk_quotes.load_funding()
     if not legs:
         return raw
     notes = raw.get("notes")
@@ -1109,8 +1114,9 @@ def _row_from_api(
     now: float,
     metadata: dict[str, dict[str, Any]] | None = None,
     rails: dict[str, dict[str, Any]] | None = None,
+    live_funding: dict[str, dict[str, Any]] | None = None,
 ) -> SpreadTerminalRow:
-    raw = _apply_live_funding(_mirror_if_spot_sale_required(raw))
+    raw = _apply_live_funding(_mirror_if_spot_sale_required(raw), live_funding)
     token = str(raw.get("token") or "").upper().strip()
     long_venue = _str_or_none(raw.get("long_venue"))
     short_venue = _str_or_none(raw.get("short_venue"))
