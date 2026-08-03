@@ -2682,7 +2682,9 @@ def market_kind_count(
     if not value:
         return min(int(summary.get("matching_tokens") or 0), api_spreads.DEFAULT_LIMIT)
     if value == "FUTURES-SPOT-PAIR":
-        count = (lane_counts or {}).get("FUTURES-SPOT", 0)
+        count = (lane_counts or {}).get("FUTURES-SPOT", 0) + (
+            lane_counts or {}
+        ).get("SPOT-FUTURES", 0)
     else:
         count = counts.get(value, 0)
     return min(int(count or 0), api_spreads.DEFAULT_LIMIT)
@@ -6040,7 +6042,7 @@ def render_profile_telegram() -> str:
     route_types = [
         ("FUTURES", "Futures"),
         ("SPOT-FUTURES", "Spot-Futures"),
-        ("FUTURES-SPOT", "Futures-Spot"),
+        ("FUTURES-SPOT-PAIR", "Futures-Spot"),
         ("SPOT", "Spot"),
         ("DEX-FUTURES", "Futures-DEX"),
         ("DEX-SPOT", "Spot-DEX"),

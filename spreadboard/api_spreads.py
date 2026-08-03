@@ -924,6 +924,85 @@ def _public_source_health(meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _mirror_if_spot_sale_required(raw: dict[str, Any]) -> dict[str, Any]:
+    """Re-orient a route that could only be taken the other way round.
+
+    A route with the futures leg long and the spot leg short cannot be taken as
+    written -- it sells spot you do not own. The board handled that by negating
+    the carry while still printing the legs in the original order, so a row read
+    "long Gate Futures, short Gate Spot" while its +0.29%/day described the
+    opposite trade. Anyone following the label put on the losing side.
+
+    Worse, the spread was never re-derived. GUA showed 192.29% buying BitMart
+    futures at 0.05186 and selling Gate spot at 0.15158; the trade you can
+    actually do -- buy Gate spot at 0.15491, short BitMart futures at 0.05186 --
+    is -66.5%. The headline edge only existed in the direction nobody can trade.
+
+    Mirroring here, before the row is built, means the label, the spread, the
+    carry and the ranking all describe the same position.
+    """
+    if str(raw.get("short_market_type") or "") != "Spot":
+        return raw
+    if str(raw.get("long_market_type") or "") != "Futures":
+        return raw
+
+    mirrored = dict(raw)
+    for key in raw:
+        if key.startswith("long_"):
+            partner = "short_" + key[len("long_") :]
+            mirrored[key] = raw.get(partner)
+            mirrored[partner] = raw[key]
+
+    # Every per-side block moves with its leg, not with the label: notes carries
+    # `funding`, `identity` and `route_inputs`, and swapping only one of them
+    # left Gate's funding rate sitting on Mexc's spot leg and lost the DEX
+    # leg's chain and contract.
+    notes = raw.get("notes")
+    if isinstance(notes, dict):
+        swapped_notes = dict(notes)
+        for name, block in notes.items():
+            if isinstance(block, dict) and ("long" in block or "short" in block):
+                swapped_notes[name] = {
+                    **block,
+                    "long": block.get("short"),
+                    "short": block.get("long"),
+                }
+        mirrored["notes"] = swapped_notes
+
+    # The edge is now buy the old short leg, sell the old long leg.
+    original_legs = (raw.get("notes") or {}).get("route_inputs") or {}
+    buy = original_legs.get("short") or {}
+    sell = original_legs.get("long") or {}
+    for spread_key, bid_key, ask_key in (
+        ("executable_spread_pct", "bid_vwap", "ask_vwap"),
+        ("depth_weighted_spread_pct", "bid_vwap", "ask_vwap"),
+        ("displayed_open_spread_pct", "bid", "ask"),
+    ):
+        if spread_key not in raw:
+            continue
+        sell_bid = _float_or_none(sell.get(bid_key)) or _float_or_none(sell.get("bid"))
+        buy_ask = _float_or_none(buy.get(ask_key)) or _float_or_none(buy.get("ask"))
+        mirrored[spread_key] = (
+            (sell_bid / buy_ask - 1.0) * 100.0
+            if sell_bid and buy_ask and buy_ask > 0
+            else None
+        )
+
+    # Short-minus-long now runs the other way, so the stored carry flips with it.
+    for key in (
+        "funding_daily_pct",
+        "funding_projected_24h_pct",
+        "funding_spread_apr_pct",
+        "funding_apr_pct",
+        "funding_24h_pct",
+        "funding_spread_pct",
+    ):
+        value = _float_or_none(raw.get(key))
+        if value is not None:
+            mirrored[key] = -value
+    return mirrored
+
+
 def _row_from_api(
     raw: dict[str, Any],
     *,
@@ -932,6 +1011,7 @@ def _row_from_api(
     metadata: dict[str, dict[str, Any]] | None = None,
     rails: dict[str, dict[str, Any]] | None = None,
 ) -> SpreadTerminalRow:
+    raw = _mirror_if_spot_sale_required(raw)
     token = str(raw.get("token") or "").upper().strip()
     long_venue = _str_or_none(raw.get("long_venue"))
     short_venue = _str_or_none(raw.get("short_venue"))

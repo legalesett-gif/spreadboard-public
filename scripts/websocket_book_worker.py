@@ -210,7 +210,7 @@ class BookWorker:
 BOARD_LANES: tuple[dict[str, Any], ...] = (
     {},
     {"kind": "FUTURES"},
-    {"kind": "FUTURES-SPOT"},
+    {"kind": "FUTURES-SPOT-PAIR"},
     {"kind": "SPOT"},
     {"kind": "DEX-FUTURES"},
     {"kind": "DEX-SPOT"},
