@@ -587,6 +587,35 @@ def _mtime_ns(path: Path) -> int:
         return 0
 
 
+_FAST_REFRESH_META_CACHE: dict[tuple[str, int], dict[str, Any]] = {}
+
+
+def _fast_quote_refresh_meta(delta_path: Path) -> dict[str, Any]:
+    """The fast worker's own report of its last cycle, from the delta it wrote.
+
+    Cached on mtime: the header is a few hundred bytes but it sits behind the
+    delta's rows, so reading it means parsing the file.
+    """
+    mtime = _mtime_ns(delta_path)
+    if not mtime:
+        return {}
+    key = (str(delta_path), mtime)
+    with _SNAPSHOT_CACHE_LOCK:
+        cached = _FAST_REFRESH_META_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        payload = json.loads(delta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    meta = payload.get("fast_quote_refresh")
+    meta = dict(meta) if isinstance(meta, dict) else {}
+    with _SNAPSHOT_CACHE_LOCK:
+        _FAST_REFRESH_META_CACHE.clear()
+        _FAST_REFRESH_META_CACHE[key] = meta
+    return meta
+
+
 def _apply_fast_quote_delta(
     rows: list["SpreadTerminalRow"],
     delta_path: Path,
@@ -697,11 +726,18 @@ def _load_api_discovery_rows(
         gc.collect()
     updated_at = _str_or_none(payload.get("updated_at"))
     discovery_age = _iso_age_min(updated_at, now=now)
-    fast_refresh = (
-        payload.get("fast_quote_refresh")
-        if isinstance(payload.get("fast_quote_refresh"), dict)
-        else {}
-    )
+    # Since the fast worker started writing a delta instead of rewriting the
+    # snapshot, the snapshot's own `fast_quote_refresh` is frozen at whenever the
+    # scan wrote it. The delta carries the current one, and it is what decides
+    # whether the board reads as live: without this the page reports the age of
+    # the last discovery scan and members are told the feed is reconnecting.
+    fast_refresh = _fast_quote_refresh_meta(delta_path)
+    if not fast_refresh:
+        fast_refresh = (
+            payload.get("fast_quote_refresh")
+            if isinstance(payload.get("fast_quote_refresh"), dict)
+            else {}
+        )
     fast_updated_at = _str_or_none(fast_refresh.get("updated_at"))
     fast_age = (
         _iso_age_min(fast_updated_at, now=now)

@@ -2336,7 +2336,10 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
     api_health_data = source_health.get("canonical_api") or {}
     pagination = data.get("pagination") or {}
     source_ready = data.get("ok") and api_health_data.get("status") == "fresh"
-    refresh_seconds = 30 if source_ready else 5
+    # Prices arrive over the stream, so a reload is only needed to pick up
+    # structural changes -- a token entering or leaving the board. Reloading the
+    # page every 30s on top of the push just made the board flicker.
+    refresh_seconds = 300 if source_ready else 5
     heading = f"""
       <header class="terminal-heading">
         <div>
@@ -2346,8 +2349,8 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
         </div>
         <div class="terminal-live-box {'live' if source_ready else 'unavailable'}">
           <span>{'Live' if source_ready else 'Reconnecting'}</span>
-          <strong>{fmt_age(api_health_data.get('age_min'))}</strong>
-          <em>public APIs · refreshes automatically</em>
+          <strong data-live-stamp>{fmt_age(api_health_data.get('age_min'))}</strong>
+          <em>streaming order books · no refresh needed</em>
         </div>
       </header>
     """
@@ -2383,6 +2386,7 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
             {''.join(render_market_token_group(group) for group in groups) or render_live_market_empty(api_health_data)}
           </div>
           {render_market_pagination(query, pagination)}
+          {render_board_stream_script(query)}
         </main>
         <aside class="market-side">
           {render_market_lane('Top Arbitrage Edges', data.get('top_edges') or [], 'edge')}

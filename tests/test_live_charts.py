@@ -1131,3 +1131,59 @@ def test_live_chart_surface_explains_series_and_streams_exact_route() -> None:
     assert "moveToPane(1)" in html
     assert "setHeight(" in html
     assert "setStretchFactor" not in html
+
+
+def test_board_reads_live_when_only_the_delta_is_fresh(tmp_path: Path) -> None:
+    """A fresh delta beside an old snapshot must read as live, not "reconnecting".
+
+    The fast worker stopped rewriting the snapshot, so the snapshot's embedded
+    `fast_quote_refresh` freezes at whenever the last discovery scan wrote it.
+    Reading freshness from it told members the feed was reconnecting while the
+    quotes on screen were a minute old, and dropped the page into a 5s reload.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from spreadboard import api_spreads
+
+    now = time.time()
+    stale = (datetime.now(tz=timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    current = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    snapshot_path = tmp_path / "api_discovery_latest.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "updated_at": stale,
+                "api_discovered_rows": [_route()],
+                "dex_discovered_rows": [],
+                "fast_quote_refresh": {
+                    "status": "ok",
+                    "updated_at": stale,
+                    "updated_routes": 12,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "api_discovery_fast_quotes.json").write_text(
+        json.dumps(
+            {
+                "schema": "spreadboard.fast_quote_delta.v1",
+                "updated_at": current,
+                "fast_quote_refresh": {
+                    "status": "ok",
+                    "updated_at": current,
+                    "updated_routes": 259,
+                },
+                "rows": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _rows, meta = api_spreads._load_api_discovery_rows(snapshot_path, now=now)
+
+    assert meta["status"] == "fresh", meta
+    assert meta["age_min"] is not None and meta["age_min"] < 5.0
+    # The discovery scan really is three hours old; only the quote age is fresh.
+    assert meta["discovery_age_min"] > 150.0
