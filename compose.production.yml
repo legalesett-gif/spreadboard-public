@@ -64,7 +64,12 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    mem_limit: 3g
+    # The box has 8GB; this stayed at 3g from when it had 4. The scan reaches
+    # ~1.6GB RSS on its own, so the container total crossed the cgroup limit and
+    # the kernel killed it 18 times in four hours -- which is why no discovery
+    # scan finished, why the container restarted five times, and why the board
+    # went blank mid-session. 6g leaves room for Caddy and the host.
+    mem_limit: 6g
     cpus: 1.8
     logging:
       driver: json-file
