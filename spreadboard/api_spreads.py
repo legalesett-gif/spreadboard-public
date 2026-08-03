@@ -575,11 +575,23 @@ def apply_live_books(
         )
         long_book = books.get(long_key)
         short_book = books.get(short_key)
-        if long_book is None or short_book is None:
+        # One live leg is enough, the same rule live_prices_for follows. This
+        # decides what the board filters on, so requiring both meant a route
+        # with one fresh leg was ranked and filtered on a price from the last
+        # scan while the stream showed something else.
+        if long_book is None and short_book is None:
             updated.append(row)
             continue
-        ask, ask_vwap = _book_side(long_book, "ask")
-        bid, bid_vwap = _book_side(short_book, "bid")
+        if long_book is not None:
+            ask, ask_vwap = _book_side(long_book, "ask")
+        else:
+            ask = _float_or_none(row.long_ask) or _float_or_none(row.long_price)
+            ask_vwap = ask
+        if short_book is not None:
+            bid, bid_vwap = _book_side(short_book, "bid")
+        else:
+            bid = _float_or_none(row.short_bid) or _float_or_none(row.short_price)
+            bid_vwap = bid
         if not ask or not bid or ask <= 0 or bid <= 0:
             updated.append(row)
             continue
@@ -589,7 +601,12 @@ def apply_live_books(
             if ask_vwap and bid_vwap and ask_vwap > 0
             else executable
         )
-        quote_ts_us = min(int(long_book.quote_ts_us), int(short_book.quote_ts_us))
+        stamps = [
+            int(book.quote_ts_us)
+            for book in (long_book, short_book)
+            if book is not None
+        ]
+        quote_ts_us = min(stamps) if stamps else int(row.quote_ts_us or 0)
         age_min = max(0.0, (now - quote_ts_us / 1_000_000) / 60.0)
         updated.append(
             replace(
