@@ -511,6 +511,12 @@ def _warm_board_cache(*, force: bool = False) -> None:
             server.api_market_spreads(_board_path(), dict(query))
         except Exception as exc:  # noqa: BLE001 - warming is best effort.
             _log(f"board cache warm skipped {query}: {type(exc).__name__}: {exc}")
+    # Intel is derived from the same snapshot and costs about as much, so it is
+    # warmed here rather than left to the first visitor.
+    try:
+        server.api_intel(_board_path())
+    except Exception as exc:  # noqa: BLE001 - warming is best effort.
+        _log(f"intel warm skipped: {type(exc).__name__}: {exc}")
     _log(f"board cache warmed {len(WARM_QUERIES)} views in {time.monotonic() - started:.1f}s")
     _refresh_funding_windows()
 

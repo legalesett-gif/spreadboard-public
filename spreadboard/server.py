@@ -44,7 +44,12 @@ from spreadboard import (  # noqa: E402
     telegram_bot,
 )
 
-_INTEL_CACHE_TTL_SECONDS = 20.0
+#: Same story as the board cache: intel takes ~24s to build and a 20s life meant
+#: it was rebuilt on almost every visit. It is derived from the same snapshot,
+#: so it can live as long.
+_INTEL_CACHE_TTL_SECONDS = max(
+    20.0, float(os.environ.get("SPREADBOARD_INTEL_CACHE_SECONDS", "900"))
+)
 _INTEL_CACHE_LOCK = threading.Lock()
 _INTEL_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 #: How long a grouped board payload stays served. This is the cache the pages
