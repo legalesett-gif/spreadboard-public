@@ -132,3 +132,18 @@ def test_a_group_with_no_settled_figure_sorts_last(monkeypatch) -> None:
     ordered = [g["token"] for g in sorted(groups, key=realised, reverse=True)]
 
     assert ordered == ["C", "A", "B"]
+
+
+def test_presentation_parameters_do_not_fragment_the_cache() -> None:
+    """`rank` and `farm` change the order shown, not the data underneath.
+
+    Letting them reach the market query gave each tab its own cache key for an
+    identical payload, which left /funding?rank=7d at 7.9s beside /funding at
+    0.03s.
+    """
+    import inspect
+
+    from spreadboard import server
+
+    source = inspect.getsource(server.render_funding_page)
+    assert 'k not in {"rank", "farm"}' in source

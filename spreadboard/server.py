@@ -3429,8 +3429,12 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
     }
     if selected_farm not in farm_kinds:
         selected_farm = "futures-futures"
+    # `rank` and `farm` decide presentation, not data. Letting them into the
+    # query gives each tab its own cache key for an identical payload, which is
+    # what left /funding?rank=7d at 7.9s beside /funding at 0.03s.
+    data_query = {k: v for k, v in query.items() if k not in {"rank", "farm"}}
     funding_query = _query_lists_with(
-        query,
+        data_query,
         funding_only="1",
         kind=farm_kinds[selected_farm],
         # Signed, not magnitude: the best carry to collect belongs at the top.
