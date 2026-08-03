@@ -44,10 +44,13 @@ class BookWorker:
         self._desired_stamp: int | None = None
         self._market_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._markets_ready: set[tuple[str, str]] = set()
+        #: Legs a venue refuses to serve without credentials. Kept out of the
+        #: reconcile so they are not resubscribed every ten seconds.
+        self._unavailable: set[LegKey] = set()
 
     async def run(self) -> None:
         while not self.stop.is_set():
-            desired = self._desired_legs_cached()
+            desired = self._desired_legs_cached() - self._unavailable
             for key in set(self.tasks) - desired:
                 self.tasks.pop(key).cancel()
             for key in desired - set(self.tasks):
@@ -112,6 +115,19 @@ class BookWorker:
                 delay = 1.0
             except asyncio.CancelledError:
                 raise
+            except ccxtpro.AuthenticationError as exc:
+                # A venue that will not serve public books without a key is not
+                # a transient failure, and retrying it forever costs CPU the
+                # streaming legs need. Coinbase International alone reconnected
+                # every few seconds on a two-core box. Drop it until the process
+                # restarts, by which time credentials may exist.
+                self._unavailable.add(key)
+                print(
+                    f"websocket-books: {venue} {market_type} {symbol}: "
+                    f"dropped, needs credentials ({str(exc)[:80]})",
+                    flush=True,
+                )
+                return
             except Exception as exc:  # noqa: BLE001 - reconnect is the intended fallback.
                 print(
                     f"websocket-books: {venue} {market_type} {symbol}: "

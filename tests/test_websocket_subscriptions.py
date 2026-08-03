@@ -103,3 +103,37 @@ def test_leftover_budget_still_covers_the_widest_unshown_routes(
     # The board's legs come first, then the budget spills onto the next widest.
     assert ("Binance", "Futures", "SHOWN/USDT:USDT") in legs
     assert ("Mexc", "Futures", "OTHER/USDT:USDT") in legs
+
+
+def test_a_venue_needing_credentials_is_dropped_not_retried_forever() -> None:
+    """Coinbase International will not serve public books without an API key.
+
+    Retrying it is guaranteed to fail, and on a two-core box the reconnect loop
+    competed for the CPU the streaming legs needed. It reconnected every few
+    seconds and filled the log for hours.
+    """
+    import asyncio
+
+    import ccxt.pro as ccxtpro
+
+    from scripts.websocket_book_worker import BookWorker
+
+    worker = BookWorker.__new__(BookWorker)
+    worker.stop = asyncio.Event()
+    worker.clients = {}
+    worker._markets_ready = set()
+    worker._market_locks = {}
+    worker._unavailable = set()
+
+    key = ("Coinbase International", "Futures", "PEPE/USDC:USDC")
+
+    def _client(_venue: str, _market_type: str):
+        raise ccxtpro.AuthenticationError('coinbaseinternational requires "apiKey" credential')
+
+    worker._client = _client
+
+    # Returns rather than looping, and records the leg so the reconcile that
+    # runs every ten seconds does not immediately resubscribe it.
+    asyncio.run(asyncio.wait_for(worker._watch(key), timeout=5))
+
+    assert key in worker._unavailable
