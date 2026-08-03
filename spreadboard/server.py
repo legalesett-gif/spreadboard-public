@@ -2303,15 +2303,11 @@ def _board_stream_rows(
     directly from the live books on every tick, which is the whole point of the
     push: the page renders from cache and the feed corrects it within seconds.
     """
-    payload = api_market_spreads(
-        board_path,
-        _query_lists_with(
-            query,
-            limit=_query_first(query, "limit") or "25",
-            kind=_query_first(query, "kind") or "",
-            sort=_query_first(query, "sort") or "rank",
-        ),
-    )
+    # Re-price under the query the page was rendered with, not a normalised one.
+    # Overriding limit/sort here produced a second cache key, so the stream and
+    # the page each paid their own ~20s board build every time the cache turned
+    # over -- on two cores that is what pushed warm page loads back to seconds.
+    payload = api_market_spreads(board_path, query)
     routes = [
         route
         for group in payload.get("groups") or []

@@ -76,3 +76,27 @@ def test_board_stream_emits_a_board_event(
         connection.close()
         server.shutdown()
         server.server_close()
+
+
+def test_stream_reprices_under_the_pages_own_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The stream must not invent a query the page never used.
+
+    It normalised limit/sort before re-pricing, which produced a second cache
+    key. The page and its own stream then each paid a full board build every
+    time the cache turned over, doubling the most expensive work on the box.
+    """
+    from spreadboard import server
+
+    seen: list[dict] = []
+
+    monkeypatch.setattr(
+        server,
+        "api_market_spreads",
+        lambda board_path, query: seen.append(query) or {"groups": []},
+    )
+    monkeypatch.setattr(server.api_spreads, "live_prices_for", lambda routes: {})
+
+    page_query = {"kind": ["FUTURES"], "limit": ["50"], "sort": ["edge"]}
+    server._board_stream_rows(Path("board.jsonl"), page_query)
+
+    assert seen == [page_query], "the stream re-priced under a different query"
