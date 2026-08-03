@@ -230,6 +230,7 @@ def test_a_ticker_is_stored_as_a_one_level_book() -> None:
     from scripts.websocket_book_worker import BookWorker
 
     worker = BookWorker.__new__(BookWorker)
+    worker._last_write = {}
     stored: dict = {}
 
     class _Store:
@@ -254,6 +255,7 @@ def test_a_ticker_without_both_sides_is_not_stored() -> None:
     from scripts.websocket_book_worker import BookWorker
 
     worker = BookWorker.__new__(BookWorker)
+    worker._last_write = {}
     calls: list = []
 
     class _Store:
