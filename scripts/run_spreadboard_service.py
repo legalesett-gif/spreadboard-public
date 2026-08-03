@@ -475,7 +475,17 @@ def _board_path() -> Path:
     return Path(os.environ.get("SPREADBOARD_BOARD_PATH", str(board.DEFAULT_BOARD_PATH)))
 
 
-def _warm_board_cache() -> None:
+#: A full pass costs 150-200s on two cores, and it used to run after every 60s
+#: quote cycle -- so it never finished before starting again and held both cores
+#: permanently, making every page slow instead of fast. One pass per interval,
+#: comfortably inside the 420s cache TTL so entries stay warm between passes.
+WARM_INTERVAL_SECONDS = max(
+    120.0, float(os.environ.get("SPREADBOARD_WARM_INTERVAL_SECONDS", "300"))
+)
+_LAST_WARM_AT = 0.0
+
+
+def _warm_board_cache(*, force: bool = False) -> None:
     """Pay the grouping cost here, not in a member's page load.
 
     Every snapshot write invalidates the request cache, and rebuilding 12k rows
@@ -486,13 +496,22 @@ def _warm_board_cache() -> None:
     cache -- and every lane, not just the default. Measured cold: 40s for the
     board, 33s for Funding, 59s for its Futures-Spot tab.
     """
+    global _LAST_WARM_AT
+
+    now = time.monotonic()
+    if not force and now - _LAST_WARM_AT < WARM_INTERVAL_SECONDS:
+        return
+    _LAST_WARM_AT = now
+
     from spreadboard import server
 
+    started = time.monotonic()
     for query in WARM_QUERIES:
         try:
             server.api_market_spreads(_board_path(), dict(query))
         except Exception as exc:  # noqa: BLE001 - warming is best effort.
             _log(f"board cache warm skipped {query}: {type(exc).__name__}: {exc}")
+    _log(f"board cache warmed {len(WARM_QUERIES)} views in {time.monotonic() - started:.1f}s")
 
 
 def _log(message: str) -> None:
