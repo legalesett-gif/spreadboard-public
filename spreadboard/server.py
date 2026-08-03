@@ -860,7 +860,10 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 previous = rows
                 if changed:
                     payload = {
-                        "updated_at": _utc_now_iso(),
+                        "updated_at": datetime.now(tz=timezone.utc)
+                        .replace(microsecond=0)
+                        .isoformat()
+                        .replace("+00:00", "Z"),
                         "routes": [
                             {"route_key": key, "spread_pct": value[0], "funding_pct": value[1]}
                             for key, value in changed.items()
