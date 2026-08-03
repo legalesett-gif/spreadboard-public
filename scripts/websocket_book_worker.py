@@ -34,9 +34,21 @@ WRITE_INTERVAL_SECONDS = max(0.1, float(os.environ.get("SPREADBOARD_WS_WRITE_SEC
 LegKey = tuple[str, str, str]
 
 
-#: Symbols per subscription. Venues cap how many a single connection may carry,
-#: and a smaller chunk also means one bad symbol takes fewer others down with it.
-CHUNK_SIZE = max(10, int(os.environ.get("SPREADBOARD_WS_CHUNK", "60")))
+#: Symbols per subscription. Sixty timed out on Gate, Bybit and Kucoin and was
+#: rejected outright by BitMart, which caps a request at twenty. Twenty is what
+#: the strictest venue accepts, and a smaller chunk also means one bad symbol
+#: takes fewer others down with it.
+CHUNK_SIZE = max(5, int(os.environ.get("SPREADBOARD_WS_CHUNK", "20")))
+#: Venues that accept fewer than the default.
+VENUE_CHUNK_LIMITS: dict[str, int] = {"BitMart": 20, "Coinbase International": 10}
+#: Venues whose batched API does not cover a market type. Mexc offers
+#: watchTickers for swaps but not spot, and retrying it forever just filled the
+#: log; these go a symbol at a time instead.
+NO_BATCH: set[tuple[str, str]] = {("Mexc", "Spot")}
+
+
+def _chunk_size_for(venue: str) -> int:
+    return min(CHUNK_SIZE, VENUE_CHUNK_LIMITS.get(venue, CHUNK_SIZE))
 
 
 def _venue_mode(client: Any) -> str:
@@ -87,7 +99,9 @@ class BookWorker:
                 bucket.append(symbol)
             wanted: dict[tuple[str, str, int], list[str]] = {}
             for (venue, market_type, _), symbols in groups.items():
-                for index, chunk in enumerate(_chunks(sorted(set(symbols)), CHUNK_SIZE)):
+                for index, chunk in enumerate(
+                    _chunks(sorted(set(symbols)), _chunk_size_for(venue))
+                ):
                     wanted[(venue, market_type, index)] = chunk
             for key in set(self.tasks) - set(wanted):
                 self.tasks.pop(key).cancel()
@@ -137,7 +151,7 @@ class BookWorker:
             try:
                 client = self._client(venue, market_type)
                 await self._ensure_markets(venue, market_type, client)
-                mode = _venue_mode(client)
+                mode = "single" if (venue, market_type) in NO_BATCH else _venue_mode(client)
                 if mode == "books":
                     book = await client.watch_order_book_for_symbols(
                         symbols, limit=_websocket_depth_limit(venue, market_type)
@@ -155,6 +169,18 @@ class BookWorker:
                 delay = 1.0
             except asyncio.CancelledError:
                 raise
+            except ccxtpro.NotSupported as exc:
+                # The venue cannot batch this market type. Downgrade rather than
+                # retry: Mexc spot repeated the same refusal 70 times in eight
+                # minutes and streamed nothing.
+                print(
+                    f"websocket-books: {venue} {market_type}: no batched watch "
+                    f"({str(exc)[:70]}); falling back to one symbol at a time",
+                    flush=True,
+                )
+                NO_BATCH.add((venue, market_type))
+                await asyncio.sleep(1.0)
+                continue
             except (ccxtpro.AuthenticationError, ccxtpro.BadRequest) as exc:
                 print(
                     f"websocket-books: {venue} {market_type} [{len(symbols)} symbols]: "

@@ -265,3 +265,19 @@ def test_a_ticker_without_both_sides_is_not_stored() -> None:
     worker._store_ticker("Gate", "Spot", "T/USDT", {"bid": 0, "ask": 1.0})
 
     assert calls == []
+
+
+def test_a_venue_with_a_lower_cap_gets_smaller_chunks() -> None:
+    """BitMart rejects anything over twenty symbols in one request."""
+    from scripts.websocket_book_worker import _chunk_size_for
+
+    assert _chunk_size_for("BitMart") <= 20
+    assert _chunk_size_for("Coinbase International") <= 10
+
+
+def test_a_market_type_without_batching_is_listed() -> None:
+    """Mexc offers watchTickers for swaps but not spot, and repeated the same
+    refusal seventy times in eight minutes while streaming nothing."""
+    from scripts.websocket_book_worker import NO_BATCH
+
+    assert ("Mexc", "Spot") in NO_BATCH
