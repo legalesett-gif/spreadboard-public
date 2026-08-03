@@ -194,3 +194,74 @@ def test_funding_farm_tabs_are_lanes_the_worker_streams() -> None:
         lane.get("kind") for lane in BOARD_LANES if lane.get("funding_only")
     }
     assert {"FUTURES", "FUTURES-SPOT-PAIR", "DEX-FUTURES"} <= funding_kinds
+
+
+def test_a_venue_is_watched_in_chunks_not_one_task_per_symbol() -> None:
+    """One asyncio task per leg is what capped the feed at a few hundred.
+
+    Every symbol paid for its own connection and its own reconnect loop.
+    Nineteen of the twenty-one venues accept a list of symbols.
+    """
+    from scripts.websocket_book_worker import _chunks
+
+    symbols = [f"T{i}/USDT" for i in range(130)]
+
+    chunks = _chunks(symbols, 60)
+
+    assert [len(c) for c in chunks] == [60, 60, 10]
+    assert sum(len(c) for c in chunks) == len(symbols)
+
+
+def test_venue_mode_prefers_books_then_tickers() -> None:
+    """A ticker carries the bid and the ask, which is what a spread is made of,
+    so a venue without batched books is still worth batching."""
+    from scripts.websocket_book_worker import _venue_mode
+
+    class _C:
+        def __init__(self, has):
+            self.has = has
+
+    assert _venue_mode(_C({"watchOrderBookForSymbols": True, "watchTickers": True})) == "books"
+    assert _venue_mode(_C({"watchTickers": True})) == "tickers"
+    assert _venue_mode(_C({})) == "single"
+
+
+def test_a_ticker_is_stored_as_a_one_level_book() -> None:
+    from scripts.websocket_book_worker import BookWorker
+
+    worker = BookWorker.__new__(BookWorker)
+    stored: dict = {}
+
+    class _Store:
+        def put(self, venue, market_type, symbol, *, bids, asks, quote_ts_us):
+            stored.update(
+                venue=venue, symbol=symbol, bids=bids, asks=asks, ts=quote_ts_us
+            )
+
+    worker.store = _Store()
+    worker._store_ticker(
+        "Gate", "Spot", "T/USDT",
+        {"bid": 1.0, "ask": 1.02, "bidVolume": 5.0, "askVolume": 7.0, "timestamp": 1785000000000},
+    )
+
+    assert stored["bids"] == [[1.0, 5.0]]
+    assert stored["asks"] == [[1.02, 7.0]]
+    assert stored["ts"] == 1785000000000 * 1000
+
+
+def test_a_ticker_without_both_sides_is_not_stored() -> None:
+    """A one-sided quote cannot price a spread."""
+    from scripts.websocket_book_worker import BookWorker
+
+    worker = BookWorker.__new__(BookWorker)
+    calls: list = []
+
+    class _Store:
+        def put(self, *a, **k):
+            calls.append(1)
+
+    worker.store = _Store()
+    worker._store_ticker("Gate", "Spot", "T/USDT", {"bid": 1.0, "ask": None})
+    worker._store_ticker("Gate", "Spot", "T/USDT", {"bid": 0, "ask": 1.0})
+
+    assert calls == []

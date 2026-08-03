@@ -34,6 +34,31 @@ WRITE_INTERVAL_SECONDS = max(0.1, float(os.environ.get("SPREADBOARD_WS_WRITE_SEC
 LegKey = tuple[str, str, str]
 
 
+#: Symbols per subscription. Venues cap how many a single connection may carry,
+#: and a smaller chunk also means one bad symbol takes fewer others down with it.
+CHUNK_SIZE = max(10, int(os.environ.get("SPREADBOARD_WS_CHUNK", "60")))
+
+
+def _venue_mode(client: Any) -> str:
+    """How this venue lets us watch many symbols at once.
+
+    One asyncio task per leg is what capped the feed at a few hundred: every
+    symbol paid for its own connection and its own reconnect. Nineteen of the
+    twenty-one venues accept a list -- thirteen for order books, six more for
+    tickers, which carry the bid and ask a spread is made of.
+    """
+    has = getattr(client, "has", {}) or {}
+    if has.get("watchOrderBookForSymbols"):
+        return "books"
+    if has.get("watchTickers"):
+        return "tickers"
+    return "single"
+
+
+def _chunks(items: list[str], size: int) -> list[list[str]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
 class BookWorker:
     def __init__(self) -> None:
         self.stop = asyncio.Event()
@@ -47,14 +72,32 @@ class BookWorker:
         #: Legs a venue refuses to serve without credentials. Kept out of the
         #: reconcile so they are not resubscribed every ten seconds.
         self._unavailable: set[LegKey] = set()
+        #: Which symbols each venue task is currently carrying.
+        self._subscribed: dict[tuple[str, str, int], list[str]] = {}
 
     async def run(self) -> None:
         while not self.stop.is_set():
             desired = self._desired_legs_cached() - self._unavailable
-            for key in set(self.tasks) - desired:
+            # One task per venue chunk rather than per leg. A venue carrying two
+            # hundred symbols used to mean two hundred connections and two
+            # hundred reconnect loops; now it means three or four.
+            groups: dict[tuple[str, str, int], list[str]] = {}
+            for venue, market_type, symbol in sorted(desired):
+                bucket = groups.setdefault((venue, market_type, 0), [])
+                bucket.append(symbol)
+            wanted: dict[tuple[str, str, int], list[str]] = {}
+            for (venue, market_type, _), symbols in groups.items():
+                for index, chunk in enumerate(_chunks(sorted(set(symbols)), CHUNK_SIZE)):
+                    wanted[(venue, market_type, index)] = chunk
+            for key in set(self.tasks) - set(wanted):
                 self.tasks.pop(key).cancel()
-            for key in desired - set(self.tasks):
-                self.tasks[key] = asyncio.create_task(self._watch(key))
+            for key, symbols in wanted.items():
+                existing = self.tasks.get(key)
+                if existing is None or self._subscribed.get(key) != symbols:
+                    if existing is not None:
+                        existing.cancel()
+                    self._subscribed[key] = symbols
+                    self.tasks[key] = asyncio.create_task(self._watch_group(key, symbols))
             self.store.prune(max_age_seconds=3600)
             try:
                 await asyncio.wait_for(self.stop.wait(), timeout=RECONCILE_SECONDS)
@@ -80,6 +123,101 @@ class BookWorker:
             self._desired_stamp = stamp
             gc.collect()
         return self._desired
+
+    async def _watch_group(self, key: tuple[str, str, int], symbols: list[str]) -> None:
+        """Carry a venue's symbols on one connection.
+
+        Order books where the venue offers them, tickers otherwise: a ticker
+        carries the bid and the ask, which is what a spread is made of. Only
+        Bingx and HTX offer neither, and those fall back to a symbol at a time.
+        """
+        venue, market_type, _ = key
+        delay = 1.0
+        while not self.stop.is_set():
+            try:
+                client = self._client(venue, market_type)
+                await self._ensure_markets(venue, market_type, client)
+                mode = _venue_mode(client)
+                if mode == "books":
+                    book = await client.watch_order_book_for_symbols(
+                        symbols, limit=_websocket_depth_limit(venue, market_type)
+                    )
+                    self._store_book(venue, market_type, book.get("symbol"), book)
+                elif mode == "tickers":
+                    tickers = await client.watch_tickers(symbols)
+                    for symbol, ticker in (tickers or {}).items():
+                        self._store_ticker(venue, market_type, symbol, ticker)
+                else:
+                    await asyncio.gather(
+                        *(self._watch((venue, market_type, symbol)) for symbol in symbols)
+                    )
+                    return
+                delay = 1.0
+            except asyncio.CancelledError:
+                raise
+            except (ccxtpro.AuthenticationError, ccxtpro.BadRequest) as exc:
+                print(
+                    f"websocket-books: {venue} {market_type} [{len(symbols)} symbols]: "
+                    f"dropped, will not stream ({type(exc).__name__}: {str(exc)[:70]})",
+                    flush=True,
+                )
+                for symbol in symbols:
+                    self._unavailable.add((venue, market_type, symbol))
+                return
+            except Exception as exc:  # noqa: BLE001 - reconnect is the fallback.
+                print(
+                    f"websocket-books: {venue} {market_type} [{len(symbols)} symbols]: "
+                    f"{type(exc).__name__}: {str(exc)[:100]}",
+                    flush=True,
+                )
+                await asyncio.sleep(delay)
+                delay = min(30.0, delay * 2)
+
+    def _store_book(self, venue: str, market_type: str, symbol: Any, book: dict) -> None:
+        if not symbol:
+            return
+        bids = _levels(book.get("bids"))
+        asks = _levels(book.get("asks"))
+        if not bids or not asks:
+            return
+        timestamp_ms = _number(book.get("timestamp"))
+        self.store.put(
+            venue,
+            market_type,
+            str(symbol),
+            bids=bids,
+            asks=asks,
+            quote_ts_us=(
+                int(timestamp_ms * 1000)
+                if timestamp_ms and timestamp_ms > 0
+                else int(time.time() * 1_000_000)
+            ),
+        )
+
+    def _store_ticker(self, venue: str, market_type: str, symbol: str, ticker: dict) -> None:
+        """A ticker is a one-level book: the bid and the ask.
+
+        Depth is unknown, which the board already reports as such; the spread
+        itself is exactly as good as an order book's top of book.
+        """
+        bid = _number(ticker.get("bid"))
+        ask = _number(ticker.get("ask"))
+        if not bid or not ask or bid <= 0 or ask <= 0:
+            return
+        timestamp_ms = _number(ticker.get("timestamp"))
+        self.store.put(
+            venue,
+            market_type,
+            str(symbol),
+            bids=[[bid, _number(ticker.get("bidVolume")) or 0.0]],
+            asks=[[ask, _number(ticker.get("askVolume")) or 0.0]],
+            quote_ts_us=(
+                int(timestamp_ms * 1000)
+                if timestamp_ms and timestamp_ms > 0
+                else int(time.time() * 1_000_000)
+            ),
+        )
+
 
     async def _watch(self, key: LegKey) -> None:
         venue, market_type, symbol = key
