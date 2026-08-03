@@ -973,6 +973,46 @@ def _public_source_health(meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _apply_live_funding(raw: dict[str, Any]) -> dict[str, Any]:
+    """Overlay the current funding rate the bulk sweep fetched for each leg.
+
+    The rate a row carries otherwise comes from whenever the discovery scan or
+    the rotating quote worker last reached that venue. Measured against the
+    venues directly: 554 of 5,382 futures legs carried no rate at all and 424
+    more disagreed, because the quote worker is a fresh process each cycle and
+    covers about three venues of eighteen per pass.
+    """
+    from spreadboard import bulk_quotes
+
+    legs = bulk_quotes.load_funding()
+    if not legs:
+        return raw
+    notes = raw.get("notes")
+    updated_notes: dict[str, Any] | None = None
+    for side in ("long", "short"):
+        if raw.get(f"{side}_market_type") != "Futures":
+            continue
+        key = f"{raw.get(f'{side}_venue')}|{raw.get(f'{side}_market_symbol')}"
+        entry = legs.get(key)
+        if not entry:
+            continue
+        if updated_notes is None:
+            updated_notes = dict(notes) if isinstance(notes, dict) else {}
+            existing = updated_notes.get("route_inputs")
+            updated_notes["route_inputs"] = dict(existing) if isinstance(existing, dict) else {}
+        route_inputs = updated_notes["route_inputs"]
+        leg = dict(route_inputs.get(side) or {})
+        leg["current_funding_pct"] = entry.get("rate_pct")
+        if entry.get("interval_hours") is not None:
+            leg["funding_interval_hours"] = entry["interval_hours"]
+        if entry.get("next_funding_ts_us") is not None:
+            leg["next_funding_ts_us"] = entry["next_funding_ts_us"]
+        route_inputs[side] = leg
+    if updated_notes is None:
+        return raw
+    return {**raw, "notes": updated_notes}
+
+
 def _mirror_if_spot_sale_required(raw: dict[str, Any]) -> dict[str, Any]:
     """Re-orient a route that could only be taken the other way round.
 
@@ -1060,7 +1100,7 @@ def _row_from_api(
     metadata: dict[str, dict[str, Any]] | None = None,
     rails: dict[str, dict[str, Any]] | None = None,
 ) -> SpreadTerminalRow:
-    raw = _mirror_if_spot_sale_required(raw)
+    raw = _apply_live_funding(_mirror_if_spot_sale_required(raw))
     token = str(raw.get("token") or "").upper().strip()
     long_venue = _str_or_none(raw.get("long_venue"))
     short_venue = _str_or_none(raw.get("short_venue"))

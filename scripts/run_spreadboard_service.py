@@ -521,6 +521,11 @@ class BulkQuoteLoop(threading.Thread):
                     f"bulk quotes: {summary['quotes']} from {summary['venues']} venues "
                     f"in {summary['seconds']}s"
                 )
+                funding = bulk_quotes.sweep_funding()
+                _log(
+                    f"bulk funding: {funding['legs']} legs from {funding['venues']} "
+                    f"venues in {funding['seconds']}s"
+                )
             except Exception as exc:  # noqa: BLE001 - best effort beside everything else.
                 _log(f"bulk quotes skipped: {type(exc).__name__}: {exc}")
             self.stop_event.wait(bulk_quotes.INTERVAL_SECONDS)

@@ -171,3 +171,56 @@ def test_a_full_pass_leaves_the_cursor_back_at_the_start(monkeypatch) -> None:
     bulk_quotes.sweep(venues, store=_Store(), budget_seconds=30.0)
 
     assert bulk_quotes._CURSOR["index"] == 0
+
+
+def test_live_funding_overlays_a_leg(monkeypatch) -> None:
+    """554 of 5,382 futures legs carried no rate and 424 disagreed, because the
+    rotating quote worker reaches about three venues of eighteen per pass."""
+    from spreadboard import api_spreads
+
+    monkeypatch.setattr(
+        bulk_quotes,
+        "load_funding",
+        lambda **_kw: {
+            "Bybit|T/USDT:USDT": {
+                "rate_pct": 0.0125,
+                "interval_hours": 4.0,
+                "next_funding_ts_us": 1785000000000000,
+            }
+        },
+    )
+    raw = {
+        "token": "T",
+        "long_venue": "Gate", "long_market_type": "Spot", "long_market_symbol": "T/USDT",
+        "short_venue": "Bybit", "short_market_type": "Futures", "short_market_symbol": "T/USDT:USDT",
+        "notes": {"route_inputs": {"short": {"current_funding_pct": 0.9}}},
+    }
+
+    out = api_spreads._apply_live_funding(raw)
+    leg = out["notes"]["route_inputs"]["short"]
+
+    assert leg["current_funding_pct"] == 0.0125, "the venue's current rate must win"
+    assert leg["funding_interval_hours"] == 4.0
+
+
+def test_a_spot_leg_is_not_given_funding(monkeypatch) -> None:
+    from spreadboard import api_spreads
+
+    monkeypatch.setattr(
+        bulk_quotes, "load_funding", lambda **_kw: {"Gate|T/USDT": {"rate_pct": 0.5}}
+    )
+    raw = {
+        "long_venue": "Gate", "long_market_type": "Spot", "long_market_symbol": "T/USDT",
+        "short_venue": "Bybit", "short_market_type": "Futures", "short_market_symbol": "T/USDT:USDT",
+    }
+
+    assert api_spreads._apply_live_funding(raw) is raw
+
+
+def test_no_cached_funding_leaves_the_row_alone(monkeypatch) -> None:
+    from spreadboard import api_spreads
+
+    monkeypatch.setattr(bulk_quotes, "load_funding", lambda **_kw: {})
+    raw = {"long_venue": "Gate", "long_market_type": "Futures", "long_market_symbol": "T/USDT:USDT"}
+
+    assert api_spreads._apply_live_funding(raw) is raw

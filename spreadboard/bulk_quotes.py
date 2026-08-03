@@ -19,12 +19,16 @@ instead of one call per symbol -- applied to prices.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import os
+from pathlib import Path
 import time
 from typing import Any
 
 from spreadboard import live_book_cache
 from spreadboard.fast_quotes import VENUE_IDS
+
+RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", "data"))
 
 #: Venues whose bulk ticker carries no bid/ask. Coinbase returns 528 symbols
 #: with neither, so calling it every cycle buys nothing.
@@ -161,3 +165,98 @@ def sweep(
 
 
 INTERVAL_SECONDS = max(15.0, float(os.environ.get("SPREADBOARD_BULK_QUOTE_SECONDS", "45")))
+
+#: Current funding per leg, written where the board can overlay it. The funding
+#: sweep runs inside the quote worker, which is a fresh process every cycle, so
+#: it pays load_markets for each venue and covers about three of eighteen per
+#: pass: 554 of 5,382 futures legs carried no rate at all and 424 more disagreed
+#: with the venue. Here the clients are already loaded, so a full pass is cheap.
+FUNDING_CACHE_PATH = RUNTIME_DIR / "live_funding.json"
+
+
+def sweep_funding(
+    venues: list[str] | None = None,
+    *,
+    cache_path: Path | str = FUNDING_CACHE_PATH,
+    budget_seconds: float = 120.0,
+) -> dict[str, Any]:
+    """One bulk funding call per venue, for every leg the venue lists."""
+    deadline = time.monotonic() + budget_seconds
+    started = time.monotonic()
+    rates: dict[str, dict[str, Any]] = {}
+    covered = 0
+    for venue in venues if venues is not None else sorted(VENUE_IDS):
+        if time.monotonic() >= deadline:
+            break
+        client = _client(venue, "Futures")
+        if client is None or not getattr(client, "has", {}).get("fetchFundingRates"):
+            continue
+        try:
+            payload = client.fetch_funding_rates()
+        except Exception:  # noqa: BLE001 - one venue must not stop the sweep.
+            continue
+        items = payload.values() if isinstance(payload, dict) else payload
+        wrote = 0
+        for item in items or []:
+            if not isinstance(item, dict) or not item.get("symbol"):
+                continue
+            rate = item.get("fundingRate")
+            if rate is None:
+                continue
+            interval = item.get("interval")
+            if isinstance(interval, str) and interval.casefold().endswith("h"):
+                interval = interval[:-1]
+            try:
+                entry: dict[str, Any] = {"rate_pct": float(rate) * 100.0}
+            except (TypeError, ValueError):
+                continue
+            try:
+                if interval is not None:
+                    entry["interval_hours"] = float(interval)
+            except (TypeError, ValueError):
+                pass
+            next_ms = item.get("fundingTimestamp") or item.get("nextFundingTimestamp")
+            try:
+                if next_ms:
+                    entry["next_funding_ts_us"] = int(float(next_ms) * 1000)
+            except (TypeError, ValueError):
+                pass
+            rates[f"{venue}|{item['symbol']}"] = entry
+            wrote += 1
+        if wrote:
+            covered += 1
+    payload_out = {
+        "schema": "spreadboard.live_funding.v1",
+        "updated_at": datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat(),
+        "legs": rates,
+    }
+    path = Path(cache_path)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload_out, separators=(",", ":")), encoding="utf-8")
+    temporary.replace(path)
+    return {
+        "status": "ok",
+        "venues": covered,
+        "legs": len(rates),
+        "seconds": round(time.monotonic() - started, 1),
+    }
+
+
+_FUNDING_CACHE: dict[str, Any] = {"stamp": None, "legs": {}}
+
+
+def load_funding(*, cache_path: Path | str = FUNDING_CACHE_PATH) -> dict[str, dict[str, Any]]:
+    """The cached rates, re-read only when the file changes."""
+    path = Path(cache_path)
+    try:
+        stamp = path.stat().st_mtime_ns
+    except OSError:
+        return {}
+    if _FUNDING_CACHE["stamp"] != stamp:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        _FUNDING_CACHE["legs"] = payload.get("legs") or {}
+        _FUNDING_CACHE["stamp"] = stamp
+    return _FUNDING_CACHE["legs"]
