@@ -28,8 +28,7 @@ services:
       # Thirteen warmed views plus room for ad-hoc queries, so ordinary
       # traffic cannot evict what the warmer just built.
       SPREADBOARD_MARKET_CACHE_ENTRIES: "40"
-      SPREADBOARD_WS_BOOKS: "2000"
-      SPREADBOARD_WS_CHUNK: "20"
+      SPREADBOARD_WS_BOOKS: "1100"
       SPREADBOARD_WS_RECONCILE_SECONDS: "10"
       SPREADBOARD_WS_WRITE_SECONDS: "0.25"
       SPREADBOARD_CHART_SAMPLE_SECONDS: "2"
