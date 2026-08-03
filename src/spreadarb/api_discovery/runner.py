@@ -377,7 +377,40 @@ def _cap_rows_per_token(
 
     kept: list[dict[str, Any]] = []
     for token_rows in by_token.values():
-        kept.extend(token_rows[:limit])
+        kept.extend(_keep_across_lanes(token_rows, limit))
+    return kept
+
+
+#: How many routes of each lane a token keeps before the rest of its allowance
+#: is handed out by strength. Without this the funding-bearing lanes take
+#: everything: ASR, CFG, CHZ, LA and PTB each held 25 or more Spot-Futures rows
+#: and not one Spot-Spot pair, because _row_strength scores a carry trade above
+#: a 0.2% spot spread every time. The reference product lists all five in its
+#: Spot lane.
+LANE_RESERVE = 3
+
+
+def _keep_across_lanes(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Give every lane a foothold before ranking the remainder on strength."""
+    if len(rows) <= limit:
+        return rows
+    by_lane: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_lane.setdefault(str(row.get("route_kind") or "UNKNOWN"), []).append(row)
+
+    kept: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for lane_rows in by_lane.values():
+        for row in lane_rows[:LANE_RESERVE]:
+            if len(kept) >= limit:
+                break
+            kept.append(row)
+            seen.add(id(row))
+    for row in rows:
+        if len(kept) >= limit:
+            break
+        if id(row) not in seen:
+            kept.append(row)
     return kept
 
 
