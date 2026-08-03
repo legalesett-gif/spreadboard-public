@@ -746,7 +746,17 @@ def _load_api_discovery_rows(
     # minutes, the fast-quote delta every minute. Keying on both means a price
     # refresh no longer forces the whole board to be rebuilt.
     delta_path = _fast_quote_delta_path(path)
-    cache_key = (str(path), path.stat().st_mtime_ns, _mtime_ns(delta_path))
+    # The funding overlay is a third input and has to be keyed too. Without it a
+    # sweep could refresh every rate on the board and the cached rows would keep
+    # the old ones until the snapshot happened to move.
+    from spreadboard import bulk_quotes
+
+    cache_key = (
+        str(path),
+        path.stat().st_mtime_ns,
+        _mtime_ns(delta_path),
+        _mtime_ns(Path(bulk_quotes.FUNDING_CACHE_PATH)),
+    )
     with _SNAPSHOT_CACHE_LOCK:
         cached_rows = _ROW_CACHE.get(cache_key)
     if cached_rows is not None and 0.0 <= now - cached_rows[0] < _ROW_CACHE_TTL_SECONDS:

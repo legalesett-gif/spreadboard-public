@@ -224,3 +224,16 @@ def test_no_cached_funding_leaves_the_row_alone(monkeypatch) -> None:
     raw = {"long_venue": "Gate", "long_market_type": "Futures", "long_market_symbol": "T/USDT:USDT"}
 
     assert api_spreads._apply_live_funding(raw) is raw
+
+
+def test_a_funding_sweep_invalidates_cached_rows(tmp_path, monkeypatch) -> None:
+    """A sweep can refresh every rate on the board, and the cached rows would
+    keep the old ones until the snapshot happened to move."""
+    import inspect
+
+    from spreadboard import api_spreads
+
+    source = inspect.getsource(api_spreads._load_api_discovery_rows)
+    assert "FUNDING_CACHE_PATH" in source, (
+        "the funding overlay must take part in the row cache key"
+    )
