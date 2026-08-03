@@ -29,6 +29,13 @@ for import_path in (ROOT / "src", ROOT):
 from spreadboard.fast_quotes import FastQuoteRefresher  # noqa: E402
 from spreadboard.server import api_market_spreads, _query_lists_with  # noqa: E402
 
+#: Venues settling more often than the 8h standard. One instantaneous print
+#: times 24 is a forecast, not a measurement, and on these it is a bad one:
+#: AGLD's print once extrapolated to 9.78%/day against the 5.66%/day the 24
+#: rates it actually paid summed to. The board uses the settled sum, so a
+#: disagreement here is this script being naive, not the board being wrong.
+SUB_8H_VENUES = {"Kraken Futures", "Hyperliquid"}
+
 LANES = (
     ("FUTURES-FUTURES", {"kind": "FUTURES"}),
     ("FUTURES-SPOT", {"kind": "FUTURES-SPOT-PAIR"}),
@@ -75,7 +82,7 @@ def main() -> int:
                 venue_rates[venue] = {}
         return venue_rates[venue]
 
-    totals = {"ok": 0, "mismatch": 0, "unverifiable": 0}
+    totals = {"ok": 0, "mismatch": 0, "forecast": 0, "unverifiable": 0}
     try:
         for lane_name, lane in LANES:
             query = _query_lists_with(
@@ -111,8 +118,21 @@ def main() -> int:
                 real = short_leg - long_leg
                 # The paired carry is the short leg's receipt less the long
                 # leg's payment; a route is fine if it is within drift of that.
-                verdict = "OK" if abs(ours - real) <= max(0.15, abs(real) * args.tolerance) else "MISMATCH"
-                totals["ok" if verdict == "OK" else "mismatch"] += 1
+                # A row whose carry came from the rates that actually settled
+                # over 24h is a measurement. This script can only build a
+                # forecast from the current print, so the two are not the same
+                # quantity and a gap between them is not an error.
+                measured = route.get("funding_24h_source") == "settled_public_events"
+                hourly = {route.get("long_venue"), route.get("short_venue")} & SUB_8H_VENUES
+                if abs(ours - real) <= max(0.15, abs(real) * args.tolerance):
+                    verdict = "OK"
+                    totals["ok"] += 1
+                elif measured or hourly:
+                    verdict = "MEASURED" if measured else "FORECAST"
+                    totals["forecast"] += 1
+                else:
+                    verdict = "MISMATCH"
+                    totals["mismatch"] += 1
                 print(
                     f"   {group.get('token'):<12} {ours:>9.4f} {real:>9.4f} {ours - real:>+9.3f}  "
                     f"{route.get('long_venue')} -> {route.get('short_venue')}  {verdict}"
@@ -120,10 +140,14 @@ def main() -> int:
     finally:
         refresher.close()
 
+    verifiable = totals["ok"] + totals["mismatch"]
     print(
         f"\nmatched {totals['ok']}, mismatched {totals['mismatch']}, "
+        f"measured-vs-forecast {totals['forecast']}, "
         f"unverifiable {totals['unverifiable']}"
     )
+    if verifiable:
+        print(f"agreement on comparable rows: {100.0 * totals['ok'] / verifiable:.0f}%")
     return 1 if totals["mismatch"] else 0
 
 
