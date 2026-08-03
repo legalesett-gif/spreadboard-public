@@ -437,6 +437,9 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stop_service)
     signal.signal(signal.SIGINT, stop_service)
     refresh_loop.start()
+    # Shares the refresh loop's stop event so shutdown stops it too.
+    bulk_quote_loop = BulkQuoteLoop(refresh_loop.stop_event)
+    bulk_quote_loop.start()
     position_alert_worker.start()
     membership_worker.start()
     market_alert_worker.start()
@@ -492,6 +495,35 @@ def _low_priority_prefix() -> list[str]:
     if shutil.which("ionice"):
         prefix += ["ionice", "-c3"]
     return prefix
+
+
+class BulkQuoteLoop(threading.Thread):
+    """Re-price the whole board from one bulk call per venue.
+
+    Websockets cover a few hundred legs of the eight thousand the board carries
+    and the scan re-quoted the rest every twenty-five minutes, so a route
+    outside the streaming set could be twenty minutes stale and a token that
+    turned positive in between did not appear until the next scan. One
+    fetch_tickers per venue closes that in about fifteen seconds.
+    """
+
+    def __init__(self, stop_event: threading.Event) -> None:
+        super().__init__(name="bulk-quotes", daemon=True)
+        self.stop_event = stop_event
+
+    def run(self) -> None:
+        from spreadboard import bulk_quotes
+
+        while not self.stop_event.is_set():
+            try:
+                summary = bulk_quotes.sweep()
+                _log(
+                    f"bulk quotes: {summary['quotes']} from {summary['venues']} venues "
+                    f"in {summary['seconds']}s"
+                )
+            except Exception as exc:  # noqa: BLE001 - best effort beside everything else.
+                _log(f"bulk quotes skipped: {type(exc).__name__}: {exc}")
+            self.stop_event.wait(bulk_quotes.INTERVAL_SECONDS)
 
 
 def _board_path() -> Path:
