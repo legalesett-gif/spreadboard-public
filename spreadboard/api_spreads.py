@@ -279,7 +279,7 @@ def load_spreads(
         # spread lanes. The funding lanes still carry them: a carry comes from
         # the funding rate, not from the book.
         if not funding_only:
-            filtered = [row for row in filtered if not spread_is_ticker_derived(row)]
+            filtered = [row for row in filtered if not spread_is_untrustworthy(row)]
     normalized_sort = _normalize_sort(sort_by)
     normalized_direction = "asc" if str(direction).casefold() == "asc" else "desc"
     filtered.sort(
@@ -1570,24 +1570,42 @@ def is_non_perpetual_or_inverse(row: "SpreadTerminalRow") -> bool:
     return False
 
 
+#: How wide a ticker-priced spread may be before it stops being believable.
+#: For a liquid market the last trade sits near the mid, so a small edge quoted
+#: that way is sound -- the reference product's entire Spot-Spot lane is
+#: 0.10-0.21% and Binance's ASR is quoted exactly like this. A large edge is
+#: different: it is the empty book that creates it.
+TICKER_PRICE_TRUST_LIMIT_PCT = float(
+    os.environ.get("SPREADBOARD_TICKER_SPREAD_LIMIT_PCT", "2.0")
+)
+
+
 def spread_is_ticker_derived(row: "SpreadTerminalRow") -> bool:
-    """True when a leg's quote is a last trade wearing a book's clothes.
-
-    A ticker-only quote fills bid and ask with the last traded price, so the
-    row prints a spread nobody can take. Upbit's BIO last traded at 0.01825
-    while its book was bid 0.02069 / ask 0.0588 -- buying costs three times what
-    the row showed, turning a displayed +45.97% into roughly -55%.
-
-    It is not a small tail: 328 of the 379 routes printing more than 20% were
-    priced this way. Filtering them leaves the edges that are real -- ESPORTS at
-    150%, RWA at 108%, VANRY at 100% -- and drops the artifacts.
-    """
+    """True when a leg is priced off a last trade rather than a book."""
     for side in ("long", "short"):
         bid = _float_or_none(getattr(row, f"{side}_bid", None))
         ask = _float_or_none(getattr(row, f"{side}_ask", None))
         if bid is not None and ask is not None and bid == ask:
             return True
     return False
+
+
+def spread_is_untrustworthy(row: "SpreadTerminalRow") -> bool:
+    """A ticker-priced row claiming an edge far too large to believe.
+
+    bid == ask means the quote came from a ticker, which says how we captured
+    it, not that the market is thin -- Binance's ASR is quoted that way and is
+    the reference product's top Spot-Spot row at 0.21%. Rejecting every such row
+    dropped exactly the tight liquid band that board is made of.
+
+    What cannot stand is a ticker price carrying a large edge. Upbit's BIO last
+    traded at 0.01825 while its book was bid 0.02069 / ask 0.0588: buying costs
+    three times the shown price, turning +45.97% into roughly -55%. 328 of the
+    379 routes printing over 20% were priced this way.
+    """
+    if not spread_is_ticker_derived(row):
+        return False
+    return abs(_entrance_spread(row)) > TICKER_PRICE_TRUST_LIMIT_PCT
 
 
 def pays_something(row: "SpreadTerminalRow") -> bool:

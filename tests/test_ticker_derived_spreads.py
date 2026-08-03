@@ -18,10 +18,19 @@ def _row(**overrides) -> SpreadTerminalRow:
         "long_ask": 1.01,
         "short_bid": 1.10,
         "short_ask": 1.11,
+        # _entrance_spread reads the displayed edge; derive it from the legs so
+        # the fixture stays self-consistent.
+        "displayed_open_spread_pct": None,
+        "executable_spread_pct": None,
+        "depth_weighted_spread_pct": None,
     }
     defaults.update(overrides)
     for key, value in defaults.items():
         object.__setattr__(row, key, value)
+    if row.displayed_open_spread_pct is None and row.long_ask:
+        object.__setattr__(
+            row, "displayed_open_spread_pct", (row.short_bid / row.long_ask - 1.0) * 100.0
+        )
     return row
 
 
@@ -41,3 +50,31 @@ def test_either_leg_is_enough_to_disqualify_the_spread() -> None:
 def test_a_missing_quote_is_not_treated_as_ticker_derived() -> None:
     """Absent prices are handled by the deliverability checks, not here."""
     assert spread_is_ticker_derived(_row(long_bid=None, long_ask=None)) is False
+
+
+def test_a_small_ticker_priced_edge_is_believable() -> None:
+    """Binance's ASR is quoted this way and is the reference top row at 0.21%.
+
+    Rejecting every ticker-priced row dropped exactly the tight liquid band the
+    reference Spot-Spot lane is made of.
+    """
+    from spreadboard.api_spreads import spread_is_untrustworthy
+
+    asr = _row(long_bid=0.856, long_ask=0.856, short_bid=0.857, short_ask=0.857)
+    assert spread_is_untrustworthy(asr) is False
+
+
+def test_a_large_ticker_priced_edge_is_not() -> None:
+    """Upbit BIO printed +45.97% off a last trade; the real trade is about -55%."""
+    from spreadboard.api_spreads import spread_is_untrustworthy
+
+    bio = _row(long_bid=0.01825, long_ask=0.01825, short_bid=0.02664, short_ask=0.02664)
+    assert spread_is_untrustworthy(bio) is True
+
+
+def test_a_large_edge_backed_by_a_real_book_is_kept() -> None:
+    """ESPORTS at 150% and VANRY at 100% have genuine two-sided books."""
+    from spreadboard.api_spreads import spread_is_untrustworthy
+
+    real = _row(long_bid=0.0170, long_ask=0.0171, short_bid=0.0428, short_ask=0.0430)
+    assert spread_is_untrustworthy(real) is False

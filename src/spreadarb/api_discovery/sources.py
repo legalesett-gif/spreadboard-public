@@ -1359,6 +1359,19 @@ def _price_ratio_implausible(long_quote: MarketQuote, short_quote: MarketQuote) 
     return ratio > MAX_PAIR_PRICE_RATIO
 
 
+def _quote_has_real_book(quote: MarketQuote) -> bool:
+    """True when a quote carries a genuine two-sided book.
+
+    A ticker-only quote fills bid and ask with the last traded price. Such a
+    pair prints an edge nobody can take, and because candidates are ranked by
+    spread it outranks the tight liquid pair and evicts it under the per-token
+    cap. The reference product's entire Spot-Spot lane sits between 0.10% and
+    0.21% -- exactly the routes that were being evicted.
+    """
+    bid, ask = quote.bid, quote.ask
+    return bid is not None and ask is not None and bid != ask
+
+
 def quote_candidate_pairs(
     quotes: Iterable[MarketQuote],
     *,
@@ -1418,7 +1431,17 @@ def quote_candidate_pairs(
                         depth_weighted_spread_pct=depth,
                     )
                 )
-    pairs.sort(key=lambda pair: pair.depth_weighted_spread_pct, reverse=True)
+    # Order by whether the pair can be traded before ordering by how much it
+    # pays. Ranking on spread alone means a ticker-only mirage always outranks a
+    # real 0.12% pair, and the per-token cap then keeps the mirage: the comment
+    # on _price_ratio_implausible above records the same eviction for NXT.
+    pairs.sort(
+        key=lambda pair: (
+            _quote_has_real_book(pair.long_quote) and _quote_has_real_book(pair.short_quote),
+            pair.depth_weighted_spread_pct,
+        ),
+        reverse=True,
+    )
     return pairs
 
 
