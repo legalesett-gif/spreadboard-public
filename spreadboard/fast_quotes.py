@@ -145,6 +145,17 @@ NATIVE_FUNDING_SOURCES: dict[str, dict[str, Any]] = {
         "rate": "funding_rate",
         "next_ms": "next_funding_rate_timestamp",
     },
+    "Ourbit": {
+        # An MEXC white-label with no CCXT adapter, so there are no markets to
+        # map ids through; its symbols are BASE_QUOTE and convert directly.
+        "url": "https://futures.ourbit.com/api/v1/contract/funding_rate",
+        "path": ("data",),
+        "symbol": "symbol",
+        "symbol_format": "underscore_swap",
+        "rate": "fundingRate",
+        "interval": "collectCycle",
+        "next_ms": "nextSettleTime",
+    },
     "Kraken Futures": {
         "url": "https://futures.kraken.com/derivatives/api/v4/tickers",
         "path": ("tickers",),
@@ -253,10 +264,12 @@ class FastQuoteRefresher:
                 payload = payload[step]
             if not isinstance(payload, list):
                 return {}
-            client = self._client(venue, "Futures")
-            if client is None:
-                return {}
-            if not getattr(client, "markets", None):
+            client = None
+            if spec.get("symbol_format") != "underscore_swap":
+                client = self._client(venue, "Futures")
+                if client is None:
+                    return {}
+            if client is not None and not getattr(client, "markets", None):
                 with self._client_request_lock(venue, "Futures"):
                     client.load_markets()
         except Exception:  # noqa: BLE001 - one venue must not stop the cycle.
@@ -267,6 +280,25 @@ class FastQuoteRefresher:
         for item in payload:
             if not isinstance(item, dict):
                 continue
+            if spec.get("symbol_format") == "underscore_swap":
+                native = str(item.get(str(spec["symbol"])) or "")
+                base, separator, quote = native.partition("_")
+                if not separator or not base:
+                    continue
+                unified = f"{base}/{quote}:{quote}"
+                rate = _optional_number(item.get(str(spec["rate"])))
+                if rate is None:
+                    continue
+                interval = _optional_number(item.get(str(spec.get("interval") or "")))
+                fields = _funding_fields(
+                    rate,
+                    interval_hours=interval or DEFAULT_FUNDING_INTERVAL_HOURS,
+                    next_funding_ms=item.get(str(spec.get("next_ms") or "")),
+                )
+                if fields:
+                    rates[unified] = fields
+                continue
+
             market = None
             for name in spec.get("symbol_keys") or (str(spec["symbol"]),):
                 native = item.get(name)

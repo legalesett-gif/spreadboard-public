@@ -172,3 +172,26 @@ def test_a_spot_only_id_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
     refresher = _refresher(monkeypatch, payload, {"night_usdt": {"symbol": "NIGHT/USDT"}})
 
     assert refresher._native_bulk_funding_rates("XT") == {}
+
+
+def test_ourbit_symbols_convert_without_a_ccxt_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ourbit is an MEXC white-label with no CCXT adapter.
+
+    There are no markets to map ids through, so BASE_QUOTE converts directly.
+    """
+    payload = {
+        "data": [
+            {"symbol": "BTC_USDT", "fundingRate": 3.4e-05, "collectCycle": 8},
+            {"symbol": "QNTX_USDT", "fundingRate": 0.0014, "collectCycle": 8},
+        ]
+    }
+    refresher = FastQuoteRefresher()
+    monkeypatch.setattr(fast_quotes, "_json_url", lambda _url: payload)
+
+    rates = refresher._native_bulk_funding_rates("Ourbit")
+
+    assert rates["BTC/USDT:USDT"]["current_funding_pct"] == pytest.approx(0.0034)
+    assert rates["BTC/USDT:USDT"]["funding_interval_hours"] == 8.0
+    assert "QNTX/USDT:USDT" in rates
