@@ -270,6 +270,7 @@ def load_spreads(
             if not price_ratio_implausible(row)
             and not leg_volume_too_thin(row)
             and not is_venue_specific_leveraged_token(row)
+            and not is_non_perpetual_or_inverse(row)
             and row.route_key not in unverifiable
             and pays_something(row)
         ]
@@ -1449,6 +1450,38 @@ def is_venue_specific_leveraged_token(row: "SpreadTerminalRow") -> bool:
         return False
     # Same venue, both legs: a venue's own spot against its own perp is fine.
     return getattr(row, "long_venue", None) != getattr(row, "short_venue", None)
+
+
+#: `BASE/QUOTE:SETTLE` settles in a stablecoin or dollar for a linear contract.
+#: An inverse (coin-margined) contract settles in the base asset instead.
+LINEAR_SETTLE_ASSETS = {"USDT", "USDC", "USD", "USDE", "FDUSD", "BUSD", "DAI", "TUSD", "USD1"}
+#: Kraken FI_XRPUSD_260828, Binance BTCUSD_261225: a dated contract carries its
+#: expiry in the symbol.
+DATED_CONTRACT_PATTERN = re.compile(r"-\d{6,8}$")
+
+
+def is_non_perpetual_or_inverse(row: "SpreadTerminalRow") -> bool:
+    """True for a leg that is not a linear perpetual, so does not belong here.
+
+    An inverse contract quotes funding against the base asset, so applying the
+    linear formula to it is not a small error: Kraken's PI_XRPUSD read
+    -0.4409%/h against a real -0.00073%/h and headlined XRP at +10.61%/day.
+    Dated futures have no funding at all, and their gap to spot is basis that
+    converges at expiry rather than an edge anyone can farm. Neither appears on
+    the reference product.
+    """
+    for side in ("long", "short"):
+        if str(getattr(row, f"{side}_market_type", "") or "") != "Futures":
+            continue
+        symbol = str(getattr(row, f"{side}_market_symbol", "") or "")
+        if not symbol:
+            continue
+        if DATED_CONTRACT_PATTERN.search(symbol):
+            return True
+        _, separator, settle = symbol.partition(":")
+        if separator and settle and settle.upper() not in LINEAR_SETTLE_ASSETS:
+            return True
+    return False
 
 
 def pays_something(row: "SpreadTerminalRow") -> bool:

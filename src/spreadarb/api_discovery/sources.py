@@ -1894,7 +1894,33 @@ def _market_matches_type(market: Mapping[str, Any], symbol: str, market_type: st
         return bool(market.get("spot")) or not (
             market.get("swap") or market.get("future") or ":" in symbol
         )
-    return bool(market.get("swap") or market.get("future") or ":" in symbol)
+    if not (market.get("swap") or market.get("future") or ":" in symbol):
+        return False
+    return _is_tradeable_perpetual(market)
+
+
+def _is_tradeable_perpetual(market: Mapping[str, Any]) -> bool:
+    """Only linear perpetuals belong on a funding board.
+
+    Kraken lists XRP three ways: PF_XRPUSD (linear perp), PI_XRPUSD (inverse
+    perp) and FI_XRPUSD_260828 (a dated future). Accepting all of them put the
+    inverse contract on the board at -0.4409%/h against a real -0.00073%/h --
+    a paired carry of +10.61%/day, or 3,869% APR, on XRP. Inverse contracts
+    quote funding against the base currency, so the linear arithmetic is simply
+    the wrong formula for them.
+
+    Dated futures are worse: they have no funding at all, and their gap to spot
+    is basis that converges at expiry rather than an edge anyone can farm.
+    """
+    if market.get("inverse") is True:
+        return False
+    # A perpetual never expires. Some venues leave `swap` unset but always
+    # publish an expiry for dated contracts.
+    if market.get("expiry") or market.get("expiryDatetime"):
+        return False
+    if market.get("future") is True and not market.get("swap"):
+        return False
+    return True
 
 
 def _source_enabled(source: DiscoverySource, source_filter: set[str] | None) -> bool:
