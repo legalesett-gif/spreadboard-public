@@ -65,6 +65,17 @@ _MARKET_CACHE_TTL_SECONDS = max(
 _MARKET_CACHE_MAX_ENTRIES = max(4, int(os.environ.get("SPREADBOARD_MARKET_CACHE_ENTRIES", "14")))
 _MARKET_CACHE_LOCK = threading.Lock()
 _MARKET_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+#: The same payloads indexed by query alone. The full cache key includes the
+#: snapshot's file signature, and the funding sweep rewrites that snapshot every
+#: couple of minutes, so every view is invalidated together far more often than
+#: the discovery scan runs. Serving the previous payload while the new one
+#: builds is what keeps the board from going cold each time -- prices are not
+#: stale with it, because the stream re-prices what is on screen every three
+#: seconds; only the grouping is a little behind.
+_MARKET_STALE_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+_MARKET_STALE_MAX_SECONDS = max(
+    60.0, float(os.environ.get("SPREADBOARD_MARKET_STALE_SECONDS", "1800"))
+)
 _MARKET_CACHE_INFLIGHT: dict[tuple[Any, ...], threading.Event] = {}
 _CHART_SAMPLE_LOCK = threading.Lock()
 _CHART_SAMPLE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -985,7 +996,12 @@ def _legacy_board_snapshot(board_path: Path, query: dict[str, list[str]] | None 
     return data
 
 
-def api_market_spreads(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+def api_market_spreads(
+    board_path: Path,
+    query: dict[str, list[str]] | None = None,
+    *,
+    allow_stale: bool = True,
+) -> dict[str, Any]:
     query = query or {}
     limit = max(20, min(500, int(_query_float(query, "limit", api_spreads.DEFAULT_LIMIT) or api_spreads.DEFAULT_LIMIT)))
     offset = max(0, int(_query_float(query, "offset", 0) or 0))
@@ -1007,6 +1023,18 @@ def api_market_spreads(board_path: Path, query: dict[str, list[str]] | None = No
             cached = _market_cache_get(cache_key)
             if cached is not None:
                 return cached
+        # The snapshot moved under us. Serve what we built for this same view a
+        # moment ago and let the refresh finish behind the request, rather than
+        # holding a page open for a full rebuild.
+        stale = _market_cache_stale_get(cache_key) if allow_stale else None
+        if stale is not None:
+            if owns_refresh:
+                threading.Thread(
+                    target=_rebuild_market_cache,
+                    args=(board_path, dict(query), cache_key),
+                    daemon=True,
+                ).start()
+            return stale
 
     try:
         min_funding_24h = _query_float(query, "min_abs_funding_24h_pct")
@@ -1039,6 +1067,25 @@ def api_market_spreads(board_path: Path, query: dict[str, list[str]] | None = No
     if cache_key is not None:
         _market_cache_finish(cache_key, data)
     return data
+
+
+def _rebuild_market_cache(
+    board_path: Path, query: dict[str, list[str]], cache_key: tuple[Any, ...]
+) -> None:
+    """Refresh a view behind the request that was served the previous payload."""
+    # The request that served the stale payload registered the in-flight marker
+    # and then returned, so nobody is holding it. Release it here or the rebuild
+    # blocks on its own gate for the full wait before doing anything.
+    with _MARKET_CACHE_LOCK:
+        waiting = _MARKET_CACHE_INFLIGHT.pop(cache_key, None)
+    if waiting is not None:
+        waiting.set()
+    try:
+        # allow_stale=False so this actually rebuilds and stores, instead of
+        # being handed back the very payload it was started to replace.
+        api_market_spreads(board_path, query, allow_stale=False)
+    except Exception:  # noqa: BLE001 - the stale payload is already serving.
+        pass
 
 
 def api_alert_context(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
@@ -1123,10 +1170,31 @@ def _market_cache_get(cache_key: tuple[Any, ...]) -> dict[str, Any] | None:
     return None
 
 
+def _market_stale_key(cache_key: tuple[Any, ...]) -> tuple[Any, ...]:
+    """The cache key without the snapshot signatures -- query and board only."""
+    return (cache_key[0], cache_key[-1])
+
+
+def _market_cache_stale_get(cache_key: tuple[Any, ...]) -> dict[str, Any] | None:
+    """The last payload built for this query, whatever snapshot produced it."""
+    now = time.monotonic()
+    with _MARKET_CACHE_LOCK:
+        cached = _MARKET_STALE_CACHE.get(_market_stale_key(cache_key))
+        if cached and now - cached[0] <= _MARKET_STALE_MAX_SECONDS:
+            return cached[1]
+    return None
+
+
 def _market_cache_finish(cache_key: tuple[Any, ...], data: dict[str, Any] | None) -> None:
     with _MARKET_CACHE_LOCK:
         if data is not None:
             _MARKET_CACHE[cache_key] = (time.monotonic(), data)
+            _MARKET_STALE_CACHE[_market_stale_key(cache_key)] = (time.monotonic(), data)
+            if len(_MARKET_STALE_CACHE) > _MARKET_CACHE_MAX_ENTRIES:
+                oldest = min(
+                    _MARKET_STALE_CACHE, key=lambda key: _MARKET_STALE_CACHE[key][0]
+                )
+                _MARKET_STALE_CACHE.pop(oldest, None)
             if len(_MARKET_CACHE) > _MARKET_CACHE_MAX_ENTRIES:
                 oldest = min(_MARKET_CACHE, key=lambda key: _MARKET_CACHE[key][0])
                 _MARKET_CACHE.pop(oldest, None)
