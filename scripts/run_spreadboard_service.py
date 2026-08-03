@@ -512,6 +512,36 @@ def _warm_board_cache(*, force: bool = False) -> None:
         except Exception as exc:  # noqa: BLE001 - warming is best effort.
             _log(f"board cache warm skipped {query}: {type(exc).__name__}: {exc}")
     _log(f"board cache warmed {len(WARM_QUERIES)} views in {time.monotonic() - started:.1f}s")
+    _refresh_funding_windows()
+
+
+def _refresh_funding_windows() -> None:
+    """Precompute realised 1d/7d/30d carry for the routes on the board.
+
+    Integrating the rate costs roughly half a second per route-window, so it
+    cannot happen while rendering. Doing it here, for the routes the warm pass
+    just built, means the page only ever reads the answer.
+    """
+    from spreadboard import market_history, server
+
+    try:
+        route_keys: list[str] = []
+        for query in WARM_QUERIES:
+            if not query.get("funding_only"):
+                continue
+            payload = server.api_market_spreads(_board_path(), dict(query))
+            for group in payload.get("groups") or []:
+                for route in group.get("routes") or []:
+                    key = route.get("route_key")
+                    if key:
+                        route_keys.append(str(key))
+        if not route_keys:
+            return
+        started = time.monotonic()
+        count = market_history.write_funding_windows(route_keys)
+        _log(f"funding windows computed for {count} routes in {time.monotonic() - started:.1f}s")
+    except Exception as exc:  # noqa: BLE001 - a missing history file is not fatal.
+        _log(f"funding windows skipped: {type(exc).__name__}: {exc}")
 
 
 def _log(message: str) -> None:

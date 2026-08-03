@@ -3267,6 +3267,30 @@ def render_signals_page(board_path: Path, config: dict[str, Any], query: dict[st
     return shell("Signals - SpreadBoard", "signals", body)
 
 
+def render_funding_windows(route_key: Any) -> str:
+    """Realised 1d/7d/30d carry for a route, or an honest blank.
+
+    A rate tells you what a farm pays right now; these tell you what it has
+    actually paid. The reference product shows them on every row and it is how
+    a member separates a durable farm from this morning's spike. A window we
+    have not observed for at least half its length shows a dash rather than a
+    number built from a fraction of the period.
+    """
+    windows = market_history.load_funding_windows().get(str(route_key or "")) or {}
+    cells = []
+    for label in ("1d", "7d", "30d"):
+        value = (windows.get(label) or {}).get("net")
+        if value is None:
+            cells.append(f'<span class="funding-window unknown"><em>{label}</em><strong>—</strong></span>')
+        else:
+            tone = "positive" if value > 0 else "negative" if value < 0 else "flat"
+            cells.append(
+                f'<span class="funding-window {tone}"><em>{label}</em>'
+                f"<strong>{fmt_signed_pct(value, digits=2)}</strong></span>"
+            )
+    return f'<div class="funding-window-strip" title="Carry actually realised over each window">{"".join(cells)}</div>'
+
+
 def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
     del config
     selected_farm = (_query_first(query, "farm") or "futures-futures").casefold()
@@ -3367,6 +3391,7 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
         <div><span>Net 24h</span><strong>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
         <div><span>Payouts</span><strong>{h(funding_cadence_pair(best))}</strong></div>
         <div><span>Entry basis</span><strong>{fmt_pct(best.get('executable_spread_pct'))}</strong></div>
+        <div><span>Realised</span>{render_funding_windows(best.get('route_key'))}</div>
         <div><span>Pairs</span><strong>{h(group.get('route_count') or 0)}</strong></div>
         <span class="funding-chevron" aria-hidden="true">⌄</span>
       </summary>
@@ -9041,6 +9066,14 @@ input:focus, select:focus, a:focus-visible, button:focus-visible, summary:focus-
 .header-strip {{ height: 12px; background: var(--terminal-bg); border-bottom: 1px solid var(--terminal-line); }}
 .mobile-primary-nav, .mobile-secondary-nav {{ display: none; }}
 main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
+.funding-window-strip {{ display: inline-flex; gap: 6px; align-items: stretch; }}
+.funding-window {{ display: flex; flex-direction: column; gap: 1px; padding: 2px 6px; border-radius: 6px;
+  background: rgba(255,255,255,0.04); line-height: 1.15; }}
+.funding-window em {{ font-size: 9px; font-style: normal; opacity: 0.6; letter-spacing: 0.04em; }}
+.funding-window strong {{ font-size: 11px; font-variant-numeric: tabular-nums; }}
+.funding-window.positive strong {{ color: #4ade80; }}
+.funding-window.negative strong {{ color: #f87171; }}
+.funding-window.unknown strong {{ opacity: 0.45; }}
 .markets-page {{ display: grid; gap: 12px; }}
 .market-hero {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: end; padding: 16px 18px; border-radius: 8px; background: var(--dark); color: white; box-shadow: var(--shadow); }}
 .market-hero-copy {{ display: grid; gap: 4px; max-width: 980px; }}

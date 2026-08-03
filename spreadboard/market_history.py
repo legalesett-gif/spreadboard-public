@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import json
 import os
 import sqlite3
+import time
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -412,3 +415,163 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+#: Windows the board offers, matching what a member expects to compare against.
+FUNDING_WINDOW_DAYS: tuple[int, ...] = (1, 7, 30)
+#: A gap longer than this is treated as missing data rather than accrual. Routes
+#: on the board are sampled every couple of minutes; a multi-hour gap means the
+#: route dropped out of the sampling set, not that funding ran unobserved.
+FUNDING_GAP_CAP_HOURS = 1.0
+#: How much of a window must be observed before the number means anything. A
+#: figure built from a tenth of the period is not a 7d return, it is noise with
+#: a label.
+FUNDING_MIN_COVERAGE = 0.5
+
+
+def funding_windows(
+    route_keys: Sequence[str],
+    *,
+    windows_days: tuple[int, ...] = FUNDING_WINDOW_DAYS,
+    db_path: Path | str = DEFAULT_DB_PATH,
+    now_us: int | None = None,
+) -> dict[str, dict[str, dict[str, float | None]]]:
+    """What each leg actually paid or received over each window, in percent.
+
+    The reference product shows 1d/7d/30d beside every leg, and it is how a
+    member separates a farm that has paid for a week from a rate that spiked
+    this morning. Ours said "history unavailable".
+
+    Funding is a rate per interval, so the realised figure is the rate
+    integrated over time: for consecutive samples, `rate * elapsed / interval`.
+    Gaps longer than FUNDING_GAP_CAP_HOURS are not counted -- the route left the
+    sampling set, and pretending otherwise would invent accrual. A window
+    observed for less than FUNDING_MIN_COVERAGE of its length returns None so
+    the board can say it does not know rather than guess.
+    """
+    wanted = [key for key in dict.fromkeys(route_keys) if key]
+    if not wanted:
+        return {}
+    now = now_us if now_us is not None else int(time.time() * 1_000_000)
+    output: dict[str, dict[str, dict[str, float | None]]] = {
+        key: {f"{days}d": {"long": None, "short": None, "net": None} for days in windows_days}
+        for key in wanted
+    }
+
+    try:
+        connection = _connect(db_path)
+    except sqlite3.Error:
+        return output
+    try:
+        for days in windows_days:
+            window_hours = days * 24.0
+            since = now - int(window_hours * 3_600_000_000)
+            placeholders = ",".join("?" for _ in wanted)
+            rows = connection.execute(
+                f"""
+                SELECT route_key,
+                       SUM(long_pct) AS long_total,
+                       SUM(short_pct) AS short_total,
+                       SUM(covered_hours) AS covered_hours
+                FROM (
+                    SELECT route_key,
+                           MIN(
+                               (LEAD(quote_ts_us) OVER w - quote_ts_us) / 3600000000.0,
+                               ?
+                           ) AS covered_hours,
+                           long_current_funding_pct
+                               * MIN((LEAD(quote_ts_us) OVER w - quote_ts_us) / 3600000000.0, ?)
+                               / NULLIF(long_funding_interval_hours, 0) AS long_pct,
+                           short_current_funding_pct
+                               * MIN((LEAD(quote_ts_us) OVER w - quote_ts_us) / 3600000000.0, ?)
+                               / NULLIF(short_funding_interval_hours, 0) AS short_pct
+                    FROM route_points
+                    WHERE quote_ts_us >= ?
+                      AND route_key IN ({placeholders})
+                    WINDOW w AS (PARTITION BY route_key ORDER BY quote_ts_us)
+                )
+                GROUP BY route_key
+                """,
+                (
+                    FUNDING_GAP_CAP_HOURS,
+                    FUNDING_GAP_CAP_HOURS,
+                    FUNDING_GAP_CAP_HOURS,
+                    since,
+                    *wanted,
+                ),
+            ).fetchall()
+            label = f"{days}d"
+            for row in rows:
+                covered = _float_or_none(row["covered_hours"]) or 0.0
+                if covered < window_hours * FUNDING_MIN_COVERAGE:
+                    continue
+                long_total = _float_or_none(row["long_total"])
+                short_total = _float_or_none(row["short_total"])
+                net = None
+                if long_total is not None or short_total is not None:
+                    net = (short_total or 0.0) - (long_total or 0.0)
+                output[str(row["route_key"])][label] = {
+                    "long": long_total,
+                    "short": short_total,
+                    "net": net,
+                }
+    except sqlite3.Error:
+        return output
+    finally:
+        connection.close()
+    return output
+
+
+FUNDING_WINDOW_CACHE_PATH = Path(
+    os.environ.get(
+        "SPREADBOARD_FUNDING_WINDOW_CACHE",
+        str(Path(DEFAULT_DB_PATH).parent / "funding_windows.json"),
+    )
+)
+
+
+def write_funding_windows(
+    route_keys: Sequence[str],
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+    cache_path: Path | str = FUNDING_WINDOW_CACHE_PATH,
+) -> int:
+    """Precompute the windows for the routes the board shows.
+
+    Integrating the rate costs about half a second per route-window, which is
+    far too slow to do while rendering: a lane of 25 tokens would add half a
+    minute to the page. The service computes it for the displayed routes and
+    the page reads the result.
+    """
+    payload = {
+        "schema": "spreadboard.funding_windows.v1",
+        "updated_at": datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat(),
+        "routes": funding_windows(route_keys, db_path=db_path),
+    }
+    path = Path(cache_path)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    temporary.replace(path)
+    return len(payload["routes"])
+
+
+_WINDOW_CACHE: dict[str, Any] = {"stamp": None, "routes": {}}
+
+
+def load_funding_windows(
+    *, cache_path: Path | str = FUNDING_WINDOW_CACHE_PATH
+) -> dict[str, dict[str, dict[str, float | None]]]:
+    """The precomputed windows, re-read only when the file changes."""
+    path = Path(cache_path)
+    try:
+        stamp = path.stat().st_mtime_ns
+    except OSError:
+        return {}
+    if _WINDOW_CACHE["stamp"] != stamp:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        _WINDOW_CACHE["routes"] = payload.get("routes") or {}
+        _WINDOW_CACHE["stamp"] = stamp
+    return _WINDOW_CACHE["routes"]
