@@ -86,6 +86,10 @@ class BookWorker:
         self._unavailable: set[LegKey] = set()
         #: Which symbols each venue task is currently carrying.
         self._subscribed: dict[tuple[str, str, int], list[str]] = {}
+        #: Last write per symbol. The per-leg loop throttled writes and the
+        #: batched one did not, so every update hit SQLite and they serialised:
+        #: 2,271 books with a median age of 550s and only 488 of them fresh.
+        self._last_write: dict[LegKey, float] = {}
 
     async def run(self) -> None:
         while not self.stop.is_set():
@@ -199,8 +203,15 @@ class BookWorker:
                 await asyncio.sleep(delay)
                 delay = min(30.0, delay * 2)
 
+    def _should_write(self, key: LegKey) -> bool:
+        now = time.monotonic()
+        if now - self._last_write.get(key, 0.0) < WRITE_INTERVAL_SECONDS:
+            return False
+        self._last_write[key] = now
+        return True
+
     def _store_book(self, venue: str, market_type: str, symbol: Any, book: dict) -> None:
-        if not symbol:
+        if not symbol or not self._should_write((venue, market_type, str(symbol))):
             return
         bids = _levels(book.get("bids"))
         asks = _levels(book.get("asks"))
@@ -229,6 +240,8 @@ class BookWorker:
         bid = _number(ticker.get("bid"))
         ask = _number(ticker.get("ask"))
         if not bid or not ask or bid <= 0 or ask <= 0:
+            return
+        if not self._should_write((venue, market_type, str(symbol))):
             return
         timestamp_ms = _number(ticker.get("timestamp"))
         self.store.put(

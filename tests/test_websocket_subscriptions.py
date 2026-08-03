@@ -281,3 +281,29 @@ def test_a_market_type_without_batching_is_listed() -> None:
     from scripts.websocket_book_worker import NO_BATCH
 
     assert ("Mexc", "Spot") in NO_BATCH
+
+
+def test_writes_are_throttled_per_symbol() -> None:
+    """The per-leg loop throttled writes; the batched one lost it.
+
+    Every update then hit SQLite and they serialised -- 2,271 books with a
+    median age of 550s and only 488 fresh.
+    """
+    from scripts.websocket_book_worker import BookWorker
+
+    worker = BookWorker.__new__(BookWorker)
+    worker._last_write = {}
+    key = ("Gate", "Spot", "T/USDT")
+
+    assert worker._should_write(key) is True
+    assert worker._should_write(key) is False, "a second write inside the window must be skipped"
+
+
+def test_throttling_is_per_symbol_not_global() -> None:
+    from scripts.websocket_book_worker import BookWorker
+
+    worker = BookWorker.__new__(BookWorker)
+    worker._last_write = {}
+
+    assert worker._should_write(("Gate", "Spot", "A/USDT")) is True
+    assert worker._should_write(("Gate", "Spot", "B/USDT")) is True
