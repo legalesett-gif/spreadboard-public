@@ -83,6 +83,64 @@ NATIVE_SPOT_VENUES = {
 FAST_QUOTE_LANES = ("FUTURES", "FUTURES-SPOT", "SPOT", "DEX-FUTURES")
 
 
+#: Venues whose funding CCXT cannot fetch in bulk. Without these the legs on
+#: these venues keep whatever the 20-40 minute discovery scan captured and are
+#: never corrected: HTX's ZHIPU sat at -0.6677%/8h while the exchange had long
+#: since moved to 0.0, which alone put ZHIPU on the board at 2.43%/day against
+#: a real 0.41%. Eight of eighteen futures venues were in this state.
+#:
+#: `path` walks the response to the list of contracts; `rate` is a fraction
+#: unless `divide_by` names a price field to normalise against (Kraken quotes
+#: an absolute rate). Native ids are mapped back through ccxt's markets_by_id,
+#: so the symbols always match the ones the board stores.
+NATIVE_FUNDING_SOURCES: dict[str, dict[str, Any]] = {
+    "HTX": {
+        "url": "https://api.hbdm.com/linear-swap-api/v1/swap_batch_funding_rate",
+        "path": ("data",),
+        "symbol": "contract_code",
+        "rate": "funding_rate",
+        "next_ms": "next_funding_time",
+    },
+    "Mexc": {
+        "url": "https://contract.mexc.com/api/v1/contract/funding_rate?page_num=1&page_size=1000",
+        "path": ("data",),
+        "symbol": "symbol",
+        "rate": "fundingRate",
+        "interval": "collectCycle",
+        "next_ms": "nextSettleTime",
+    },
+    "Kucoin Futures": {
+        "url": "https://api-futures.kucoin.com/api/v1/contracts/active",
+        "path": ("data",),
+        "symbol": "symbol",
+        "rate": "fundingFeeRate",
+        "interval": "fundingRateGranularity",
+    },
+    "Phemex": {
+        "url": "https://api.phemex.com/md/v3/ticker/24hr/all",
+        "path": ("result",),
+        "symbol": "symbol",
+        "rate": "fundingRateRr",
+    },
+    "BitMart": {
+        "url": "https://api-cloud-v2.bitmart.com/contract/public/details",
+        "path": ("data", "symbols"),
+        "symbol": "symbol",
+        "rate": "funding_rate",
+        "interval": "funding_interval_hours",
+    },
+    "Kraken Futures": {
+        "url": "https://futures.kraken.com/derivatives/api/v4/tickers",
+        "path": ("tickers",),
+        "symbol": "symbol",
+        "rate": "fundingRate",
+        # Kraken publishes an absolute rate; the fraction is it over mark price.
+        "divide_by": "markPrice",
+        "interval_constant": 1.0,
+    },
+}
+
+
 class FastQuoteRefresher:
     def __init__(self) -> None:
         self._clients: dict[tuple[str, str], Any] = {}
@@ -164,16 +222,72 @@ class FastQuoteRefresher:
         payload["funding_refresh"] = summary
         return summary
 
+    def _native_bulk_funding_rates(self, venue: str) -> dict[str, dict[str, Any]]:
+        """Funding for a venue CCXT cannot bulk-fetch, from its own public API.
+
+        Keyed by the venue's unified CCXT symbol so the result drops straight
+        into the same place the CCXT path fills.
+        """
+        spec = NATIVE_FUNDING_SOURCES.get(venue)
+        if spec is None:
+            return {}
+        try:
+            payload = _json_url(str(spec["url"]))
+            for step in spec.get("path") or ():
+                payload = payload[step]
+            if not isinstance(payload, list):
+                return {}
+            client = self._client(venue, "Futures")
+            if client is None:
+                return {}
+            if not getattr(client, "markets", None):
+                with self._client_request_lock(venue, "Futures"):
+                    client.load_markets()
+        except Exception:  # noqa: BLE001 - one venue must not stop the cycle.
+            return {}
+
+        divide_by = spec.get("divide_by")
+        rates: dict[str, dict[str, Any]] = {}
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            native = item.get(str(spec["symbol"]))
+            market = client.markets_by_id.get(str(native)) if native else None
+            if isinstance(market, list):
+                market = market[0] if market else None
+            if not isinstance(market, dict) or not market.get("symbol"):
+                continue
+            rate = _optional_number(item.get(str(spec["rate"])))
+            if rate is None:
+                continue
+            if divide_by:
+                reference = _optional_number(item.get(str(divide_by)))
+                if not reference:
+                    continue
+                rate = rate / reference
+            fields = _funding_fields(
+                rate,
+                interval_hours=(
+                    spec.get("interval_constant")
+                    if spec.get("interval_constant") is not None
+                    else item.get(str(spec.get("interval") or ""))
+                ),
+                next_funding_ms=item.get(str(spec.get("next_ms") or "")),
+            )
+            if fields:
+                rates[str(market["symbol"])] = fields
+        return rates
+
     def _bulk_funding_rates(self, venue: str) -> dict[str, dict[str, Any]]:
         """One call per venue for every perpetual it lists."""
         try:
             client = self._client(venue, "Futures")
             if client is None or not getattr(client, "has", {}).get("fetchFundingRates"):
-                return {}
+                return self._native_bulk_funding_rates(venue)
             with self._client_request_lock(venue, "Futures"):
                 payload = client.fetch_funding_rates()
         except Exception:  # noqa: BLE001 - one venue must not stop the cycle.
-            return {}
+            return self._native_bulk_funding_rates(venue)
         items = payload.values() if isinstance(payload, dict) else payload
         rates: dict[str, dict[str, Any]] = {}
         for item in items or []:
@@ -189,7 +303,9 @@ class FastQuoteRefresher:
             )
             if fields:
                 rates[str(item["symbol"])] = fields
-        return rates
+        # A venue that answers with nothing is indistinguishable from one that
+        # cannot answer at all, and both leave the legs frozen at scan time.
+        return rates or self._native_bulk_funding_rates(venue)
 
     def refresh(
         self,
