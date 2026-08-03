@@ -1187,3 +1187,69 @@ def test_board_reads_live_when_only_the_delta_is_fresh(tmp_path: Path) -> None:
     assert meta["age_min"] is not None and meta["age_min"] < 5.0
     # The discovery scan really is three hours old; only the quote age is fresh.
     assert meta["discovery_age_min"] > 150.0
+
+
+def test_fast_quote_refresh_writes_what_it_has_when_the_deadline_passes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A cycle that runs long must still publish its quotes.
+
+    The service runs this as a subprocess with a hard timeout and kills it on
+    overrun, which discarded every quote taken that cycle -- the board reported
+    `timeout, updated_routes: 0` and the delta went 32 minutes without moving.
+    A deadline below the parent's kill time lets it stop and write.
+    """
+    routes = []
+    for index in range(6):
+        route = _route()
+        route.update(
+            {
+                "route_key": f"TEST{index}|Aster|Futures|Bybit|Futures",
+                "token": f"TEST{index}",
+                "depth_weighted_spread_pct": 2.0,
+                "executable_spread_pct": 2.0,
+                "blockers": [],
+            }
+        )
+        routes.append(route)
+
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "updated_at": "2020-01-01T00:00:00Z",
+                "api_discovered_rows": routes,
+                "dex_discovered_rows": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    refresher = FastQuoteRefresher()
+    monkeypatch.setattr(refresher, "refresh_all_funding", lambda _payload: {"skipped": True})
+
+    calls = {"n": 0}
+
+    def slow_leg(_row: dict, side: str, **_kwargs: object) -> dict:
+        calls["n"] += 1
+        time.sleep(0.05)
+        return {
+            "symbol": "TEST/USDT:USDT",
+            "bid": 100.0 if side == "long" else 103.0,
+            "ask": 101.0 if side == "long" else 104.0,
+            "bid_vwap": 100.0 if side == "long" else 103.0,
+            "ask_vwap": 101.0 if side == "long" else 104.0,
+            "contract_size": 1.0,
+            "quote_ts_us": 2_000_000,
+        }
+
+    monkeypatch.setattr(refresher, "_leg_quote", slow_leg)
+
+    # Far too little time to quote every leg.
+    result = refresher.refresh(snapshot_path, route_limit=12, deadline_seconds=0.12)
+
+    # It returned rather than running to completion, and it still produced a
+    # summary the caller can act on instead of being killed with nothing.
+    assert isinstance(result, dict)
+    assert calls["n"] < 12, "the deadline did not stop the cycle early"

@@ -21,11 +21,18 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--snapshot-path", type=Path, required=True)
     parser.add_argument("--route-limit", type=int, default=100)
+    # Stop quoting and write in time to beat the parent's hard timeout: a
+    # killed cycle discards every quote it had already taken.
+    parser.add_argument("--deadline-seconds", type=float, default=None)
     args = parser.parse_args()
 
     refresher = FastQuoteRefresher()
     try:
-        summary = refresher.refresh(args.snapshot_path, route_limit=args.route_limit)
+        summary = refresher.refresh(
+            args.snapshot_path,
+            route_limit=args.route_limit,
+            deadline_seconds=args.deadline_seconds,
+        )
     finally:
         refresher.close()
     print(json.dumps(summary, sort_keys=True), flush=True)

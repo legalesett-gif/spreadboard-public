@@ -192,8 +192,16 @@ class FastQuoteRefresher:
         return rates
 
     def refresh(
-        self, snapshot_path: Path, *, route_limit: int = 100, target_notional_usd: float = 50.0
+        self,
+        snapshot_path: Path,
+        *,
+        route_limit: int = 100,
+        target_notional_usd: float = 50.0,
+        deadline_seconds: float | None = None,
     ) -> dict[str, Any]:
+        deadline = (
+            time.monotonic() + deadline_seconds if deadline_seconds is not None else None
+        )
         try:
             payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -249,6 +257,7 @@ class FastQuoteRefresher:
                     venue_key,
                     jobs,
                     target_notional_usd=target_notional_usd,
+                    deadline=deadline,
                 )
                 for venue_key, jobs in jobs_by_venue.items()
             }
@@ -346,10 +355,16 @@ class FastQuoteRefresher:
         jobs: list[tuple[tuple[str, str, str], dict[str, Any], str]],
         *,
         target_notional_usd: float,
+        deadline: float | None = None,
     ) -> dict[tuple[str, str, str], dict[str, Any] | None]:
         cache: dict[tuple[str, str, str], dict[str, Any] | None] = {}
         try:
             for key, row, side in jobs:
+                # Stopping a venue short is far better than being killed mid
+                # cycle: the parent runs this as a subprocess with a hard
+                # timeout, and a kill discards every quote taken so far.
+                if deadline is not None and time.monotonic() >= deadline:
+                    break
                 cache[key] = self._leg_quote(
                     row,
                     side,

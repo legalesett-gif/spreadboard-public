@@ -292,6 +292,8 @@ class RefreshLoop:
                     max(25, int(os.environ.get("SPREADBOARD_FAST_QUOTE_ROUTES", "50"))),
                 )
             ),
+            "--deadline-seconds",
+            str(round(_fast_quote_timeout() * 0.8, 1)),
         ]
         try:
             result = subprocess.run(
@@ -299,10 +301,7 @@ class RefreshLoop:
                 cwd=ROOT,
                 capture_output=True,
                 text=True,
-                timeout=max(
-                    90.0,
-                    float(os.environ.get("SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS", "240")),
-                ),
+                timeout=_fast_quote_timeout(),
                 check=False,
             )
         except subprocess.TimeoutExpired:
@@ -315,6 +314,14 @@ class RefreshLoop:
                 "updated_routes": 0,
                 "exit_code": result.returncode,
             }
+
+
+def _fast_quote_timeout() -> float:
+    """How long the parent waits before killing the fast-quote subprocess."""
+    return max(
+        90.0,
+        float(os.environ.get("SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS", "240")),
+    )
 
 
 def _merge_newer_fast_quotes(
