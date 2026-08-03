@@ -185,11 +185,66 @@ class BookWorker:
         self.store.close()
 
 
+#: The lanes the board renders, in the order a member meets them. Budget is
+#: spent down this list so the front page is covered before the tail lanes.
+BOARD_LANES: tuple[dict[str, Any], ...] = (
+    {},
+    {"funding_only": True},
+    {"kind": "FUTURES"},
+    {"kind": "FUTURES-SPOT"},
+    {"kind": "SPOT"},
+    {"kind": "DEX-FUTURES"},
+    {"kind": "DEX-SPOT"},
+)
+
+
+def _board_legs(path: Path, *, limit: int) -> list[LegKey]:
+    """The legs behind the routes the board actually shows, in rank order.
+
+    Ranking the raw snapshot by spread subscribes to whatever prints the widest
+    number, which is exactly the set of dislocated rows the board filters out --
+    the worker streamed hundreds of books while only a third of the routes on
+    screen had a live price behind them. Selecting through the board's own
+    loader is what keeps the two from drifting apart again.
+    """
+    from spreadboard import api_spreads
+
+    legs: list[LegKey] = []
+    seen: set[LegKey] = set()
+    for lane in BOARD_LANES:
+        try:
+            data = api_spreads.load_spreads(board_path=path, limit=250, **lane)
+        except Exception:
+            continue
+        routes = [
+            route
+            for group in data.get("groups") or []
+            for route in group.get("routes") or []
+            if isinstance(route, dict)
+        ] or [row for row in data.get("rows") or [] if isinstance(row, dict)]
+        for route in routes:
+            for side in ("long", "short"):
+                key = _board_leg_key(route, side)
+                if key is not None and key not in seen:
+                    seen.add(key)
+                    legs.append(key)
+                    if len(legs) >= limit:
+                        return legs
+    return legs
+
+
 def _desired_legs(path: Path, *, limit: int) -> set[LegKey]:
+    legs = _board_legs(path, limit=limit)
+    if len(legs) >= limit:
+        return set(legs)
+
+    # Spend whatever budget the visible board did not use on the widest
+    # remaining routes, so a token promoted between scans is already streaming.
+    seen = set(legs)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return set()
+        return set(legs)
     rows = [
         row
         for bucket in ("api_discovered_rows", "dex_discovered_rows")
@@ -201,15 +256,30 @@ def _desired_legs(path: Path, *, limit: int) -> set[LegKey]:
         key=lambda row: _number(row.get("depth_weighted_spread_pct")) or -999_999.0,
         reverse=True,
     )
-    legs: list[LegKey] = []
     for row in ranked:
         for side in ("long", "short"):
             key = _leg_key(row, side)
-            if key is not None and key not in legs:
+            if key is not None and key not in seen:
+                seen.add(key)
                 legs.append(key)
                 if len(legs) >= limit:
                     return set(legs)
     return set(legs)
+
+
+def _board_leg_key(route: dict[str, Any], side: str) -> LegKey | None:
+    """Key a displayed route's leg exactly as the board looks it up.
+
+    api_spreads.live_prices_for keys books on `<side>_market_symbol`, so a
+    subscription stored under the route_inputs symbol is a book the board can
+    never find. The two must be built from the same field.
+    """
+    venue = str(route.get(f"{side}_venue") or "")
+    market_type = str(route.get(f"{side}_market_type") or "")
+    symbol = str(route.get(f"{side}_market_symbol") or "")
+    if venue not in VENUE_IDS or market_type not in {"Spot", "Futures"} or not symbol:
+        return None
+    return (venue, market_type, symbol)
 
 
 def _leg_key(row: dict[str, Any], side: str) -> LegKey | None:
