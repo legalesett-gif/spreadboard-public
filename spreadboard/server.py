@@ -2361,20 +2361,26 @@ def render_board_stream_script(query: dict[str, list[str]]) -> str:
         let payload;
         try { payload = JSON.parse(event.data); } catch (error) { return; }
         for (const route of payload.routes || []) {
-          const row = document.querySelector(
-            '[data-route-key="' + (window.CSS && CSS.escape ? CSS.escape(route.route_key) : route.route_key) + '"]');
-          if (!row) continue;
-          const spread = row.querySelector("[data-live-spread]");
+          // A route appears twice: once on the collapsed group a member reads
+          // and once on its row inside the expansion. querySelector patched
+          // only the first, so the number on screen never moved.
+          const key = window.CSS && CSS.escape ? CSS.escape(route.route_key) : route.route_key;
+          const rows = document.querySelectorAll('[data-route-key="' + key + '"]');
           const text = pct(route.spread_pct, 2);
-          if (spread && text && spread.textContent.trim() !== text) {
-            spread.textContent = text;
-            flash(spread);
-          }
-          const funding = row.querySelector("[data-live-funding]");
           const carry = pct(route.funding_pct, 3);
-          if (funding && carry && funding.textContent.trim() !== carry) {
-            funding.textContent = carry;
-            flash(funding);
+          for (const row of rows) {
+            for (const spread of row.querySelectorAll("[data-live-spread]")) {
+              if (text && spread.textContent.trim() !== text) {
+                spread.textContent = text;
+                flash(spread);
+              }
+            }
+            for (const funding of row.querySelectorAll("[data-live-funding]")) {
+              if (carry && funding.textContent.trim() !== carry) {
+                funding.textContent = carry;
+                flash(funding);
+              }
+            }
           }
         }
         const stamp = document.querySelector("[data-live-stamp]");
@@ -2488,7 +2494,7 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
         return shell("Markets - SpreadBoard", "markets", body)
 
     body = f"""
-    <section class="markets-page terminal-page" data-refresh="{refresh_seconds}">
+    <section class="markets-page terminal-page" data-refresh="{refresh_seconds}" data-refresh-silent="1">
       {heading}
       <section class="terminal-kpis compact-kpis" aria-label="Market summary">
         {render_market_metric('Assets', min(int(summary.get('matching_tokens') or 0), api_spreads.DEFAULT_LIMIT), 'top 25, grouped')}
@@ -2640,7 +2646,8 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         if venue
     )
     return f"""
-    <details class="token-route-group" id="token-{h(group.get('token'))}">
+    <details class="token-route-group" id="token-{h(group.get('token'))}"
+             data-route-key="{h(best.get('route_key') or '')}">
       <summary class="token-route-summary">
         <div class="asset-identity">
           <span class="asset-monogram">{h(str(group.get('token') or '?')[:2])}</span>
@@ -2653,12 +2660,12 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         </div>
         <div class="group-number">
           <span>Best spread</span>
-          <strong class="{spread_class(group.get('best_edge_pct'))}">{fmt_pct(group.get('best_edge_pct'))}</strong>
+          <strong class="{spread_class(group.get('best_edge_pct'))}" data-live-spread>{fmt_pct(group.get('best_edge_pct'))}</strong>
           <em>{fmt_pct(best.get('depth_weighted_spread_pct'))} matched $50 VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book</em>
         </div>
         <div class="group-number">
           <span>Best-route funding</span>
-          <strong>{fmt_signed_pct(funding, digits=3) if funding is not None else '—'}</strong>
+          <strong data-live-funding>{fmt_signed_pct(funding, digits=3) if funding is not None else '—'}</strong>
           <em>{h(funding_basis)} · {h(funding_economic_label(funding, best))} · {h(funding_pair) if funding_pair else 'not applicable'}</em>
         </div>
         <div class="group-routes">
@@ -3467,7 +3474,7 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
         ("futures-dex", "Futures-DEX"),
     ]
     body = f"""
-    <section class="funding-page terminal-page" data-refresh="300">
+    <section class="funding-page terminal-page" data-refresh="300" data-refresh-silent="1">
       {render_board_stream_script(funding_query)}
       <div class="terminal-heading">
         <div>
@@ -8805,11 +8812,16 @@ def render_auto_refresh_script() -> str:
     requestAnimationFrame(() => window.scrollTo(0, savedScroll));
     sessionStorage.removeItem(scrollKey);
   }
+  // A page whose prices arrive over the stream has nothing to count down to.
+  // The reload is only there to pick up a token entering or leaving the board,
+  // so it runs silently rather than showing a timer that implies the numbers
+  // are waiting on it.
+  const silent = root.dataset.refreshSilent === "1";
   const pill = document.createElement("aside");
   pill.className = "auto-refresh-pill";
   pill.setAttribute("aria-live", "polite");
   pill.innerHTML = '<span id="autoRefreshStatus"></span><button id="autoRefreshToggle" type="button"></button>';
-  document.body.appendChild(pill);
+  if (!silent) document.body.appendChild(pill);
   const label = pill.querySelector("#autoRefreshStatus");
   const toggle = pill.querySelector("#autoRefreshToggle");
   let remaining = seconds;

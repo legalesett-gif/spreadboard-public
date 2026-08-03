@@ -1379,7 +1379,12 @@ def _filter_rows(rows: list[SpreadTerminalRow], **filters: Any) -> list[SpreadTe
         if not include_stale and row.freshness == "stale":
             continue
         spread = _entrance_spread(row)
-        if min_spread is not None and spread < float(min_spread):
+        # Carry and spread are separate mechanisms and a spread floor must not
+        # decide a funding row. A farm whose basis never converges can still pay
+        # well -- the reference product's whole futures lane runs on negative
+        # open spreads, -0.15% to -0.52% -- and applying the floor here dropped
+        # exactly those rows before the funding test ever ran.
+        if not funding_only and min_spread is not None and spread < float(min_spread):
             continue
         effective_funding = _effective_funding_24h(row)
         # The funding lane is about carry you RECEIVE. A route that pays is not a
