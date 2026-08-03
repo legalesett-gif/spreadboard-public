@@ -452,17 +452,44 @@ def main() -> int:
     return 0
 
 
+#: Every view the navigation can reach, because each is a separate cache key
+#: and each costs a full rebuild. Warming only the default left a member opening
+#: Funding -> Futures-Spot waiting 59 seconds.
+WARM_QUERIES: tuple[dict[str, list[str]], ...] = (
+    {},
+    {"kind": ["FUTURES"]},
+    {"kind": ["FUTURES-SPOT-PAIR"]},
+    {"kind": ["SPOT"]},
+    {"kind": ["DEX-FUTURES"]},
+    {"kind": ["DEX-SPOT"]},
+    {"funding_only": ["1"], "kind": ["FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
+    {"funding_only": ["1"], "kind": ["FUTURES-SPOT-PAIR"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
+    {"funding_only": ["1"], "kind": ["DEX-FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
+)
+
+
+def _board_path() -> Path:
+    return Path(os.environ.get("SPREADBOARD_BOARD_PATH", str(board.DEFAULT_BOARD_PATH)))
+
+
 def _warm_board_cache() -> None:
     """Pay the grouping cost here, not in a member's page load.
 
     Every snapshot write invalidates the request cache, and rebuilding 12k rows
     into a public payload takes seconds. Doing it right after the write means the
     first real request finds it already done.
+
+    It must warm the same cache the pages read -- the server's per-query market
+    cache -- and every lane, not just the default. Measured cold: 40s for the
+    board, 33s for Funding, 59s for its Futures-Spot tab.
     """
-    try:
-        api_spreads.load_spreads(limit=api_spreads.DEFAULT_LIMIT)
-    except Exception as exc:  # noqa: BLE001 - warming is best effort.
-        _log(f"board cache warm skipped: {type(exc).__name__}: {exc}")
+    from spreadboard import server
+
+    for query in WARM_QUERIES:
+        try:
+            server.api_market_spreads(_board_path(), dict(query))
+        except Exception as exc:  # noqa: BLE001 - warming is best effort.
+            _log(f"board cache warm skipped {query}: {type(exc).__name__}: {exc}")
 
 
 def _log(message: str) -> None:
