@@ -137,6 +137,7 @@ class RefreshLoop:
             snapshot_path=SNAPSHOT_PATH if SNAPSHOT_PATH.exists() else REFRESH_SNAPSHOT_PATH
         )
         command = [
+            *_low_priority_prefix(),
             sys.executable,
             str(ROOT / "scripts/api_discovery_worker.py"),
             "--db-path",
@@ -281,6 +282,7 @@ class RefreshLoop:
 
     def _refresh_fast_quotes(self) -> dict[str, Any]:
         command = [
+            *_low_priority_prefix(),
             sys.executable,
             str(ROOT / "scripts/fast_quote_worker.py"),
             "--snapshot-path",
@@ -474,6 +476,22 @@ WARM_QUERIES: tuple[dict[str, list[str]], ...] = (
     {"farm": ["futures-spot"], "funding_only": ["1"], "kind": ["FUTURES-SPOT-PAIR"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
     {"farm": ["futures-dex"], "funding_only": ["1"], "kind": ["DEX-FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
 )
+
+
+def _low_priority_prefix() -> list[str]:
+    """nice/ionice if the image has them, nothing if it does not.
+
+    The scan is background work and a page load is not. Running it at the lowest
+    priority the kernel offers does not make it finish sooner -- it still takes
+    its 20-40 minutes -- it stops it taking them out of whoever is reading the
+    board.
+    """
+    prefix: list[str] = []
+    if shutil.which("nice"):
+        prefix += ["nice", "-n", "19"]
+    if shutil.which("ionice"):
+        prefix += ["ionice", "-c3"]
+    return prefix
 
 
 def _board_path() -> Path:

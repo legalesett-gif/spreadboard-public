@@ -865,8 +865,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         a member still only saw it by refreshing. On a spread that lasts minutes
         that is the difference between a trade and a screenshot.
         """
+        # A spread that ticks 20.0 -> 20.1 -> 19.9 has to arrive as it happens,
+        # not on a three-second beat. The books are flushed every 0.25s and the
+        # re-pricing is shared between streams, so this can sit near that.
         interval = max(
-            1.0, min(15.0, float(os.environ.get("SPREADBOARD_BOARD_STREAM_SECONDS", "3")))
+            0.2, min(15.0, float(os.environ.get("SPREADBOARD_BOARD_STREAM_SECONDS", "0.5")))
         )
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -879,8 +882,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         try:
             self.wfile.write(b"retry: 3000\n\n")
             self.wfile.flush()
-            for _ in range(600):
-                rows = _board_stream_rows(self.server.board_path, query)
+            for _ in range(20_000):
+                rows = _shared_stream_rows(self.server.board_path, query)
                 changed = {
                     key: value for key, value in rows.items() if previous.get(key) != value
                 }
@@ -2381,6 +2384,40 @@ def render_board_stream_script(query: dict[str, list[str]]) -> str:
     </script>""".replace("__SUFFIX__", suffix)
 
 
+#: One computation of live prices, shared by every open stream. Re-pricing per
+#: connection would multiply the cost by the number of readers, which is what
+#: kept the tick at three seconds; sharing it makes the cadence independent of
+#: how many people are watching.
+_LIVE_TICK: dict[tuple[Any, ...], tuple[float, dict[str, tuple[Any, Any]]]] = {}
+_LIVE_TICK_LOCK = threading.Lock()
+#: The book writer flushes every 0.25s, so there is nothing to gain below that.
+LIVE_TICK_SECONDS = max(
+    0.2, float(os.environ.get("SPREADBOARD_LIVE_TICK_SECONDS", "0.5"))
+)
+
+
+def _shared_stream_rows(
+    board_path: Path, query: dict[str, list[str]]
+) -> dict[str, tuple[Any, Any]]:
+    """Current prices for a lane, computed once however many streams want them."""
+    key = (
+        str(board_path),
+        tuple(sorted((k, tuple(v)) for k, v in query.items())),
+    )
+    now = time.monotonic()
+    with _LIVE_TICK_LOCK:
+        cached = _LIVE_TICK.get(key)
+        if cached is not None and now - cached[0] < LIVE_TICK_SECONDS:
+            return cached[1]
+    rows = _board_stream_rows(board_path, query)
+    with _LIVE_TICK_LOCK:
+        _LIVE_TICK[key] = (time.monotonic(), rows)
+        if len(_LIVE_TICK) > 32:
+            oldest = min(_LIVE_TICK, key=lambda item: _LIVE_TICK[item][0])
+            _LIVE_TICK.pop(oldest, None)
+    return rows
+
+
 def _board_stream_rows(
     board_path: Path, query: dict[str, list[str]]
 ) -> dict[str, tuple[Any, Any]]:
@@ -3341,6 +3378,16 @@ def render_signals_page(board_path: Path, config: dict[str, Any], query: dict[st
     return shell("Signals - SpreadBoard", "signals", body)
 
 
+#: How the funding lanes can be ranked: the live rate, or what each window
+#: actually paid.
+FUNDING_RANK_TABS: tuple[tuple[str, str], ...] = (
+    ("now", "Now"),
+    ("1d", "Last 24h"),
+    ("7d", "Last 7d"),
+    ("30d", "Last 30d"),
+)
+
+
 def render_funding_windows(route: dict[str, Any] | None, route_key: Any) -> str:
     """Realised 1d/7d/30d carry for a route, or an honest blank.
 
@@ -3393,6 +3440,21 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
     )
     market_data = api_market_spreads(board_path, funding_query)
     funding_groups = market_data.get("groups") or []
+    # "Now" keeps the rate-based order the board already computed. The realised
+    # windows are what a member wants when deciding whether a farm has actually
+    # been paying, so they re-rank on the settled figure instead.
+    selected_window = (_query_first(query, "rank") or "now").casefold()
+    if selected_window not in {value for value, _ in FUNDING_RANK_TABS}:
+        selected_window = "now"
+    if selected_window != "now":
+        def realised(group: dict[str, Any]) -> float:
+            best = group.get("best_funding_route") or {}
+            value = venue_funding_history.route_windows(best).get(selected_window)
+            # A group we have no settled figure for sorts last rather than
+            # jumping to the top on a zero.
+            return value if value is not None else float("-inf")
+
+        funding_groups = sorted(funding_groups, key=realised, reverse=True)
     summary = market_data.get("summary") or {}
     api_health_data = (market_data.get("source_health") or {}).get("canonical_api") or {}
     tabs = [
@@ -3417,6 +3479,14 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
       </div>
       <nav class="funding-farm-tabs" aria-label="Funding farm type">
         {''.join(f'<a class="{"active" if value == selected_farm else ""}" href="/funding?farm={h(value)}">{h(label)}</a>' for value, label in tabs)}
+      </nav>
+      <nav class="funding-window-tabs" aria-label="Rank by">
+        <span>Rank by</span>
+        {''.join(
+            f'<a class="{"active" if value == selected_window else ""}" '
+            f'href="/funding?farm={h(selected_farm)}&amp;rank={h(value)}">{h(label)}</a>'
+            for value, label in FUNDING_RANK_TABS
+        )}
       </nav>
       <section class="terminal-tape funding-tape" aria-label="Funding summary">
         {render_market_metric('Assets', summary.get('matching_tokens'), 'unique tokens')}
@@ -9147,6 +9217,11 @@ input:focus, select:focus, a:focus-visible, button:focus-visible, summary:focus-
 .header-strip {{ height: 12px; background: var(--terminal-bg); border-bottom: 1px solid var(--terminal-line); }}
 .mobile-primary-nav, .mobile-secondary-nav {{ display: none; }}
 main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
+.funding-window-tabs {{ display: flex; gap: 6px; align-items: center; margin: 6px 0 2px; flex-wrap: wrap; }}
+.funding-window-tabs span {{ font-size: 10px; opacity: 0.55; letter-spacing: 0.06em; text-transform: uppercase; }}
+.funding-window-tabs a {{ font-size: 11px; padding: 3px 9px; border-radius: 999px; text-decoration: none;
+  background: rgba(255,255,255,0.05); color: inherit; }}
+.funding-window-tabs a.active {{ background: #7dd3c0; color: #04211b; font-weight: 700; }}
 .funding-window-strip {{ display: inline-flex; gap: 6px; align-items: stretch; }}
 .funding-window {{ display: flex; flex-direction: column; gap: 1px; padding: 2px 6px; border-radius: 6px;
   background: rgba(255,255,255,0.04); line-height: 1.15; }}

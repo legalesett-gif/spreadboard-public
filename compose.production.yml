@@ -20,6 +20,10 @@ services:
       SPREADBOARD_FAST_QUOTE_SECONDS: "60"
       SPREADBOARD_FAST_QUOTE_ROUTES: "150"
       SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS: "300"
+      # Prices must move as the books move, not on a beat. The re-pricing is
+      # shared between streams, so this is independent of how many people watch.
+      SPREADBOARD_BOARD_STREAM_SECONDS: "0.5"
+      SPREADBOARD_LIVE_TICK_SECONDS: "0.5"
       SPREADBOARD_RESULT_CACHE_SECONDS: "1200"
       # Thirteen warmed views plus room for ad-hoc queries, so ordinary
       # traffic cannot evict what the warmer just built.

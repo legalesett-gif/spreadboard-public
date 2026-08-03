@@ -95,3 +95,40 @@ def test_unknown_routes_come_back_empty_not_missing(tmp_path: Path) -> None:
     result = market_history.funding_windows(["R", "OTHER"], windows_days=(1,), db_path=path, now_us=now)
 
     assert result["OTHER"]["1d"] == {"long": None, "short": None, "net": None}
+
+
+def test_the_funding_lane_can_be_ranked_on_a_realised_window() -> None:
+    """Ranking on the live rate answers a different question from ranking on
+    what a farm has actually paid over a week."""
+    from spreadboard.server import FUNDING_RANK_TABS
+
+    assert [value for value, _ in FUNDING_RANK_TABS] == ["now", "1d", "7d", "30d"]
+
+
+def test_a_group_with_no_settled_figure_sorts_last(monkeypatch) -> None:
+    """It must not reach the top on a missing value read as zero."""
+    from spreadboard import server, venue_funding_history
+
+    windows = {
+        "A": {"7d": 2.0},
+        "B": {"7d": None},
+        "C": {"7d": 5.0},
+    }
+    monkeypatch.setattr(
+        venue_funding_history,
+        "route_windows",
+        lambda route: windows.get(route.get("token"), {}),
+    )
+    groups = [
+        {"token": t, "best_funding_route": {"token": t}} for t in ("A", "B", "C")
+    ]
+
+    def realised(group):
+        value = venue_funding_history.route_windows(
+            group.get("best_funding_route") or {}
+        ).get("7d")
+        return value if value is not None else float("-inf")
+
+    ordered = [g["token"] for g in sorted(groups, key=realised, reverse=True)]
+
+    assert ordered == ["C", "A", "B"]
