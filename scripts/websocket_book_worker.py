@@ -204,17 +204,26 @@ class BookWorker:
         self.store.close()
 
 
-#: The lanes the board renders, in the order a member meets them. Budget is
-#: spent down this list so the front page is covered before the tail lanes.
+#: Every lane the board renders, including the three funding-farm tabs, which
+#: use their own kinds. A member on any tab expects the prices in front of them
+#: to move, so each lane gets a guaranteed share before depth is added anywhere.
 BOARD_LANES: tuple[dict[str, Any], ...] = (
     {},
-    {"funding_only": True},
     {"kind": "FUTURES"},
     {"kind": "FUTURES-SPOT"},
     {"kind": "SPOT"},
     {"kind": "DEX-FUTURES"},
     {"kind": "DEX-SPOT"},
+    {"funding_only": True},
+    {"funding_only": True, "kind": "FUTURES"},
+    {"funding_only": True, "kind": "FUTURES-SPOT-PAIR"},
+    {"funding_only": True, "kind": "DEX-FUTURES"},
 )
+
+#: Routes per lane that must be streaming before any lane gets depth. Ten
+#: routes is two legs each at worst, so the reservation costs at most 20
+#: subscriptions per lane and leaves the rest of the budget for depth.
+LANE_RESERVED_ROUTES = max(1, int(os.environ.get("SPREADBOARD_WS_LANE_ROUTES", "10")))
 
 
 def _board_legs(path: Path, *, limit: int) -> list[LegKey]:
@@ -228,27 +237,49 @@ def _board_legs(path: Path, *, limit: int) -> list[LegKey]:
     """
     from spreadboard import api_spreads
 
-    legs: list[LegKey] = []
-    seen: set[LegKey] = set()
+    routes_by_lane: list[list[dict[str, Any]]] = []
     for lane in BOARD_LANES:
         try:
             data = api_spreads.load_spreads(board_path=path, limit=250, **lane)
         except Exception:
+            routes_by_lane.append([])
             continue
-        routes = [
-            route
-            for group in data.get("groups") or []
-            for route in group.get("routes") or []
-            if isinstance(route, dict)
-        ] or [row for row in data.get("rows") or [] if isinstance(row, dict)]
-        for route in routes:
-            for side in ("long", "short"):
-                key = _board_leg_key(route, side)
-                if key is not None and key not in seen:
-                    seen.add(key)
-                    legs.append(key)
-                    if len(legs) >= limit:
-                        return legs
+        routes_by_lane.append(
+            [
+                route
+                for group in data.get("groups") or []
+                for route in group.get("routes") or []
+                if isinstance(route, dict)
+            ]
+            or [row for row in data.get("rows") or [] if isinstance(row, dict)]
+        )
+
+    legs: list[LegKey] = []
+    seen: set[LegKey] = set()
+
+    def take(route: dict[str, Any]) -> bool:
+        """Add both legs of a route. False once the budget is spent."""
+        for side in ("long", "short"):
+            key = _board_leg_key(route, side)
+            if key is not None and key not in seen:
+                seen.add(key)
+                legs.append(key)
+                if len(legs) >= limit:
+                    return False
+        return True
+
+    # Reserve every lane's top routes first. Walking the lanes in order instead
+    # let the default view spend the whole budget, so a member on the
+    # Futures-DEX tab watched numbers that never moved.
+    for routes in routes_by_lane:
+        for route in routes[:LANE_RESERVED_ROUTES]:
+            if not take(route):
+                return legs
+    # Whatever is left buys depth, in the same lane order.
+    for routes in routes_by_lane:
+        for route in routes[LANE_RESERVED_ROUTES:]:
+            if not take(route):
+                return legs
     return legs
 
 

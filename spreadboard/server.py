@@ -3008,7 +3008,7 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
     profile = data.get("profile_shell") or {}
     alert_preview = data.get("alert_preview") or {}
     body = f"""
-    <section class="intel-page" data-refresh="30">
+    <section class="intel-page" data-refresh="180">
       <div class="intel-hero">
         <div>
           <span class="page-kicker">Community Intel</span>
@@ -3061,7 +3061,7 @@ def render_triage_page(board_path: Path, config: dict[str, Any], query: dict[str
     summary = data.get("summary") or {}
     buckets = data.get("buckets") or {}
     body = f"""
-    <section class="triage-page" data-refresh="30">
+    <section class="triage-page" data-refresh="180">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Triage</span>
@@ -3212,7 +3212,7 @@ def render_signals_page(board_path: Path, config: dict[str, Any], query: dict[st
     recent = data.get("recent_events") or {}
     community = data.get("community") or {}
     body = f"""
-    <section class="signals-page" data-refresh="30">
+    <section class="signals-page" data-refresh="120">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Signals</span>
@@ -3280,7 +3280,7 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
         ("futures-dex", "Futures-DEX"),
     ]
     body = f"""
-    <section class="funding-page terminal-page" data-refresh="30">
+    <section class="funding-page terminal-page" data-refresh="300">
       {render_board_stream_script(funding_query)}
       <div class="terminal-heading">
         <div>
@@ -3464,7 +3464,7 @@ def render_community_page(board_path: Path, config: dict[str, Any], query: dict[
     data = api_community(board_path, query)
     insights = data.get("community_insights") or {}
     body = f"""
-    <section class="community-page" data-refresh="30">
+    <section class="community-page" data-refresh="180">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Community</span>
@@ -3502,7 +3502,7 @@ def render_playbook_page(board_path: Path, config: dict[str, Any], query: dict[s
     data = api_playbook(board_path, query)
     source_note = data.get("source_note") or {}
     body = f"""
-    <section class="playbook-page" data-refresh="30">
+    <section class="playbook-page" data-refresh="180">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Community Playbook</span>
@@ -5132,7 +5132,7 @@ def render_sources_page(board_path: Path, config: dict[str, Any]) -> str:
     market = health.get("market") or {}
     reconciliation = health.get("reconciliation") or {}
     body = f"""
-    <section class="sources-page" data-refresh="30">
+    <section class="sources-page" data-refresh="180">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">System</span>
@@ -6298,7 +6298,7 @@ def render_alerts_page(board_path: Path, config: dict[str, Any], query: dict[str
         else ""
     )
     body = f"""
-    <section class="alerts-page" data-refresh="30">
+    <section class="alerts-page" data-refresh="180">
       {render_member_alert_rules(board_path)}
       <div class="intel-hero compact-hero">
         <div>
@@ -6350,7 +6350,7 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
         if isinstance(item, dict) and item.get("status") in {"stale", "missing", "error"}
     ]
     body = f"""
-    <section class="watchlist-page" data-refresh="30">
+    <section class="watchlist-page" data-refresh="120">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Watchlist</span>

@@ -145,3 +145,52 @@ def test_permanent_subscribe_failures_are_dropped_not_retried_forever(error: str
     asyncio.run(asyncio.wait_for(worker._watch(key), timeout=5))
 
     assert key in worker._unavailable
+
+
+def test_every_lane_gets_its_top_routes_before_any_lane_gets_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A member on any tab expects the prices in front of them to move.
+
+    Walking the lanes in order let the default view spend the whole budget, so
+    the tail lanes -- Futures-DEX especially -- streamed nothing at all.
+    """
+    from scripts import websocket_book_worker as worker
+
+    def lane_rows(prefix: str, count: int) -> list[dict]:
+        return [_row(f"{prefix}{i}", spread=float(count - i)) for i in range(count)]
+
+    # The first lane alone could consume the entire budget.
+    lanes = {
+        "default": lane_rows("A", 40),
+        "dex": lane_rows("Z", 40),
+    }
+
+    def fake_load(**kwargs):
+        rows = lanes["dex"] if kwargs.get("kind") == "DEX-SPOT" else lanes["default"]
+        return {"groups": [{"routes": rows}], "rows": rows}
+
+    from spreadboard import api_spreads
+
+    monkeypatch.setattr(api_spreads, "load_spreads", fake_load)
+    monkeypatch.setattr(worker, "BOARD_LANES", ({}, {"kind": "DEX-SPOT"}))
+    monkeypatch.setattr(worker, "LANE_RESERVED_ROUTES", 3)
+
+    snapshot = tmp_path / "api_discovery_latest.json"
+    snapshot.write_text(json.dumps({"api_discovered_rows": [], "dex_discovered_rows": []}), encoding="utf-8")
+
+    legs = worker._board_legs(snapshot, limit=12)
+
+    # Both lanes are represented, not just the one that came first.
+    assert any(symbol.startswith("A") for _v, _t, symbol in legs)
+    assert any(symbol.startswith("Z") for _v, _t, symbol in legs)
+
+
+def test_funding_farm_tabs_are_lanes_the_worker_streams() -> None:
+    """The three funding tabs use their own kinds; each must be subscribed."""
+    from scripts.websocket_book_worker import BOARD_LANES
+
+    funding_kinds = {
+        lane.get("kind") for lane in BOARD_LANES if lane.get("funding_only")
+    }
+    assert {"FUTURES", "FUTURES-SPOT-PAIR", "DEX-FUTURES"} <= funding_kinds
