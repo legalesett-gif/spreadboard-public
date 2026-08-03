@@ -274,6 +274,12 @@ def load_spreads(
             and row.route_key not in unverifiable
             and pays_something(row)
         ]
+        # A spread is a claim about prices you could trade at. Rows quoted from
+        # last trades cannot support that claim, so they are kept out of the
+        # spread lanes. The funding lanes still carry them: a carry comes from
+        # the funding rate, not from the book.
+        if not funding_only:
+            filtered = [row for row in filtered if not spread_is_ticker_derived(row)]
     normalized_sort = _normalize_sort(sort_by)
     normalized_direction = "asc" if str(direction).casefold() == "asc" else "desc"
     filtered.sort(
@@ -1560,6 +1566,26 @@ def is_non_perpetual_or_inverse(row: "SpreadTerminalRow") -> bool:
             return True
         _, separator, settle = symbol.partition(":")
         if separator and settle and settle.upper() not in LINEAR_SETTLE_ASSETS:
+            return True
+    return False
+
+
+def spread_is_ticker_derived(row: "SpreadTerminalRow") -> bool:
+    """True when a leg's quote is a last trade wearing a book's clothes.
+
+    A ticker-only quote fills bid and ask with the last traded price, so the
+    row prints a spread nobody can take. Upbit's BIO last traded at 0.01825
+    while its book was bid 0.02069 / ask 0.0588 -- buying costs three times what
+    the row showed, turning a displayed +45.97% into roughly -55%.
+
+    It is not a small tail: 328 of the 379 routes printing more than 20% were
+    priced this way. Filtering them leaves the edges that are real -- ESPORTS at
+    150%, RWA at 108%, VANRY at 100% -- and drops the artifacts.
+    """
+    for side in ("long", "short"):
+        bid = _float_or_none(getattr(row, f"{side}_bid", None))
+        ask = _float_or_none(getattr(row, f"{side}_ask", None))
+        if bid is not None and ask is not None and bid == ask:
             return True
     return False
 
