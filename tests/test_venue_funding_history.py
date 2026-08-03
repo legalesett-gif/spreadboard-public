@@ -111,3 +111,38 @@ def test_a_leg_we_have_no_history_for_leaves_the_route_unknown(monkeypatch) -> N
     }
 
     assert vfh.route_windows(route) == {"1d": None, "7d": None, "30d": None}
+
+
+def test_bitmart_native_history_is_parsed(monkeypatch) -> None:
+    """CCXT has no funding history for BitMart, and it appears in top rows."""
+    payload = {
+        "data": {
+            "list": [
+                {"symbol": "FWDIUSDT", "funding_rate": "-0.0012", "funding_time": 1785000000000},
+                {"symbol": "FWDIUSDT", "funding_rate": "0.0004", "funding_time": 1785028800000},
+            ]
+        }
+    }
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def read(self):
+            import json as _json
+
+            return _json.dumps(payload).encode()
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_a, **_k: _Response())
+
+    entries = vfh._native_leg_history("BitMart", "FWDI/USDT:USDT")
+
+    assert [e["fundingRate"] for e in entries] == [-0.0012, 0.0004]
+    assert entries[0]["timestamp"] == 1785000000000
+
+
+def test_a_venue_without_a_native_endpoint_returns_nothing() -> None:
+    assert vfh._native_leg_history("Binance", "BTC/USDT:USDT") == []

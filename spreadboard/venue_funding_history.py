@@ -65,6 +65,45 @@ def realised_windows(
     return output
 
 
+#: Venues CCXT cannot give settled history for. BitMart is the only one, and it
+#: appears in the top funding rows, so its native endpoint is worth the code.
+NATIVE_HISTORY = {
+    "BitMart": "https://api-cloud-v2.bitmart.com/contract/public/funding-rate-history?symbol={symbol}&limit=500",
+}
+
+
+def _native_leg_history(venue: str, symbol: str) -> list[dict[str, Any]]:
+    """Settled funding from a venue's own endpoint, shaped like CCXT's."""
+    template = NATIVE_HISTORY.get(venue)
+    if not template:
+        return []
+    native_symbol = symbol.split(":")[0].replace("/", "")
+    try:
+        from urllib.request import Request, urlopen
+
+        request = Request(
+            template.format(symbol=native_symbol),
+            headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"},
+        )
+        with urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read())
+    except Exception:  # noqa: BLE001 - one venue must not stop the sweep.
+        return []
+    rows = (payload.get("data") or {}).get("list") or []
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            entries.append(
+                {
+                    "timestamp": int(row["funding_time"]),
+                    "fundingRate": float(row["funding_rate"]),
+                }
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return entries
+
+
 def leg_history(
     venue: str,
     symbol: str,
@@ -73,6 +112,8 @@ def leg_history(
     days: int = 30,
 ) -> list[dict[str, Any]]:
     """One venue's settled funding for one symbol, best effort."""
+    if venue in NATIVE_HISTORY:
+        return _native_leg_history(venue, symbol)
     exchange_id = VENUE_IDS.get(venue)
     if not exchange_id or not symbol:
         return []
