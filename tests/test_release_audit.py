@@ -2553,14 +2553,34 @@ def test_a_real_dislocation_with_turnover_on_both_legs_survives() -> None:
     assert api_spreads.unverifiable_price_outliers(rows) == set()
 
 
-def test_a_shut_rail_still_shows_because_the_price_is_real() -> None:
-    """A closed rail is why a fat spread survives, and the reopen watcher needs
-    those tokens tracked. It is marked, not deleted."""
+def test_a_shut_rail_is_still_tracked_even_though_the_board_hides_it() -> None:
+    """Two callers, two needs.
+
+    The rail-reopen watcher calls load_spreads and must keep seeing tokens whose
+    rail is shut -- a closed rail is exactly what it watches for reopening. The
+    board must not list them: a spot arb needs the coin delivered, ESPORTS
+    printed 150% into a closed Mexc deposit, and every spot row the reference
+    product lists has both rails open. So deliverability is opt-in, and only the
+    board opts in.
+    """
     import inspect
+
+    signature = inspect.signature(api_spreads.load_spreads)
+    assert "require_deliverable" in signature.parameters
+    assert signature.parameters["require_deliverable"].default is False, (
+        "the watcher's view must keep shut-rail rows by default"
+    )
+
     source = inspect.getsource(api_spreads.load_spreads)
     gate = source.split("if not include_unverified:")[1].split("normalized_sort")[0]
-    assert "route_deliverable" not in gate, "deliverability must not remove a row from the board"
     assert "price_ratio_implausible" in gate and "leg_volume_too_thin" in gate
+    assert "if require_deliverable:" in source, (
+        "the board's stricter view must be reachable"
+    )
+
+    # And the board asks for it.
+    board_source = inspect.getsource(__import__("spreadboard.server", fromlist=["x"]).api_market_spreads)
+    assert "require_deliverable=True" in board_source
 
 
 def test_cross_venue_leveraged_tokens_are_not_arbitrage() -> None:

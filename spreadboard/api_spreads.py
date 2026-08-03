@@ -120,6 +120,7 @@ def load_spreads(
     min_abs_funding_apr_pct: float | None = None,
     funding_only: bool = False,
     include_stale: bool = False,
+    require_deliverable: bool = False,
     include_unverified: bool = False,
     max_age_min: float | None = DEFAULT_MAX_AGE_MIN,
     sort_by: str = "edge",
@@ -280,6 +281,19 @@ def load_spreads(
         # the funding rate, not from the book.
         if not funding_only:
             filtered = [row for row in filtered if not spread_is_untrustworthy(row)]
+        # A spot arb needs the coin moved, so a shut rail is not a spread at all
+        # -- ESPORTS printed 150% into a Mexc deposit that was closed, which is
+        # why it printed at all, and every spot row the reference product lists
+        # has both rails open. This is opt-in rather than automatic because the
+        # rail-reopen watcher reads this same function and needs those tokens
+        # tracked; only the board asks for it. Unknown status is left alone.
+        if require_deliverable:
+            filtered = [
+                row
+                for row in filtered
+                if getattr(row, "route_kind", None) not in TRANSFER_ROUTE_KINDS
+                or route_deliverable(row) is not False
+            ]
     normalized_sort = _normalize_sort(sort_by)
     normalized_direction = "asc" if str(direction).casefold() == "asc" else "desc"
     filtered.sort(

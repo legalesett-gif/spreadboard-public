@@ -78,3 +78,35 @@ def test_a_large_edge_backed_by_a_real_book_is_kept() -> None:
 
     real = _row(long_bid=0.0170, long_ask=0.0171, short_bid=0.0428, short_ask=0.0430)
     assert spread_is_untrustworthy(real) is False
+
+
+def test_a_spot_route_into_a_shut_deposit_is_not_a_spread() -> None:
+    """ESPORTS printed 150% into a Mexc deposit that was closed.
+
+    A spot arb needs the coin delivered, so a shut rail is why the gap exists
+    rather than an opportunity. Every spot row the reference product lists
+    shows both rails open.
+    """
+    from spreadboard.api_spreads import route_deliverable
+
+    row = _row()
+    object.__setattr__(row, "route_kind", "SPOT")
+    object.__setattr__(row, "long_venue", "Kraken")
+    object.__setattr__(row, "short_venue", "Mexc")
+    object.__setattr__(row, "long_withdraw_enabled", True)
+    object.__setattr__(row, "short_deposit_enabled", False)
+
+    assert route_deliverable(row) is False
+
+
+def test_an_unknown_rail_is_not_treated_as_shut() -> None:
+    from spreadboard.api_spreads import route_deliverable
+
+    row = _row()
+    object.__setattr__(row, "route_kind", "SPOT")
+    object.__setattr__(row, "long_venue", "Kraken")
+    object.__setattr__(row, "short_venue", "Mexc")
+    object.__setattr__(row, "long_withdraw_enabled", True)
+    object.__setattr__(row, "short_deposit_enabled", None)
+
+    assert route_deliverable(row) is None
