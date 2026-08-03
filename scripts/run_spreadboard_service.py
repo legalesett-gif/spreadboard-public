@@ -540,6 +540,55 @@ def _refresh_funding_windows() -> None:
         started = time.monotonic()
         count = market_history.write_funding_windows(route_keys)
         _log(f"funding windows computed for {count} routes in {time.monotonic() - started:.1f}s")
+        _refresh_venue_funding_history()
+    except Exception as exc:  # noqa: BLE001 - a missing history file is not fatal.
+        _log(f"funding windows skipped: {type(exc).__name__}: {exc}")
+
+
+#: Settled history moves once per funding interval, so sweeping it every warm
+#: pass would be waste. Hours, not minutes.
+VENUE_HISTORY_INTERVAL_SECONDS = max(
+    900.0, float(os.environ.get("SPREADBOARD_VENUE_HISTORY_SECONDS", "10800"))
+)
+_LAST_VENUE_HISTORY_AT = 0.0
+
+
+def _refresh_venue_funding_history() -> None:
+    """Pull each venue's settled funding for the legs the board is showing."""
+    global _LAST_VENUE_HISTORY_AT
+
+    now = time.monotonic()
+    if now - _LAST_VENUE_HISTORY_AT < VENUE_HISTORY_INTERVAL_SECONDS:
+        return
+    _LAST_VENUE_HISTORY_AT = now
+
+    from spreadboard import server, venue_funding_history
+
+    try:
+        legs: list[tuple[str, str]] = []
+        for query in WARM_QUERIES:
+            if not query.get("funding_only"):
+                continue
+            payload = server.api_market_spreads(_board_path(), dict(query))
+            for group in payload.get("groups") or []:
+                for route in group.get("routes") or []:
+                    for side in ("long", "short"):
+                        if route.get(f"{side}_market_type") != "Futures":
+                            continue
+                        venue = route.get(f"{side}_venue")
+                        symbol = route.get(f"{side}_market_symbol")
+                        if venue and symbol:
+                            legs.append((str(venue), str(symbol)))
+        if not legs:
+            return
+        started = time.monotonic()
+        windows = venue_funding_history.build(legs)
+        _log(
+            f"venue funding history: {len(windows)} of {len(set(legs))} legs "
+            f"in {time.monotonic() - started:.1f}s"
+        )
+    except Exception as exc:  # noqa: BLE001 - best effort beside everything else.
+        _log(f"venue funding history skipped: {type(exc).__name__}: {exc}")
     except Exception as exc:  # noqa: BLE001 - a missing history file is not fatal.
         _log(f"funding windows skipped: {type(exc).__name__}: {exc}")
 

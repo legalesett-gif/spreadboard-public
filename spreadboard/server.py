@@ -39,6 +39,7 @@ from spreadboard import (  # noqa: E402
     live,
     live_book_cache,
     market_history,
+    venue_funding_history,
     portfolio,
     telegram_bot,
 )
@@ -3267,7 +3268,7 @@ def render_signals_page(board_path: Path, config: dict[str, Any], query: dict[st
     return shell("Signals - SpreadBoard", "signals", body)
 
 
-def render_funding_windows(route_key: Any) -> str:
+def render_funding_windows(route: dict[str, Any] | None, route_key: Any) -> str:
     """Realised 1d/7d/30d carry for a route, or an honest blank.
 
     A rate tells you what a farm pays right now; these tell you what it has
@@ -3276,10 +3277,17 @@ def render_funding_windows(route_key: Any) -> str:
     have not observed for at least half its length shows a dash rather than a
     number built from a fraction of the period.
     """
-    windows = market_history.load_funding_windows().get(str(route_key or "")) or {}
+    # The venue's own settlement history is the better source: it reaches back
+    # thirty days where our samples hold about eighty-six hours, and each entry
+    # is a payment that really happened. Our samples remain the fallback for a
+    # leg whose venue publishes no history.
+    venue_windows = venue_funding_history.route_windows(route or {})
+    sampled = market_history.load_funding_windows().get(str(route_key or "")) or {}
     cells = []
     for label in ("1d", "7d", "30d"):
-        value = (windows.get(label) or {}).get("net")
+        value = venue_windows.get(label)
+        if value is None:
+            value = (sampled.get(label) or {}).get("net")
         if value is None:
             cells.append(f'<span class="funding-window unknown"><em>{label}</em><strong>—</strong></span>')
         else:
@@ -3391,7 +3399,7 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
         <div><span>Net 24h</span><strong>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
         <div><span>Payouts</span><strong>{h(funding_cadence_pair(best))}</strong></div>
         <div><span>Entry basis</span><strong>{fmt_pct(best.get('executable_spread_pct'))}</strong></div>
-        <div><span>Realised</span>{render_funding_windows(best.get('route_key'))}</div>
+        <div><span>Realised</span>{render_funding_windows(best, best.get('route_key'))}</div>
         <div><span>Pairs</span><strong>{h(group.get('route_count') or 0)}</strong></div>
         <span class="funding-chevron" aria-hidden="true">⌄</span>
       </summary>
