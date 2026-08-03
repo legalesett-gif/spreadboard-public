@@ -33,12 +33,15 @@ def test_htx_zhipu_zero_rate_is_published_not_dropped(monkeypatch: pytest.Monkey
     """A genuine 0.0 is data. Treating it as missing is what froze ZHIPU."""
     payload = {"data": [{"contract_code": "ZHIPU-USDT", "funding_rate": "0E-18"}]}
     refresher = _refresher(
-        monkeypatch, payload, {"ZHIPU-USDT": {"symbol": "ZHIPU/USDT:USDT"}}
+        monkeypatch, payload, {"ZHIPU-USDT": {"symbol": "ZHIPU/USDT:USDT", "swap": True}}
     )
 
     rates = refresher._native_bulk_funding_rates("HTX")
 
-    assert rates == {"ZHIPU/USDT:USDT": {"current_funding_pct": 0.0}}
+    # The interval is always stated, so a rate can never sit on a stale one.
+    assert rates == {
+        "ZHIPU/USDT:USDT": {"current_funding_pct": 0.0, "funding_interval_hours": 8.0}
+    }
 
 
 def test_kraken_absolute_rate_is_normalised_by_mark_price(
@@ -50,7 +53,7 @@ def test_kraken_absolute_rate_is_normalised_by_mark_price(
             {"symbol": "PF_XRPUSD", "fundingRate": -7.84115846425e-06, "markPrice": 1.06696914757}
         ]
     }
-    refresher = _refresher(monkeypatch, payload, {"PF_XRPUSD": {"symbol": "XRP/USD:USD"}})
+    refresher = _refresher(monkeypatch, payload, {"PF_XRPUSD": {"symbol": "XRP/USD:USD", "swap": True}})
 
     rates = refresher._native_bulk_funding_rates("Kraken Futures")
 
@@ -80,7 +83,7 @@ def test_ccxt_returning_empty_falls_back_to_the_native_source(
     """An empty answer and no answer both leave the legs frozen at scan time."""
     payload = {"data": [{"contract_code": "ZHIPU-USDT", "funding_rate": "0.001"}]}
     refresher = _refresher(
-        monkeypatch, payload, {"ZHIPU-USDT": {"symbol": "ZHIPU/USDT:USDT"}}
+        monkeypatch, payload, {"ZHIPU-USDT": {"symbol": "ZHIPU/USDT:USDT", "swap": True}}
     )
 
     class _Empty(_Client):
@@ -90,7 +93,7 @@ def test_ccxt_returning_empty_falls_back_to_the_native_source(
             return {}
 
     monkeypatch.setattr(
-        refresher, "_client", lambda *_a, **_k: _Empty({"ZHIPU-USDT": {"symbol": "ZHIPU/USDT:USDT"}})
+        refresher, "_client", lambda *_a, **_k: _Empty({"ZHIPU-USDT": {"symbol": "ZHIPU/USDT:USDT", "swap": True}})
     )
 
     rates = refresher._bulk_funding_rates("HTX")
@@ -101,6 +104,71 @@ def test_ccxt_returning_empty_falls_back_to_the_native_source(
 def test_every_native_source_declares_the_fields_the_parser_reads() -> None:
     for venue, spec in NATIVE_FUNDING_SOURCES.items():
         assert spec.get("url"), venue
-        assert spec.get("path"), venue
+        assert "path" in spec, venue
         assert spec.get("symbol"), venue
         assert spec.get("rate"), venue
+
+
+def test_kucoin_granularity_is_milliseconds_not_hours(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """14400000 is four hours. Read as hours it made READY read 0.82%/day."""
+    payload = {
+        "data": [
+            {"symbol": "READYUSDTM", "fundingFeeRate": 0.000931, "fundingRateGranularity": 14400000}
+        ]
+    }
+    refresher = _refresher(monkeypatch, payload, {"READYUSDTM": {"symbol": "READY/USDT:USDT", "swap": True}})
+
+    entry = refresher._native_bulk_funding_rates("Kucoin Futures")["READY/USDT:USDT"]
+
+    assert entry["funding_interval_hours"] == pytest.approx(4.0)
+
+
+def test_a_rate_without_an_interval_never_inherits_a_stale_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WhiteBIT publishes no interval.
+
+    A fresh rate merged onto the 1h interval left from an old scan made DEXE
+    read 4.27%/day against a real 0.02%. When the venue is silent the standard
+    8h applies, so rate and interval always describe the same thing.
+    """
+    from spreadboard.fast_quotes import DEFAULT_FUNDING_INTERVAL_HOURS
+
+    payload = {"data": [{"contract_code": "DEXE-USDT", "funding_rate": "-0.0015976"}]}
+    refresher = _refresher(monkeypatch, payload, {"DEXE-USDT": {"symbol": "DEXE/USDT:USDT", "swap": True}})
+
+    entry = refresher._native_bulk_funding_rates("HTX")["DEXE/USDT:USDT"]
+
+    assert entry["funding_interval_hours"] == DEFAULT_FUNDING_INTERVAL_HOURS
+
+
+def test_an_id_shared_by_spot_and_perp_resolves_to_the_perp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """XT's `night_usdt` is both NIGHT/USDT and its perpetual.
+
+    Taking the first match filed the funding rate against the spot symbol,
+    where nothing on the board ever looks it up.
+    """
+    payload = [{"symbol": "night_usdt", "funding_rate": "0.00005123"}]
+    by_id = {
+        "night_usdt": [
+            {"symbol": "NIGHT/USDT", "swap": False},
+            {"symbol": "NIGHT/USDT:USDT", "swap": True},
+        ]
+    }
+    refresher = _refresher(monkeypatch, payload, by_id)
+
+    rates = refresher._native_bulk_funding_rates("XT")
+
+    assert "NIGHT/USDT:USDT" in rates
+    assert "NIGHT/USDT" not in rates
+
+
+def test_a_spot_only_id_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = [{"symbol": "night_usdt", "funding_rate": "0.0001"}]
+    refresher = _refresher(monkeypatch, payload, {"night_usdt": {"symbol": "NIGHT/USDT"}})
+
+    assert refresher._native_bulk_funding_rates("XT") == {}

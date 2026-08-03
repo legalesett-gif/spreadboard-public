@@ -82,6 +82,11 @@ NATIVE_SPOT_VENUES = {
 }
 FAST_QUOTE_LANES = ("FUTURES", "FUTURES-SPOT", "SPOT", "DEX-FUTURES")
 
+#: What a perpetual settles on when the venue does not say. Eight hours is
+#: the market standard; the venues that differ (Hyperliquid, Kraken) publish
+#: their interval, so this only ever fills a genuine gap.
+DEFAULT_FUNDING_INTERVAL_HOURS = 8.0
+
 
 #: Venues whose funding CCXT cannot fetch in bulk. Without these the legs on
 #: these venues keep whatever the 20-40 minute discovery scan captured and are
@@ -115,6 +120,9 @@ NATIVE_FUNDING_SOURCES: dict[str, dict[str, Any]] = {
         "symbol": "symbol",
         "rate": "fundingFeeRate",
         "interval": "fundingRateGranularity",
+        # Kucoin reports granularity in milliseconds: 14400000 is four hours,
+        # not 14.4 million of them.
+        "interval_scale": 1.0 / 3_600_000.0,
     },
     "Phemex": {
         "url": "https://api.phemex.com/md/v3/ticker/24hr/all",
@@ -128,6 +136,14 @@ NATIVE_FUNDING_SOURCES: dict[str, dict[str, Any]] = {
         "symbol": "symbol",
         "rate": "funding_rate",
         "interval": "funding_interval_hours",
+    },
+    "XT": {
+        "url": "https://fapi.xt.com/future/market/v1/public/cg/contracts",
+        "path": (),
+        "symbol": "symbol",
+        "symbol_keys": ("symbol", "ticker_id"),
+        "rate": "funding_rate",
+        "next_ms": "next_funding_rate_timestamp",
     },
     "Kraken Futures": {
         "url": "https://futures.kraken.com/derivatives/api/v4/tickers",
@@ -251,11 +267,19 @@ class FastQuoteRefresher:
         for item in payload:
             if not isinstance(item, dict):
                 continue
-            native = item.get(str(spec["symbol"]))
-            market = client.markets_by_id.get(str(native)) if native else None
-            if isinstance(market, list):
-                market = market[0] if market else None
-            if not isinstance(market, dict) or not market.get("symbol"):
+            market = None
+            for name in spec.get("symbol_keys") or (str(spec["symbol"]),):
+                native = item.get(name)
+                found = client.markets_by_id.get(str(native)) if native else None
+                if isinstance(found, list):
+                    found = next(
+                        (m for m in found if m.get("swap") and m.get("inverse") is not True),
+                        None,
+                    )
+                if isinstance(found, dict) and found.get("swap") and found.get("symbol"):
+                    market = found
+                    break
+            if market is None:
                 continue
             rate = _optional_number(item.get(str(spec["rate"])))
             if rate is None:
@@ -265,13 +289,15 @@ class FastQuoteRefresher:
                 if not reference:
                     continue
                 rate = rate / reference
+            interval = spec.get("interval_constant")
+            if interval is None:
+                interval = _optional_number(item.get(str(spec.get("interval") or "")))
+                scale = spec.get("interval_scale")
+                if interval is not None and scale:
+                    interval = interval * float(scale)
             fields = _funding_fields(
                 rate,
-                interval_hours=(
-                    spec.get("interval_constant")
-                    if spec.get("interval_constant") is not None
-                    else item.get(str(spec.get("interval") or ""))
-                ),
+                interval_hours=interval if interval else DEFAULT_FUNDING_INTERVAL_HOURS,
                 next_funding_ms=item.get(str(spec.get("next_ms") or "")),
             )
             if fields:
@@ -298,7 +324,10 @@ class FastQuoteRefresher:
                 interval = interval[:-1]
             fields = _funding_fields(
                 item.get("fundingRate"),
-                interval_hours=interval,
+                # Never leave a fresh rate sitting on a stale interval. WhiteBIT
+                # publishes no interval, so DEXE kept a 1h interval from an old
+                # scan against an 8h rate and read 4.27%/day instead of 0.02%.
+                interval_hours=interval if interval else DEFAULT_FUNDING_INTERVAL_HOURS,
                 next_funding_ms=item.get("fundingTimestamp") or item.get("nextFundingTimestamp"),
             )
             if fields:
