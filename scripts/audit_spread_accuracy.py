@@ -26,6 +26,34 @@ import ccxt  # noqa: E402
 from spreadboard.fast_quotes import VENUE_IDS  # noqa: E402
 from spreadboard.server import api_market_spreads, _query_lists_with  # noqa: E402
 
+#: CCXT renamed some adapters. VENUE_IDS still carries the older ids, and the
+#: websocket worker has always mapped them; without the same map here every
+#: Gate route reported as unverifiable for no reason but the name.
+CCXT_ALIASES = {
+    "gateio": ("gate", "gateio"),
+    "gate": ("gate", "gateio"),
+    "coinbaseexchange": ("coinbaseexchange", "coinbase"),
+    "huobi": ("htx", "huobi"),
+}
+
+
+def _exchange(exchange_id: str):
+    """A loaded CCXT client for a venue id, or None if it has no adapter."""
+    import ccxt
+
+    for candidate in CCXT_ALIASES.get(exchange_id, (exchange_id,)):
+        klass = getattr(ccxt, candidate, None)
+        if klass is None:
+            continue
+        try:
+            client = klass({"enableRateLimit": True, "timeout": 20000})
+            client.load_markets()
+            return client
+        except Exception:  # noqa: BLE001 - try the next name, then give up.
+            continue
+    return None
+
+
 LANES = (
     ("FUTURES", {"kind": "FUTURES"}),
     ("FUTURES-SPOT", {"kind": "FUTURES-SPOT-PAIR"}),
@@ -50,12 +78,7 @@ def main() -> int:
         if not exchange_id or not symbol:
             return None, None
         if exchange_id not in clients:
-            try:
-                client = getattr(ccxt, exchange_id)({"enableRateLimit": True, "timeout": 20000})
-                client.load_markets()
-                clients[exchange_id] = client
-            except Exception:  # noqa: BLE001 - an unreachable venue is not a board bug.
-                clients[exchange_id] = None
+            clients[exchange_id] = _exchange(exchange_id)
         client = clients[exchange_id]
         if client is None or symbol not in getattr(client, "symbols", []):
             return None, None
