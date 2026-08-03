@@ -216,9 +216,7 @@ def load_spreads(
     rankable_universe = [
         row
         for row in public_universe
-        if route_deliverable(row) is not False
-        and not price_ratio_implausible(row)
-        and not leg_volume_too_thin(row)
+        if route_deliverable(row) is not False and row_is_presentable(row)
     ]
     # A funding farm holds both legs -- long spot on one venue, short futures on
     # another -- and never moves the coin between them, so transfer rails are
@@ -227,9 +225,11 @@ def load_spreads(
     rankable_funding_universe = [
         row
         for row in public_universe
-        if not price_ratio_implausible(row)
+        if funding_intervals_known(row)
+        and not price_ratio_implausible(row)
         and not leg_volume_too_thin(row)
-        and funding_intervals_known(row)
+        and not is_venue_specific_leveraged_token(row)
+        and not is_non_perpetual_or_inverse(row)
     ]
     route_kind_token_counts = _route_kind_token_counts(public_universe)
     release_lane_token_counts = _release_lane_token_counts(public_universe)
@@ -1639,6 +1639,24 @@ def pays_something(row: "SpreadTerminalRow") -> bool:
         return True
     carry = _effective_funding_24h(row)
     return carry is not None and carry > 0
+
+
+def row_is_presentable(row: "SpreadTerminalRow") -> bool:
+    """Would this row survive the board's own filters?
+
+    The headline panels ranked off a universe that applied only deliverability
+    and price sanity, so rows the board itself rejects still led the page:
+    SHIB3S, a 3x leveraged token, headlined Top Arbitrage Edges at +177% while
+    the lane beside it correctly refused to list it. The panels and the lane
+    must answer the same question.
+    """
+    return (
+        not price_ratio_implausible(row)
+        and not leg_volume_too_thin(row)
+        and not is_venue_specific_leveraged_token(row)
+        and not is_non_perpetual_or_inverse(row)
+        and not spread_is_untrustworthy(row)
+    )
 
 
 def unverifiable_price_outliers(rows: list["SpreadTerminalRow"]) -> set[str]:
