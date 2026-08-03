@@ -178,53 +178,50 @@ def sweep_funding(
     venues: list[str] | None = None,
     *,
     cache_path: Path | str = FUNDING_CACHE_PATH,
-    budget_seconds: float = 120.0,
+    budget_seconds: float = 180.0,
 ) -> dict[str, Any]:
-    """One bulk funding call per venue, for every leg the venue lists."""
+    """One bulk funding call per venue, for every leg the venue lists.
+
+    Goes through FastQuoteRefresher._bulk_funding_rates rather than calling
+    CCXT directly: eight of the eighteen futures venues publish no bulk funding
+    through CCXT and are served by native endpoints instead. Calling CCXT alone
+    left Ourbit (845 legs) and XT (688) without a rate at all, along with Mexc,
+    HTX, BitMart and both Kraken and Kucoin futures.
+    """
+    from spreadboard.fast_quotes import FastQuoteRefresher
+
     deadline = time.monotonic() + budget_seconds
     started = time.monotonic()
     rates: dict[str, dict[str, Any]] = {}
     covered = 0
-    for venue in venues if venues is not None else sorted(VENUE_IDS):
-        if time.monotonic() >= deadline:
-            break
-        client = _client(venue, "Futures")
-        if client is None or not getattr(client, "has", {}).get("fetchFundingRates"):
-            continue
-        try:
-            payload = client.fetch_funding_rates()
-        except Exception:  # noqa: BLE001 - one venue must not stop the sweep.
-            continue
-        items = payload.values() if isinstance(payload, dict) else payload
-        wrote = 0
-        for item in items or []:
-            if not isinstance(item, dict) or not item.get("symbol"):
-                continue
-            rate = item.get("fundingRate")
-            if rate is None:
-                continue
-            interval = item.get("interval")
-            if isinstance(interval, str) and interval.casefold().endswith("h"):
-                interval = interval[:-1]
+    refresher = FastQuoteRefresher()
+    try:
+        for venue in venues if venues is not None else sorted(VENUE_IDS):
+            if time.monotonic() >= deadline:
+                break
             try:
-                entry: dict[str, Any] = {"rate_pct": float(rate) * 100.0}
-            except (TypeError, ValueError):
+                venue_rates = refresher._bulk_funding_rates(venue) or {}
+            except Exception:  # noqa: BLE001 - one venue must not stop the sweep.
                 continue
-            try:
-                if interval is not None:
-                    entry["interval_hours"] = float(interval)
-            except (TypeError, ValueError):
-                pass
-            next_ms = item.get("fundingTimestamp") or item.get("nextFundingTimestamp")
-            try:
-                if next_ms:
-                    entry["next_funding_ts_us"] = int(float(next_ms) * 1000)
-            except (TypeError, ValueError):
-                pass
-            rates[f"{venue}|{item['symbol']}"] = entry
-            wrote += 1
-        if wrote:
+            if not venue_rates:
+                continue
             covered += 1
+            for symbol, fields in venue_rates.items():
+                entry: dict[str, Any] = {}
+                if fields.get("current_funding_pct") is not None:
+                    entry["rate_pct"] = fields["current_funding_pct"]
+                if fields.get("funding_interval_hours") is not None:
+                    entry["interval_hours"] = fields["funding_interval_hours"]
+                if fields.get("next_funding_ts_us") is not None:
+                    entry["next_funding_ts_us"] = fields["next_funding_ts_us"]
+                if entry:
+                    rates[f"{venue}|{symbol}"] = entry
+    finally:
+        try:
+            refresher.close()
+        except Exception:  # noqa: BLE001
+            pass
+
     payload_out = {
         "schema": "spreadboard.live_funding.v1",
         "updated_at": datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat(),

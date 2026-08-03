@@ -237,3 +237,35 @@ def test_a_funding_sweep_invalidates_cached_rows(tmp_path, monkeypatch) -> None:
     assert "FUNDING_CACHE_PATH" in source, (
         "the funding overlay must take part in the row cache key"
     )
+
+
+def test_the_funding_sweep_covers_venues_ccxt_cannot(monkeypatch) -> None:
+    """Eight of eighteen futures venues publish no bulk funding through CCXT.
+
+    Calling CCXT alone left Ourbit (845 legs) and XT (688) with no rate at all,
+    along with Mexc, HTX, BitMart and both Kraken and Kucoin futures.
+    """
+    import inspect
+
+    source = inspect.getsource(bulk_quotes.sweep_funding)
+    assert "_bulk_funding_rates" in source, (
+        "the sweep must go through the native-aware path, not CCXT directly"
+    )
+
+
+def test_the_sweep_writes_entries_keyed_by_venue_and_symbol(tmp_path, monkeypatch) -> None:
+    class _Refresher:
+        def _bulk_funding_rates(self, venue):
+            if venue != "Ourbit":
+                return {}
+            return {"QNTX/USDT:USDT": {"current_funding_pct": 0.02, "funding_interval_hours": 8.0}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("spreadboard.fast_quotes.FastQuoteRefresher", lambda: _Refresher())
+    out = bulk_quotes.sweep_funding(["Ourbit"], cache_path=tmp_path / "f.json")
+
+    assert out["legs"] == 1
+    legs = bulk_quotes.load_funding(cache_path=tmp_path / "f.json")
+    assert legs["Ourbit|QNTX/USDT:USDT"]["rate_pct"] == 0.02
