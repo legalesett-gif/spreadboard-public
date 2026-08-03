@@ -457,6 +457,9 @@ def main() -> int:
 #: Funding -> Futures-Spot waiting 59 seconds.
 WARM_QUERIES: tuple[dict[str, list[str]], ...] = (
     {},
+    # /charts builds its picker from 500 rows, which is its own cache key -- it
+    # stayed at 27s while every other page came down.
+    {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
     {"kind": ["FUTURES"]},
     {"kind": ["FUTURES-SPOT-PAIR"]},
     {"kind": ["SPOT"]},
