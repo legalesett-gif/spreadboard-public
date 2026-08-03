@@ -572,6 +572,12 @@ def _warm_board_cache(*, force: bool = False) -> None:
         server.api_intel(_board_path())
     except Exception as exc:  # noqa: BLE001 - warming is best effort.
         _log(f"intel warm skipped: {type(exc).__name__}: {exc}")
+    try:
+        # Opening a chart by route needs this index; building it on demand cost
+        # 14.6s of the thirty a member waited.
+        server._route_index(_board_path())
+    except Exception as exc:  # noqa: BLE001 - warming is best effort.
+        _log(f"route index warm skipped: {type(exc).__name__}: {exc}")
     _log(f"board cache warmed {len(WARM_QUERIES)} views in {time.monotonic() - started:.1f}s")
     _refresh_funding_windows()
 

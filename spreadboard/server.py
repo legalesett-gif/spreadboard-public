@@ -2019,10 +2019,23 @@ def _chart_stream_payload(route_key: str, board_path: Path, hours: float) -> dic
     }
 
 
-def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | None:
-    custom = chart_catalog.route_from_key(route_key)
-    if custom is not None:
-        return custom
+#: route_key -> row for the current snapshot. Finding one route used to build
+#: the entire twelve-thousand-row board and then scan it, which cost 14.6s on
+#: every chart opened by route -- most of the thirty seconds a member waited.
+_ROUTE_INDEX: dict[str, Any] = {"signature": None, "rows": {}}
+_ROUTE_INDEX_LOCK = threading.Lock()
+
+
+def _route_index(board_path: Path) -> dict[str, dict[str, Any]]:
+    """Every route on the board keyed by route_key, rebuilt when it changes."""
+    signature = (
+        str(board_path),
+        _file_signature(board_path),
+        _file_signature(api_spreads.DEFAULT_API_DISCOVERY_PATH),
+    )
+    with _ROUTE_INDEX_LOCK:
+        if _ROUTE_INDEX["signature"] == signature:
+            return _ROUTE_INDEX["rows"]
     market = api_spreads.load_spreads(
         board_path=board_path,
         include_stale=True,
@@ -2032,14 +2045,22 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
         include_unverified=True,
         limit=None,
     )
-    return next(
-        (
-            row
-            for row in market.get("rows") or []
-            if str(row.get("route_key") or "") == route_key
-        ),
-        None,
-    )
+    index = {
+        str(row.get("route_key") or ""): row
+        for row in market.get("rows") or []
+        if row.get("route_key")
+    }
+    with _ROUTE_INDEX_LOCK:
+        _ROUTE_INDEX["signature"] = signature
+        _ROUTE_INDEX["rows"] = index
+    return index
+
+
+def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | None:
+    custom = chart_catalog.route_from_key(route_key)
+    if custom is not None:
+        return custom
+    return _route_index(board_path).get(route_key)
 
 
 def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
