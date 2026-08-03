@@ -1332,7 +1332,27 @@ def _row_strength(row: dict[str, Any]) -> float:
     """
     spread = as_float(row.get("depth_weighted_spread_pct")) or 0.0
     funding = as_float((row.get("notes") or {}).get("funding", {}).get("net_apr_pct")) or 0.0
-    return max(abs(spread), max(funding, 0.0) / 365.0)
+    strength = max(abs(spread), max(funding, 0.0) / 365.0)
+    # A route quoted from last trades is not stronger than one quoted from a
+    # book, however wide it prints -- and because this ranking decides which
+    # routes survive the per-token cap, letting it win discarded the tradeable
+    # pair. The reference product's whole Spot-Spot lane is 0.10-0.21%, exactly
+    # the band that was being evicted; 23 of its 44 listed routes were missing
+    # here because both venues were present but this pair never survived.
+    if not _row_legs_have_books(row):
+        return strength / 1_000_000.0
+    return strength
+
+
+def _row_legs_have_books(row: dict[str, Any]) -> bool:
+    """True when both legs carry a genuine two-sided book."""
+    legs = (row.get("notes") or {}).get("route_inputs") or {}
+    for side in ("long", "short"):
+        leg = legs.get(side) or {}
+        bid, ask = as_float(leg.get("bid")), as_float(leg.get("ask"))
+        if bid is None or ask is None or bid == ask:
+            return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)

@@ -57,3 +57,40 @@ def test_spread_still_orders_pairs_that_are_equally_tradeable() -> None:
     )
 
     assert pairs[0].depth_weighted_spread_pct >= pairs[-1].depth_weighted_spread_pct
+
+
+def test_the_per_token_cap_keeps_the_route_with_a_book() -> None:
+    """_row_strength decides which routes survive the cap, not pair ordering.
+
+    Sorting candidates was the wrong layer: _cap_rows_per_token re-sorts by
+    _row_strength, so a ticker-priced route printing 90% still evicted the real
+    0.12% pair. 23 of the reference product's 44 routes were missing for this.
+    """
+    from src.spreadarb.api_discovery.sources import _row_strength
+
+    def row(spread: float, *, book: bool) -> dict:
+        quote = {"bid": 1.0, "ask": 1.01} if book else {"bid": 1.0, "ask": 1.0}
+        return {
+            "depth_weighted_spread_pct": spread,
+            "notes": {"route_inputs": {"long": dict(quote), "short": dict(quote)}},
+        }
+
+    real = row(0.12, book=True)
+    mirage = row(90.0, book=False)
+
+    assert _row_strength(real) > _row_strength(mirage), (
+        "a tradeable 0.12% route must outrank a ticker-priced 90% one"
+    )
+
+
+def test_spread_still_decides_between_two_booked_routes() -> None:
+    from src.spreadarb.api_discovery.sources import _row_strength
+
+    def booked(spread: float) -> dict:
+        quote = {"bid": 1.0, "ask": 1.01}
+        return {
+            "depth_weighted_spread_pct": spread,
+            "notes": {"route_inputs": {"long": dict(quote), "short": dict(quote)}},
+        }
+
+    assert _row_strength(booked(5.0)) > _row_strength(booked(0.5))
