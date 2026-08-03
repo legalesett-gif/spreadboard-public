@@ -105,7 +105,14 @@ def test_leftover_budget_still_covers_the_widest_unshown_routes(
     assert ("Mexc", "Futures", "OTHER/USDT:USDT") in legs
 
 
-def test_a_venue_needing_credentials_is_dropped_not_retried_forever() -> None:
+@pytest.mark.parametrize(
+    "error",
+    [
+        'AuthenticationError:coinbaseinternational requires "apiKey" credential',
+        "BadRequest:The coin pair does not currently offer",
+    ],
+)
+def test_permanent_subscribe_failures_are_dropped_not_retried_forever(error: str) -> None:
     """Coinbase International will not serve public books without an API key.
 
     Retrying it is guaranteed to fail, and on a two-core box the reconnect loop
@@ -125,10 +132,11 @@ def test_a_venue_needing_credentials_is_dropped_not_retried_forever() -> None:
     worker._market_locks = {}
     worker._unavailable = set()
 
+    kind, _, message = error.partition(":")
     key = ("Coinbase International", "Futures", "PEPE/USDC:USDC")
 
     def _client(_venue: str, _market_type: str):
-        raise ccxtpro.AuthenticationError('coinbaseinternational requires "apiKey" credential')
+        raise getattr(ccxtpro, kind)(message)
 
     worker._client = _client
 

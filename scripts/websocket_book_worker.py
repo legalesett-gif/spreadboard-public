@@ -115,16 +115,19 @@ class BookWorker:
                 delay = 1.0
             except asyncio.CancelledError:
                 raise
-            except ccxtpro.AuthenticationError as exc:
-                # A venue that will not serve public books without a key is not
-                # a transient failure, and retrying it forever costs CPU the
-                # streaming legs need. Coinbase International alone reconnected
-                # every few seconds on a two-core box. Drop it until the process
-                # restarts, by which time credentials may exist.
+            except (ccxtpro.AuthenticationError, ccxtpro.BadRequest) as exc:
+                # Neither of these gets better by asking again: the venue either
+                # will not serve public books without a key (Coinbase
+                # International) or does not stream that symbol at all (HTX
+                # answers "the coin pair does not currently offer" for a long
+                # tail of spot pairs). Retrying them forever spent the CPU the
+                # streaming legs needed -- 219 log lines in eight minutes while
+                # the store held no books at all. Dropped until the process
+                # restarts, by which time credentials or listings may differ.
                 self._unavailable.add(key)
                 print(
                     f"websocket-books: {venue} {market_type} {symbol}: "
-                    f"dropped, needs credentials ({str(exc)[:80]})",
+                    f"dropped, will not stream ({type(exc).__name__}: {str(exc)[:70]})",
                     flush=True,
                 )
                 return
