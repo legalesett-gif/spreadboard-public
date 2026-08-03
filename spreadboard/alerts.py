@@ -328,10 +328,22 @@ def send_user_test_alert(user_id: int, *, accounts_path: Path | str = accounts.D
 def _rule_value(row: dict[str, Any] | None, metric: str) -> float | None:
     if not row:
         return None
+    # These must name fields the board actually produces. They did not: every
+    # spread rule read None and silently never fired, so a member could set a
+    # threshold, watch the board cross it, and never be told. The displayed
+    # value comes first because that is the number the threshold was set
+    # against; the older names stay as fallbacks for rules stored before.
     keys = (
-        ("funding_net_24h_pct", "funding_24h_pct", "net_funding_24h_pct")
+        ("funding_24h_pct", "funding_net_24h_pct", "net_funding_24h_pct")
         if metric == "funding_24h_pct"
-        else ("open_spread_pct", "entry_spread_pct", "spread_pct")
+        else (
+            "displayed_open_spread_pct",
+            "executable_spread_pct",
+            "depth_weighted_spread_pct",
+            "open_spread_pct",
+            "entry_spread_pct",
+            "spread_pct",
+        )
     )
     for key in keys:
         try:
