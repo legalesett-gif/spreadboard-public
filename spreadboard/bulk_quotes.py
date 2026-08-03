@@ -118,25 +118,39 @@ def sweep_venue(
     return written
 
 
+#: Where the last sweep stopped. Without this every pass starts at the same
+#: venue, so when the budget runs out it is always the same later venues that
+#: go unswept -- observed as 18 venues one pass, then 10, then 1, with coverage
+#: swinging between 42% and 76%. The funding sweep has always rotated for this
+#: reason; prices need it for the same reason.
+_CURSOR = {"index": 0}
+
+
 def sweep(
     venues: list[str] | None = None,
     *,
     store: live_book_cache.LiveBookStore | None = None,
-    budget_seconds: float = 120.0,
+    budget_seconds: float = 180.0,
 ) -> dict[str, Any]:
-    """One pass over every venue, bounded so it cannot run into the next one."""
+    """One pass over the venues, resuming where the last pass ran out of time."""
     target = store or live_book_cache.LiveBookStore()
     deadline = time.monotonic() + budget_seconds
     started = time.monotonic()
     written = 0
     covered = 0
-    for venue in venues if venues is not None else sorted(VENUE_IDS):
+    ordered = venues if venues is not None else sorted(VENUE_IDS)
+    start = _CURSOR["index"] % max(1, len(ordered))
+    rotation = ordered[start:] + ordered[:start]
+    position = start
+    for venue in rotation:
         if time.monotonic() >= deadline:
             break
+        position = (ordered.index(venue) + 1) % max(1, len(ordered))
         count = sweep_venue(venue, store=target)
         if count:
             covered += 1
             written += count
+    _CURSOR["index"] = position
     return {
         "status": "ok",
         "venues": covered,

@@ -131,3 +131,43 @@ def test_a_staler_quote_does_not_overwrite_a_fresher_one(tmp_path) -> None:
     assert book is not None
     assert book.bids[0][0] == 1.0, "the fresher streamed book must survive"
     assert book.quote_ts_us == fresh_ts
+
+
+def test_the_sweep_resumes_where_it_ran_out_of_time(monkeypatch) -> None:
+    """Starting at the same venue every pass starves the later ones.
+
+    Observed as 18 venues one pass, then 10, then 1, with board coverage
+    swinging between 42% and 76%.
+    """
+    import time as _time
+
+    visited: list[str] = []
+
+    def slow(venue, *, store):
+        visited.append(venue)
+        _time.sleep(0.03)
+        return 1
+
+    monkeypatch.setattr(bulk_quotes, "sweep_venue", slow)
+    venues = ["A", "B", "C", "D", "E", "F"]
+    bulk_quotes._CURSOR["index"] = 0
+
+    bulk_quotes.sweep(venues, store=_Store(), budget_seconds=0.05)
+    first = list(visited)
+    visited.clear()
+    bulk_quotes.sweep(venues, store=_Store(), budget_seconds=0.05)
+
+    assert first, "the first pass must cover something"
+    assert visited, "the second pass must cover something"
+    assert visited[0] != first[0], "the second pass must not repeat the first venue"
+    assert visited[0] == venues[len(first) % len(venues)]
+
+
+def test_a_full_pass_leaves_the_cursor_back_at_the_start(monkeypatch) -> None:
+    monkeypatch.setattr(bulk_quotes, "sweep_venue", lambda venue, *, store: 1)
+    venues = ["A", "B", "C"]
+    bulk_quotes._CURSOR["index"] = 0
+
+    bulk_quotes.sweep(venues, store=_Store(), budget_seconds=30.0)
+
+    assert bulk_quotes._CURSOR["index"] == 0
