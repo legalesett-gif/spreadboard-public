@@ -30,8 +30,8 @@ services:
       SPREADBOARD_MARKET_CACHE_ENTRIES: "40"
       # One fetch_tickers per venue re-prices the whole board. This is what
       # makes every positive token current rather than only the streamed ones.
-      SPREADBOARD_BULK_QUOTE_SECONDS: "45"
-      SPREADBOARD_LIVE_BOOK_AGE_SECONDS: "150"
+      SPREADBOARD_BULK_QUOTE_SECONDS: "15"
+      SPREADBOARD_LIVE_BOOK_AGE_SECONDS: "300"
       SPREADBOARD_WS_BOOKS: "1100"
       SPREADBOARD_WS_RECONCILE_SECONDS: "10"
       SPREADBOARD_WS_WRITE_SECONDS: "0.25"
