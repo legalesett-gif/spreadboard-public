@@ -2293,7 +2293,13 @@ def render_board_stream_script(query: dict[str, list[str]]) -> str:
 def _board_stream_rows(
     board_path: Path, query: dict[str, list[str]]
 ) -> dict[str, tuple[Any, Any]]:
-    """Current spread and funding per route, for the lane the member is viewing."""
+    """Current spread and funding per route, for the lane the member is viewing.
+
+    The grouped board is cached because building it is expensive, so prices in it
+    are only as fresh as that cache. This re-prices the routes that are streaming
+    directly from the live books on every tick, which is the whole point of the
+    push: the page renders from cache and the feed corrects it within seconds.
+    """
     payload = api_market_spreads(
         board_path,
         _query_lists_with(
@@ -2303,12 +2309,21 @@ def _board_stream_rows(
             sort=_query_first(query, "sort") or "rank",
         ),
     )
+    routes = [
+        route
+        for group in payload.get("groups") or []
+        for route in group.get("routes") or []
+        if isinstance(route, dict) and route.get("route_key")
+    ]
+    live = api_spreads.live_prices_for(routes)
     rows: dict[str, tuple[Any, Any]] = {}
-    for group in payload.get("groups") or []:
-        for route in group.get("routes") or []:
-            key = str(route.get("route_key") or "")
-            if key:
-                rows[key] = (route.get("executable_spread_pct"), route.get("funding_daily_pct"))
+    for route in routes:
+        key = str(route["route_key"])
+        spread, funding = live.get(key, (None, None))
+        rows[key] = (
+            spread if spread is not None else route.get("executable_spread_pct"),
+            funding if funding is not None else route.get("funding_daily_pct"),
+        )
     return rows
 
 

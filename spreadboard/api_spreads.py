@@ -486,6 +486,42 @@ def _book_side(book: Any, side: str) -> tuple[float | None, float | None]:
     return top, vwap or top
 
 
+def live_prices_for(routes: list[dict[str, Any]]) -> dict[str, tuple[float | None, float | None]]:
+    """Spread and carry straight from the streaming books, for a set of rendered routes.
+
+    The push path must not go through the grouped board's cache: a cached price
+    is exactly what the stream exists to correct.
+    """
+    books = _live_books()
+    if not books or not routes:
+        return {}
+    from spreadboard import live_book_cache
+
+    out: dict[str, tuple[float | None, float | None]] = {}
+    for route in routes:
+        long_book = books.get(
+            live_book_cache.cache_key(
+                str(route.get("long_venue") or ""), str(route.get("long_market_type") or ""),
+                str(route.get("long_market_symbol") or ""))
+        )
+        short_book = books.get(
+            live_book_cache.cache_key(
+                str(route.get("short_venue") or ""), str(route.get("short_market_type") or ""),
+                str(route.get("short_market_symbol") or ""))
+        )
+        if long_book is None or short_book is None:
+            continue
+        ask, _ = _book_side(long_book, "ask")
+        bid, _ = _book_side(short_book, "bid")
+        if not ask or not bid or ask <= 0:
+            continue
+        out[str(route["route_key"])] = (
+            (bid / ask - 1.0) * 100.0,
+            _float_or_none(route.get("funding_daily_pct")),
+        )
+    return out
+
+
 def apply_live_books(
     rows: list["SpreadTerminalRow"], books: dict[str, Any], *, now: float
 ) -> list["SpreadTerminalRow"]:

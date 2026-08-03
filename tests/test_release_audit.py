@@ -2916,3 +2916,40 @@ def test_a_venues_markets_are_loaded_once_not_once_per_subscription() -> None:
 
     asyncio.run(drive())
     assert calls["n"] == 1, f"one request per venue, not {calls['n']}"
+
+
+def test_the_push_path_does_not_read_prices_from_the_cache() -> None:
+    """The grouped board is cached because building it is expensive, so its
+    prices are only as fresh as that cache. A cached price is exactly what the
+    stream exists to correct."""
+    import inspect
+    source = inspect.getsource(server._board_stream_rows)
+    assert "live_prices_for" in source
+
+
+def test_live_prices_come_from_the_books_for_streamed_routes() -> None:
+    from spreadboard import live_book_cache
+    ts = int(time.time() * 1_000_000)
+    books = {
+        live_book_cache.cache_key("Gate", "Futures", "A/USDT:USDT"):
+            _Book([[100.0, 9.0]], [[100.0, 9.0]], ts),
+        live_book_cache.cache_key("Bybit", "Futures", "A/USDT:USDT"):
+            _Book([[105.0, 9.0]], [[105.5, 9.0]], ts),
+    }
+    routes = [{"route_key": "A|k", "long_venue": "Gate", "long_market_type": "Futures",
+               "long_market_symbol": "A/USDT:USDT", "short_venue": "Bybit",
+               "short_market_type": "Futures", "short_market_symbol": "A/USDT:USDT",
+               "funding_daily_pct": 0.2}]
+    import unittest.mock as mock
+    with mock.patch.object(api_spreads, "_live_books", return_value=books):
+        prices = api_spreads.live_prices_for(routes)
+    assert prices["A|k"][0] == pytest.approx(5.0)
+
+
+def test_a_route_with_no_live_book_is_not_invented() -> None:
+    import unittest.mock as mock
+    routes = [{"route_key": "Z|k", "long_venue": "Gate", "long_market_type": "Futures",
+               "long_market_symbol": "Z/USDT:USDT", "short_venue": "Bybit",
+               "short_market_type": "Futures", "short_market_symbol": "Z/USDT:USDT"}]
+    with mock.patch.object(api_spreads, "_live_books", return_value={}):
+        assert api_spreads.live_prices_for(routes) == {}
