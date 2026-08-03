@@ -72,6 +72,12 @@ class LiveBookStore:
                     quote_ts_us = excluded.quote_ts_us,
                     bids_json = excluded.bids_json,
                     asks_json = excluded.asks_json
+                -- A slower source must not overwrite a faster one. The bulk
+                -- ticker sweep covers the whole board every ninety seconds and
+                -- the websockets cover the busiest legs sub-second; without
+                -- this the sweep kept flattening the streamed books and the
+                -- push had almost nothing left to send.
+                WHERE excluded.quote_ts_us >= live_books.quote_ts_us
                 """,
                 (
                     cache_key(venue, market_type, symbol),

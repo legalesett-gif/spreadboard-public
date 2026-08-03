@@ -112,3 +112,22 @@ def test_a_failing_venue_does_not_stop_the_sweep(monkeypatch: pytest.MonkeyPatch
 
     # sweep_venue swallows it; the sweep keeps going to the next venue.
     assert bulk_quotes.sweep_venue("Binance", store=store) == 0
+
+
+def test_a_staler_quote_does_not_overwrite_a_fresher_one(tmp_path) -> None:
+    """The bulk sweep covers the whole board every ninety seconds; the
+    websockets cover the busiest legs sub-second. Letting the sweep flatten a
+    streamed book leaves the push with nothing to send."""
+    from spreadboard import live_book_cache
+
+    store = live_book_cache.LiveBookStore(tmp_path / "books.sqlite3")
+    fresh_ts = 1_785_000_100_000_000
+    stale_ts = 1_785_000_000_000_000
+
+    store.put("Gate", "Spot", "T/USDT", bids=[[1.0, 1.0]], asks=[[1.1, 1.0]], quote_ts_us=fresh_ts)
+    store.put("Gate", "Spot", "T/USDT", bids=[[9.0, 1.0]], asks=[[9.9, 1.0]], quote_ts_us=stale_ts)
+
+    book = store.get("Gate", "Spot", "T/USDT", max_age_seconds=10**9)
+    assert book is not None
+    assert book.bids[0][0] == 1.0, "the fresher streamed book must survive"
+    assert book.quote_ts_us == fresh_ts
