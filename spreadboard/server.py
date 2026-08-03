@@ -46,7 +46,17 @@ from spreadboard import (  # noqa: E402
 _INTEL_CACHE_TTL_SECONDS = 20.0
 _INTEL_CACHE_LOCK = threading.Lock()
 _INTEL_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
-_MARKET_CACHE_TTL_SECONDS = 20.0
+#: How long a grouped board payload stays served. This is the cache the pages
+#: actually read, and at 20s it expired seconds after the warmer filled it --
+#: which is why warming every view did not make the pages fast. It must outlive
+#: the warm cycle. Prices do not go stale with it: the payload is structure, and
+#: the stream re-prices what is on screen every three seconds.
+_MARKET_CACHE_TTL_SECONDS = max(
+    20.0, float(os.environ.get("SPREADBOARD_MARKET_CACHE_SECONDS", "900"))
+)
+#: Each payload is fully materialised and large, so the count is bounded to keep
+#: a 4GB box off its limit -- an earlier unbounded version left it with 156MB.
+_MARKET_CACHE_MAX_ENTRIES = max(4, int(os.environ.get("SPREADBOARD_MARKET_CACHE_ENTRIES", "14")))
 _MARKET_CACHE_LOCK = threading.Lock()
 _MARKET_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 _MARKET_CACHE_INFLIGHT: dict[tuple[Any, ...], threading.Event] = {}
@@ -1111,7 +1121,7 @@ def _market_cache_finish(cache_key: tuple[Any, ...], data: dict[str, Any] | None
     with _MARKET_CACHE_LOCK:
         if data is not None:
             _MARKET_CACHE[cache_key] = (time.monotonic(), data)
-            if len(_MARKET_CACHE) > 32:
+            if len(_MARKET_CACHE) > _MARKET_CACHE_MAX_ENTRIES:
                 oldest = min(_MARKET_CACHE, key=lambda key: _MARKET_CACHE[key][0])
                 _MARKET_CACHE.pop(oldest, None)
         inflight = _MARKET_CACHE_INFLIGHT.pop(cache_key, None)
