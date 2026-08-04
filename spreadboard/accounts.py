@@ -281,6 +281,23 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 observed_at TEXT NOT NULL,
                 PRIMARY KEY (tx_hash, log_index)
             );
+            CREATE TABLE IF NOT EXISTS saved_charts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                route_key TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                -- Some pairs are the same asset at a fixed ratio: SKHY and SKHX
+                -- on Hyperliquid are 10:1, so their spread only reads correctly
+                -- once one side is scaled.
+                ratio REAL NOT NULL DEFAULT 1.0,
+                created_at TEXT NOT NULL,
+                UNIQUE (user_id, route_key)
+            );
+            CREATE INDEX IF NOT EXISTS saved_charts_user ON saved_charts(user_id, created_at);
+            """
+        )
+        connection.executescript(
+            """
             CREATE TABLE IF NOT EXISTS crypto_watcher_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 last_scanned_block INTEGER NOT NULL DEFAULT 0,
@@ -1701,3 +1718,75 @@ def _optional_nonnegative_float(value: Any) -> float | None:
     if number < 0:
         raise ValueError("value_must_be_nonnegative")
     return number
+
+
+def add_saved_chart(
+    user_id: int,
+    payload: dict[str, Any],
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Pin a route to a member's own chart list.
+
+    Any route may be saved, including one whose spread is negative: a pair that
+    never converges can still be worth watching, and the operator holds exactly
+    such a position.
+    """
+    route_key = str(payload.get("route_key") or "").strip()[:400]
+    if not route_key:
+        raise ValueError("saved_chart_requires_route")
+    label = str(payload.get("label") or "").strip()[:120]
+    try:
+        ratio = float(payload.get("ratio") or 1.0)
+    except (TypeError, ValueError):
+        ratio = 1.0
+    if ratio <= 0:
+        ratio = 1.0
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """INSERT INTO saved_charts (user_id, route_key, label, ratio, created_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(user_id, route_key) DO UPDATE SET
+                   label = excluded.label, ratio = excluded.ratio""",
+            (int(user_id), route_key, label, ratio, _utc_iso()),
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM saved_charts WHERE user_id = ? AND route_key = ?",
+            (int(user_id), route_key),
+        ).fetchone()
+        return dict(row) if row else {}
+    finally:
+        connection.close()
+
+
+def list_saved_charts(
+    user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> list[dict[str, Any]]:
+    connection = _connect(db_path)
+    try:
+        return [
+            dict(row)
+            for row in connection.execute(
+                "SELECT * FROM saved_charts WHERE user_id = ? ORDER BY created_at DESC",
+                (int(user_id),),
+            )
+        ]
+    finally:
+        connection.close()
+
+
+def delete_saved_chart(
+    user_id: int, route_key: str, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> bool:
+    connection = _connect(db_path)
+    try:
+        cursor = connection.execute(
+            "DELETE FROM saved_charts WHERE user_id = ? AND route_key = ?",
+            (int(user_id), str(route_key)),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    finally:
+        connection.close()

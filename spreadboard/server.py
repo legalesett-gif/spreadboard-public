@@ -349,6 +349,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/market-alert-rules":
                 user = self._required_user()
                 self._send_json({"ok": True, "rules": accounts.list_market_alert_rules(user.id, db_path=self.server.accounts_path)})
+            elif parsed.path == "/api/saved-charts":
+                user = self._required_user()
+                self._send_json({
+                    "ok": True,
+                    "charts": accounts.list_saved_charts(user.id, db_path=self.server.accounts_path),
+                })
             elif parsed.path == "/api/account-users":
                 user = self._required_user()
                 if not user.is_admin:
@@ -366,7 +372,13 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/arbitrage":
                 self._send_html(render_markets_page(self.server.board_path, self.server.config, query))
             elif parsed.path == "/charts":
-                self._send_html(render_charts_page(self.server.board_path, self.server.config, query))
+                self._send_html(render_charts_page(
+                    self.server.board_path,
+                    self.server.config,
+                    query,
+                    user=getattr(self, "current_user", None),
+                    accounts_path=self.server.accounts_path,
+                ))
             elif parsed.path == "/signals":
                 self._send_html(render_signals_page(self.server.board_path, self.server.config, query))
             elif parsed.path == "/funding":
@@ -587,6 +599,22 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/market-alert-rules":
                 rule = accounts.add_market_alert_rule(user.id, payload, db_path=self.server.accounts_path)
                 self._send_json({"ok": True, "rule": rule}, status=HTTPStatus.CREATED)
+            elif parsed.path == "/api/saved-charts":
+                try:
+                    chart = accounts.add_saved_chart(
+                        user.id, payload, db_path=self.server.accounts_path
+                    )
+                except ValueError as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+                else:
+                    self._send_json({"ok": True, "chart": chart}, status=HTTPStatus.CREATED)
+            elif parsed.path == "/api/saved-charts/delete":
+                removed = accounts.delete_saved_chart(
+                    user.id,
+                    str(payload.get("route_key") or ""),
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json({"ok": removed})
             elif parsed.path.startswith("/api/market-alert-rules/"):
                 # This server speaks GET and POST only, so a member's edits and
                 # deletes ride on POST sub-paths rather than PATCH/DELETE.
@@ -3929,7 +3957,85 @@ def render_pair_page(route_key: str, board_path: Path, config: dict[str, Any]) -
     return shell(f"{row.get('symbol')} route - SpreadBoard", "board", body)
 
 
-def render_charts_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
+def render_saved_charts_panel(
+    user: Any, selected_route: str, accounts_path: Any
+) -> str:
+    """A member's own pinned pairs, and the control to pin the one on screen.
+
+    Any route can be pinned, including one whose spread is negative: a pair that
+    never converges can still be worth watching. SKHY against SKHX on
+    Hyperliquid is the case in point -- the same asset at a fixed 10:1, so the
+    ratio is stored beside the route and the spread only reads correctly once
+    one side is scaled by it.
+    """
+    if user is None:
+        return ""
+    try:
+        charts = accounts.list_saved_charts(user.id, db_path=accounts_path)
+    except Exception:  # noqa: BLE001 - the page must render without the list.
+        charts = []
+    saved_keys = {str(item.get("route_key")) for item in charts}
+    rows = "".join(
+        f"""
+        <li>
+          <a href="/charts?route_key={h(quote(str(item.get('route_key') or ''), safe=''))}">
+            <strong>{h(item.get('label') or str(item.get('route_key') or '').split('|')[0])}</strong>
+            <em>{h(' → '.join(str(item.get('route_key') or '').split('|')[1:5:2]))}</em>
+            {f"<span class='saved-ratio'>ratio {h(item.get('ratio'))}:1</span>" if float(item.get('ratio') or 1) != 1 else ''}
+          </a>
+          <button type="button" class="saved-chart-remove" data-route="{h(item.get('route_key'))}">Remove</button>
+        </li>"""
+        for item in charts
+    ) or "<li class='saved-empty'>No pinned charts yet. Open a route and choose Pin this chart.</li>"
+    pin = ""
+    if selected_route:
+        already = selected_route in saved_keys
+        pin = f"""
+        <div class="saved-chart-pin">
+          <input id="savedChartLabel" placeholder="Name this chart" maxlength="120">
+          <input id="savedChartRatio" placeholder="Ratio (e.g. 10 for SKHY:SKHX)" inputmode="decimal">
+          <button type="button" id="savedChartPin" data-route="{h(selected_route)}">
+            {'Update pin' if already else 'Pin this chart'}
+          </button>
+        </div>"""
+    return f"""
+    <section class="saved-charts-panel">
+      <div class="panel-head flat"><div><h2>My charts</h2><p>Pairs you track, including ones that never converge.</p></div></div>
+      {pin}
+      <ul class="saved-chart-list">{rows}</ul>
+    </section>
+    <script>
+    (() => {{
+      const pinBtn = document.getElementById("savedChartPin");
+      const post = (path, body) => fetch(path, {{
+        method: "POST",
+        headers: {{"Content-Type": "application/json"}},
+        body: JSON.stringify(body),
+      }}).then(() => window.location.reload());
+      if (pinBtn) {{
+        pinBtn.addEventListener("click", () => post("/api/saved-charts", {{
+          route_key: pinBtn.dataset.route,
+          label: (document.getElementById("savedChartLabel") || {{}}).value || "",
+          ratio: Number((document.getElementById("savedChartRatio") || {{}}).value || 1) || 1,
+        }}));
+      }}
+      for (const button of document.querySelectorAll(".saved-chart-remove")) {{
+        button.addEventListener("click", () => post("/api/saved-charts/delete", {{
+          route_key: button.dataset.route,
+        }}));
+      }}
+    }})();
+    </script>"""
+
+
+def render_charts_page(
+    board_path: Path,
+    config: dict[str, Any],
+    query: dict[str, list[str]],
+    *,
+    user: Any = None,
+    accounts_path: Any = None,
+) -> str:
     selected_route = _query_first(query, "route_key") or ""
     market_query: dict[str, list[str]] = {
         "limit": ["500"],
@@ -3982,6 +4088,7 @@ def render_charts_page(board_path: Path, config: dict[str, Any], query: dict[str
           <em>canonical public APIs</em>
         </div>
       </header>
+      {render_saved_charts_panel(user, selected_route, accounts_path)}
       {render_chart_builder(markets, selected_row, catalogue)}
       {render_selected_chart(selected_row, detail, history, window, history_payload.get('meta') or {}) if selected_row and detail else render_chart_blank_state()}
       {render_funding_history_dialog(detail) if detail else ''}
@@ -9262,6 +9369,17 @@ input:focus, select:focus, a:focus-visible, button:focus-visible, summary:focus-
 .header-strip {{ height: 12px; background: var(--terminal-bg); border-bottom: 1px solid var(--terminal-line); }}
 .mobile-primary-nav, .mobile-secondary-nav {{ display: none; }}
 main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
+.saved-charts-panel {{ background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 10px; }}
+.saved-chart-pin {{ display: flex; gap: 8px; flex-wrap: wrap; }}
+.saved-chart-pin input {{ flex: 1 1 180px; min-height: 34px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--row); color: inherit; }}
+.saved-chart-pin button {{ min-height: 34px; padding: 0 14px; border-radius: 6px; border: 0; background: var(--accent); color: var(--accent-ink); font-weight: 800; cursor: pointer; }}
+.saved-chart-list {{ list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }}
+.saved-chart-list li {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 6px; background: var(--row); }}
+.saved-chart-list a {{ text-decoration: none; color: inherit; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }}
+.saved-chart-list em {{ color: var(--terminal-muted); font-size: 11px; font-style: normal; }}
+.saved-ratio {{ font-size: 10px; padding: 2px 6px; border-radius: 999px; background: var(--yellow-chip); }}
+.saved-empty {{ color: var(--terminal-muted); font-size: 12px; }}
+.saved-chart-remove {{ border: 0; background: transparent; color: var(--terminal-muted); cursor: pointer; font-size: 11px; }}
 .funding-window-tabs {{ display: flex; gap: 6px; align-items: center; margin: 6px 0 2px; flex-wrap: wrap; }}
 .funding-window-tabs span {{ font-size: 10px; opacity: 0.55; letter-spacing: 0.06em; text-transform: uppercase; }}
 .funding-window-tabs a {{ font-size: 11px; padding: 3px 9px; border-radius: 999px; text-decoration: none;
