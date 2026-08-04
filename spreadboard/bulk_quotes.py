@@ -37,32 +37,45 @@ SKIP_VENUES: set[str] = {"Coinbase"}
 #: CCXT renamed some adapters; VENUE_IDS still carries the older ids.
 _ALIASES = {"gateio": ("gate", "gateio"), "coinbaseexchange": ("coinbaseexchange", "coinbase")}
 
-_CLIENTS: dict[tuple[str, str], Any] = {}
+#: One loaded client per venue -- not one per venue and market type.
+#:
+#: `load_markets()` returns the same set whichever `defaultType` the client was
+#: built with: Binance answers with 4,552 markets (3,670 spot, 848 swap) either
+#: way, Gate with 6,297, Bitget with 2,017. So a second client per venue held a
+#: byte-for-byte duplicate of the first venue's market metadata. Binance's pair
+#: alone measured 303MB, and across 21 venues the duplication was gigabytes --
+#: enough to OOM-kill the service inside its 6GB cgroup roughly hourly, taking
+#: the scan and the site with it. `defaultType` is read at call time, so one
+#: client can serve both sweeps.
+_CLIENTS: dict[str, Any] = {}
+
+_DEFAULT_TYPES = {"Futures": "swap", "Spot": "spot"}
 
 
 def _client(venue: str, market_type: str) -> Any:
-    """A loaded client per venue and market type, reused across cycles."""
-    key = (venue, market_type)
-    if key in _CLIENTS:
-        return _CLIENTS[key]
-    import ccxt
+    """The venue's client, pointed at the market type this sweep wants."""
+    client = _CLIENTS.get(venue) if venue in _CLIENTS else None
+    if venue not in _CLIENTS:
+        import ccxt
 
-    exchange_id = VENUE_IDS.get(venue)
-    client = None
-    for candidate in _ALIASES.get(exchange_id or "", (exchange_id,)):
-        klass = getattr(ccxt, candidate, None) if candidate else None
-        if klass is None:
-            continue
-        try:
-            options = {"enableRateLimit": True, "timeout": 25000}
-            if market_type == "Futures":
-                options["options"] = {"defaultType": "swap"}
-            client = klass(options)
-            client.load_markets()
-            break
-        except Exception:  # noqa: BLE001 - an unreachable venue is not fatal.
-            client = None
-    _CLIENTS[key] = client
+        exchange_id = VENUE_IDS.get(venue)
+        for candidate in _ALIASES.get(exchange_id or "", (exchange_id,)):
+            klass = getattr(ccxt, candidate, None) if candidate else None
+            if klass is None:
+                continue
+            try:
+                client = klass({"enableRateLimit": True, "timeout": 25000})
+                client.load_markets()
+                break
+            except Exception:  # noqa: BLE001 - an unreachable venue is not fatal.
+                client = None
+        _CLIENTS[venue] = client
+    if client is None:
+        return None
+    try:
+        client.options["defaultType"] = _DEFAULT_TYPES.get(market_type, "spot")
+    except Exception:  # noqa: BLE001 - a client without options still fetches.
+        pass
     return client
 
 

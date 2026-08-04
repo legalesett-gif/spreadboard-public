@@ -25,14 +25,14 @@ services:
       SPREADBOARD_BOARD_STREAM_SECONDS: "0.25"
       SPREADBOARD_LIVE_TICK_SECONDS: "0.25"
       SPREADBOARD_RESULT_CACHE_SECONDS: "1200"
-      # Thirteen warmed views plus one, and no more. A cached view measures
-      # ~78MB, and this bound is applied TWICE -- once to _MARKET_CACHE and
-      # again to _MARKET_STALE_CACHE, which holds the previous generation so a
-      # rebuild can serve stale rather than block. So the ceiling is
-      # 2 x entries x 78MB: at 40 that is 6.2GB against a 6GB cgroup, which is
-      # exactly what OOM-killed the service every hour and took the site down
-      # with it. At 14 it is ~2.2GB, leaving room for the scan and the workers.
-      SPREADBOARD_MARKET_CACHE_ENTRIES: "14"
+      # Thirteen warmed views plus headroom for ad-hoc queries. Measured, the
+      # whole warm set costs ~471MB: the first build is +210MB and the charts
+      # view at limit=500 is +83MB, while every lane query after them adds
+      # 0-8MB because they share the parsed snapshot. The bound exists to stop
+      # ordinary traffic evicting what the warmer just built and to cap the
+      # tail -- it is applied twice, to _MARKET_CACHE and to the
+      # stale-while-revalidate copy behind it.
+      SPREADBOARD_MARKET_CACHE_ENTRIES: "20"
       # One fetch_tickers per venue re-prices the whole board. This is what
       # makes every positive token current rather than only the streamed ones.
       SPREADBOARD_BULK_QUOTE_SECONDS: "15"

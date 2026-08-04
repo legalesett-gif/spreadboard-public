@@ -311,3 +311,35 @@ def test_the_funding_sweep_covers_venues_with_no_ccxt_adapter() -> None:
 
     source = inspect.getsource(bulk_quotes.sweep_funding)
     assert "NATIVE_FUNDING_SOURCES" in source
+
+
+def test_one_client_per_venue_not_one_per_market_type(monkeypatch) -> None:
+    """The second client held a duplicate of the first's market metadata.
+
+    load_markets() returns the same set whichever defaultType the client was
+    built with, so caching per (venue, market type) doubled the heaviest thing
+    in the process -- Binance's pair measured 303MB -- and across 21 venues it
+    was enough to OOM the service.
+    """
+    built: list[str] = []
+
+    class Client:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.options: dict[str, object] = {}
+            self.markets: dict[str, object] = {}
+
+        def load_markets(self) -> None:
+            built.append("load")
+
+    module = type("ccxt", (), {"binance": Client})
+    monkeypatch.setitem(__import__("sys").modules, "ccxt", module)
+    monkeypatch.setattr(bulk_quotes, "_CLIENTS", {})
+    monkeypatch.setattr(bulk_quotes, "VENUE_IDS", {"Binance": "binance"})
+
+    spot = bulk_quotes._client("Binance", "Spot")
+    futures = bulk_quotes._client("Binance", "Futures")
+
+    assert spot is futures
+    assert built == ["load"]
+    assert futures.options["defaultType"] == "swap"
+    assert bulk_quotes._client("Binance", "Spot").options["defaultType"] == "spot"

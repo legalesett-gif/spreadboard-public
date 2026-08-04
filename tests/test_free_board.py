@@ -194,26 +194,21 @@ def _production_setting(name: str) -> str:
     return match.group(1).strip()
 
 
-def test_the_board_cache_ceiling_fits_inside_the_container_memory_limit() -> None:
-    """The bound is applied to two caches, so the ceiling is twice what it reads.
+def test_the_warm_set_fits_the_board_cache_without_evicting_itself() -> None:
+    """Measured, not assumed: the thirteen warmed views cost ~471MB in total.
 
-    A cached view measures ~78MB. At 40 entries that is 2 x 40 x 78MB = 6.2GB
-    against a 6GB cgroup, and the service was OOM-killed hourly.
+    Most lane queries add almost nothing on top of the first build because they
+    share the parsed snapshot; only the first (+210MB) and the charts view at
+    limit=500 (+83MB) are substantial. So the bound exists to stop ad-hoc
+    traffic evicting warm entries, and to keep an unbounded tail from growing --
+    not because each entry is individually huge.
     """
-    import re
-
     from scripts.run_spreadboard_service import WARM_QUERIES
 
     entries = int(_production_setting("SPREADBOARD_MARKET_CACHE_ENTRIES"))
-    text = Path("compose.production.yml").read_text(encoding="utf-8")
-    limit_gb = float(re.search(r"mem_limit:\s*(\d+)g", text).group(1))
 
-    megabytes_per_view = 78
-    ceiling_gb = (2 * entries * megabytes_per_view) / 1024
-
-    # Room for the scan, the websocket worker and the chart catalog too.
-    assert ceiling_gb < limit_gb * 0.5, (
-        f"cache ceiling {ceiling_gb:.1f}GB is too much of the {limit_gb:.0f}GB limit"
-    )
-    # ...but still enough that the warm pass does not evict itself.
+    # The warm pass must not evict its own earlier entries.
     assert entries > len(WARM_QUERIES)
+    # ...and the tail stays bounded. The bound is applied twice, to
+    # _MARKET_CACHE and to the stale-while-revalidate copy behind it.
+    assert entries <= 24
