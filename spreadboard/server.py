@@ -2355,8 +2355,16 @@ def render_board_stream_script(query: dict[str, list[str]]) -> str:
     Without this the numbers are live but a member only sees them by reloading,
     which is no use on a spread that lasts minutes.
     """
+    # Every parameter that decides which routes the page shows has to reach the
+    # stream, or it subscribes to a different set and none of the keys match.
+    # Forwarding only kind/limit/sort left the funding page subscribed to the
+    # spread board: events arrived for routes that were not on screen, so the
+    # funding lanes never moved.
     params = []
-    for name in ("kind", "limit", "sort"):
+    # `farm` and `rank` decide presentation, not which routes are returned, and
+    # sending them would fragment the stream's cache key for an identical set.
+    for name in ("kind", "limit", "sort", "direction", "funding_only",
+                 "q", "exchange", "min_spread_pct", "min_abs_funding_24h_pct"):
         value = _query_first(query, name)
         if value:
             params.append(f"{name}={quote(str(value))}")
@@ -9571,6 +9579,24 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .value-chip.negative, .spread-negative {{ background: var(--red-soft); }}
 .value-chip.neutral, .spread-low {{ background: #ffffff; }}
 .spread-watch {{ background: var(--yellow-chip); }}
+/* In dark mode the chip backgrounds go very dark (--green-soft is #123f32)
+   while the text stayed on var(--dark), so a percentage was dark-on-dark and
+   barely legible. Brighten the text and keep the hue, so green still reads as
+   green and red as red. */
+:root[data-theme="dark"] .value-chip,
+:root[data-theme="dark"] .spread-hot,
+:root[data-theme="dark"] .spread-good,
+:root[data-theme="dark"] .spread-watch,
+:root[data-theme="dark"] .spread-low,
+:root[data-theme="dark"] .spread-negative {{ color: #f4fbf9; }}
+:root[data-theme="dark"] .value-chip.positive,
+:root[data-theme="dark"] .spread-hot,
+:root[data-theme="dark"] .spread-good {{ color: #6ee7b7; border: 1px solid rgba(110,231,183,0.35); }}
+:root[data-theme="dark"] .value-chip.negative,
+:root[data-theme="dark"] .spread-negative {{ color: #fca5a5; border: 1px solid rgba(252,165,165,0.35); }}
+:root[data-theme="dark"] .spread-watch {{ color: #fcd34d; border: 1px solid rgba(252,211,77,0.35); }}
+:root[data-theme="dark"] .value-chip.neutral,
+:root[data-theme="dark"] .spread-low {{ background: #1d2b28; color: #d7e5e1; }}
 .board-empty {{ min-width: 1250px; padding: 28px; background: var(--row); border-radius: 10px; color: #777; text-align: center; }}
 .route-empty {{ display: grid; gap: 12px; text-align: left; border: 1px solid #d0d0d0; background: #f7f7f7; color: var(--dark); box-shadow: var(--shadow); }}
 .route-empty.unavailable {{ border-color: rgba(242,109,125,.34); background: #fff8f9; }}
