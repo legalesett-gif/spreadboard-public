@@ -320,3 +320,28 @@ def test_no_worker_output_is_buffered_in_the_server() -> None:
     # Only the docstring that explains the hazard may mention it.
     assert code.count("capture_output=True") <= 1
     assert "WORKER_OUTPUT_TAIL_BYTES" in code
+
+
+def test_a_dex_leg_is_labelled_dex_not_spot() -> None:
+    """An on-chain swap carries market_type "Spot", so a DEX-Futures route
+    rendered as "OKX DEX 56 Spot -> Gate Futures" -- which reads exactly like a
+    Spot-Futures route, and is why the DEX farms looked mixed in with the
+    Futures-Spot ones."""
+    from spreadboard import server
+
+    assert server.leg_market_label("OKX DEX 56", "Spot") == "DEX"
+    assert server.leg_market_label("OKX DEX 1", "Spot") == "DEX"
+    # Everything else is untouched, including the perp DEXes, which are perps.
+    assert server.leg_market_label("Gate", "Futures") == "Futures"
+    assert server.leg_market_label("Binance", "Spot") == "Spot"
+    assert server.leg_market_label("Hyperliquid", "Futures") == "Futures"
+    assert server.leg_market_label("Aster", "Futures") == "Futures"
+
+
+def test_no_leg_renders_its_raw_market_type() -> None:
+    """Every render site must go through the label, or one page disagrees."""
+    import re
+
+    source = Path("spreadboard/server.py").read_text(encoding="utf-8")
+    raw = re.findall(r"h\((?:row|route)\.get\(['\"](?:long|short)_market_type['\"]\)\)", source)
+    assert not raw, f"{len(raw)} render sites still print the raw market type"

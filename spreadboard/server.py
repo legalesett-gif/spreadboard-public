@@ -2718,8 +2718,8 @@ def render_free_row(group: dict[str, Any], *, metric: str) -> str:
         group.get("best_funding_route") if metric == "funding" else group.get("best_route")
     ) or {}
     route_key = str(route.get("route_key") or "")
-    long_leg = f"{route.get('long_venue') or '-'} {route.get('long_market_type') or ''}".strip()
-    short_leg = f"{route.get('short_venue') or '-'} {route.get('short_market_type') or ''}".strip()
+    long_leg = f"{route.get('long_venue') or '-'} {leg_market_label(route.get('long_venue'), route.get('long_market_type'))}".strip()
+    short_leg = f"{route.get('short_venue') or '-'} {leg_market_label(route.get('short_venue'), route.get('short_market_type'))}".strip()
     spread = _float_or_none(group.get("best_edge_pct"))
     funding = _float_or_none(group.get("best_funding_24h_pct"))
     return f"""
@@ -2926,6 +2926,20 @@ def render_fair_price_page() -> str:
     return shell("Fair price - SpreadBoard", "fair", body)
 
 
+def leg_market_label(venue: Any, market_type: Any) -> str:
+    """What kind of market this leg is, as a member reads it.
+
+    An OKX DEX leg carries market_type "Spot", because an on-chain swap is a
+    spot trade. So a DEX-Futures route rendered as
+    "OKX DEX 56 Spot -> Gate Futures", which reads exactly like a Spot-Futures
+    route -- the lane was right, the label was not, and that is why the DEX
+    farms looked mixed in with the Futures-Spot ones.
+    """
+    if "DEX" in str(venue or "").upper():
+        return "DEX"
+    return str(market_type or "").strip()
+
+
 def render_market_reconnecting(
     health: dict[str, Any],
     query: dict[str, list[str]],
@@ -3106,10 +3120,10 @@ def render_market_group_route(row: dict[str, Any]) -> str:
     return f"""
     <article class="route-detail-row" data-route-key="{h(row.get('route_key') or '')}">
       <div class="route-leg buy">
-        <span>Buy</span>{render_exchange_link(row, 'long')}<em>{h(row.get('long_market_type'))}</em>
+        <span>Buy</span>{render_exchange_link(row, 'long')}<em>{h(leg_market_label(row.get('long_venue'), row.get('long_market_type')))}</em>
       </div>
       <div class="route-leg sell">
-        <span>Sell</span>{render_exchange_link(row, 'short')}<em>{h(row.get('short_market_type'))}</em>
+        <span>Sell</span>{render_exchange_link(row, 'short')}<em>{h(leg_market_label(row.get('short_venue'), row.get('short_market_type')))}</em>
       </div>
       <div class="route-prices">
         <strong>{fmt_price(row.get('long_price'))}</strong><span>→</span><strong>{fmt_price(row.get('short_price'))}</strong>
@@ -4646,7 +4660,7 @@ def render_selected_chart(
     return f"""
     <section class="selected-chart">
       <header class="selected-chart-head">
-        <div><span>Spread chart</span><strong>{h(row.get('token'))}</strong><em>{h(row.get('long_venue'))} {h(row.get('long_market_type'))} → {h(row.get('short_venue'))} {h(row.get('short_market_type'))}{h(normalization_note)}</em></div>
+        <div><span>Spread chart</span><strong>{h(row.get('token'))}</strong><em>{h(row.get('long_venue'))} {h(leg_market_label(row.get('long_venue'), row.get('long_market_type')))} → {h(row.get('short_venue'))} {h(leg_market_label(row.get('short_venue'), row.get('short_market_type')))}{h(normalization_note)}</em></div>
         <nav class="chart-window-tabs" aria-label="Chart window">
           {''.join(f'<a class="{"active" if value == window else ""}" href="/charts?route_key={h(route_key)}&window={value}">{label}</a>' for value, label in windows)}
         </nav>
@@ -5367,7 +5381,7 @@ def render_chart_route_card(row: dict[str, Any], history: list[dict[str, Any]]) 
         <a href="/markets#token-{h(row.get('token') or row.get('symbol'))}"><strong>{h(row.get('token') or row.get('symbol'))}</strong><span>{h(route_kind_display(row.get('route_kind') or row.get('kind')))}</span></a>
         <b class="{spread_class(open_spread)}">{fmt_pct(open_spread)}</b>
       </div>
-      <p>{h(row.get('long_venue'))} {h(row.get('long_market_type'))} → {h(row.get('short_venue'))} {h(row.get('short_market_type'))}</p>
+      <p>{h(row.get('long_venue'))} {h(leg_market_label(row.get('long_venue'), row.get('long_market_type')))} → {h(row.get('short_venue'))} {h(leg_market_label(row.get('short_venue'), row.get('short_market_type')))}</p>
       {render_sparkline(history, 'executable_spread_pct', label='executable spread')}
       <div class="chart-card-metrics">
         <span>Move<strong>{fmt_signed_pct(delta)}</strong></span>
@@ -8761,13 +8775,13 @@ def render_spread_lens(row: dict[str, Any], detail: dict[str, Any]) -> str:
         <article class="equation-leg buy">
           <span>Buy</span>
           {render_exchange_link(row, 'long')}
-          <em>{h(row.get('long_market_type'))} {fmt_price(long_price)}</em>
+          <em>{h(leg_market_label(row.get('long_venue'), row.get('long_market_type')))} {fmt_price(long_price)}</em>
         </article>
         <div class="equation-operator">to</div>
         <article class="equation-leg sell">
           <span>Sell</span>
           {render_exchange_link(row, 'short')}
-          <em>{h(row.get('short_market_type'))} {fmt_price(short_price)}</em>
+          <em>{h(leg_market_label(row.get('short_venue'), row.get('short_market_type')))} {fmt_price(short_price)}</em>
         </article>
         <div class="equation-operator">=</div>
         <article class="equation-result">
