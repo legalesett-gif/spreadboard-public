@@ -183,3 +183,37 @@ def test_the_readiness_probes_own_query_is_warmed() -> None:
 
     warm = inspect.getsource(service._warm_board_cache)
     assert "api_source_health" in warm
+
+
+def _production_setting(name: str) -> str:
+    import re
+
+    text = Path("compose.production.yml").read_text(encoding="utf-8")
+    match = re.search(rf'^\s+{name}:\s*"?([^"\n]*?)"?\s*$', text, re.MULTILINE)
+    assert match, f"{name} is not set in compose.production.yml"
+    return match.group(1).strip()
+
+
+def test_the_board_cache_ceiling_fits_inside_the_container_memory_limit() -> None:
+    """The bound is applied to two caches, so the ceiling is twice what it reads.
+
+    A cached view measures ~78MB. At 40 entries that is 2 x 40 x 78MB = 6.2GB
+    against a 6GB cgroup, and the service was OOM-killed hourly.
+    """
+    import re
+
+    from scripts.run_spreadboard_service import WARM_QUERIES
+
+    entries = int(_production_setting("SPREADBOARD_MARKET_CACHE_ENTRIES"))
+    text = Path("compose.production.yml").read_text(encoding="utf-8")
+    limit_gb = float(re.search(r"mem_limit:\s*(\d+)g", text).group(1))
+
+    megabytes_per_view = 78
+    ceiling_gb = (2 * entries * megabytes_per_view) / 1024
+
+    # Room for the scan, the websocket worker and the chart catalog too.
+    assert ceiling_gb < limit_gb * 0.5, (
+        f"cache ceiling {ceiling_gb:.1f}GB is too much of the {limit_gb:.0f}GB limit"
+    )
+    # ...but still enough that the warm pass does not evict itself.
+    assert entries > len(WARM_QUERIES)

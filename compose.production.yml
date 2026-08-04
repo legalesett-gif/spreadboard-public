@@ -25,9 +25,14 @@ services:
       SPREADBOARD_BOARD_STREAM_SECONDS: "0.25"
       SPREADBOARD_LIVE_TICK_SECONDS: "0.25"
       SPREADBOARD_RESULT_CACHE_SECONDS: "1200"
-      # Thirteen warmed views plus room for ad-hoc queries, so ordinary
-      # traffic cannot evict what the warmer just built.
-      SPREADBOARD_MARKET_CACHE_ENTRIES: "40"
+      # Thirteen warmed views plus one, and no more. A cached view measures
+      # ~78MB, and this bound is applied TWICE -- once to _MARKET_CACHE and
+      # again to _MARKET_STALE_CACHE, which holds the previous generation so a
+      # rebuild can serve stale rather than block. So the ceiling is
+      # 2 x entries x 78MB: at 40 that is 6.2GB against a 6GB cgroup, which is
+      # exactly what OOM-killed the service every hour and took the site down
+      # with it. At 14 it is ~2.2GB, leaving room for the scan and the workers.
+      SPREADBOARD_MARKET_CACHE_ENTRIES: "14"
       # One fetch_tickers per venue re-prices the whole board. This is what
       # makes every positive token current rather than only the streamed ones.
       SPREADBOARD_BULK_QUOTE_SECONDS: "15"
