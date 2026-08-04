@@ -142,6 +142,32 @@ def sweep_venue(
 #: reason; prices need it for the same reason.
 _CURSOR = {"index": 0}
 
+#: The cursor outlives the process that advances it.
+#:
+#: The sweep runs as a worker that exits after each pass, so an in-memory cursor
+#: would reset to zero every time and the rotation would stop rotating -- the
+#: same starvation it was added to fix, just with a new cause.
+CURSOR_PATH = RUNTIME_DIR / "bulk_quote_cursor.json"
+
+
+def _load_cursor(count: int) -> int:
+    try:
+        stored = json.loads(Path(CURSOR_PATH).read_text(encoding="utf-8"))
+        return int(stored.get("index", 0)) % max(1, count)
+    except (OSError, ValueError, json.JSONDecodeError, AttributeError):
+        return _CURSOR["index"] % max(1, count)
+
+
+def _store_cursor(index: int) -> None:
+    _CURSOR["index"] = index
+    try:
+        path = Path(CURSOR_PATH)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"index": index}), encoding="utf-8")
+        temporary.replace(path)
+    except OSError:  # noqa: S110 - a cursor that cannot be saved is not fatal.
+        pass
+
 
 def sweep(
     venues: list[str] | None = None,
@@ -156,7 +182,7 @@ def sweep(
     written = 0
     covered = 0
     ordered = venues if venues is not None else sorted(VENUE_IDS)
-    start = _CURSOR["index"] % max(1, len(ordered))
+    start = _load_cursor(len(ordered))
     rotation = ordered[start:] + ordered[:start]
     position = start
     for venue in rotation:
@@ -167,7 +193,7 @@ def sweep(
         if count:
             covered += 1
             written += count
-    _CURSOR["index"] = position
+    _store_cursor(position)
     return {
         "status": "ok",
         "venues": covered,

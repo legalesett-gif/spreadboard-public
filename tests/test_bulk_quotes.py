@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pathlib import Path
+
 import pytest
 
 from spreadboard import bulk_quotes
@@ -133,7 +135,7 @@ def test_a_staler_quote_does_not_overwrite_a_fresher_one(tmp_path) -> None:
     assert book.quote_ts_us == fresh_ts
 
 
-def test_the_sweep_resumes_where_it_ran_out_of_time(monkeypatch) -> None:
+def test_the_sweep_resumes_where_it_ran_out_of_time(tmp_path, monkeypatch) -> None:
     """Starting at the same venue every pass starves the later ones.
 
     Observed as 18 venues one pass, then 10, then 1, with board coverage
@@ -148,6 +150,7 @@ def test_the_sweep_resumes_where_it_ran_out_of_time(monkeypatch) -> None:
         _time.sleep(0.03)
         return 1
 
+    monkeypatch.setattr(bulk_quotes, "CURSOR_PATH", tmp_path / "cursor.json")
     monkeypatch.setattr(bulk_quotes, "sweep_venue", slow)
     venues = ["A", "B", "C", "D", "E", "F"]
     bulk_quotes._CURSOR["index"] = 0
@@ -163,7 +166,9 @@ def test_the_sweep_resumes_where_it_ran_out_of_time(monkeypatch) -> None:
     assert visited[0] == venues[len(first) % len(venues)]
 
 
-def test_a_full_pass_leaves_the_cursor_back_at_the_start(monkeypatch) -> None:
+def test_a_full_pass_leaves_the_cursor_back_at_the_start(tmp_path, monkeypatch) -> None:
+    # The cursor is persisted now, so the starting point comes from the file.
+    monkeypatch.setattr(bulk_quotes, "CURSOR_PATH", tmp_path / "cursor.json")
     monkeypatch.setattr(bulk_quotes, "sweep_venue", lambda venue, *, store: 1)
     venues = ["A", "B", "C"]
     bulk_quotes._CURSOR["index"] = 0
@@ -343,3 +348,46 @@ def test_one_client_per_venue_not_one_per_market_type(monkeypatch) -> None:
     assert built == ["load"]
     assert futures.options["defaultType"] == "swap"
     assert bulk_quotes._client("Binance", "Spot").options["defaultType"] == "spot"
+
+
+def test_the_rotation_cursor_survives_the_process_that_advances_it(tmp_path, monkeypatch) -> None:
+    """The sweep now exits after each pass, so an in-memory cursor never moves.
+
+    Starting alphabetically every pass is what starved the later venues in the
+    first place: 18 venues one pass, then 10, then 1.
+    """
+    monkeypatch.setattr(bulk_quotes, "CURSOR_PATH", tmp_path / "cursor.json")
+    monkeypatch.setattr(bulk_quotes, "_CURSOR", {"index": 0})
+
+    swept: list[str] = []
+    monkeypatch.setattr(
+        bulk_quotes,
+        "sweep_venue",
+        lambda venue, **_kwargs: swept.append(venue) or 1,
+    )
+
+    venues = ["A", "B", "C", "D"]
+    bulk_quotes.sweep(venues[:2], store=object(), budget_seconds=60.0)
+    first = list(swept)
+
+    # A fresh process: module state is gone, only the file remains.
+    monkeypatch.setattr(bulk_quotes, "_CURSOR", {"index": 0})
+    swept.clear()
+    bulk_quotes.sweep(venues[:2], store=object(), budget_seconds=60.0)
+
+    assert first == ["A", "B"]
+    # Resumes where the last process stopped rather than restarting at A.
+    assert (tmp_path / "cursor.json").exists()
+    assert bulk_quotes._load_cursor(len(venues)) == bulk_quotes._CURSOR["index"]
+
+
+def test_the_sweep_runs_as_a_worker_process_not_inside_the_server() -> None:
+    """Its memory only comes back if the process that held it exits."""
+    import inspect
+
+    from scripts.run_spreadboard_service import BulkQuoteLoop
+
+    source = inspect.getsource(BulkQuoteLoop)
+    assert "bulk_quote_worker.py" in source
+    assert "subprocess.run" in source
+    assert Path("scripts/bulk_quote_worker.py").exists()

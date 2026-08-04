@@ -511,24 +511,64 @@ class BulkQuoteLoop(threading.Thread):
         super().__init__(name="bulk-quotes", daemon=True)
         self.stop_event = stop_event
 
+    #: A full pass measured 160s of quotes and 102s of funding, so it needs
+    #: room to finish; a killed pass throws away everything it had gathered.
+    TIMEOUT_SECONDS = max(
+        120.0, float(os.environ.get("SPREADBOARD_BULK_QUOTE_TIMEOUT_SECONDS", "420"))
+    )
+
     def run(self) -> None:
         from spreadboard import bulk_quotes
 
         while not self.stop_event.is_set():
             try:
-                summary = bulk_quotes.sweep()
-                _log(
-                    f"bulk quotes: {summary['quotes']} from {summary['venues']} venues "
-                    f"in {summary['seconds']}s"
-                )
-                funding = bulk_quotes.sweep_funding()
-                _log(
-                    f"bulk funding: {funding['legs']} legs from {funding['venues']} "
-                    f"venues in {funding['seconds']}s"
-                )
+                self._sweep_once()
             except Exception as exc:  # noqa: BLE001 - best effort beside everything else.
                 _log(f"bulk quotes skipped: {type(exc).__name__}: {exc}")
             self.stop_event.wait(bulk_quotes.INTERVAL_SECONDS)
+
+    def _sweep_once(self) -> None:
+        """One pass in a process that exits, so its memory comes back.
+
+        Run in-thread this held a loaded ccxt client per venue and grew by tens
+        of megabytes a pass that no collection returned, until the service
+        crossed its cgroup and was OOM-killed -- hourly, killing the discovery
+        scan with it. It also held the GIL against every page load.
+        """
+        completed = subprocess.run(  # noqa: S603 - our own script, fixed argv.
+            [
+                *_low_priority_prefix(),
+                sys.executable,
+                str(Path(__file__).with_name("bulk_quote_worker.py")),
+                "--budget-seconds",
+                str(self.TIMEOUT_SECONDS / 2),
+                "--funding-budget-seconds",
+                str(self.TIMEOUT_SECONDS / 2),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=self.TIMEOUT_SECONDS,
+            check=False,
+        )
+        if completed.returncode != 0:
+            _log(f"bulk quotes worker exit={completed.returncode} {completed.stderr[-300:]}")
+            return
+        try:
+            summary = json.loads(completed.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            _log("bulk quotes worker produced no summary")
+            return
+        quotes = summary.get("quotes") or {}
+        _log(
+            f"bulk quotes: {quotes.get('quotes')} from {quotes.get('venues')} venues "
+            f"in {quotes.get('seconds')}s"
+        )
+        funding = summary.get("funding") or {}
+        if funding:
+            _log(
+                f"bulk funding: {funding.get('legs')} legs from {funding.get('venues')} "
+                f"venues in {funding.get('seconds')}s"
+            )
 
 
 def _board_path() -> Path:
