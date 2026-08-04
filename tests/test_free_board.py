@@ -338,6 +338,21 @@ def test_a_dex_leg_is_labelled_dex_not_spot() -> None:
     assert server.leg_market_label("Aster", "Futures") == "Futures"
 
 
+def test_the_exchange_link_shows_dex_not_spot() -> None:
+    """The funding rows render their legs through this helper."""
+    from spreadboard import server
+
+    row = {
+        "long_venue": "OKX DEX 56", "long_market_type": "Spot",
+        "short_venue": "Gate", "short_market_type": "Futures",
+    }
+    long_html = server.render_exchange_link(row, "long", include_market_type=True)
+    short_html = server.render_exchange_link(row, "short", include_market_type=True)
+
+    assert "DEX" in long_html and "Spot" not in long_html
+    assert "Futures" in short_html
+
+
 def test_no_leg_renders_its_raw_market_type() -> None:
     """Every render site must go through the label, or one page disagrees."""
     import re

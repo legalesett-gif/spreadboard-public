@@ -8383,8 +8383,12 @@ def render_exchange_link(
 ) -> str:
     venue = row.get(f"{side}_venue")
     market_type = row.get(f"{side}_market_type")
+    # An on-chain swap is a spot trade, so a DEX leg carries market_type
+    # "Spot" -- and printing it raw made every DEX farm read as a Futures-Spot
+    # one. The route key keeps the raw value; only what a member reads changes.
+    shown_type = leg_market_label(venue, market_type)
     label = (
-        f"{venue or '?'} · {market_type or '?'}"
+        f"{venue or '?'} · {shown_type or '?'}"
         if include_market_type
         else str(venue or "?")
     )
