@@ -176,6 +176,7 @@ class OkxDexQuoteSource:
                 "quote_count": len(quotes),
                 "static_asset_count": len(assets) - len(dynamic_assets),
                 "dynamic_asset_count": len(dynamic_assets),
+                "dynamic_funnel": getattr(self, "last_funnel", {}),
             },
         )
         return SourceResult(status=status, rows=tuple(rows), quotes=tuple(quotes))
@@ -265,6 +266,18 @@ class OkxDexQuoteSource:
             return (projected_funding_24h, 1 if has_futures else 0, volume, symbol)
 
         selected = sorted(unique_matches, key=priority, reverse=True)[:limit]
+        # Where the funnel narrows. Raising the cap from 50 to 150 changed
+        # nothing, which means the loss is upstream of it -- most likely the
+        # uniqueness rule below, which drops any symbol that resolves to more
+        # than one contract across chains, and that is exactly the mainstream
+        # names: DOGE, SHIB and WIF are listed on several chains at once.
+        self.last_funnel = {
+            "candidates": len(candidate_symbols),
+            "matched_on_chain": len(matches),
+            "unique_across_chains": len(unique_matches),
+            "limit": limit,
+            "selected": len(selected),
+        }
         assets: list[WatchAsset] = []
         for symbol in selected:
             item = unique_matches[symbol]
