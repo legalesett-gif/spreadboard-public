@@ -1,0 +1,164 @@
+"""The board without an account.
+
+A visitor sees a real, live, deliberately small slice: complete routes with
+venues, ticking off the same feed the full board runs on. What they must not
+see is the rest of the board, and what they must not be able to do is widen
+the free stream into it.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from urllib.parse import urlparse
+
+import pytest
+
+from spreadboard import accounts, server
+
+
+@pytest.fixture(autouse=True)
+def _signed_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SPREADBOARD_AUTH_REQUIRED", "1")
+    accounts.set_current_user(None)
+
+
+def _stub_board(monkeypatch: pytest.MonkeyPatch, payload: dict) -> None:
+    monkeypatch.setattr(server, "api_market_spreads", lambda path, query: payload)
+
+
+def _group(token: str, *, edge: float, funding: float) -> dict:
+    route = {
+        "route_key": f"{token}|Binance Futures|Gate Futures",
+        "long_venue": "Binance",
+        "long_market_type": "Futures",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+    }
+    return {
+        "token": token,
+        "token_name": f"{token} Token",
+        "best_route": route,
+        "best_funding_route": route,
+        "best_edge_pct": edge,
+        "best_funding_24h_pct": funding,
+    }
+
+
+PAYLOAD = {
+    "ok": True,
+    "summary": {"matching_tokens": 1089, "matching_rows": 15609},
+    "source_health": {"canonical_api": {"status": "fresh", "age_min": 0.4}},
+    "exchange_options": [f"venue{index}" for index in range(21)],
+    "top_edges": [_group(f"EDGE{i}", edge=20.0 - i, funding=0.1) for i in range(8)],
+    "top_funding": [_group(f"CARRY{i}", edge=1.0, funding=0.9 - i / 10) for i in range(8)],
+}
+
+
+def test_the_free_page_shows_complete_routes_with_their_venues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A number with the venues stripped out is an unverifiable claim."""
+    _stub_board(monkeypatch, PAYLOAD)
+
+    html = server.render_free_page(Path("board.json"))
+
+    assert "EDGE0" in html
+    assert "Binance Futures" in html
+    assert "Gate Futures" in html
+
+
+def test_the_free_page_is_capped_well_below_the_full_board(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_board(monkeypatch, PAYLOAD)
+
+    html = server.render_free_page(Path("board.json"))
+
+    shown = [f"EDGE{index}" for index in range(8) if f">EDGE{index}<" in html]
+    assert len(shown) == server.FREE_TOKEN_LIMIT
+    assert "EDGE0" in shown and f"EDGE{server.FREE_TOKEN_LIMIT}" not in shown
+
+
+def test_the_free_page_carries_the_live_hooks_it_needs_to_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rendered numbers are patched by route key; without both it never moves."""
+    _stub_board(monkeypatch, PAYLOAD)
+
+    html = server.render_free_page(Path("board.json"))
+
+    rows = server.FREE_TOKEN_LIMIT * 2
+    assert html.count('<article class="free-row" data-route-key=') == rows
+    assert html.count("<strong data-live-spread>") == rows
+    assert html.count("<strong data-live-funding>") == rows
+    assert "/api/stream/free" in html
+
+
+def test_the_free_stream_endpoint_is_the_one_the_page_subscribes_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_board(monkeypatch, PAYLOAD)
+
+    html = server.render_free_page(Path("board.json"))
+
+    assert 'EventSource("/api/stream/free")' in html
+    assert "/api/stream/board" not in html
+
+
+def test_the_free_query_is_pinned_and_ignores_whatever_the_visitor_sends() -> None:
+    """`/free?limit=100000` must not hand over the whole board."""
+    assert server.FREE_BOARD_QUERY == {}
+    script = server.render_board_stream_script(
+        dict(server.FREE_BOARD_QUERY), endpoint="/api/stream/free"
+    )
+    # No query string at all: nothing from the request reaches the subscription.
+    assert 'EventSource("/api/stream/free")' in script
+
+
+def test_the_free_page_and_its_stream_are_reachable_without_an_account() -> None:
+    source = server.SpreadBoardHandler._authorize.__doc__ or ""
+    del source
+    import inspect
+
+    gate = inspect.getsource(server.SpreadBoardHandler._authorize)
+    assert '"/free"' in gate
+    assert '"/api/stream/free"' in gate
+
+
+def test_a_signed_out_visitor_lands_on_the_board_not_a_login_form() -> None:
+    import inspect
+
+    gate = inspect.getsource(server.SpreadBoardHandler._authorize)
+    assert 'self._redirect("/free")' in gate
+
+
+def test_the_visitor_nav_only_offers_pages_a_visitor_can_open() -> None:
+    """Every member link bounced to /login: seven dead ends, no way to the board."""
+    nav = server.render_primary_nav("free", signed_in=False)
+
+    public = {
+        "/login",
+        "/register",
+        "/pricing",
+        "/guide",
+        "/terms",
+        "/privacy",
+        "/refunds",
+        "/free",
+    }
+    hrefs = {
+        part.split('"', 1)[0]
+        for part in nav.split('href="')[1:]
+    }
+    assert hrefs
+    assert hrefs <= public
+    assert "/free" in hrefs
+
+
+def test_the_member_nav_is_unchanged() -> None:
+    nav = server.render_primary_nav("markets", signed_in=True)
+
+    for href in ("/funding", "/charts", "/intel", "/watchlist", "/account", "/pricing"):
+        assert f'href="{href}"' in nav
+    assert urlparse("/").path == "/"
+    assert 'href="/"' in nav

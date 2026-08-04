@@ -295,6 +295,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_register_page())
             elif parsed.path == "/pricing":
                 self._send_html(render_pricing_page())
+            elif parsed.path == "/free":
+                self._send_html(render_free_page(self.server.board_path))
             elif parsed.path == "/terms":
                 self._send_html(render_legal_page("terms"))
             elif parsed.path == "/privacy":
@@ -443,6 +445,10 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_json(api_history(route_key, self.server.board_path, query))
             elif parsed.path == "/api/stream/board":
                 self._send_board_stream(query)
+            elif parsed.path == "/api/stream/free":
+                # Pinned, not taken from the request: this one is public, and a
+                # visitor must not be able to widen it into the whole board.
+                self._send_board_stream(dict(FREE_BOARD_QUERY))
             elif parsed.path.startswith("/api/stream/"):
                 route_key = unquote(parsed.path.removeprefix("/api/stream/"))
                 self._send_chart_stream(route_key, query)
@@ -721,7 +727,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.current_user = None
         if not accounts.auth_required():
             return True
-        public = path in {"/login", "/register", "/pricing", "/guide", "/terms", "/privacy", "/refunds", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico"} or path.startswith("/assets/")
+        public = path in {"/login", "/register", "/pricing", "/guide", "/terms", "/privacy", "/refunds", "/free", "/api/stream/free", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico"} or path.startswith("/assets/")
         token = self._session_token()
         user = accounts.user_for_session(token, self.server.accounts_path) if token else None
         self.current_user = user
@@ -732,6 +738,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "authentication_required"}, status=HTTPStatus.UNAUTHORIZED)
             elif head_only:
                 self._send_empty(HTTPStatus.UNAUTHORIZED)
+            elif path == "/":
+                # The front door shows the product rather than a login form.
+                self._redirect("/free")
             else:
                 self._redirect("/login?" + urlencode({"next": self.path[:500]}))
             return False
@@ -2377,7 +2386,9 @@ def api_health(
     }
 
 
-def render_board_stream_script(query: dict[str, list[str]]) -> str:
+def render_board_stream_script(
+    query: dict[str, list[str]], *, endpoint: str = "/api/stream/board"
+) -> str:
     """Subscribe the open page to price changes and patch them in place.
 
     Without this the numbers are live but a member only sees them by reloading,
@@ -2401,7 +2412,7 @@ def render_board_stream_script(query: dict[str, list[str]]) -> str:
     <script>
     (function(){
       if (!window.EventSource) return;
-      const source = new EventSource("/api/stream/board__SUFFIX__");
+      const source = new EventSource("__ENDPOINT____SUFFIX__");
       const pct = (value, digits) => {
         if (value === null || value === undefined || value === "") return null;
         const number = Number(value);
@@ -2444,7 +2455,7 @@ def render_board_stream_script(query: dict[str, list[str]]) -> str:
         if (stamp) stamp.textContent = "live";
       });
     })();
-    </script>""".replace("__SUFFIX__", suffix)
+    </script>""".replace("__SUFFIX__", suffix).replace("__ENDPOINT__", endpoint)
 
 
 #: One computation of live prices, shared by every open stream. Re-pricing per
@@ -2587,6 +2598,167 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
     </section>
     """
     return shell("Markets - SpreadBoard", "markets", body)
+
+
+#: The free board is built from the query the warmer already keeps hot, so a
+#: visitor costs no board build at all. It is pinned here rather than read from
+#: the request: a public page that honoured `limit` would hand the whole board
+#: to anyone who typed `?limit=100000`.
+FREE_BOARD_QUERY: dict[str, list[str]] = {}
+
+#: How many tokens a visitor sees. Enough to show real, complete, live routes --
+#: venues included -- and small next to the full board, which is what the
+#: membership is for.
+FREE_TOKEN_LIMIT = 6
+
+
+def render_free_row(group: dict[str, Any], *, metric: str) -> str:
+    """One token on the free board, complete enough to be worth trusting.
+
+    Venues are shown. A number with the venues stripped out is not a smaller
+    version of this product, it is an unverifiable claim -- and this board
+    already spends enough effort proving its spreads are not mirages.
+    """
+    route = (
+        group.get("best_funding_route") if metric == "funding" else group.get("best_route")
+    ) or {}
+    route_key = str(route.get("route_key") or "")
+    long_leg = f"{route.get('long_venue') or '-'} {route.get('long_market_type') or ''}".strip()
+    short_leg = f"{route.get('short_venue') or '-'} {route.get('short_market_type') or ''}".strip()
+    spread = _float_or_none(group.get("best_edge_pct"))
+    funding = _float_or_none(group.get("best_funding_24h_pct"))
+    return f"""
+      <article class="free-row" data-route-key="{h(route_key)}">
+        <div class="free-row-token">
+          <strong>{h(group.get("token"))}</strong>
+          <span>{h(group.get("token_name") or "")}</span>
+        </div>
+        <div class="free-row-route">
+          <span class="free-leg"><em>Long</em>{h(long_leg)}</span>
+          <span class="free-leg"><em>Short</em>{h(short_leg)}</span>
+        </div>
+        <div class="free-row-metric">
+          <em>Spread</em>
+          <strong data-live-spread>{fmt_signed_pct(spread, digits=2)}</strong>
+        </div>
+        <div class="free-row-metric">
+          <em>Funding 24h</em>
+          <strong data-live-funding>{fmt_signed_pct(funding, digits=3)}</strong>
+        </div>
+      </article>
+    """
+
+
+def render_free_page(board_path: Path) -> str:
+    """The board without an account: a real, live, deliberately small slice."""
+    data = api_market_spreads(board_path, dict(FREE_BOARD_QUERY))
+    summary = data.get("summary") or {}
+    health = (data.get("source_health") or {}).get("canonical_api") or {}
+    live = bool(data.get("ok")) and health.get("status") == "fresh"
+    edges = (data.get("top_edges") or [])[:FREE_TOKEN_LIMIT]
+    carries = (data.get("top_funding") or [])[:FREE_TOKEN_LIMIT]
+    tokens = int(summary.get("matching_tokens") or 0)
+    routes = int(summary.get("matching_rows") or 0)
+    venues = len(data.get("exchange_options") or [])
+    body = f"""
+    <style>
+      .free-page {{ width:min(1240px,calc(100% - 36px)); margin:30px auto 64px; display:grid; gap:26px; }}
+      .free-hero {{ display:grid; grid-template-columns:minmax(0,1.5fr) minmax(280px,.7fr); border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
+      .free-hero-copy {{ padding:34px 32px; }}
+      .free-hero-copy h1 {{ margin:8px 0 12px; font-size:clamp(30px,4.4vw,52px); line-height:1.04; max-width:16ch; }}
+      .free-hero-copy p {{ margin:0; max-width:60ch; color:var(--terminal-muted); font-size:16px; line-height:1.55; }}
+      .free-hero-side {{ padding:28px 26px; border-left:1px solid var(--terminal-line); display:grid; align-content:center; gap:12px; }}
+      .free-stats {{ display:grid; grid-template-columns:repeat(3,1fr); border:1px solid var(--terminal-line); }}
+      .free-stats div {{ padding:16px 18px; border-right:1px solid var(--terminal-line); }}
+      .free-stats div:last-child {{ border-right:0; }}
+      .free-stats strong {{ display:block; font-size:26px; line-height:1.1; }}
+      .free-stats span {{ color:var(--terminal-muted); font-size:11px; font-weight:900; text-transform:uppercase; letter-spacing:.06em; }}
+      .free-columns {{ display:grid; grid-template-columns:1fr 1fr; gap:22px; }}
+      .free-column h2 {{ margin:0 0 4px; font-size:21px; }}
+      .free-column > p {{ margin:0 0 12px; color:var(--terminal-muted); font-size:13px; line-height:1.45; }}
+      .free-row {{ display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1.3fr) auto auto; gap:14px; align-items:center;
+                   padding:13px 16px; border:1px solid var(--terminal-line); border-bottom:0; background:var(--terminal-panel); }}
+      .free-list .free-row:last-child {{ border-bottom:1px solid var(--terminal-line); }}
+      .free-row-token strong {{ display:block; font-size:15px; }}
+      .free-row-token span {{ color:var(--terminal-muted); font-size:11px; }}
+      .free-row-route {{ display:grid; gap:3px; }}
+      .free-leg {{ font-size:12px; color:var(--terminal-text); }}
+      .free-leg em {{ display:inline-block; min-width:42px; color:var(--terminal-muted); font-style:normal; font-size:10px;
+                      font-weight:900; text-transform:uppercase; letter-spacing:.06em; }}
+      .free-row-metric {{ text-align:right; }}
+      .free-row-metric em {{ display:block; color:var(--terminal-muted); font-style:normal; font-size:10px; font-weight:900;
+                             text-transform:uppercase; letter-spacing:.06em; }}
+      .free-row-metric strong {{ font-variant-numeric:tabular-nums; font-size:15px; }}
+      .free-cta {{ padding:26px 28px; border:1px solid var(--terminal-line); background:var(--terminal-panel);
+                   display:flex; gap:20px; align-items:center; justify-content:space-between; flex-wrap:wrap; }}
+      .free-cta h2 {{ margin:0 0 6px; font-size:22px; }}
+      .free-cta p {{ margin:0; max-width:62ch; color:var(--terminal-muted); line-height:1.5; }}
+      .free-actions {{ display:flex; gap:9px; flex-wrap:wrap; }}
+      .free-button {{ min-height:43px; padding:11px 18px; border:1px solid var(--terminal-line); color:var(--terminal-text);
+                      text-decoration:none; font-weight:900; display:inline-flex; align-items:center; }}
+      .free-button.primary {{ background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }}
+      .free-note {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
+      @media(max-width:900px) {{ .free-hero {{ grid-template-columns:1fr; }} .free-hero-side {{ border-left:0; border-top:1px solid var(--terminal-line); }}
+        .free-columns {{ grid-template-columns:1fr; }} }}
+      @media(max-width:620px) {{ .free-page {{ width:min(100% - 20px,1240px); }} .free-hero-copy,.free-hero-side {{ padding:22px 18px; }}
+        .free-stats {{ grid-template-columns:1fr; }} .free-stats div {{ border-right:0; border-bottom:1px solid var(--terminal-line); }}
+        .free-stats div:last-child {{ border-bottom:0; }}
+        .free-row {{ grid-template-columns:1fr 1fr; }} .free-row-route {{ grid-column:1 / -1; order:3; }} }}
+    </style>
+    <section class="free-page">
+      <header class="free-hero">
+        <div class="free-hero-copy">
+          <span class="page-kicker">Free preview</span>
+          <h1>Live spreads, no account.</h1>
+          <p>These are real routes off public order books, priced continuously and pushed to this
+             page as the books move &mdash; nothing here waits for a refresh. It is the same feed
+             the full board runs on, showing {FREE_TOKEN_LIMIT} tokens instead of {tokens:,}.</p>
+        </div>
+        <aside class="free-hero-side">
+          <div class="terminal-live-box {'live' if live else 'unavailable'}">
+            <span>{'Live' if live else 'Reconnecting'}</span>
+            <strong data-live-stamp>{fmt_age(health.get('age_min'))}</strong>
+            <em>streaming order books</em>
+          </div>
+          <p class="free-note">Watch a number for a few seconds. If it moves, the feed is live.</p>
+        </aside>
+      </header>
+      <div class="free-stats">
+        <div><span>Tokens tracked</span><strong>{tokens:,}</strong></div>
+        <div><span>Routes priced</span><strong>{routes:,}</strong></div>
+        <div><span>Venues</span><strong>{venues:,}</strong></div>
+      </div>
+      <div class="free-columns">
+        <section class="free-column">
+          <h2>Widest spreads</h2>
+          <p>Buy the long leg at its ask, sell the short leg at its bid.</p>
+          <div class="free-list">{''.join(render_free_row(group, metric="edge") for group in edges) or '<p class="free-note">No fresh route right now. The board is re-pricing.</p>'}</div>
+        </section>
+        <section class="free-column">
+          <h2>Best funding</h2>
+          <p>What the position pays over 24h at the current settled rate.</p>
+          <div class="free-list">{''.join(render_free_row(group, metric="funding") for group in carries) or '<p class="free-note">No fresh funding route right now.</p>'}</div>
+        </section>
+      </div>
+      <section class="free-cta">
+        <div>
+          <h2>The other {max(tokens - FREE_TOKEN_LIMIT, 0):,} tokens</h2>
+          <p>A membership opens every lane &mdash; Futures-Futures, Futures-Spot, Spot-Spot and both
+             DEX lanes &mdash; with filters, convergence charts, saved pairs, transfer-rail checks
+             and alerts when a spread opens or a funding rate flips.</p>
+        </div>
+        <div class="free-actions">
+          <a class="free-button primary" href="/register">Create account</a>
+          <a class="free-button" href="/pricing">Membership</a>
+          <a class="free-button" href="/login">Sign in</a>
+        </div>
+      </section>
+      <p class="free-note">Spreads and funding rates are public market data, not advice. Every route
+         carries execution risk, and a number on a screen is not a filled order.</p>
+    </section>
+    {render_board_stream_script(dict(FREE_BOARD_QUERY), endpoint="/api/stream/free")}
+    """
+    return shell("Live spreads - SpreadBoard", "free", body)
 
 
 def render_market_reconnecting(
@@ -9254,6 +9426,55 @@ def render_alert_draft_script() -> str:
 """
 
 
+#: What a signed-out visitor is offered. The member nav was rendered for
+#: everyone, so every link on the public pages bounced to the login form --
+#: seven dead ends and no way to reach the free board.
+_VISITOR_NAV: tuple[tuple[str, str, str], ...] = (
+    ("free", "/free", "Live spreads"),
+    ("pricing", "/pricing", "Membership"),
+    ("guide", "/guide", "Guide"),
+    ("login", "/login", "Sign in"),
+)
+
+_MEMBER_NAV: tuple[tuple[str, str, str], ...] = (
+    ("markets", "/", "Arbitrage"),
+    ("funding", "/funding", "Funding"),
+    ("charts", "/charts", "Charts"),
+    ("intel", "/intel", "Intel"),
+    ("watchlist", "/watchlist", "Watchlist"),
+    ("profile", "/account", "Portfolio"),
+    ("pricing", "/pricing", "Membership"),
+)
+
+
+_MOBILE_SECONDARY_NAV: tuple[tuple[str, str, str], ...] = (
+    ("alerts", "/alerts", "Alerts"),
+    ("signals", "/signals", "Signals"),
+    ("triage", "/triage", "Triage"),
+    ("playbook", "/playbook", "Playbook"),
+    ("community", "/community", "Community"),
+)
+
+
+def render_primary_nav(active: str, *, signed_in: bool) -> str:
+    links = _MEMBER_NAV if signed_in else _VISITOR_NAV
+    return "".join(
+        f'<a class="{active_class(active, key)}" href="{href}">{h(label)}</a>'
+        for key, href, label in links
+    )
+
+
+def render_mobile_secondary_nav(active: str) -> str:
+    links = "".join(
+        f'<a class="{active_class(active, key)}" href="{href}">{h(label)}</a>'
+        for key, href, label in _MOBILE_SECONDARY_NAV
+    )
+    return (
+        '<nav class="mobile-secondary-nav" aria-label="Mobile community navigation">'
+        f"{links}</nav>"
+    )
+
+
 def shell(title: str, active: str, body: str) -> str:
     user = accounts.current_user()
     account_action = (
@@ -10866,15 +11087,7 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 <header class="site-header">
   <div class="topbar">
     <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span><span>SpreadBoard</span></a>
-    <nav class="main-nav">
-      <a class="{active_class(active, 'markets')}" href="/">Arbitrage</a>
-      <a class="{active_class(active, 'funding')}" href="/funding">Funding</a>
-      <a class="{active_class(active, 'charts')}" href="/charts">Charts</a>
-      <a class="{active_class(active, 'intel')}" href="/intel">Intel</a>
-      <a class="{active_class(active, 'watchlist')}" href="/watchlist">Watchlist</a>
-      <a class="{active_class(active, 'profile')}" href="/account">Portfolio</a>
-      <a class="{active_class(active, 'pricing')}" href="/pricing">Membership</a>
-    </nav>
+    <nav class="main-nav">{render_primary_nav(active, signed_in=user is not None)}</nav>
     <div class="header-actions">
       {account_action}
       <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle light and dark mode" aria-pressed="false">
@@ -10884,22 +11097,8 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
     </div>
   </div>
   <div class="header-strip"></div>
-  <nav class="mobile-primary-nav" aria-label="Mobile primary navigation">
-    <a class="{active_class(active, 'markets')}" href="/">Arbitrage</a>
-    <a class="{active_class(active, 'funding')}" href="/funding">Funding</a>
-    <a class="{active_class(active, 'charts')}" href="/charts">Charts</a>
-    <a class="{active_class(active, 'intel')}" href="/intel">Intel</a>
-    <a class="{active_class(active, 'profile')}" href="/account">Portfolio</a>
-    <a class="{active_class(active, 'watchlist')}" href="/watchlist">Watchlist</a>
-    <a class="{active_class(active, 'pricing')}" href="/pricing">Membership</a>
-  </nav>
-  <nav class="mobile-secondary-nav" aria-label="Mobile community navigation">
-    <a class="{active_class(active, 'alerts')}" href="/alerts">Alerts</a>
-    <a class="{active_class(active, 'signals')}" href="/signals">Signals</a>
-    <a class="{active_class(active, 'triage')}" href="/triage">Triage</a>
-    <a class="{active_class(active, 'playbook')}" href="/playbook">Playbook</a>
-    <a class="{active_class(active, 'community')}" href="/community">Community</a>
-  </nav>
+  <nav class="mobile-primary-nav" aria-label="Mobile primary navigation">{render_primary_nav(active, signed_in=user is not None)}</nav>
+  {render_mobile_secondary_nav(active) if user else ''}
 </header>
 <main>{body}</main>
 {render_theme_script()}
