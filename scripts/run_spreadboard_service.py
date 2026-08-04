@@ -471,6 +471,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stop_service)
     signal.signal(signal.SIGINT, stop_service)
     refresh_loop.start()
+    MemoryWatchdog(refresh_loop.stop_event).start()
     # Shares the refresh loop's stop event so shutdown stops it too.
     bulk_quote_loop = BulkQuoteLoop(refresh_loop.stop_event)
     bulk_quote_loop.start()
@@ -853,6 +854,36 @@ def _log(message: str) -> None:
     # and watching it climb anyway; a number on each line would have said which
     # one immediately.
     print(f"spreadboard-service: [{_rss_gb():.2f}GB] {message}", flush=True)
+
+
+class MemoryWatchdog(threading.Thread):
+    """Say what the process is holding, every so often.
+
+    Four subsystems were moved out of this process one at a time while it kept
+    climbing to 4GB, because the logs only spoke at the end of long operations
+    and the growth happened between them.
+    """
+
+    def __init__(self, stop_event: threading.Event, interval_seconds: float = 20.0) -> None:
+        super().__init__(name="memory-watchdog", daemon=True)
+        self.stop_event = stop_event
+        self.interval_seconds = interval_seconds
+
+    def run(self) -> None:
+        from spreadboard import server as server_module
+
+        while not self.stop_event.wait(self.interval_seconds):
+            try:
+                _log(
+                    "memory "
+                    f"market={len(server_module._MARKET_CACHE)} "
+                    f"stale={len(server_module._MARKET_STALE_CACHE)} "
+                    f"result={len(api_spreads._RESULT_CACHE)} "
+                    f"tick={len(server_module._LIVE_TICK)} "
+                    f"threads={threading.active_count()}"
+                )
+            except Exception as exc:  # noqa: BLE001 - observation must not break serving.
+                _log(f"memory watchdog: {type(exc).__name__}: {exc}")
 
 
 def _seed_public_caches() -> None:
