@@ -266,3 +266,26 @@ def test_the_publish_stage_still_runs_under_both_locks() -> None:
     guarded = source.split("with self.quote_cycle_lock, self.snapshot_lock:", 1)
     assert len(guarded) == 2, "publish is not inside the lock block"
     assert '_finalize_snapshot("publish")' in guarded[1].split("\n\n", 1)[0]
+
+
+def test_nothing_that_loads_a_venue_or_a_snapshot_runs_in_the_server() -> None:
+    """Everything heavy is a process that exits, so its memory comes back.
+
+    The server reached 2.2GB within a minute of starting and 4.3GB by five,
+    inside a 6GB cgroup. What it holds now is its caches.
+    """
+    import inspect
+
+    from scripts.run_spreadboard_service import RefreshLoop, BulkQuoteLoop
+
+    catalog = inspect.getsource(RefreshLoop.run_chart_catalog)
+    assert "chart_catalog.refresh" not in catalog
+    assert "artifact_worker" in catalog
+
+    identity = inspect.getsource(RefreshLoop._refresh_verified_identity_registry)
+    assert "build_verified_identity_registry" not in identity
+    assert "artifact_worker" in identity
+
+    assert "bulk_quote_worker" in inspect.getsource(BulkQuoteLoop)
+    for name in ("artifact_worker", "bulk_quote_worker", "snapshot_finalize_worker"):
+        assert Path(f"scripts/{name}.py").exists()

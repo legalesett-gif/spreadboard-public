@@ -98,16 +98,18 @@ class RefreshLoop:
 
     def run_chart_catalog(self) -> None:
         while not self.stop_event.is_set():
-            try:
-                payload = chart_catalog.refresh(
-                    workers=int(os.environ.get("SPREADBOARD_CHART_CATALOG_WORKERS", "4"))
-                )
+            # 22,309 markets means a loaded ccxt client per venue; that belongs
+            # in a process that exits, not in the one serving pages.
+            summary = _artifact_worker(
+                "chart-catalog",
+                "--workers",
+                os.environ.get("SPREADBOARD_CHART_CATALOG_WORKERS", "4"),
+            )
+            if summary:
                 _log(
-                    f"chart catalog markets={payload.get('count', 0)} "
-                    f"tokens={payload.get('token_count', 0)}"
+                    f"chart catalog markets={summary.get('markets', 0)} "
+                    f"tokens={summary.get('tokens', 0)}"
                 )
-            except Exception as exc:  # noqa: BLE001 - board refresh remains independent.
-                _log(f"chart catalog unavailable: {type(exc).__name__}: {exc}")
             self.stop_event.wait(
                 max(900.0, float(os.environ.get("SPREADBOARD_CHART_CATALOG_SECONDS", "21600")))
             )
@@ -224,22 +226,28 @@ class RefreshLoop:
         _return_freed_memory()
 
     def _refresh_verified_identity_registry(self, *, snapshot_path: Path) -> None:
-        try:
-            payload = verified_identity.build_verified_identity_registry(
-                static_registry_path=ROOT / "data/api_discovery_identity_registry.json",
-                watchlist_path=ROOT / "data/api_discovery_watchlist.json",
-                rails_path=RUNTIME_DIR / "public_transfer_rails.json",
-                snapshot_path=snapshot_path,
-                output_path=GENERATED_IDENTITY_PATH,
-            )
-            generation = payload.get("generation") or {}
+        # Parsing the 40MB snapshot costs roughly a gigabyte, and this runs
+        # before every scan -- inside the server it was most of what the process
+        # held one minute after starting.
+        summary = _artifact_worker(
+            "identity-registry",
+            "--snapshot-path",
+            str(snapshot_path),
+            "--output-path",
+            str(GENERATED_IDENTITY_PATH),
+            "--static-registry-path",
+            str(ROOT / "data/api_discovery_identity_registry.json"),
+            "--watchlist-path",
+            str(ROOT / "data/api_discovery_watchlist.json"),
+            "--rails-path",
+            str(RUNTIME_DIR / "public_transfer_rails.json"),
+        )
+        if summary:
             _log(
                 "verified identity registry "
-                f"matches={generation.get('verified_matches', 0)} "
-                f"markets_added={generation.get('markets_added', 0)}"
+                f"matches={summary.get('matches', 0)} "
+                f"markets_added={summary.get('markets_added', 0)}"
             )
-        except Exception as exc:  # noqa: BLE001 - static registry remains available.
-            _log(f"verified identity refresh unavailable: {type(exc).__name__}: {exc}")
 
     def run_fast_quotes(self) -> None:
         interval = max(
@@ -353,6 +361,37 @@ def _snapshot_route_key(row: dict[str, Any]) -> str:
             "short_market_type",
         )
     )
+
+
+def _artifact_worker(job: str, *arguments: str) -> dict[str, Any] | None:
+    """Build one of the board's files in a process that exits."""
+    try:
+        result = subprocess.run(
+            [
+                *_low_priority_prefix(),
+                sys.executable,
+                str(ROOT / "scripts/artifact_worker.py"),
+                "--job",
+                job,
+                *arguments,
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=float(os.environ.get("SPREADBOARD_ARTIFACT_TIMEOUT_SECONDS", "900")),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        _log(f"{job} timeout: {exc}")
+        return None
+    if result.returncode != 0:
+        _log(f"{job} unavailable ({result.returncode}): {(result.stderr or '')[-300:]}")
+        return None
+    try:
+        return json.loads((result.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        _log(f"{job} produced no summary")
+        return None
 
 
 def _finalize_snapshot(stage: str) -> dict[str, Any] | None:
