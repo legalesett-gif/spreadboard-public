@@ -249,6 +249,14 @@ class UserMarketAlertWorker:
             self._stop.wait(self.poll_seconds)
 
     def check_once(self) -> dict[str, int]:
+        # Ask who is waiting before building anything. This runs every ten
+        # seconds and `limit=None` materialises the entire board -- every row of
+        # every token, the largest payload the process ever holds, on its own
+        # cache key. Doing that for an empty rule table was several hundred
+        # megabytes rebuilt six times a minute to deliver nothing.
+        user_ids = accounts.list_market_alert_user_ids(db_path=self.accounts_path)
+        if not user_ids:
+            return {"evaluated": 0, "triggered": 0, "delivered": 0}
         market = api_spreads.load_spreads(
             board_path=self.board_path,
             include_stale=False,
@@ -263,7 +271,7 @@ class UserMarketAlertWorker:
         evaluated = triggered = delivered = 0
         app_token = os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
         public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
-        for user_id in accounts.list_market_alert_user_ids(db_path=self.accounts_path):
+        for user_id in user_ids:
             user = accounts.get_user_object(user_id, db_path=self.accounts_path)
             if user is None or not user.subscription_active:
                 continue

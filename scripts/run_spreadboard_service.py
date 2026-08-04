@@ -5,6 +5,7 @@ from __future__ import annotations
 
 # ruff: noqa: E402
 
+import ctypes
 import gc
 import json
 import os
@@ -600,6 +601,25 @@ def _yield_to_requests() -> None:
         time.sleep(WARM_YIELD_SECONDS)
 
 
+def _return_freed_memory() -> None:
+    """Hand freed arenas back to the kernel.
+
+    Every snapshot write invalidates the caches and a fresh generation of
+    payloads is built beside the one being dropped. Each generation is hundreds
+    of megabytes of many medium-sized objects, which fragments the allocator, so
+    `gc.collect()` frees the objects but glibc keeps the arenas and RSS only
+    ever climbs. Measured components sum to under a gigabyte while the live
+    process reached 4.2GB and was OOM-killed inside its 6GB cgroup.
+
+    malloc_trim is glibc-only and advisory; anywhere else this is a no-op.
+    """
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):  # noqa: S110 - musl, macOS: nothing to do.
+        pass
+
+
 def _warm_board_cache(*, force: bool = False) -> None:
     """Pay the grouping cost here, not in a member's page load.
 
@@ -652,6 +672,8 @@ def _warm_board_cache(*, force: bool = False) -> None:
     _yield_to_requests()
     _log(f"board cache warmed {len(WARM_QUERIES)} views in {time.monotonic() - started:.1f}s")
     _refresh_funding_windows()
+    # The generation this pass replaced is now unreferenced; give it back.
+    _return_freed_memory()
 
 
 def _refresh_funding_windows() -> None:

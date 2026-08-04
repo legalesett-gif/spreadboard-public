@@ -212,3 +212,27 @@ def test_the_warm_set_fits_the_board_cache_without_evicting_itself() -> None:
     # ...and the tail stays bounded. The bound is applied twice, to
     # _MARKET_CACHE and to the stale-while-revalidate copy behind it.
     assert entries <= 24
+
+
+def test_the_alert_worker_builds_nothing_when_nobody_has_a_rule() -> None:
+    """It runs every ten seconds and limit=None is the largest payload there is."""
+    import inspect
+
+    from spreadboard import alerts
+
+    source = inspect.getsource(alerts.UserMarketAlertWorker.check_once)
+    before_build = source.split("load_spreads", 1)[0]
+    assert "list_market_alert_user_ids" in before_build
+    assert "if not user_ids:" in before_build
+
+
+def test_freed_memory_is_returned_to_the_kernel_after_each_warm() -> None:
+    """gc.collect() frees the objects; glibc keeps the arenas unless asked."""
+    import inspect
+
+    from scripts import run_spreadboard_service as service
+
+    assert "malloc_trim" in inspect.getsource(service._return_freed_memory)
+    assert "_return_freed_memory()" in inspect.getsource(service._warm_board_cache)
+    # Must not raise anywhere -- it is a no-op off glibc.
+    service._return_freed_memory()
