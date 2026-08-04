@@ -236,3 +236,33 @@ def test_freed_memory_is_returned_to_the_kernel_after_each_warm() -> None:
     assert "_return_freed_memory()" in inspect.getsource(service._warm_board_cache)
     # Must not raise anywhere -- it is a no-op off glibc.
     service._return_freed_memory()
+
+
+def test_the_snapshot_pipeline_runs_outside_the_web_server() -> None:
+    """Parsing a 40MB snapshot costs ~1GB, and it was done up to three times.
+
+    In the server process that reached 4.31GB five minutes after every start,
+    inside a 6GB cgroup -- so the kernel killed it and lost the scan with it.
+    """
+    import inspect
+
+    from scripts.run_spreadboard_service import RefreshLoop
+
+    source = inspect.getsource(RefreshLoop.refresh_once)
+    assert "_finalize_snapshot" in source
+    # No snapshot may be parsed in the server process any more.
+    assert "json.loads(REFRESH_SNAPSHOT_PATH" not in source
+    assert "json.loads(SNAPSHOT_PATH" not in source
+    assert Path("scripts/snapshot_finalize_worker.py").exists()
+
+
+def test_the_publish_stage_still_runs_under_both_locks() -> None:
+    """The merge and the write must stay mutually exclusive with quote cycles."""
+    import inspect
+
+    from scripts.run_spreadboard_service import RefreshLoop
+
+    source = inspect.getsource(RefreshLoop.refresh_once)
+    guarded = source.split("with self.quote_cycle_lock, self.snapshot_lock:", 1)
+    assert len(guarded) == 2, "publish is not inside the lock block"
+    assert '_finalize_snapshot("publish")' in guarded[1].split("\n\n", 1)[0]

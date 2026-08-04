@@ -194,52 +194,34 @@ class RefreshLoop:
         if result.returncode != 0:
             _log(f"refresh failed ({result.returncode}): {(result.stderr or '')[-500:]}")
             return
-        try:
-            snapshot = json.loads(REFRESH_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            _log(f"snapshot unavailable after refresh: {exc}")
+        # Every step below used to parse the 40MB snapshot here, in the web
+        # server: the staging copy and the published one at the same time so the
+        # merge could see both, then again for the identity registry. That is
+        # roughly a gigabyte of Python objects per copy, and it took the process
+        # to 4.31GB five minutes after every start until the kernel killed it --
+        # taking the site down and losing the very scan it had just finished.
+        # It all happens in a process that exits now.
+        enriched = _finalize_snapshot("enrich")
+        if enriched is None:
             return
-        funding_summary = live.enrich_snapshot_funding_24h(
-            snapshot,
-            max_workers=int(os.environ.get("SPREADBOARD_FUNDING_HISTORY_WORKERS", "4")),
-            route_keys=_funding_refresh_route_keys(snapshot),
-        )
         # The discovery worker writes to a staging snapshot so it cannot block
         # or overwrite fast quote cycles while the broad venue scan is running.
+        # The publish stage is short, and the locks are held across it exactly
+        # as they were when the merge and write happened inline.
         with self.quote_cycle_lock, self.snapshot_lock:
-            try:
-                current_snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                current_snapshot = {}
-            _merge_newer_fast_quotes(snapshot, current_snapshot)
-            _atomic_write_snapshot(snapshot)
-        inserted = market_history.record_snapshot(snapshot)
-        refresh = snapshot.get("source_refresh") or {}
+            published = _finalize_snapshot("publish")
+        if published is None:
+            return
         _log(
             "refresh complete "
-            f"routes={len(snapshot.get('api_discovered_rows') or []) + len(snapshot.get('dex_discovered_rows') or [])} "
-            f"history_inserted={inserted} funding={funding_summary} status={refresh.get('status')}"
+            f"routes={published.get('routes')} "
+            f"history_inserted={published.get('history_inserted')} "
+            f"funding={enriched.get('funding')} status={published.get('refresh_status')}"
         )
-        if lightweight_mode:
-            _refresh_enrichment_subprocess()
-        else:
-            symbols = {
-                str(row.get("token") or "").upper()
-                for bucket in ("api_discovered_rows", "dex_discovered_rows")
-                for row in snapshot.get(bucket) or []
-                if isinstance(row, dict) and row.get("token")
-            }
-            try:
-                token_metadata.refresh_token_metadata(symbols)
-            except Exception as exc:  # noqa: BLE001 - metadata must not stop market refresh.
-                _log(f"token-name refresh unavailable: {type(exc).__name__}: {exc}")
-            try:
-                public_rails.refresh_public_rails(snapshot)
-            except Exception as exc:  # noqa: BLE001 - rail coverage can be partial.
-                _log(f"transfer-rail refresh unavailable: {type(exc).__name__}: {exc}")
+        _refresh_enrichment_subprocess()
+        if not lightweight_mode:
             self._refresh_verified_identity_registry(snapshot_path=SNAPSHOT_PATH)
-        del snapshot
-        gc.collect()
+        _return_freed_memory()
 
     def _refresh_verified_identity_registry(self, *, snapshot_path: Path) -> None:
         try:
@@ -371,6 +353,43 @@ def _snapshot_route_key(row: dict[str, Any]) -> str:
             "short_market_type",
         )
     )
+
+
+def _finalize_snapshot(stage: str) -> dict[str, Any] | None:
+    """Run one stage of the post-scan pipeline and read back its summary."""
+    command = [
+        *_low_priority_prefix(),
+        sys.executable,
+        str(ROOT / "scripts/snapshot_finalize_worker.py"),
+        "--stage",
+        stage,
+        "--staging-path",
+        str(REFRESH_SNAPSHOT_PATH),
+        "--published-path",
+        str(SNAPSHOT_PATH),
+        "--funding-workers",
+        os.environ.get("SPREADBOARD_FUNDING_HISTORY_WORKERS", "4"),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=float(os.environ.get("SPREADBOARD_FINALIZE_TIMEOUT_SECONDS", "900")),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        _log(f"snapshot {stage} timeout: {exc}")
+        return None
+    if result.returncode != 0:
+        _log(f"snapshot {stage} failed ({result.returncode}): {(result.stderr or '')[-400:]}")
+        return None
+    try:
+        return json.loads((result.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        _log(f"snapshot {stage} produced no summary")
+        return None
 
 
 def _refresh_enrichment_subprocess() -> None:
