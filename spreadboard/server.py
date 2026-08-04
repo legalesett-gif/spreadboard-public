@@ -3600,16 +3600,16 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
         else f"/charts?token={quote(str(group.get('token') or ''))}"
     )
     return f"""
-    <details class="funding-token-group">
+    <details class="funding-token-group" data-route-key="{h(best.get('route_key') or '')}">
       <summary>
         <div class="asset-identity">
           <span class="asset-monogram">{h(str(group.get('token') or '?')[:2])}</span>
           <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best funding-pair chart">{h(group.get('token'))}</a><em>{h(name)}</em></span>
         </div>
         <div><span>Best farm</span><strong>{h(best.get('long_venue'))} → {h(best.get('short_venue'))}</strong></div>
-        <div><span>Net 24h</span><strong>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
+        <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
         <div><span>Payouts</span><strong>{h(funding_cadence_pair(best))}</strong></div>
-        <div><span>Entry basis</span><strong>{fmt_pct(best.get('executable_spread_pct'))}</strong></div>
+        <div><span>Entry basis</span><strong data-live-spread>{fmt_pct(best.get('executable_spread_pct'))}</strong></div>
         <div><span>Realised</span>{render_funding_windows(best, best.get('route_key'))}</div>
         <div><span>Pairs</span><strong>{h(group.get('route_count') or 0)}</strong></div>
         <span class="funding-chevron" aria-hidden="true">⌄</span>
@@ -3635,11 +3635,11 @@ def render_funding_pair(row: dict[str, Any]) -> str:
         else "history unavailable"
     )
     return f"""
-    <article class="funding-pair-row">
+    <article class="funding-pair-row" data-route-key="{h(row.get('route_key') or '')}">
       <div><span>Long</span>{render_exchange_link(row, 'long', include_market_type=True)}<em>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)} · {h(funding_interval_label(row.get('long_funding_interval_hours'), row.get('long_funding_interval_assumed')))}</em></div>
       <div><span>Short</span>{render_exchange_link(row, 'short', include_market_type=True)}<em>{fmt_signed_pct(row.get('short_funding_pct'), digits=4)} · {h(funding_interval_label(row.get('short_funding_interval_hours'), row.get('short_funding_interval_assumed')))}</em></div>
-      <div><span>Net 24h</span><strong>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)} · {h(funding_cadence_pair(row))}</em></div>
-      <div><span>Basis / VWAP</span><strong>{fmt_pct(row.get('executable_spread_pct'))}</strong><em>{fmt_pct(row.get('depth_weighted_spread_pct'))}</em></div>
+      <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)} · {h(funding_cadence_pair(row))}</em></div>
+      <div><span>Basis / VWAP</span><strong data-live-spread>{fmt_pct(row.get('executable_spread_pct'))}</strong><em>{fmt_pct(row.get('depth_weighted_spread_pct'))}</em></div>
       <div><span>Updated</span><strong>{fmt_age(row.get('age_min'))}</strong></div>
       <div class="route-actions">{render_alert_draft_button(row, alert_type='funding', compact=True)}<a href="/pair/{h(board.route_key_url(str(row.get('route_key') or '')))}">Details</a><a href="/charts?route_key={h(board.route_key_url(str(row.get('route_key') or '')))}">Chart</a></div>
     </article>
