@@ -8,6 +8,7 @@ turned positive in between did not appear until the next scan.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from pathlib import Path
@@ -391,3 +392,47 @@ def test_the_sweep_runs_as_a_worker_process_not_inside_the_server() -> None:
     assert "bulk_quote_worker.py" in source
     assert "_run_worker" in source
     assert Path("scripts/bulk_quote_worker.py").exists()
+
+
+def test_a_quote_with_an_unknown_size_is_still_a_quote(tmp_path) -> None:
+    """Several venues return a bid and an ask but no volumes.
+
+    The sweep stores the size as 0, and requiring amount > 0 discarded all 299
+    Hyperliquid books on read -- silently, with the rows sitting in the table.
+    That is why the operator's SKHY/SKHX chart showed no prices.
+    """
+    from spreadboard import live_book_cache
+
+    store = live_book_cache.LiveBookStore(tmp_path / "books.sqlite3")
+    store.put(
+        "Hyperliquid",
+        "Futures",
+        "XYZ-SKHX/USDC:USDC",
+        bids=[[1167.409, 0.0]],
+        asks=[[1167.6, 0.0]],
+        quote_ts_us=int(time.time() * 1_000_000),
+    )
+
+    book = store.get(
+        "Hyperliquid", "Futures", "XYZ-SKHX/USDC:USDC", max_age_seconds=300.0
+    )
+
+    assert book is not None, "a sized-0 quote was dropped on read"
+    assert book.bids[0][0] == 1167.409
+    assert book.asks[0][0] == 1167.6
+
+
+def test_a_zero_or_negative_price_is_still_rejected(tmp_path) -> None:
+    from spreadboard import live_book_cache
+
+    store = live_book_cache.LiveBookStore(tmp_path / "books.sqlite3")
+    store.put(
+        "Venue",
+        "Futures",
+        "X/Y",
+        bids=[[0.0, 5.0]],
+        asks=[[-1.0, 5.0]],
+        quote_ts_us=int(time.time() * 1_000_000),
+    )
+
+    assert store.get("Venue", "Futures", "X/Y", max_age_seconds=300.0) is None

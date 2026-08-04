@@ -220,6 +220,16 @@ def _levels(value: Any) -> list[list[float]]:
             amount = float(item[1])
         except (TypeError, ValueError):
             continue
-        if price > 0 and amount > 0:
+        # An unknown size is not an absent quote. Several venues -- Hyperliquid
+        # among them -- return tickers with a bid and an ask but no bidVolume or
+        # askVolume, so the sweep stores the size as 0. Requiring amount > 0
+        # discarded all 299 Hyperliquid books on read, silently: the rows were
+        # in the table and every lookup returned nothing, which is why the
+        # operator's SKHY/SKHX chart had no prices at all.
+        #
+        # The price is what a spread needs. `_book_side` takes the top level for
+        # the quote and falls back to it when the depth-weighted price cannot be
+        # computed, so a zero size costs the VWAP refinement and nothing else.
+        if price > 0 and amount >= 0:
             output.append([price, amount])
     return output
