@@ -3049,3 +3049,27 @@ def test_perp_dex_quotes_join_the_pool_a_dex_leg_is_paired_against(tmp_path: Pat
     )
 
     assert "Aster" in downstream.seen
+
+
+def test_the_dex_token_ceiling_leaves_room_for_the_mainstream_names() -> None:
+    """The cap was 50, and it is the whole of the DEX side's token coverage.
+
+    The ranking puts projected funding first -- right for a funding board, but
+    it means high-volume names like DOGE, WIF and SHIB lose every tie, so the
+    board carried 50 DEX tokens and none of them.
+    """
+    import inspect
+    import re
+
+    source = inspect.getsource(sources.OkxDexQuoteSource._discover_okx_assets)
+    ceiling = int(re.search(r"min\(\s*(\d+),", source).group(1))
+    assert ceiling >= 150, f"DEX token ceiling is still {ceiling}"
+
+    configured = int(
+        re.search(
+            r'SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS:\s*"(\d+)"',
+            Path("compose.production.yml").read_text(encoding="utf-8"),
+        ).group(1)
+    )
+    assert configured > 50
+    assert configured <= ceiling

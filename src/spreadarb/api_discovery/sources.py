@@ -188,10 +188,16 @@ class OkxDexQuoteSource:
         okx_dex: Any,
         existing_tokens: set[str],
     ) -> tuple[list[WatchAsset], list[str]]:
+        # The ceiling was 50, and it is the whole of the DEX side's token
+        # coverage: the board carried 50 DEX tokens and no DOGE, WIF, SHIB,
+        # PENGU, FARTCOIN or STETH. The ranking below puts projected funding
+        # first, which is right for a funding board but means the mainstream
+        # high-volume names lose every tie -- so they only appear once there is
+        # room for both.
         limit = max(
             0,
             min(
-                50,
+                250,
                 int(os.environ.get("SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS", "0")),
             ),
         )
