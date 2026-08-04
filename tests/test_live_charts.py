@@ -1253,3 +1253,41 @@ def test_fast_quote_refresh_writes_what_it_has_when_the_deadline_passes(
     # summary the caller can act on instead of being killed with nothing.
     assert isinstance(result, dict)
     assert calls["n"] < 12, "the deadline did not stop the cycle early"
+
+
+def test_a_custom_pair_prices_from_the_books_not_the_board(monkeypatch) -> None:
+    """A custom chart is not on the board, so it has no board price.
+
+    The ccxt fallback cannot cover it either -- loading a venue's markets cold
+    costs ~32s against a 6s enrichment budget -- so the operator's own SKHY/SKHX
+    position charted as an empty page.
+    """
+    from spreadboard import live
+
+    class Store:
+        def get(self, venue, market_type, symbol):
+            assert (venue, market_type) == ("Hyperliquid", "Futures")
+            return {
+                "bids": [[1052.6, 4.0]],
+                "asks": [[1052.8, 4.0]],
+                "quote_ts_us": 1,
+            }
+
+    from spreadboard import live_book_cache
+
+    monkeypatch.setattr(live_book_cache, "LiveBookStore", Store)
+
+    quote = live.book_quote("Hyperliquid", "Futures", "XYZ-SKHX/USDC:USDC")
+
+    assert quote["bid"] == 1052.6
+    assert quote["ask"] == 1052.8
+    assert quote["price"] == pytest.approx(1052.7)
+    assert quote["source"] == "live_book"
+
+
+def test_book_quote_is_silent_when_there_is_no_book(monkeypatch) -> None:
+    from spreadboard import live
+
+    assert live.book_quote(None, "Futures", "X/Y") == {}
+    assert live.book_quote("Hyperliquid", None, "X/Y") == {}
+    assert live.book_quote("Hyperliquid", "Futures", None) == {}

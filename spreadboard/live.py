@@ -237,6 +237,45 @@ def _env_bool(name: str) -> bool:
     return os.environ.get(name, "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
+def book_quote(
+    venue: str | None, market_type: str | None, symbol: str | None
+) -> dict[str, Any]:
+    """Best bid and ask for a leg, from the books the sweep already writes.
+
+    A leg's price came from the board row, so a custom chart -- a pair that by
+    definition is not on the board -- had none, and every field rendered blank.
+    The ccxt fallback cannot cover it either: loading a venue's markets cold
+    costs ~32s against a 6s enrichment budget, so it always timed out. The
+    operator's own SKHY/SKHX position charted as an empty page.
+
+    This is a dictionary lookup against quotes that are already there.
+    """
+    if not venue or not market_type or not symbol:
+        return {}
+    try:
+        from spreadboard import live_book_cache
+
+        book = live_book_cache.LiveBookStore().get(str(venue), str(market_type), str(symbol))
+    except Exception:  # noqa: BLE001 - a missing book is not an error.
+        return {}
+    if not book:
+        return {}
+    bids = book.get("bids") or []
+    asks = book.get("asks") or []
+    bid = _float_or_none(bids[0][0]) if bids and bids[0] else None
+    ask = _float_or_none(asks[0][0]) if asks and asks[0] else None
+    if bid is None and ask is None:
+        return {}
+    mid = (bid + ask) / 2 if bid is not None and ask is not None else (bid or ask)
+    return {
+        "bid": bid,
+        "ask": ask,
+        "price": mid,
+        "quote_ts_us": book.get("quote_ts_us"),
+        "source": "live_book",
+    }
+
+
 def _leg_public_enrichment(
     exchange_id: str | None,
     market_symbol: str | None,
@@ -325,6 +364,12 @@ def _leg_detail_from_board(
         else board_row.get(f"{side}_market_symbol")
         or market_symbol_for(symbol, str(market_type or ""), exchange_id)
     )
+    # A custom pair is not on the board, so it has no board price. The sweep
+    # already holds a quote for it; use that before falling back to a ccxt call
+    # that cannot finish inside the enrichment budget.
+    book = book_quote(venue, market_type, market_symbol) if price is None else {}
+    if price is None:
+        price = book.get("price")
     volatility = volatility or {
         "status": "unavailable",
         "reason": reason or "not_enough_data",
@@ -389,11 +434,15 @@ def _leg_detail_from_board(
             market_stats.get("bid")
             if market_stats.get("bid") is not None
             else board_row.get(f"{side}_bid")
+            if board_row.get(f"{side}_bid") is not None
+            else book.get("bid")
         ),
         "ask": (
             market_stats.get("ask")
             if market_stats.get("ask") is not None
             else board_row.get(f"{side}_ask")
+            if board_row.get(f"{side}_ask") is not None
+            else book.get("ask")
         ),
         "deposit_enabled": board_row.get(f"{side}_deposit_enabled"),
         "withdraw_enabled": board_row.get(f"{side}_withdraw_enabled"),
