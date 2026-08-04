@@ -2973,3 +2973,79 @@ def test_a_route_with_no_live_book_is_not_invented() -> None:
                "short_market_type": "Futures", "short_market_symbol": "Z/USDT:USDT"}]
     with mock.patch.object(api_spreads, "_live_books", return_value={}):
         assert api_spreads.live_prices_for(routes) == {}
+
+
+def _perp_dex_source_index(enabled: list) -> int:
+    for index, source in enumerate(enabled):
+        if isinstance(source, sources.DexDerivativeCcxtSource):
+            return index
+    raise AssertionError("no perp DEX source in the default set")
+
+
+def test_perp_dexes_are_collected_before_the_spot_dex_that_pairs_against_them() -> None:
+    """Aster has to exist before a DEX spot leg can be hedged onto it.
+
+    A source only ever sees the quotes gathered ahead of it. Collecting Aster
+    and Hyperliquid after the OKX DEX source meant no DEX spot leg could pair
+    with a perp DEX, which is the shape most of these farms take.
+    """
+    enabled = sources.default_sources(include_network=True)
+    spot_dex = [
+        index
+        for index, source in enumerate(enabled)
+        if isinstance(source, sources.OkxDexQuoteSource)
+    ]
+
+    assert spot_dex, "no DEX spot source in the default set"
+    assert _perp_dex_source_index(enabled) < min(spot_dex)
+
+
+def test_perp_dex_quotes_join_the_pool_a_dex_leg_is_paired_against(tmp_path: Path) -> None:
+    """`dex_derivative` quotes are hedge venues, not only route producers."""
+
+    def quote(venue: str) -> MarketQuote:
+        return MarketQuote(
+            token="AAA",
+            venue=venue,
+            market_type="Futures",
+            bid=1.0,
+            ask=1.0,
+            bid_vwap=1.0,
+            ask_vwap=1.0,
+            quote_ts_us=1,
+            source_name="test",
+        )
+
+    class Source:
+        def __init__(self, name: str, kind: str) -> None:
+            self.name = name
+            self.kind = kind
+
+        def collect(self, context):
+            self.seen = tuple(q.venue for q in context.reference_quotes)
+            return SourceResult(
+                status=SourceStatus(
+                    name=self.name,
+                    kind=self.kind,
+                    status="ok",
+                    started_at="now",
+                    finished_at="now",
+                    elapsed_seconds=0.0,
+                ),
+                quotes=(quote(self.name),),
+            )
+
+    perp_dex = Source("Aster", "dex_derivative")
+    downstream = Source("OkxDex", "dex_spot")
+
+    runner.run_discovery(
+        db_path=None,
+        watchlist_path=None,
+        snapshot_path=tmp_path / "snapshot.json",
+        archive_dir=tmp_path / "archive",
+        timeout_seconds=None,
+        sources=[perp_dex, downstream],
+        blacklist_filter_enabled=False,
+    )
+
+    assert "Aster" in downstream.seen

@@ -112,7 +112,13 @@ def run_discovery(
         )
         result = source.collect(context)
         source_results.append(result)
-        if result.quotes and source.kind == "cex":
+        # Aster and Hyperliquid are perp venues that happen to settle on-chain,
+        # so they were classed "dex_derivative" and never joined the reference
+        # pool -- which is the exact pool a DEX spot leg is paired against. The
+        # board carried 506 Aster routes against centralised venues and not one
+        # against a DEX, though DEX-long/perp-short is the shape most of these
+        # farms actually take.
+        if result.quotes and source.kind in {"cex", "dex_derivative"}:
             reference_quotes = (*reference_quotes, *result.quotes)
         for row in result.rows:
             if row.get("source_kind") == SOURCE_DEX_DISCOVERED:

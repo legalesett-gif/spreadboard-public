@@ -1158,9 +1158,13 @@ def default_sources(
             *[source for pair in zip(spot_batches, futures_batches) for source in pair],
             *spot_batches[len(futures_batches) :],
             *futures_batches[len(spot_batches) :],
-            OkxDexQuoteSource(),
+            # The perp DEXes come before the spot DEX source: a source is only
+            # paired against the quotes gathered ahead of it, so collecting
+            # Aster and Hyperliquid afterwards left them invisible to every
+            # DEX spot leg.
             DexDerivativeCcxtSource(venues={"Hyperliquid": "hyperliquid", "Aster": "aster"}),
             HyperliquidBuilderDexSource(),
+            OkxDexQuoteSource(),
         ]
         enabled.extend(source for source in source_specs if _source_enabled(source, source_filter))
     disabled_specs = [
