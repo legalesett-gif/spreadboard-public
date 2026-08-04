@@ -25,7 +25,7 @@ from pathlib import Path
 import time
 from typing import Any
 
-from spreadboard import live_book_cache
+from spreadboard import fair_price, live_book_cache
 from spreadboard.fast_quotes import VENUE_IDS
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", "data"))
@@ -93,8 +93,14 @@ def sweep_venue(
     *,
     store: live_book_cache.LiveBookStore,
     client_factory: Any = None,
+    fair_price_rows: list[dict[str, Any]] | None = None,
 ) -> int:
-    """Write every priced symbol this venue lists into the live book store."""
+    """Write every priced symbol this venue lists into the live book store.
+
+    Also collects how far each contract trades from the venue's own fair price,
+    when `fair_price_rows` is given. The tickers are already in hand, so that
+    signal costs nothing beyond reading two more fields.
+    """
     if venue in SKIP_VENUES:
         return 0
     written = 0
@@ -115,6 +121,10 @@ def sweep_venue(
                 continue
             if _market_type_of(markets.get(symbol) or {}) != market_type:
                 continue
+            if fair_price_rows is not None and market_type == "Futures":
+                row = fair_price.deviation(venue, str(symbol), ticker)
+                if row is not None:
+                    fair_price_rows.append(row)
             timestamp_ms = ticker.get("timestamp")
             try:
                 store.put(
@@ -181,6 +191,7 @@ def sweep(
     started = time.monotonic()
     written = 0
     covered = 0
+    fair_price_rows: list[dict[str, Any]] = []
     ordered = venues if venues is not None else sorted(VENUE_IDS)
     start = _load_cursor(len(ordered))
     rotation = ordered[start:] + ordered[:start]
@@ -189,15 +200,17 @@ def sweep(
         if time.monotonic() >= deadline:
             break
         position = (ordered.index(venue) + 1) % max(1, len(ordered))
-        count = sweep_venue(venue, store=target)
+        count = sweep_venue(venue, store=target, fair_price_rows=fair_price_rows)
         if count:
             covered += 1
             written += count
     _store_cursor(position)
+    deviations = fair_price.write(fair_price_rows)
     return {
         "status": "ok",
         "venues": covered,
         "quotes": written,
+        "fair_price_deviations": deviations,
         "seconds": round(time.monotonic() - started, 1),
         "updated_at": datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat(),
     }

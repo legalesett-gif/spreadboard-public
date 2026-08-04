@@ -34,6 +34,7 @@ from spreadboard import (  # noqa: E402
     chart_catalog,
     crypto_billing,
     crypto_watcher,
+    fair_price,
     historical_spreads,
     intel,
     live,
@@ -295,6 +296,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_register_page())
             elif parsed.path == "/pricing":
                 self._send_html(render_pricing_page())
+            elif parsed.path == "/fair":
+                self._send_html(render_fair_price_page())
             elif parsed.path == "/free":
                 self._send_html(render_free_page(self.server.board_path))
             elif parsed.path == "/terms":
@@ -2851,6 +2854,76 @@ def render_free_page(board_path: Path) -> str:
     {render_board_stream_script(dict(FREE_BOARD_QUERY), endpoint="/api/stream/free")}
     """
     return shell("Live spreads - SpreadBoard", "free", body)
+
+
+def render_fair_price_page() -> str:
+    """Contracts trading away from the price their own venue marks them at.
+
+    Every other lane here compares two venues. This one compares a contract
+    against its own exchange's fair price -- the mark used for liquidations --
+    which is a mean-reversion signal rather than an arbitrage, and it shows up
+    exactly where the cross-venue board is weakest: thin, newly listed
+    contracts whose last trade drifts from the index between fills.
+    """
+    payload = fair_price.load()
+    rows = payload.get("rows") or []
+    updated = payload.get("updated_at")
+    body_rows = "".join(
+        f"""
+        <article class="fair-row">
+          <div class="fair-token">
+            <strong>{h(str(row.get("symbol") or "").split("/")[0])}</strong>
+            <span>{h(row.get("venue"))} · {h(row.get("symbol"))}</span>
+          </div>
+          <div class="fair-metric"><em>Last</em><strong>{fmt_price(row.get("last_price"))}</strong></div>
+          <div class="fair-metric"><em>Fair</em><strong>{fmt_price(row.get("fair_price"))}</strong></div>
+          <div class="fair-metric"><em>Volume 24h</em><strong>{fmt_money(row.get("volume_24h_usd"))}</strong></div>
+          <div class="fair-metric"><em>Gap</em><strong class="{'spread-good' if (row.get('deviation_pct') or 0) > 0 else 'spread-negative'}">{fmt_signed_pct(row.get("deviation_pct"), digits=2)}</strong></div>
+          <div class="fair-side {'long' if row.get('side') == 'Long' else 'short'}">{h(row.get("side"))}</div>
+        </article>
+        """
+        for row in rows[:60]
+    )
+    empty = '<p class="free-note">No contract is far enough from its fair price right now.</p>'
+    body = f"""
+    <style>
+      .fair-page {{ width:min(1240px,calc(100% - 36px)); margin:30px auto 64px; display:grid; gap:20px; }}
+      .fair-row {{ display:grid; grid-template-columns:minmax(0,1.5fr) repeat(4,auto) 84px; gap:14px; align-items:center;
+                   padding:12px 16px; border:1px solid var(--terminal-line); border-bottom:0; background:var(--terminal-panel); }}
+      .fair-list .fair-row:last-child {{ border-bottom:1px solid var(--terminal-line); }}
+      .fair-token strong {{ display:block; font-size:15px; }}
+      .fair-token span {{ color:var(--terminal-muted); font-size:11px; }}
+      .fair-metric {{ text-align:right; }}
+      .fair-metric em {{ display:block; color:var(--terminal-muted); font-style:normal; font-size:10px; font-weight:900;
+                         text-transform:uppercase; letter-spacing:.06em; }}
+      .fair-metric strong {{ font-variant-numeric:tabular-nums; font-size:14px; }}
+      .fair-side {{ text-align:center; font-weight:900; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+                    padding:5px 0; border:1px solid var(--terminal-line); }}
+      .fair-side.long {{ color:var(--accent-ink); background:var(--accent); border-color:var(--accent); }}
+      .fair-side.short {{ color:var(--terminal-text); }}
+      @media(max-width:820px) {{ .fair-row {{ grid-template-columns:1fr 1fr; }} .fair-token {{ grid-column:1 / -1; }} }}
+    </style>
+    <section class="fair-page">
+      <header class="terminal-heading">
+        <div>
+          <span class="page-kicker">Fair price</span>
+          <h1>Trading away from its own mark</h1>
+          <p>Not an arbitrage between venues &mdash; a contract against the fair price its own
+             exchange computes and liquidates against. Last below fair reads Long, above reads
+             Short. Thin and newly listed contracts drift furthest, so size to the volume shown.</p>
+        </div>
+        <div class="terminal-live-box {'live' if rows else 'unavailable'}">
+          <span>{len(rows)} flagged</span>
+          <strong data-live-stamp>{h(updated or "—")}</strong>
+          <em>from the same sweep that prices the board</em>
+        </div>
+      </header>
+      <div class="fair-list">{body_rows or empty}</div>
+      <p class="free-note">Public market data, not advice. A gap can persist or widen, and a thin
+         contract can be hard to leave.</p>
+    </section>
+    """
+    return shell("Fair price - SpreadBoard", "fair", body)
 
 
 def render_market_reconnecting(
@@ -9531,6 +9604,7 @@ _VISITOR_NAV: tuple[tuple[str, str, str], ...] = (
 _MEMBER_NAV: tuple[tuple[str, str, str], ...] = (
     ("markets", "/", "Arbitrage"),
     ("funding", "/funding", "Funding"),
+    ("fair", "/fair", "Fair price"),
     ("charts", "/charts", "Charts"),
     ("intel", "/intel", "Intel"),
     ("watchlist", "/watchlist", "Watchlist"),

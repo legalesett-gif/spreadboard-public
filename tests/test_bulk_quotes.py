@@ -146,12 +146,13 @@ def test_the_sweep_resumes_where_it_ran_out_of_time(tmp_path, monkeypatch) -> No
 
     visited: list[str] = []
 
-    def slow(venue, *, store):
+    def slow(venue, **_kwargs):
         visited.append(venue)
         _time.sleep(0.03)
         return 1
 
     monkeypatch.setattr(bulk_quotes, "CURSOR_PATH", tmp_path / "cursor.json")
+    monkeypatch.setattr(bulk_quotes.fair_price, "write", lambda rows, **_k: 0)
     monkeypatch.setattr(bulk_quotes, "sweep_venue", slow)
     venues = ["A", "B", "C", "D", "E", "F"]
     bulk_quotes._CURSOR["index"] = 0
@@ -170,7 +171,9 @@ def test_the_sweep_resumes_where_it_ran_out_of_time(tmp_path, monkeypatch) -> No
 def test_a_full_pass_leaves_the_cursor_back_at_the_start(tmp_path, monkeypatch) -> None:
     # The cursor is persisted now, so the starting point comes from the file.
     monkeypatch.setattr(bulk_quotes, "CURSOR_PATH", tmp_path / "cursor.json")
-    monkeypatch.setattr(bulk_quotes, "sweep_venue", lambda venue, *, store: 1)
+    monkeypatch.setattr(bulk_quotes, "CACHE_WRITER", None) if False else None
+    monkeypatch.setattr(bulk_quotes.fair_price, "write", lambda rows, **_k: 0)
+    monkeypatch.setattr(bulk_quotes, "sweep_venue", lambda venue, **_kwargs: 1)
     venues = ["A", "B", "C"]
     bulk_quotes._CURSOR["index"] = 0
 
@@ -366,6 +369,7 @@ def test_the_rotation_cursor_survives_the_process_that_advances_it(tmp_path, mon
         "sweep_venue",
         lambda venue, **_kwargs: swept.append(venue) or 1,
     )
+    monkeypatch.setattr(bulk_quotes.fair_price, "write", lambda rows, **_k: 0)
 
     venues = ["A", "B", "C", "D"]
     bulk_quotes.sweep(venues[:2], store=object(), budget_seconds=60.0)
