@@ -162,3 +162,24 @@ def test_the_member_nav_is_unchanged() -> None:
         assert f'href="{href}"' in nav
     assert urlparse("/").path == "/"
     assert 'href="/"' in nav
+
+
+def test_warming_yields_between_builds_so_the_server_can_answer() -> None:
+    """The warm holds the GIL; without a yield the site is unreachable, not slow."""
+    import inspect
+
+    from scripts import run_spreadboard_service as service
+
+    warm = inspect.getsource(service._warm_board_cache)
+    assert "_yield_to_requests()" in warm
+    assert service.WARM_YIELD_SECONDS > 0
+
+
+def test_the_readiness_probes_own_query_is_warmed() -> None:
+    """/api/health builds the board at limit=0 -- a key nothing else warms."""
+    import inspect
+
+    from scripts import run_spreadboard_service as service
+
+    warm = inspect.getsource(service._warm_board_cache)
+    assert "api_source_health" in warm

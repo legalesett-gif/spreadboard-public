@@ -544,6 +544,21 @@ WARM_INTERVAL_SECONDS = max(
 )
 _LAST_WARM_AT = 0.0
 
+#: Breathing room between warm builds, in seconds.
+#:
+#: Warming is CPU-bound pure Python in the same process as the HTTP server, so
+#: it holds the GIL and the server cannot answer while it runs. Thirteen builds
+#: back to back on two cores kept `/api/health` timing out for ten minutes after
+#: every restart -- the site was not slow, it was unreachable. Sleeping between
+#: builds releases the GIL and lets whatever is queued through; it costs a few
+#: seconds on a pass that already takes minutes.
+WARM_YIELD_SECONDS = max(0.0, float(os.environ.get("SPREADBOARD_WARM_YIELD_SECONDS", "1.0")))
+
+
+def _yield_to_requests() -> None:
+    if WARM_YIELD_SECONDS:
+        time.sleep(WARM_YIELD_SECONDS)
+
 
 def _warm_board_cache(*, force: bool = False) -> None:
     """Pay the grouping cost here, not in a member's page load.
@@ -571,18 +586,30 @@ def _warm_board_cache(*, force: bool = False) -> None:
             server.api_market_spreads(_board_path(), dict(query))
         except Exception as exc:  # noqa: BLE001 - warming is best effort.
             _log(f"board cache warm skipped {query}: {type(exc).__name__}: {exc}")
+        _yield_to_requests()
     # Intel is derived from the same snapshot and costs about as much, so it is
     # warmed here rather than left to the first visitor.
     try:
         server.api_intel(_board_path())
     except Exception as exc:  # noqa: BLE001 - warming is best effort.
         _log(f"intel warm skipped: {type(exc).__name__}: {exc}")
+    _yield_to_requests()
     try:
         # Opening a chart by route needs this index; building it on demand cost
         # 14.6s of the thirty a member waited.
         server._route_index(_board_path())
     except Exception as exc:  # noqa: BLE001 - warming is best effort.
         _log(f"route index warm skipped: {type(exc).__name__}: {exc}")
+    _yield_to_requests()
+    try:
+        # /api/health builds the board at limit=0, which is its own cache key
+        # and was in nobody's warm set -- so the readiness probe was one of the
+        # most expensive requests on the server and timed out against a cold
+        # cache, reporting the container unhealthy while it was merely starting.
+        server.api_source_health(_board_path(), {})
+    except Exception as exc:  # noqa: BLE001 - warming is best effort.
+        _log(f"health warm skipped: {type(exc).__name__}: {exc}")
+    _yield_to_requests()
     _log(f"board cache warmed {len(WARM_QUERIES)} views in {time.monotonic() - started:.1f}s")
     _refresh_funding_windows()
 
