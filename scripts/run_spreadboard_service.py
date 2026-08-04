@@ -699,12 +699,14 @@ def _warm_board_cache(*, force: bool = False) -> None:
     from spreadboard import server
 
     started = time.monotonic()
+    _log("board cache warm starting")
     for query in WARM_QUERIES:
         try:
             server.api_market_spreads(_board_path(), dict(query))
         except Exception as exc:  # noqa: BLE001 - warming is best effort.
             _log(f"board cache warm skipped {query}: {type(exc).__name__}: {exc}")
         _yield_to_requests()
+    _log(f"warm queries done in {time.monotonic() - started:.1f}s")
     # Intel is derived from the same snapshot and costs about as much, so it is
     # warmed here rather than left to the first visitor.
     try:
@@ -812,8 +814,21 @@ def _refresh_venue_funding_history() -> None:
         _log(f"funding windows skipped: {type(exc).__name__}: {exc}")
 
 
+def _rss_gb() -> float:
+    """This process's resident size. Zero where /proc is not available."""
+    try:
+        with open("/proc/self/statm", encoding="ascii") as handle:
+            return int(handle.read().split()[1]) * 4096 / 1024**3
+    except (OSError, IndexError, ValueError):
+        return 0.0
+
+
 def _log(message: str) -> None:
-    print(f"spreadboard-service: {message}", flush=True)
+    # Every line carries the process size. Finding what took this service to
+    # 4.3GB inside a 6GB cgroup meant moving four subsystems out one at a time
+    # and watching it climb anyway; a number on each line would have said which
+    # one immediately.
+    print(f"spreadboard-service: [{_rss_gb():.2f}GB] {message}", flush=True)
 
 
 def _seed_public_caches() -> None:
