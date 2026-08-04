@@ -14,6 +14,7 @@ import signal
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Any
@@ -181,20 +182,15 @@ class RefreshLoop:
             "--ttl-s",
             "900",
         ]
-        try:
-            result = subprocess.run(
-                command,
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                timeout=float(os.environ.get("SPREADBOARD_REFRESH_TIMEOUT_SECONDS", "900")),
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            _log(f"refresh timeout: {exc}")
+        result = _run_worker(
+            command,
+            timeout=float(os.environ.get("SPREADBOARD_REFRESH_TIMEOUT_SECONDS", "900")),
+        )
+        if result.timed_out:
+            _log("refresh timeout")
             return
         if result.returncode != 0:
-            _log(f"refresh failed ({result.returncode}): {(result.stderr or '')[-500:]}")
+            _log(f"refresh failed ({result.returncode}): {result.stderr[-500:]}")
             return
         # Every step below used to parse the 40MB snapshot here, in the web
         # server: the staging copy and the published one at the same time so the
@@ -290,16 +286,8 @@ class RefreshLoop:
             "--deadline-seconds",
             str(round(_fast_quote_timeout() * 0.8, 1)),
         ]
-        try:
-            result = subprocess.run(
-                command,
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                timeout=_fast_quote_timeout(),
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
+        result = _run_worker(command, timeout=_fast_quote_timeout())
+        if result.timed_out:
             return {"status": "timeout", "updated_routes": 0}
         try:
             return json.loads((result.stdout or "").strip().splitlines()[-1])
@@ -367,30 +355,25 @@ def _snapshot_route_key(row: dict[str, Any]) -> str:
 
 def _artifact_worker(job: str, *arguments: str) -> dict[str, Any] | None:
     """Build one of the board's files in a process that exits."""
-    try:
-        result = subprocess.run(
-            [
-                *_low_priority_prefix(),
-                sys.executable,
-                str(ROOT / "scripts/artifact_worker.py"),
-                "--job",
-                job,
-                *arguments,
-            ],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=float(os.environ.get("SPREADBOARD_ARTIFACT_TIMEOUT_SECONDS", "900")),
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        _log(f"{job} timeout: {exc}")
+    result = _run_worker(
+        [
+            *_low_priority_prefix(),
+            sys.executable,
+            str(ROOT / "scripts/artifact_worker.py"),
+            "--job",
+            job,
+            *arguments,
+        ],
+        timeout=float(os.environ.get("SPREADBOARD_ARTIFACT_TIMEOUT_SECONDS", "900")),
+    )
+    if result.timed_out:
+        _log(f"{job} timeout")
         return None
     if result.returncode != 0:
-        _log(f"{job} unavailable ({result.returncode}): {(result.stderr or '')[-300:]}")
+        _log(f"{job} unavailable ({result.returncode}): {result.stderr[-300:]}")
         return None
     try:
-        return json.loads((result.stdout or "").strip().splitlines()[-1])
+        return json.loads(result.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):
         _log(f"{job} produced no summary")
         return None
@@ -411,23 +394,18 @@ def _finalize_snapshot(stage: str) -> dict[str, Any] | None:
         "--funding-workers",
         os.environ.get("SPREADBOARD_FUNDING_HISTORY_WORKERS", "4"),
     ]
-    try:
-        result = subprocess.run(
-            command,
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=float(os.environ.get("SPREADBOARD_FINALIZE_TIMEOUT_SECONDS", "900")),
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        _log(f"snapshot {stage} timeout: {exc}")
+    result = _run_worker(
+        command,
+        timeout=float(os.environ.get("SPREADBOARD_FINALIZE_TIMEOUT_SECONDS", "900")),
+    )
+    if result.timed_out:
+        _log(f"snapshot {stage} timeout")
         return None
     if result.returncode != 0:
-        _log(f"snapshot {stage} failed ({result.returncode}): {(result.stderr or '')[-400:]}")
+        _log(f"snapshot {stage} failed ({result.returncode}): {result.stderr[-400:]}")
         return None
     try:
-        return json.loads((result.stdout or "").strip().splitlines()[-1])
+        return json.loads(result.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):
         _log(f"snapshot {stage} produced no summary")
         return None
@@ -442,19 +420,14 @@ def _refresh_enrichment_subprocess() -> None:
         "--rail-workers",
         "1",
     ]
-    try:
-        result = subprocess.run(
-            command,
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=float(os.environ.get("SPREADBOARD_ENRICHMENT_TIMEOUT_SECONDS", "240")),
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        _log(f"isolated enrichment timeout: {exc}")
+    result = _run_worker(
+        command,
+        timeout=float(os.environ.get("SPREADBOARD_ENRICHMENT_TIMEOUT_SECONDS", "240")),
+    )
+    if result.timed_out:
+        _log("isolated enrichment timeout")
         return
-    summary = (result.stdout or result.stderr or "").strip()[-500:]
+    summary = (result.stdout or result.stderr).strip()[-500:]
     _log(f"isolated enrichment exit={result.returncode} {summary}")
 
 
@@ -596,7 +569,7 @@ class BulkQuoteLoop(threading.Thread):
         crossed its cgroup and was OOM-killed -- hourly, killing the discovery
         scan with it. It also held the GIL against every page load.
         """
-        completed = subprocess.run(  # noqa: S603 - our own script, fixed argv.
+        completed = _run_worker(
             [
                 *_low_priority_prefix(),
                 sys.executable,
@@ -606,12 +579,9 @@ class BulkQuoteLoop(threading.Thread):
                 "--funding-budget-seconds",
                 str(self.TIMEOUT_SECONDS / 2),
             ],
-            capture_output=True,
-            text=True,
             timeout=self.TIMEOUT_SECONDS,
-            check=False,
         )
-        if completed.returncode != 0:
+        if completed.timed_out or completed.returncode != 0:
             _log(f"bulk quotes worker exit={completed.returncode} {completed.stderr[-300:]}")
             return
         try:
@@ -814,6 +784,58 @@ def _refresh_venue_funding_history() -> None:
         _log(f"venue funding history skipped: {type(exc).__name__}: {exc}")
     except Exception as exc:  # noqa: BLE001 - a missing history file is not fatal.
         _log(f"funding windows skipped: {type(exc).__name__}: {exc}")
+
+
+#: How much of a worker's output the parent keeps. Enough to diagnose a
+#: failure, bounded so a chatty child cannot consume the server.
+WORKER_OUTPUT_TAIL_BYTES = 64 * 1024
+
+
+class WorkerResult:
+    __slots__ = ("returncode", "stdout", "stderr", "timed_out")
+
+    def __init__(self, returncode: int, stdout: str, stderr: str, timed_out: bool) -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.timed_out = timed_out
+
+
+def _run_worker(command: list[str], *, timeout: float, cwd: Path = ROOT) -> WorkerResult:
+    """Run a worker without buffering everything it says in this process.
+
+    `subprocess.run(capture_output=True)` accumulates the child's entire stdout
+    and stderr in the parent's memory until it exits. The fast-quote worker hits
+    its 240s deadline and writes venue errors the whole time, and the parent
+    went from 0.51GB to 4.50GB inside a single call -- once a minute, which is
+    what kept taking the container over its 6GB limit and killing the scan.
+
+    The child writes to files; the parent reads back only the tail.
+    """
+    def tail(handle: Any) -> str:
+        try:
+            size = handle.tell()
+            handle.seek(max(0, size - WORKER_OUTPUT_TAIL_BYTES))
+            return handle.read().decode("utf-8", "replace")
+        except OSError:
+            return ""
+
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        timed_out = False
+        returncode = -1
+        try:
+            completed = subprocess.run(  # noqa: S603 - our own scripts, fixed argv.
+                command,
+                cwd=cwd,
+                stdout=out,
+                stderr=err,
+                timeout=timeout,
+                check=False,
+            )
+            returncode = completed.returncode
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        return WorkerResult(returncode, tail(out), tail(err), timed_out)
 
 
 def _rss_gb() -> float:

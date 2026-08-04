@@ -389,5 +389,5 @@ def test_the_sweep_runs_as_a_worker_process_not_inside_the_server() -> None:
 
     source = inspect.getsource(BulkQuoteLoop)
     assert "bulk_quote_worker.py" in source
-    assert "subprocess.run" in source
+    assert "_run_worker" in source
     assert Path("scripts/bulk_quote_worker.py").exists()

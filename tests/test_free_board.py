@@ -305,3 +305,18 @@ def test_the_fast_quote_cycle_does_not_parse_the_snapshot_in_the_server() -> Non
     assert "json.loads(SNAPSHOT_PATH" not in source
     assert "market_history.record_snapshot" not in source
     assert '_finalize_snapshot("record")' in source
+
+
+def test_no_worker_output_is_buffered_in_the_server() -> None:
+    """capture_output=True holds everything a child says until it exits.
+
+    The fast-quote worker hits its 240s deadline writing venue errors the whole
+    time; the parent went 0.51GB -> 4.50GB inside one call, once a minute.
+    """
+    source = Path("scripts/run_spreadboard_service.py").read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith("#")
+    )
+    # Only the docstring that explains the hazard may mention it.
+    assert code.count("capture_output=True") <= 1
+    assert "WORKER_OUTPUT_TAIL_BYTES" in code
