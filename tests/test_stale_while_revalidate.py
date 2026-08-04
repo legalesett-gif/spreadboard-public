@@ -74,3 +74,47 @@ def test_the_stale_index_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
         server._market_cache_finish(("board", f"sig{index}", ((f"q{index}", ()),)), {"n": index})
 
     assert len(server._MARKET_STALE_CACHE) <= 3
+
+
+def test_a_waiter_never_starts_a_second_build_of_the_same_view(monkeypatch) -> None:
+    """The stampede that kept killing the container.
+
+    A cold build takes 30-60s on two cores; waiters gave up after fifteen and
+    built their own copy. After a restart the threads went 14 -> 40 and the
+    process 0.5GB -> 4.2GB with every cache still empty.
+    """
+    import threading
+    import time
+
+    from spreadboard import api_spreads, server
+
+    monkeypatch.setattr(server, "_MARKET_CACHE", {})
+    monkeypatch.setattr(server, "_MARKET_STALE_CACHE", {})
+    monkeypatch.setattr(server, "_MARKET_CACHE_INFLIGHT", {})
+    monkeypatch.setattr(server, "_MARKET_BUILD_WAIT_SECONDS", 1.0)
+
+    builds = []
+    started = threading.Event()
+
+    def slow_build(**kwargs):
+        builds.append(kwargs)
+        started.set()
+        time.sleep(2.0)
+        return {"ok": True, "groups": [], "rows": [], "summary": {}}
+
+    monkeypatch.setattr(api_spreads, "load_spreads", slow_build)
+
+    board = Path("board.json")
+    owner = threading.Thread(
+        target=lambda: server.api_market_spreads(board, {}), daemon=True
+    )
+    owner.start()
+    assert started.wait(timeout=5.0)
+
+    # A second request arrives while the first is still building.
+    payload = server.api_market_spreads(board, {})
+    owner.join(timeout=10.0)
+
+    assert payload.get("ok") is False
+    assert payload.get("status") == "warming"
+    assert len(builds) == 1, f"the waiter started its own build: {len(builds)}"

@@ -1059,21 +1059,35 @@ def api_market_spreads(
             else:
                 owns_refresh = False
         if not owns_refresh:
-            inflight.wait(timeout=15.0)
+            # A cold build takes 30-60s on two cores. Waiting fifteen and then
+            # building our own copy is what turned one slow build into forty
+            # concurrent ones: after a restart the threads went 14 -> 40 and the
+            # process 0.5GB -> 4.2GB with every cache still empty, until the
+            # kernel killed the container. A waiter never builds.
+            deadline = time.monotonic() + _MARKET_BUILD_WAIT_SECONDS
+            while not inflight.wait(timeout=1.0) and time.monotonic() < deadline:
+                cached = _market_cache_get(cache_key)
+                if cached is not None:
+                    return cached
             cached = _market_cache_get(cache_key)
             if cached is not None:
                 return cached
+            stale = _market_cache_stale_get(cache_key) if allow_stale else None
+            if stale is not None:
+                return stale
+            # The owner is still building. Say so rather than start a second
+            # copy of the same work.
+            return _market_warming_payload()
         # The snapshot moved under us. Serve what we built for this same view a
         # moment ago and let the refresh finish behind the request, rather than
         # holding a page open for a full rebuild.
         stale = _market_cache_stale_get(cache_key) if allow_stale else None
         if stale is not None:
-            if owns_refresh:
-                threading.Thread(
-                    target=_rebuild_market_cache,
-                    args=(board_path, dict(query), cache_key),
-                    daemon=True,
-                ).start()
+            threading.Thread(
+                target=_rebuild_market_cache,
+                args=(board_path, dict(query), cache_key),
+                daemon=True,
+            ).start()
             return stale
 
     try:
@@ -1243,14 +1257,50 @@ def _market_cache_finish(cache_key: tuple[Any, ...], data: dict[str, Any] | None
             inflight.set()
 
 
+#: How long a request waits for someone else's build before giving up. Longer
+#: than a cold build so waiters do not pile on, short enough that nobody holds a
+#: page open indefinitely.
+_MARKET_BUILD_WAIT_SECONDS = max(
+    5.0, float(os.environ.get("SPREADBOARD_MARKET_BUILD_WAIT_SECONDS", "25"))
+)
+
+
+def _market_warming_payload() -> dict[str, Any]:
+    """What a view looks like while someone else is building it.
+
+    `ok: False` is what every page already checks to decide between the board
+    and its reconnecting state, so this needs no special handling anywhere.
+    """
+    return {
+        "ok": False,
+        "status": "warming",
+        "summary": {},
+        "groups": [],
+        "rows": [],
+        "top_edges": [],
+        "top_funding": [],
+        "exchange_options": [],
+        "source_health": {"canonical_api": {"status": "warming"}},
+        "pagination": {},
+    }
+
+
 def _market_include_stale(query: dict[str, list[str]]) -> bool:
     del query
     return False
 
 
+#: One health build at a time. This calls load_spreads directly, so it is not
+#: covered by the board's single-flight -- and the container probes it every
+#: thirty seconds while Caddy and any waiting browser probe it too. Concurrent
+#: cold builds here were part of the same stampede.
+_HEALTH_BUILD_LOCK = threading.Lock()
+
+
 def api_source_health(board_path: Path, config: dict[str, Any]) -> dict[str, Any]:
     del config
-    market = api_spreads.load_spreads(board_path=board_path, limit=0, include_stale=False)
+    with _HEALTH_BUILD_LOCK:
+        market = api_spreads.load_spreads(board_path=board_path, limit=0, include_stale=False)
     return {
         "ok": market.get("ok"),
         "mode": "canonical_public_api_health",
