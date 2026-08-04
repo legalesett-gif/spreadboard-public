@@ -237,6 +237,20 @@ def _env_bool(name: str) -> bool:
     return os.environ.get(name, "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
+def _leg_multiplier(board_row: dict[str, Any], side: str) -> float:
+    """How many units of this leg make one unit of the comparison.
+
+    Carried on a custom chart as `notes.relative_value`, so a pair like
+    SKHY/SKHX -- the same asset at a fixed ten-to-one -- can be compared at all.
+    """
+    notes = board_row.get("notes")
+    relative = (notes or {}).get("relative_value") if isinstance(notes, dict) else None
+    if not isinstance(relative, dict):
+        return 1.0
+    value = _float_or_none(relative.get(f"{side}_multiplier"))
+    return value if value and value > 0 else 1.0
+
+
 def book_quote(
     venue: str | None, market_type: str | None, symbol: str | None
 ) -> dict[str, Any]:
@@ -380,6 +394,19 @@ def _leg_detail_from_board(
     book = book_quote(venue, market_type, market_symbol) if price is None else {}
     if price is None:
         price = book.get("price")
+    # Two legs of the same asset at a fixed ratio -- SKHY against SKHX, where
+    # one is worth ten of the other -- only produce a meaningful spread once
+    # both are in the same unit. The ratio was carried as a display label only,
+    # so the chart read +7572% where the real dislocation is about 23%. Scaling
+    # here puts every number downstream -- spread, samples, history -- in
+    # normalized units.
+    multiplier = _leg_multiplier(board_row, side)
+    if multiplier != 1.0:
+        price = price * multiplier if price is not None else None
+        book = {
+            key: (value * multiplier if key in {"bid", "ask", "price"} and value else value)
+            for key, value in book.items()
+        }
     volatility = volatility or {
         "status": "unavailable",
         "reason": reason or "not_enough_data",

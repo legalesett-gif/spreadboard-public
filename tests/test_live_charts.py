@@ -1298,3 +1298,69 @@ def test_book_quote_is_silent_when_there_is_no_book(monkeypatch) -> None:
     assert live.book_quote(None, "Futures", "X/Y") == {}
     assert live.book_quote("Hyperliquid", None, "X/Y") == {}
     assert live.book_quote("Hyperliquid", "Futures", None) == {}
+
+
+def test_a_fixed_ratio_pair_is_compared_in_the_same_unit(monkeypatch) -> None:
+    """SKHY and SKHX are the same asset at ten to one.
+
+    Carried as a display label only, the chart read +7572% where the real
+    dislocation is about 23%.
+    """
+    from spreadboard import live
+    from spreadboard.live_book_cache import CachedBook
+
+    prices = {
+        "XYZ-SKHX/USDC:USDC": 1164.95,
+        "XYZ-SKHY/USDC:USDC": 151.83,
+    }
+
+    class Store:
+        def get(self, venue, market_type, symbol, *, max_age_seconds=5.0):
+            price = prices[symbol]
+            return CachedBook(bids=[[price, 0.0]], asks=[[price, 0.0]], quote_ts_us=1)
+
+    from spreadboard import live_book_cache
+
+    monkeypatch.setattr(live_book_cache, "LiveBookStore", Store)
+
+    row = {
+        "symbol": "SKHY",
+        "long_venue": "Hyperliquid",
+        "long_market_type": "Futures",
+        "long_market_symbol": "XYZ-SKHX/USDC:USDC",
+        "short_venue": "Hyperliquid",
+        "short_market_type": "Futures",
+        "short_market_symbol": "XYZ-SKHY/USDC:USDC",
+        # One SKHX is worth ten SKHY, so SKHY carries the x10.
+        "notes": {"relative_value": {"long_multiplier": 1.0, "short_multiplier": 10.0}},
+    }
+
+    long_leg = live._leg_detail_from_board(row, side="long")
+    short_leg = live._leg_detail_from_board(row, side="short")
+
+    assert long_leg["price"] == pytest.approx(1164.95)
+    assert short_leg["price"] == pytest.approx(1518.3)
+
+    spread = (long_leg["price"] / short_leg["price"] - 1) * 100
+    assert -30 < spread < -15, f"normalized spread should be ~-23%, got {spread:.1f}%"
+
+
+def test_no_ratio_leaves_the_price_alone(monkeypatch) -> None:
+    from spreadboard import live
+    from spreadboard.live_book_cache import CachedBook
+
+    class Store:
+        def get(self, venue, market_type, symbol, *, max_age_seconds=5.0):
+            return CachedBook(bids=[[100.0, 0.0]], asks=[[100.0, 0.0]], quote_ts_us=1)
+
+    from spreadboard import live_book_cache
+
+    monkeypatch.setattr(live_book_cache, "LiveBookStore", Store)
+
+    row = {
+        "symbol": "AAA",
+        "long_venue": "Hyperliquid",
+        "long_market_type": "Futures",
+        "long_market_symbol": "A/USDC:USDC",
+    }
+    assert live._leg_detail_from_board(row, side="long")["price"] == pytest.approx(100.0)
