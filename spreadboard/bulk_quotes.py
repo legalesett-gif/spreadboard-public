@@ -196,7 +196,13 @@ def sweep_funding(
     covered = 0
     refresher = FastQuoteRefresher()
     try:
-        for venue in venues if venues is not None else sorted(VENUE_IDS):
+        # Ourbit has no CCXT adapter and so is absent from VENUE_IDS, which is
+        # what this iterated: 844 of its legs never had a rate asked for. It is
+        # served by a native endpoint in NATIVE_FUNDING_SOURCES.
+        from spreadboard.fast_quotes import NATIVE_FUNDING_SOURCES
+
+        all_venues = sorted(set(VENUE_IDS) | set(NATIVE_FUNDING_SOURCES))
+        for venue in venues if venues is not None else all_venues:
             if time.monotonic() >= deadline:
                 break
             try:

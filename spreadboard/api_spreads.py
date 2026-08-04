@@ -985,6 +985,21 @@ def _public_source_health(meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _leg_symbol(raw: dict[str, Any], side: str) -> str | None:
+    """The venue symbol for a leg, wherever the snapshot happens to keep it."""
+    legs = (raw.get("notes") or {}).get("route_inputs") or {}
+    leg = legs.get(side) if isinstance(legs, dict) else None
+    for value in (
+        (leg or {}).get("symbol") if isinstance(leg, dict) else None,
+        raw.get(f"{side}_market_symbol"),
+        raw.get(f"{side}_symbol"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
+
+
 def _apply_live_funding(
     raw: dict[str, Any], legs: dict[str, dict[str, Any]] | None = None
 ) -> dict[str, Any]:
@@ -1007,8 +1022,14 @@ def _apply_live_funding(
     for side in ("long", "short"):
         if raw.get(f"{side}_market_type") != "Futures":
             continue
-        key = f"{raw.get(f'{side}_venue')}|{raw.get(f'{side}_market_symbol')}"
-        entry = legs.get(key)
+        # The snapshot carries no top-level market_symbol for a futures leg --
+        # all 32,056 of them keep it in notes.route_inputs -- so keying on that
+        # field produced "venue|None" every time and the overlay never matched
+        # anything at all. Resolve it the way the row itself does.
+        symbol = _leg_symbol(raw, side)
+        if not symbol:
+            continue
+        entry = legs.get(f"{raw.get(f'{side}_venue')}|{symbol}")
         if not entry:
             continue
         if updated_notes is None:

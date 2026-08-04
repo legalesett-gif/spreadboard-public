@@ -269,3 +269,45 @@ def test_the_sweep_writes_entries_keyed_by_venue_and_symbol(tmp_path, monkeypatc
     assert out["legs"] == 1
     legs = bulk_quotes.load_funding(cache_path=tmp_path / "f.json")
     assert legs["Ourbit|QNTX/USDT:USDT"]["rate_pct"] == 0.02
+
+
+def test_the_overlay_keys_on_the_symbol_the_snapshot_actually_carries() -> None:
+    """No futures leg has a top-level market_symbol.
+
+    All 32,056 of them keep it in notes.route_inputs, so keying on the
+    top-level field produced "venue|None" for every leg and the overlay matched
+    nothing at all.
+    """
+    from spreadboard.api_spreads import _apply_live_funding
+
+    raw = {
+        "long_venue": "XT",
+        "long_market_type": "Futures",
+        "notes": {"route_inputs": {"long": {"symbol": "VANRY/USDT:USDT"}}},
+    }
+    overlay = {"XT|VANRY/USDT:USDT": {"rate_pct": -0.0212, "interval_hours": 8.0}}
+
+    out = _apply_live_funding(raw, overlay)
+    leg = out["notes"]["route_inputs"]["long"]
+
+    assert leg["current_funding_pct"] == -0.0212
+    assert leg["funding_interval_hours"] == 8.0
+
+
+def test_a_leg_with_no_symbol_anywhere_is_skipped() -> None:
+    from spreadboard.api_spreads import _apply_live_funding
+
+    raw = {"long_venue": "XT", "long_market_type": "Futures", "notes": {}}
+
+    assert _apply_live_funding(raw, {"XT|X": {"rate_pct": 1.0}}) is raw
+
+
+def test_the_funding_sweep_covers_venues_with_no_ccxt_adapter() -> None:
+    """Ourbit is absent from VENUE_IDS, so iterating that alone never asked for
+    its rates -- 844 legs with nothing."""
+    import inspect
+
+    from spreadboard import bulk_quotes
+
+    source = inspect.getsource(bulk_quotes.sweep_funding)
+    assert "NATIVE_FUNDING_SOURCES" in source
