@@ -1264,14 +1264,15 @@ def test_a_custom_pair_prices_from_the_books_not_the_board(monkeypatch) -> None:
     """
     from spreadboard import live
 
+    from spreadboard.live_book_cache import CachedBook
+
+    seen = {}
+
     class Store:
-        def get(self, venue, market_type, symbol):
+        def get(self, venue, market_type, symbol, *, max_age_seconds=5.0):
             assert (venue, market_type) == ("Hyperliquid", "Futures")
-            return {
-                "bids": [[1052.6, 4.0]],
-                "asks": [[1052.8, 4.0]],
-                "quote_ts_us": 1,
-            }
+            seen["max_age_seconds"] = max_age_seconds
+            return CachedBook(bids=[[1052.6, 4.0]], asks=[[1052.8, 4.0]], quote_ts_us=1)
 
     from spreadboard import live_book_cache
 
@@ -1283,6 +1284,12 @@ def test_a_custom_pair_prices_from_the_books_not_the_board(monkeypatch) -> None:
     assert quote["ask"] == 1052.8
     assert quote["price"] == pytest.approx(1052.7)
     assert quote["source"] == "live_book"
+    # Not the store's five-second default, which would call every swept book
+    # absent: the sweep refreshes a venue roughly every 230 seconds.
+    from spreadboard import api_spreads
+
+    assert seen["max_age_seconds"] == api_spreads.LIVE_BOOK_MAX_AGE_SECONDS
+    assert seen["max_age_seconds"] > 5.0
 
 
 def test_book_quote_is_silent_when_there_is_no_book(monkeypatch) -> None:

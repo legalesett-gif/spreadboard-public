@@ -253,15 +253,25 @@ def book_quote(
     if not venue or not market_type or not symbol:
         return {}
     try:
-        from spreadboard import live_book_cache
+        from spreadboard import api_spreads, live_book_cache
 
-        book = live_book_cache.LiveBookStore().get(str(venue), str(market_type), str(symbol))
+        book = live_book_cache.LiveBookStore().get(
+            str(venue),
+            str(market_type),
+            str(symbol),
+            # The store defaults to a five-second window, which suits the
+            # websocket legs. The bulk sweep refreshes a venue every ~230s, so
+            # at five seconds every swept book reads as absent -- which is why
+            # this returned nothing for a pair that was sitting in the table.
+            max_age_seconds=api_spreads.LIVE_BOOK_MAX_AGE_SECONDS,
+        )
     except Exception:  # noqa: BLE001 - a missing book is not an error.
         return {}
-    if not book:
+    if book is None:
         return {}
-    bids = book.get("bids") or []
-    asks = book.get("asks") or []
+    # A CachedBook, not a dict.
+    bids = list(getattr(book, "bids", None) or [])
+    asks = list(getattr(book, "asks", None) or [])
     bid = _float_or_none(bids[0][0]) if bids and bids[0] else None
     ask = _float_or_none(asks[0][0]) if asks and asks[0] else None
     if bid is None and ask is None:
@@ -271,7 +281,7 @@ def book_quote(
         "bid": bid,
         "ask": ask,
         "price": mid,
-        "quote_ts_us": book.get("quote_ts_us"),
+        "quote_ts_us": getattr(book, "quote_ts_us", None),
         "source": "live_book",
     }
 
