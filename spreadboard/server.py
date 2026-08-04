@@ -4007,9 +4007,13 @@ def render_saved_charts_panel(
     <script>
     (() => {{
       const pinBtn = document.getElementById("savedChartPin");
+      // Every state-changing POST carries the session CSRF token; without it
+      // the server answers 400 before the handler ever runs.
+      const csrf = () => document.querySelector("[data-logout]")?.dataset.csrf || "";
       const post = (path, body) => fetch(path, {{
         method: "POST",
-        headers: {{"Content-Type": "application/json"}},
+        credentials: "same-origin",
+        headers: {{"Content-Type": "application/json", "X-CSRF-Token": csrf()}},
         body: JSON.stringify(body),
       }}).then(() => window.location.reload());
       if (pinBtn) {{
