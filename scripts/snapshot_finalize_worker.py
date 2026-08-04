@@ -20,6 +20,8 @@ Two stages, because they have different locking needs:
   publish  Merge the newer fast quotes, write the published snapshot, record
            history. Fast, and the parent holds its snapshot and quote-cycle
            locks across it exactly as it did when this was inline.
+  record   History alone, for the fast-quote cycle. That ran once a minute in
+           the server and was what actually took it to 4.3GB.
 """
 
 from __future__ import annotations
@@ -63,11 +65,22 @@ def _write_atomic(path: Path, payload: dict) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=("enrich", "publish"), required=True)
+    parser.add_argument("--stage", choices=("enrich", "publish", "record"), required=True)
     parser.add_argument("--staging-path", type=Path, required=True)
     parser.add_argument("--published-path", type=Path, required=True)
     parser.add_argument("--funding-workers", type=int, default=4)
     args = parser.parse_args()
+
+    if args.stage == "record":
+        # The published snapshot, straight to history. Once a minute in the
+        # server this was a gigabyte of parsed JSON per cycle.
+        published = _load(args.published_path)
+        if not published:
+            print(json.dumps({"status": "no_snapshot"}), flush=True)
+            os._exit(1)
+        inserted = market_history.record_snapshot(published)
+        print(json.dumps({"status": "ok", "history_inserted": inserted}), flush=True)
+        os._exit(0)
 
     snapshot = _load(args.staging_path)
     if not snapshot:

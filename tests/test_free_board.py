@@ -289,3 +289,19 @@ def test_nothing_that_loads_a_venue_or_a_snapshot_runs_in_the_server() -> None:
     assert "bulk_quote_worker" in inspect.getsource(BulkQuoteLoop)
     for name in ("artifact_worker", "bulk_quote_worker", "snapshot_finalize_worker"):
         assert Path(f"scripts/{name}.py").exists()
+
+
+def test_the_fast_quote_cycle_does_not_parse_the_snapshot_in_the_server() -> None:
+    """Once a minute, ~1GB of parsed JSON. This was the actual cause.
+
+    The service reached 1.8GB after one minute and 4.3GB by five, then the
+    kernel killed the container -- losing the discovery scan every time.
+    """
+    import inspect
+
+    from scripts.run_spreadboard_service import RefreshLoop
+
+    source = inspect.getsource(RefreshLoop.run_fast_quotes)
+    assert "json.loads(SNAPSHOT_PATH" not in source
+    assert "market_history.record_snapshot" not in source
+    assert '_finalize_snapshot("record")' in source

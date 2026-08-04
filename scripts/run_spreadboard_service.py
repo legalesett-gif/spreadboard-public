@@ -259,14 +259,16 @@ class RefreshLoop:
                 _log("fast quote cycle starting")
                 summary = self._refresh_fast_quotes()
                 with self.snapshot_lock:
+                    # This parsed the 40MB snapshot here, in the server, once a
+                    # minute. That is roughly a gigabyte of Python objects per
+                    # cycle; freeing them leaves the arenas fragmented, so RSS
+                    # only climbed -- 1.8GB after one minute, 4.3GB by five, and
+                    # then the kernel killed the whole container. It is the
+                    # reason the site kept going down and no scan ever landed.
+                    inserted = 0
                     if summary.get("updated_routes"):
-                        try:
-                            snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
-                            inserted = market_history.record_snapshot(snapshot)
-                        except (OSError, json.JSONDecodeError):
-                            inserted = 0
-                    else:
-                        inserted = 0
+                        recorded = _finalize_snapshot("record")
+                        inserted = (recorded or {}).get("history_inserted") or 0
             _log(f"fast quotes {summary} history_inserted={inserted}")
             _warm_board_cache()
             self.stop_event.wait(interval)
