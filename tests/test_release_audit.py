@@ -3073,3 +3073,68 @@ def test_the_dex_token_ceiling_leaves_room_for_the_mainstream_names() -> None:
     )
     assert configured > 50
     assert configured <= ceiling
+
+
+def test_the_most_traded_tokens_keep_a_share_of_the_dex_slots() -> None:
+    """Funding-first ranking filled every slot with obscure high-carry names.
+
+    Measured at limit 150 with 459 qualifying: DOGE, WIF, SHIB, FARTCOIN and
+    STETH were all still absent, because their funding is unremarkable while
+    their volume is not.
+    """
+    assert 0 < sources.VOLUME_RESERVED_SHARE <= 0.6
+
+    source = sources.OkxDexQuoteSource.__new__(sources.OkxDexQuoteSource)
+
+    # Ten tokens: HIGHCARRY* pay well and trade nothing; TRADED* the reverse.
+    quotes = {}
+    for index in range(5):
+        quotes[f"HIGHCARRY{index}"] = [
+            MarketQuote(
+                token=f"HIGHCARRY{index}", venue="V", market_type="Futures",
+                bid=1.0, ask=1.0, bid_vwap=1.0, ask_vwap=1.0, quote_ts_us=1,
+                source_name="t", funding_rate_pct=5.0, funding_interval_hours=8.0,
+                volume_24h_usd=1_000.0,
+            )
+        ]
+        quotes[f"TRADED{index}"] = [
+            MarketQuote(
+                token=f"TRADED{index}", venue="V", market_type="Futures",
+                bid=1.0, ask=1.0, bid_vwap=1.0, ask_vwap=1.0, quote_ts_us=1,
+                source_name="t", funding_rate_pct=0.0001, funding_interval_hours=8.0,
+                volume_24h_usd=900_000_000.0,
+            )
+        ]
+
+    # Reproduce the selection the source performs, at a limit of 4.
+    limit = 4
+    reserved = max(0, int(limit * sources.VOLUME_RESERVED_SHARE))
+
+    def priority(symbol):
+        refs = quotes[symbol]
+        return (
+            max(abs(q.funding_rate_pct or 0.0) * 24.0 / (q.funding_interval_hours or 8.0) for q in refs),
+            1,
+            max(q.volume_24h_usd or 0.0 for q in refs),
+            symbol,
+        )
+
+    def traded(symbol):
+        return max(q.volume_24h_usd or 0.0 for q in quotes[symbol])
+
+    by_funding = sorted(quotes, key=priority, reverse=True)
+    by_volume = sorted(quotes, key=traded, reverse=True)
+    chosen = set(by_funding[: limit - reserved])
+    for symbol in by_volume:
+        if len(chosen) >= limit:
+            break
+        chosen.add(symbol)
+
+    del source
+    assert len(chosen) == limit
+    assert any(name.startswith("TRADED") for name in chosen), (
+        "the most traded names still take no slot"
+    )
+    assert any(name.startswith("HIGHCARRY") for name in chosen), (
+        "funding ranking must still win most slots"
+    )

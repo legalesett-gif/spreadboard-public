@@ -73,6 +73,14 @@ CEX_INSTRUMENT_ALIASES = {
 HIGH_DISLOCATION_IDENTITY_THRESHOLD_PCT = 5.0
 
 
+#: Share of the DEX token slots kept for the most traded names, whatever their
+#: funding. Without it the funding-first ranking filled every slot with obscure
+#: high-carry tokens and the board carried no DOGE, WIF, SHIB or FARTCOIN.
+VOLUME_RESERVED_SHARE = max(
+    0.0, min(0.6, float(os.environ.get("SPREADBOARD_DEX_VOLUME_SHARE", "0.35")))
+)
+
+
 class OkxDexQuoteSource:
     """Read-only OKX DEX quotes for exact-identity watchlist assets."""
 
@@ -265,7 +273,28 @@ class OkxDexQuoteSource:
             volume = max((quote.volume_24h_usd or 0.0 for quote in refs), default=0.0)
             return (projected_funding_24h, 1 if has_futures else 0, volume, symbol)
 
-        selected = sorted(unique_matches, key=priority, reverse=True)[:limit]
+        # Rank by projected funding first -- right for a funding board -- but
+        # reserve a share for the most traded names, or they lose every tie.
+        # Measured at limit 150: 459 tokens qualify, and DOGE, WIF, SHIB,
+        # FARTCOIN and STETH were all still absent because their funding is
+        # unremarkable while their volume is not. The source is already over its
+        # time budget, so this buys their coverage inside the same slot count
+        # rather than by scanning longer.
+        by_funding = sorted(unique_matches, key=priority, reverse=True)
+        reserved = max(0, int(limit * VOLUME_RESERVED_SHARE))
+
+        def traded(symbol: str) -> float:
+            refs = reference_by_token.get(symbol) or []
+            return max((quote.volume_24h_usd or 0.0 for quote in refs), default=0.0)
+
+        by_volume = sorted(unique_matches, key=traded, reverse=True)
+        selected_set = set(by_funding[: max(0, limit - reserved)])
+        for symbol in by_volume:
+            if len(selected_set) >= limit:
+                break
+            selected_set.add(symbol)
+        selected = [symbol for symbol in by_funding if symbol in selected_set]
+        selected += [s for s in by_volume if s in selected_set and s not in set(selected)]
         # Where the funnel narrows. Raising the cap from 50 to 150 changed
         # nothing, which means the loss is upstream of it -- most likely the
         # uniqueness rule below, which drops any symbol that resolves to more
@@ -276,6 +305,7 @@ class OkxDexQuoteSource:
             "matched_on_chain": len(matches),
             "unique_across_chains": len(unique_matches),
             "limit": limit,
+            "volume_reserved": reserved,
             "selected": len(selected),
         }
         assets: list[WatchAsset] = []
