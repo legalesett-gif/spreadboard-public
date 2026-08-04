@@ -118,3 +118,36 @@ def test_a_waiter_never_starts_a_second_build_of_the_same_view(monkeypatch) -> N
     assert payload.get("ok") is False
     assert payload.get("status") == "warming"
     assert len(builds) == 1, f"the waiter started its own build: {len(builds)}"
+
+
+def test_the_readiness_probe_never_builds_the_board(monkeypatch) -> None:
+    """It ran a 14s build against a 12s probe timeout, so the container was
+    reported unhealthy while serving pages in two seconds."""
+    from spreadboard import api_spreads, server
+
+    monkeypatch.setitem(server._HEALTH_CACHE, "payload", None)
+    monkeypatch.setitem(server._HEALTH_CACHE, "at", 0.0)
+
+    builds = []
+
+    def build(**kwargs):
+        builds.append(kwargs)
+        return {"ok": True, "summary": {}, "source_health": {"canonical_api": {}}}
+
+    monkeypatch.setattr(api_spreads, "load_spreads", build)
+
+    first = server.api_source_health(Path("board.json"), {})
+    second = server.api_source_health(Path("board.json"), {})
+
+    assert first["ok"] is True and second["ok"] is True
+    assert len(builds) == 1, "the probe rebuilt inside its own cache window"
+
+    # And while another thread holds the build, it answers without waiting.
+    server._HEALTH_BUILD_LOCK.acquire()
+    try:
+        monkeypatch.setitem(server._HEALTH_CACHE, "at", 0.0)
+        answer = server.api_source_health(Path("board.json"), {})
+    finally:
+        server._HEALTH_BUILD_LOCK.release()
+    assert len(builds) == 1
+    assert answer is not None

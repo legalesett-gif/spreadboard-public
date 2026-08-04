@@ -1297,11 +1297,50 @@ def _market_include_stale(query: dict[str, list[str]]) -> bool:
 _HEALTH_BUILD_LOCK = threading.Lock()
 
 
+_HEALTH_CACHE: dict[str, Any] = {"at": 0.0, "payload": None}
+_HEALTH_CACHE_TTL_SECONDS = max(
+    5.0, float(os.environ.get("SPREADBOARD_HEALTH_CACHE_SECONDS", "30"))
+)
+
+
+def _health_from_snapshot_file(board_path: Path) -> dict[str, Any]:
+    """A readiness answer that costs a stat, for when nothing is built yet."""
+    del board_path
+    try:
+        stat = Path(api_spreads.DEFAULT_API_DISCOVERY_PATH).stat()
+        age_min = max(0.0, (time.time() - stat.st_mtime) / 60.0)
+        present = stat.st_size > 0
+    except OSError:
+        age_min, present = None, False
+    return {
+        "ok": present,
+        "mode": "canonical_public_api_health",
+        "canonical_api": {
+            "status": "warming" if present else "unavailable",
+            "age_min": age_min,
+        },
+        "websocket_books": _live_book_status(),
+        "market": {},
+    }
+
+
 def api_source_health(board_path: Path, config: dict[str, Any]) -> dict[str, Any]:
     del config
-    with _HEALTH_BUILD_LOCK:
+    # A readiness probe must never build the board. This ran load_spreads at
+    # limit=0 -- its own cache key, 14s cold -- against a 12s healthcheck
+    # timeout, so the container reported unhealthy while it was serving pages in
+    # two seconds, and every probe joined the stampede that OOM-killed it.
+    now = time.monotonic()
+    cached = _HEALTH_CACHE.get("payload")
+    if cached is not None and now - float(_HEALTH_CACHE["at"]) <= _HEALTH_CACHE_TTL_SECONDS:
+        return cached
+    if not _HEALTH_BUILD_LOCK.acquire(blocking=False):
+        return cached if cached is not None else _health_from_snapshot_file(board_path)
+    try:
         market = api_spreads.load_spreads(board_path=board_path, limit=0, include_stale=False)
-    return {
+    finally:
+        _HEALTH_BUILD_LOCK.release()
+    payload = {
         "ok": market.get("ok"),
         "mode": "canonical_public_api_health",
         "canonical_api": (market.get("source_health") or {}).get("canonical_api") or {},
@@ -1312,6 +1351,9 @@ def api_source_health(board_path: Path, config: dict[str, Any]) -> dict[str, Any
             "funding_pair_count": (market.get("summary") or {}).get("funding_rows"),
         },
     }
+    _HEALTH_CACHE["payload"] = payload
+    _HEALTH_CACHE["at"] = time.monotonic()
+    return payload
 
 
 def _live_book_status() -> dict[str, Any]:
