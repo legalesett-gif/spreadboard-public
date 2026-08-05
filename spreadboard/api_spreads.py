@@ -1065,6 +1065,47 @@ def _apply_live_funding(
     return {**raw, "notes": updated_notes}
 
 
+def _project_route_funding(raw: dict[str, Any]) -> dict[str, Any]:
+    """Give a route a carry figure when both legs carry a live rate.
+
+    `_propagate_funding_by_leg` computes the route total at snapshot load, from
+    `notes.funding` -- before the live overlay has been applied. The overlay
+    then refreshes `notes.route_inputs` per row and nothing recomputes the
+    total, so 1,498 futures routes held a live rate on BOTH legs and displayed
+    no funding at all.
+
+    This is the same arithmetic the enrichment step performs, and it only fills
+    a gap: a settled or already-projected total is left exactly as it was.
+    """
+    if raw.get("funding_projected_24h_pct") is not None:
+        return raw
+    if raw.get("funding_24h_pct") is not None:
+        return raw
+    notes = raw.get("notes") if isinstance(raw.get("notes"), dict) else {}
+    legs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+    daily: dict[str, float] = {}
+    for side in ("long", "short"):
+        if raw.get(f"{side}_market_type") != "Futures":
+            # A spot leg pays and receives nothing.
+            daily[side] = 0.0
+            continue
+        leg = legs.get(side) if isinstance(legs, dict) else None
+        if not isinstance(leg, dict):
+            return raw
+        value = _float_or_none(leg.get("projected_24h_pct"))
+        if value is None:
+            rate = _float_or_none(leg.get("current_funding_pct"))
+            interval = _float_or_none(leg.get("funding_interval_hours"))
+            if rate is None or not interval or interval <= 0:
+                return raw
+            value = rate * 24.0 / interval
+        daily[side] = value
+    if not any(raw.get(f"{side}_market_type") == "Futures" for side in ("long", "short")):
+        return raw
+    # The short leg receives, the long leg pays.
+    return {**raw, "funding_projected_24h_pct": daily["short"] - daily["long"]}
+
+
 def _mirror_if_spot_sale_required(raw: dict[str, Any]) -> dict[str, Any]:
     """Re-orient a route that could only be taken the other way round.
 
@@ -1154,6 +1195,7 @@ def _row_from_api(
     live_funding: dict[str, dict[str, Any]] | None = None,
 ) -> SpreadTerminalRow:
     raw = _apply_live_funding(_mirror_if_spot_sale_required(raw), live_funding)
+    raw = _project_route_funding(raw)
     token = str(raw.get("token") or "").upper().strip()
     long_venue = _str_or_none(raw.get("long_venue"))
     short_venue = _str_or_none(raw.get("short_venue"))

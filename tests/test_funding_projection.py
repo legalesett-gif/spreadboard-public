@@ -97,3 +97,56 @@ def test_a_quote_records_which_path_produced_it() -> None:
     assert 'quote_source="ticker"' in body
     assert 'quote_source="orderbook"' in body
     assert '"quote_source": quote.quote_source' in body
+
+
+def test_the_route_total_is_computed_after_the_overlay_lands() -> None:
+    """The propagation runs at snapshot load, before the live overlay exists."""
+    raw = {
+        "token": "AAA",
+        "long_venue": "Gate", "long_market_type": "Futures",
+        "short_venue": "Mexc", "short_market_type": "Futures",
+        "notes": {"route_inputs": {
+            "long": {"current_funding_pct": 0.01, "funding_interval_hours": 8.0},
+            "short": {"current_funding_pct": 0.02, "funding_interval_hours": 4.0},
+        }},
+    }
+
+    out = api_spreads._project_route_funding(raw)
+
+    # short receives 0.12%/day, long pays 0.03%/day -> +0.09%/day net.
+    assert out["funding_projected_24h_pct"] == pytest.approx(0.09)
+
+
+def test_a_spot_leg_pays_nothing_and_does_not_block_the_total() -> None:
+    raw = {
+        "token": "AAA",
+        "long_venue": "Gate", "long_market_type": "Spot",
+        "short_venue": "Mexc", "short_market_type": "Futures",
+        "notes": {"route_inputs": {
+            "short": {"current_funding_pct": 0.02, "funding_interval_hours": 8.0},
+        }},
+    }
+
+    assert api_spreads._project_route_funding(raw)["funding_projected_24h_pct"] == pytest.approx(0.06)
+
+
+def test_a_settled_total_is_never_replaced_by_the_projection() -> None:
+    raw = {
+        "funding_24h_pct": 0.5,
+        "long_market_type": "Futures", "short_market_type": "Futures",
+        "notes": {"route_inputs": {
+            "long": {"current_funding_pct": 9.0, "funding_interval_hours": 1.0},
+            "short": {"current_funding_pct": 9.0, "funding_interval_hours": 1.0},
+        }},
+    }
+
+    assert api_spreads._project_route_funding(raw).get("funding_projected_24h_pct") is None
+
+
+def test_a_spot_spot_route_gets_no_funding_invented() -> None:
+    raw = {
+        "long_market_type": "Spot", "short_market_type": "Spot",
+        "notes": {"route_inputs": {"long": {}, "short": {}}},
+    }
+
+    assert api_spreads._project_route_funding(raw).get("funding_projected_24h_pct") is None
