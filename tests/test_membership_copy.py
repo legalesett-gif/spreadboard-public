@@ -98,3 +98,52 @@ def test_a_renewal_date_reads_as_a_date() -> None:
     assert server.fmt_renewal_date("2026-08-18T00:00:00+00:00") == "18 August 2026"
     assert server.fmt_renewal_date(None) == "—"
     assert server.fmt_renewal_date("not a date") == "—"
+
+
+def test_the_watchlist_follows_the_theme_and_is_legible() -> None:
+    """It was hardcoded light-mode -- white cards on a dark page -- at 11px.
+
+    Every colour came from a literal (#dedede, white, #666) rather than the
+    theme variables the rest of the site uses, so dark mode did not reach it at
+    all, and #666 on a dark background is unreadable.
+    """
+    import re
+
+    from pathlib import Path as _Path
+
+    from spreadboard import accounts, server
+
+    class _User:
+        id = 1
+        display_name = "Alex"
+        email = "a@b"
+        role = "admin"
+        is_admin = True
+        subscription_active = True
+        subscription_status = "active"
+        csrf_token = "t"
+        subscription_expires_at = None
+        billing_customer_id = None
+        billing_subscription_id = None
+        subscription_cancel_at_period_end = False
+        monthly_capital_usd = None
+
+    accounts.set_current_user(_User())
+    try:
+        html = server.render_watchlist_page(_Path("data/spreadboard.json"), {}, {})
+    finally:
+        accounts.set_current_user(None)
+
+    rules = re.findall(r"(\.watch[a-z-]*[^{]*\{[^}]*\})", html)
+    assert rules, "no watchlist rules rendered"
+
+    hardcoded = [r for r in rules if re.search(r"#[0-9a-fA-F]{3,6}\b", r) or ": white" in r]
+    assert not hardcoded, f"{len(hardcoded)} watchlist rules still hardcode a colour"
+
+    sizes = {int(m) for r in rules for m in re.findall(r"font-size:\s*(\d+)px", r)}
+    assert sizes, "no font sizes found"
+    assert min(sizes) >= 13, f"smallest watchlist type is {min(sizes)}px"
+
+    # Tap targets big enough to hit.
+    heights = {int(m) for r in rules for m in re.findall(r"min-height:\s*(\d+)px", r)}
+    assert all(h >= 38 for h in heights if h < 100), f"small tap target: {sorted(heights)}"

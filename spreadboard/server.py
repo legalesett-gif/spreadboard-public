@@ -10981,53 +10981,53 @@ body.alert-modal-open {{ overflow: hidden; }}
 .watch-status-grid {{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }}
 .watchlist-layout {{ display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }}
 .watchlist-main, .watchlist-side {{ display: grid; gap: 16px; min-width: 0; }}
-.watch-panel {{ display: grid; gap: 12px; padding: 14px; border-radius: 10px; border: 1px solid #d0d0d0; background: #f7f7f7; box-shadow: var(--shadow); min-width: 0; }}
+.watch-panel {{ display: grid; gap: 14px; padding: 18px; border-radius: 10px; border: 1px solid var(--terminal-line); background: var(--terminal-panel); box-shadow: var(--shadow); min-width: 0; }}
 .watch-control-row {{ display: grid; grid-template-columns: minmax(160px, 1fr) auto auto auto; gap: 8px; align-items: center; }}
-.watch-input {{ width: 100%; min-height: 36px; border: 1px solid #cfcfcf; border-radius: 7px; padding: 0 10px; background: white; color: var(--dark); font-weight: 800; text-transform: uppercase; }}
+.watch-input {{ width: 100%; min-height: 44px; border: 1px solid var(--terminal-line); border-radius: 7px; padding: 0 12px; background: var(--terminal-row); color: var(--terminal-text); font-size: 15px; font-weight: 800; text-transform: uppercase; }}
 .watch-items {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
-.watch-token-card {{ position: relative; display: grid; gap: 9px; min-height: 148px; padding: 12px; border-radius: 9px; background: white; border: 1px solid #dedede; }}
+.watch-token-card {{ position: relative; display: grid; gap: 11px; min-height: 158px; padding: 16px; border-radius: 9px; background: var(--terminal-row); border: 1px solid var(--terminal-line); }}
 .watch-token-card > div:first-child {{ display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }}
-.watch-token-card strong {{ font-size: 22px; overflow-wrap: anywhere; }}
-.watch-token-card span {{ color: #666; font-size: 12px; font-weight: 800; }}
-.watch-token-card p {{ margin: 0; color: #52635e; font-size: 13px; overflow-wrap: anywhere; }}
+.watch-token-card strong {{ font-size: 24px; overflow-wrap: anywhere; }}
+.watch-token-card span {{ color: var(--terminal-muted); font-size: 14px; font-weight: 800; }}
+.watch-token-card p {{ margin: 0; color: var(--terminal-muted); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }}
 .watch-token-metrics {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }}
-.watch-token-metrics span {{ display: block; padding: 7px; border-radius: 6px; background: var(--row); color: #666; font-size: 11px; }}
-.watch-token-metrics strong {{ display: block; color: var(--dark); font-size: 14px; }}
-.watch-remove {{ justify-self: start; min-height: 30px; padding: 0 9px; border: 0; border-radius: 6px; background: #e5e5e5; color: var(--dark); font-size: 12px; font-weight: 900; cursor: pointer; }}
+.watch-token-metrics span {{ display: block; padding: 10px; border-radius: 6px; background: var(--terminal-panel); color: var(--terminal-muted); font-size: 13px; font-weight: 700; }}
+.watch-token-metrics strong {{ display: block; color: var(--terminal-text); font-size: 17px; font-variant-numeric: tabular-nums; }}
+.watch-remove {{ justify-self: start; min-height: 40px; padding: 0 14px; border: 1px solid var(--terminal-line); border-radius: 6px; background: var(--terminal-panel); color: var(--terminal-text); font-size: 14px; font-weight: 900; cursor: pointer; }}
 .suggestion-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }}
 .suggestion-chip {{ min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid #d6dfdc; border-radius: 8px; background: white; color: var(--dark); padding: 8px 9px; cursor: pointer; min-width: 0; }}
 .suggestion-chip strong {{ min-width: 0; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 .suggestion-chip span {{ padding: 4px 6px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-ink); font-size: 11px; font-weight: 900; }}
 .watch-route-list, .watch-alert-list, .profile-shell-list, .source-note-list {{ display: grid; gap: 8px; }}
-.watch-route-card {{ display: grid; gap: 10px; padding: 12px; border-radius: 9px; background: white; border: 1px solid #dedede; }}
+.watch-route-card {{ display: grid; gap: 12px; padding: 16px; border-radius: 9px; background: var(--terminal-row); border: 1px solid var(--terminal-line); }}
 .watch-route-head {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; }}
 .watch-route-head a {{ font-size: 21px; font-weight: 900; }}
-.watch-route-head span {{ padding: 4px 7px; border-radius: 5px; background: var(--row); color: #52635e; font-size: 11px; font-weight: 900; }}
+.watch-route-head span {{ padding: 6px 10px; border-radius: 5px; background: var(--terminal-panel); border: 1px solid var(--terminal-line); color: var(--terminal-text); font-size: 13px; font-weight: 900; }}
 .watch-route-links {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }}
-.watch-route-link {{ display: grid; gap: 4px; padding: 9px; border-radius: 7px; background: var(--row); }}
-.watch-route-link span, .watch-route-link em {{ color: #666; font-size: 11px; font-style: normal; }}
-.watch-route-link strong {{ font-size: 18px; }}
+.watch-route-link {{ display: grid; gap: 5px; padding: 13px; border-radius: 7px; background: var(--terminal-panel); border: 1px solid var(--terminal-line); }}
+.watch-route-link span, .watch-route-link em {{ color: var(--terminal-muted); font-size: 13px; font-style: normal; font-weight: 700; }}
+.watch-route-link strong {{ font-size: 20px; font-variant-numeric: tabular-nums; }}
 .watch-route-meta {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }}
-.watch-route-meta span {{ padding: 8px; border-radius: 6px; background: #f2f5f3; color: #666; font-size: 12px; }}
-.watch-route-meta strong {{ display: block; color: var(--dark); overflow-wrap: anywhere; }}
-.watch-route-card p {{ margin: 0; color: #52635e; font-size: 12px; overflow-wrap: anywhere; }}
+.watch-route-meta span {{ display: block; padding: 11px; border-radius: 6px; background: var(--terminal-panel); color: var(--terminal-muted); font-size: 13px; font-weight: 700; }}
+.watch-route-meta strong {{ display: block; color: var(--terminal-text); font-size: 15px; overflow-wrap: anywhere; }}
+.watch-route-card p {{ margin: 0; color: var(--terminal-muted); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }}
 .watch-alert-list {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
-.watch-alert-card {{ display: grid; gap: 5px; padding: 10px; border-radius: 8px; background: white; border: 1px solid #dedede; }}
-.watch-alert-card.on {{ border-color: rgba(0,184,132,.45); background: #f3fffb; }}
-.watch-alert-card span {{ color: #666; font-size: 11px; font-weight: 900; text-transform: uppercase; }}
-.watch-alert-card strong {{ font-size: 17px; overflow-wrap: anywhere; }}
-.watch-alert-card em {{ color: #007e61; font-size: 13px; font-style: normal; font-weight: 900; }}
-.watch-profile-row {{ display: grid; grid-template-columns: 1fr auto 28px; gap: 8px; align-items: center; padding: 8px; border-radius: 7px; background: white; border: 1px solid #dedede; }}
-.watch-profile-row span {{ color: #666; font-size: 12px; }}
-.watch-profile-row strong {{ font-size: 12px; }}
+.watch-alert-card {{ display: grid; gap: 7px; padding: 14px; border-radius: 8px; background: var(--terminal-row); border: 1px solid var(--terminal-line); }}
+.watch-alert-card.on {{ border-color: var(--accent); background: var(--terminal-panel); }}
+.watch-alert-card span {{ color: var(--terminal-muted); font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; }}
+.watch-alert-card strong {{ font-size: 19px; overflow-wrap: anywhere; }}
+.watch-alert-card em {{ color: var(--accent-strong, var(--accent)); font-size: 15px; font-style: normal; font-weight: 900; }}
+.watch-profile-row {{ display: grid; grid-template-columns: 1fr auto 34px; gap: 10px; align-items: center; padding: 12px; border-radius: 7px; background: var(--terminal-row); border: 1px solid var(--terminal-line); }}
+.watch-profile-row span {{ color: var(--terminal-muted); font-size: 14px; }}
+.watch-profile-row strong {{ font-size: 15px; }}
 .watch-profile-row em {{ color: var(--dark); font-style: normal; font-weight: 900; text-align: right; }}
 .source-note-list {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
 .source-note-list span {{ padding: 8px; border-radius: 7px; background: white; border: 1px solid #dedede; color: #52635e; font-size: 12px; font-weight: 800; overflow-wrap: anywhere; }}
-.watch-empty {{ margin: 0; padding: 14px; border-radius: 8px; background: white; color: #71807c; text-align: center; font-size: 13px; font-weight: 800; }}
+.watch-empty {{ margin: 0; padding: 20px; border-radius: 8px; background: var(--terminal-row); color: var(--terminal-muted); text-align: center; font-size: 15px; font-weight: 800; }}
 .watch-empty.compact {{ padding: 9px; text-align: left; }}
 .profile-row {{ display: grid; grid-template-columns: 1fr auto 24px; gap: 7px; align-items: center; margin-top: 7px; }}
 .profile-row strong {{ color: var(--dark); }}
-.watchlist-line {{ padding: 8px; border-radius: 6px; background: var(--row); font-weight: 800; }}
+.watchlist-line {{ padding: 12px; border-radius: 6px; background: var(--terminal-row); color: var(--terminal-text); font-size: 15px; font-weight: 800; }}
 .feed-columns {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }}
 .feed-card {{ padding: 12px; box-shadow: none; }}
 .feed-row {{ display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; padding: 8px 0; border-bottom: 1px solid #dedede; font-size: 12px; }}
