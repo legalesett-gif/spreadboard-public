@@ -103,6 +103,12 @@ class MarketQuote:
     price_impact_pct: float | None = None
     route_plan: tuple[str, ...] = ()
     blockers: tuple[str, ...] = ()
+    #: Which path produced this quote: "ticker" for a top-of-book ticker,
+    #: "orderbook" for a walked ladder. Without it the snapshot cannot tell the
+    #: two apart -- a $50 probe that fills at the first level leaves the VWAP
+    #: equal to top of book -- so there was no way to check whether the
+    #: depth_unverified blocker, set on 100% of rows, was accurate.
+    quote_source: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

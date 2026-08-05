@@ -899,10 +899,23 @@ def _env_bool(name: str) -> bool:
     return os.environ.get(name, "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
+#: How many tokens per lane get REAL settled funding rather than a projection.
+#:
+#: Settled 24h funding is the sum of a venue's actual funding events, and it
+#: needs one history call per futures leg -- there is no bulk endpoint for it on
+#: most venues, so it cannot cover all 5,000 futures legs on the board. At 25 it
+#: covered 181 of 15,754 rows, so 99% of the board showed a projection from the
+#: current rate, which is exactly the number that misleads when funding flips.
+#: Raising it trades scan time for accuracy on the routes people actually take.
+FUNDING_TOKENS_PER_LANE = max(
+    5, min(300, int(os.environ.get("SPREADBOARD_FUNDING_TOKENS_PER_LANE", "25")))
+)
+
+
 def _funding_refresh_route_keys(
     snapshot: dict[str, Any],
     *,
-    tokens_per_lane: int = 25,
+    tokens_per_lane: int | None = None,
 ) -> set[str]:
     rows = [
         row
@@ -910,6 +923,8 @@ def _funding_refresh_route_keys(
         for row in snapshot.get(bucket) or []
         if isinstance(row, dict)
     ]
+    if tokens_per_lane is None:
+        tokens_per_lane = FUNDING_TOKENS_PER_LANE
     selected: set[str] = set()
     for lane in ("FUTURES", "FUTURES-SPOT", "DEX-FUTURES"):
         lane_rows = [row for row in rows if _funding_lane(row) == lane]

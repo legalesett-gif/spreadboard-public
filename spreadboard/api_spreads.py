@@ -1043,6 +1043,22 @@ def _apply_live_funding(
             leg["funding_interval_hours"] = entry["interval_hours"]
         if entry.get("next_funding_ts_us") is not None:
             leg["next_funding_ts_us"] = entry["next_funding_ts_us"]
+        # The sweep gives a current rate and an interval for nearly every
+        # futures leg, but only the enrichment step -- which covers 25 tokens a
+        # lane -- ever wrote `projected_24h_pct`. A route needs it on BOTH legs
+        # to show any carry at all, so 1,498 futures routes displayed no funding
+        # while holding a live rate on each side. The projection is exactly this
+        # arithmetic; deriving it here is not a new estimate, it is the one the
+        # enrichment step would have made.
+        #
+        # Never overwrite: a settled or enriched value is measured, this is not.
+        if leg.get("projected_24h_pct") is None:
+            rate = _float_or_none(entry.get("rate_pct"))
+            interval = _float_or_none(
+                entry.get("interval_hours") or leg.get("funding_interval_hours")
+            )
+            if rate is not None and interval and interval > 0:
+                leg["projected_24h_pct"] = rate * 24.0 / interval
         route_inputs[side] = leg
     if updated_notes is None:
         return raw

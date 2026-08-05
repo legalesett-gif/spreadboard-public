@@ -300,6 +300,10 @@ class OkxDexQuoteSource:
         # uniqueness rule below, which drops any symbol that resolves to more
         # than one contract across chains, and that is exactly the mainstream
         # names: DOGE, SHIB and WIF are listed on several chains at once.
+        # Which names actually made it, and where the well-known ones fell out.
+        # Two rounds of guessing at DOGE/WIF/SHIB/FARTCOIN/STETH cost more than
+        # this line would have.
+        watched = ("DOGE", "WIF", "SHIB", "FARTCOIN", "STETH", "PENGU", "BONK", "RAY")
         self.last_funnel = {
             "candidates": len(candidate_symbols),
             "matched_on_chain": len(matches),
@@ -307,6 +311,16 @@ class OkxDexQuoteSource:
             "limit": limit,
             "volume_reserved": reserved,
             "selected": len(selected),
+            "selected_sample": sorted(selected)[:40],
+            "watched": {
+                name: (
+                    "selected" if name in set(selected)
+                    else "dropped_not_unique" if name in matches
+                    else "no_okx_listing" if name in candidate_symbols
+                    else "not_a_cex_token"
+                )
+                for name in watched
+            },
         }
         assets: list[WatchAsset] = []
         for symbol in selected:
@@ -1653,6 +1667,11 @@ def _quote_route_note(quote: MarketQuote) -> dict[str, Any]:
         "slippage_bps": quote.slippage_bps,
         "price_impact_pct": quote.price_impact_pct,
         "route_plan": list(quote.route_plan),
+        # Carried so the snapshot can answer whether depth_unverified is
+        # accurate. A walked ladder whose $50 probe fills at the first level
+        # leaves the VWAP equal to top of book, so the numbers alone cannot
+        # distinguish it from a ticker quote.
+        "quote_source": quote.quote_source,
     }
     return {key: value for key, value in note.items() if value not in (None, [], ())}
 
@@ -1814,6 +1833,8 @@ def _quote_from_book(
             target_notional_usd,
             contract_size=contract_size,
         ),
+        # A real ladder was walked here, whatever the VWAP came out as.
+        quote_source="orderbook",
         quote_ts_us=now_us(),
         source_name=source_name,
         symbol=symbol,
@@ -2178,6 +2199,13 @@ def _ticker_quotes_for_symbols(
                 # bid_vwap/ask_vwap here are the top of book, not a depth-weighted
                 # ladder, so any route built from this quote must say so rather
                 # than imply a size that was never measured.
+                #
+                # `quote_source` records WHICH path produced this leg. Without
+                # it the snapshot cannot tell a ticker quote from a walked
+                # ladder whose $50 probe happened to fill at the first level,
+                # so there was no way to check whether depth_unverified -- set
+                # on 100% of rows -- was accurate or merely unconditional.
+                quote_source="ticker",
                 blockers=tuple([*identity.blockers, DEPTH_UNVERIFIED_BLOCKER]),
             )
         )

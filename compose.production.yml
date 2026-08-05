@@ -59,7 +59,12 @@ services:
       SPREADBOARD_DEX_CANDIDATES: "450"
       SPREADBOARD_DEX_SPOT_TIMEOUT_SECONDS: "420"
       SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS: "150"
-      SPREADBOARD_FUNDING_HISTORY_WORKERS: "10"
+      SPREADBOARD_FUNDING_HISTORY_WORKERS: "14"
+      # Settled funding needs one history call per futures leg -- no venue
+      # offers it in bulk -- so it cannot cover the whole board. At 25 tokens a
+      # lane only 181 of 15,754 rows were settled and the rest were projections
+      # from the current rate. 90 covers the routes people actually take.
+      SPREADBOARD_FUNDING_TOKENS_PER_LANE: "90"
       SPREADBOARD_NATIVE_FUNDING_ONLY: "1"
       SPREADARB_MAX_ENTRY_SPREAD_PCT: "0"
     volumes:
