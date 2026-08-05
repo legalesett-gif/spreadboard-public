@@ -606,8 +606,19 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json({"ok": True, "preferences": preferences})
             elif parsed.path == "/api/market-alert-rules":
-                rule = accounts.add_market_alert_rule(user.id, payload, db_path=self.server.accounts_path)
-                self._send_json({"ok": True, "rule": rule}, status=HTTPStatus.CREATED)
+                try:
+                    rule = accounts.add_market_alert_rule(
+                        user.id, payload, db_path=self.server.accounts_path
+                    )
+                except (ValueError, TypeError) as exc:
+                    # A bad threshold or a missing token is the member's typo,
+                    # not a server fault, and the form shows what comes back.
+                    self._send_json(
+                        {"ok": False, "error": str(exc)[:200]},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                else:
+                    self._send_json({"ok": True, "rule": rule}, status=HTTPStatus.CREATED)
             elif parsed.path == "/api/saved-charts":
                 try:
                     chart = accounts.add_saved_chart(
@@ -6837,9 +6848,29 @@ def render_profile_pushover(flags: dict[str, Any]) -> str:
       </form>
       <section class="profile-panel alert-library">
         <div class="profile-panel-head">
-          <div><h3>Alerts <span id="profileAlertCount">(0)</span></h3><p>Spread and funding rules evaluate against the latest local route rows. Other rule types remain templates.</p></div>
-          <button class="sheet-button primary js-alert-draft" type="button" data-alert-type="token_spread">Add new alert</button>
+          <div><h3>Alerts <span id="profileAlertCount">(0)</span></h3><p>Spread, funding, token price and token funding rules all evaluate against the live board. Other rule types remain templates.</p></div>
+          <button class="sheet-button primary js-alert-draft" type="button" data-alert-type="token_spread">Add route alert</button>
         </div>
+        <form class="token-alert-form" id="tokenAlertForm">
+          <div>
+            <strong>Watch a token</strong>
+            <p class="pricing-note">No route to pick. Price is the median across every venue quoting it,
+               so one stale print cannot trip the alert; funding is the best 24h carry on the asset.</p>
+          </div>
+          <label><span>Token</span><input name="symbol" placeholder="DOGE" maxlength="40" required></label>
+          <label><span>Watch</span><select name="type">
+            <option value="price">Price</option>
+            <option value="token_funding">Funding 24h</option>
+          </select></label>
+          <label><span>When it is</span><select name="direction">
+            <option value="above">At or above</option>
+            <option value="below">At or below</option>
+          </select></label>
+          <label><span>Level</span><input name="threshold" type="number" step="any" placeholder="0.25" required></label>
+          <label><span>Hold for</span><input name="stability_seconds" type="number" min="0" max="3600" value="30"></label>
+          <button class="sheet-button primary" type="submit">Create</button>
+          <span class="token-alert-status" data-token-alert-status></span>
+        </form>
         <div class="profile-alert-filters">
           <label><span>Alert type</span><select id="profileAlertTypeFilter">
             <option value="all">All</option><option value="token_spread">Token spread</option><option value="funding">Funding</option><option value="price">Price</option><option value="exchange_spread">Exchange spread</option><option value="custom_pair_spread">Custom pair spread</option><option value="dw_tracking">D/W tracking</option><option value="freshness">Freshness</option>
@@ -6955,6 +6986,31 @@ def render_member_alert_script() -> str:
         const data = await response.json().catch(() => ({}));
         if(!response.ok || data.ok === false) throw new Error(data.error || 'Could not save');
         return data;
+      }
+      const tokenForm = document.getElementById('tokenAlertForm');
+      if(tokenForm){
+        tokenForm.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const status = tokenForm.querySelector('[data-token-alert-status]');
+          const data = new FormData(tokenForm);
+          const symbol = String(data.get('symbol') || '').trim().toUpperCase();
+          const threshold = Number(data.get('threshold'));
+          if(!symbol || !Number.isFinite(threshold)){
+            status.textContent = 'Enter a token and a level.'; return;
+          }
+          status.textContent = 'Creating...';
+          try{
+            await send('/api/market-alert-rules', {
+              type: data.get('type'),
+              symbol,
+              direction: data.get('direction'),
+              threshold,
+              stability_seconds: Number(data.get('stability_seconds') || 0)});
+            status.textContent = symbol + ' alert created.';
+            tokenForm.reset();
+            setTimeout(() => window.location.reload(), 700);
+          }catch(error){ status.textContent = error.message; }
+        });
       }
       document.addEventListener('click', async (event) => {
         const card = event.target.closest('[data-alert-id]');
@@ -11002,6 +11058,13 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   0% {{ box-shadow: 0 0 0 0 rgba(31,184,165,.38); }}
   70%, 100% {{ box-shadow: 0 0 0 10px rgba(31,184,165,0); }}
 }}
+.token-alert-form {{ display: grid; grid-template-columns: minmax(0,1.6fr) repeat(4, minmax(0,1fr)) auto; gap: 10px; align-items: end; padding: 14px; border: 1px solid var(--terminal-line); border-radius: 7px; background: var(--terminal-panel); margin-bottom: 12px; }}
+.token-alert-form > div {{ grid-column: 1 / -1; }}
+.token-alert-form label {{ display: grid; gap: 4px; min-width: 0; }}
+.token-alert-form label span {{ color: var(--terminal-muted); font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .06em; }}
+.token-alert-form input, .token-alert-form select {{ min-height: 36px; padding: 0 10px; border: 1px solid var(--terminal-line); border-radius: 6px; background: var(--terminal-row); color: inherit; }}
+.token-alert-status {{ grid-column: 1 / -1; color: var(--terminal-muted); font-size: 12px; }}
+@media(max-width:820px) {{ .token-alert-form {{ grid-template-columns: 1fr 1fr; }} }}
 .funding-farm-tabs {{ display: flex; gap: 7px; padding: 7px; border: 1px solid var(--terminal-line); border-radius: 7px; background: var(--terminal-panel); }}
 .funding-farm-tabs a {{ min-height: 34px; display: inline-flex; align-items: center; padding: 0 12px; border-radius: 5px; color: var(--terminal-muted); font-size: 12px; font-weight: 900; }}
 .funding-farm-tabs a.active {{ background: var(--terminal-accent); color: #062f2b; }}

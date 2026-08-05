@@ -237,7 +237,12 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 route_key TEXT NOT NULL,
                 symbol TEXT NOT NULL,
-                metric TEXT NOT NULL CHECK (metric IN ('open_spread_pct', 'funding_24h_pct')),
+                metric TEXT NOT NULL CHECK (metric IN (
+                    'open_spread_pct', 'funding_24h_pct',
+                    -- Per token rather than per route: "tell me when DOGE
+                    -- trades above X", or when anything on this token pays.
+                    'token_price', 'token_funding_24h_pct'
+                )),
                 operator TEXT NOT NULL CHECK (operator IN ('lte', 'gte')),
                 threshold REAL NOT NULL,
                 stability_seconds INTEGER NOT NULL DEFAULT 10,
@@ -328,6 +333,7 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
         _ensure_columns(connection, "position_alert_rules", {
             "last_condition_met": "INTEGER NOT NULL DEFAULT 0",
         })
+        _widen_market_alert_metrics(connection)
         connection.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS users_billing_customer ON users(billing_customer_id) WHERE billing_customer_id IS NOT NULL"
         )
@@ -836,6 +842,24 @@ def notification_delivery(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
         connection.close()
 
 
+#: Rules that watch an asset rather than one venue pair.
+TOKEN_METRICS = frozenset({"token_price", "token_funding_24h_pct"})
+
+#: The prefix that marks a synthetic, token-wide alert target.
+TOKEN_ALERT_PREFIX = "TOKEN:"
+
+
+def token_alert_key(symbol: str) -> str:
+    return f"{TOKEN_ALERT_PREFIX}{str(symbol or '').strip().upper()}"
+
+
+def token_from_alert_key(route_key: str) -> str | None:
+    text = str(route_key or "")
+    if not text.startswith(TOKEN_ALERT_PREFIX):
+        return None
+    return text[len(TOKEN_ALERT_PREFIX):].strip().upper() or None
+
+
 def add_market_alert_rule(
     user_id: int,
     payload: dict[str, Any],
@@ -845,11 +869,22 @@ def add_market_alert_rule(
     route_key = str(payload.get("route_key") or "").strip()[:1000]
     symbol = str(payload.get("symbol") or "").strip().upper()[:80]
     alert_type = str(payload.get("type") or "token_spread")
-    metric = "funding_24h_pct" if alert_type == "funding" else "open_spread_pct"
+    metric = {
+        "funding": "funding_24h_pct",
+        "price": "token_price",
+        "token_funding": "token_funding_24h_pct",
+    }.get(alert_type, "open_spread_pct")
     operator = "lte" if str(payload.get("direction") or "above") == "below" else "gte"
     threshold = float(payload.get("threshold"))
     stability = max(0, min(3600, int(payload.get("stability_seconds") or 0)))
-    if not route_key or not symbol:
+    if not symbol:
+        raise ValueError("alert_requires_a_token")
+    if metric in TOKEN_METRICS:
+        # A token rule watches the asset, not one venue pair, so it carries a
+        # synthetic key instead of a route. Same table, same worker, same
+        # de-duplication.
+        route_key = token_alert_key(symbol)
+    elif not route_key:
         raise ValueError("route_alert_requires_exact_route")
     now = _utc_iso()
     connection = _connect(db_path)
@@ -1594,6 +1629,59 @@ def _connect(db_path: Path | str) -> sqlite3.Connection:
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA busy_timeout = 10000")
     return connection
+
+
+def _widen_market_alert_metrics(connection: sqlite3.Connection) -> None:
+    """Let the metric column hold the per-token rules as well.
+
+    SQLite cannot alter a CHECK constraint, so a table created before token
+    price and funding alerts existed would reject them at insert time -- with a
+    constraint error, long after the member had filled in the form. Rebuild it
+    once, carrying every existing rule across.
+    """
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='market_alert_rules'"
+    ).fetchone()
+    existing = str((row[0] if row else "") or "")
+    if not existing or "token_price" in existing:
+        return
+    columns = [
+        item[1] for item in connection.execute("PRAGMA table_info(market_alert_rules)")
+    ]
+    connection.execute("ALTER TABLE market_alert_rules RENAME TO market_alert_rules_old")
+    connection.execute(
+        """
+        CREATE TABLE market_alert_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            route_key TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            metric TEXT NOT NULL CHECK (metric IN (
+                'open_spread_pct', 'funding_24h_pct',
+                'token_price', 'token_funding_24h_pct'
+            )),
+            operator TEXT NOT NULL CHECK (operator IN ('lte', 'gte')),
+            threshold REAL NOT NULL,
+            stability_seconds INTEGER NOT NULL DEFAULT 10,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            condition_since TEXT,
+            last_condition_met INTEGER NOT NULL DEFAULT 0,
+            last_triggered_at TEXT,
+            last_value REAL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    shared = ", ".join(columns)
+    connection.execute(
+        f"INSERT INTO market_alert_rules ({shared}) SELECT {shared} FROM market_alert_rules_old"
+    )
+    connection.execute("DROP TABLE market_alert_rules_old")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS market_alert_rules_user "
+        "ON market_alert_rules(user_id, enabled, updated_at)"
+    )
 
 
 def _ensure_columns(connection: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:

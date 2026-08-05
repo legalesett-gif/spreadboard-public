@@ -263,11 +263,12 @@ class UserMarketAlertWorker:
             include_unverified=False,
             limit=None,
         )
-        rows = {
-            str(row.get("route_key") or ""): row
-            for row in market.get("rows") or []
+        board_rows = [
+            row for row in market.get("rows") or []
             if isinstance(row, dict) and row.get("route_key")
-        }
+        ]
+        rows = {str(row["route_key"]): row for row in board_rows}
+        tokens = token_metrics(board_rows)
         evaluated = triggered = delivered = 0
         app_token = os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
         public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
@@ -279,22 +280,27 @@ class UserMarketAlertWorker:
             for rule in accounts.list_market_alert_rules(user_id, db_path=self.accounts_path):
                 if not rule.get("enabled"):
                     continue
-                row = rows.get(str(rule.get("route_key") or ""))
-                value = _rule_value(row, str(rule.get("metric") or "")) if row else None
+                metric = str(rule.get("metric") or "")
+                token = accounts.token_from_alert_key(str(rule.get("route_key") or ""))
+                if token is not None:
+                    row = None
+                    value = (tokens.get(token) or {}).get(metric)
+                else:
+                    row = rows.get(str(rule.get("route_key") or ""))
+                    value = _rule_value(row, metric) if row else None
                 if value is None:
                     continue
                 evaluated += 1
-                metric_label = "24h paired funding" if rule["metric"] == "funding_24h_pct" else "open spread"
-                body = (
-                    f"{rule['symbol']} {metric_label} is {value:+.4f}% on "
-                    f"{row.get('long_venue') or '?'} -> {row.get('short_venue') or '?'}; "
-                    f"threshold {rule['operator']} {float(rule['threshold']):+.4f}%."
-                )
+                body = _alert_body(rule, metric, value, row, tokens.get(token or ""))
                 notification = accounts.record_market_alert_evaluation(
                     user_id,
                     int(rule["id"]),
                     value=value,
-                    title=f"{rule['symbol']} route alert",
+                    title=(
+                        f"{rule['symbol']} {'price' if metric == 'token_price' else 'alert'}"
+                        if token is not None
+                        else f"{rule['symbol']} route alert"
+                    ),
                     body=body,
                     db_path=self.accounts_path,
                 )
@@ -331,6 +337,92 @@ def send_user_test_alert(user_id: int, *, accounts_path: Path | str = accounts.D
         sound=delivery.get("sound"),
     )
     return {"ok": bool(result.get("ok")), "status": result.get("status"), "error": result.get("error")}
+
+
+def token_metrics(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
+    """Per-asset values a token alert can be set against.
+
+    A token rule watches the asset, not one venue pair -- "tell me when DOGE
+    trades above 0.20", or "when anything on this token pays more than 0.05% a
+    day". So price is taken as the MEDIAN of the legs quoting it, which is what
+    makes it trustworthy: one venue printing a stale or dislocated quote moves
+    a mean and cannot move a median, and this board has already had a single bad
+    quote become a headline.
+
+    Funding is the best net 24h carry available on the token, because that is
+    the one a member would actually put on.
+    """
+    prices: dict[str, list[float]] = {}
+    funding: dict[str, float] = {}
+    for row in rows:
+        token = str(row.get("token") or "").upper()
+        if not token:
+            continue
+        for side in ("long", "short"):
+            value = _float(row.get(f"{side}_price"))
+            if value is not None and value > 0:
+                prices.setdefault(token, []).append(value)
+        carry = _float(row.get("funding_24h_pct"))
+        if carry is None:
+            carry = _float(row.get("funding_projected_24h_pct"))
+        if carry is not None:
+            funding[token] = max(funding.get(token, float("-inf")), carry)
+
+    metrics: dict[str, dict[str, float]] = {}
+    for token, values in prices.items():
+        ordered = sorted(values)
+        middle = len(ordered) // 2
+        median = (
+            ordered[middle]
+            if len(ordered) % 2
+            else (ordered[middle - 1] + ordered[middle]) / 2
+        )
+        metrics.setdefault(token, {})["token_price"] = median
+    for token, carry in funding.items():
+        if carry > float("-inf"):
+            metrics.setdefault(token, {})["token_funding_24h_pct"] = carry
+    return metrics
+
+
+def _float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number else None
+
+
+#: How each metric reads in the notification, and whether it is a percentage.
+_METRIC_LABELS = {
+    "funding_24h_pct": ("24h paired funding", True),
+    "open_spread_pct": ("open spread", True),
+    "token_price": ("price", False),
+    "token_funding_24h_pct": ("best 24h funding", True),
+}
+
+
+def _alert_body(
+    rule: dict[str, Any],
+    metric: str,
+    value: float,
+    row: dict[str, Any] | None,
+    token_view: dict[str, float] | None,
+) -> str:
+    """What the member reads. It must say the number and what it crossed."""
+    label, is_pct = _METRIC_LABELS.get(metric, ("value", True))
+    shown = f"{value:+.4f}%" if is_pct else f"{value:,.6g}"
+    limit = (
+        f"{float(rule['threshold']):+.4f}%"
+        if is_pct
+        else f"{float(rule['threshold']):,.6g}"
+    )
+    direction = "at or above" if rule["operator"] == "gte" else "at or below"
+    where = ""
+    if row is not None:
+        where = f" on {row.get('long_venue') or '?'} -> {row.get('short_venue') or '?'}"
+    elif token_view:
+        where = " across every venue quoting it"
+    return f"{rule['symbol']} {label} is {shown}{where}; threshold {direction} {limit}."
 
 
 def _rule_value(row: dict[str, Any] | None, metric: str) -> float | None:
