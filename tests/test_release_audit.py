@@ -3138,3 +3138,42 @@ def test_the_most_traded_tokens_keep_a_share_of_the_dex_slots() -> None:
     assert any(name.startswith("HIGHCARRY") for name in chosen), (
         "funding ranking must still win most slots"
     )
+
+
+def test_the_depth_column_reads_a_key_discovery_actually_writes() -> None:
+    """It read notes.screen.liquidity_usd, which nothing has ever written.
+
+    Measured on production: 0 of 26,690 snapshot rows carry that key, so the
+    column was empty on all 15,943 board rows and "sort by depth" ranked
+    nothing -- silently, the same shape as the funding overlay keying on a field
+    that was always None.
+    """
+    row = {
+        "notes": {
+            "route_inputs": {
+                "long": {"volume_24h_usd": 3_976_315.0},
+                "short": {"volume_24h_usd": 8_816.0},
+            }
+        }
+    }
+
+    # The route is only as tradeable as its thinner side.
+    assert api_spreads._depth_from_api(row) == pytest.approx(8_816.0)
+
+    # The old key is not consulted any more.
+    assert api_spreads._depth_from_api({"notes": {"screen": {"liquidity_usd": 999}}}) is None
+    # One leg without volume is not a route figure.
+    assert api_spreads._depth_from_api(
+        {"notes": {"route_inputs": {"long": {"volume_24h_usd": 10.0}, "short": {}}}}
+    ) is None
+    assert api_spreads._depth_from_api({}) is None
+
+
+def test_the_column_no_longer_promises_order_book_depth() -> None:
+    """The scan probes $50, which cannot answer "how much before I move it"."""
+    source = Path("spreadboard/server.py").read_text(encoding="utf-8")
+
+    assert "24h vol, thinner leg" in source
+    assert "('depth', '24h volume')" in source
+    # The guide must not claim it is depth.
+    assert "roughly how much you can trade before you move the price" not in source

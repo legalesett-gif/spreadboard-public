@@ -3216,7 +3216,7 @@ def render_market_filter_bar(data: dict[str, Any], query: dict[str, list[str]]) 
         <label><span>Min edge %</span><input name="min_spread_pct" value="{h(_query_first(query, 'min_spread_pct') or '')}" placeholder="0.50"></label>
         <label><span>Min 24h %</span><input name="min_abs_funding_24h_pct" value="{h(_query_first(query, 'min_abs_funding_24h_pct') or '')}" placeholder="0.10"></label>
         <label><span>Sort</span><select name="sort">
-          {''.join(f'<option value="{value}" {"selected" if value == selected_sort else ""}>{label}</option>' for value, label in [('edge', 'Spread'), ('funding', 'Funding 24h'), ('funding_abs', 'Funding magnitude'), ('depth', 'Depth'), ('age', 'Age'), ('token', 'Token')])}
+          {''.join(f'<option value="{value}" {"selected" if value == selected_sort else ""}>{label}</option>' for value, label in [('edge', 'Spread'), ('funding', 'Funding 24h'), ('funding_abs', 'Funding magnitude'), ('depth', '24h volume'), ('age', 'Age'), ('token', 'Token')])}
         </select></label>
         <label><span>Direction</span><select name="direction">
           <option value="desc" {'selected' if selected_direction == 'desc' else ''}>High to low</option>
@@ -3310,7 +3310,7 @@ def render_market_row(row: dict[str, Any]) -> str:
       <div class="market-number-cell"><strong>{fmt_pct(headline)}</strong><span>open</span></div>
       <div class="market-number-cell"><strong>{fmt_signed_pct(row.get('executable_spread_pct'))}</strong><span>{fmt_signed_pct(row.get('depth_weighted_spread_pct'))} vwap</span></div>
       <div class="market-funding-cell">{render_market_funding(row)}</div>
-      <div class="market-number-cell"><strong>{fmt_money(row.get('depth_usd'))}</strong><span>min leg</span></div>
+      <div class="market-number-cell"><strong>{fmt_money(row.get('depth_usd'))}</strong><span>24h vol, thinner leg</span></div>
       <div class="market-age-cell"><strong>{fmt_age(row.get('age_min'))}</strong><span>{label_text(row.get('freshness'))}</span></div>
       <div class="market-dw-cell">{render_market_dw(row)}</div>
       <div class="market-blocker-cell">
@@ -5406,7 +5406,7 @@ def render_chart_route_card(row: dict[str, Any], history: list[dict[str, Any]]) 
       <div class="chart-card-metrics">
         <span>Move<strong>{fmt_signed_pct(delta)}</strong></span>
         <span>F APR<strong>{fmt_signed_pct(row.get('funding_apr_pct'), digits=0)}</strong></span>
-        <span>Depth<strong>{fmt_money(row.get('depth_usd'))}</strong></span>
+        <span>24h volume<strong>{fmt_money(row.get('depth_usd'))}</strong></span>
         <span>Samples<strong>{h(sample_count)}</strong></span>
       </div>
       <div class="chart-card-actions">
@@ -6484,7 +6484,7 @@ def render_guide_page() -> str:
           <li><b>Edge %</b> -- how far apart the two prices are right now. Bigger is better, but see the warnings below.</li>
           <li><b>Funding</b> -- a fee paid every few hours between longs and shorts. A positive number on your route means you get paid while you wait. This is often worth more than the gap itself.</li>
           <li><b>APR</b> -- what that funding works out to per year if it stayed the same. It will not stay the same, so treat it as a hint, not a promise.</li>
-          <li><b>Depth</b> -- roughly how much you can trade before you move the price. A big edge with tiny depth is not a real opportunity.</li>
+          <li><b>24h volume</b> -- what the thinner leg of the route trades in a day. A big edge on a market that trades almost nothing is not a real opportunity. It is not order-book depth: the scan only probes $50, so treat it as a size sanity check, not a fill guarantee.</li>
           <li><b>Age</b> -- how old the quote is. Older quotes are less reliable.</li>
           <li><b>D / W</b> -- whether deposits and withdrawals are open. <b>SHUT</b> means you cannot move the coin, which kills any trade that needs a transfer.</li>
           <li><b>?</b> -- we have not confirmed that both venues list the same underlying token. Check the contract yourself before trusting the number.</li>
@@ -8525,7 +8525,7 @@ def render_board_mobile_card(row: dict[str, Any]) -> str:
         <span>Executable<strong>{fmt_pct(row.get('spread_pct'))}</strong></span>
         <span>F spread<strong>{fmt_signed_pct(row.get('funding_spread_pct'))}</strong></span>
         <span>Funding 24h<strong>{fmt_signed_pct(funding_24h_value(row), digits=3)}</strong></span>
-        <span>Depth<strong>{fmt_money(row.get('depth_usd'))}</strong></span>
+        <span>24h volume<strong>{fmt_money(row.get('depth_usd'))}</strong></span>
       </div>
       <div class="mobile-board-footer">
         <span>{fmt_age(row.get('age_min'))} old</span>

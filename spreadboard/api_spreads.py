@@ -2424,9 +2424,31 @@ def _next_action(status: str, blockers: list[str], *, source_group: str) -> str:
 
 
 def _depth_from_api(raw: dict[str, Any]) -> float | None:
+    """How much the thinner leg of this route actually trades in a day.
+
+    This read `notes.screen.liquidity_usd`, a key discovery has never written --
+    the same shape of bug as the funding overlay keying on a field that was
+    always None. So the Depth column was empty on all 15,943 rows and "sort by
+    depth" ranked nothing, silently.
+
+    There is no honest order-book depth to put here: the scan walks the ladder
+    to a $50 probe, which cannot answer "how much can I trade before I move the
+    price". The 24h volume of the *thinner* leg can, roughly, and it is real and
+    present on 89% of rows -- so that is what this returns, and the column is
+    labelled 24h volume rather than depth.
+    """
     notes = raw.get("notes") if isinstance(raw.get("notes"), dict) else {}
-    screen = notes.get("screen") if isinstance(notes.get("screen"), dict) else {}
-    return _float_or_none(screen.get("liquidity_usd"))
+    legs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+    volumes = []
+    for side in ("long", "short"):
+        leg = legs.get(side) if isinstance(legs, dict) else None
+        value = _float_or_none((leg or {}).get("volume_24h_usd")) if isinstance(leg, dict) else None
+        if value is not None and value > 0:
+            volumes.append(value)
+    if len(volumes) < 2:
+        return None
+    # The route is only as tradeable as its thinner side.
+    return min(volumes)
 
 
 def _nested_float(value: Any, section: str, key: str) -> float | None:
