@@ -347,7 +347,35 @@ def _create_join_request_link(chat_id: int) -> str:
     return invite
 
 
+#: Telegram methods that only read. Everything else writes into a chat.
+READ_ONLY_METHODS = frozenset({
+    "getMe", "getUpdates", "getChat", "getChatMember", "getChatMemberCount",
+    "getChatAdministrators", "getWebhookInfo", "getFile", "setWebhook", "deleteWebhook",
+})
+
+
+def outbound_posting_enabled() -> bool:
+    """Whether this deployment may post into a chat at all.
+
+    Off unless switched on, deliberately. The operator's own Telegram account
+    is the one these messages come from, and a board that starts talking to a
+    chat because a default flipped is not recoverable -- the message is already
+    sent. Set SPREADBOARD_TELEGRAM_OUTBOUND=1 when a dedicated account exists.
+    """
+    return os.environ.get("SPREADBOARD_TELEGRAM_OUTBOUND", "").strip().casefold() in {
+        "1", "true", "yes", "on",
+    }
+
+
+class TelegramOutboundDisabled(TelegramBotError):
+    """Raised instead of posting, so a caller cannot mistake it for delivery."""
+
+
 def _api_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    if method not in READ_ONLY_METHODS and not outbound_posting_enabled():
+        raise TelegramOutboundDisabled(
+            f"telegram_outbound_disabled:{method}"
+        )
     token = config().bot_token
     if not token:
         raise TelegramBotError("telegram_bot_not_configured")
