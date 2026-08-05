@@ -5952,6 +5952,116 @@ def render_register_page() -> str:
 <script>document.getElementById('registerForm').addEventListener('submit',async(event)=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),error=form.querySelector('.login-error');button.disabled=true;error.textContent='';try{const response=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(form)))});const data=await response.json();if(!response.ok)throw new Error(({email_already_registered:'An account already exists for this email.',invalid_email:'Enter a valid email address.',password_must_be_at_least_12_characters:'Use at least 12 characters.',too_many_registration_attempts:'Too many attempts. Try again later.'})[data.error]||'Could not create the account.');location.assign(data.next||'/subscription')}catch(exc){error.textContent=exc.message||'Could not create the account.';button.disabled=false}});</script></body></html>"""
 
 
+#: What a membership actually includes, one line each. The pricing page had
+#: fourteen paragraphs of prose and the reference product has seven ticks; a
+#: member deciding whether to pay reads the ticks.
+MEMBERSHIP_FEATURES = (
+    "Every venue we track \u2014 22 exchanges plus OKX DEX",
+    "Every lane: Futures-Futures, Futures-Spot, Spot-Spot, Spot-DEX, Futures-DEX",
+    "Live prices that move on screen, no refresh",
+    "Spread, funding, token price and token funding alerts",
+    "Convergence charts, custom pairs and saved charts",
+    "Fair-price gaps: contracts trading away from their own venue's mark",
+    "Free updates and priority support",
+)
+
+#: Three reasons, one line each.
+MEMBERSHIP_REASONS = (
+    ("\u26a1", "Live, not polled", "Prices move as the books move."),
+    ("\u25f1", "Depth behind the number", "Matched-size VWAP beside top of book."),
+    ("\u2713", "Identity-checked routes", "Exact chain and contract, never ticker matching."),
+)
+
+
+def membership_terms() -> list[dict[str, Any]]:
+    """The real terms, derived from the prices that are actually charged.
+
+    Written out by hand they drift from `crypto_billing.PERIODS` the first time
+    a price changes, and a pricing page that lies is worse than a verbose one.
+    """
+    periods = dict(crypto_billing.PERIODS)
+    if not periods:
+        return []
+    monthly_days = min(periods)
+    base_monthly = periods[monthly_days] / (monthly_days / 30.0)
+    terms = []
+    for days in sorted(periods):
+        months = max(1, round(days / 30.0))
+        total = periods[days] / 100.0
+        per_month = total / months
+        saving = 0 if base_monthly <= 0 else round((1 - (per_month * 100) / base_monthly) * 100)
+        terms.append({
+            "days": days,
+            "months": months,
+            "label": "1 month" if months == 1 else f"{months} months",
+            "total": total,
+            "per_month": per_month,
+            "saving_pct": max(0, saving),
+        })
+    return terms
+
+
+def render_membership_ticks() -> str:
+    return "".join(
+        f'<li><span aria-hidden="true">\u2713</span>{h(item)}</li>'
+        for item in MEMBERSHIP_FEATURES
+    )
+
+
+def render_membership_terms(*, selected_days: int | None = None) -> str:
+    terms = membership_terms()
+    if not terms:
+        return ""
+    best = max(term["saving_pct"] for term in terms)
+    cards = []
+    for term in terms:
+        classes = ["term-card"]
+        if term["saving_pct"] == best and best > 0:
+            classes.append("best")
+        if selected_days is not None and term["days"] == selected_days:
+            classes.append("current")
+        saving = (
+            f'<em class="term-saving">-{term["saving_pct"]}%</em>'
+            if term["saving_pct"]
+            else ""
+        )
+        cards.append(
+            f'<div class="{" ".join(classes)}">{saving}'
+            f'<strong>{h(term["label"])}</strong>'
+            f'<span class="term-rate">${term["per_month"]:,.2f}<em>/mo</em></span>'
+            f'<span class="term-total">${term["total"]:,.0f} billed once</span></div>'
+        )
+    return f'<div class="term-grid">{"".join(cards)}</div>'
+
+
+def render_membership_reasons() -> str:
+    return "".join(
+        f'<div class="reason"><span aria-hidden="true">{mark}</span>'
+        f'<strong>{h(title)}</strong><p>{h(line)}</p></div>'
+        for mark, title, line in MEMBERSHIP_REASONS
+    )
+
+
+MEMBERSHIP_STYLE = """
+      .tick-list { list-style:none; margin:0; padding:0; display:grid; gap:9px; }
+      .tick-list li { display:grid; grid-template-columns:20px 1fr; gap:9px; align-items:start; line-height:1.4; }
+      .tick-list li span { color:var(--accent); font-weight:900; }
+      .term-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+      .term-card { position:relative; padding:16px 14px; border:1px solid var(--terminal-line); display:grid; gap:3px; background:var(--terminal-panel); }
+      .term-card.best { border-color:var(--accent); }
+      .term-card.current { background:var(--terminal-row); }
+      .term-card strong { font-size:14px; }
+      .term-rate { font-size:22px; font-weight:900; font-variant-numeric:tabular-nums; }
+      .term-rate em { font-size:12px; font-weight:700; font-style:normal; color:var(--terminal-muted); }
+      .term-total { color:var(--terminal-muted); font-size:11px; }
+      .term-saving { position:absolute; top:-9px; right:10px; padding:2px 7px; background:var(--accent); color:var(--accent-ink); font-size:10px; font-weight:900; font-style:normal; }
+      .reason-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:18px; text-align:center; }
+      .reason span { font-size:22px; }
+      .reason strong { display:block; margin:6px 0 4px; font-size:15px; }
+      .reason p { margin:0; color:var(--terminal-muted); font-size:13px; line-height:1.45; }
+"""
+
+
 def render_pricing_page() -> str:
     user = accounts.current_user()
     if user and user.subscription_active:
@@ -5963,52 +6073,61 @@ def render_pricing_page() -> str:
     else:
         primary_action = '<a class="pricing-button primary" href="/register">Create account</a>'
         secondary_action = '<a class="pricing-button" href="/login">Sign in</a>'
+    terms = membership_terms()
+    monthly = terms[0]["per_month"] if terms else 180.0
     body = f"""
     <style>
-      .pricing-page {{ width:min(1240px,calc(100% - 36px)); margin:36px auto 72px; }}
-      .pricing-intro {{ display:grid; grid-template-columns:minmax(0,1.45fr) minmax(320px,.72fr); border-block:1px solid var(--terminal-line); background:var(--terminal-panel); }}
-      .pricing-copy {{ padding:42px 38px; }} .pricing-copy h1 {{ margin:7px 0 14px; max-width:760px; font-size:clamp(34px,5vw,64px); line-height:1.02; letter-spacing:0; }}
-      .pricing-copy p {{ max-width:720px; margin:0; color:var(--terminal-muted); font-size:17px; line-height:1.55; }}
-      .pricing-plan {{ padding:32px; border-left:1px solid var(--terminal-line); display:grid; align-content:center; gap:14px; }}
-      .pricing-plan span,.pricing-section-head span,.pricing-card span {{ color:var(--accent); font-size:11px; font-weight:900; text-transform:uppercase; }}
-      .pricing-price {{ display:flex; align-items:baseline; gap:8px; }} .pricing-price strong {{ font-size:48px; }} .pricing-price em {{ color:var(--terminal-muted); font-style:normal; }}
-      .pricing-actions {{ display:flex; gap:9px; flex-wrap:wrap; }} .pricing-button {{ min-height:43px; padding:11px 16px; border:1px solid var(--terminal-line); color:var(--terminal-text); text-decoration:none; font-weight:900; display:inline-flex; align-items:center; justify-content:center; }}
+      .pricing-page {{ width:min(1000px,calc(100% - 36px)); margin:36px auto 72px; display:grid; gap:28px; }}
+      .pricing-intro {{ display:grid; grid-template-columns:minmax(0,1.2fr) minmax(260px,.8fr); border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
+      .pricing-copy {{ padding:34px 32px; }}
+      .pricing-copy h1 {{ margin:8px 0 10px; font-size:clamp(30px,4.4vw,48px); line-height:1.05; max-width:16ch; }}
+      .pricing-copy p {{ margin:0; color:var(--terminal-muted); font-size:16px; line-height:1.5; max-width:44ch; }}
+      .pricing-plan {{ padding:30px 28px; border-left:1px solid var(--terminal-line); display:grid; align-content:center; gap:14px; }}
+      .pricing-price strong {{ font-size:44px; line-height:1; }}
+      .pricing-price em {{ color:var(--terminal-muted); font-style:normal; }}
+      .pricing-actions {{ display:flex; gap:8px; flex-wrap:wrap; }}
+      .pricing-button {{ min-height:43px; padding:11px 16px; border:1px solid var(--terminal-line); color:var(--terminal-text); text-decoration:none; font-weight:900; display:inline-flex; align-items:center; }}
       .pricing-button.primary {{ background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }}
-      .pricing-note {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.45; }}
-      .pricing-section {{ margin-top:30px; }} .pricing-section-head {{ display:flex; justify-content:space-between; align-items:end; gap:20px; padding:0 0 13px; border-bottom:1px solid var(--terminal-line); }}
-      .pricing-section-head h2 {{ margin:4px 0 0; font-size:28px; }} .pricing-section-head p {{ max-width:520px; margin:0; color:var(--terminal-muted); line-height:1.45; }}
-      .pricing-grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }} .pricing-card {{ min-height:190px; padding:24px; border-right:1px solid var(--terminal-line); border-bottom:1px solid var(--terminal-line); }}
-      .pricing-card:nth-child(3n+1) {{ border-left:1px solid var(--terminal-line); }} .pricing-card h3 {{ margin:8px 0 10px; font-size:20px; }} .pricing-card p {{ margin:0; color:var(--terminal-muted); line-height:1.5; }}
-      .pricing-standards {{ display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--terminal-line); }} .pricing-standards div {{ padding:18px; border-right:1px solid var(--terminal-line); }} .pricing-standards div:last-child {{ border-right:0; }} .pricing-standards strong {{ display:block; margin-bottom:5px; }} .pricing-standards span {{ color:var(--terminal-muted); font-size:12px; line-height:1.4; }}
-      .pricing-disclaimer {{ margin:20px 0 0; color:var(--terminal-muted); font-size:12px; line-height:1.55; }}
-      @media(max-width:820px) {{ .pricing-intro {{ grid-template-columns:1fr; }} .pricing-plan {{ border-left:0; border-top:1px solid var(--terminal-line); }} .pricing-grid {{ grid-template-columns:1fr 1fr; }} .pricing-card:nth-child(n) {{ border-left:0; border-right:1px solid var(--terminal-line); }} .pricing-card:nth-child(2n+1) {{ border-left:1px solid var(--terminal-line); }} .pricing-standards {{ grid-template-columns:1fr 1fr; }} .pricing-standards div:nth-child(2) {{ border-right:0; }} .pricing-standards div:nth-child(-n+2) {{ border-bottom:1px solid var(--terminal-line); }} }}
-      @media(max-width:560px) {{ .pricing-page {{ width:min(100% - 20px,1240px); margin-top:18px; }} .pricing-copy,.pricing-plan {{ padding:24px 20px; }} .pricing-grid,.pricing-standards {{ grid-template-columns:1fr; }} .pricing-card:nth-child(n),.pricing-standards div {{ border-left:1px solid var(--terminal-line); border-right:1px solid var(--terminal-line); }} .pricing-standards div:not(:last-child) {{ border-bottom:1px solid var(--terminal-line); }} .pricing-section-head {{ align-items:flex-start; flex-direction:column; }} }}
+      .pricing-block {{ padding:26px 28px; border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
+      .pricing-block h2 {{ margin:0 0 16px; font-size:20px; }}
+      .pricing-note {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
+      {MEMBERSHIP_STYLE}
+      @media(max-width:820px) {{ .pricing-intro {{ grid-template-columns:1fr; }} .pricing-plan {{ border-left:0; border-top:1px solid var(--terminal-line); }} }}
     </style>
     <section class="pricing-page">
       <header class="pricing-intro">
-        <div class="pricing-copy"><span class="page-kicker">SpreadBoard membership</span><h1>One terminal for live spread and funding research.</h1><p>Compare executable CEX and OKX DEX routes, inspect funding and transfer constraints, and follow divergence and convergence without stitching together exchange screens.</p></div>
-        <aside class="pricing-plan"><span>Full access</span><div class="pricing-price"><strong>$180</strong><em>per month</em></div><p class="pricing-note">Recurring monthly membership. Billing and cancellation are managed through Stripe.</p><div class="pricing-actions">{primary_action}{secondary_action}</div></aside>
-      </header>
-      <section class="pricing-section">
-        <header class="pricing-section-head"><div><span>Included</span><h2>Built for route verification</h2></div><p>Every view is designed to answer whether a displayed edge is current, liquid enough to inspect, and carrying a funding cost or benefit.</p></header>
-        <div class="pricing-grid">
-          <article class="pricing-card"><span>Arbitrage</span><h3>All major route types</h3><p>Futures-Futures, Futures-Spot, Spot-Spot, and Futures-DEX opportunities grouped by token, with the strongest route first.</p></article>
-          <article class="pricing-card"><span>Execution context</span><h3>Order-book aware spreads</h3><p>Top-book entry and exit spreads sit beside matched-size $50 VWAP so a thin quote is not presented as effortless liquidity.</p></article>
-          <article class="pricing-card"><span>Funding</span><h3>Paired carry, not isolated rates</h3><p>Current funding, settled 24-hour funding, payout cadence, next event, and available history for every futures leg.</p></article>
-          <article class="pricing-card"><span>Charts</span><h3>Live spread progression</h3><p>Interactive route charts from one minute through seven days, including entry, exit, matched VWAP, and funding series where available.</p></article>
-          <article class="pricing-card"><span>DEX</span><h3>OKX DEX-first identity</h3><p>Read-only quotes use exact chain and contract identity, with route metadata and quote age instead of ticker-only matching.</p></article>
-          <article class="pricing-card"><span>Workflow</span><h3>Alerts, Intel, and journal</h3><p>Watchlists, route and funding alerts, anonymized Community Intel, and a position journal that separates price PnL, funding, and fees.</p></article>
+        <div class="pricing-copy">
+          <span class="page-kicker">Membership</span>
+          <h1>Every spread, live.</h1>
+          <p>Cross-venue spreads and funding across 22 exchanges and OKX DEX, priced continuously.</p>
         </div>
+        <aside class="pricing-plan">
+          <div class="pricing-price"><strong>${monthly:,.0f}</strong> <em>/ month</em></div>
+          <div class="pricing-actions">{primary_action}{secondary_action}</div>
+          <p class="pricing-note">Cancel any time.</p>
+        </aside>
+      </header>
+
+      <section class="pricing-block">
+        <h2>What you get</h2>
+        <ul class="tick-list">{render_membership_ticks()}</ul>
       </section>
-      <section class="pricing-section">
-        <header class="pricing-section-head"><div><span>Product standard</span><h2>What the numbers mean</h2></div></header>
-        <div class="pricing-standards"><div><strong>Continuously refreshed</strong><span>Public exchange and DEX data is collected on the production server.</span></div><div><strong>Freshness visible</strong><span>Unavailable or unresolved inputs are labelled rather than silently estimated.</span></div><div><strong>Read-only by design</strong><span>No orders, transfers, approvals, signatures, or withdrawals are initiated.</span></div><div><strong>Telegram connected</strong><span>Link your account privately to check membership and open the payment flow.</span></div></div>
-        <p class="pricing-disclaimer">SpreadBoard is a market-information and research product, not an exchange, broker, investment adviser, or execution service. Digital-asset markets are volatile. Displayed spreads can change before either leg is filled, and access does not guarantee profit or execution. <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/refunds">Refunds</a></p>
+
+      <section class="pricing-block">
+        <h2>Terms</h2>
+        {render_membership_terms()}
       </section>
+
+      <section class="pricing-block">
+        <h2>Why membership</h2>
+        <div class="reason-grid">{render_membership_reasons()}</div>
+      </section>
+
+      <p class="pricing-note">Public market data, not investment advice. Every route carries execution
+         risk. See the <a href="/terms">Terms</a> and <a href="/refunds">Refund Policy</a>.</p>
     </section>
     """
     return shell("Membership - SpreadBoard", "pricing", body)
-
 
 def render_crypto_checkout_panel() -> str:
     """Prepaid crypto checkout: pick a period, pay the exact amount, get access."""
@@ -6160,6 +6279,18 @@ def render_crypto_checkout_script() -> str:
 """
 
 
+def fmt_renewal_date(value: Any) -> str:
+    """The renewal date as a member reads it, from the stored ISO timestamp."""
+    text = str(value or "").strip()
+    if not text:
+        return "\u2014"
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return "\u2014"
+    return moment.strftime("%d %B %Y")
+
+
 def render_subscription_page() -> str:
     user = accounts.current_user()
     billing_state = billing.status()
@@ -6167,18 +6298,64 @@ def render_subscription_page() -> str:
         '<button class="sheet-button primary" type="button" data-billing-action="portal">Manage billing</button>'
         if user and user.billing_customer_id
         else f'<button class="sheet-button primary" type="button" data-billing-action="checkout">Subscribe · {h(billing_state["plan_label"])}</button>'
-    ) if billing_state["checkout_ready"] else '<p>Online subscription activation is being configured. No payment can be taken yet.</p>'
+    ) if billing_state["checkout_ready"] else '<p class="pricing-note">Card checkout is being configured. Pay with crypto below.</p>'
+    active = bool(user and user.subscription_active)
+    renews = fmt_renewal_date(getattr(user, "subscription_expires_at", None)) if user else "\u2014"
+    terms = membership_terms()
+    monthly = terms[0]["per_month"] if terms else 180.0
     body = f"""
-    <section class="account-page narrow-account" data-account-page>
-      <header class="terminal-heading"><div><span class="page-kicker">Membership</span><h1>Subscription required</h1><p>Your account is signed in, but market access is not currently active.</p></div></header>
-      <section class="account-empty-panel"><strong>{h(user.display_name if user else 'Member')}</strong><p>Status: {h(user.subscription_status if user else 'inactive')}.</p><label class="subscription-consent"><input type="checkbox" data-subscription-consent> <span>I accept the <a href="/terms" target="_blank">Terms</a> and <a href="/refunds" target="_blank">Refund Policy</a>, request immediate access, and acknowledge that the statutory cancellation right may be affected once digital access begins.</span></label>{action}<a class="sheet-button" href="/account">Open account</a><p role="alert" data-billing-error></p></section>
+    <style>
+      .sub-page {{ width:min(860px,calc(100% - 36px)); margin:32px auto 64px; display:grid; gap:22px; }}
+      .sub-plan {{ border:1px solid var(--terminal-line); background:var(--terminal-panel); padding:26px 28px; display:grid; gap:18px; }}
+      .sub-badge {{ justify-self:start; padding:3px 10px; background:var(--accent); color:var(--accent-ink); font-size:10px; font-weight:900; text-transform:uppercase; letter-spacing:.06em; }}
+      .sub-facts {{ display:grid; gap:8px; }}
+      .sub-facts div {{ display:flex; justify-content:space-between; gap:14px; padding-bottom:8px; border-bottom:1px solid var(--terminal-line); }}
+      .sub-facts span {{ color:var(--terminal-muted); font-size:13px; }}
+      .sub-facts strong {{ font-size:15px; font-variant-numeric:tabular-nums; }}
+      .sub-actions {{ display:flex; gap:8px; flex-wrap:wrap; }}
+      .subscription-consent {{ display:flex; gap:9px; align-items:flex-start; color:var(--terminal-muted); font-size:12px; line-height:1.45; }}
+      .pricing-note {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
+      {MEMBERSHIP_STYLE}
+    </style>
+    <section class="sub-page" data-account-page>
+      <header class="terminal-heading">
+        <div>
+          <span class="page-kicker">Membership</span>
+          <h1>{'Your membership' if active else 'Activate membership'}</h1>
+          <p>{'Renews automatically. Cancel any time.' if active else 'Your account is signed in; market access is not active yet.'}</p>
+        </div>
+      </header>
+
+      <section class="sub-plan">
+        <span class="sub-badge">{'Current plan' if active else 'Not active'}</span>
+        <div class="sub-facts">
+          <div><span>Monthly price</span><strong>${monthly:,.2f}</strong></div>
+          <div><span>Billing cycle</span><strong>Monthly</strong></div>
+          <div><span>{'Next payment' if active else 'Status'}</span><strong>{h(renews if active else (user.subscription_status if user else 'inactive'))}</strong></div>
+        </div>
+        <ul class="tick-list">{render_membership_ticks()}</ul>
+        <label class="subscription-consent"><input type="checkbox" data-subscription-consent>
+          <span>I accept the <a href="/terms" target="_blank">Terms</a> and
+          <a href="/refunds" target="_blank">Refund Policy</a>, request immediate access, and
+          acknowledge that the statutory cancellation right may be affected once digital access
+          begins.</span></label>
+        <div class="sub-actions">{action}<a class="sheet-button" href="/account">Open account</a></div>
+        <p role="alert" data-billing-error></p>
+      </section>
+
+      <section class="sub-plan">
+        <span class="sub-badge">Longer terms</span>
+        {render_membership_terms()}
+        <p class="pricing-note">Longer terms are prepaid in one payment.</p>
+      </section>
+
       {render_crypto_checkout_panel()}
     </section>
     <script type="application/json" id="account-session">{json_script_data({'csrf_token': user.csrf_token if user else None})}</script>
     {render_billing_script()}
     {render_crypto_checkout_script()}
     """
-    return shell("Subscription - SpreadBoard", "profile", body)
+    return shell("Membership - SpreadBoard", "profile", body)
 
 
 GUIDE_LANES = [
