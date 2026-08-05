@@ -5958,7 +5958,7 @@ def render_register_page() -> str:
 MEMBERSHIP_FEATURES = (
     "Every venue we track \u2014 22 exchanges plus OKX DEX",
     "Every lane: Futures-Futures, Futures-Spot, Spot-Spot, Spot-DEX, Futures-DEX",
-    "Live prices that move on screen, no refresh",
+    "Live prices that move on screen",
     "Spread, funding, token price and token funding alerts",
     "Convergence charts, custom pairs and saved charts",
     "Fair-price gaps: contracts trading away from their own venue's mark",
