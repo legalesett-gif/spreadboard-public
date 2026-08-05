@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from spreadboard import accounts, billing, telegram_queries
+from spreadboard import accounts, crypto_billing, billing, telegram_queries
 
 
 class TelegramBotError(RuntimeError):
@@ -242,10 +242,29 @@ def handle_update(
         state = "active" if user.subscription_active else user.subscription_status
         return _reply(chat_id, f"Subscription: {state}. Valid until: {expiry}.")
     if command == "/subscribe":
+        # Crypto is the way this is sold, so it leads. The payment page carries
+        # the exact amount and address, and the chain watcher credits it -- a
+        # link here rather than an address in chat, because the amount is what
+        # identifies the invoice and it must not be retyped from memory.
+        public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
+        crypto = crypto_billing.status()
+        if crypto.get("checkout_ready") and public_url:
+            prices = " · ".join(
+                f"{p['days'] // 30 if p['days'] >= 30 else p['days']}m {p['label']}"
+                for p in crypto.get("periods") or []
+            )
+            return _reply(
+                chat_id,
+                "Pay in USDC or USDT on "
+                f"{crypto.get('chain')}.\n{prices}\n\n"
+                "Open the page to get your exact amount and address. The amount "
+                "is unique to your invoice, so send it exactly as shown.",
+                button=("Get payment details", f"{public_url}/subscription"),
+            )
         try:
             url = billing.create_checkout_session(user)
         except billing.BillingError:
-            return _reply(chat_id, "Online checkout is temporarily unavailable. Your account has not been charged.")
+            return _reply(chat_id, "Checkout is temporarily unavailable. Your account has not been charged.")
         return _reply(
             chat_id,
             f"Your secure {billing.config().plan_label} subscription link is ready.",

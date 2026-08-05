@@ -28,6 +28,7 @@ for import_path in (ROOT / "src", ROOT):
 from spreadboard import (
     alerts,
     api_spreads,
+    crypto_watcher,
     board,
     chart_catalog,
     live,
@@ -472,6 +473,16 @@ def main() -> int:
     signal.signal(signal.SIGINT, stop_service)
     refresh_loop.start()
     MemoryWatchdog(refresh_loop.stop_event).start()
+    # Without this nothing watches the chain, so a member could send USDC and
+    # the invoice would simply expire an hour later having credited nothing.
+    # The watcher was only ever started by server.py's standalone CLI main(),
+    # which production does not run -- production runs this file.
+    crypto_stop = crypto_watcher.start_background(db_path=server.accounts_path)
+    _log(
+        "crypto watcher started"
+        if crypto_stop is not None
+        else "crypto watcher idle (receiving address or RPC URL not configured)"
+    )
     # Shares the refresh loop's stop event so shutdown stops it too.
     bulk_quote_loop = BulkQuoteLoop(refresh_loop.stop_event)
     bulk_quote_loop.start()
@@ -510,9 +521,12 @@ WARM_QUERIES: tuple[dict[str, list[str]], ...] = (
     # exactly what left /funding?farm=futures-spot at 27s while /funding was
     # 0.20s. Each tab is warmed as the page actually asks for it.
     {"funding_only": ["1"], "kind": ["FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
-    {"farm": ["futures-futures"], "funding_only": ["1"], "kind": ["FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
-    {"farm": ["futures-spot"], "funding_only": ["1"], "kind": ["FUTURES-SPOT-PAIR"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
-    {"farm": ["futures-dex"], "funding_only": ["1"], "kind": ["DEX-FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
+    # No `farm` here. The funding page strips farm and rank before building its
+    # query -- they are presentation, not data -- so warming WITH farm builds a
+    # key the page never reads. Measured live: /funding?farm=futures-dex took
+    # 16.7s against 0.11s for the tabs whose key actually matched.
+    {"funding_only": ["1"], "kind": ["FUTURES-SPOT-PAIR"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
+    {"funding_only": ["1"], "kind": ["DEX-FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
 )
 
 
