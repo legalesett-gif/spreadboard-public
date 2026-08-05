@@ -1073,11 +1073,20 @@ def api_market_spreads(
             else:
                 owns_refresh = False
         if not owns_refresh:
-            # A cold build takes 30-60s on two cores. Waiting fifteen and then
-            # building our own copy is what turned one slow build into forty
-            # concurrent ones: after a restart the threads went 14 -> 40 and the
-            # process 0.5GB -> 4.2GB with every cache still empty, until the
-            # kernel killed the container. A waiter never builds.
+            # Someone else is already building this view. A waiter must never
+            # build its own copy -- that is what turned one slow build into
+            # forty concurrent ones, threads 14 -> 40 and the process
+            # 0.5GB -> 4.2GB until the kernel killed the container.
+            #
+            # But it must not WAIT for that build either when it already has a
+            # perfectly good previous copy. Checking stale only after the wait
+            # expired put a 25s pause in front of every page served while the
+            # warmer held the build: /free measured 26s three times running with
+            # the answer sitting in the stale cache the whole time.
+            stale = _market_cache_stale_get(cache_key) if allow_stale else None
+            if stale is not None:
+                return stale
+            # Nothing to serve yet, so waiting is the only option.
             deadline = time.monotonic() + _MARKET_BUILD_WAIT_SECONDS
             while not inflight.wait(timeout=1.0) and time.monotonic() < deadline:
                 cached = _market_cache_get(cache_key)

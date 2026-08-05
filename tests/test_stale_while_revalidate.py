@@ -151,3 +151,53 @@ def test_the_readiness_probe_never_builds_the_board(monkeypatch) -> None:
         server._HEALTH_BUILD_LOCK.release()
     assert len(builds) == 1
     assert answer is not None
+
+
+def test_a_waiter_serves_stale_immediately_instead_of_waiting(monkeypatch) -> None:
+    """It must not wait out someone else's build when it already has an answer.
+
+    Checking stale only after the wait expired put a 25s pause in front of every
+    page served while the warmer held the build: /free measured 26s three times
+    running with the answer sitting in the stale cache the whole time.
+    """
+    import threading
+    import time
+
+    from spreadboard import api_spreads, server
+
+    monkeypatch.setattr(server, "_MARKET_CACHE", {})
+    monkeypatch.setattr(server, "_MARKET_STALE_CACHE", {})
+    monkeypatch.setattr(server, "_MARKET_CACHE_INFLIGHT", {})
+    monkeypatch.setattr(server, "_MARKET_BUILD_WAIT_SECONDS", 30.0)
+
+    builds = []
+    started = threading.Event()
+
+    def slow_build(**kwargs):
+        builds.append(kwargs)
+        started.set()
+        time.sleep(3.0)
+        return {"ok": True, "groups": [], "rows": [], "summary": {"generation": len(builds)}}
+
+    monkeypatch.setattr(api_spreads, "load_spreads", slow_build)
+
+    board = Path("board.json")
+    # The stale key is (first, last) of the cache key -- the snapshot signature
+    # sits in the middle, so it changes while the stale key stays put.
+    monkeypatch.setattr(server, "_market_cache_key", lambda path, query: ("board", "sig1", "view"))
+    server.api_market_spreads(board, {})
+    assert len(builds) == 1
+
+    # The snapshot moves, so the exact key misses while a rebuild is in flight.
+    monkeypatch.setattr(server, "_market_cache_key", lambda path, query: ("board", "sig2", "view"))
+    owner = threading.Thread(target=lambda: server.api_market_spreads(board, {}), daemon=True)
+    owner.start()
+    assert started.wait(timeout=5.0)
+
+    began = time.monotonic()
+    payload = server.api_market_spreads(board, {})
+    elapsed = time.monotonic() - began
+
+    owner.join(timeout=10.0)
+    assert payload.get("ok") is True, "a waiter with a stale copy got the warming page"
+    assert elapsed < 1.0, f"the waiter sat for {elapsed:.1f}s with an answer in hand"
