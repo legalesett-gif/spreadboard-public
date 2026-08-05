@@ -82,16 +82,88 @@ def test_the_free_page_is_capped_well_below_the_full_board(
 def test_the_free_page_carries_the_live_hooks_it_needs_to_tick(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Rendered numbers are patched by route key; without both it never moves."""
+    """The visible rows use the member renderer, so they tick like the paid ones."""
     _stub_board(monkeypatch, PAYLOAD)
 
     html = server.render_free_page(Path("board.json"))
 
-    rows = server.FREE_TOKEN_LIMIT * 2
-    assert html.count('<article class="free-row" data-route-key=') == rows
-    assert html.count("<strong data-live-spread>") == rows
-    assert html.count("<strong data-live-funding>") == rows
+    assert html.count("data-live-spread") >= server.FREE_TOKEN_LIMIT
+    assert html.count("data-live-funding") >= server.FREE_TOKEN_LIMIT
     assert "/api/stream/free" in html
+
+
+def test_the_visible_rows_are_the_same_component_a_member_sees(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Not a cut-down copy: a visitor should see exactly what they are buying."""
+    _stub_board(monkeypatch, PAYLOAD)
+
+    html = server.render_free_page(Path("board.json"))
+
+    assert 'class="token-route-group"' in html
+    assert "Best pair" in html
+    assert "matched $50 VWAP" in html
+    assert "Best-route funding" in html
+
+
+def test_only_three_tokens_are_shown_in_full(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_board(monkeypatch, PAYLOAD)
+
+    html = server.render_free_page(Path("board.json"))
+
+    assert server.FREE_TOKEN_LIMIT == 3
+    # Two sections, three rows each.
+    assert html.count('class="token-route-group"') == server.FREE_TOKEN_LIMIT * 2
+
+
+def test_a_locked_row_contains_no_data_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A CSS blur over real values hands the board to anyone with an inspector."""
+    _stub_board(monkeypatch, PAYLOAD)
+
+    html = server.render_free_page(Path("board.json"))
+    locked = html.split('class="locked-list"')[1].split("</section>")[0]
+
+    assert "locked-row" in locked
+    # None of the withheld tokens or their numbers appear in the markup.
+    for index in range(server.FREE_TOKEN_LIMIT, 8):
+        assert f"EDGE{index}" not in locked
+        assert f"CARRY{index}" not in locked
+
+    # Strip the placeholder bar widths, which are layout, not data.
+    import re
+
+    text = re.sub(r'style="[^"]*"', "", locked)
+    text = re.sub(r"<[^>]+>", " ", text)
+    assert "%" not in text
+    assert not re.search(r"\d+\.\d+", text), f"a number reached the locked row: {text[:120]}"
+
+
+def test_the_locked_rows_open_the_membership_dialog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_board(monkeypatch, PAYLOAD)
+
+    html = server.render_free_page(Path("board.json"))
+
+    assert "data-locked" in html
+    assert 'id="unlockDialog"' in html
+    assert "showModal" in html
+    # Keyboard users get there too.
+    assert 'tabindex="0"' in html
+
+
+def test_the_teaser_says_how_much_is_withheld_without_naming_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A spread without its token is unactionable, and it is what sells."""
+    _stub_board(monkeypatch, PAYLOAD)
+
+    html = server.render_free_page(Path("board.json"))
+
+    assert "Widest spread locked" in html
+    assert "Best funding locked" in html
+    # The widest locked edge belongs to EDGE3, whose name must not appear.
+    assert "EDGE3" not in html
 
 
 def test_the_free_stream_endpoint_is_the_one_the_page_subscribes_to(
@@ -360,3 +432,35 @@ def test_no_leg_renders_its_raw_market_type() -> None:
     source = Path("spreadboard/server.py").read_text(encoding="utf-8")
     raw = re.findall(r"h\((?:row|route)\.get\(['\"](?:long|short)_market_type['\"]\)\)", source)
     assert not raw, f"{len(raw)} render sites still print the raw market type"
+
+
+def test_the_free_stream_sends_only_the_visible_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pinning the query was not enough on its own.
+
+    The board stream pushes a route key with every price change, so a visitor
+    who opened it received live prices for all 1,097 tokens -- locked ones
+    included -- which is the entire product.
+    """
+    _stub_board(monkeypatch, PAYLOAD)
+
+    allowed = server.free_visible_route_keys(Path("board.json"))
+
+    # Three from each list, and nothing beyond.
+    assert len(allowed) <= server.FREE_TOKEN_LIMIT * 2
+    for index in range(server.FREE_TOKEN_LIMIT):
+        assert f"EDGE{index}|Binance Futures|Gate Futures" in allowed
+    for index in range(server.FREE_TOKEN_LIMIT, 8):
+        assert f"EDGE{index}|Binance Futures|Gate Futures" not in allowed
+
+
+def test_the_stream_handler_applies_that_filter() -> None:
+    import inspect
+
+    source = inspect.getsource(server.SpreadBoardHandler.do_GET)
+    block = source.split('"/api/stream/free"', 1)[1][:900]
+    assert "free_visible_route_keys" in block
+
+    stream = inspect.getsource(server.SpreadBoardHandler._send_board_stream)
+    assert "only" in stream and "key in only" in stream

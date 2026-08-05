@@ -455,7 +455,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/stream/free":
                 # Pinned, not taken from the request: this one is public, and a
                 # visitor must not be able to widen it into the whole board.
-                self._send_board_stream(dict(FREE_BOARD_QUERY))
+                #
+                # Pinning alone was not enough. The stream pushes a route key
+                # with every price change, so a visitor who opened it received
+                # live prices for all 1,097 tokens -- locked ones included --
+                # which is the entire product. Only the visible rows go out.
+                self._send_board_stream(
+                    dict(FREE_BOARD_QUERY),
+                    only=free_visible_route_keys(self.server.board_path),
+                )
             elif parsed.path.startswith("/api/stream/"):
                 route_key = unquote(parsed.path.removeprefix("/api/stream/"))
                 self._send_chart_stream(route_key, query)
@@ -960,7 +968,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return
 
-    def _send_board_stream(self, query: dict[str, list[str]]) -> None:
+    def _send_board_stream(
+        self, query: dict[str, list[str]], *, only: set[str] | None = None
+    ) -> None:
         """Push price changes to an open board instead of waiting for a reload.
 
         The data went live once routes were priced from the streaming books, but
@@ -986,6 +996,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             self.wfile.flush()
             for _ in range(20_000):
                 rows = _shared_stream_rows(self.server.board_path, query)
+                if only is not None:
+                    rows = {key: value for key, value in rows.items() if key in only}
                 changed = {
                     key: value for key, value in rows.items() if previous.get(key) != value
                 }
@@ -2772,113 +2784,161 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
 #: to anyone who typed `?limit=100000`.
 FREE_BOARD_QUERY: dict[str, list[str]] = {}
 
-#: How many tokens a visitor sees. Enough to show real, complete, live routes --
-#: venues included -- and small next to the full board, which is what the
-#: membership is for.
-FREE_TOKEN_LIMIT = 6
+#: How many rows a visitor sees in full. Three is enough to prove the board is
+#: real and live, and small against 1,097 tokens.
+FREE_TOKEN_LIMIT = 3
 
 
-def render_free_row(group: dict[str, Any], *, metric: str) -> str:
-    """One token on the free board, complete enough to be worth trusting.
+def free_visible_route_keys(board_path: Path) -> set[str]:
+    """The only route keys a visitor is allowed to receive.
 
-    Venues are shown. A number with the venues stripped out is not a smaller
-    version of this product, it is an unverifiable claim -- and this board
-    already spends enough effort proving its spreads are not mirages.
+    The board stream pushes a route key with every price change. Pinning the
+    query was not enough on its own: a visitor who opened the stream would have
+    received live prices for all 1,097 tokens, locked or not, which is the whole
+    product. The stream is filtered to these keys.
     """
-    route = (
-        group.get("best_funding_route") if metric == "funding" else group.get("best_route")
-    ) or {}
-    route_key = str(route.get("route_key") or "")
-    long_leg = f"{route.get('long_venue') or '-'} {leg_market_label(route.get('long_venue'), route.get('long_market_type'))}".strip()
-    short_leg = f"{route.get('short_venue') or '-'} {leg_market_label(route.get('short_venue'), route.get('short_market_type'))}".strip()
-    spread = _float_or_none(group.get("best_edge_pct"))
-    funding = _float_or_none(group.get("best_funding_24h_pct"))
+    data = api_market_spreads(board_path, dict(FREE_BOARD_QUERY))
+    keys: set[str] = set()
+    for group in (data.get("top_edges") or [])[:FREE_TOKEN_LIMIT]:
+        route = group.get("best_route") or {}
+        if route.get("route_key"):
+            keys.add(str(route["route_key"]))
+    for group in (data.get("top_funding") or [])[:FREE_TOKEN_LIMIT]:
+        route = group.get("best_funding_route") or group.get("best_route") or {}
+        if route.get("route_key"):
+            keys.add(str(route["route_key"]))
+    return keys
+
+
+def render_locked_row(index: int) -> str:
+    """A row with the shape of the real thing and none of its data.
+
+    Deliberately not a CSS blur over real values: anyone can read those out of
+    the DOM, so a blur would hand the board away to whoever opened the
+    inspector. Nothing here has ever touched a number.
+    """
     return f"""
-      <article class="free-row" data-route-key="{h(route_key)}">
-        <div class="free-row-token">
-          <strong>{h(group.get("token"))}</strong>
-          <span>{h(group.get("token_name") or "")}</span>
+      <div class="locked-row" role="button" tabindex="0" data-locked
+           aria-label="Locked opportunity {index}. Open a membership to see it.">
+        <div class="asset-identity">
+          <span class="asset-monogram locked-mark" aria-hidden="true">&#128274;</span>
+          <span><strong>Locked</strong><em>Member view</em></span>
         </div>
-        <div class="free-row-route">
-          <span class="free-leg"><em>Long</em>{h(long_leg)}</span>
-          <span class="free-leg"><em>Short</em>{h(short_leg)}</span>
+        <div class="locked-bars">
+          <span style="width:58%"></span><span style="width:34%"></span>
         </div>
-        <div class="free-row-metric">
-          <em>Spread</em>
-          <strong data-live-spread>{fmt_signed_pct(spread, digits=2)}</strong>
-        </div>
-        <div class="free-row-metric">
-          <em>Funding 24h</em>
-          <strong data-live-funding>{fmt_signed_pct(funding, digits=3)}</strong>
-        </div>
-      </article>
+        <div class="locked-bars"><span style="width:44%"></span></div>
+        <div class="locked-bars"><span style="width:50%"></span></div>
+        <div class="locked-cta">Unlock</div>
+      </div>
     """
+
+
+def _free_teaser(groups: list[dict[str, Any]], hidden: int) -> tuple[str, str]:
+    """One number from behind the lock, with no way to act on it.
+
+    A spread without its token is unactionable, and it is the single most
+    persuasive thing on the page: it says plainly how much is being withheld.
+    """
+    edges = [
+        _float_or_none(group.get("best_edge_pct"))
+        for group in groups[FREE_TOKEN_LIMIT:]
+    ]
+    carries = [
+        _float_or_none(group.get("best_funding_24h_pct"))
+        for group in groups[FREE_TOKEN_LIMIT:]
+    ]
+    widest = max((value for value in edges if value is not None), default=None)
+    best = max((value for value in carries if value is not None), default=None)
+    return (
+        fmt_pct(widest) if widest is not None else "—",
+        fmt_signed_pct(best, digits=3) if best is not None else "—",
+    )
 
 
 def render_free_page(board_path: Path) -> str:
-    """The board without an account: a real, live, deliberately small slice."""
+    """The board a visitor sees: the real thing, three rows deep."""
     data = api_market_spreads(board_path, dict(FREE_BOARD_QUERY))
     summary = data.get("summary") or {}
     health = (data.get("source_health") or {}).get("canonical_api") or {}
     live = bool(data.get("ok")) and health.get("status") == "fresh"
-    edges = (data.get("top_edges") or [])[:FREE_TOKEN_LIMIT]
-    carries = (data.get("top_funding") or [])[:FREE_TOKEN_LIMIT]
+    edges = data.get("top_edges") or []
+    carries = data.get("top_funding") or []
     tokens = int(summary.get("matching_tokens") or 0)
     routes = int(summary.get("matching_rows") or 0)
     venues = len(data.get("exchange_options") or [])
+    hidden = max(tokens - FREE_TOKEN_LIMIT, 0)
+    widest, best_carry = _free_teaser(edges, hidden)
+
+    def section(title: str, blurb: str, groups: list[dict[str, Any]]) -> str:
+        shown = "".join(
+            render_market_token_group(group) for group in groups[:FREE_TOKEN_LIMIT]
+        )
+        locked = "".join(render_locked_row(i + 1) for i in range(4))
+        return f"""
+        <section class="free-section">
+          <header><h2>{h(title)}</h2><p>{h(blurb)}</p></header>
+          <div class="token-route-list">{shown}</div>
+          <div class="locked-list">{locked}</div>
+        </section>
+        """
+
     body = f"""
     <style>
-      .free-page {{ width:min(1240px,calc(100% - 36px)); margin:30px auto 64px; display:grid; gap:26px; }}
-      .free-hero {{ display:grid; grid-template-columns:minmax(0,1.5fr) minmax(280px,.7fr); border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
-      .free-hero-copy {{ padding:34px 32px; }}
-      .free-hero-copy h1 {{ margin:8px 0 12px; font-size:clamp(30px,4.4vw,52px); line-height:1.04; max-width:16ch; }}
-      .free-hero-copy p {{ margin:0; max-width:60ch; color:var(--terminal-muted); font-size:16px; line-height:1.55; }}
-      .free-hero-side {{ padding:28px 26px; border-left:1px solid var(--terminal-line); display:grid; align-content:center; gap:12px; }}
-      .free-stats {{ display:grid; grid-template-columns:repeat(3,1fr); border:1px solid var(--terminal-line); }}
+      .free-page {{ width:min(1240px,calc(100% - 36px)); margin:26px auto 64px; display:grid; gap:24px; }}
+      .free-hero {{ display:grid; grid-template-columns:minmax(0,1.5fr) minmax(260px,.7fr); border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
+      .free-hero-copy {{ padding:30px 30px 26px; }}
+      .free-hero-copy h1 {{ margin:8px 0 10px; font-size:clamp(28px,4.2vw,46px); line-height:1.05; max-width:17ch; }}
+      .free-hero-copy p {{ margin:0; max-width:56ch; color:var(--terminal-muted); font-size:16px; line-height:1.5; }}
+      .free-hero-side {{ padding:26px; border-left:1px solid var(--terminal-line); display:grid; align-content:center; gap:12px; }}
+      .free-stats {{ display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--terminal-line); }}
       .free-stats div {{ padding:16px 18px; border-right:1px solid var(--terminal-line); }}
       .free-stats div:last-child {{ border-right:0; }}
-      .free-stats strong {{ display:block; font-size:26px; line-height:1.1; }}
+      .free-stats strong {{ display:block; font-size:24px; line-height:1.1; font-variant-numeric:tabular-nums; }}
       .free-stats span {{ color:var(--terminal-muted); font-size:11px; font-weight:900; text-transform:uppercase; letter-spacing:.06em; }}
-      .free-columns {{ display:grid; grid-template-columns:1fr 1fr; gap:22px; }}
-      .free-column h2 {{ margin:0 0 4px; font-size:21px; }}
-      .free-column > p {{ margin:0 0 12px; color:var(--terminal-muted); font-size:13px; line-height:1.45; }}
-      .free-row {{ display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1.3fr) auto auto; gap:14px; align-items:center;
-                   padding:13px 16px; border:1px solid var(--terminal-line); border-bottom:0; background:var(--terminal-panel); }}
-      .free-list .free-row:last-child {{ border-bottom:1px solid var(--terminal-line); }}
-      .free-row-token strong {{ display:block; font-size:15px; }}
-      .free-row-token span {{ color:var(--terminal-muted); font-size:11px; }}
-      .free-row-route {{ display:grid; gap:3px; }}
-      .free-leg {{ font-size:12px; color:var(--terminal-text); }}
-      .free-leg em {{ display:inline-block; min-width:42px; color:var(--terminal-muted); font-style:normal; font-size:10px;
-                      font-weight:900; text-transform:uppercase; letter-spacing:.06em; }}
-      .free-row-metric {{ text-align:right; }}
-      .free-row-metric em {{ display:block; color:var(--terminal-muted); font-style:normal; font-size:10px; font-weight:900;
-                             text-transform:uppercase; letter-spacing:.06em; }}
-      .free-row-metric strong {{ font-variant-numeric:tabular-nums; font-size:15px; }}
+      .free-section header {{ margin-bottom:12px; }}
+      .free-section h2 {{ margin:0 0 4px; font-size:21px; }}
+      .free-section header p {{ margin:0; color:var(--terminal-muted); font-size:14px; }}
+      .locked-list {{ display:grid; gap:8px; margin-top:8px; }}
+      .locked-row {{ display:grid; grid-template-columns:minmax(180px,1.2fr) minmax(180px,1.25fr) 108px 108px 96px; gap:10px;
+                     align-items:center; min-height:64px; padding:9px 12px; cursor:pointer;
+                     border:1px solid var(--terminal-line); border-radius:7px; background:var(--terminal-row); }}
+      .locked-row:hover, .locked-row:focus-visible {{ border-color:var(--accent); outline:none; }}
+      .locked-mark {{ display:grid; place-items:center; font-size:15px; }}
+      .locked-row .asset-identity em {{ color:var(--terminal-muted); font-size:11px; font-style:normal; }}
+      .locked-bars {{ display:grid; gap:6px; }}
+      .locked-bars span {{ display:block; height:11px; border-radius:3px;
+                           background:linear-gradient(90deg,var(--terminal-line),var(--terminal-panel));
+                           filter:blur(1.5px); opacity:.85; }}
+      .locked-cta {{ justify-self:end; padding:7px 13px; border-radius:6px; background:var(--accent);
+                     color:var(--accent-ink); font-size:12px; font-weight:900; }}
       .free-cta {{ padding:26px 28px; border:1px solid var(--terminal-line); background:var(--terminal-panel);
                    display:flex; gap:20px; align-items:center; justify-content:space-between; flex-wrap:wrap; }}
       .free-cta h2 {{ margin:0 0 6px; font-size:22px; }}
       .free-cta p {{ margin:0; max-width:62ch; color:var(--terminal-muted); line-height:1.5; }}
       .free-actions {{ display:flex; gap:9px; flex-wrap:wrap; }}
-      .free-button {{ min-height:43px; padding:11px 18px; border:1px solid var(--terminal-line); color:var(--terminal-text);
+      .free-button {{ min-height:44px; padding:12px 18px; border:1px solid var(--terminal-line); color:var(--terminal-text);
                       text-decoration:none; font-weight:900; display:inline-flex; align-items:center; }}
       .free-button.primary {{ background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }}
       .free-note {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
+      .unlock-dialog {{ border:1px solid var(--terminal-line); border-radius:10px; background:var(--terminal-panel);
+                        color:var(--terminal-text); max-width:460px; padding:26px; }}
+      .unlock-dialog::backdrop {{ background:rgba(0,0,0,.55); }}
+      .unlock-dialog h3 {{ margin:0 0 10px; font-size:22px; }}
+      .unlock-dialog ul {{ list-style:none; margin:0 0 18px; padding:0; display:grid; gap:8px; }}
+      .unlock-dialog li {{ display:grid; grid-template-columns:18px 1fr; gap:9px; line-height:1.4; }}
+      .unlock-dialog li span {{ color:var(--accent); font-weight:900; }}
       @media(max-width:900px) {{ .free-hero {{ grid-template-columns:1fr; }} .free-hero-side {{ border-left:0; border-top:1px solid var(--terminal-line); }}
-        .free-columns {{ grid-template-columns:1fr; }} }}
-      @media(max-width:620px) {{ .free-page {{ width:min(100% - 20px,1240px); }} .free-hero-copy,.free-hero-side {{ padding:22px 18px; }}
-        .free-stats {{ grid-template-columns:1fr; }} .free-stats div {{ border-right:0; border-bottom:1px solid var(--terminal-line); }}
-        .free-stats div:last-child {{ border-bottom:0; }}
-        .free-row {{ grid-template-columns:1fr 1fr; }} .free-row-route {{ grid-column:1 / -1; order:3; }} }}
+        .free-stats {{ grid-template-columns:1fr 1fr; }} .locked-row {{ grid-template-columns:1fr 1fr; }} }}
     </style>
     <section class="free-page">
       <header class="free-hero">
         <div class="free-hero-copy">
           <span class="page-kicker">Free preview</span>
-          <h1>Live spreads, no account.</h1>
-          <p>These are real routes off public order books, priced continuously and pushed to this
-             page as the books move &mdash; nothing here waits for a refresh. It is the same feed
-             the full board runs on, showing {FREE_TOKEN_LIMIT} tokens instead of {tokens:,}.</p>
+          <h1>The board, three rows deep.</h1>
+          <p>These are the real top routes, priced off public order books and moving as the books
+             move. Everything a member sees is here &mdash; venues, matched VWAP, funding, rails
+             &mdash; for the top {FREE_TOKEN_LIMIT} of {tokens:,} tokens.</p>
         </div>
         <aside class="free-hero-side">
           <div class="terminal-live-box {'live' if live else 'unavailable'}">
@@ -2889,39 +2949,62 @@ def render_free_page(board_path: Path) -> str:
           <p class="free-note">Watch a number for a few seconds. If it moves, the feed is live.</p>
         </aside>
       </header>
+
       <div class="free-stats">
         <div><span>Tokens tracked</span><strong>{tokens:,}</strong></div>
         <div><span>Routes priced</span><strong>{routes:,}</strong></div>
-        <div><span>Venues</span><strong>{venues:,}</strong></div>
+        <div><span>Widest spread locked</span><strong>{widest}</strong></div>
+        <div><span>Best funding locked</span><strong>{best_carry}</strong></div>
       </div>
-      <div class="free-columns">
-        <section class="free-column">
-          <h2>Widest spreads</h2>
-          <p>Buy the long leg at its ask, sell the short leg at its bid.</p>
-          <div class="free-list">{''.join(render_free_row(group, metric="edge") for group in edges) or '<p class="free-note">No fresh route right now. The board is re-pricing.</p>'}</div>
-        </section>
-        <section class="free-column">
-          <h2>Best funding</h2>
-          <p>What the position pays over 24h at the current settled rate.</p>
-          <div class="free-list">{''.join(render_free_row(group, metric="funding") for group in carries) or '<p class="free-note">No fresh funding route right now.</p>'}</div>
-        </section>
-      </div>
+
+      {section("Widest spreads", "Buy the long leg at its ask, sell the short leg at its bid. Expand a row for every venue pair.", edges)}
+      {section("Best funding", "What the position pays over 24h at the settled rate.", carries)}
+
       <section class="free-cta">
         <div>
-          <h2>The other {max(tokens - FREE_TOKEN_LIMIT, 0):,} tokens</h2>
-          <p>A membership opens every lane &mdash; Futures-Futures, Futures-Spot, Spot-Spot and both
-             DEX lanes &mdash; with filters, convergence charts, saved pairs, transfer-rail checks
-             and alerts when a spread opens or a funding rate flips.</p>
+          <h2>{hidden:,} more tokens are behind the lock</h2>
+          <p>Every lane &mdash; Futures-Futures, Futures-Spot, Spot-Spot and both DEX lanes &mdash;
+             with filters, convergence charts, saved pairs, transfer-rail checks, fair-price gaps,
+             and alerts on any token's price, spread or funding.</p>
         </div>
         <div class="free-actions">
           <a class="free-button primary" href="/register">Create account</a>
-          <a class="free-button" href="/pricing">Membership</a>
-          <a class="free-button" href="/login">Sign in</a>
+          <a class="free-button" href="/pricing">See membership</a>
         </div>
       </section>
-      <p class="free-note">Spreads and funding rates are public market data, not advice. Every route
-         carries execution risk, and a number on a screen is not a filled order.</p>
+      <p class="free-note">Public market data, not advice. Every route carries execution risk, and a
+         number on a screen is not a filled order.</p>
     </section>
+    <dialog class="unlock-dialog" id="unlockDialog">
+      <h3>{hidden:,} tokens are waiting</h3>
+      <ul>
+        <li><span>&#10003;</span>Every one of {tokens:,} tokens and {routes:,} priced routes</li>
+        <li><span>&#10003;</span>All five lanes, {venues} venues and OKX DEX</li>
+        <li><span>&#10003;</span>Convergence charts, custom pairs, saved charts</li>
+        <li><span>&#10003;</span>Alerts on any token's price, spread or funding</li>
+        <li><span>&#10003;</span>Fair-price gaps and transfer-rail checks</li>
+      </ul>
+      <div class="free-actions">
+        <a class="free-button primary" href="/register">Create account</a>
+        <a class="free-button" href="/pricing">See membership</a>
+        <button class="free-button" type="button" data-close-unlock>Not now</button>
+      </div>
+    </dialog>
+    <script>
+    (function(){{
+      const dialog = document.getElementById('unlockDialog');
+      if(!dialog) return;
+      const open = () => {{ if(typeof dialog.showModal === 'function') dialog.showModal(); else window.location.assign('/pricing'); }};
+      document.addEventListener('click', (event) => {{
+        if(event.target.closest('[data-locked]')) open();
+        if(event.target.closest('[data-close-unlock]')) dialog.close();
+      }});
+      document.addEventListener('keydown', (event) => {{
+        if((event.key === 'Enter' || event.key === ' ') && document.activeElement
+           && document.activeElement.matches('[data-locked]')){{ event.preventDefault(); open(); }}
+      }});
+    }})();
+    </script>
     {render_board_stream_script(dict(FREE_BOARD_QUERY), endpoint="/api/stream/free")}
     """
     return shell("Live spreads - SpreadBoard", "free", body)
