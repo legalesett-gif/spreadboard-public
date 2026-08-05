@@ -80,21 +80,51 @@ def _handle_group_query(
     community = accounts.telegram_community(db_path=db_path)
     if community is None or int(community["chat_id"]) != int(chat_id):
         return None
+    public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip()
+    # A bare "$" -- or "$so" with nothing exact behind it -- is a request for
+    # suggestions. Telegram gives a bot no autocomplete hook, so this is the
+    # closest thing: offer what is actually moving and let them tap.
+    # Only a bare "$" asks for suggestions. "$SIREN" is a lookup and must stay
+    # one -- matching any short cashtag here turned every token query into a
+    # suggestion list.
+    bare = text.strip() == "$"
+    if bare and board_path is not None:
+        prefix = ""
+        if not telegram_queries.allow(chat_id, telegram_queries.Query(kind="spread", symbol=prefix or "$")):
+            return None
+        try:
+            symbols = telegram_queries.suggestions(prefix, board_path=board_path)
+        except Exception:  # noqa: BLE001 - a lookup failure must never break the webhook
+            return None
+        if not symbols:
+            return _reply(chat_id, "No token matches that right now.", thread_id=thread_id)
+        heading = f"Tokens matching <b>{prefix.upper()}</b>:" if prefix else "Biggest spreads right now — tap one:"
+        return _reply(
+            chat_id, heading, html=True, thread_id=thread_id,
+            markup=telegram_queries.suggestion_keyboard(symbols, public_url=public_url),
+        )
     query = telegram_queries.parse_query(text)
     if query is None or not telegram_queries.allow(chat_id, query):
         return None
     if board_path is None:
         return None
-    public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip()
     try:
         body = telegram_queries.render(
             query, board_path=board_path, public_url=public_url
         )
     except Exception:  # noqa: BLE001 - a lookup failure must never break the webhook
         return None
+    markup = telegram_queries.keyboard(query, public_url=public_url)
+    if "no parsed routes right now" in body:
+        # A dead end helps nobody: offer what is near it instead.
+        try:
+            near = telegram_queries.suggestions(query.symbol, board_path=board_path)
+        except Exception:  # noqa: BLE001
+            near = []
+        if near:
+            markup = telegram_queries.suggestion_keyboard(near, public_url=public_url)
     return _reply(
-        chat_id, body, html=True, thread_id=thread_id,
-        markup=telegram_queries.keyboard(query, public_url=public_url),
+        chat_id, body, html=True, thread_id=thread_id, markup=markup,
     )
 
 
@@ -108,9 +138,13 @@ def _handle_callback(cb: dict[str, Any], *, db_path: Any, board_path: Any) -> di
     if community is None or int(community["chat_id"]) != chat_id:
         return None
     parts = data.split(":", 2)
-    if len(parts) != 3 or parts[0] != "v":
+    if len(parts) == 2 and parts[0] == "t":
+        # A suggested token was tapped: show its spread, with the view buttons.
+        query = telegram_queries.Query(kind="spread", symbol=parts[1])
+    elif len(parts) == 3 and parts[0] == "v":
+        query = telegram_queries.Query(kind=parts[1], symbol=parts[2])
+    else:
         return None
-    query = telegram_queries.Query(kind=parts[1], symbol=parts[2])
     public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip()
     try:
         body = telegram_queries.render(query, board_path=board_path, public_url=public_url)

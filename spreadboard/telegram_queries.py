@@ -132,6 +132,62 @@ def _route(row: dict[str, Any]) -> str:
     return f"{row.get('long_venue') or '?'}>{row.get('short_venue') or '?'}{mark}"[:22]
 
 
+#: A bare "$" is a request for suggestions, not a token.
+BARE_CASHTAG = re.compile(r"^\$([A-Za-z0-9._-]{0,11})$")
+
+#: How many tokens to offer. Three to a row, four rows, fits a phone.
+SUGGESTION_LIMIT = 12
+
+
+def suggestions(prefix: str, *, board_path: Path | str) -> list[str]:
+    """Tokens to offer for a bare `$`, best first.
+
+    Telegram gives a bot no autocomplete hook, so `$` on its own used to parse
+    to nothing and the member got silence. Offering the tokens actually moving
+    is the closest thing to the autocomplete they expected.
+    """
+    wanted = _normalise(prefix)
+    payload = api_spreads.load_spreads(q=wanted or None, limit=200)
+    scored: list[tuple[float, str]] = []
+    for group in payload.get("groups") or []:
+        token = str(group.get("token") or "").upper()
+        if not token:
+            continue
+        if wanted and not token.startswith(wanted) and wanted not in token:
+            continue
+        edge = group.get("best_edge_pct")
+        try:
+            score = abs(float(edge))
+        except (TypeError, ValueError):
+            score = 0.0
+        scored.append((score, token))
+    # Prefixes first, then contains, each by size of edge.
+    starts = sorted((s for s in scored if s[1].startswith(wanted)), key=lambda x: -x[0])
+    rest = sorted((s for s in scored if not s[1].startswith(wanted)), key=lambda x: -x[0])
+    ordered: list[str] = []
+    for _score, token in starts + rest:
+        if token not in ordered:
+            ordered.append(token)
+        if len(ordered) >= SUGGESTION_LIMIT:
+            break
+    return ordered
+
+
+def suggestion_keyboard(symbols: list[str], *, public_url: str = "") -> dict[str, Any]:
+    rows: list[list[dict[str, Any]]] = []
+    row: list[dict[str, Any]] = []
+    for symbol in symbols:
+        row.append({"text": symbol, "callback_data": f"t:{symbol}"[:64]})
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    if public_url:
+        rows.append([{"text": "Open the board", "url": f"{public_url.rstrip('/')}/markets"}])
+    return {"inline_keyboard": rows}
+
+
 def _rows_for(symbol: str, board_path: Path | str) -> list[dict[str, Any]]:
     """Routes for one token, from the same feed the website renders.
 

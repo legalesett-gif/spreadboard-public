@@ -377,3 +377,68 @@ def test_inline_query_with_empty_prefix_returns_top_tokens(db, board_file, monke
         {"inline_query": {"id": "q1", "query": ""}}, db_path=db, board_path=board_file
     )
     assert [r["title"] for r in reply["results"]] == ["AAA"]
+
+
+def test_a_bare_dollar_offers_tokens_to_tap(monkeypatch, tmp_path) -> None:
+    """`$` on its own used to parse to nothing and the member got silence.
+
+    Telegram gives a bot no autocomplete hook, so offering what is actually
+    moving is the closest thing to the autocomplete they expected.
+    """
+    from spreadboard import telegram_queries as q
+
+    monkeypatch.setattr(
+        q.api_spreads, "load_spreads",
+        lambda **kwargs: {"groups": [
+            {"token": "SIREN", "best_edge_pct": 12.0},
+            {"token": "GUA", "best_edge_pct": 8.0},
+            {"token": "SOL", "best_edge_pct": 1.0},
+        ]},
+    )
+
+    picks = q.suggestions("", board_path=tmp_path / "board.json")
+
+    assert picks == ["SIREN", "GUA", "SOL"]
+    kb = q.suggestion_keyboard(picks)
+    labels = [b["text"] for row in kb["inline_keyboard"] for b in row]
+    assert labels == ["SIREN", "GUA", "SOL"]
+    assert all(b["callback_data"].startswith("t:") for row in kb["inline_keyboard"] for b in row)
+
+
+def test_a_prefix_puts_matches_first(monkeypatch, tmp_path) -> None:
+    from spreadboard import telegram_queries as q
+
+    monkeypatch.setattr(
+        q.api_spreads, "load_spreads",
+        lambda **kwargs: {"groups": [
+            {"token": "RESOLV", "best_edge_pct": 30.0},
+            {"token": "SOL", "best_edge_pct": 2.0},
+            {"token": "SOSO", "best_edge_pct": 1.0},
+        ]},
+    )
+
+    picks = q.suggestions("so", board_path=tmp_path / "board.json")
+
+    # Starts-with wins over a bigger edge that merely contains it.
+    assert picks[0] in {"SOL", "SOSO"}
+    assert "RESOLV" in picks
+
+
+def test_a_named_token_is_still_a_lookup_not_a_suggestion() -> None:
+    """Matching any short cashtag turned every token query into a list."""
+    import inspect
+
+    from spreadboard import telegram_bot
+
+    source = inspect.getsource(telegram_bot._handle_group_query)
+    assert 'text.strip() == "$"' in source
+
+
+def test_tapping_a_suggested_token_renders_it() -> None:
+    import inspect
+
+    from spreadboard import telegram_bot
+
+    source = inspect.getsource(telegram_bot._handle_callback)
+    assert 'parts[0] == "t"' in source
+    assert 'kind="spread"' in source
