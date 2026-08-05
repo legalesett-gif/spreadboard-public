@@ -101,6 +101,15 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 updated_at TEXT NOT NULL,
                 last_login_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS password_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                token_hash TEXT NOT NULL UNIQUE,
+                purpose TEXT NOT NULL CHECK (purpose IN ('invite', 'reset')),
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT
+            );
             CREATE TABLE IF NOT EXISTS sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1224,6 +1233,129 @@ def apply_billing_event(
     except Exception:
         connection.rollback()
         raise
+    finally:
+        connection.close()
+
+
+#: How long a set-password link stays usable. An invite is handed over by the
+#: admin and may sit in a chat for a day or two; a reset is a live credential
+#: and should not.
+INVITE_TOKEN_DAYS = 7
+RESET_TOKEN_HOURS = 2
+
+
+def create_password_token(
+    user_id: int,
+    *,
+    purpose: str = "invite",
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> str:
+    """Mint a single-use link that lets someone set their own password.
+
+    There was no way to recover an account at all: no reset, no forgot-password,
+    and no mail sender configured. A member who lost their password was locked
+    out permanently and a new member could only be created by an admin typing a
+    password and then transmitting it -- which means the admin knows it.
+
+    The raw token is returned once and never stored; only its hash is kept, the
+    same way session tokens are handled.
+    """
+    if purpose not in {"invite", "reset"}:
+        raise ValueError("unknown_token_purpose")
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(tz=timezone.utc)
+    expires = now + (
+        timedelta(days=INVITE_TOKEN_DAYS)
+        if purpose == "invite"
+        else timedelta(hours=RESET_TOKEN_HOURS)
+    )
+    connection = _connect(db_path)
+    try:
+        # One live link per user: minting a new one retires the old.
+        connection.execute(
+            "UPDATE password_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL",
+            (_utc_iso(), int(user_id)),
+        )
+        connection.execute(
+            """INSERT INTO password_tokens (user_id, token_hash, purpose, created_at, expires_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (int(user_id), _token_hash(token), purpose, now.isoformat(), expires.isoformat()),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return token
+
+
+def consume_password_token(
+    token: str,
+    new_password: str,
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    """Set a password from a link, once.
+
+    Every existing session for that user is revoked: if the link was needed
+    because the password leaked, leaving old sessions alive defeats it.
+    """
+    text = str(token or "").strip()
+    if not text:
+        return None
+    encoded = hash_password(new_password)  # raises if too short, before any writes
+    now = datetime.now(tz=timezone.utc)
+    connection = _connect(db_path)
+    try:
+        row = connection.execute(
+            "SELECT * FROM password_tokens WHERE token_hash = ?", (_token_hash(text),)
+        ).fetchone()
+        if row is None or row["used_at"]:
+            return None
+        try:
+            expires = datetime.fromisoformat(str(row["expires_at"]))
+        except ValueError:
+            return None
+        if expires <= now:
+            return None
+        connection.execute(
+            "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+            (encoded, _utc_iso(), int(row["user_id"])),
+        )
+        connection.execute(
+            "UPDATE password_tokens SET used_at = ? WHERE id = ?", (_utc_iso(), int(row["id"]))
+        )
+        connection.execute("DELETE FROM sessions WHERE user_id = ?", (int(row["user_id"]),))
+        connection.commit()
+        user = connection.execute(
+            "SELECT id, email, display_name FROM users WHERE id = ?", (int(row["user_id"]),)
+        ).fetchone()
+        return dict(user) if user else None
+    finally:
+        connection.close()
+
+
+def password_token_status(
+    token: str, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> dict[str, Any] | None:
+    """Whether a link is still good, without spending it."""
+    text = str(token or "").strip()
+    if not text:
+        return None
+    connection = _connect(db_path)
+    try:
+        row = connection.execute(
+            """SELECT p.purpose, p.expires_at, p.used_at, u.email, u.display_name
+               FROM password_tokens p JOIN users u ON u.id = p.user_id
+               WHERE p.token_hash = ?""",
+            (_token_hash(text),),
+        ).fetchone()
+        if row is None or row["used_at"]:
+            return None
+        try:
+            if datetime.fromisoformat(str(row["expires_at"])) <= datetime.now(tz=timezone.utc):
+                return None
+        except ValueError:
+            return None
+        return dict(row)
     finally:
         connection.close()
 

@@ -298,6 +298,10 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_pricing_page())
             elif parsed.path == "/fair":
                 self._send_html(render_fair_price_page())
+            elif parsed.path == "/set-password":
+                self._send_html(
+                    render_set_password_page(query, self.server.accounts_path)
+                )
             elif parsed.path == "/free":
                 self._send_html(render_free_page(self.server.board_path))
             elif parsed.path == "/terms":
@@ -510,6 +514,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(response or {"ok": True})
                 return
+            if parsed.path == "/api/set-password":
+                # Public by necessity: the person cannot sign in yet. The token
+                # is the credential -- single use, time limited, and spending it
+                # revokes every existing session for that account.
+                self._handle_set_password()
+                return
             if parsed.path == "/api/register":
                 self._handle_register()
                 return
@@ -674,6 +684,18 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         db_path=self.server.accounts_path,
                     )
                     self._send_json({"ok": True, "user": created}, status=HTTPStatus.CREATED)
+            elif parsed.path.startswith("/api/account-users/") and parsed.path.endswith("/invite"):
+                if not user.is_admin:
+                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                else:
+                    target_id = int(parsed.path.split("/")[3])
+                    token = accounts.create_password_token(
+                        target_id,
+                        purpose=str(payload.get("purpose") or "invite"),
+                        db_path=self.server.accounts_path,
+                    )
+                    base = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
+                    self._send_json({"ok": True, "url": f"{base}/set-password?token={token}"})
             elif parsed.path.startswith("/api/account-users/") and parsed.path.endswith("/subscription"):
                 if not user.is_admin:
                     self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
@@ -741,7 +763,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.current_user = None
         if not accounts.auth_required():
             return True
-        public = path in {"/login", "/register", "/pricing", "/guide", "/terms", "/privacy", "/refunds", "/free", "/api/stream/free", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico"} or path.startswith("/assets/")
+        public = path in {"/login", "/register", "/pricing", "/guide", "/terms", "/privacy", "/refunds", "/free", "/api/stream/free", "/set-password", "/api/set-password", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico"} or path.startswith("/assets/")
         token = self._session_token()
         user = accounts.user_for_session(token, self.server.accounts_path) if token else None
         self.current_user = user
@@ -774,6 +796,35 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._redirect("/subscription")
             return False
         return True
+
+    def _handle_set_password(self) -> None:
+        """Spend a one-time link. Rate limited like a login, for the same reason."""
+        payload = self._read_payload()
+        key = self.client_address[0] if self.client_address else "unknown"
+        now = time.monotonic()
+        with self._login_attempts_lock:
+            recent = [item for item in self._login_attempts.get(key, []) if now - item < 900]
+            recent.append(now)
+            self._login_attempts[key] = recent
+        if len(recent) > 10:
+            self._send_json(
+                {"ok": False, "error": "too_many_attempts"},
+                status=HTTPStatus.TOO_MANY_REQUESTS,
+            )
+            return
+        try:
+            updated = accounts.consume_password_token(
+                str(payload.get("token") or ""),
+                str(payload.get("password") or ""),
+                db_path=self.server.accounts_path,
+            )
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)[:120]}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if updated is None:
+            self._send_json({"ok": False, "error": "link_not_valid"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        self._send_json({"ok": True})
 
     def _handle_login(self) -> None:
         payload = self._read_payload()
@@ -2958,6 +3009,69 @@ def leg_market_label(venue: Any, market_type: Any) -> str:
     if "DEX" in str(venue or "").upper():
         return "DEX"
     return str(market_type or "").strip()
+
+
+def render_set_password_page(query: dict[str, list[str]], accounts_path: Path) -> str:
+    """Where someone sets their own password from a one-time link.
+
+    Public by necessity -- the person using it cannot sign in yet, which is the
+    whole point -- so the token is the only credential and it is single use,
+    time limited, and revokes every existing session when spent.
+    """
+    token = _query_first(query, "token") or ""
+    state = accounts.password_token_status(token, db_path=accounts_path) if token else None
+    if state is None:
+        inner = (
+            '<h1>This link is not valid</h1>'
+            '<p>It may have been used already, or expired. Ask for a new one.</p>'
+            '<div class="login-note"><a href="/login">Back to sign in</a></div>'
+        )
+    else:
+        who = h(str(state.get("display_name") or state.get("email") or ""))
+        verb = "Set your password" if state.get("purpose") == "invite" else "Choose a new password"
+        inner = f"""
+          <h1>{verb}</h1>
+          <p>for <b>{who}</b></p>
+          <form id="setPasswordForm">
+            <input type="hidden" name="token" value="{h(token)}">
+            <label>New password<input name="password" type="password" minlength="12"
+              autocomplete="new-password" required autofocus></label>
+            <label>Repeat it<input name="confirm" type="password" minlength="12"
+              autocomplete="new-password" required></label>
+            <button type="submit">Save password</button>
+            <div class="login-error" role="alert"></div>
+          </form>
+          <div class="login-note">At least 12 characters. Signing in anywhere else will be ended.</div>
+        """
+    return shell("Set password - SpreadBoard", "login", f"""
+    <main class="login-shell">
+      <div class="login-brand"><span class="login-mark"></span>SpreadBoard</div>
+      <section class="login-panel">{inner}</section>
+    </main>
+    <script>
+    (function(){{
+      const form = document.getElementById('setPasswordForm');
+      if(!form) return;
+      form.addEventListener('submit', async (event) => {{
+        event.preventDefault();
+        const box = form.querySelector('.login-error');
+        const data = new FormData(form);
+        if(String(data.get('password')) !== String(data.get('confirm'))){{
+          box.textContent = 'The two passwords do not match.'; return;
+        }}
+        box.textContent = 'Saving...';
+        try{{
+          const response = await fetch('/api/set-password', {{
+            method: 'POST', headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{token: data.get('token'), password: data.get('password')}})}});
+          const body = await response.json().catch(() => ({{}}));
+          if(!response.ok || body.ok === false) throw new Error(body.error || 'Could not save');
+          box.textContent = 'Saved. Taking you to sign in...';
+          setTimeout(() => window.location.assign('/login'), 900);
+        }}catch(error){{ box.textContent = error.message; }}
+      }});
+    }})();
+    </script>""")
 
 
 def render_market_reconnecting(
