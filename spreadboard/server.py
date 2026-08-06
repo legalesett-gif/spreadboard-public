@@ -78,6 +78,21 @@ _MARKET_STALE_MAX_SECONDS = max(
     60.0, float(os.environ.get("SPREADBOARD_MARKET_STALE_SECONDS", "1800"))
 )
 _MARKET_CACHE_INFLIGHT: dict[tuple[Any, ...], threading.Event] = {}
+
+#: How many *different* board views may be built at the same time.
+#:
+#: Single-flight already stops N readers of one view from starting N builds.
+#: Nothing stopped N readers of N different views, and every lane tab is a
+#: different view: opening the board's five kind filters plus funding right
+#: after a restart started six full builds in parallel and took the service
+#: from 0.9GB to 3.98GB, at which point the container hit its 6GB cap and Caddy
+#: could no longer dial it at all -- 502s while the process sat at 182% CPU.
+#: Builds beyond this queue; a queued reader still gets the stale payload
+#: immediately if it has one, so the wait is invisible on any view served
+#: before.
+_MARKET_BUILD_SLOTS = threading.BoundedSemaphore(
+    max(1, int(os.environ.get("SPREADBOARD_MARKET_BUILD_SLOTS", "2")))
+)
 _CHART_SAMPLE_LOCK = threading.Lock()
 _CHART_SAMPLE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CHART_SAMPLE_INFLIGHT: dict[str, threading.Event] = {}
@@ -1183,6 +1198,18 @@ def api_market_spreads(
             ).start()
             return stale
 
+    acquired = _MARKET_BUILD_SLOTS.acquire(timeout=_MARKET_BUILD_WAIT_SECONDS)
+    if not acquired:
+        # Every slot is busy. Anything we can serve beats piling on another
+        # full build, which is what exhausted the container. A no_cache caller
+        # has nothing to fall back on and is an explicit internal request, so
+        # it proceeds unslotted rather than being told the board is warming.
+        if cache_key is not None:
+            stale = _market_cache_stale_get(cache_key) if allow_stale else None
+            _market_cache_finish(cache_key, None)
+            if stale is not None:
+                return stale
+            return _market_warming_payload()
     try:
         min_funding_24h = _query_float(query, "min_abs_funding_24h_pct")
         min_funding_apr = _query_float(query, "min_abs_funding_apr_pct")
@@ -1211,6 +1238,9 @@ def api_market_spreads(
         if cache_key is not None:
             _market_cache_finish(cache_key, None)
         raise
+    finally:
+        if acquired:
+            _MARKET_BUILD_SLOTS.release()
     if cache_key is not None:
         _market_cache_finish(cache_key, data)
     return data
