@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import time
 from types import SimpleNamespace
 
@@ -487,6 +488,14 @@ def test_route_alert_dialog_only_offers_server_evaluated_metrics() -> None:
         "community_call", "hyperliquid", "token_index",
     ):
         assert f'<option value="{unsupported}">' not in source
+
+
+def test_production_board_does_not_admit_hour_old_routes_as_live() -> None:
+    compose = (Path(__file__).resolve().parents[1] / "compose.production.yml").read_text()
+
+    match = re.search(r'SPREADBOARD_LIVE_MAX_AGE_MIN:\s*"([0-9.]+)"', compose)
+    assert match is not None
+    assert float(match.group(1)) <= 5.0
 
 
 def test_high_dislocation_dex_route_requires_exact_cex_identity() -> None:
