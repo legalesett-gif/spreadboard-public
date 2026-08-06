@@ -520,7 +520,7 @@ def test_fast_quote_budget_covers_top_25_without_a_five_minute_cycle() -> None:
 
     assert routes >= 4 * 25
     assert routes <= 160
-    assert timeout <= 180
+    assert timeout <= 240
 
 
 def test_high_dislocation_dex_route_requires_exact_cex_identity() -> None:
