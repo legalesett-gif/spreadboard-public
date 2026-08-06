@@ -32,7 +32,10 @@ services:
       # ordinary traffic evicting what the warmer just built and to cap the
       # tail -- it is applied twice, to _MARKET_CACHE and to the
       # stale-while-revalidate copy behind it.
-      SPREADBOARD_MARKET_CACHE_ENTRIES: "20"
+      # The warmer builds 11 views; 20 left ~9 tail entries churning on a box
+      # whose ceiling is 6g and which peaked at 5.1g. This is the code default
+      # and still holds every warmed view resident.
+      SPREADBOARD_MARKET_CACHE_ENTRIES: "14"
       # One fetch_tickers per venue re-prices the whole board. This is what
       # makes every positive token current rather than only the streamed ones.
       SPREADBOARD_BULK_QUOTE_SECONDS: "15"
