@@ -873,6 +873,21 @@ def test_history_reader_does_not_run_schema_writes_against_active_writer(tmp_pat
         writer.close()
 
 
+def test_live_quote_survives_a_momentary_history_writer_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        market_history,
+        "record_route",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")),
+    )
+
+    inserted, state = server._record_live_chart_route(_route())
+
+    assert inserted == 0
+    assert state == "history_write_deferred"
+
+
 def test_history_bucketing_keeps_latest_sample_per_bucket(tmp_path: Path) -> None:
     route = _route()
     start_us = int(time.time() * 1_000_000) - 60_000_000

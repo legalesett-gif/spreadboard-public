@@ -8,12 +8,15 @@ from pathlib import Path
 import json
 import os
 import sqlite3
+import threading
 import time
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_DB_PATH = RUNTIME_DIR / "spreadboard_market_history.sqlite3"
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_READY: set[str] = set()
 
 
 def record_snapshot(
@@ -286,13 +289,17 @@ def _is_contaminated_dex_sample(
 def _connect(path: Path | str) -> sqlite3.Connection:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
+    connection = sqlite3.connect(path, timeout=15)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA busy_timeout=5000")
-    connection.execute("PRAGMA journal_mode=WAL")
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS route_points (
+    connection.execute("PRAGMA busy_timeout=15000")
+    key = str(path.resolve())
+    with _SCHEMA_LOCK:
+        if key in _SCHEMA_READY:
+            return connection
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS route_points (
             route_key TEXT NOT NULL,
             quote_ts_us INTEGER NOT NULL,
             token TEXT NOT NULL,
@@ -325,34 +332,36 @@ def _connect(path: Path | str) -> sqlite3.Connection:
             long_next_funding_ts_us INTEGER,
             short_next_funding_ts_us INTEGER,
             PRIMARY KEY (route_key, quote_ts_us)
+            )
+            """
         )
-        """
-    )
-    _ensure_columns(
-        connection,
-        {
-            "long_bid_price": "REAL",
-            "long_ask_price": "REAL",
-            "short_bid_price": "REAL",
-            "short_ask_price": "REAL",
-            "exit_spread_pct": "REAL",
-            "long_bid_vwap_price": "REAL",
-            "long_ask_vwap_price": "REAL",
-            "short_bid_vwap_price": "REAL",
-            "short_ask_vwap_price": "REAL",
-            "sample_source": "TEXT",
-            "target_notional_usd": "REAL",
-            "long_current_funding_pct": "REAL",
-            "short_current_funding_pct": "REAL",
-            "long_funding_interval_hours": "REAL",
-            "short_funding_interval_hours": "REAL",
-            "long_next_funding_ts_us": "INTEGER",
-            "short_next_funding_ts_us": "INTEGER",
-        },
-    )
-    connection.execute(
-        "CREATE INDEX IF NOT EXISTS route_points_token_ts ON route_points(token, quote_ts_us)"
-    )
+        _ensure_columns(
+            connection,
+            {
+                "long_bid_price": "REAL",
+                "long_ask_price": "REAL",
+                "short_bid_price": "REAL",
+                "short_ask_price": "REAL",
+                "exit_spread_pct": "REAL",
+                "long_bid_vwap_price": "REAL",
+                "long_ask_vwap_price": "REAL",
+                "short_bid_vwap_price": "REAL",
+                "short_ask_vwap_price": "REAL",
+                "sample_source": "TEXT",
+                "target_notional_usd": "REAL",
+                "long_current_funding_pct": "REAL",
+                "short_current_funding_pct": "REAL",
+                "long_funding_interval_hours": "REAL",
+                "short_funding_interval_hours": "REAL",
+                "long_next_funding_ts_us": "INTEGER",
+                "short_next_funding_ts_us": "INTEGER",
+            },
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS route_points_token_ts ON route_points(token, quote_ts_us)"
+        )
+        connection.commit()
+        _SCHEMA_READY.add(key)
     return connection
 
 

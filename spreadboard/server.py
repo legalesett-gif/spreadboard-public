@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
 from http.cookies import SimpleCookie
 import subprocess
 import sys
@@ -2399,10 +2400,7 @@ def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
             worker_exit_code = completed.returncode
         quoted_row = worker.get("row") if isinstance(worker, dict) else None
         if worker_exit_code == 0 and isinstance(quoted_row, dict):
-            inserted = market_history.record_route(
-                quoted_row,
-                sample_source="live_chart_exact_route",
-            )
+            inserted, persistence = _record_live_chart_route(quoted_row)
             result = {
                 "status": "ok",
                 "inserted": inserted,
@@ -2411,6 +2409,8 @@ def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
                 "target_notional_usd": worker.get("target_notional_usd") or 50.0,
                 "duration_ms": round((time.monotonic() - started) * 1000),
             }
+            if persistence is not None:
+                result["persistence"] = persistence
         else:
             result = {
                 "status": "unavailable",
@@ -2432,6 +2432,25 @@ def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
         if event is not None:
             event.set()
     return result
+
+
+def _record_live_chart_route(row: dict[str, Any]) -> tuple[int, str | None]:
+    """Persist a sample when possible without taking the live stream down.
+
+    An exact quote is still valid if the history database has a momentary
+    writer lock. The following two-second tick will try again; returning the
+    quote is more accurate than turning the whole SSE request into HTTP 500.
+    """
+
+    try:
+        return (
+            market_history.record_route(row, sample_source="live_chart_exact_route"),
+            None,
+        )
+    except sqlite3.OperationalError as exc:
+        if "locked" not in str(exc).casefold():
+            raise
+        return 0, "history_write_deferred"
 
 
 def _native_chart_route(row: dict[str, Any]) -> bool:
