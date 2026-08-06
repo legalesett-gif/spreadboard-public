@@ -524,6 +524,97 @@ def test_exact_identity_dex_route_is_not_mirage_guarded() -> None:
     assert reasons == []
 
 
+def test_large_cex_dislocation_requires_exact_public_contract_identity() -> None:
+    reasons = api_spreads._route_mirage_reasons(
+        raw={
+            "source_kind": "api_discovered",
+            "long_venue": "Gate",
+            "short_venue": "Kucoin",
+            "executable_spread_pct": 97,
+            "blockers": [],
+        },
+        long_market_type="Futures",
+        short_market_type="Futures",
+        long_rails={"networks": [{"network": "BEP20", "withdraw": True}]},
+        short_rails={"networks": [{"network": "BASE", "deposit": True}]},
+    )
+
+    assert reasons == ["mirage_guard:high_dislocation_exact_identity_required"]
+
+
+def test_large_cex_dislocation_survives_exact_contract_match() -> None:
+    reasons = api_spreads._route_mirage_reasons(
+        raw={
+            "source_kind": "api_discovered",
+            "long_venue": "Binance",
+            "short_venue": "Mexc",
+            "executable_spread_pct": 30,
+            "blockers": [],
+        },
+        long_market_type="Spot",
+        short_market_type="Spot",
+        long_rails={
+            "networks": [
+                {"network": "ETH", "withdraw": True, "contract": "0xAbC"}
+            ]
+        },
+        short_rails={
+            "networks": [
+                {"network": "ERC20", "deposit": True, "contract": "0xaBc"}
+            ]
+        },
+    )
+
+    assert reasons == []
+
+
+def test_large_same_venue_spot_future_gap_still_needs_contract_proof() -> None:
+    reasons = api_spreads._route_mirage_reasons(
+        raw={
+            "source_kind": "api_discovered",
+            "long_venue": "Gate",
+            "short_venue": "Gate",
+            "executable_spread_pct": 100,
+            "blockers": [],
+        },
+        long_market_type="Spot",
+        short_market_type="Futures",
+        long_rails={},
+        short_rails={},
+    )
+    assert reasons == ["mirage_guard:high_dislocation_exact_identity_required"]
+
+
+def test_large_dex_gap_requires_the_cex_to_publish_the_same_contract() -> None:
+    reasons = api_spreads._route_mirage_reasons(
+        raw={
+            "source_kind": "dex_discovered",
+            "long_venue": "Gate",
+            "short_venue": "OKX DEX 1",
+            "executable_spread_pct": 101,
+            "blockers": [],
+            "notes": {
+                "identity": {
+                    "long": {"identity_key": "asset:vanry"},
+                    "short": {
+                        "chain_id": 1,
+                        "token_address": "0x8de5",
+                    },
+                }
+            },
+        },
+        long_market_type="Spot",
+        short_market_type="Spot",
+        long_rails={
+            "networks": [
+                {"network": "ERC20", "withdraw": True, "contract": None}
+            ]
+        },
+        short_rails={},
+    )
+    assert "mirage_guard:high_dislocation_cex_contract_unverified" in reasons
+
+
 def test_dex_contract_guard_rejects_contract_from_another_token() -> None:
     watchlist = {
         "ETH": WatchAsset(
@@ -2804,6 +2895,35 @@ def test_a_price_refresh_does_not_invalidate_the_whole_board(tmp_path) -> None:
     assert snapshot.stat().st_mtime_ns == stamp_before, "the snapshot must not be rewritten"
     bbb = [r for g in after["groups"] for r in g["routes"] if r["token"] == "BBB"]
     assert bbb, "routes outside the delta must survive untouched"
+
+
+def test_warmed_views_parse_one_snapshot_once(tmp_path, monkeypatch) -> None:
+    """Each lane is a different result-cache key, but they share one row set."""
+    quote_ts_us = int(time.time() * 1_000_000)
+    snapshot = tmp_path / "api_discovery_latest.json"
+    snapshot.write_text(json.dumps({
+        "updated_at": "2026-08-06T00:00:00Z",
+        "api_discovered_rows": [{
+            "token": "AAA", "long_venue": "Gate", "long_market_type": "Futures",
+            "short_venue": "Bybit", "short_market_type": "Futures",
+            "quote_ts_us": quote_ts_us, "executable_spread_pct": 1.0,
+            "depth_weighted_spread_pct": 1.0,
+        }],
+        "dex_discovered_rows": [],
+    }))
+    original = api_spreads._cached_snapshot
+    calls = 0
+
+    def counted(path):
+        nonlocal calls
+        calls += 1
+        return original(path)
+
+    monkeypatch.setattr(api_spreads, "_cached_snapshot", counted)
+    api_spreads._ROW_CACHE.clear()
+    api_spreads._load_api_discovery_rows(snapshot, now=time.time(), metadata={}, rails={})
+    api_spreads._load_api_discovery_rows(snapshot, now=time.time(), metadata={}, rails={})
+    assert calls == 1
 
 
 def test_a_delta_route_absent_from_the_snapshot_is_still_shown(tmp_path) -> None:

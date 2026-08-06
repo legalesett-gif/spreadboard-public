@@ -5,13 +5,15 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from http.cookiejar import CookieJar
 from datetime import datetime, timezone
 import json
 import math
+import os
 import time
 from typing import Any
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 LANES = ("FUTURES", "FUTURES-SPOT-PAIR", "SPOT", "DEX-FUTURES")
 WINDOWS = {
@@ -21,14 +23,34 @@ WINDOWS = {
     "1h": 1.0,
 }
 
+_OPENER = build_opener(HTTPCookieProcessor(CookieJar()))
+
 
 def _json_url(url: str, *, timeout: float) -> dict[str, Any]:
     request = Request(url, headers={"Accept": "application/json", "User-Agent": "SpreadBoardAudit/1"})
-    with urlopen(request, timeout=timeout) as response:
+    with _OPENER.open(request, timeout=timeout) as response:
         payload = json.load(response)
     if not isinstance(payload, dict):
         raise ValueError("response_is_not_an_object")
     return payload
+
+
+def _authenticate(base_url: str, *, email: str, password: str, timeout: float) -> None:
+    payload = json.dumps({"email": email, "password": password}).encode("utf-8")
+    request = Request(
+        _endpoint(base_url, "/api/login"),
+        data=payload,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "SpreadBoardAudit/1",
+        },
+        method="POST",
+    )
+    with _OPENER.open(request, timeout=timeout) as response:
+        result = json.load(response)
+    if not isinstance(result, dict) or not result.get("ok"):
+        raise RuntimeError("audit_login_failed")
 
 
 def _endpoint(base_url: str, path: str, query: dict[str, Any] | None = None) -> str:
@@ -228,7 +250,14 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=45.0)
     parser.add_argument("--max-age-seconds", type=float, default=60.0)
     parser.add_argument("--output")
+    parser.add_argument("--email", default=os.environ.get("SPREADBOARD_AUDIT_EMAIL"))
+    parser.add_argument("--password", default=os.environ.get("SPREADBOARD_AUDIT_PASSWORD"))
     args = parser.parse_args()
+
+    if args.email or args.password:
+        if not args.email or not args.password:
+            parser.error("both --email and --password are required for authenticated audits")
+        _authenticate(args.base_url, email=args.email, password=args.password, timeout=args.timeout)
 
     routes = _select_routes(
         args.base_url,

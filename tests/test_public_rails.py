@@ -89,6 +89,34 @@ def test_an_unreachable_public_source_falls_through(monkeypatch) -> None:
     assert public_rails._fetch_native_venue_rails("Binance", {"BTC"}) is None
 
 
+def test_exact_contract_match_does_not_trust_network_name_alone() -> None:
+    left = {"networks": [{"network": "ERC20", "withdraw": True, "contract": None}]}
+    right = {"networks": [{"network": "ETH", "deposit": True, "contract": None}]}
+    assert public_rails.transfer_compatibility(left, right)["status"] == "compatible"
+    assert public_rails.exact_contract_match(left, right) is False
+
+
+def test_exact_contract_match_normalizes_network_and_contract_case() -> None:
+    left = {
+        "networks": [{"network": "ERC20", "withdraw": True, "contract": "0xAbC"}]
+    }
+    right = {
+        "networks": [{"network": "ETH", "deposit": True, "contract": "0xaBc"}]
+    }
+    assert public_rails.exact_contract_match(left, right) is True
+
+
+def test_state_exact_contract_requires_the_dex_chain_too() -> None:
+    state = {
+        "networks": [
+            {"network": "ERC20", "contract": "0xAbC"},
+            {"network": "BASE", "contract": "0xDef"},
+        ]
+    }
+    assert public_rails.state_has_exact_contract(state, contract="0xaBc", chain_id=1)
+    assert not public_rails.state_has_exact_contract(state, contract="0xaBc", chain_id=8453)
+
+
 def test_a_blind_venue_is_reported_not_silently_empty(tmp_path, monkeypatch) -> None:
     """An empty result read as 'this venue has no shut rails', which is the
     opposite of the truth when the endpoint simply needed credentials."""

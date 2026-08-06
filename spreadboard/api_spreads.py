@@ -456,8 +456,14 @@ def _release_lane_token_counts(
 # an already-propagated payload is safe.
 _BULK_KEYS = ("api_discovered_rows", "dex_discovered_rows")
 _SNAPSHOT_CACHE_LOCK = Lock()
-_ROW_CACHE: dict[tuple[str, int], tuple[float, list["SpreadTerminalRow"]]] = {}
-_ROW_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_ROW_CACHE_SECONDS", "5"))
+_ROW_CACHE: dict[
+    tuple[Any, ...],
+    tuple[float, list["SpreadTerminalRow"], dict[str, Any]],
+] = {}
+# Every input that can change a materialised row is part of the cache key. A
+# five-second TTL therefore only forced the same 40-80 MB snapshot to be parsed
+# once per warmed view; it added CPU load without improving freshness.
+_ROW_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_ROW_CACHE_SECONDS", "900"))
 _RESULT_CACHE: dict[tuple[Any, ...], tuple[int, float, dict[str, Any]]] = {}
 _RESULT_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_RESULT_CACHE_SECONDS", "90"))
 _RESULT_CACHE_MAX_ENTRIES = int(os.environ.get("SPREADBOARD_RESULT_CACHE_ENTRIES", "4"))
@@ -722,17 +728,10 @@ def _load_api_discovery_rows(
     rails: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[SpreadTerminalRow], dict[str, Any]]:
     try:
-        payload = _cached_snapshot(path)
+        snapshot_mtime = path.stat().st_mtime_ns
     except OSError as exc:
         return [], {
             "status": "missing",
-            "path": str(path),
-            "error": str(exc),
-            "row_count": 0,
-        }
-    except json.JSONDecodeError as exc:
-        return [], {
-            "status": "error",
             "path": str(path),
             "error": str(exc),
             "row_count": 0,
@@ -753,15 +752,27 @@ def _load_api_discovery_rows(
 
     cache_key = (
         str(path),
-        path.stat().st_mtime_ns,
+        snapshot_mtime,
         _mtime_ns(delta_path),
         _mtime_ns(Path(bulk_quotes.FUNDING_CACHE_PATH)),
+        _mtime_ns(token_metadata.DEFAULT_CACHE_PATH),
+        _mtime_ns(public_rails.DEFAULT_CACHE_PATH),
     )
     with _SNAPSHOT_CACHE_LOCK:
         cached_rows = _ROW_CACHE.get(cache_key)
     if cached_rows is not None and 0.0 <= now - cached_rows[0] < _ROW_CACHE_TTL_SECONDS:
         rows = cached_rows[1]
+        snapshot_meta = cached_rows[2]
     else:
+        try:
+            payload = _cached_snapshot(path)
+        except json.JSONDecodeError as exc:
+            return [], {
+                "status": "error",
+                "path": str(path),
+                "error": str(exc),
+                "row_count": 0,
+            }
         _propagate_funding_by_leg(payload)
         live_funding = bulk_quotes.load_funding()
         rows = [
@@ -780,13 +791,23 @@ def _load_api_discovery_rows(
         rows = _apply_fast_quote_delta(
             rows, delta_path, now=now, metadata=metadata or {}, rails=rails or {}
         )
+        snapshot_meta = {
+            "updated_at": payload.get("updated_at"),
+            "api_discovered_count": len(payload.get("api_discovered_rows") or []),
+            "dex_discovered_count": len(payload.get("dex_discovered_rows") or []),
+            "executor_ready_count": len(payload.get("executor_ready_rows") or []),
+            "expires_at": payload.get("expires_at"),
+            "worker_status": ((payload.get("source_refresh") or {}).get("status")),
+            "dex_spot_source": _dex_spot_source_status(payload),
+            "fast_quote_refresh": payload.get("fast_quote_refresh"),
+        }
         with _SNAPSHOT_CACHE_LOCK:
             _ROW_CACHE.clear()
-            _ROW_CACHE[cache_key] = (now, rows)
+            _ROW_CACHE[cache_key] = (now, rows, snapshot_meta)
         # The tree is no longer referenced by anything but this frame.
         payload = {key: value for key, value in payload.items() if key not in _BULK_KEYS}
         gc.collect()
-    updated_at = _str_or_none(payload.get("updated_at"))
+    updated_at = _str_or_none(snapshot_meta.get("updated_at"))
     discovery_age = _iso_age_min(updated_at, now=now)
     # Since the fast worker started writing a delta instead of rewriting the
     # snapshot, the snapshot's own `fast_quote_refresh` is frozen at whenever the
@@ -795,11 +816,8 @@ def _load_api_discovery_rows(
     # the last discovery scan and members are told the feed is reconnecting.
     fast_refresh = _fast_quote_refresh_meta(delta_path)
     if not fast_refresh:
-        fast_refresh = (
-            payload.get("fast_quote_refresh")
-            if isinstance(payload.get("fast_quote_refresh"), dict)
-            else {}
-        )
+        cached_refresh = snapshot_meta.get("fast_quote_refresh")
+        fast_refresh = cached_refresh if isinstance(cached_refresh, dict) else {}
     fast_updated_at = _str_or_none(fast_refresh.get("updated_at"))
     fast_age = (
         _iso_age_min(fast_updated_at, now=now)
@@ -826,13 +844,13 @@ def _load_api_discovery_rows(
         "discovery_age_min": discovery_age,
         "fast_quote_age_min": fast_age,
         "row_count": len(rows),
-        "api_discovered_count": len(payload.get("api_discovered_rows") or []),
-        "dex_discovered_count": len(payload.get("dex_discovered_rows") or []),
-        "executor_ready_count": len(payload.get("executor_ready_rows") or []),
-        "expires_at": payload.get("expires_at"),
-        "worker_status": ((payload.get("source_refresh") or {}).get("status")),
-        "dex_spot_source": _dex_spot_source_status(payload),
-        "fast_quote_refresh": payload.get("fast_quote_refresh"),
+        "api_discovered_count": snapshot_meta.get("api_discovered_count"),
+        "dex_discovered_count": snapshot_meta.get("dex_discovered_count"),
+        "executor_ready_count": snapshot_meta.get("executor_ready_count"),
+        "expires_at": snapshot_meta.get("expires_at"),
+        "worker_status": snapshot_meta.get("worker_status"),
+        "dex_spot_source": snapshot_meta.get("dex_spot_source"),
+        "fast_quote_refresh": fast_refresh or snapshot_meta.get("fast_quote_refresh"),
     }
 
 
@@ -1567,6 +1585,32 @@ def _route_mirage_reasons(
         reasons.append("mirage_guard:dex_cex_identity_unverified")
     elif spread >= 25.0 and identity_unverified and not already_guarded:
         reasons.append("mirage_guard:high_dislocation_identity_unverified")
+    # A generic ``asset:TICKER`` identity proves only that symbols match. It
+    # cannot distinguish RWA Inc from Allo (both trade as RWA), or migrated and
+    # legacy representations of the same ticker. A very large cross-venue CEX
+    # gap therefore needs exact public contract evidence before it is ranked.
+    # DEX rows have a separate exact chain/contract guard below.
+    if (
+        spread >= 10.0
+        and not is_dex
+        and not public_rails.exact_contract_match(long_rails, short_rails)
+        and not already_guarded
+    ):
+        reasons.append("mirage_guard:high_dislocation_exact_identity_required")
+    if is_dex and spread >= 5.0 and not identity_unverified and not already_guarded:
+        notes = raw.get("notes") if isinstance(raw.get("notes"), dict) else {}
+        identities = notes.get("identity") if isinstance(notes.get("identity"), dict) else {}
+        long_identity = identities.get("long") if isinstance(identities.get("long"), dict) else {}
+        short_identity = identities.get("short") if isinstance(identities.get("short"), dict) else {}
+        long_is_dex = "dex" in str(raw.get("long_venue") or "").casefold()
+        dex_identity = long_identity if long_is_dex else short_identity
+        cex_rails = short_rails if long_is_dex else long_rails
+        if not public_rails.state_has_exact_contract(
+            cex_rails,
+            contract=_str_or_none(dex_identity.get("token_address")),
+            chain_id=dex_identity.get("chain_id"),
+        ):
+            reasons.append("mirage_guard:high_dislocation_cex_contract_unverified")
     if spread < 1.0:
         return reasons
     if long_market_type == "Spot" and short_market_type == "Spot":
@@ -1618,7 +1662,7 @@ def _dex_contract_mirage_reasons(
 
 def _hide_guarded_rows() -> bool:
     """Whether identity-unverified rows are dropped instead of badged."""
-    return str(os.environ.get("SPREADBOARD_HIDE_GUARDED_ROWS", "")).strip().lower() in {
+    return str(os.environ.get("SPREADBOARD_HIDE_GUARDED_ROWS", "1")).strip().lower() in {
         "1", "true", "yes", "on",
     }
 

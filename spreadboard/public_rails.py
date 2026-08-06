@@ -84,6 +84,69 @@ def transfer_compatibility(
     }
 
 
+def exact_contract_match(
+    left_state: dict[str, Any],
+    right_state: dict[str, Any],
+) -> bool:
+    """Return whether two venues publish the same contract on one network.
+
+    A shared network name with one or both contracts omitted is enough to study
+    transferability, but it is not identity proof. That distinction matters for
+    very large dislocations, where unrelated assets routinely reuse a ticker.
+    """
+
+    left_networks = _usable_networks(left_state, "withdraw")
+    right_networks = _usable_networks(right_state, "deposit")
+    for network in set(left_networks) & set(right_networks):
+        left_contract = left_networks[network]
+        right_contract = right_networks[network]
+        if (
+            left_contract
+            and right_contract
+            and left_contract.casefold() == right_contract.casefold()
+        ):
+            return True
+    return False
+
+
+_CHAIN_NETWORK = {
+    1: "ethereum",
+    10: "optimism",
+    56: "bsc",
+    137: "polygon",
+    501: "solana",
+    8453: "base",
+    42161: "arbitrum",
+    43114: "avalanchec",
+}
+
+
+def state_has_exact_contract(
+    state: dict[str, Any],
+    *,
+    contract: str | None,
+    chain_id: int | str | None,
+) -> bool:
+    """Return whether one venue explicitly publishes the DEX leg's contract."""
+
+    expected_contract = str(contract or "").strip()
+    try:
+        expected_network = _CHAIN_NETWORK.get(int(chain_id))
+    except (TypeError, ValueError):
+        expected_network = None
+    if not expected_contract or not expected_network:
+        return False
+    for item in state.get("networks") or []:
+        if not isinstance(item, dict):
+            continue
+        if _normalize_network(item.get("network")) != expected_network:
+            continue
+        published = str(item.get("contract") or "").strip()
+        if published and published.casefold() == expected_contract.casefold():
+            return True
+    return False
+
+
 def _usable_networks(state: dict[str, Any], direction: str) -> dict[str, str | None]:
     networks = state.get("networks") if isinstance(state, dict) else None
     if not isinstance(networks, list):
