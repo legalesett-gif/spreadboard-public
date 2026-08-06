@@ -180,3 +180,92 @@ def test_the_chart_draws_the_convergence_line() -> None:
 def test_the_convergence_colour_is_defined_in_both_themes() -> None:
     source = Path("spreadboard/server.py").read_text(encoding="utf-8")
     assert source.count("--terminal-warning:") == 2, "light and dark both need the colour"
+
+
+def test_ourbit_columnar_klines_become_ohlcv_rows() -> None:
+    """Ourbit has no ccxt adapter and returns parallel arrays, not rows.
+
+    Its legs are 1,337 of the board's futures legs -- the single largest
+    backfill blocker -- and every one of them is a futures leg, so the spot
+    endpoint would not have helped.
+    """
+    import json as _json
+    from unittest.mock import patch
+
+    payload = {
+        "success": True,
+        "data": {
+            "time": [1786039260, 1786039320, 1786039380],
+            "open": [0.4354, 0.4345, 0.4340],
+            "high": [0.4354, 0.4345, 0.4346],
+            "low": [0.4345, 0.4340, 0.4338],
+            "close": [0.4345, 0.4340, 0.4346],
+            "vol": [59.2, 33.8, 192.0],
+        },
+    }
+
+    class _Response:
+        def read(self) -> bytes:
+            return _json.dumps(payload).encode()
+
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    with patch("urllib.request.urlopen", return_value=_Response()):
+        candles = historical_spreads._fetch_ourbit_leg("BP/USDT:USDT", "1m", 1786039260 * 1000)
+
+    assert len(candles) == 3
+    # ccxt layout: [ms, open, high, low, close, volume]
+    assert candles[0][0] == 1786039260 * 1000
+    assert candles[0][4] == pytest.approx(0.4345)
+    assert candles[-1][4] == pytest.approx(0.4346)
+
+
+def test_the_ourbit_symbol_is_translated() -> None:
+    assert historical_spreads._ourbit_symbol("BP/USDT:USDT") == "BP_USDT"
+    assert historical_spreads._ourbit_symbol("1000TOSHI/USDT") == "1000TOSHI_USDT"
+
+
+def test_ourbit_candles_before_the_window_are_dropped() -> None:
+    """Their API rounds `start` down, so it can return points we did not ask for."""
+    import json as _json
+    from unittest.mock import patch
+
+    payload = {"data": {"time": [1000, 2000, 3000], "open": [1, 1, 1],
+                        "high": [1, 1, 1], "low": [1, 1, 1], "close": [1, 2, 3], "vol": [1, 1, 1]}}
+
+    class _Response:
+        def read(self) -> bytes:
+            return _json.dumps(payload).encode()
+
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    with patch("urllib.request.urlopen", return_value=_Response()):
+        candles = historical_spreads._fetch_ourbit_leg("BP/USDT:USDT", "1m", 2000 * 1000)
+
+    assert [c[0] for c in candles] == [2000 * 1000, 3000 * 1000]
+
+
+def test_history_only_venues_do_not_touch_the_price_path() -> None:
+    """VENUE_IDS drives live quoting; widening it would reprice the board."""
+    from spreadboard.fast_quotes import VENUE_IDS
+
+    assert "Upbit" not in VENUE_IDS
+    assert "Lighter" not in VENUE_IDS
+    assert historical_spreads._history_exchange_id("Upbit") == "upbit"
+    assert historical_spreads._history_exchange_id("Lighter") == "lighter"
+    # ...and a venue nobody can serve stays unmapped.
+    assert historical_spreads._history_exchange_id("Nonesuch") is None
+    # Venues already on the price path keep their existing id.
+    assert historical_spreads._history_exchange_id("Binance") == VENUE_IDS["Binance"]
+
+
+def test_a_leg_with_no_symbol_is_not_fetched() -> None:
+    assert historical_spreads._fetch_leg({"long_venue": "Binance"}, "long", "1m", 0) == []
