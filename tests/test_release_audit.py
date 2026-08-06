@@ -460,7 +460,7 @@ def test_unknown_spot_transfer_is_visible_as_research_condition() -> None:
     assert reasons == ["condition:spot_transfer_unknown"]
 
 
-def test_unverified_cex_dislocation_uses_wider_research_ceiling() -> None:
+def test_unverified_cex_dislocation_above_five_percent_needs_exact_identity() -> None:
     reasons = api_spreads._route_mirage_reasons(
         raw={
             "source_kind": "api_discovered",
@@ -473,7 +473,20 @@ def test_unverified_cex_dislocation_uses_wider_research_ceiling() -> None:
         short_rails={},
     )
 
-    assert reasons == []
+    assert reasons == ["mirage_guard:high_dislocation_exact_identity_required"]
+
+
+def test_route_alert_dialog_only_offers_server_evaluated_metrics() -> None:
+    source = server.render_alert_draft_script()
+
+    assert '<option value="token_spread">' in source
+    assert '<option value="funding">' in source
+    assert '<option value="price">' in source
+    for unsupported in (
+        "exchange_spread", "custom_pair_spread", "dw_tracking", "freshness",
+        "community_call", "hyperliquid", "token_index",
+    ):
+        assert f'<option value="{unsupported}">' not in source
 
 
 def test_high_dislocation_dex_route_requires_exact_cex_identity() -> None:
@@ -2877,7 +2890,7 @@ def test_a_price_refresh_does_not_invalidate_the_whole_board(tmp_path) -> None:
     api_spreads._RESULT_CACHE.clear()
 
     before = api_spreads.load_spreads(api_path=snapshot, board_path=tmp_path / "n.jsonl",
-                                      limit=None, include_stale=True)
+                                      limit=None, include_stale=True, include_unverified=True)
     aaa = [r for g in before["groups"] for r in g["routes"] if r["token"] == "AAA"]
     assert aaa and float(aaa[0]["executable_spread_pct"]) == 1.0
 
@@ -2889,7 +2902,7 @@ def test_a_price_refresh_does_not_invalidate_the_whole_board(tmp_path) -> None:
     api_spreads._RESULT_CACHE.clear()
 
     after = api_spreads.load_spreads(api_path=snapshot, board_path=tmp_path / "n.jsonl",
-                                     limit=None, include_stale=True)
+                                     limit=None, include_stale=True, include_unverified=True)
     aaa = [r for g in after["groups"] for r in g["routes"] if r["token"] == "AAA"]
     assert aaa and float(aaa[0]["executable_spread_pct"]) == 7.5, "the delta must be applied"
     assert snapshot.stat().st_mtime_ns == stamp_before, "the snapshot must not be rewritten"

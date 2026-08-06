@@ -70,7 +70,6 @@ def _select_routes(base_url: str, *, limit: int, timeout: float) -> list[dict[st
                     "limit": 25,
                     "sort": "edge",
                     "direction": "desc",
-                    "no_cache": 1,
                 },
             ),
             timeout=timeout,

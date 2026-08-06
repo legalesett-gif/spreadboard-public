@@ -10045,14 +10045,7 @@ def render_alert_draft_script() -> str:
     return ({
       token_spread: "Token spread",
       funding: "Funding",
-      price: "Price",
-      exchange_spread: "Exchange spread",
-      custom_pair_spread: "Custom pair spread",
-      dw_tracking: "D/W tracking",
-      freshness: "Freshness",
-      community_call: "Community call",
-      hyperliquid: "Hyperliquid",
-      token_index: "Token index"
+      price: "Price"
     })[value] || "Alert";
   }
 
@@ -10104,13 +10097,6 @@ def render_alert_draft_script() -> str:
             <option value="token_spread">Token spread</option>
             <option value="funding">Funding 24h</option>
             <option value="price">Price</option>
-            <option value="exchange_spread">Exchange spread</option>
-            <option value="custom_pair_spread">Custom pair spread</option>
-            <option value="dw_tracking">D/W tracking</option>
-            <option value="freshness">Freshness</option>
-            <option value="community_call">Community call</option>
-            <option value="hyperliquid">Hyperliquid</option>
-            <option value="token_index">Token index</option>
           </select></label>
           <label><span>Token</span><input name="symbol" autocomplete="off" placeholder="Token symbol"></label>
           <label><span>Direction</span><select name="direction"><option value="above">Crosses above</option><option value="below">Crosses below</option></select></label>

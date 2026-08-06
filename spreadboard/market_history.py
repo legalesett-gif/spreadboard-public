@@ -100,12 +100,12 @@ def record_snapshot(
                     short_ask_vwap,
                     sample_source,
                     _float_or_none(row.get("target_notional_usd")) or 50.0,
-                    _route_price(route_inputs, "long", "current_funding_pct"),
-                    _route_price(route_inputs, "short", "current_funding_pct"),
-                    _route_price(route_inputs, "long", "funding_interval_hours"),
-                    _route_price(route_inputs, "short", "funding_interval_hours"),
-                    _route_int(route_inputs, "long", "next_funding_ts_us"),
-                    _route_int(route_inputs, "short", "next_funding_ts_us"),
+                    _funding_value(row, route_inputs, funding, "long", "current_funding_pct"),
+                    _funding_value(row, route_inputs, funding, "short", "current_funding_pct"),
+                    _funding_value(row, route_inputs, funding, "long", "funding_interval_hours"),
+                    _funding_value(row, route_inputs, funding, "short", "funding_interval_hours"),
+                    _funding_int(row, route_inputs, funding, "long", "next_funding_ts_us"),
+                    _funding_int(row, route_inputs, funding, "short", "next_funding_ts_us"),
                 ),
             )
             inserted += int(connection.execute("SELECT changes()").fetchone()[0] > 0)
@@ -143,7 +143,10 @@ def load_history(
     bucket_seconds: int | None = None,
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> list[dict[str, Any]]:
-    connection = _connect(db_path)
+    path = Path(db_path)
+    if not path.exists():
+        return []
+    connection = _connect_readonly(path)
     clauses: list[str] = []
     params: list[Any] = []
     if route_key:
@@ -353,6 +356,21 @@ def _connect(path: Path | str) -> sqlite3.Connection:
     return connection
 
 
+def _connect_readonly(path: Path | str) -> sqlite3.Connection:
+    """Open a WAL reader without running schema DDL against active writers."""
+
+    path = Path(path)
+    connection = sqlite3.connect(
+        f"file:{path}?mode=ro",
+        uri=True,
+        timeout=15,
+    )
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout=15000")
+    connection.execute("PRAGMA query_only=ON")
+    return connection
+
+
 def _ensure_columns(connection: sqlite3.Connection, columns: dict[str, str]) -> None:
     existing = {
         str(row["name"])
@@ -368,6 +386,38 @@ def _route_price(route_inputs: Any, side: str, *keys: str) -> float | None:
     if not isinstance(value, dict):
         return None
     return _float_or_none(*(value.get(key) for key in keys))
+
+
+def _funding_value(
+    row: dict[str, Any],
+    route_inputs: Any,
+    funding: Any,
+    side: str,
+    key: str,
+) -> float | None:
+    exact = _route_price(route_inputs, side, key)
+    if exact is not None:
+        return exact
+    settled = _route_price(funding, side, key)
+    if settled is not None:
+        return settled
+    aliases = (
+        (f"{side}_current_funding_pct", f"{side}_funding_pct")
+        if key == "current_funding_pct"
+        else (f"{side}_{key}",)
+    )
+    return _float_or_none(*(row.get(alias) for alias in aliases))
+
+
+def _funding_int(
+    row: dict[str, Any],
+    route_inputs: Any,
+    funding: Any,
+    side: str,
+    key: str,
+) -> int | None:
+    value = _funding_value(row, route_inputs, funding, side, key)
+    return int(value) if value is not None else None
 
 
 def _scaled_route_price(

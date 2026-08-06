@@ -513,6 +513,58 @@ def _book_side(book: Any, side: str) -> tuple[float | None, float | None]:
     return top, vwap or top
 
 
+def _route_has_dex_leg(route: Any) -> bool:
+    """Whether one side cannot have a centralised-exchange websocket book."""
+
+    return any(
+        str(
+            route.get(f"{side}_market_type")
+            if isinstance(route, dict)
+            else getattr(route, f"{side}_market_type", "")
+        ).casefold()
+        == "dex"
+        for side in ("long", "short")
+    )
+
+
+def _stream_funding_daily(
+    route: dict[str, Any], legs: dict[str, dict[str, Any]]
+) -> float | None:
+    """Current net daily carry from the latest bulk funding sweep.
+
+    The grouped market payload intentionally has a long cache lifetime. Funding
+    is a separate, much smaller file and changes every sweep, so the push path
+    overlays it directly instead of leaving the visible rate frozen until a
+    structural board rebuild.
+    """
+
+    daily: dict[str, float] = {}
+    saw_live_leg = False
+    for side in ("long", "short"):
+        if str(route.get(f"{side}_market_type") or "") != "Futures":
+            daily[side] = 0.0
+            continue
+        symbol = str(route.get(f"{side}_market_symbol") or "")
+        entry = legs.get(f"{route.get(f'{side}_venue')}|{symbol}") if symbol else None
+        if entry:
+            rate = _float_or_none(entry.get("rate_pct"))
+            interval = _float_or_none(entry.get("interval_hours"))
+            saw_live_leg = True
+        else:
+            rate = _float_or_none(
+                route.get(f"{side}_current_funding_pct"),
+                route.get(f"{side}_funding_pct"),
+            )
+            interval = _float_or_none(route.get(f"{side}_funding_interval_hours"))
+        value = _per_day(rate, interval)
+        if value is None:
+            return None
+        daily[side] = value
+    if not saw_live_leg:
+        return None
+    return daily["short"] - daily["long"]
+
+
 def live_prices_for(routes: list[dict[str, Any]]) -> dict[str, tuple[float | None, float | None]]:
     """Spread and carry straight from the streaming books, for a set of rendered routes.
 
@@ -520,11 +572,13 @@ def live_prices_for(routes: list[dict[str, Any]]) -> dict[str, tuple[float | Non
     is exactly what the stream exists to correct.
     """
     books = _live_books()
-    if not books or not routes:
+    if not routes:
         return {}
     from spreadboard import live_book_cache
+    from spreadboard import bulk_quotes
 
     out: dict[str, tuple[float | None, float | None]] = {}
+    funding_legs = bulk_quotes.load_funding()
     for route in routes:
         long_book = books.get(
             live_book_cache.cache_key(
@@ -536,13 +590,17 @@ def live_prices_for(routes: list[dict[str, Any]]) -> dict[str, tuple[float | Non
                 str(route.get("short_venue") or ""), str(route.get("short_market_type") or ""),
                 str(route.get("short_market_symbol") or ""))
         )
-        # One live leg is enough. Requiring both meant a route could only move
-        # if every venue on it streamed, which left Futures-Spot and DEX lanes
-        # frozen -- and a DEX leg has no websocket to stream from at all, so
-        # those could never have moved. The leg that is live is re-priced and
-        # the other keeps its last quoted price, which is strictly closer to the
-        # market than leaving the whole row stale.
-        if long_book is None and short_book is None:
+        # Mixing one current CEX book with one older quote can manufacture a
+        # spread that never existed. CEX routes therefore move only when both
+        # books are live. A DEX leg has no websocket by definition, so those
+        # routes may still reprice their one streamable CEX leg.
+        price_is_live = not (long_book is None and short_book is None)
+        if price_is_live and not _route_has_dex_leg(route):
+            price_is_live = long_book is not None and short_book is not None
+        funding_daily = _stream_funding_daily(route, funding_legs)
+        if not price_is_live:
+            if funding_daily is not None:
+                out[str(route["route_key"])] = (None, funding_daily)
             continue
         if long_book is not None:
             ask, _ = _book_side(long_book, "ask")
@@ -556,7 +614,9 @@ def live_prices_for(routes: list[dict[str, Any]]) -> dict[str, tuple[float | Non
             continue
         out[str(route["route_key"])] = (
             (bid / ask - 1.0) * 100.0,
-            _float_or_none(route.get("funding_daily_pct")),
+            funding_daily
+            if funding_daily is not None
+            else _float_or_none(route.get("funding_daily_pct")),
         )
     return out
 
@@ -581,11 +641,12 @@ def apply_live_books(
         )
         long_book = books.get(long_key)
         short_book = books.get(short_key)
-        # One live leg is enough, the same rule live_prices_for follows. This
-        # decides what the board filters on, so requiring both meant a route
-        # with one fresh leg was ranked and filtered on a price from the last
-        # scan while the stream showed something else.
+        # Never rank a CEX route on a mixed-time pair of books. DEX routes are
+        # the deliberate exception because their on-chain leg cannot stream.
         if long_book is None and short_book is None:
+            updated.append(row)
+            continue
+        if not _route_has_dex_leg(row) and (long_book is None or short_book is None):
             updated.append(row)
             continue
         if long_book is not None:
@@ -1587,11 +1648,11 @@ def _route_mirage_reasons(
         reasons.append("mirage_guard:high_dislocation_identity_unverified")
     # A generic ``asset:TICKER`` identity proves only that symbols match. It
     # cannot distinguish RWA Inc from Allo (both trade as RWA), or migrated and
-    # legacy representations of the same ticker. A very large cross-venue CEX
+    # legacy representations of the same ticker. A large cross-venue CEX
     # gap therefore needs exact public contract evidence before it is ranked.
     # DEX rows have a separate exact chain/contract guard below.
     if (
-        spread >= 10.0
+        spread >= 5.0
         and not is_dex
         and not public_rails.exact_contract_match(long_rails, short_rails)
         and not already_guarded

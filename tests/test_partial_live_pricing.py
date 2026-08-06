@@ -1,8 +1,7 @@
-"""A route moves when either leg moves, not only when both do.
+"""Live repricing must never manufacture a mixed-time CEX spread.
 
-Requiring both legs to stream left the Futures-Spot lane at 0% live with 7 of
-10 routes already having one live leg, and the DEX lanes at 0% permanently --
-a DEX leg has no websocket to stream from, so those rows could never move.
+DEX routes are the intentional exception because the on-chain leg cannot have
+a centralised-exchange websocket book.
 """
 
 from __future__ import annotations
@@ -42,20 +41,18 @@ def _book(bid: float, ask: float) -> _Book:
     return _Book(bid, ask)
 
 
-def test_a_live_short_leg_reprices_against_the_stored_long(
+def test_a_live_short_leg_does_not_mix_with_a_stored_cex_long(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The DEX case: only the exchange leg can ever stream."""
     key = live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT")
     monkeypatch.setattr(api_spreads, "_live_books", lambda: {key: _book(1.20, 1.21)})
 
     priced = api_spreads.live_prices_for([_route()])
 
-    # Sell at the live bid 1.20 against the stored ask 1.00.
-    assert priced["T|Gate|Spot|Bybit|Futures"][0] == pytest.approx(20.0)
+    assert priced == {}
 
 
-def test_a_live_long_leg_reprices_against_the_stored_short(
+def test_a_live_long_leg_does_not_mix_with_a_stored_cex_short(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     key = live_book_cache.cache_key("Gate", "Spot", "T/USDT")
@@ -63,8 +60,18 @@ def test_a_live_long_leg_reprices_against_the_stored_short(
 
     priced = api_spreads.live_prices_for([_route()])
 
-    # Buy at the live ask 0.80 against the stored bid 1.10.
-    assert priced["T|Gate|Spot|Bybit|Futures"][0] == pytest.approx(37.5)
+    assert priced == {}
+
+
+def test_a_live_cex_leg_can_reprice_a_dex_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    key = live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT")
+    monkeypatch.setattr(api_spreads, "_live_books", lambda: {key: _book(1.20, 1.21)})
+
+    priced = api_spreads.live_prices_for([
+        _route(long_venue="Uniswap", long_market_type="DEX")
+    ])
+
+    assert priced["T|Gate|Spot|Bybit|Futures"][0] == pytest.approx(20.0)
 
 
 def test_both_legs_live_still_uses_both(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -87,12 +94,10 @@ def test_no_live_leg_leaves_the_route_alone(monkeypatch: pytest.MonkeyPatch) -> 
     assert api_spreads.live_prices_for([_route()]) == {}
 
 
-def test_the_board_filters_on_one_live_leg_too(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_board_does_not_filter_on_one_live_cex_leg(monkeypatch: pytest.MonkeyPatch) -> None:
     """apply_live_books decides what the board ranks and filters on.
 
-    Requiring both legs meant a route with one fresh leg was filtered on a
-    price from the last scan while the stream showed something else -- the two
-    paths disagreed about the same row.
+    A current leg and an older leg are not a simultaneous executable spread.
     """
     from dataclasses import fields
 
@@ -114,6 +119,24 @@ def test_the_board_filters_on_one_live_leg_too(monkeypatch: pytest.MonkeyPatch) 
     key = live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT")
     updated = apply_live_books([row], {key: _book(1.30, 1.31)}, now=1_700_000_100.0)
 
-    # Sell at the live bid 1.30 against the stored ask 1.00.
-    assert updated[0].displayed_open_spread_pct == pytest.approx(30.0)
-    assert updated[0].live_book is True
+    assert updated[0].displayed_open_spread_pct == pytest.approx(10.0)
+    assert updated[0].live_book is False
+
+
+def test_live_funding_recomputes_each_leg_on_its_own_cadence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_spreads, "_live_books", lambda: {})
+    monkeypatch.setattr(
+        "spreadboard.bulk_quotes.load_funding",
+        lambda: {
+            "Gate|T/USDT": {"rate_pct": 0.01, "interval_hours": 1},
+            "Bybit|T/USDT:USDT": {"rate_pct": 0.04, "interval_hours": 4},
+        },
+    )
+    route = _route(long_market_type="Futures")
+
+    priced = api_spreads.live_prices_for([route])
+
+    # short: 0.04 * 6 = 0.24/day; long: 0.01 * 24 = 0.24/day.
+    assert priced[route["route_key"]] == (None, pytest.approx(0.0))

@@ -44,12 +44,17 @@ def config() -> TelegramConfig:
 def status(*, db_path: Any = accounts.DEFAULT_DB_PATH) -> dict[str, Any]:
     value = config()
     community = accounts.telegram_community(db_path=db_path) if value.ready else None
+    candidates = accounts.telegram_membership_candidates(db_path=db_path) if value.ready else []
     return {
         "configured": value.ready,
         "bot_username": value.bot_username or None,
         "webhook_ready": bool(value.webhook_secret),
         "community_configured": community is not None,
         "community_title": community.get("title") if community else None,
+        "linked_accounts": len(candidates),
+        "membership_errors": sum(
+            1 for candidate in candidates if candidate.get("membership_state") == "error"
+        ),
     }
 
 
@@ -363,13 +368,30 @@ class MembershipWorker:
     def check_once(self) -> dict[str, int]:
         community = accounts.telegram_community(db_path=self.db_path)
         if community is None:
-            return {"checked": 0, "removed": 0}
+            return {"checked": 0, "removed": 0, "errors": 0}
         chat_id = int(community["chat_id"])
-        checked = removed = 0
+        checked = removed = errors = 0
         for candidate in accounts.telegram_membership_candidates(db_path=self.db_path):
             checked += 1
             telegram_user_id = int(candidate["telegram_user_id"])
-            member = (_api_call("getChatMember", {"chat_id": chat_id, "user_id": telegram_user_id}).get("result") or {})
+            try:
+                member = (_api_call(
+                    "getChatMember", {"chat_id": chat_id, "user_id": telegram_user_id}
+                ).get("result") or {})
+            except TelegramBotError as exc:
+                # One stale/invalid linked account must not abort checks for all
+                # subscribers or fill the service log once a minute. Persist a
+                # safe state for operators and continue with the next member.
+                errors += 1
+                accounts.record_telegram_membership(
+                    int(candidate["user_id"]),
+                    telegram_user_id=telegram_user_id,
+                    community_chat_id=chat_id,
+                    state="error",
+                    error=str(exc)[:200],
+                    db_path=self.db_path,
+                )
+                continue
             state = str(member.get("status") or "left")
             user = accounts.get_user_object(int(candidate["user_id"]), db_path=self.db_path)
             if state in {"creator", "administrator"}:
@@ -386,7 +408,7 @@ class MembershipWorker:
                 removed += 1
             if user is not None:
                 accounts.record_telegram_membership(user.id, telegram_user_id=telegram_user_id, community_chat_id=chat_id, state="removed", db_path=self.db_path)
-        return {"checked": checked, "removed": removed}
+        return {"checked": checked, "removed": removed, "errors": errors}
 
 
 def _create_join_request_link(chat_id: int) -> str:
@@ -441,7 +463,18 @@ def _api_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
     try:
         with urlopen(request, timeout=15) as response:  # noqa: S310 - fixed Telegram origin
             payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except HTTPError as exc:
+        # Telegram sends useful, non-secret JSON errors (for example an invalid
+        # stale participant id). Preserve the category so health/audit output
+        # can distinguish bad stored state from an unreachable API.
+        try:
+            error_payload = json.loads(exc.read().decode("utf-8"))
+            description = str(error_payload.get("description") or "telegram_http_error")
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            description = "telegram_http_error"
+        safe = "_".join(description.upper().replace(":", " ").split())[:120]
+        raise TelegramBotError(f"telegram_api_error:{safe}") from exc
+    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise TelegramBotError("telegram_api_unavailable") from exc
     if not isinstance(payload, dict) or not payload.get("ok"):
         description = str(payload.get("description") or "telegram_api_error") if isinstance(payload, dict) else "telegram_api_error"

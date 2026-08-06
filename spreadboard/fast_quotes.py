@@ -608,8 +608,11 @@ class FastQuoteRefresher:
             }
         notes = quoted.setdefault("notes", {})
         route_inputs = notes.setdefault("route_inputs", {})
+        _carry_forward_funding(quoted, "long", long_quote)
+        _carry_forward_funding(quoted, "short", short_quote)
         route_inputs["long"] = {**(route_inputs.get("long") or {}), **long_quote}
         route_inputs["short"] = {**(route_inputs.get("short") or {}), **short_quote}
+        _sync_quoted_funding(quoted, long_quote, short_quote)
         quoted["executable_spread_pct"] = executable
         quoted["depth_weighted_spread_pct"] = depth
         quoted["quote_ts_us"] = min(long_quote["quote_ts_us"], short_quote["quote_ts_us"])
@@ -809,6 +812,60 @@ class FastQuoteRefresher:
             except Exception:
                 pass
         gc.collect()
+
+
+def _carry_forward_funding(
+    row: dict[str, Any], side: str, quote: dict[str, Any]
+) -> None:
+    """Keep a recent board rate when the exact book endpoint omits funding."""
+
+    if str(row.get(f"{side}_market_type") or "") != "Futures":
+        return
+    if quote.get("current_funding_pct") is None:
+        current = _optional_number(
+            row.get(f"{side}_current_funding_pct", row.get(f"{side}_funding_pct"))
+        )
+        if current is not None:
+            quote["current_funding_pct"] = current
+    if quote.get("funding_interval_hours") is None:
+        interval = _optional_number(row.get(f"{side}_funding_interval_hours"))
+        if interval is not None:
+            quote["funding_interval_hours"] = interval
+    if quote.get("next_funding_ts_us") is None:
+        upcoming = _optional_int(row.get(f"{side}_next_funding_ts_us"))
+        if upcoming is not None:
+            quote["next_funding_ts_us"] = upcoming
+
+
+def _sync_quoted_funding(
+    row: dict[str, Any],
+    long_quote: dict[str, Any],
+    short_quote: dict[str, Any],
+) -> None:
+    """Make exact sampled cadence the row's displayed funding cadence."""
+
+    daily: dict[str, float] = {"long": 0.0, "short": 0.0}
+    for side, quote in (("long", long_quote), ("short", short_quote)):
+        if str(row.get(f"{side}_market_type") or "") != "Futures":
+            continue
+        rate = _optional_number(quote.get("current_funding_pct"))
+        interval = _optional_number(quote.get("funding_interval_hours"))
+        upcoming = _optional_int(quote.get("next_funding_ts_us"))
+        if rate is not None:
+            row[f"{side}_current_funding_pct"] = rate
+            row[f"{side}_funding_pct"] = rate
+        if interval is not None and interval > 0:
+            row[f"{side}_funding_interval_hours"] = interval
+            row[f"{side}_funding_interval_assumed"] = False
+        if upcoming is not None:
+            row[f"{side}_next_funding_ts_us"] = upcoming
+        if rate is not None and interval is not None and interval > 0:
+            daily[side] = rate * (24.0 / interval)
+    projected = daily["short"] - daily["long"]
+    row["funding_projected_24h_pct"] = projected
+    row["funding_daily_pct"] = projected
+    row["funding_spread_pct"] = projected
+    row["funding_apr_pct"] = projected * 365.0
 
 
 def _fast_quote_delta_path(snapshot_path: Path) -> Path:

@@ -120,5 +120,25 @@ def test_membership_worker_removes_expired_non_admin(tmp_path, monkeypatch) -> N
 
     monkeypatch.setattr(telegram_bot, "_api_call", fake_api)
     summary = telegram_bot.MembershipWorker(db_path=db_path).check_once()
-    assert summary == {"checked": 1, "removed": 1}
+    assert summary == {"checked": 1, "removed": 1, "errors": 0}
     assert calls == ["getChatMember", "banChatMember", "unbanChatMember"]
+
+
+def test_membership_worker_records_one_invalid_link_and_continues(tmp_path, monkeypatch) -> None:
+    db_path = _linked_user(tmp_path)
+    accounts.configure_telegram_community(
+        -100123, title="Subscribers", configured_by_telegram_user_id=42, db_path=db_path
+    )
+    monkeypatch.setattr(
+        telegram_bot,
+        "_api_call",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            telegram_bot.TelegramBotError("telegram_api_error:BAD_REQUEST_PARTICIPANT_ID_INVALID")
+        ),
+    )
+
+    summary = telegram_bot.MembershipWorker(db_path=db_path).check_once()
+
+    assert summary == {"checked": 1, "removed": 0, "errors": 1}
+    candidate = accounts.telegram_membership_candidates(db_path=db_path)[0]
+    assert candidate["membership_state"] == "error"

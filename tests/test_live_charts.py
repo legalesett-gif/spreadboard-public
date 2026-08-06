@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sqlite3
 import time
 
 import pytest
@@ -166,6 +167,10 @@ def test_exact_route_quote_uses_four_book_sides_and_matched_size(
     assert result["row"]["executable_spread_pct"] == pytest.approx(10.0)
     assert result["row"]["depth_weighted_spread_pct"] == pytest.approx((108 / 101 - 1) * 100)
     assert result["row"]["quote_ts_us"] == 2_000_000
+    assert result["row"]["long_funding_interval_hours"] == 1.0
+    assert result["row"]["short_funding_interval_hours"] == 4.0
+    assert result["row"]["long_funding_interval_assumed"] is False
+    assert result["row"]["funding_projected_24h_pct"] == pytest.approx(-0.72)
     assert set(calls) == {("long", True), ("short", True)}
 
 
@@ -807,6 +812,50 @@ def test_history_persists_entry_matched_exit_and_sample_provenance(tmp_path: Pat
     assert saved[0]["short_current_funding_pct"] == pytest.approx(-0.08)
     assert saved[0]["short_funding_interval_hours"] == pytest.approx(4.0)
     assert _formula_errors(saved[0]) == []
+
+
+def test_history_reads_funding_from_the_canonical_notes_shape(tmp_path: Path) -> None:
+    row = _route()
+    quote_ts_us = int(time.time() * 1_000_000)
+    row.update({
+        "quote_ts_us": quote_ts_us,
+        "executable_spread_pct": 1.0,
+        "depth_weighted_spread_pct": 1.0,
+        "notes": {
+            "route_inputs": {
+                "long": {"bid": 99, "ask": 100, "bid_vwap": 99, "ask_vwap": 100},
+                "short": {"bid": 101, "ask": 102, "bid_vwap": 101, "ask_vwap": 102},
+            },
+            "funding": {
+                "long": {"current_funding_pct": 0.01, "funding_interval_hours": 1},
+                "short": {"current_funding_pct": -0.08, "funding_interval_hours": 4},
+            },
+        },
+    })
+    db_path = tmp_path / "history.sqlite3"
+    assert market_history.record_route(row, db_path=db_path) == 1
+    saved = market_history.load_history(route_key=row["route_key"], db_path=db_path)
+    assert saved[0]["long_current_funding_pct"] == pytest.approx(0.01)
+    assert saved[0]["short_funding_interval_hours"] == pytest.approx(4.0)
+
+
+def test_history_reader_does_not_run_schema_writes_against_active_writer(tmp_path: Path) -> None:
+    row = _route()
+    row.update({
+        "quote_ts_us": int(time.time() * 1_000_000),
+        "executable_spread_pct": 1.0,
+        "depth_weighted_spread_pct": 1.0,
+    })
+    db_path = tmp_path / "history.sqlite3"
+    market_history.record_route(row, db_path=db_path)
+    writer = sqlite3.connect(db_path)
+    try:
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute("UPDATE route_points SET executable_spread_pct = 2")
+        assert market_history.load_history(route_key=row["route_key"], db_path=db_path)
+    finally:
+        writer.rollback()
+        writer.close()
 
 
 def test_history_bucketing_keeps_latest_sample_per_bucket(tmp_path: Path) -> None:
