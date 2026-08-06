@@ -2475,7 +2475,15 @@ def test_the_profile_tells_a_member_whether_pushover_can_actually_send(monkeypat
 
 
 def test_rail_reopens_reach_each_member_not_only_the_group(monkeypatch) -> None:
-    """The operator's requirement: alerts land on individual phones via Pushover."""
+    """
+    # Pushing every reopen buries the alerts a member asked for, so it is now
+    # opt-in. The capability must still work when it is switched on.
+    monkeypatch.setenv("SPREADBOARD_RAIL_PUSH", "1")
+    The operator's requirement: alerts land on individual phones via Pushover."""
+    # Pushing every reopen buries the alerts a member asked for, so it is now
+    # opt-in. The capability must still work when it is switched on.
+    monkeypatch.setenv("SPREADBOARD_RAIL_PUSH", "1")
+    
     from spreadboard import rail_watch, accounts, alerts as alerts_module
 
     monkeypatch.setenv("SPREADBOARD_PUSHOVER_APP_TOKEN", "app-token")

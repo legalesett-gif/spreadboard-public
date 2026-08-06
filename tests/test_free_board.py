@@ -106,36 +106,39 @@ def test_the_visible_rows_are_the_same_component_a_member_sees(
     assert "Best-route funding" in html
 
 
-def test_only_three_tokens_are_shown_in_full(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_only_the_top_tokens_are_shown_in_full(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_board(monkeypatch, PAYLOAD)
 
     html = server.render_free_page(Path("board.json"))
 
-    assert server.FREE_TOKEN_LIMIT == 3
-    # Two sections, three rows each.
+    assert server.FREE_TOKEN_LIMIT == 2
     assert html.count('class="token-route-group"') == server.FREE_TOKEN_LIMIT * 2
 
 
-def test_a_locked_row_contains_no_data_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A CSS blur over real values hands the board to anyone with an inspector."""
+def test_a_teaser_row_shows_the_numbers_and_hides_the_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What converts is a judgeable opportunity you cannot act on.
+
+    The spread, funding, lane and route count are all real. What is withheld is
+    what you would need to place the trade: which asset, and where to buy it.
+    """
     _stub_board(monkeypatch, PAYLOAD)
 
     html = server.render_free_page(Path("board.json"))
-    locked = html.split('class="locked-list"')[1].split("</section>")[0]
+    teasers = html.split('class="teaser-list"')[1].split("</section>")[0]
 
-    assert "locked-row" in locked
-    # None of the withheld tokens or their numbers appear in the markup.
+    # Numbers are present and real.
+    assert "data-live-spread" in teasers
+    assert "data-live-funding" in teasers
+    assert "%" in teasers
+
+    # The token and the buy leg never reach the markup.
     for index in range(server.FREE_TOKEN_LIMIT, 8):
-        assert f"EDGE{index}" not in locked
-        assert f"CARRY{index}" not in locked
-
-    # Strip the placeholder bar widths, which are layout, not data.
-    import re
-
-    text = re.sub(r'style="[^"]*"', "", locked)
-    text = re.sub(r"<[^>]+>", " ", text)
-    assert "%" not in text
-    assert not re.search(r"\d+\.\d+", text), f"a number reached the locked row: {text[:120]}"
+        assert f"EDGE{index}" not in teasers
+    assert "Binance" not in teasers, "the buy venue leaked"
+    # ...while the sell leg is shown, so the shape of the route is legible.
+    assert "Gate" in teasers
 
 
 def test_the_locked_rows_open_the_membership_dialog(
@@ -160,10 +163,10 @@ def test_the_teaser_says_how_much_is_withheld_without_naming_it(
 
     html = server.render_free_page(Path("board.json"))
 
-    assert "Widest spread locked" in html
-    assert "Best funding locked" in html
-    # The widest locked edge belongs to EDGE3, whose name must not appear.
-    assert "EDGE3" not in html
+    assert "Widest spread held back" in html
+    assert "Best funding held back" in html
+    # The widest withheld edge belongs to EDGE2, whose name must not appear.
+    assert "EDGE2" not in html
 
 
 def test_the_free_stream_endpoint_is_the_one_the_page_subscribes_to(
@@ -445,14 +448,20 @@ def test_the_free_stream_sends_only_the_visible_rows(
     """
     _stub_board(monkeypatch, PAYLOAD)
 
-    allowed = server.free_visible_route_keys(Path("board.json"))
+    mapping = server.free_stream_key_map(Path("board.json"))
 
-    # Three from each list, and nothing beyond.
-    assert len(allowed) <= server.FREE_TOKEN_LIMIT * 2
+    shown = server.FREE_TOKEN_LIMIT + server.FREE_TEASER_ROWS
+    assert len(mapping) <= shown * 2
+    # The two full rows keep their own key; teasers go out under a hash that
+    # names neither the asset nor its venues.
     for index in range(server.FREE_TOKEN_LIMIT):
-        assert f"EDGE{index}|Binance Futures|Gate Futures" in allowed
-    for index in range(server.FREE_TOKEN_LIMIT, 8):
-        assert f"EDGE{index}|Binance Futures|Gate Futures" not in allowed
+        real = f"EDGE{index}|Binance Futures|Gate Futures"
+        assert mapping[real] == real
+    for index in range(server.FREE_TOKEN_LIMIT, 6):
+        real = f"EDGE{index}|Binance Futures|Gate Futures"
+        emitted = mapping[real]
+        assert emitted != real
+        assert "EDGE" not in emitted and "Binance" not in emitted and "Gate" not in emitted
 
 
 def test_the_stream_handler_applies_that_filter() -> None:
@@ -460,7 +469,7 @@ def test_the_stream_handler_applies_that_filter() -> None:
 
     source = inspect.getsource(server.SpreadBoardHandler.do_GET)
     block = source.split('"/api/stream/free"', 1)[1][:900]
-    assert "free_visible_route_keys" in block
+    assert "free_stream_key_map" in block
 
     stream = inspect.getsource(server.SpreadBoardHandler._send_board_stream)
-    assert "only" in stream and "key in only" in stream
+    assert "rename" in stream and "key in rename" in stream

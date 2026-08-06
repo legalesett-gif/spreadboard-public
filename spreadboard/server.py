@@ -462,7 +462,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 # which is the entire product. Only the visible rows go out.
                 self._send_board_stream(
                     dict(FREE_BOARD_QUERY),
-                    only=free_visible_route_keys(self.server.board_path),
+                    rename=free_stream_key_map(self.server.board_path),
                 )
             elif parsed.path.startswith("/api/stream/"):
                 route_key = unquote(parsed.path.removeprefix("/api/stream/"))
@@ -969,7 +969,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             return
 
     def _send_board_stream(
-        self, query: dict[str, list[str]], *, only: set[str] | None = None
+        self, query: dict[str, list[str]], *, rename: dict[str, str] | None = None
     ) -> None:
         """Push price changes to an open board instead of waiting for a reload.
 
@@ -996,8 +996,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             self.wfile.flush()
             for _ in range(20_000):
                 rows = _shared_stream_rows(self.server.board_path, query)
-                if only is not None:
-                    rows = {key: value for key, value in rows.items() if key in only}
+                if rename is not None:
+                    # Filters and aliases in one pass: anything not listed does
+                    # not go out at all, and a teaser route goes out under a
+                    # hash so the stream cannot name the asset or its venues.
+                    rows = {
+                        rename[key]: value
+                        for key, value in rows.items()
+                        if key in rename
+                    }
                 changed = {
                     key: value for key, value in rows.items() if previous.get(key) != value
                 }
@@ -2784,62 +2791,116 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
 #: to anyone who typed `?limit=100000`.
 FREE_BOARD_QUERY: dict[str, list[str]] = {}
 
-#: How many rows a visitor sees in full. Three is enough to prove the board is
-#: real and live, and small against 1,097 tokens.
-FREE_TOKEN_LIMIT = 3
+#: How many rows a visitor sees complete, token and both venues included.
+FREE_TOKEN_LIMIT = 2
+
+#: How many teaser rows follow, carrying real numbers with the entry hidden.
+FREE_TEASER_ROWS = 6
+
+
+def free_teaser_alias(route_key: str) -> str:
+    """An opaque, stable id for a teaser row.
+
+    A route key is "TOKEN|Buy Venue|Sell Venue", so putting the real one in
+    data-route-key hands over the asset and both exchanges to anyone who opens
+    the inspector -- exactly what the teaser withholds. The row still has to
+    tick, so it carries a hash instead and the stream emits the same hash for
+    that route.
+    """
+    import hashlib
+
+    return "t" + hashlib.blake2s(str(route_key).encode(), digest_size=8).hexdigest()
+
+
+def free_stream_key_map(board_path: Path) -> dict[str, str]:
+    """Real route key -> what the public stream is allowed to call it.
+
+    The two full rows keep their own keys; every teaser route is aliased.
+    """
+    data = api_market_spreads(board_path, dict(FREE_BOARD_QUERY))
+    mapping: dict[str, str] = {}
+    limit = FREE_TOKEN_LIMIT + FREE_TEASER_ROWS
+    for name, best_key in (("top_edges", "best_route"), ("top_funding", "best_funding_route")):
+        groups = data.get(name) or []
+        for index, group in enumerate(groups[:limit]):
+            route = group.get(best_key) or group.get("best_route") or {}
+            key = str(route.get("route_key") or "")
+            if not key:
+                continue
+            mapping[key] = key if index < FREE_TOKEN_LIMIT else free_teaser_alias(key)
+    return mapping
 
 
 def free_visible_route_keys(board_path: Path) -> set[str]:
-    """The only route keys a visitor is allowed to receive.
+    """The only route keys a visitor is allowed to receive over the stream.
 
-    The board stream pushes a route key with every price change. Pinning the
-    query was not enough on its own: a visitor who opened the stream would have
-    received live prices for all 1,097 tokens, locked or not, which is the whole
-    product. The stream is filtered to these keys.
+    Teaser rows show live numbers too, so their keys go out as well -- what is
+    withheld is the token and one venue, which never travel over the stream.
     """
     data = api_market_spreads(board_path, dict(FREE_BOARD_QUERY))
     keys: set[str] = set()
-    for group in (data.get("top_edges") or [])[:FREE_TOKEN_LIMIT]:
-        route = group.get("best_route") or {}
-        if route.get("route_key"):
-            keys.add(str(route["route_key"]))
-    for group in (data.get("top_funding") or [])[:FREE_TOKEN_LIMIT]:
-        route = group.get("best_funding_route") or group.get("best_route") or {}
-        if route.get("route_key"):
-            keys.add(str(route["route_key"]))
+    limit = FREE_TOKEN_LIMIT + FREE_TEASER_ROWS
+    for name, best_key in (("top_edges", "best_route"), ("top_funding", "best_funding_route")):
+        for group in (data.get(name) or [])[:limit]:
+            route = group.get(best_key) or group.get("best_route") or {}
+            if route.get("route_key"):
+                keys.add(str(route["route_key"]))
     return keys
 
 
-def render_locked_row(index: int) -> str:
-    """A row with the shape of the real thing and none of its data.
+def render_teaser_row(group: dict[str, Any], *, metric: str) -> str:
+    """A real row with the entry withheld.
 
-    Deliberately not a CSS blur over real values: anyone can read those out of
-    the DOM, so a blur would hand the board away to whoever opened the
-    inspector. Nothing here has ever touched a number.
+    Everything that makes the opportunity judgeable stays: the spread, the
+    funding, the lane, the route count, how fresh it is. What is withheld is
+    what you would need to place the trade -- which asset, and where to buy it.
+    One venue is shown, so the shape of the route is legible and it is still
+    obvious a membership is what turns this into something actionable.
+
+    The hidden fields are never rendered. A blur over real text is decoration:
+    anyone can read it out of the DOM.
     """
+    route = (
+        group.get("best_funding_route") if metric == "funding" else group.get("best_route")
+    ) or {}
+    funding = (
+        route.get("funding_24h_pct")
+        if route.get("funding_24h_pct") is not None
+        else route.get("funding_projected_24h_pct")
+    )
+    sell_leg = f"{route.get('short_venue') or '—'} {leg_market_label(route.get('short_venue'), route.get('short_market_type'))}".strip()
     return f"""
-      <div class="locked-row" role="button" tabindex="0" data-locked
-           aria-label="Locked opportunity {index}. Open a membership to see it.">
+      <div class="teaser-row" data-route-key="{h(free_teaser_alias(str(route.get('route_key') or '')))}"
+           role="button" tabindex="0" data-locked>
         <div class="asset-identity">
-          <span class="asset-monogram locked-mark" aria-hidden="true">&#128274;</span>
-          <span><strong>Locked</strong><em>Member view</em></span>
+          <span class="asset-monogram teaser-hidden" aria-hidden="true">&#128274;</span>
+          <span><strong class="teaser-blur" aria-label="Token hidden">&#9608;&#9608;&#9608;&#9608;</strong>
+                <em>{h(route_kind_display(route.get('route_kind')))}</em></span>
         </div>
-        <div class="locked-bars">
-          <span style="width:58%"></span><span style="width:34%"></span>
+        <div class="teaser-route">
+          <span>Buy leg</span>
+          <strong class="teaser-blur" aria-label="Exchange hidden">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</strong>
         </div>
-        <div class="locked-bars"><span style="width:44%"></span></div>
-        <div class="locked-bars"><span style="width:50%"></span></div>
-        <div class="locked-cta">Unlock</div>
+        <div class="teaser-route">
+          <span>Sell leg</span><strong>{h(sell_leg)}</strong>
+        </div>
+        <div class="group-number">
+          <span>Spread</span>
+          <strong class="{spread_class(group.get('best_edge_pct'))}" data-live-spread>{fmt_pct(group.get('best_edge_pct'))}</strong>
+          <em>{fmt_pct(route.get('depth_weighted_spread_pct'))} matched $50 VWAP</em>
+        </div>
+        <div class="group-number">
+          <span>Funding 24h</span>
+          <strong data-live-funding>{fmt_signed_pct(funding, digits=3) if funding is not None else '—'}</strong>
+          <em>{h(str(group.get('route_count') or 0))} routes</em>
+        </div>
+        <div class="teaser-cta">Unlock</div>
       </div>
     """
 
 
 def _free_teaser(groups: list[dict[str, Any]], hidden: int) -> tuple[str, str]:
-    """One number from behind the lock, with no way to act on it.
-
-    A spread without its token is unactionable, and it is the single most
-    persuasive thing on the page: it says plainly how much is being withheld.
-    """
+    """One number from behind the lock, with no way to act on it."""
     edges = [
         _float_or_none(group.get("best_edge_pct"))
         for group in groups[FREE_TOKEN_LIMIT:]
@@ -2857,7 +2918,7 @@ def _free_teaser(groups: list[dict[str, Any]], hidden: int) -> tuple[str, str]:
 
 
 def render_free_page(board_path: Path) -> str:
-    """The board a visitor sees: the real thing, three rows deep."""
+    """The board a visitor sees: two rows whole, the rest with the entry hidden."""
     data = api_market_spreads(board_path, dict(FREE_BOARD_QUERY))
     summary = data.get("summary") or {}
     health = (data.get("source_health") or {}).get("canonical_api") or {}
@@ -2870,16 +2931,19 @@ def render_free_page(board_path: Path) -> str:
     hidden = max(tokens - FREE_TOKEN_LIMIT, 0)
     widest, best_carry = _free_teaser(edges, hidden)
 
-    def section(title: str, blurb: str, groups: list[dict[str, Any]]) -> str:
+    def section(title: str, blurb: str, groups: list[dict[str, Any]], metric: str) -> str:
         shown = "".join(
             render_market_token_group(group) for group in groups[:FREE_TOKEN_LIMIT]
         )
-        locked = "".join(render_locked_row(i + 1) for i in range(4))
+        teasers = "".join(
+            render_teaser_row(group, metric=metric)
+            for group in groups[FREE_TOKEN_LIMIT:FREE_TOKEN_LIMIT + FREE_TEASER_ROWS]
+        )
         return f"""
         <section class="free-section">
           <header><h2>{h(title)}</h2><p>{h(blurb)}</p></header>
           <div class="token-route-list">{shown}</div>
-          <div class="locked-list">{locked}</div>
+          <div class="teaser-list">{teasers}</div>
         </section>
         """
 
@@ -2889,7 +2953,7 @@ def render_free_page(board_path: Path) -> str:
       .free-hero {{ display:grid; grid-template-columns:minmax(0,1.5fr) minmax(260px,.7fr); border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
       .free-hero-copy {{ padding:30px 30px 26px; }}
       .free-hero-copy h1 {{ margin:8px 0 10px; font-size:clamp(28px,4.2vw,46px); line-height:1.05; max-width:17ch; }}
-      .free-hero-copy p {{ margin:0; max-width:56ch; color:var(--terminal-muted); font-size:16px; line-height:1.5; }}
+      .free-hero-copy p {{ margin:0; max-width:58ch; color:var(--terminal-muted); font-size:16px; line-height:1.5; }}
       .free-hero-side {{ padding:26px; border-left:1px solid var(--terminal-line); display:grid; align-content:center; gap:12px; }}
       .free-stats {{ display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--terminal-line); }}
       .free-stats div {{ padding:16px 18px; border-right:1px solid var(--terminal-line); }}
@@ -2899,18 +2963,21 @@ def render_free_page(board_path: Path) -> str:
       .free-section header {{ margin-bottom:12px; }}
       .free-section h2 {{ margin:0 0 4px; font-size:21px; }}
       .free-section header p {{ margin:0; color:var(--terminal-muted); font-size:14px; }}
-      .locked-list {{ display:grid; gap:8px; margin-top:8px; }}
-      .locked-row {{ display:grid; grid-template-columns:minmax(180px,1.2fr) minmax(180px,1.25fr) 108px 108px 96px; gap:10px;
-                     align-items:center; min-height:64px; padding:9px 12px; cursor:pointer;
+      .teaser-list {{ display:grid; gap:8px; margin-top:8px; }}
+      .teaser-row {{ display:grid; grid-template-columns:minmax(150px,1fr) minmax(120px,1fr) minmax(120px,1fr) 118px 118px 92px;
+                     gap:12px; align-items:center; min-height:70px; padding:10px 14px; cursor:pointer;
                      border:1px solid var(--terminal-line); border-radius:7px; background:var(--terminal-row); }}
-      .locked-row:hover, .locked-row:focus-visible {{ border-color:var(--accent); outline:none; }}
-      .locked-mark {{ display:grid; place-items:center; font-size:15px; }}
-      .locked-row .asset-identity em {{ color:var(--terminal-muted); font-size:11px; font-style:normal; }}
-      .locked-bars {{ display:grid; gap:6px; }}
-      .locked-bars span {{ display:block; height:11px; border-radius:3px;
-                           background:linear-gradient(90deg,var(--terminal-line),var(--terminal-panel));
-                           filter:blur(1.5px); opacity:.85; }}
-      .locked-cta {{ justify-self:end; padding:7px 13px; border-radius:6px; background:var(--accent);
+      .teaser-row:hover, .teaser-row:focus-visible {{ border-color:var(--accent); outline:none; }}
+      .teaser-row .group-number span, .teaser-route span {{ display:block; color:var(--terminal-muted); font-size:10px;
+                     font-weight:900; text-transform:uppercase; letter-spacing:.06em; }}
+      .teaser-row .group-number strong {{ font-size:19px; font-variant-numeric:tabular-nums; }}
+      .teaser-row .group-number em, .teaser-row .asset-identity em {{ display:block; color:var(--terminal-muted);
+                     font-size:11px; font-style:normal; }}
+      .teaser-route strong {{ font-size:14px; }}
+      .teaser-blur {{ display:inline-block; color:var(--terminal-muted); letter-spacing:2px;
+                      filter:blur(3px); user-select:none; }}
+      .teaser-hidden {{ display:grid; place-items:center; font-size:14px; }}
+      .teaser-cta {{ justify-self:end; padding:8px 14px; border-radius:6px; background:var(--accent);
                      color:var(--accent-ink); font-size:12px; font-weight:900; }}
       .free-cta {{ padding:26px 28px; border:1px solid var(--terminal-line); background:var(--terminal-panel);
                    display:flex; gap:20px; align-items:center; justify-content:space-between; flex-wrap:wrap; }}
@@ -2928,17 +2995,17 @@ def render_free_page(board_path: Path) -> str:
       .unlock-dialog ul {{ list-style:none; margin:0 0 18px; padding:0; display:grid; gap:8px; }}
       .unlock-dialog li {{ display:grid; grid-template-columns:18px 1fr; gap:9px; line-height:1.4; }}
       .unlock-dialog li span {{ color:var(--accent); font-weight:900; }}
-      @media(max-width:900px) {{ .free-hero {{ grid-template-columns:1fr; }} .free-hero-side {{ border-left:0; border-top:1px solid var(--terminal-line); }}
-        .free-stats {{ grid-template-columns:1fr 1fr; }} .locked-row {{ grid-template-columns:1fr 1fr; }} }}
+      @media(max-width:1000px) {{ .free-hero {{ grid-template-columns:1fr; }} .free-hero-side {{ border-left:0; border-top:1px solid var(--terminal-line); }}
+        .free-stats {{ grid-template-columns:1fr 1fr; }} .teaser-row {{ grid-template-columns:1fr 1fr; }} }}
     </style>
     <section class="free-page">
       <header class="free-hero">
         <div class="free-hero-copy">
           <span class="page-kicker">Free preview</span>
-          <h1>The board, three rows deep.</h1>
-          <p>These are the real top routes, priced off public order books and moving as the books
-             move. Everything a member sees is here &mdash; venues, matched VWAP, funding, rails
-             &mdash; for the top {FREE_TOKEN_LIMIT} of {tokens:,} tokens.</p>
+          <h1>Real spreads, live.</h1>
+          <p>Every number here is the same one members see, moving as the books move. The top
+             {FREE_TOKEN_LIMIT} are shown whole. Below them the spread, funding and depth are all
+             open &mdash; only the asset and where to buy it are held back.</p>
         </div>
         <aside class="free-hero-side">
           <div class="terminal-live-box {'live' if live else 'unavailable'}">
@@ -2953,18 +3020,18 @@ def render_free_page(board_path: Path) -> str:
       <div class="free-stats">
         <div><span>Tokens tracked</span><strong>{tokens:,}</strong></div>
         <div><span>Routes priced</span><strong>{routes:,}</strong></div>
-        <div><span>Widest spread locked</span><strong>{widest}</strong></div>
-        <div><span>Best funding locked</span><strong>{best_carry}</strong></div>
+        <div><span>Widest spread held back</span><strong>{widest}</strong></div>
+        <div><span>Best funding held back</span><strong>{best_carry}</strong></div>
       </div>
 
-      {section("Widest spreads", "Buy the long leg at its ask, sell the short leg at its bid. Expand a row for every venue pair.", edges)}
-      {section("Best funding", "What the position pays over 24h at the settled rate.", carries)}
+      {section("Widest spreads", "Buy the long leg at its ask, sell the short leg at its bid.", edges, "spread")}
+      {section("Best funding", "What the position pays over 24h at the settled rate.", carries, "funding")}
 
       <section class="free-cta">
         <div>
-          <h2>{hidden:,} more tokens are behind the lock</h2>
-          <p>Every lane &mdash; Futures-Futures, Futures-Spot, Spot-Spot and both DEX lanes &mdash;
-             with filters, convergence charts, saved pairs, transfer-rail checks, fair-price gaps,
+          <h2>{hidden:,} more tokens, with the entry shown</h2>
+          <p>A membership names the asset and both venues on every route, across all five lanes,
+             with filters, convergence charts, saved pairs, transfer-rail checks, fair-price gaps
              and alerts on any token's price, spread or funding.</p>
         </div>
         <div class="free-actions">
@@ -2976,10 +3043,10 @@ def render_free_page(board_path: Path) -> str:
          number on a screen is not a filled order.</p>
     </section>
     <dialog class="unlock-dialog" id="unlockDialog">
-      <h3>{hidden:,} tokens are waiting</h3>
+      <h3>See the asset and the venue</h3>
       <ul>
         <li><span>&#10003;</span>Every one of {tokens:,} tokens and {routes:,} priced routes</li>
-        <li><span>&#10003;</span>All five lanes, {venues} venues and OKX DEX</li>
+        <li><span>&#10003;</span>Both legs named on every route, {venues} venues and OKX DEX</li>
         <li><span>&#10003;</span>Convergence charts, custom pairs, saved charts</li>
         <li><span>&#10003;</span>Alerts on any token's price, spread or funding</li>
         <li><span>&#10003;</span>Fair-price gaps and transfer-rail checks</li>

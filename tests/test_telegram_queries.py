@@ -53,16 +53,21 @@ SIREN_ROUTES = [
 def board_file(tmp_path, monkeypatch):
     """Patch the real feed loader; the returned path is unused but kept for the API."""
     def fake_load_spreads(*, q=None, **kwargs):
-        assert 'include_stale' not in kwargs, 'bot must not be laxer than the site'
+        # The bot must never be more permissive than the site. It now passes
+        # these explicitly -- same values as the site's defaults -- so that it
+        # shares one warm cache entry with the alert worker instead of building
+        # its own board on every lookup, which cost 26s and timed the webhook
+        # out. What matters is the value, not whether the kwarg is present.
+        assert kwargs.get('include_stale', False) is False, 'bot must not be laxer than the site'
+        assert kwargs.get('include_unverified', False) is False, 'bot must not be laxer than the site'
         assert 'max_age_min' not in kwargs, 'bot must not bypass freshness filters'
-        token = str(q or "").upper()
-        groups = []
-        if token == "SIREN":
-            groups = [{"token": "SIREN", "routes": list(SIREN_ROUTES)}]
-        elif token == "GUA":
-            groups = [{"token": "GUA", "routes": [
-                route("GUA", "FUTURES", "MEXC", "KuCoin", 0.74, -0.021, -7.6, 51_000)]}]
-        return {"groups": groups}
+        # One warm payload carrying the whole board; the bot filters it itself
+        # rather than asking for a per-token query it would have to build.
+        return {"groups": [
+            {"token": "SIREN", "routes": list(SIREN_ROUTES)},
+            {"token": "GUA", "routes": [
+                route("GUA", "FUTURES", "MEXC", "KuCoin", 0.74, -0.021, -7.6, 51_000)]},
+        ]}
 
     monkeypatch.setattr(telegram_queries.api_spreads, "load_spreads", fake_load_spreads)
     return tmp_path / "unused.jsonl"

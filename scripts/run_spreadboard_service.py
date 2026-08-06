@@ -709,6 +709,15 @@ def _warm_board_cache(*, force: bool = False) -> None:
         _log(f"route index warm skipped: {type(exc).__name__}: {exc}")
     _yield_to_requests()
     try:
+        # The Telegram bot filters this one payload for every lookup. Unwarmed,
+        # a bare "$" took 36s and Telegram's webhook gave up first.
+        from spreadboard import telegram_queries
+
+        telegram_queries._warm_payload(_board_path())
+    except Exception as exc:  # noqa: BLE001 - warming is best effort.
+        _log(f"telegram payload warm skipped: {type(exc).__name__}: {exc}")
+    _yield_to_requests()
+    try:
         # /api/health builds the board at limit=0, which is its own cache key
         # and was in nobody's warm set -- so the readiness probe was one of the
         # most expensive requests on the server and timed out against a cold

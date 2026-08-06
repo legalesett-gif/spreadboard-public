@@ -192,7 +192,18 @@ class RailReopenWatcher:
             print(f"spreadboard-rail-reopen: {message}", flush=True)
 
     def _push_to_members(self, alert: dict[str, Any], message: str) -> int:
-        """A reopen window is short, so it goes to each member's own phone."""
+        """A reopen window is short, so it goes to each member's own phone.
+
+        Off unless switched on. A deposit or withdrawal reopening is the
+        highest-frequency event on the board, and pushing every one of them to
+        a phone buries the alerts a member actually asked for. The rules for
+        what deserves a push are the operator's to set; until they are set,
+        this one stays quiet and the reopen is still recorded and logged.
+        """
+        if os.environ.get("SPREADBOARD_RAIL_PUSH", "").strip().casefold() not in {
+            "1", "true", "yes", "on",
+        }:
+            return 0
         app_token = os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
         if not app_token:
             return 0

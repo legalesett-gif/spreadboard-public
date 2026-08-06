@@ -132,6 +132,25 @@ def _route(row: dict[str, Any]) -> str:
     return f"{row.get('long_venue') or '?'}>{row.get('short_venue') or '?'}{mark}"[:22]
 
 
+#: The one query the bot builds from. It is warmed by the service, so a
+#: Telegram lookup is a dictionary read rather than a board build.
+#:
+#: Every lookup used to call load_spreads(q=SYMBOL), which is its own cache key
+#: and was never warmed -- so a bare "$" took 36.2s and "$SIREN" 26.3s, and
+#: Telegram's webhook gave up long before either returned. The member saw
+#: nothing at all, which is exactly what "the $ is not working" looked like.
+WARM_QUERY: dict[str, Any] = {}
+
+
+def _warm_payload(board_path: Path | str) -> dict[str, Any]:
+    return api_spreads.load_spreads(
+        board_path=board_path,
+        include_stale=False,
+        include_unverified=False,
+        limit=None,
+    )
+
+
 #: A bare "$" is a request for suggestions, not a token.
 BARE_CASHTAG = re.compile(r"^\$([A-Za-z0-9._-]{0,11})$")
 
@@ -147,7 +166,7 @@ def suggestions(prefix: str, *, board_path: Path | str) -> list[str]:
     is the closest thing to the autocomplete they expected.
     """
     wanted = _normalise(prefix)
-    payload = api_spreads.load_spreads(q=wanted or None, limit=200)
+    payload = _warm_payload(board_path)
     scored: list[tuple[float, str]] = []
     for group in payload.get("groups") or []:
         token = str(group.get("token") or "").upper()
@@ -195,10 +214,12 @@ def _rows_for(symbol: str, board_path: Path | str) -> list[dict[str, Any]]:
     separate, currently-empty legacy source. Reading the wrong one makes the bot
     disagree with the site, which is worse than being silent.
     """
-    # Use the website's own defaults. Forcing include_stale/max_age_min=None
-    # surfaces stale quotes with absurd edges (+95%, -778% APR) that the site
-    # deliberately withholds -- the bot must not be more permissive than the UI.
-    payload = api_spreads.load_spreads(q=symbol)
+    # The same warm payload the suggestions use. Passing q=SYMBOL made every
+    # lookup its own cache key, so each one paid a full 26s board build and
+    # Telegram timed out. Filtering a warm payload costs nothing and, because
+    # include_stale/include_unverified match the site's own defaults, the bot
+    # still cannot be more permissive than the UI.
+    payload = _warm_payload(board_path)
     rows: list[dict[str, Any]] = []
     for group in payload.get("groups") or []:
         if str(group.get("token") or "").upper() != symbol:
