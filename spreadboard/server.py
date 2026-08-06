@@ -2456,6 +2456,7 @@ def _history_coverage_meta(
         # The client re-polls while this is true; without it a chart opened
         # cold would stay empty until the member reloaded the page by hand.
         "historical_proxy_warming": proxy.get("status") == "warming",
+        "historical_proxy_status": proxy.get("status"),
         "exact_point_count": sum(1 for item in rows if item.get("sample_source") != "historical_ohlcv_close_proxy"),
         "proxy_point_count": sum(1 for item in rows if item.get("sample_source") == "historical_ohlcv_close_proxy"),
     }
@@ -4951,10 +4952,18 @@ def render_selected_chart(
         if relative_value
         else ""
     )
-    coverage_note = (
-        f"{float(history_meta.get('coverage_pct') or 0):.0f}% window coverage"
-        + (f" · older points use {h(history_meta.get('historical_proxy_timeframe'))} close-price proxy" if history_meta.get("historical_proxy") else " · exact book samples only")
-    )
+    proxy_status = str(history_meta.get("historical_proxy_status") or "")
+    if history_meta.get("historical_proxy"):
+        source_note = f" · older points use {h(history_meta.get('historical_proxy_timeframe'))} close-price proxy"
+    elif proxy_status == "not_applicable":
+        source_note = " · no candle history exists for a DEX leg, so this chart builds live as you watch"
+    elif proxy_status == "warming":
+        source_note = " · loading window history"
+    elif proxy_status == "unavailable":
+        source_note = " · this venue publishes no candles, so only exact book samples are shown"
+    else:
+        source_note = " · exact book samples only"
+    coverage_note = f"{float(history_meta.get('coverage_pct') or 0):.0f}% window coverage{source_note}"
     return f"""
     <section class="selected-chart">
       <header class="selected-chart-head">

@@ -317,3 +317,25 @@ def test_the_book_is_deep_enough_to_price_the_probe() -> None:
     assert '"limit": 20' not in source
     assert '"sz": 20' not in source
     assert "limit=20" not in source
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ("not_applicable", "no candle history exists for a DEX leg"),
+        ("warming", "loading window history"),
+        ("unavailable", "publishes no candles"),
+    ],
+)
+def test_a_thin_window_says_why(status: str, expected: str) -> None:
+    """"0% window coverage" alone reads as a fault rather than as a fact.
+
+    A DEX leg has no candles anywhere -- that is a property of the venue, not a
+    failure of the board, and the member deciding whether to trust the chart
+    needs to know which it is.
+    """
+    meta = server._history_coverage_meta([], 1.0, {"status": status, "rows": []})
+    assert meta["historical_proxy_status"] == status
+
+    source = Path("spreadboard/server.py").read_text(encoding="utf-8")
+    assert expected in source
