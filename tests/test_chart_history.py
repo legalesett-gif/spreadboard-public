@@ -269,3 +269,33 @@ def test_history_only_venues_do_not_touch_the_price_path() -> None:
 
 def test_a_leg_with_no_symbol_is_not_fetched() -> None:
     assert historical_spreads._fetch_leg({"long_venue": "Binance"}, "long", "1m", 0) == []
+
+
+def test_a_venue_without_ccxt_can_still_be_quoted_live() -> None:
+    """Ourbit legs could never be repriced, so their charts sat frozen.
+
+    _leg_quote rejected anything outside VENUE_IDS before it reached the native
+    book fetcher below it -- which is the fetcher that exists precisely for
+    venues with no ccxt adapter.
+    """
+    from spreadboard import fast_quotes
+
+    assert "Ourbit" not in fast_quotes.VENUE_IDS
+    assert "Ourbit" in fast_quotes.NATIVE_FUTURES_VENUES
+    assert fast_quotes._has_native_book("Ourbit", "Futures") is True
+    # Spot is a different set, and Ourbit serves no spot legs on this board.
+    assert fast_quotes._has_native_book("Ourbit", "Spot") is False
+    assert fast_quotes._has_native_book("Nonesuch", "Futures") is False
+
+
+def test_the_ccxt_fallback_is_not_attempted_without_an_adapter() -> None:
+    """Reaching for a client that cannot exist would raise on every quote."""
+    import inspect
+
+    from spreadboard import fast_quotes
+
+    source = inspect.getsource(fast_quotes.FastQuoteRefresher._leg_quote)
+    guard = "if native_book is None and venue not in VENUE_IDS:"
+    assert guard in source
+    # The guard has to come before the client is constructed.
+    assert source.index(guard) < source.index("client = self._client(venue, market_type)")

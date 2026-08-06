@@ -59,10 +59,18 @@ NATIVE_FUTURES_VENUES = {
     "Kucoin Futures",
     "Mexc",
     "OKX",
+    "Ourbit",
     "Phemex",
     "WhiteBIT",
     "XT",
 }
+def _has_native_book(venue: str, market_type: str) -> bool:
+    """Whether this venue serves a public book without a ccxt adapter."""
+    if market_type == "Futures":
+        return venue in NATIVE_FUTURES_VENUES
+    return market_type == "Spot" and venue in NATIVE_SPOT_VENUES
+
+
 NATIVE_SPOT_VENUES = {
     "Binance",
     "Bingx",
@@ -666,7 +674,13 @@ class FastQuoteRefresher:
             )
             cache[key] = value
             return value
-        if not venue or not symbol or venue not in VENUE_IDS:
+        # Some venues have no ccxt adapter but do publish a public book, and
+        # this gate rejected them before the native fetcher below was ever
+        # reached -- so their legs could never be repriced and their charts sat
+        # frozen reading "Stream sampler unavailable".
+        if not venue or not symbol:
+            return None
+        if venue not in VENUE_IDS and not _has_native_book(venue, market_type):
             return None
         try:
             live_book = live_book_cache.load_live_book(
@@ -680,6 +694,10 @@ class FastQuoteRefresher:
                 if live_book is not None
                 else _native_order_book(venue, market_type, symbol)
             )
+            if native_book is None and venue not in VENUE_IDS:
+                # No public book this time and no ccxt adapter to fall back on.
+                cache[key] = None
+                return None
             if native_book is None:
                 client = self._client(venue, market_type)
                 with self._client_request_lock(venue, market_type):
@@ -989,6 +1007,9 @@ def _native_order_book(
         )
     elif venue == "Mexc":
         url = f"https://contract.mexc.com/api/v1/contract/depth/{base}_{quote}"
+    elif venue == "Ourbit":
+        # A MEXC white-label: same path, same response shape, different host.
+        url = f"https://futures.ourbit.com/api/v1/contract/depth/{base}_{quote}"
     elif venue == "HTX":
         url = "https://api.hbdm.com/linear-swap-ex/market/depth?" + urlencode(
             {"contract_code": f"{base}-{quote}", "depth": 20, "type": "step0"}
@@ -1052,7 +1073,7 @@ def _native_order_book(
     elif venue == "Kucoin Futures":
         raw_bids = (payload.get("data") or {}).get("bids")
         raw_asks = (payload.get("data") or {}).get("asks")
-    elif venue == "Mexc":
+    elif venue in {"Mexc", "Ourbit"}:
         raw_bids = (payload.get("data") or {}).get("bids")
         raw_asks = (payload.get("data") or {}).get("asks")
     elif venue == "HTX":
