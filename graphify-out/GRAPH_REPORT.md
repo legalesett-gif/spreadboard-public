@@ -1,11 +1,11 @@
 # Graph Report - spreadboard-public-release-clean  (2026-08-06)
 
 ## Corpus Check
-- 110 files · ~215,607 words
+- 111 files · ~216,267 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 5457 nodes · 10441 edges · 81 communities detected
+- 5496 nodes · 10484 edges · 85 communities detected
 - Extraction: 96% EXTRACTED · 4% INFERRED · 0% AMBIGUOUS · INFERRED: 378 edges (avg confidence: 0.72)
 - Token cost: 0 input · 0 output
 
@@ -84,13 +84,17 @@
 - [[_COMMUNITY_Community 72|Community 72]]
 - [[_COMMUNITY_Community 73|Community 73]]
 - [[_COMMUNITY_Community 74|Community 74]]
+- [[_COMMUNITY_Community 75|Community 75]]
 - [[_COMMUNITY_Community 76|Community 76]]
 - [[_COMMUNITY_Community 77|Community 77]]
-- [[_COMMUNITY_Community 82|Community 82]]
-- [[_COMMUNITY_Community 83|Community 83]]
-- [[_COMMUNITY_Community 84|Community 84]]
-- [[_COMMUNITY_Community 85|Community 85]]
+- [[_COMMUNITY_Community 79|Community 79]]
+- [[_COMMUNITY_Community 80|Community 80]]
+- [[_COMMUNITY_Community 81|Community 81]]
 - [[_COMMUNITY_Community 86|Community 86]]
+- [[_COMMUNITY_Community 87|Community 87]]
+- [[_COMMUNITY_Community 88|Community 88]]
+- [[_COMMUNITY_Community 89|Community 89]]
+- [[_COMMUNITY_Community 90|Community 90]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `h()` - 140 edges
@@ -120,11 +124,11 @@
 
 ### Community 0 - "Community 0"
 Cohesion: 0.01
-Nodes (129): _(), a(), ae, ai, an(), ar(), as(), At (+121 more)
+Nodes (127): _(), a(), ae, ai, an(), ar(), as(), At (+119 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.0
-Nodes (586): _age_min(), _apply_fast_quote_delta(), apply_live_books(), _apply_live_funding(), _book_side(), _bool_or_none(), _cached_snapshot(), _dedupe_rows() (+578 more)
+Nodes (585): _age_min(), _apply_fast_quote_delta(), apply_live_books(), _apply_live_funding(), _book_side(), _bool_or_none(), _cached_snapshot(), _dedupe_rows() (+577 more)
 
 ### Community 2 - "Community 2"
 Cohesion: 0.01
@@ -132,31 +136,31 @@ Nodes (375): _erow(), _frow(), _funding_row(), _iso(), _live_row(), _mq(), _perp
 
 ### Community 3 - "Community 3"
 Cohesion: 0.02
-Nodes (356): _daily_pct(), main(), A venue's per-interval rate as percent per day., A venue's per-interval rate as percent per day., _exchange(), main(), A loaded CCXT client for a venue id, or None if it has no adapter., active_class() (+348 more)
+Nodes (357): _daily_pct(), main(), A venue's per-interval rate as percent per day., A venue's per-interval rate as percent per day., _exchange(), main(), A loaded CCXT client for a venue id, or None if it has no adapter., active_class() (+349 more)
 
 ### Community 4 - "Community 4"
 Cohesion: 0.01
-Nodes (267): _checks_from_payload(), empty(), ExecutorAttestation, ExecutorAttestationRegistry, load_executor_attestations(), Read-only executor/preflight attestations for API discovery rows., route_key(), BlacklistFilterResult (+259 more)
+Nodes (272): _checks_from_payload(), empty(), ExecutorAttestation, ExecutorAttestationRegistry, load_executor_attestations(), Read-only executor/preflight attestations for API discovery rows., route_key(), BlacklistFilterResult (+264 more)
 
 ### Community 5 - "Community 5"
 Cohesion: 0.02
-Nodes (163): depth_weighted_price(), Small read-only order-book math helpers., main(), main(), _atomic_write(), _ccxt_current_funding(), _dex_chain_contract(), _expanded_token_rows() (+155 more)
+Nodes (172): depth_weighted_price(), Small read-only order-book math helpers., _audit_route(), _endpoint(), _formula_errors(), _funding_errors(), _history(), _json_url() (+164 more)
 
 ### Community 6 - "Community 6"
 Cohesion: 0.02
 Nodes (162): _artifact_worker(), _atomic_write_snapshot(), _board_path(), BulkQuoteLoop, _env_bool(), _fast_quote_timeout(), _finalize_snapshot(), _funding_lane() (+154 more)
 
 ### Community 7 - "Community 7"
-Cohesion: 0.02
-Nodes (114): BaseHTTPRequestHandler, _board_stream_rows(), Explain an empty farm tab instead of rendering a blank list.      Futures-DEX in, Explain an empty farm tab instead of rendering a blank list.      Futures-DEX in, Explain an empty farm tab instead of rendering a blank list.      Futures-DEX in, Explain an empty farm tab instead of rendering a blank list.      Futures-DEX in, Explain an empty farm tab instead of rendering a blank list.      Futures-DEX in, Explain an empty farm tab instead of rendering a blank list.      Futures-DEX in (+106 more)
+Cohesion: 0.01
+Nodes (180): _board_stream_rows(), _merge_history_rows(), Explain an empty farm tab instead of rendering a blank list.      Futures-DEX in, Merge proxy and exact samples without sacrificing full-window coverage., Merge proxy and exact samples without sacrificing full-window coverage., Explain an empty farm tab instead of rendering a blank list.      Futures-DEX in, Merge proxy and exact samples without sacrificing full-window coverage., Merge proxy and exact samples without sacrificing full-window coverage. (+172 more)
 
 ### Community 8 - "Community 8"
 Cohesion: 0.02
-Nodes (120): api_alert_context(), _health_from_snapshot_file(), _legacy_board_snapshot(), _load_public_intel_feed(), _market_cache_stale_get(), _market_stale_key(), _public_intel_best_route(), _public_intel_payload() (+112 more)
+Nodes (135): api_alert_context(), _health_from_snapshot_file(), _legacy_board_snapshot(), _load_public_intel_feed(), _market_cache_stale_get(), _market_stale_key(), _market_warming_payload(), _public_intel_best_route() (+127 more)
 
 ### Community 9 - "Community 9"
 Cohesion: 0.02
-Nodes (116): fmt_renewal_date(), Prepaid crypto checkout: pick a period, pay the exact amount, get access., Prepaid crypto checkout: pick a period, pay the exact amount, get access., Prepaid crypto checkout: pick a period, pay the exact amount, get access., Prepaid crypto checkout: pick a period, pay the exact amount, get access., Prepaid crypto checkout: pick a period, pay the exact amount, get access., Client logic: create an invoice, render a QR, poll until it settles.      Emits, Client logic: create an invoice, render a QR, poll until it settles.      Emits (+108 more)
+Nodes (119): fmt_renewal_date(), Prepaid crypto checkout: pick a period, pay the exact amount, get access., Prepaid crypto checkout: pick a period, pay the exact amount, get access., Prepaid crypto checkout: pick a period, pay the exact amount, get access., Prepaid crypto checkout: pick a period, pay the exact amount, get access., Prepaid crypto checkout: pick a period, pay the exact amount, get access., Client logic: create an invoice, render a QR, poll until it settles.      Emits, Client logic: create an invoice, render a QR, poll until it settles.      Emits (+111 more)
 
 ### Community 10 - "Community 10"
 Cohesion: 0.04
@@ -168,31 +172,31 @@ Nodes (83): _board_leg_key(), _board_legs(), BookWorker, _chunk_size_for(), _chu
 
 ### Community 12 - "Community 12"
 Cohesion: 0.03
-Nodes (85): _production_setting(), The board without an account.  A visitor sees a real, live, deliberately small s, `/free?limit=100000` must not hand over the whole board., A CSS blur over real values hands the board to anyone with an inspector., What converts is a judgeable opportunity you cannot act on.      The spread, fun, Every member link bounced to /login: seven dead ends, no way to the board., A spread without its token is unactionable, and it is what sells., A spread without its token is unactionable, and it is what sells. (+77 more)
+Nodes (11): ee(), ft, ht, ir, Ks, lr, tn(), tr (+3 more)
 
 ### Community 13 - "Community 13"
+Cohesion: 0.03
+Nodes (85): _production_setting(), The board without an account.  A visitor sees a real, live, deliberately small s, `/free?limit=100000` must not hand over the whole board., A CSS blur over real values hands the board to anyone with an inspector., What converts is a judgeable opportunity you cannot act on.      The spread, fun, Every member link bounced to /login: seven dead ends, no way to the board., A spread without its token is unactionable, and it is what sells., A spread without its token is unactionable, and it is what sells. (+77 more)
+
+### Community 14 - "Community 14"
 Cohesion: 0.06
 Nodes (80): _action_badges(), _action_next(), _action_priority(), _action_reason(), _action_status(), _age_min(), _alert_example_with_freshness(), _alert_freshness() (+72 more)
 
-### Community 14 - "Community 14"
+### Community 15 - "Community 15"
 Cohesion: 0.03
 Nodes (73): _Client, One bulk call per venue re-prices the whole board.  Websockets stream a few hund, Coinbase returns 528 symbols with neither bid nor ask., Coinbase returns 528 symbols with neither bid nor ask., Coinbase returns 528 symbols with neither bid nor ask., The bulk sweep covers the whole board every ninety seconds; the     websockets c, The bulk sweep covers the whole board every ninety seconds; the     websockets c, The bulk sweep covers the whole board every ninety seconds; the     websockets c (+65 more)
 
-### Community 15 - "Community 15"
-Cohesion: 0.04
-Nodes (7): ft, ht, ir, lr, tn(), Wt(), yt
-
 ### Community 16 - "Community 16"
-Cohesion: 0.03
-Nodes (76): _merge_history_rows(), Merge proxy and exact samples without sacrificing full-window coverage., Merge proxy and exact samples without sacrificing full-window coverage., Merge proxy and exact samples without sacrificing full-window coverage., Merge proxy and exact samples without sacrificing full-window coverage., Merge proxy and exact samples without sacrificing full-window coverage., Merge proxy and exact samples without sacrificing full-window coverage., Merge proxy and exact samples without sacrificing full-window coverage. (+68 more)
-
-### Community 17 - "Community 17"
 Cohesion: 0.06
 Nodes (75): best_spreads(), book_quote(), _bool_or_none(), _build_route_detail(), _build_token_data(), _ccxt_exchange_class(), convergence_hint(), _deposit_withdraw_status() (+67 more)
 
-### Community 18 - "Community 18"
+### Community 17 - "Community 17"
 Cohesion: 0.05
 Nodes (58): RuntimeError, main(), BillingError, config(), create_checkout_session(), create_portal_session(), Small Stripe Billing adapter with strict webhook verification., A safe, user-facing billing failure. (+50 more)
+
+### Community 18 - "Community 18"
+Cohesion: 0.06
+Nodes (9): cn(), dn(), gn, j, on, rn(), u(), un() (+1 more)
 
 ### Community 19 - "Community 19"
 Cohesion: 0.04
@@ -207,8 +211,8 @@ Cohesion: 0.04
 Nodes (41): test_settled_funding_propagates_to_every_route_using_same_leg(), board_event(), board_file(), message(), Token lookups in the subscriber Telegram group., Whatever a member types becomes a bounded, inert token string., Whatever a member types becomes a bounded, inert token string., Whatever a member types becomes a bounded, inert token string. (+33 more)
 
 ### Community 22 - "Community 22"
-Cohesion: 0.07
-Nodes (8): cn(), dn(), j, on, rn(), u(), un(), Zn()
+Cohesion: 0.06
+Nodes (52): chain_index(), _decimal_or_none(), erc20_decimals(), _eth_call(), _http_get(), _is_rate_limited(), list_tokens(), load_okx_dex_credentials() (+44 more)
 
 ### Community 23 - "Community 23"
 Cohesion: 0.06
@@ -216,31 +220,31 @@ Nodes (45): _api_call(), config(), _configure_group(), _create_join_request_link
 
 ### Community 24 - "Community 24"
 Cohesion: 0.05
-Nodes (10): b(), er, mt, re, s(), st, tt, x() (+2 more)
-
-### Community 25 - "Community 25"
-Cohesion: 0.05
 Nodes (34): _candles(), A chart that opens on a route has to draw a line.  The default window is 1H. The, Ten members opening the same chart must not start ten candle fetches., Without this flag the client polls once and a cold chart stays blank., The stream only appends the newest row, so it cannot fill the window., A basis trade is closed at zero -- that level is the point of the chart., Ourbit has no ccxt adapter and returns parallel arrays, not rows.      Its legs, Their API rounds `start` down, so it can return points we did not ask for. (+26 more)
 
-### Community 26 - "Community 26"
+### Community 25 - "Community 25"
 Cohesion: 0.1
 Nodes (34): _age_min(), _apply_filters(), BoardRow, BoardSnapshot, _bool_or_none(), build_source_health(), _chart_url(), _depth_usd() (+26 more)
 
-### Community 27 - "Community 27"
+### Community 26 - "Community 26"
 Cohesion: 0.08
 Nodes (24): _alert_body(), AlertWatcher, config_flags(), _float(), _float_or_default(), _json_or_text(), _public_detail(), _pushover_users() (+16 more)
 
-### Community 28 - "Community 28"
+### Community 27 - "Community 27"
 Cohesion: 0.11
 Nodes (30): make_user(), pay(), Crypto (Arbitrum USDC/USDT) prepaid billing.  The invariant that matters most: a, An exchange withdrawal fee must not cost the member their access., A token calling itself USDC must not buy access., Renewing with time left must not forfeit the days already paid for., Dollars -> raw 6-decimal token units., test_admin_can_settle_a_parked_payment() (+22 more)
 
+### Community 28 - "Community 28"
+Cohesion: 0.1
+Nodes (17): BaseHTTPRequestHandler, Spend a one-time link. Rate limited like a login, for the same reason., Spend a one-time link. Rate limited like a login, for the same reason., Spend a one-time link. Rate limited like a login, for the same reason., Push price changes to an open board instead of waiting for a reload.          Th, Push price changes to an open board instead of waiting for a reload.          Th, Push price changes to an open board instead of waiting for a reload.          Th, Push price changes to an open board instead of waiting for a reload.          Th (+9 more)
+
 ### Community 29 - "Community 29"
 Cohesion: 0.06
-Nodes (35): _client(), _load_cursor(), load_funding(), _market_type_of(), Re-price the whole board from one bulk call per venue.  Prices reached the board, One pass over every venue, bounded so it cannot run into the next one., One pass over the venues, resuming where the last pass ran out of time., One pass over the venues, resuming where the last pass ran out of time. (+27 more)
+Nodes (36): A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre (+28 more)
 
 ### Community 30 - "Community 30"
 Cohesion: 0.06
-Nodes (35): A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre, A member's own alerts, each against the value it is watching right now.      Cre (+27 more)
+Nodes (35): _client(), _load_cursor(), load_funding(), _market_type_of(), Re-price the whole board from one bulk call per venue.  Prices reached the board, One pass over every venue, bounded so it cannot run into the next one., One pass over the venues, resuming where the last pass ran out of time., One pass over the venues, resuming where the last pass ran out of time. (+27 more)
 
 ### Community 31 - "Community 31"
 Cohesion: 0.12
@@ -259,56 +263,56 @@ Cohesion: 0.1
 Nodes (22): build(), leg_history(), load(), _native_leg_history(), Realised funding windows taken from each venue's own settlement history.  Derivi, One venue's settled funding for one symbol, best effort., Realised windows for each (venue, symbol), written where the board reads.      B, The cached windows, re-read only when the file changes. (+14 more)
 
 ### Community 35 - "Community 35"
-Cohesion: 0.16
-Nodes (23): chain_index(), _decimal_or_none(), erc20_decimals(), _eth_call(), _http_get(), _is_rate_limited(), list_tokens(), load_okx_dex_credentials() (+15 more)
+Cohesion: 0.09
+Nodes (23): Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you (+15 more)
 
 ### Community 36 - "Community 36"
-Cohesion: 0.14
-Nodes (20): _any_network_state(), _atomic_write(), _bool_or_none(), _fetch_native_venue_rails(), _fetch_venue_rails(), _load_payload(), _normalize_network(), _payload_is_fresh() (+12 more)
-
-### Community 37 - "Community 37"
 Cohesion: 0.18
 Nodes (22): _connect(), _ensure_columns(), _exit_spread_pct(), _float_or_none(), funding_windows(), _int_or_none(), _is_contaminated_dex_sample(), load_funding_windows() (+14 more)
 
-### Community 38 - "Community 38"
+### Community 37 - "Community 37"
 Cohesion: 0.14
 Nodes (21): _market(), _rails(), A shut rail is why a fat spread survives; the reopen is the tradeable moment., A watcher nobody starts is a watcher that never fires., The group is already configured by the Telegram setup flow. Requiring a     sepa, A venue whose API was briefly unavailable last cycle has not reopened     anythi, A reopened withdrawal does not help while the other side's deposits are shut., You withdraw from the leg you buy and deposit into the leg you sell. (+13 more)
 
-### Community 39 - "Community 39"
-Cohesion: 0.09
-Nodes (22): Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you, Realised 1d/7d/30d carry for a route, or an honest blank.      A rate tells you (+14 more)
-
-### Community 40 - "Community 40"
+### Community 38 - "Community 38"
 Cohesion: 0.18
 Nodes (12): _evaluate_position_alerts(), _hydrate_position(), _matching_route(), _number(), portfolio_snapshot(), _portfolio_totals(), PositionAlertWorker, _quote_position() (+4 more)
 
-### Community 41 - "Community 41"
+### Community 39 - "Community 39"
 Cohesion: 0.17
 Nodes (17): _db(), _hourly(), Realised funding per leg over 1d/7d/30d.  The reference product shows these besi, Ranking on the live rate answers a different question from ranking on     what a, It must not reach the top on a missing value read as zero., `rank` and `farm` change the order shown, not the data underneath.      Letting, One sample an hour, each leg on an 8h funding interval., Three hours of samples is not a 7d return, whatever the arithmetic says. (+9 more)
 
-### Community 42 - "Community 42"
+### Community 40 - "Community 40"
 Cohesion: 0.14
 Nodes (14): A live funding rate must produce a carry figure.  1,498 futures routes showed no, The propagation runs at snapshot load, before the live overlay exists., Both legs at 0.0 is a real answer: this route pays nothing., Settled and enriched values are measured; this one is arithmetic., At 25 tokens a lane only 181 of 15,754 rows carried settled funding., Needed to tell a walked ladder from a ticker when the VWAP matches., _row(), test_a_live_rate_and_interval_produce_a_projection() (+6 more)
 
-### Community 43 - "Community 43"
+### Community 41 - "Community 41"
 Cohesion: 0.12
 Nodes (13): The crypto payment path, end to end.  The watcher is what makes a crypto payment, It was only started by server.py's CLI main(), which production does not run., A cold cursor must not scan Arbitrum from block 0., It holds no key and must never be able to move funds., One address serves every member, so the amount is the identifier., Tolerance absorbs a withdrawal fee, not a wrong invoice., The free tier caps eth_getLogs at ten blocks and Arbitrum makes ~14,400     an h, test_alchemy_uses_asset_transfers_not_a_range_scan() (+5 more)
 
-### Community 44 - "Community 44"
+### Community 42 - "Community 42"
 Cohesion: 0.14
 Nodes (11): The membership pages say what you get, not an essay about it.  The pricing page, It was hardcoded light-mode -- white cards on a dark page -- at 11px.      Every, Paragraphs a reader has to wade through.      Feature ticks are deliberately one, Written out by hand they drift the first time a price changes., Concise must not mean dropping what is legally required or functional., test_the_pricing_page_is_short(), test_the_subscription_page_keeps_its_consent_and_checkout(), test_the_subscription_page_leads_with_the_plan_facts() (+3 more)
 
-### Community 45 - "Community 45"
+### Community 43 - "Community 43"
 Cohesion: 0.15
 Nodes (1): js()
 
-### Community 46 - "Community 46"
+### Community 44 - "Community 44"
 Cohesion: 0.26
 Nodes (13): post(), HTTP boundary for crypto checkout.  The subtle failure this guards against: memb, The tutorial must be reachable without an account -- it is a conversion page., register(), test_a_member_cannot_poll_someone_elses_invoice(), test_admin_only_queue_is_closed_to_members(), test_checkout_panel_fails_closed_when_unconfigured(), test_consent_is_required_before_an_invoice_is_issued() (+5 more)
 
-### Community 47 - "Community 47"
+### Community 45 - "Community 45"
 Cohesion: 0.13
 Nodes (9): The funding interval is a multiplier on every carry number on the board.  0.01%, 1,102 Kucoin legs arrived as 3.9999999999999996 and 7.999999999999999., One Mexc leg reported 24 hours. Annualising from that understates the     carry, A quarter of futures legs carried an assumed interval; an assumption must     ne, Two consecutive settlement times are a measurement, not a guess., test_a_published_interval_beats_an_assumption(), test_a_schedule_no_perpetual_uses_is_refused(), test_float_noise_snaps_to_the_real_schedule() (+1 more)
+
+### Community 46 - "Community 46"
+Cohesion: 0.13
+Nodes (15): A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any (+7 more)
+
+### Community 47 - "Community 47"
+Cohesion: 0.15
+Nodes (2): le, ne()
 
 ### Community 48 - "Community 48"
 Cohesion: 0.32
@@ -319,76 +323,76 @@ Cohesion: 0.16
 Nodes (9): Realised funding windows from each venue's settlement history.  Deriving these f, CCXT has no funding history for BitMart, and it appears in top rows., Bybit returns 20 days where Binance returns 30.      Summing 20 days and calling, A spot leg pays no funding, so the pair is determined by its futures leg., _settlements(), test_a_spot_leg_contributes_zero_not_unknown(), test_a_window_is_the_sum_of_what_settled_inside_it(), test_a_window_the_venue_does_not_reach_reports_nothing() (+1 more)
 
 ### Community 51 - "Community 51"
-Cohesion: 0.14
-Nodes (14): A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any, A member's own pinned pairs, and the control to pin the one on screen.      Any (+6 more)
-
-### Community 52 - "Community 52"
 Cohesion: 0.23
 Nodes (12): _Book, A route moves when either leg moves, not only when both do.  Requiring both legs, A live book as api_spreads reads it: bids, asks and a quote timestamp., The DEX case: only the exchange leg can ever stream., The DEX case: only the exchange leg can ever stream., apply_live_books decides what the board ranks and filters on.      Requiring bot, _route(), test_a_live_long_leg_reprices_against_the_stored_short() (+4 more)
 
-### Community 53 - "Community 53"
-Cohesion: 0.27
-Nodes (13): _asset_from_watchlist(), _atomic_write(), build_verified_identity_registry(), _has_market(), _load_dict(), _norm_contract(), _norm_network(), _rail_asset_matches() (+5 more)
-
-### Community 54 - "Community 54"
+### Community 52 - "Community 52"
 Cohesion: 0.15
 Nodes (5): Where a contract trades away from its own venue's fair price.  The reference pro, Last 84.31 against fair 90.99 is 7.34% cheap, so the side is Long., Below the floor it is fees and tick size; below the volume nobody can take it., test_it_reproduces_the_reference_alert(), test_noise_and_untradeable_contracts_are_left_out()
 
-### Community 55 - "Community 55"
+### Community 53 - "Community 53"
 Cohesion: 0.15
 Nodes (11): The board must not go cold every time the snapshot is rewritten.  The market cac, It ran a 14s build against a 12s probe timeout, so the container was     reporte, It must not wait out someone else's build when it already has an answer.      Ch, Serving something indefinitely would be worse than a slow page., Each payload is large; the second index must not grow without limit., The stampede that kept killing the container.      A cold build takes 30-60s on, test_a_payload_older_than_the_stale_limit_is_not_served(), test_a_waiter_never_starts_a_second_build_of_the_same_view() (+3 more)
 
-### Community 56 - "Community 56"
+### Community 54 - "Community 54"
 Cohesion: 0.27
 Nodes (10): _alert_user(), _database(), Members create alerts against a route and must be able to change the     thresho, A rule edited while its condition was already met would otherwise stay     silen, test_a_member_can_edit_and_delete_their_own_alert(), test_a_member_cannot_touch_someone_elses_alert(), test_editing_an_alert_rearms_it(), test_login_uses_opaque_session_and_subscription_expiry() (+2 more)
 
-### Community 57 - "Community 57"
+### Community 55 - "Community 55"
 Cohesion: 0.2
 Nodes (9): _fake_response(), Transfer rails decide whether a fat spread is an opportunity or a closed door., CCXT sends fetch_currencies to a credentialed endpoint on Binance and,     with, Identity verification needs to prove two venues list the same asset, not     mer, An empty result read as 'this venue has no shut rails', which is the     opposit, test_a_blind_venue_is_reported_not_silently_empty(), test_binance_contract_reaches_the_parsed_rail(), test_binance_rails_come_from_a_public_endpoint() (+1 more)
 
-### Community 58 - "Community 58"
+### Community 56 - "Community 56"
 Cohesion: 0.18
 Nodes (2): di(), o
 
-### Community 59 - "Community 59"
+### Community 57 - "Community 57"
 Cohesion: 0.35
 Nodes (7): _event(), _member(), test_customer_cannot_be_reassigned(), test_payment_failed_and_deleted_revoke_access(), test_subscription_event_is_idempotent(), test_unrelated_invoice_cannot_activate_membership(), test_webhook_signature_and_expiry()
 
-### Community 60 - "Community 60"
+### Community 58 - "Community 58"
 Cohesion: 0.18
 Nodes (3): A member pins the pairs they actually hold.  Any route may be saved, including o, SKHY and SKHX are the same asset at 10:1., test_a_fixed_ratio_pair_keeps_its_ratio()
 
-### Community 61 - "Community 61"
+### Community 59 - "Community 59"
 Cohesion: 0.18
 Nodes (9): Nothing posts into a chat unless it has been switched on.  The operator's own Te, The unsolicited path into the subscriber group., It must raise, not return quietly: a caller cannot mistake this for delivery., Not just sendMessage -- edits and replies write into a chat too., Verifying who is in the group is not posting., test_a_send_raises_instead_of_posting(), test_every_write_method_is_covered(), test_group_broadcast_is_blocked() (+1 more)
 
-### Community 62 - "Community 62"
+### Community 60 - "Community 60"
 Cohesion: 0.24
 Nodes (10): deviation(), fair_price_of(), load(), _number(), Where a contract trades away from the venue's own fair price.  A different signa, The published deviations, re-read only when the file changes., The venue's own fair price for this contract, and what it called it., One contract's distance from its own fair price, or None if it is close.      Th (+2 more)
 
-### Community 63 - "Community 63"
-Cohesion: 0.22
-Nodes (2): le, ne()
+### Community 61 - "Community 61"
+Cohesion: 0.18
+Nodes (1): ct
 
-### Community 64 - "Community 64"
+### Community 62 - "Community 62"
 Cohesion: 0.31
 Nodes (10): _keep_across_lanes(), Give every lane a foothold before ranking the remainder on strength., Give every lane a foothold before ranking the remainder on strength., Every lane a token appears in must keep a foothold under the per-token cap.  _ro, Order is preserved after each lane's reserve, so strength still decides., _row(), test_a_crowded_token_still_keeps_spot_routes(), test_a_token_within_its_allowance_is_untouched() (+2 more)
 
-### Community 65 - "Community 65"
-Cohesion: 0.49
-Nodes (9): _audit_route(), _endpoint(), _formula_errors(), _funding_errors(), _history(), _json_url(), main(), _number() (+1 more)
+### Community 63 - "Community 63"
+Cohesion: 0.2
+Nodes (7): _clear_cache(), Concurrent cold builds of *different* views must not stack up.  Single-flight al, A view built before must answer from the previous copy under load., Both stores, or one test is served the previous test's stale payload., A leaked slot would wedge the board permanently., test_a_queued_reader_is_served_rather_than_left_waiting(), test_the_slot_is_released_when_a_build_raises()
 
-### Community 66 - "Community 66"
+### Community 64 - "Community 64"
 Cohesion: 0.27
 Nodes (9): from_schedule(), normalise(), per_day(), One place that decides how often a contract pays funding.  The interval is a mul, Snap a reported interval to the schedule it is obviously meant to be.      Retur, The interval two consecutive settlement times imply.      This is a measurement,, Settle on one interval and say whether it was measured or assumed.      Order is, A single funding print expressed per day, or None if it cannot be.      Refuses (+1 more)
 
-### Community 67 - "Community 67"
+### Community 65 - "Community 65"
+Cohesion: 0.33
+Nodes (1): we
+
+### Community 66 - "Community 66"
 Cohesion: 0.36
 Nodes (6): _linked_user(), test_group_messages_are_ignored(), test_group_setup_requires_admin_and_records_community(), test_join_request_only_approves_active_linked_subscriber(), test_membership_worker_removes_expired_non_admin(), test_subscription_command_uses_linked_account_checkout()
 
-### Community 68 - "Community 68"
+### Community 67 - "Community 67"
 Cohesion: 0.43
 Nodes (7): _backup_sqlite(), _ensure_repository(), _excluded(), Stage consistent databases plus small operational state files., _require_restic_configuration(), run_backup(), stage_snapshot()
+
+### Community 68 - "Community 68"
+Cohesion: 0.25
+Nodes (1): rt
 
 ### Community 69 - "Community 69"
 Cohesion: 0.33
@@ -399,88 +403,118 @@ Cohesion: 0.53
 Nodes (5): Carry and spread are separate mechanisms.  A farm whose basis never converges ca, _row(), test_a_funding_lane_still_requires_carry_it_receives(), test_a_negative_spread_farm_survives_the_funding_lane(), test_the_spread_floor_still_applies_to_the_spread_lane()
 
 ### Community 71 - "Community 71"
+Cohesion: 0.33
+Nodes (1): dt
+
+### Community 72 - "Community 72"
 Cohesion: 0.4
 Nodes (1): Opening a chart by route must not rebuild the whole board.  _find_canonical_rout
 
-### Community 72 - "Community 72"
+### Community 73 - "Community 73"
 Cohesion: 0.6
 Nodes (3): _credentials(), test_signed_get_does_not_retry_injected_test_client(), test_signed_get_retries_default_client_rate_limit()
 
-### Community 73 - "Community 73"
+### Community 74 - "Community 74"
 Cohesion: 0.7
 Nodes (4): _float(), main(), Resolve DEX contract addresses for Futures-DEX watchlist candidates.  Futures-DE, resolve()
 
-### Community 74 - "Community 74"
+### Community 75 - "Community 75"
 Cohesion: 0.5
 Nodes (4): exchange_market_url(), _market_parts(), Official exchange market links for read-only leg navigation., Return an official market page for a normalized exchange leg.
 
 ### Community 76 - "Community 76"
+Cohesion: 0.5
+Nodes (1): f()
+
+### Community 77 - "Community 77"
+Cohesion: 0.5
+Nodes (1): it
+
+### Community 79 - "Community 79"
 Cohesion: 1.0
 Nodes (2): main(), telegram_call()
 
-### Community 77 - "Community 77"
+### Community 80 - "Community 80"
 Cohesion: 1.0
 Nodes (2): main(), stripe_request()
 
-### Community 82 - "Community 82"
+### Community 81 - "Community 81"
+Cohesion: 0.67
+Nodes (1): qt
+
+### Community 86 - "Community 86"
 Cohesion: 1.0
 Nodes (1): Spread arbitrage research bot.
 
-### Community 83 - "Community 83"
+### Community 87 - "Community 87"
 Cohesion: 1.0
 Nodes (1): Utility helpers for spreadarb.
 
-### Community 84 - "Community 84"
+### Community 88 - "Community 88"
 Cohesion: 1.0
 Nodes (1): Narrow live-operation helpers.  The main live engine remains locked. Modules in
 
-### Community 85 - "Community 85"
+### Community 89 - "Community 89"
 Cohesion: 1.0
 Nodes (1): Read-only decentralized exchange integrations.
 
-### Community 86 - "Community 86"
+### Community 90 - "Community 90"
 Cohesion: 1.0
 Nodes (1): Read-only API discovery for Telegram opportunity visibility.  The package is int
 
 ## Knowledge Gaps
-- **2032 isolated node(s):** `HTTP boundary for crypto checkout.  The subtle failure this guards against: memb`, `The tutorial must be reachable without an account -- it is a conversion page.`, `The crypto payment path, end to end.  The watcher is what makes a crypto payment`, `It was only started by server.py's CLI main(), which production does not run.`, `A cold cursor must not scan Arbitrum from block 0.` (+2027 more)
+- **2061 isolated node(s):** `HTTP boundary for crypto checkout.  The subtle failure this guards against: memb`, `The tutorial must be reachable without an account -- it is a conversion page.`, `The crypto payment path, end to end.  The watcher is what makes a crypto payment`, `It was only started by server.py's CLI main(), which production does not run.`, `A cold cursor must not scan Arbitrum from block 0.` (+2056 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **Thin community `Community 45`** (16 nodes): `js()`, `.cacheKey()`, `.constructor()`, `.convertHorzItemToInternal()`, `.createConverterToInternalObj()`, `.fillWeightsForPoints()`, `.formatHorzItem()`, `.formatTickmark()`, `.key()`, `.maxTickMarkWeight()`, `.options()`, `.preprocessData()`, `.setOptions()`, `.updateFormatter()`, `.zg()`, `.eg()`
+- **Thin community `Community 43`** (16 nodes): `js()`, `.cacheKey()`, `.constructor()`, `.convertHorzItemToInternal()`, `.createConverterToInternalObj()`, `.fillWeightsForPoints()`, `.formatHorzItem()`, `.formatTickmark()`, `.key()`, `.maxTickMarkWeight()`, `.options()`, `.preprocessData()`, `.setOptions()`, `.updateFormatter()`, `.zg()`, `.eg()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 58`** (12 nodes): `di()`, `o`, `.constructor()`, `.hi()`, `.ht()`, `.i()`, `.m()`, `.p()`, `.st()`, `.$t()`, `.u()`, `.v()`
+- **Thin community `Community 47`** (15 nodes): `.Wg()`, `.Fg()`, `le`, `.constructor()`, `.Ig()`, `ne()`, `.attached()`, `.constructor()`, `.detached()`, `.hr()`, `.NM()`, `.paneViews()`, `.SM()`, `.updateAllViews()`, `.Wg()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 63`** (11 nodes): `le`, `.constructor()`, `ne()`, `.attached()`, `.constructor()`, `.detached()`, `.hr()`, `.NM()`, `.paneViews()`, `.SM()`, `.updateAllViews()`
+- **Thin community `Community 56`** (12 nodes): `di()`, `o`, `.constructor()`, `.hi()`, `.ht()`, `.i()`, `.m()`, `.p()`, `.st()`, `.$t()`, `.u()`, `.v()`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 61`** (11 nodes): `ct`, `.constructor()`, `.He()`, `.je()`, `.Ke()`, `.qe()`, `.Ue()`, `.Xe()`, `.Ye()`, `.Ze()`, `.Zi()`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 65`** (10 nodes): `we`, `.applyOptions()`, `.constructor()`, `.et()`, `.getSeries()`, `.ht()`, `.jp()`, `._M()`, `.mM()`, `.uM()`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 68`** (8 nodes): `.paneViews()`, `.updateAllViews()`, `rt`, `.constructor()`, `.Fn()`, `.oh()`, `.On()`, `.Ys()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 69`** (7 nodes): `be`, `.CM()`, `.constructor()`, `.dM()`, `.draw()`, `.et()`, `.ht()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 71`** (5 nodes): `test_route_index.py`, `Opening a chart by route must not rebuild the whole board.  _find_canonical_rout`, `test_a_catalogue_route_short_circuits()`, `test_a_new_snapshot_rebuilds_the_index()`, `test_the_board_is_built_once_and_then_indexed()`
+- **Thin community `Community 71`** (6 nodes): `dt`, `.constructor()`, `.Ke()`, `.Qe()`, `.tr()`, `.Xe()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 76`** (3 nodes): `main()`, `configure_telegram_webhook.py`, `telegram_call()`
+- **Thin community `Community 72`** (5 nodes): `test_route_index.py`, `Opening a chart by route must not rebuild the whole board.  _find_canonical_rout`, `test_a_catalogue_route_short_circuits()`, `test_a_new_snapshot_rebuilds_the_index()`, `test_the_board_is_built_once_and_then_indexed()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 77`** (3 nodes): `main()`, `configure_stripe_webhook.py`, `stripe_request()`
+- **Thin community `Community 76`** (4 nodes): `f()`, `.constructor()`, `.ht()`, `.st()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 82`** (2 nodes): `Spread arbitrage research bot.`, `__init__.py`
+- **Thin community `Community 77`** (4 nodes): `it`, `.constructor()`, `.ih()`, `.Ns()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 83`** (2 nodes): `__init__.py`, `Utility helpers for spreadarb.`
+- **Thin community `Community 79`** (3 nodes): `main()`, `configure_telegram_webhook.py`, `telegram_call()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 84`** (2 nodes): `Narrow live-operation helpers.  The main live engine remains locked. Modules in`, `__init__.py`
+- **Thin community `Community 80`** (3 nodes): `main()`, `configure_stripe_webhook.py`, `stripe_request()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 85`** (2 nodes): `Read-only decentralized exchange integrations.`, `__init__.py`
+- **Thin community `Community 81`** (3 nodes): `qt`, `.constructor()`, `.lr()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 86`** (2 nodes): `Read-only API discovery for Telegram opportunity visibility.  The package is int`, `__init__.py`
+- **Thin community `Community 86`** (2 nodes): `Spread arbitrage research bot.`, `__init__.py`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 87`** (2 nodes): `__init__.py`, `Utility helpers for spreadarb.`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 88`** (2 nodes): `Narrow live-operation helpers.  The main live engine remains locked. Modules in`, `__init__.py`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 89`** (2 nodes): `Read-only decentralized exchange integrations.`, `__init__.py`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 90`** (2 nodes): `Read-only API discovery for Telegram opportunity visibility.  The package is int`, `__init__.py`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `q()` connect `Community 0` to `Community 2`, `Community 15`?**
-  _High betweenness centrality (0.281) - this node is a cross-community bridge._
+- **Why does `q()` connect `Community 0` to `Community 2`, `Community 12`?**
+  _High betweenness centrality (0.280) - this node is a cross-community bridge._
 - **Why does `_Book` connect `Community 4` to `Community 1`, `Community 2`, `Community 5`, `Community 6`?**
-  _High betweenness centrality (0.253) - this node is a cross-community bridge._
-- **Why does `FastQuoteRefresher` connect `Community 5` to `Community 3`, `Community 4`, `Community 6`, `Community 7`, `Community 40`, `Community 29`?**
-  _High betweenness centrality (0.211) - this node is a cross-community bridge._
+  _High betweenness centrality (0.271) - this node is a cross-community bridge._
+- **Why does `FastQuoteRefresher` connect `Community 5` to `Community 3`, `Community 4`, `Community 38`, `Community 6`, `Community 28`, `Community 30`?**
+  _High betweenness centrality (0.221) - this node is a cross-community bridge._
 - **What connects `HTTP boundary for crypto checkout.  The subtle failure this guards against: memb`, `The tutorial must be reachable without an account -- it is a conversion page.`, `The crypto payment path, end to end.  The watcher is what makes a crypto payment` to the rest of the system?**
-  _2032 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _2061 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.01 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**

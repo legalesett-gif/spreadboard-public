@@ -1198,7 +1198,7 @@ def api_market_spreads(
             ).start()
             return stale
 
-    acquired = _MARKET_BUILD_SLOTS.acquire(timeout=_MARKET_BUILD_WAIT_SECONDS)
+    acquired = _MARKET_BUILD_SLOTS.acquire(timeout=_MARKET_BUILD_SLOT_WAIT_SECONDS)
     if not acquired:
         # Every slot is busy. Anything we can serve beats piling on another
         # full build, which is what exhausted the container. A no_cache caller
@@ -1385,6 +1385,16 @@ def _market_cache_finish(cache_key: tuple[Any, ...], data: dict[str, Any] | None
 #: page open indefinitely.
 _MARKET_BUILD_WAIT_SECONDS = max(
     5.0, float(os.environ.get("SPREADBOARD_MARKET_BUILD_WAIT_SECONDS", "25"))
+)
+
+#: How long to wait for a build slot before giving up and answering anyway.
+#:
+#: This is admission control, so it must fail fast. Reusing the 25s in-flight
+#: wait meant a request could spend 25s on the gate and another 25s on the
+#: slot: ten lane tabs opened at once produced a 60s hang and a dropped
+#: connection instead of a prompt "still warming".
+_MARKET_BUILD_SLOT_WAIT_SECONDS = max(
+    0.5, float(os.environ.get("SPREADBOARD_MARKET_BUILD_SLOT_WAIT_SECONDS", "6"))
 )
 
 

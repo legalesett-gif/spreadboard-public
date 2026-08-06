@@ -131,3 +131,19 @@ def test_a_queued_reader_is_served_rather_than_left_waiting(
 
 def test_the_limit_is_configurable_and_at_least_one() -> None:
     assert server._MARKET_BUILD_SLOTS._initial_value >= 1
+
+
+def test_admission_control_fails_fast() -> None:
+    """It must not add a second long wait on top of the in-flight gate.
+
+    A request could spend 25s waiting for the in-flight event and another 25s
+    waiting for a build slot: ten lane tabs opened together produced a 60s hang
+    and a dropped connection rather than a prompt "still warming".
+    """
+    assert server._MARKET_BUILD_SLOT_WAIT_SECONDS < server._MARKET_BUILD_WAIT_SECONDS
+    assert server._MARKET_BUILD_SLOT_WAIT_SECONDS <= 10
+
+    import inspect
+
+    source = inspect.getsource(server.api_market_spreads)
+    assert "_MARKET_BUILD_SLOTS.acquire(timeout=_MARKET_BUILD_SLOT_WAIT_SECONDS)" in source
