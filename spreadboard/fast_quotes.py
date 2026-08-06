@@ -384,7 +384,16 @@ class FastQuoteRefresher:
             payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             return {"status": "unavailable", "updated": 0, "error": type(exc).__name__}
-        funding_summary = self.refresh_all_funding(payload)
+        # The dedicated bulk worker already refreshes every venue into the
+        # compact live_funding file. Repeating the same 18-venue sweep here made
+        # the top-route quote cycle take more than four minutes and delayed the
+        # very prices it exists to refresh. Fall back to the inline sweep only
+        # when that independent cache is absent or stale.
+        funding_summary = (
+            {"status": "external_live_funding", "skipped": True, "legs": 0, "venues": 0}
+            if _external_funding_is_fresh()
+            else self.refresh_all_funding(payload)
+        )
         rows_by_lane: dict[str, list[dict[str, Any]]] = {lane: [] for lane in FAST_QUOTE_LANES}
         for bucket in ("api_discovered_rows", "dex_discovered_rows"):
             for row in payload.get(bucket) or []:
@@ -866,6 +875,16 @@ def _sync_quoted_funding(
     row["funding_daily_pct"] = projected
     row["funding_spread_pct"] = projected
     row["funding_apr_pct"] = projected * 365.0
+
+
+def _external_funding_is_fresh(*, max_age_seconds: float = 600.0) -> bool:
+    """Whether the independent all-venue funding sweep is current enough."""
+
+    path = Path(os.environ.get("SPREADBOARD_DATA_DIR", "data")) / "live_funding.json"
+    try:
+        return 0.0 <= time.time() - path.stat().st_mtime <= max_age_seconds
+    except OSError:
+        return False
 
 
 def _fast_quote_delta_path(snapshot_path: Path) -> Path:

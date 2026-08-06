@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sqlite3
 import time
@@ -172,6 +173,20 @@ def test_exact_route_quote_uses_four_book_sides_and_matched_size(
     assert result["row"]["long_funding_interval_assumed"] is False
     assert result["row"]["funding_projected_24h_pct"] == pytest.approx(-0.72)
     assert set(calls) == {("long", True), ("short", True)}
+
+
+def test_fresh_external_funding_cache_skips_duplicate_venue_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    funding = tmp_path / "live_funding.json"
+    funding.write_text('{"legs":{}}')
+    monkeypatch.setenv("SPREADBOARD_DATA_DIR", str(tmp_path))
+
+    assert fast_quotes._external_funding_is_fresh()
+
+    old = time.time() - 601
+    os.utime(funding, (old, old))
+    assert not fast_quotes._external_funding_is_fresh()
 
 
 def test_exact_dex_route_rejects_out_of_bounds_spread(

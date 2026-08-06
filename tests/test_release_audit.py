@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import time
@@ -496,6 +497,20 @@ def test_production_board_does_not_admit_hour_old_routes_as_live() -> None:
     match = re.search(r'SPREADBOARD_LIVE_MAX_AGE_MIN:\s*"([0-9.]+)"', compose)
     assert match is not None
     assert float(match.group(1)) <= 5.0
+
+
+def test_price_worker_invalidates_grouped_market_payloads() -> None:
+    from scripts import run_spreadboard_service as service
+
+    api_spreads._RESULT_CACHE[("test",)] = (0, 0.0, {"old": True})
+    server._MARKET_CACHE[("test",)] = (0.0, {"old": True})
+    server._MARKET_STALE_CACHE[("test",)] = (0.0, {"old": True})
+
+    service._invalidate_market_price_caches()
+
+    assert api_spreads._RESULT_CACHE == {}
+    assert server._MARKET_CACHE == {}
+    assert server._MARKET_STALE_CACHE == {}
 
 
 def test_high_dislocation_dex_route_requires_exact_cex_identity() -> None:
@@ -1700,22 +1715,21 @@ def test_broad_dex_output_goes_to_the_writable_runtime_dir() -> None:
     assert 'RUNTIME_DIR / "api_discovery_broad_dex_latest.json"' in source
 
 
-def test_freshness_window_exceeds_the_discovery_cadence() -> None:
-    """Discovery rows must survive between scans or they are never shown.
+def test_freshness_window_tracks_the_continuous_quote_workers() -> None:
+    """Discovery finds routes; continuous workers must keep them admissible.
 
-    High-spread routes (SIREN at 100%+) come from the discovery scan, which
-    runs every 20-45 minutes -- not from the 95-second fast-quote worker. A
-    freshness window shorter than that cadence silently expires exactly the
-    opportunities the product exists to surface.
+    Extending freshness to the 25-minute discovery cadence let a failed venue
+    retain an hour-old executable claim. Bulk and fast quote workers refresh
+    prices independently, so a route they cannot touch must leave promptly.
     """
     compose = (Path(__file__).resolve().parents[1] / "compose.production.yml").read_text(encoding="utf-8")
-    import re
     window = float(re.search(r'SPREADBOARD_LIVE_MAX_AGE_MIN:\s*"(\d+)"', compose).group(1))
-    cadence = float(re.search(r'SPREADBOARD_REFRESH_SECONDS:\s*"(\d+)"', compose).group(1)) / 60.0
-    assert window > cadence * 2, (
-        f"freshness window {window}min must comfortably exceed the {cadence}min "
-        "scan cadence, or discovery rows expire before they are displayed"
-    )
+    bulk_tick = float(re.search(r'SPREADBOARD_BULK_QUOTE_SECONDS:\s*"(\d+)"', compose).group(1))
+    assert window <= 5.0
+    assert bulk_tick <= 30.0
+    assert "_invalidate_market_price_caches()" in (
+        Path(__file__).resolve().parents[1] / "scripts/run_spreadboard_service.py"
+    ).read_text(encoding="utf-8")
 
 
 def test_only_transfer_lanes_need_a_rail() -> None:

@@ -267,6 +267,8 @@ class RefreshLoop:
                         recorded = _finalize_snapshot("record")
                         inserted = (recorded or {}).get("history_inserted") or 0
             _log(f"fast quotes {summary} history_inserted={inserted}")
+            if summary.get("updated_routes"):
+                _invalidate_market_price_caches()
             _warm_board_cache()
             self.stop_event.wait(interval)
 
@@ -615,6 +617,26 @@ class BulkQuoteLoop(threading.Thread):
                 f"bulk funding: {funding.get('legs')} legs from {funding.get('venues')} "
                 f"venues in {funding.get('seconds')}s"
             )
+        if (quotes.get("quotes") or 0) > 0:
+            _invalidate_market_price_caches()
+
+
+def _invalidate_market_price_caches() -> None:
+    """Drop grouped payloads after a worker writes newer books or deltas.
+
+    Those caches are keyed on the large discovery snapshot because that keeps
+    page loads fast. Price workers deliberately do not rewrite that snapshot,
+    so without this explicit signal the server retained the old route ranking
+    for 15-20 minutes after newer prices were already on disk.
+    """
+
+    from spreadboard import server as server_module
+
+    with api_spreads._SNAPSHOT_CACHE_LOCK:
+        api_spreads._RESULT_CACHE.clear()
+    with server_module._MARKET_CACHE_LOCK:
+        server_module._MARKET_CACHE.clear()
+        server_module._MARKET_STALE_CACHE.clear()
 
 
 def _board_path() -> Path:
