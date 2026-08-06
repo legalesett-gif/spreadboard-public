@@ -22,8 +22,11 @@ services:
       SPREADBOARD_LIVE_MAX_AGE_MIN: "5"
       SPREADBOARD_REFRESH_TIMEOUT_SECONDS: "2700"
       SPREADBOARD_FAST_QUOTE_SECONDS: "60"
-      SPREADBOARD_FAST_QUOTE_ROUTES: "320"
-      SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS: "300"
+      # Thirty exact routes per primary lane covers each visible top-25 plus
+      # headroom. Asking for 320 kept the cycle alive for 4-5 minutes, so its
+      # results were old before the next ranking could use them.
+      SPREADBOARD_FAST_QUOTE_ROUTES: "120"
+      SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS: "180"
       # Prices must move as the books move, not on a beat. The re-pricing is
       # shared between streams, so this is independent of how many people watch.
       SPREADBOARD_BOARD_STREAM_SECONDS: "0.25"

@@ -513,6 +513,16 @@ def test_price_worker_invalidates_grouped_market_payloads() -> None:
     assert server._MARKET_STALE_CACHE == {}
 
 
+def test_fast_quote_budget_covers_top_25_without_a_five_minute_cycle() -> None:
+    compose = (Path(__file__).resolve().parents[1] / "compose.production.yml").read_text()
+    routes = int(re.search(r'SPREADBOARD_FAST_QUOTE_ROUTES:\s*"(\d+)"', compose).group(1))
+    timeout = int(re.search(r'SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS:\s*"(\d+)"', compose).group(1))
+
+    assert routes >= 4 * 25
+    assert routes <= 160
+    assert timeout <= 180
+
+
 def test_high_dislocation_dex_route_requires_exact_cex_identity() -> None:
     reasons = api_spreads._route_mirage_reasons(
         raw={
