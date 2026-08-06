@@ -64,13 +64,6 @@ NATIVE_FUTURES_VENUES = {
     "WhiteBIT",
     "XT",
 }
-def _has_native_book(venue: str, market_type: str) -> bool:
-    """Whether this venue serves a public book without a ccxt adapter."""
-    if market_type == "Futures":
-        return venue in NATIVE_FUTURES_VENUES
-    return market_type == "Spot" and venue in NATIVE_SPOT_VENUES
-
-
 NATIVE_SPOT_VENUES = {
     "Binance",
     "Bingx",
@@ -680,7 +673,7 @@ class FastQuoteRefresher:
         # frozen reading "Stream sampler unavailable".
         if not venue or not symbol:
             return None
-        if venue not in VENUE_IDS and not _has_native_book(venue, market_type):
+        if venue not in VENUE_IDS and not supports_native_order_book(venue, market_type):
             return None
         try:
             live_book = live_book_cache.load_live_book(
@@ -702,7 +695,7 @@ class FastQuoteRefresher:
                 client = self._client(venue, market_type)
                 with self._client_request_lock(venue, market_type):
                     market = client.market(symbol)
-                    book = client.fetch_order_book(symbol, limit=20)
+                    book = client.fetch_order_book(symbol, limit=BOOK_DEPTH_LEVELS)
                     funding = (
                         _ccxt_current_funding(client, symbol, venue=venue)
                         if include_funding and market_type == "Futures"
@@ -969,15 +962,15 @@ def _native_order_book(
     compact = _native_linear_symbol(venue, base, quote)
     if venue == "Aster":
         url = (
-            f"https://fapi.asterdex.com/fapi/v1/depth?{urlencode({'symbol': compact, 'limit': 20})}"
+            f"https://fapi.asterdex.com/fapi/v1/depth?{urlencode({'symbol': compact, 'limit': BOOK_DEPTH_LEVELS})}"
         )
     elif venue == "Binance":
         url = (
-            f"https://fapi.binance.com/fapi/v1/depth?{urlencode({'symbol': compact, 'limit': 20})}"
+            f"https://fapi.binance.com/fapi/v1/depth?{urlencode({'symbol': compact, 'limit': BOOK_DEPTH_LEVELS})}"
         )
     elif venue == "Bingx":
         url = "https://open-api.bingx.com/openApi/swap/v2/quote/depth?" + urlencode(
-            {"symbol": f"{base}-{quote}", "limit": 20}
+            {"symbol": f"{base}-{quote}", "limit": BOOK_DEPTH_LEVELS}
         )
     elif venue == "Bitget":
         url = "https://api.bitget.com/api/v2/mix/market/merge-depth?" + urlencode(
@@ -985,16 +978,16 @@ def _native_order_book(
                 "symbol": compact,
                 "productType": f"{quote}-FUTURES",
                 "precision": "scale0",
-                "limit": 20,
+                "limit": BOOK_DEPTH_LEVELS,
             }
         )
     elif venue == "Bybit":
         url = "https://api.bybit.com/v5/market/orderbook?" + urlencode(
-            {"category": "linear", "symbol": compact, "limit": 20}
+            {"category": "linear", "symbol": compact, "limit": BOOK_DEPTH_LEVELS}
         )
     elif venue == "Gate":
         url = "https://api.gateio.ws/api/v4/futures/usdt/order_book?" + urlencode(
-            {"contract": f"{base}_USDT", "limit": 20}
+            {"contract": f"{base}_USDT", "limit": BOOK_DEPTH_LEVELS}
         )
     elif venue == "Kraken Futures":
         kraken_base = _kraken_asset_code(base)
@@ -1016,13 +1009,13 @@ def _native_order_book(
         )
     elif venue == "CoinEx":
         url = "https://api.coinex.com/v2/futures/depth?" + urlencode(
-            {"market": compact, "limit": 20, "interval": "0"}
+            {"market": compact, "limit": BOOK_DEPTH_LEVELS, "interval": "0"}
         )
     elif venue == "Phemex":
         url = "https://api.phemex.com/md/v2/orderbook?" + urlencode({"symbol": compact})
     elif venue == "WhiteBIT":
         url = f"https://whitebit.com/api/v4/public/orderbook/{base}_PERP?" + urlencode(
-            {"limit": 20, "level": 2}
+            {"limit": BOOK_DEPTH_LEVELS, "level": 2}
         )
     elif venue == "BitMart":
         url = "https://api-cloud-v2.bitmart.com/contract/public/depth?" + urlencode(
@@ -1030,7 +1023,7 @@ def _native_order_book(
         )
     elif venue == "XT":
         url = "https://fapi.xt.com/future/market/v1/public/q/depth?" + urlencode(
-            {"symbol": f"{base.lower()}_{quote.lower()}", "level": 20}
+            {"symbol": f"{base.lower()}_{quote.lower()}", "level": BOOK_DEPTH_LEVELS}
         )
     elif venue == "Coinbase International":
         url = f"https://api.international.coinbase.com/api/v1/instruments/{base}-PERP/quote"
@@ -1053,7 +1046,7 @@ def _native_order_book(
         return _sorted_book(raw_bids, raw_asks)
     else:
         url = "https://www.okx.com/api/v5/market/books?" + urlencode(
-            {"instId": f"{base}-{quote}-SWAP", "sz": 20}
+            {"instId": f"{base}-{quote}-SWAP", "sz": BOOK_DEPTH_LEVELS}
         )
     request = Request(url, headers={"User-Agent": "SpreadBoard/1.0"})
     with urlopen(request, timeout=8.0) as response:
@@ -1108,6 +1101,16 @@ def _native_order_book(
     return _sorted_book(raw_bids, raw_asks)
 
 
+#: How deep to ask for a public order book.
+#:
+#: Twenty levels is not enough to price the $50 probe on a thin contract: Gate
+#: held $41.67 on the bid and $47.26 on the ask for BP across twenty levels and
+#: the VWAP came back None, so the route could not be sampled and its chart
+#: read "Stream sampler unavailable". Fifty levels of the same book held $107
+#: and $233. Venues that cap lower return what they have.
+BOOK_DEPTH_LEVELS = 50
+
+
 def supports_native_order_book(venue: str, market_type: str) -> bool:
     if market_type == "Spot":
         return venue in NATIVE_SPOT_VENUES
@@ -1126,46 +1129,46 @@ def _native_spot_order_book(
     compact = f"{base}{quote}"
     dashed = f"{base}-{quote}"
     if venue == "Binance":
-        url = "https://api.binance.com/api/v3/depth?" + urlencode({"symbol": compact, "limit": 20})
+        url = "https://api.binance.com/api/v3/depth?" + urlencode({"symbol": compact, "limit": BOOK_DEPTH_LEVELS})
     elif venue == "Bingx":
         url = "https://open-api.bingx.com/openApi/spot/v1/market/depth?" + urlencode(
-            {"symbol": dashed, "limit": 20}
+            {"symbol": dashed, "limit": BOOK_DEPTH_LEVELS}
         )
     elif venue == "Bitget":
         url = "https://api.bitget.com/api/v2/spot/market/orderbook?" + urlencode(
-            {"symbol": compact, "type": "step0", "limit": 20}
+            {"symbol": compact, "type": "step0", "limit": BOOK_DEPTH_LEVELS}
         )
     elif venue == "Bybit":
         url = "https://api.bybit.com/v5/market/orderbook?" + urlencode(
-            {"category": "spot", "symbol": compact, "limit": 20}
+            {"category": "spot", "symbol": compact, "limit": BOOK_DEPTH_LEVELS}
         )
     elif venue == "Gate":
         url = "https://api.gateio.ws/api/v4/spot/order_book?" + urlencode(
-            {"currency_pair": f"{base}_{quote}", "limit": 20}
+            {"currency_pair": f"{base}_{quote}", "limit": BOOK_DEPTH_LEVELS}
         )
     elif venue == "Kucoin":
         url = f"https://api.kucoin.com/api/v1/market/orderbook/level2_20?symbol={dashed}"
     elif venue == "Mexc":
-        url = "https://api.mexc.com/api/v3/depth?" + urlencode({"symbol": compact, "limit": 20})
+        url = "https://api.mexc.com/api/v3/depth?" + urlencode({"symbol": compact, "limit": BOOK_DEPTH_LEVELS})
     elif venue == "HTX":
         url = "https://api.huobi.pro/market/depth?" + urlencode(
             {"symbol": compact.lower(), "type": "step0", "depth": 20}
         )
     elif venue == "CoinEx":
         url = "https://api.coinex.com/v2/spot/depth?" + urlencode(
-            {"market": compact, "limit": 20, "interval": "0"}
+            {"market": compact, "limit": BOOK_DEPTH_LEVELS, "interval": "0"}
         )
     elif venue == "WhiteBIT":
         url = f"https://whitebit.com/api/v4/public/orderbook/{base}_{quote}?" + urlencode(
-            {"limit": 20, "level": 2}
+            {"limit": BOOK_DEPTH_LEVELS, "level": 2}
         )
     elif venue == "BitMart":
         url = "https://api-cloud.bitmart.com/spot/quotation/v3/books?" + urlencode(
-            {"symbol": f"{base}_{quote}", "limit": 20}
+            {"symbol": f"{base}_{quote}", "limit": BOOK_DEPTH_LEVELS}
         )
     elif venue == "XT":
         url = "https://sapi.xt.com/v4/public/depth?" + urlencode(
-            {"symbol": f"{base.lower()}_{quote.lower()}", "limit": 20}
+            {"symbol": f"{base.lower()}_{quote.lower()}", "limit": BOOK_DEPTH_LEVELS}
         )
     elif venue == "Coinbase":
         url = f"https://api.exchange.coinbase.com/products/{base}-{quote}/book?" + urlencode(
@@ -1176,7 +1179,7 @@ def _native_spot_order_book(
             {"symbol": f"{base}/{quote}"}
         )
     else:
-        url = "https://www.okx.com/api/v5/market/books?" + urlencode({"instId": dashed, "sz": 20})
+        url = "https://www.okx.com/api/v5/market/books?" + urlencode({"instId": dashed, "sz": BOOK_DEPTH_LEVELS})
     payload = _json_url(url)
     if venue == "Bybit":
         raw_bids = (payload.get("result") or {}).get("b")

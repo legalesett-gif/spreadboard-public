@@ -282,10 +282,10 @@ def test_a_venue_without_ccxt_can_still_be_quoted_live() -> None:
 
     assert "Ourbit" not in fast_quotes.VENUE_IDS
     assert "Ourbit" in fast_quotes.NATIVE_FUTURES_VENUES
-    assert fast_quotes._has_native_book("Ourbit", "Futures") is True
+    assert fast_quotes.supports_native_order_book("Ourbit", "Futures") is True
     # Spot is a different set, and Ourbit serves no spot legs on this board.
-    assert fast_quotes._has_native_book("Ourbit", "Spot") is False
-    assert fast_quotes._has_native_book("Nonesuch", "Futures") is False
+    assert fast_quotes.supports_native_order_book("Ourbit", "Spot") is False
+    assert fast_quotes.supports_native_order_book("Nonesuch", "Futures") is False
 
 
 def test_the_ccxt_fallback_is_not_attempted_without_an_adapter() -> None:
@@ -299,3 +299,21 @@ def test_the_ccxt_fallback_is_not_attempted_without_an_adapter() -> None:
     assert guard in source
     # The guard has to come before the client is constructed.
     assert source.index(guard) < source.index("client = self._client(venue, market_type)")
+
+
+def test_the_book_is_deep_enough_to_price_the_probe() -> None:
+    """Twenty levels could not fill $50 on a thin contract.
+
+    Gate held $41.67 on the bid and $47.26 on the ask for BP across twenty
+    levels, so depth_weighted_price returned None, the leg quote failed, and
+    the chart reported "Stream sampler unavailable" on a route the board was
+    still listing. Fifty levels of that same book held $107 and $233.
+    """
+    from spreadboard import fast_quotes
+
+    assert fast_quotes.BOOK_DEPTH_LEVELS >= 50
+    source = Path("spreadboard/fast_quotes.py").read_text(encoding="utf-8")
+    # No book request may quietly keep the old shallow limit.
+    assert '"limit": 20' not in source
+    assert '"sz": 20' not in source
+    assert "limit=20" not in source

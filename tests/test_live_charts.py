@@ -291,7 +291,7 @@ def test_native_gate_spot_order_book_is_sorted_and_normalized(
         (
             "XT",
             {"result": {"b": [[2.0, 3]], "a": [[2.1, 4]]}},
-            "level=20",
+            f"level={fast_quotes.BOOK_DEPTH_LEVELS}",
         ),
         (
             "Coinbase International",
