@@ -72,6 +72,65 @@ def set_cursor(block_number: int, *, db_path=accounts.DEFAULT_DB_PATH) -> None:
         connection.close()
 
 
+#: Alchemy's free tier caps eth_getLogs at a ten-block range, and Arbitrum makes
+#: roughly 14,400 blocks an hour -- so a range scan could never keep up with a
+#: one-hour invoice window, and every scan failed outright with a 400. Their
+#: asset-transfers endpoint answers the same question ("what reached this
+#: address") with no range limit, so it is preferred when available and
+#: eth_getLogs remains the fallback for any other RPC.
+def _transfers_to_us(
+    call: Callable[[str, list[Any]], Any],
+    settings: Any,
+    from_block: int,
+    to_block: int,
+) -> list[dict[str, Any]]:
+    tokens = list(crypto_billing.TOKENS.keys())
+    if "alchemy" in str(getattr(settings, "rpc_url", "")).casefold():
+        try:
+            payload = call(
+                "alchemy_getAssetTransfers",
+                [{
+                    "fromBlock": hex(from_block),
+                    "toBlock": hex(to_block),
+                    "toAddress": settings.receiving_address,
+                    "contractAddresses": tokens,
+                    "category": ["erc20"],
+                    "excludeZeroValue": True,
+                    "maxCount": "0x3e8",
+                }],
+            ) or {}
+            return [
+                {
+                    "address": (item.get("rawContract") or {}).get("address"),
+                    "data": (item.get("rawContract") or {}).get("value"),
+                    "transactionHash": item.get("hash"),
+                    "logIndex": "0x0",
+                    "blockNumber": item.get("blockNum"),
+                    "topics": [
+                        crypto_billing.TRANSFER_TOPIC,
+                        _topic_address(str(item.get("from") or "0x" + "0" * 40)),
+                        _topic_address(settings.receiving_address),
+                    ],
+                }
+                for item in (payload.get("transfers") or [])
+            ]
+        except Exception:  # noqa: BLE001 - fall back rather than stall the cursor
+            LOGGER.warning("asset-transfers unavailable; falling back to eth_getLogs")
+    return call(
+        "eth_getLogs",
+        [{
+            "fromBlock": hex(from_block),
+            "toBlock": hex(to_block),
+            "address": tokens,
+            "topics": [
+                crypto_billing.TRANSFER_TOPIC,
+                None,
+                _topic_address(settings.receiving_address),
+            ],
+        }],
+    ) or []
+
+
 def scan_once(
     *,
     db_path=accounts.DEFAULT_DB_PATH,
@@ -103,19 +162,7 @@ def scan_once(
     from_block = cursor + 1
     to_block = min(safe_head, from_block + MAX_BLOCK_SPAN - 1)
 
-    logs = call(
-        "eth_getLogs",
-        [{
-            "fromBlock": hex(from_block),
-            "toBlock": hex(to_block),
-            "address": list(crypto_billing.TOKENS.keys()),
-            "topics": [
-                crypto_billing.TRANSFER_TOPIC,
-                None,
-                _topic_address(settings.receiving_address),
-            ],
-        }],
-    ) or []
+    logs = _transfers_to_us(call, settings, from_block, to_block)
 
     results = []
     for entry in logs:

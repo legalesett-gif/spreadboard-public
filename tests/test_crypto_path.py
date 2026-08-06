@@ -77,3 +77,75 @@ def test_an_amount_outside_the_band_is_not_credited() -> None:
     from spreadboard import crypto_billing
 
     assert crypto_billing.TOLERANCE_CENTS == 200
+
+
+def test_alchemy_uses_asset_transfers_not_a_range_scan(monkeypatch) -> None:
+    """The free tier caps eth_getLogs at ten blocks and Arbitrum makes ~14,400
+    an hour, so every range scan failed with a 400 and no payment could land."""
+    from spreadboard import crypto_watcher
+
+    seen: list[str] = []
+
+    def call(method, params):
+        seen.append(method)
+        if method == "alchemy_getAssetTransfers":
+            return {"transfers": [{
+                "hash": "0xabc", "blockNum": "0x10", "from": "0x" + "1" * 40,
+                "rawContract": {"address": "0xtoken", "value": "0x2540be400"},
+            }]}
+        return []
+
+    settings = type("S", (), {
+        "rpc_url": "https://arb-mainnet.g.alchemy.com/v2/key",
+        "receiving_address": "0x" + "e" * 40,
+    })()
+
+    logs = crypto_watcher._transfers_to_us(call, settings, 100, 200)
+
+    assert seen == ["alchemy_getAssetTransfers"], "it still range-scanned"
+    assert len(logs) == 1
+    entry = logs[0]
+    # Shaped exactly like an eth_getLogs entry, so the caller is unchanged.
+    assert entry["transactionHash"] == "0xabc"
+    assert int(entry["data"], 16) == 10_000_000_000
+    assert len(entry["topics"]) == 3
+
+
+def test_a_non_alchemy_rpc_still_range_scans(monkeypatch) -> None:
+    from spreadboard import crypto_watcher
+
+    seen: list[str] = []
+
+    def call(method, params):
+        seen.append(method)
+        return []
+
+    settings = type("S", (), {
+        "rpc_url": "https://arb1.arbitrum.io/rpc",
+        "receiving_address": "0x" + "e" * 40,
+    })()
+
+    crypto_watcher._transfers_to_us(call, settings, 100, 200)
+
+    assert seen == ["eth_getLogs"]
+
+
+def test_asset_transfers_failing_falls_back_rather_than_stalling(monkeypatch) -> None:
+    from spreadboard import crypto_watcher
+
+    seen: list[str] = []
+
+    def call(method, params):
+        seen.append(method)
+        if method == "alchemy_getAssetTransfers":
+            raise RuntimeError("temporarily unavailable")
+        return []
+
+    settings = type("S", (), {
+        "rpc_url": "https://arb-mainnet.g.alchemy.com/v2/key",
+        "receiving_address": "0x" + "e" * 40,
+    })()
+
+    crypto_watcher._transfers_to_us(call, settings, 100, 200)
+
+    assert seen == ["alchemy_getAssetTransfers", "eth_getLogs"]
