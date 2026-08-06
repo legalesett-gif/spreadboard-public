@@ -302,7 +302,7 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
                 venues.setdefault(r.get("long_venue"), (r.get("long_deposit_enabled"), r.get("long_withdraw_enabled")))
             if r.get("short_venue"):
                 venues.setdefault(r.get("short_venue"), (r.get("short_deposit_enabled"), r.get("short_withdraw_enabled")))
-        flag = {True: "open", False: "SHUT", None: "?"}
+        flag = {True: "open", False: "SHUT", None: "unknown"}
         body = _table(
             ("VENUE", "DEPOSIT", "WITHDRAW"), (16, 8, 9),
             [(v[:16], flag.get(d, "?"), flag.get(w, "?")) for v, (d, w) in sorted(venues.items())][:MAX_ROWS],

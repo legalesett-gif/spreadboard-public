@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 import time
 from typing import Any
 
@@ -19,15 +20,108 @@ RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 CACHE_DIR = RUNTIME_DIR / "historical_spread_cache"
 
 
-def load_or_fetch(row: dict[str, Any], *, hours: float, max_points: int = 1200) -> dict[str, Any]:
-    """Return full-window indicative history without presenting candles as books."""
-    if hours < 4 or any("dex" in str(row.get(f"{side}_venue") or "").casefold() for side in ("long", "short")):
+#: Backfills already running, so N readers of one cold chart cause one fetch.
+_WARMING: dict[str, float] = {}
+_WARMING_LOCK = threading.Lock()
+
+#: How long a completed backfill is trusted before it is fetched again.
+CACHE_SECONDS = 300.0
+
+#: How long a warm-up may run before another reader is allowed to retry it.
+WARMING_TIMEOUT_SECONDS = 90.0
+
+
+def _is_dex(row: dict[str, Any]) -> bool:
+    """OKX DEX publishes no candles, so a DEX leg can never be backfilled."""
+    return any(
+        "dex" in str(row.get(f"{side}_venue") or "").casefold() for side in ("long", "short")
+    )
+
+
+def timeframe_for(hours: float) -> str:
+    """The finest candle that still covers the window in one or two pages.
+
+    A 1h window on 1m candles is 60 points -- which is the whole reason the
+    short windows were empty. They were refused outright rather than being
+    given the timeframe that fits them.
+    """
+    if hours <= 24:
+        return "1m"
+    if hours <= 72:
+        return "5m"
+    return "15m"
+
+
+def load_or_fetch(
+    row: dict[str, Any],
+    *,
+    hours: float,
+    max_points: int = 1200,
+    blocking: bool = True,
+) -> dict[str, Any]:
+    """Return full-window indicative history without presenting candles as books.
+
+    The window used to have to be at least four hours long, which meant the 1H
+    default -- the first chart anybody opens -- was never backfilled at all. The
+    exact-book recorder rotates over 200k routes and lands roughly one sample
+    per route per 45 minutes, so with no backfill a fresh chart held a single
+    point and drew no line.
+
+    Fetching both legs takes several seconds, so ``blocking=False`` starts the
+    fetch in the background and reports ``warming``; the caller polls until the
+    cache lands rather than holding the page open.
+    """
+    if _is_dex(row):
         return {"status": "not_applicable", "rows": []}
-    cache_path = _cache_path(str(row.get("route_key") or ""), hours)
+    route_key = str(row.get("route_key") or "")
+    cache_path = _cache_path(route_key, hours)
     cached = _read_cache(cache_path)
-    if cached and time.time() - float(cached.get("cached_at") or 0) <= 300:
+    if cached and time.time() - float(cached.get("cached_at") or 0) <= CACHE_SECONDS:
         return _with_sampled_rows(cached, max_points=max_points)
-    timeframe = "1m" if hours <= 24 else "5m" if hours <= 72 else "15m"
+    if not blocking:
+        if _claim_warming(cache_path, row, hours):
+            return {"status": "warming", "rows": [], "timeframe": timeframe_for(hours)}
+        # Someone else is already fetching it. Serve the stale copy meanwhile so
+        # the chart shows the shape of the window instead of going blank.
+        if cached:
+            result = _with_sampled_rows(cached, max_points=max_points)
+            result["stale"] = True
+            return result
+        return {"status": "warming", "rows": [], "timeframe": timeframe_for(hours)}
+    return _fetch_and_cache(row, hours=hours, max_points=max_points, cache_path=cache_path)
+
+
+def _claim_warming(cache_path: Path, row: dict[str, Any], hours: float) -> bool:
+    """Start a background backfill unless one is already in flight."""
+    key = str(cache_path)
+    now = time.time()
+    with _WARMING_LOCK:
+        started = _WARMING.get(key)
+        if started is not None and now - started < WARMING_TIMEOUT_SECONDS:
+            return False
+        _WARMING[key] = now
+
+    def run() -> None:
+        try:
+            _fetch_and_cache(row, hours=hours, max_points=1, cache_path=cache_path)
+        except Exception:  # noqa: BLE001 - history is a supplement to live books.
+            pass
+        finally:
+            with _WARMING_LOCK:
+                _WARMING.pop(key, None)
+
+    threading.Thread(target=run, name="historical-spread-warm", daemon=True).start()
+    return True
+
+
+def _fetch_and_cache(
+    row: dict[str, Any],
+    *,
+    hours: float,
+    max_points: int,
+    cache_path: Path,
+) -> dict[str, Any]:
+    timeframe = timeframe_for(hours)
     since_ms = int((time.time() - hours * 3600) * 1000)
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = {

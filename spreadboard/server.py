@@ -2144,7 +2144,14 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
         since_us=since_us,
         bucket_seconds=bucket_seconds or None,
     )
-    proxy = historical_spreads.load_or_fetch(current, hours=hours, max_points=points) if current is not None else {"status": "not_applicable", "rows": []}
+    # Fetching two legs of candles takes several seconds. Doing it inline held
+    # the chart request open for that long; doing it in the background lets the
+    # page render now and the client poll until the window fills.
+    proxy = (
+        historical_spreads.load_or_fetch(current, hours=hours, max_points=points, blocking=False)
+        if current is not None
+        else {"status": "not_applicable", "rows": []}
+    )
     proxy_rows = proxy.get("rows") or []
     if proxy_rows:
         public_rows = _merge_history_rows(
@@ -2177,7 +2184,10 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
             "count": len(rows),
             "collecting": True,
             "sample": sample,
-            "meta": _history_meta(rows),
+            "meta": {
+                **_history_meta(rows),
+                **_history_coverage_meta(rows, hours, proxy),
+            },
             "rows": rows,
         }
     rows = board.load_history(board_path, route_key=route_key, max_points=points)
@@ -2443,6 +2453,9 @@ def _history_coverage_meta(
         "sample_sources": sorted(sources),
         "historical_proxy": proxy.get("status") == "ok",
         "historical_proxy_timeframe": proxy.get("timeframe"),
+        # The client re-polls while this is true; without it a chart opened
+        # cold would stay empty until the member reloaded the page by hand.
+        "historical_proxy_warming": proxy.get("status") == "warming",
         "exact_point_count": sum(1 for item in rows if item.get("sample_source") != "historical_ohlcv_close_proxy"),
         "proxy_point_count": sum(1 for item in rows if item.get("sample_source") == "historical_ohlcv_close_proxy"),
     }
@@ -3629,12 +3642,12 @@ def market_type_compact(value: Any) -> str:
         return "spot"
     if key == "dex":
         return "DEX"
-    return str(value or "?")
+    return str(value or ABSENT)
 
 
 def render_market_leg_line(row: dict[str, Any], side: str) -> str:
     is_long = side == "long"
-    venue = row.get("long_venue" if is_long else "short_venue") or "?"
+    venue = row.get("long_venue" if is_long else "short_venue") or ABSENT
     market_type = row.get("long_market_type" if is_long else "short_market_type")
     price = row.get("long_price" if is_long else "short_price")
     funding = row.get("long_funding_pct" if is_long else "short_funding_pct")
@@ -3656,7 +3669,7 @@ def render_market_funding(row: dict[str, Any]) -> str:
     if funding_24h is None:
         projected = row.get("funding_projected_24h_pct")
         if projected is None:
-            return '<strong class="muted">?</strong><span>history unavailable</span>'
+            return '<strong class="muted">&#8212;</strong><span>history unavailable</span>'
         return (
             f"<strong>{fmt_signed_pct(projected, digits=3)}</strong>"
             f"<span>24h at current · {h(funding_cadence_pair(row))}</span>"
@@ -3731,7 +3744,8 @@ def rail_char(value: Any) -> str:
         return "open"
     if value is False:
         return "closed"
-    return "?"
+    # The venue does not publish it, which is not the same as a failure.
+    return "unknown"
 
 
 def rail_text(value: Any) -> str:
@@ -5055,6 +5069,9 @@ def render_live_spread_chart(
       let controller = null;
       let refreshing = false;
       let chart = null;
+      let convergenceLine = null;
+      let backfillTries = 0;
+      let backfillTimer = null;
       let resizeObserver = null;
       let themeObserver = null;
       const chartSeries = {{}};
@@ -5085,6 +5102,7 @@ def render_live_spread_chart(
           grid: style.getPropertyValue('--terminal-line').trim() || '#223a34',
           matched: style.getPropertyValue('--terminal-accent').trim() || '#24c7ad',
           exit: style.getPropertyValue('--terminal-danger').trim() || '#ff7184',
+          convergence: style.getPropertyValue('--terminal-warning').trim() || '#e8b53a',
         }};
       }}
 
@@ -5152,6 +5170,17 @@ def render_live_spread_chart(
         chartSeries.longFunding.moveToPane(1);
         chartSeries.shortFunding.moveToPane(1);
         chartSeries.matched.applyOptions({{ visible: false }});
+        // Convergence: the spread is closed when it reaches zero, so this is
+        // the line every route is travelling towards and the level the Out
+        // series has to touch before the trade is out.
+        convergenceLine = chartSeries.exit.createPriceLine({{
+          price: 0,
+          color: colors.convergence,
+          lineWidth: 2,
+          lineStyle: LightweightCharts.LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: 'Converged',
+        }});
         sizeChartPanes();
         chart.subscribeCrosshairMove(showTooltip);
         resizeObserver = new ResizeObserver(() => {{
@@ -5194,6 +5223,7 @@ def render_live_spread_chart(
         }});
         chartSeries.entry?.applyOptions({{ color: colors.matched }});
         chartSeries.exit?.applyOptions({{ color: colors.exit }});
+        convergenceLine?.applyOptions({{ color: colors.convergence }});
       }}
 
       function seriesData(rows, key, gapSeconds) {{
@@ -5344,6 +5374,7 @@ def render_live_spread_chart(
               ? 'Live · recent exact sample'
               : `Sampler ${{sample.status || 'unavailable'}}`;
           state.classList.toggle('stale', !['ok','idle'].includes(sample.status) && !(sample.cached && payload.meta?.age_seconds <= 60));
+          scheduleBackfill(payload);
         }} catch (error) {{
           if (error.name !== 'AbortError') {{
             state.textContent = 'Live sample unavailable; retained history shown';
@@ -5353,6 +5384,18 @@ def render_live_spread_chart(
           refreshing = false;
         }}
       }}
+      function scheduleBackfill(payload) {{
+        // The window history is fetched off-request so the page can render.
+        // Poll until it lands, then stop -- the live stream keeps it current
+        // from there. Bounded so a permanently unavailable route (a DEX leg,
+        // a venue without candles) does not poll forever.
+        window.clearTimeout(backfillTimer);
+        if (!payload?.meta?.historical_proxy_warming || backfillTries >= 12) return;
+        backfillTries += 1;
+        if (state) state.textContent = 'Loading window history...';
+        backfillTimer = window.setTimeout(refresh, 2500);
+      }}
+
       function mergeStreamRow(row) {{
         if (!row || !Number.isFinite(Number(row.quote_ts_us))) return;
         const ts = Number(row.quote_ts_us);
@@ -5417,6 +5460,7 @@ def render_live_spread_chart(
       }});
       window.addEventListener('pagehide', () => {{
         window.clearInterval(timer);
+        window.clearTimeout(backfillTimer);
         stream?.close();
         controller?.abort();
         resizeObserver?.disconnect();
@@ -5915,14 +5959,14 @@ def render_token_market_script(symbol: str) -> str:
 
       function formatPrice(value) {{
         const number = numberValue(value);
-        if (number === null) return "?";
+        if (number === null) return "\u2014";
         if (number >= 1) return `$${{number.toLocaleString(undefined, {{minimumFractionDigits: 4, maximumFractionDigits: 4}})}}`;
         return `$${{number.toFixed(8).replace(/0+$/, "").replace(/\\.$/, "")}}`;
       }}
 
       function formatPct(value, digits = 1) {{
         const number = numberValue(value);
-        return number === null ? "?" : `${{number.toFixed(digits)}}%`;
+        return number === null ? "\u2014" : `${{number.toFixed(digits)}}%`;
       }}
 
       function formatSignedPct(value, digits = 1) {{
@@ -5938,7 +5982,7 @@ def render_token_market_script(symbol: str) -> str:
       function markStatus(value) {{
         if (value === true) return "open";
         if (value === false) return "closed";
-        return "?";
+        return "unknown";
       }}
 
       function setStatus(text, cls) {{
@@ -7985,12 +8029,12 @@ WATCHLIST_SCRIPT = """
 
   function formatPct(value, digits = 1) {
     const number = Number(value);
-    return Number.isFinite(number) ? `${number.toFixed(digits)}%` : "?";
+    return Number.isFinite(number) ? `${number.toFixed(digits)}%` : "\u2014";
   }
 
   function formatSignedPct(value, digits = 1) {
     const number = Number(value);
-    return Number.isFinite(number) ? `${number >= 0 ? "+" : ""}${number.toFixed(digits)}%` : "?";
+    return Number.isFinite(number) ? `${number >= 0 ? "+" : ""}${number.toFixed(digits)}%` : "\u2014";
   }
 
   function loadTokens() {
@@ -10229,6 +10273,7 @@ def shell(title: str, active: str, body: str) -> str:
   --terminal-accent-soft: #d9f7ef;
   --terminal-danger-soft: #ffe8ed;
   --terminal-warning-soft: #fff3cc;
+  --terminal-warning: #b8860b;
 }}
 :root[data-theme="dark"] {{
   color-scheme: dark;
@@ -10260,6 +10305,7 @@ def shell(title: str, active: str, body: str) -> str:
   --terminal-accent-soft: #123d36;
   --terminal-danger-soft: #3a1720;
   --terminal-warning-soft: #372d12;
+  --terminal-warning: #e8b53a;
 }}
 * {{ box-sizing: border-box; }}
 html {{ min-width: 0; }}
@@ -11903,38 +11949,49 @@ def status_char(value: bool | None) -> str:
         return "open"
     if value is False:
         return "closed"
-    return "?"
+    return "unknown"
+
+
+#: What a number formatter prints when there is nothing to print.
+#:
+#: "?" reads as a fault -- as though the board tried and failed -- and the
+#: operator kept finding them and asking what had broken. An em dash reads as
+#: "not available", which is what it means: 32 contracts on /fair genuinely
+#: publish no 24h volume, and one funding row has no settled carry yet. No row
+#: is missing a core field; every one of 14,123 has its token, venues, market
+#: types, spread, prices and age.
+ABSENT = "\u2014"
 
 
 def fmt_pct(value: Any, *, digits: int = 1) -> str:
     number = _float_or_none(value)
-    return "?" if number is None else f"{number:.{digits}f}%"
+    return ABSENT if number is None else f"{number:.{digits}f}%"
 
 
 def fmt_signed_pct(value: Any, *, digits: int = 1) -> str:
     number = _float_or_none(value)
-    return "?" if number is None else f"{number:+.{digits}f}%"
+    return ABSENT if number is None else f"{number:+.{digits}f}%"
 
 
 def fmt_money(value: Any) -> str:
     number = _float_or_none(value)
-    return "?" if number is None else f"${number:,.0f}"
+    return ABSENT if number is None else f"${number:,.0f}"
 
 
 def fmt_signed_money(value: Any) -> str:
     number = _float_or_none(value)
-    return "?" if number is None else f"{number:+,.2f} USD"
+    return ABSENT if number is None else f"{number:+,.2f} USD"
 
 
 def fmt_signed_number(value: Any) -> str:
     number = _float_or_none(value)
-    return "?" if number is None else f"{number:+,.0f}"
+    return ABSENT if number is None else f"{number:+,.0f}"
 
 
 def fmt_price(value: Any) -> str:
     number = _float_or_none(value)
     if number is None:
-        return "?"
+        return ABSENT
     if number >= 1:
         return f"${number:,.4f}"
     return f"${number:.8f}".rstrip("0").rstrip(".")
@@ -11943,7 +12000,7 @@ def fmt_price(value: Any) -> str:
 def fmt_age(value: Any) -> str:
     number = _float_or_none(value)
     if number is None:
-        return "?"
+        return ABSENT
     if number < 60:
         return f"{number:.0f} min"
     return f"{number / 60:.1f} h"
@@ -11952,7 +12009,7 @@ def fmt_age(value: Any) -> str:
 def fmt_duration(value: Any) -> str:
     number = _float_or_none(value)
     if number is None:
-        return "?"
+        return ABSENT
     if number < 1:
         return "<1 min"
     if number < 60:
