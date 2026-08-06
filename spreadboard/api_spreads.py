@@ -1040,7 +1040,11 @@ def _apply_live_funding(
         leg = dict(route_inputs.get(side) or {})
         leg["current_funding_pct"] = entry.get("rate_pct")
         if entry.get("interval_hours") is not None:
-            leg["funding_interval_hours"] = entry["interval_hours"]
+            from spreadboard import funding_interval as _fi
+
+            snapped = _fi.normalise(entry["interval_hours"])
+            if snapped is not None:
+                leg["funding_interval_hours"] = snapped
         if entry.get("next_funding_ts_us") is not None:
             leg["next_funding_ts_us"] = entry["next_funding_ts_us"]
         # The sweep gives a current rate and an interval for nearly every
@@ -2174,12 +2178,25 @@ def _row_sort_key(row: SpreadTerminalRow) -> tuple[float, float, float, float]:
 # 4482% APR purely from a 4h leg differenced against a 1h leg. Both sides must
 # be converted to the same per-day basis first.
 def _per_day(rate_pct: float | None, interval_hours: float | None) -> float | None:
+    """One funding print expressed per day.
+
+    The interval multiplies every carry number on the board -- 0.01% is
+    0.03%/day on an 8-hour contract and 0.24%/day on a 1-hour one -- so it goes
+    through funding_interval, which snaps float noise (3.9999999999999996 came
+    through on 1,102 Kucoin legs) and refuses values no perpetual venue uses
+    rather than annualising from them.
+    """
+    from spreadboard import funding_interval
+
     rate = _float_or_none(rate_pct)
     if rate is None:
         return None
-    hours = _float_or_none(interval_hours)
-    if not hours or hours <= 0:
-        hours = 8.0  # exchanges default to 8h when they do not publish one
+    hours = funding_interval.normalise(interval_hours)
+    if hours is None:
+        # Not a schedule we recognise. Fall back to the common one rather than
+        # drop the row, and funding_intervals_known() still reports it as
+        # unverified so nothing presents it as measured.
+        hours = funding_interval.DEFAULT_INTERVAL_HOURS
     return rate * (24.0 / hours)
 
 
