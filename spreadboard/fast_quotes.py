@@ -465,20 +465,41 @@ class FastQuoteRefresher:
             1,
             min(8, int(os.environ.get("SPREADBOARD_FAST_QUOTE_WORKERS", "4"))),
         )
+        job_batches: list[
+            tuple[
+                tuple[str, str],
+                list[tuple[tuple[str, str, str], dict[str, Any], str]],
+            ]
+        ] = []
+        dex_chunk_size = max(
+            4,
+            min(24, int(os.environ.get("SPREADBOARD_DEX_QUOTE_CHUNK_SIZE", "8"))),
+        )
+        for venue_key, jobs in jobs_by_venue.items():
+            if "okx dex" in venue_key[0].casefold():
+                # OKX DEX quotes are stateless HTTP requests. Keeping dozens of
+                # them in one venue batch made that single task dominate the
+                # entire cycle even after CEX venues were parallelized.
+                job_batches.extend(
+                    (venue_key, jobs[offset : offset + dex_chunk_size])
+                    for offset in range(0, len(jobs), dex_chunk_size)
+                )
+            else:
+                job_batches.append((venue_key, jobs))
         with ThreadPoolExecutor(
-            max_workers=max(1, min(venue_workers, len(jobs_by_venue)))
+            max_workers=max(1, min(venue_workers, len(job_batches)))
         ) as pool:
-            futures = {
-                venue_key: pool.submit(
+            futures = [
+                pool.submit(
                     self._quote_venue_jobs,
                     venue_key,
                     jobs,
                     target_notional_usd=target_notional_usd,
                     deadline=deadline,
                 )
-                for venue_key, jobs in jobs_by_venue.items()
-            }
-            for future in futures.values():
+                for venue_key, jobs in job_batches
+            ]
+            for future in futures:
                 leg_cache.update(future.result())
         updated = failed = 0
         for row in selected:
