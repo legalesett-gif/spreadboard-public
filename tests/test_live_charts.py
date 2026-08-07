@@ -1069,7 +1069,7 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
                     "blockers": [],
                 }
             )
-    for index in range(30):
+    for index in range(80):
         token = f"CASH{index:02d}"
         rows.append(
             {
@@ -1083,8 +1083,8 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
                 "short_market_type": "Spot",
                 "long_market_symbol": f"{token}/USDT",
                 "short_market_symbol": f"{token}/USDT",
-                "depth_weighted_spread_pct": 30 - index,
-                "executable_spread_pct": 30 - index,
+                "depth_weighted_spread_pct": 80 - index,
+                "executable_spread_pct": 80 - index,
                 "blockers": [],
             }
         )
@@ -1176,11 +1176,11 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
     )
     updated = [row for row in saved["rows"] if row.get("fast_quote_verified_at")]
 
-    assert result["selected_routes"] == 122
-    assert result["updated_routes"] == 122
+    assert result["selected_routes"] == 158
+    assert result["updated_routes"] == 158
     assert sum(row["route_kind"] == "FUTURES" for row in updated) == 34
     assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 34
-    assert sum(row["route_kind"] == "SPOT" for row in updated) == 30
+    assert sum(row["route_kind"] == "SPOT" for row in updated) == 66
     assert sum(row["route_kind"] == "DEX-FUTURES" for row in updated) == 12
     assert sum(row["route_kind"] == "DEX-SPOT" for row in updated) == 12
     assert {row["token"] for row in updated if row["route_kind"] == "FUTURES"} == {
@@ -1190,7 +1190,7 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
         f"SPOT{index:02d}" for index in range(30)
     }
     assert {row["token"] for row in updated if row["route_kind"] == "SPOT"} == {
-        f"CASH{index:02d}" for index in range(30)
+        f"CASH{index:02d}" for index in range(66)
     }
     assert {row["token"] for row in updated if row["route_kind"] == "DEX-FUTURES"} == {
         f"DEX{index:02d}" for index in range(12)

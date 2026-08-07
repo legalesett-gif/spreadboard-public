@@ -431,7 +431,7 @@ class FastQuoteRefresher:
             selected.extend(
                 _expanded_token_rows(
                     rows_by_lane[lane],
-                    token_limit=min(50, lane_limit),
+                    token_limit=min(90 if lane == "SPOT" else 50, lane_limit),
                     route_limit=lane_limit,
                 )
             )
