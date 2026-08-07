@@ -92,11 +92,17 @@ def test_fast_quote_lane_covers_all_public_route_families() -> None:
             }
         },
     }
+    dex_spot = {
+        **dex,
+        "long_venue": "Gate",
+        "long_market_type": "Spot",
+    }
 
     assert _fast_quote_lane(futures) == "FUTURES"
     assert _fast_quote_lane(futures_spot) == "FUTURES-SPOT"
     assert _fast_quote_lane(spot) == "SPOT"
     assert _fast_quote_lane(dex) == "DEX-FUTURES"
+    assert _fast_quote_lane(dex_spot) == "DEX-SPOT"
     assert _fast_quote_lane({**dex, "blockers": ["cex_identity_unverified"]}) is None
     assert _fast_quote_lane({**dex, "notes": {}}) is None
 
@@ -1108,6 +1114,33 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
                 "blockers": [],
             }
         )
+    for index in range(12):
+        token = f"DEXCASH{index:02d}"
+        rows.append(
+            {
+                **_route(),
+                "route_key": f"{token}|Gate|Spot|OKX DEX 56|Spot",
+                "token": token,
+                "route_kind": "DEX-SPOT",
+                "long_venue": "Gate",
+                "long_market_type": "Spot",
+                "short_venue": "OKX DEX 56",
+                "short_market_type": "Spot",
+                "long_market_symbol": f"{token}/USDT",
+                "short_market_symbol": f"{token}/USDC",
+                "notes": {
+                    "identity": {
+                        "short": {
+                            "chain_id": "56",
+                            "token_address": f"0x{index + 100:040x}",
+                        }
+                    }
+                },
+                "depth_weighted_spread_pct": 30 - index,
+                "executable_spread_pct": 30 - index,
+                "blockers": [],
+            }
+        )
     snapshot_path = tmp_path / "snapshot.json"
     snapshot_path.write_text(
         json.dumps(
@@ -1143,12 +1176,13 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
     )
     updated = [row for row in saved["rows"] if row.get("fast_quote_verified_at")]
 
-    assert result["selected_routes"] == 142
-    assert result["updated_routes"] == 142
-    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 50
-    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 50
+    assert result["selected_routes"] == 134
+    assert result["updated_routes"] == 134
+    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 40
+    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 40
     assert sum(row["route_kind"] == "SPOT" for row in updated) == 30
     assert sum(row["route_kind"] == "DEX-FUTURES" for row in updated) == 12
+    assert sum(row["route_kind"] == "DEX-SPOT" for row in updated) == 12
     assert {row["token"] for row in updated if row["route_kind"] == "FUTURES"} == {
         f"FUT{index:02d}" for index in range(30)
     }
@@ -1160,6 +1194,9 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
     }
     assert {row["token"] for row in updated if row["route_kind"] == "DEX-FUTURES"} == {
         f"DEX{index:02d}" for index in range(12)
+    }
+    assert {row["token"] for row in updated if row["route_kind"] == "DEX-SPOT"} == {
+        f"DEXCASH{index:02d}" for index in range(12)
     }
     assert sum(row["token"] == "FUT00" and row["route_kind"] == "FUTURES" for row in updated) == 2
     assert (

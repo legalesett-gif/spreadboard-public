@@ -81,7 +81,13 @@ NATIVE_SPOT_VENUES = {
     "WhiteBIT",
     "XT",
 }
-FAST_QUOTE_LANES = ("FUTURES", "FUTURES-SPOT", "SPOT", "DEX-FUTURES")
+FAST_QUOTE_LANES = (
+    "FUTURES",
+    "FUTURES-SPOT",
+    "SPOT",
+    "DEX-FUTURES",
+    "DEX-SPOT",
+)
 
 #: What a perpetual settles on when the venue does not say. Eight hours is
 #: the market standard; the venues that differ (Hyperliquid, Kraken) publish
@@ -948,7 +954,11 @@ def _fast_quote_lane(row: dict[str, Any]) -> str | None:
         chain, contract = _dex_chain_contract(row)
         if identity_unverified or not chain or not contract:
             return None
-        return "DEX-FUTURES" if {long_type, short_type} == {"Spot", "Futures"} else None
+        if {long_type, short_type} == {"Spot", "Futures"}:
+            return "DEX-FUTURES"
+        if long_type == short_type == "Spot":
+            return "DEX-SPOT"
+        return None
     if long_type == short_type == "Futures":
         return "FUTURES"
     if {long_type, short_type} == {"Spot", "Futures"}:
