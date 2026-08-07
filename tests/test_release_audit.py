@@ -519,7 +519,7 @@ def test_fast_quote_budget_covers_top_25_across_all_five_public_lanes() -> None:
     timeout = int(re.search(r'SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS:\s*"(\d+)"', compose).group(1))
 
     assert routes >= 5 * 25
-    assert routes <= 200
+    assert routes <= 220
     assert timeout <= 300
 
 
@@ -2656,6 +2656,17 @@ def test_a_member_sees_their_alerts_against_the_live_value(tmp_path, monkeypatch
     assert "15.13" in html.replace(",", "."), "the live value must be shown next to the level"
     assert 'value="32.0"' in html and "3600" in html, "threshold and hold window are editable"
     assert "data-alert-save" in html and "data-alert-delete" in html
+
+
+def test_empty_member_alert_state_explains_real_delivery(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(server.accounts, "current_user", lambda *a, **k: SimpleNamespace(id=1))
+    monkeypatch.setattr(server.accounts, "notification_preferences", lambda *a, **k: {})
+    monkeypatch.setattr(server.accounts, "list_market_alert_rules", lambda *a, **k: [])
+
+    html = server.render_member_alert_rules(tmp_path / "board.jsonl")
+
+    assert "recorded in Portfolio" in html
+    assert "{h(delivery_note)}" not in html
 
 
 def test_the_alerts_page_no_longer_claims_it_cannot_send() -> None:

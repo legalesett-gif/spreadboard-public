@@ -157,7 +157,7 @@ PLAYBOOK_DEFS = [
         "category": "Pushover / alerts",
         "title": "Alert rules and notification hygiene",
         "why": "Use alerts for state changes: new route, spread or funding threshold, stale source, route change, or community call.",
-        "answer": "This pass is preview-only. Treat the alert cards as a dry run of what would trigger, then wire Pushover later behind an explicit send-enabled change.",
+        "answer": "Authenticated rules are evaluated continuously, recorded in Portfolio, and can also reach the member's configured Pushover device. Reference cards remain read-only examples.",
         "checks": [
             "Open the alert planner and confirm which cards would trigger now.",
             "Check source freshness before trusting an alert idea.",
@@ -229,11 +229,11 @@ PLAYBOOK_DEFS = [
         "category": "Liquidation / PnL",
         "title": "PnL and liquidation framing",
         "why": "Community users often mix mark-to-market PnL, funding, convergence value, leverage, and liquidation risk.",
-        "answer": "Keep PnL profile-ready but not live in this pass. For now, show route context and leave real personal PnL to a later authenticated profile layer.",
+        "answer": "Portfolio tracks manual fills, live price PnL, recorded funding cashflows, fees, return on tracked capital, and closed-position results. Keep those private records separate from public board estimates.",
         "checks": [
-            "Use Watchlist for browser-local pins only.",
-            "Do not claim personal PnL from public board rows.",
-            "Keep future PnL features separate from public community data.",
+            "Use Watchlist for browser-local pins and Portfolio for private positions.",
+            "Replace suggested entries with the member's actual fills.",
+            "Keep price PnL, funding cashflows, and fees separate.",
         ],
         "links": [("Watchlist", "/watchlist"), ("Learn", "/learn")],
     },
@@ -1955,7 +1955,7 @@ def api_playbook(board_path: Path, query: dict[str, list[str]] | None = None) ->
             {"label": "Alerts", "href": "/alerts"},
         ],
         "read_only_guards": [
-            "No Pushover send path",
+            "No alert-triggered trade actions",
             "No live orders",
             "No swaps or approvals",
             "No transfers or withdrawals",
@@ -7115,7 +7115,9 @@ def render_account_script() -> str:
   const root=document.querySelector('[data-account-page]'); if(!root) return;
   const {csrf_token:csrf}=JSON.parse(document.getElementById('account-session').textContent||'{}');
   const request=async(url,body)=>{const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw new Error(data.error||'Request failed');return data;};
-  root.querySelectorAll('[data-account-tab]').forEach(button=>button.addEventListener('click',()=>{root.querySelectorAll('[data-account-tab]').forEach(item=>item.classList.toggle('active',item===button));root.querySelectorAll('[data-account-panel]').forEach(panel=>panel.hidden=panel.dataset.accountPanel!==button.dataset.accountTab);if(button.dataset.accountTab==='members')loadMembers();}));
+  const activateAccountTab=button=>{if(!button)return;root.querySelectorAll('[data-account-tab]').forEach(item=>item.classList.toggle('active',item===button));root.querySelectorAll('[data-account-panel]').forEach(panel=>panel.hidden=panel.dataset.accountPanel!==button.dataset.accountTab);if(button.dataset.accountTab==='members')loadMembers();};
+  root.querySelectorAll('[data-account-tab]').forEach(button=>button.addEventListener('click',()=>{activateAccountTab(button);history.replaceState(null,'',`#${button.dataset.accountTab}`);}));
+  activateAccountTab(root.querySelector(`[data-account-tab="${location.hash.slice(1)}"]`));
   const positionDialog=root.querySelector('[data-position-dialog]');root.querySelector('[data-position-new]')?.addEventListener('click',()=>{positionDialog.showModal();refreshSuggestions('');});
   const positionForm=positionDialog?.querySelector('form'),tokenInput=positionForm?.elements.token,routeSelect=positionForm?.querySelector('[data-position-route]');let suggestedRoutes=[],suggestionTimer;
   const setOptions=(id,values)=>{const list=document.getElementById(id);if(!list)return;list.replaceChildren(...[...new Set(values.filter(Boolean))].map(value=>new Option(value)));};
@@ -7456,14 +7458,28 @@ def render_member_alert_rules(board_path: Path) -> str:
     user = accounts.current_user()
     if user is None:
         return ""
+    try:
+        preferences = accounts.notification_preferences(user.id)
+    except sqlite3.Error:
+        preferences = {}
+    pushover_ready = bool(
+        os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
+        and preferences.get("pushover_configured")
+        and preferences.get("pushover_enabled")
+    )
+    delivery_note = (
+        "The trigger is recorded in Portfolio and sent to your configured Pushover device."
+        if pushover_ready
+        else "The trigger is recorded in Portfolio. Add and enable a Pushover key in Portfolio settings for phone delivery."
+    )
     rules = accounts.list_market_alert_rules(user.id)
     if not rules:
-        return """
+        return f"""
     <section class="member-alerts">
       <div class="profile-section-title"><div><span class="page-kicker">My alerts</span>
         <h2>You have no alerts yet</h2>
         <p>Open any route on the board and use "Alert" to watch its spread or funding.
-           Alerts are delivered to your own Pushover account.</p></div></div>
+           {h(delivery_note)}</p></div></div>
     </section>"""
     market = api_market_spreads(board_path, {"limit": ["0"]})
     current: dict[str, dict[str, Any]] = {
@@ -7479,8 +7495,8 @@ def render_member_alert_rules(board_path: Path) -> str:
     <section class="member-alerts">
       <div class="profile-section-title">
         <div><span class="page-kicker">My alerts</span><h2>{len(rules)} alert{"s" if len(rules) != 1 else ""} armed</h2>
-        <p>Delivered to your Pushover account. An alert fires once when the level holds
-           for its stability window, and re-arms after the market moves back.</p></div>
+        <p>{h(delivery_note)} An alert fires once when the level holds for its stability
+           window, and re-arms after the market moves back.</p></div>
       </div>
       <div class="member-alert-grid">{cards}</div>
     </section>
@@ -7609,6 +7625,23 @@ def render_alerts_page(board_path: Path, config: dict[str, Any], query: dict[str
         if telegram
         else ""
     )
+    user = accounts.current_user()
+    try:
+        preferences = (
+            accounts.notification_preferences(user.id) if user is not None else {}
+        )
+    except sqlite3.Error:
+        preferences = {}
+    pushover_ready = bool(
+        flags.get("pushover_configured")
+        and preferences.get("pushover_configured")
+        and preferences.get("pushover_enabled")
+    )
+    delivery_detail = (
+        "in-app and Pushover enabled"
+        if pushover_ready
+        else "in-app active; add a Pushover key for phone delivery"
+    )
     body = f"""
     <section class="alerts-page" data-refresh="180">
       {render_member_alert_rules(board_path)}
@@ -7620,21 +7653,21 @@ def render_alerts_page(board_path: Path, config: dict[str, Any], query: dict[str
         </div>
         <div class="intel-actions">
           {telegram_button}
-          <a class="primary" href="/profile?section=pushover">Manage alert rules</a>
+          <a class="primary" href="/account#settings">Notification settings</a>
           <a class="secondary" href="/intel">Intel</a>
         </div>
       </div>
       <section class="alert-status-grid">
-        <article class="chart-summary-card"><span>Delivery</span><strong>Preview only</strong><em>No Pushover send path is active</em></article>
+        <article class="chart-summary-card"><span>Delivery</span><strong>Live</strong><em>{h(delivery_detail)}</em></article>
         <article class="chart-summary-card"><span>Would trigger</span><strong>{h(preview.get('would_trigger_count') or 0)}</strong><em>current local data</em></article>
         <article class="chart-summary-card"><span>Spread threshold</span><strong>{h(flags['alert_min_spread_pct'])}%</strong><em>configured reference</em></article>
-        <article class="chart-summary-card"><span>Recipients</span><strong>{h(flags['pushover_user_count'])}</strong><em>stored locally, not used here</em></article>
+        <article class="chart-summary-card"><span>Phone delivery</span><strong>{'Ready' if pushover_ready else 'Setup needed'}</strong><em>per-account Pushover settings</em></article>
       </section>
       <section class="alert-rule-grid">
         {''.join(render_alert_rule_card(card) for card in preview.get('cards') or []) or '<p class="empty">No alert preview rows available.</p>'}
       </section>
       <section class="community-panel">
-        <div class="panel-head flat"><div><h2>Profile Alert Library</h2><p>Create route-bound spread and funding rules from Markets, Funding, pair detail, or the Profile tab.</p></div></div>
+        <div class="panel-head flat"><div><h2>Alert reference library</h2><p>Route spread, route funding, and token price rules are live above. The cards below describe additional alert families planned for later releases.</p></div></div>
         <div class="alert-template-grid">
           {render_alert_template('Spread', 'Token or route crosses an open-spread threshold, optionally filtered by route kind and venue.')}
           {render_alert_template('Funding', 'Funding APR or next-funding delta crosses a threshold while route freshness is healthy.')}
@@ -7671,15 +7704,15 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
         </div>
         <div class="intel-actions">
           <a class="secondary" href="/intel">Intel</a>
-          <a class="secondary" href="/alerts">Alert previews</a>
+          <a class="secondary" href="/alerts">Live alerts</a>
         </div>
       </div>
       <section class="watch-status-grid">
         <article class="chart-summary-card"><span>Storage</span><strong>Browser only</strong><em>No server profile writes</em></article>
-        <article class="chart-summary-card"><span>Profile</span><strong>{label_text(profile.get('status') or 'profile_shell_only')}</strong><em>Auth comes later</em></article>
-        <article class="chart-summary-card"><span>PnL</span><strong>Planned</strong><em>Not active in this pass</em></article>
+        <article class="chart-summary-card"><span>Account</span><strong>Active</strong><em>portfolio workspace available</em></article>
+        <article class="chart-summary-card"><span>PnL</span><strong>Live</strong><em>tracked in Portfolio</em></article>
         <article class="chart-summary-card"><span>Matched routes</span><strong>{h(route_count)}</strong><em>from local intel</em></article>
-        <article class="chart-summary-card"><span>Would trigger</span><strong>{h(trigger_count)}</strong><em>preview only</em></article>
+        <article class="chart-summary-card"><span>Reference matches</span><strong>{h(trigger_count)}</strong><em>preview context</em></article>
       </section>
       <section class="watchlist-layout">
         <main class="watchlist-main">
@@ -7710,7 +7743,7 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
             </div>
           </section>
           <section class="watch-panel">
-            <div class="panel-head flat"><div><h2>Profile Shell</h2><p>Reserved surfaces for the later account/PnL pass.</p></div></div>
+            <div class="panel-head flat"><div><h2>Account workspace</h2><p>Watchlist is browser-local; positions, PnL, notifications, and delivery settings live in Portfolio.</p></div></div>
             <div class="profile-shell-list">
               {''.join(render_watch_profile_row(item) for item in profile.get('sections') or []) or '<p class="watch-empty">No profile sections available.</p>'}
             </div>
@@ -8185,7 +8218,7 @@ WATCHLIST_SCRIPT = """
           <div class="watch-token-metrics">
             <span>Open<strong>${formatPct(best.open_spread_pct)}</strong></span>
             <span>Funding<strong>${formatSignedPct(best.funding_apr_pct, 0)}</strong></span>
-            <span>Score<strong>${escapeHtml(hot.score || "?")}</strong></span>
+            <span>Score<strong>${escapeHtml(hot.score ?? "—")}</strong></span>
           </div>
           <button class="watch-remove" type="button" data-remove-symbol="${escapeHtml(token)}" aria-label="Remove ${escapeHtml(token)}">Remove</button>
         </article>
@@ -8650,8 +8683,8 @@ def render_profile_shell(profile: dict[str, Any]) -> str:
     watchlist = ", ".join(profile.get("watchlist") or []) or "No pinned tokens yet"
     return f"""
     <article class="side-card">
-      <div class="side-head"><h2>Profile Shell</h2><span>{h(profile.get('status'))}</span></div>
-      <p class="small">Local-only placeholder for the later profile and PnL layer.</p>
+      <div class="side-head"><h2>Account snapshot</h2><span>Active</span></div>
+      <p class="small">Watchlist pins stay in this browser; private positions, PnL, alerts, and delivery settings are available in Portfolio.</p>
       <p class="watchlist-line">{h(watchlist)}</p>
       {''.join(sections)}
     </article>

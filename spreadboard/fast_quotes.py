@@ -88,6 +88,15 @@ FAST_QUOTE_LANES = (
     "DEX-FUTURES",
     "DEX-SPOT",
 )
+FAST_QUOTE_LANE_WEIGHTS = {
+    "FUTURES": 1,
+    "FUTURES-SPOT": 1,
+    # Spot books fail or disappear more often than perpetual books. Reserve a
+    # second share so enough exact routes survive to keep the public top 25.
+    "SPOT": 2,
+    "DEX-FUTURES": 1,
+    "DEX-SPOT": 1,
+}
 
 #: What a perpetual settles on when the venue does not say. Eight hours is
 #: the market standard; the venues that differ (Hyperliquid, Kraken) publish
@@ -411,10 +420,14 @@ class FastQuoteRefresher:
                 spread = _number(row.get("depth_weighted_spread_pct"), -999999.0)
                 if 0.0 <= spread <= 90.0 or row.get("fast_quote_verified_at"):
                     rows_by_lane[lane].append(row)
-        base_quota, extra = divmod(max(0, route_limit), len(FAST_QUOTE_LANES))
+        total_weight = sum(FAST_QUOTE_LANE_WEIGHTS.values())
+        base_quota, extra = divmod(max(0, route_limit), total_weight)
         selected: list[dict[str, Any]] = []
         for index, lane in enumerate(FAST_QUOTE_LANES):
-            lane_limit = base_quota + (1 if index < extra else 0)
+            lane_limit = (
+                base_quota * FAST_QUOTE_LANE_WEIGHTS[lane]
+                + (1 if index < extra else 0)
+            )
             selected.extend(
                 _expanded_token_rows(
                     rows_by_lane[lane],

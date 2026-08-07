@@ -1176,10 +1176,10 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
     )
     updated = [row for row in saved["rows"] if row.get("fast_quote_verified_at")]
 
-    assert result["selected_routes"] == 134
-    assert result["updated_routes"] == 134
-    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 40
-    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 40
+    assert result["selected_routes"] == 122
+    assert result["updated_routes"] == 122
+    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 34
+    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 34
     assert sum(row["route_kind"] == "SPOT" for row in updated) == 30
     assert sum(row["route_kind"] == "DEX-FUTURES" for row in updated) == 12
     assert sum(row["route_kind"] == "DEX-SPOT" for row in updated) == 12
