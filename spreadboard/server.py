@@ -7618,7 +7618,7 @@ def render_member_alert_script() -> str:
 
 def render_alerts_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
     flags = alerts.config_flags(config)
-    preview = api_alert_preview(board_path, query)
+    del query
     telegram = str(config.get("telegram_channel_url") or "").strip()
     telegram_button = (
         f'<a class="primary" href="{h(telegram)}" rel="noreferrer">Join Telegram channel</a>'
@@ -7642,6 +7642,9 @@ def render_alerts_page(board_path: Path, config: dict[str, Any], query: dict[str
         if pushover_ready
         else "in-app active; add a Pushover key for phone delivery"
     )
+    live_rule_count = (
+        len(accounts.list_market_alert_rules(user.id)) if user is not None else 0
+    )
     body = f"""
     <section class="alerts-page" data-refresh="180">
       {render_member_alert_rules(board_path)}
@@ -7659,21 +7662,16 @@ def render_alerts_page(board_path: Path, config: dict[str, Any], query: dict[str
       </div>
       <section class="alert-status-grid">
         <article class="chart-summary-card"><span>Delivery</span><strong>Live</strong><em>{h(delivery_detail)}</em></article>
-        <article class="chart-summary-card"><span>Would trigger</span><strong>{h(preview.get('would_trigger_count') or 0)}</strong><em>current local data</em></article>
-        <article class="chart-summary-card"><span>Spread threshold</span><strong>{h(flags['alert_min_spread_pct'])}%</strong><em>configured reference</em></article>
+        <article class="chart-summary-card"><span>Saved rules</span><strong>{h(live_rule_count)}</strong><em>evaluated continuously</em></article>
+        <article class="chart-summary-card"><span>Rule types</span><strong>3</strong><em>route spread · route funding · token price</em></article>
         <article class="chart-summary-card"><span>Phone delivery</span><strong>{'Ready' if pushover_ready else 'Setup needed'}</strong><em>per-account Pushover settings</em></article>
       </section>
-      <section class="alert-rule-grid">
-        {''.join(render_alert_rule_card(card) for card in preview.get('cards') or []) or '<p class="empty">No alert preview rows available.</p>'}
-      </section>
       <section class="community-panel">
-        <div class="panel-head flat"><div><h2>Alert reference library</h2><p>Route spread, route funding, and token price rules are live above. The cards below describe additional alert families planned for later releases.</p></div></div>
+        <div class="panel-head flat"><div><h2>Live alert types</h2><p>Create these from the Alert action on a current route. Each crossing is recorded in Portfolio and optionally sent through Pushover.</p></div></div>
         <div class="alert-template-grid">
-          {render_alert_template('Spread', 'Token or route crosses an open-spread threshold, optionally filtered by route kind and venue.')}
-          {render_alert_template('Funding', 'Funding APR or next-funding delta crosses a threshold while route freshness is healthy.')}
-          {render_alert_template('Freshness', 'A source goes stale, recovers, or a premium/session-backed tab becomes unavailable.')}
-          {render_alert_template('Route Change', 'A hot symbol appears, closes, changes route direction, or gets a new blocker/next action.')}
-          {render_alert_template('Community Call', 'Telegram/community discussion spikes for a watched token or matches a repeated question category.')}
+          {render_alert_template('Route spread', 'Fires when the exact route open spread holds at or above or below your threshold.', 'Live')}
+          {render_alert_template('Route funding', 'Fires when the exact route 24-hour funding value holds at your threshold.', 'Live')}
+          {render_alert_template('Token price', 'Fires when the selected token price holds at or above or below your threshold.', 'Live')}
         </div>
       </section>
     </section>
@@ -8664,12 +8662,12 @@ def render_alert_example(item: Any) -> str:
     )
 
 
-def render_alert_template(title: str, body: str) -> str:
+def render_alert_template(title: str, body: str, status: str = "Reference") -> str:
     return f"""
     <article class="alert-template">
       <strong>{h(title)}</strong>
       <p>{h(body)}</p>
-      <span>Profile template</span>
+      <span>{h(status)}</span>
     </article>
     """
 
