@@ -465,7 +465,13 @@ class FastQuoteRefresher:
             1,
             min(8, int(os.environ.get("SPREADBOARD_FAST_QUOTE_WORKERS", "4"))),
         )
-        job_batches: list[
+        dex_batches: list[
+            tuple[
+                tuple[str, str],
+                list[tuple[tuple[str, str, str], dict[str, Any], str]],
+            ]
+        ] = []
+        cex_batches: list[
             tuple[
                 tuple[str, str],
                 list[tuple[tuple[str, str, str], dict[str, Any], str]],
@@ -480,12 +486,16 @@ class FastQuoteRefresher:
                 # OKX DEX quotes are stateless HTTP requests. Keeping dozens of
                 # them in one venue batch made that single task dominate the
                 # entire cycle even after CEX venues were parallelized.
-                job_batches.extend(
+                dex_batches.extend(
                     (venue_key, jobs[offset : offset + dex_chunk_size])
                     for offset in range(0, len(jobs), dex_chunk_size)
                 )
             else:
-                job_batches.append((venue_key, jobs))
+                cex_batches.append((venue_key, jobs))
+        # Submit the many independent DEX requests first. If the CEX batches
+        # occupy every worker before these are queued, the DEX chunks remain
+        # effectively serial until late in the cycle and the deadline wins.
+        job_batches = dex_batches + cex_batches
         with ThreadPoolExecutor(
             max_workers=max(1, min(venue_workers, len(job_batches)))
         ) as pool:
