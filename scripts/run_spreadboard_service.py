@@ -252,6 +252,7 @@ class RefreshLoop:
             float(os.environ.get("SPREADBOARD_FAST_QUOTE_SECONDS", "30")),
         )
         while not self.stop_event.wait(5.0):
+            cycle_started = time.monotonic()
             with self.quote_cycle_lock:
                 _log("fast quote cycle starting")
                 summary = self._refresh_fast_quotes()
@@ -270,7 +271,10 @@ class RefreshLoop:
             if summary.get("updated_routes"):
                 _invalidate_market_price_caches()
             _warm_board_cache()
-            self.stop_event.wait(interval)
+            # The interval is a start-to-start target. Sleeping a full interval
+            # after a multi-minute quote pass and cache warm created a stale
+            # gap on every cycle even though the configured cadence was 60s.
+            self.stop_event.wait(max(0.0, interval - (time.monotonic() - cycle_started)))
 
     def _refresh_fast_quotes(self) -> dict[str, Any]:
         command = [

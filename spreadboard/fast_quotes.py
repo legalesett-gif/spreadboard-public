@@ -456,7 +456,18 @@ class FastQuoteRefresher:
         for key, (row, side) in leg_jobs.items():
             jobs_by_venue.setdefault((key[0], key[1]), []).append((key, row, side))
         leg_cache: dict[tuple[str, str, str], dict[str, Any] | None] = {}
-        with ThreadPoolExecutor(max_workers=max(1, min(2, len(jobs_by_venue)))) as pool:
+        # Venue groups are independent and almost entirely network-bound. Two
+        # workers made a 220-route pass take four to five minutes, leaving the
+        # five-minute public freshness window with no scheduling margin. Keep
+        # each venue sequential (and therefore inside its own rate limiter),
+        # but allow several different venues to make progress concurrently.
+        venue_workers = max(
+            1,
+            min(8, int(os.environ.get("SPREADBOARD_FAST_QUOTE_WORKERS", "4"))),
+        )
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(venue_workers, len(jobs_by_venue)))
+        ) as pool:
             futures = {
                 venue_key: pool.submit(
                     self._quote_venue_jobs,

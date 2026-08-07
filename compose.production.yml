@@ -25,6 +25,7 @@ services:
       # Reserve extra exact candidates for Spot-Spot, whose venue books fail
       # more often, while keeping every other public lane above its top 25.
       SPREADBOARD_FAST_QUOTE_ROUTES: "220"
+      SPREADBOARD_FAST_QUOTE_WORKERS: "6"
       SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS: "300"
       # Prices must move as the books move, not on a beat. The re-pricing is
       # shared between streams, so this is independent of how many people watch.
