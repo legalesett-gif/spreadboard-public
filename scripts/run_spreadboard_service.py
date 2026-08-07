@@ -67,6 +67,7 @@ class RefreshLoop:
             name="spreadboard-chart-catalog",
             daemon=True,
         )
+        self.warm_thread: threading.Thread | None = None
         self.websocket_process: subprocess.Popen[str] | None = None
 
     def start(self) -> None:
@@ -83,6 +84,8 @@ class RefreshLoop:
             self.fast_thread.join(timeout=5.0)
         if self.catalog_thread.is_alive():
             self.catalog_thread.join(timeout=5.0)
+        if self.warm_thread is not None and self.warm_thread.is_alive():
+            self.warm_thread.join(timeout=5.0)
         if self.websocket_process is not None and self.websocket_process.poll() is None:
             self.websocket_process.terminate()
             try:
@@ -270,11 +273,22 @@ class RefreshLoop:
             _log(f"fast quotes {summary} history_inserted={inserted}")
             if summary.get("updated_routes"):
                 _invalidate_market_price_caches()
-            _warm_board_cache()
+            self._start_board_warm()
             # The interval is a start-to-start target. Sleeping a full interval
             # after a multi-minute quote pass and cache warm created a stale
             # gap on every cycle even though the configured cadence was 60s.
             self.stop_event.wait(max(0.0, interval - (time.monotonic() - cycle_started)))
+
+    def _start_board_warm(self) -> None:
+        """Warm request caches without delaying the next market-price pass."""
+        if self.warm_thread is not None and self.warm_thread.is_alive():
+            return
+        self.warm_thread = threading.Thread(
+            target=_warm_board_cache,
+            name="spreadboard-board-warm",
+            daemon=True,
+        )
+        self.warm_thread.start()
 
     def _refresh_fast_quotes(self) -> dict[str, Any]:
         command = [

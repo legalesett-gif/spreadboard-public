@@ -2397,7 +2397,10 @@ def test_the_service_warms_the_board_cache_after_writing() -> None:
     import inspect
     from scripts import run_spreadboard_service
 
-    assert "_warm_board_cache()" in inspect.getsource(run_spreadboard_service.RefreshLoop.run_fast_quotes)
+    quote_source = inspect.getsource(run_spreadboard_service.RefreshLoop.run_fast_quotes)
+    warm_source = inspect.getsource(run_spreadboard_service.RefreshLoop._start_board_warm)
+    assert "self._start_board_warm()" in quote_source
+    assert "target=_warm_board_cache" in warm_source
 
 
 def test_book_verification_upgrades_quotes_it_does_not_discard_them() -> None:

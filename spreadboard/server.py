@@ -1323,6 +1323,11 @@ def _market_cache_key(board_path: Path, query: dict[str, list[str]]) -> tuple[An
         str(board_path.resolve()),
         _file_signature(board_path),
         _file_signature(api_spreads.DEFAULT_API_DISCOVERY_PATH),
+        _file_signature(
+            Path(api_spreads.DEFAULT_API_DISCOVERY_PATH).with_name(
+                "api_discovery_fast_quotes.json"
+            )
+        ),
         _file_signature(api_spreads.token_metadata.DEFAULT_CACHE_PATH),
         _file_signature(api_spreads.public_rails.DEFAULT_CACHE_PATH),
         normalized_query,

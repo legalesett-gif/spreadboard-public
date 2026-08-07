@@ -18,6 +18,20 @@ import pytest
 from spreadboard import server
 
 
+def test_fast_quote_delta_changes_the_market_cache_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = tmp_path / "api_discovery_latest.json"
+    snapshot.write_text("{}")
+    monkeypatch.setattr(server.api_spreads, "DEFAULT_API_DISCOVERY_PATH", snapshot)
+
+    first = server._market_cache_key(tmp_path / "board.jsonl", {})
+    (tmp_path / "api_discovery_fast_quotes.json").write_text("{}")
+    second = server._market_cache_key(tmp_path / "board.jsonl", {})
+
+    assert first != second
+
+
 def test_a_moved_snapshot_serves_the_previous_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     board = Path("board.jsonl")
     builds: list[int] = []
