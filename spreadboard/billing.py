@@ -27,8 +27,24 @@ class StripeConfig:
     plan_label: str
 
     @property
+    def mode(self) -> str:
+        if self.secret_key.startswith(("sk_live_", "rk_live_")):
+            return "live"
+        if self.secret_key.startswith(("sk_test_", "rk_test_")):
+            return "test"
+        return "unknown"
+
+    @property
     def checkout_ready(self) -> bool:
-        return bool(self.secret_key and self.price_id and self.public_url)
+        allow_test = os.environ.get("SPREADBOARD_ALLOW_TEST_BILLING", "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        return bool(
+            self.secret_key
+            and self.price_id
+            and self.public_url
+            and (self.mode == "live" or (self.mode == "test" and allow_test))
+        )
 
     @property
     def webhook_ready(self) -> bool:
@@ -53,12 +69,14 @@ def status() -> dict[str, Any]:
     value = config()
     return {
         "provider": "stripe",
+        "mode": value.mode,
         "checkout_ready": value.checkout_ready,
         "webhook_ready": value.webhook_ready,
         "configured": value.checkout_ready and value.webhook_ready,
         "plan_label": value.plan_label,
         "providers": {
             "stripe": {
+                "mode": value.mode,
                 "checkout_ready": value.checkout_ready,
                 "webhook_ready": value.webhook_ready,
                 "recurring": True,
@@ -102,7 +120,7 @@ def create_checkout_session(user: Any) -> str:
 def create_portal_session(user: Any) -> str:
     value = config()
     customer = getattr(user, "billing_customer_id", None)
-    if not value.secret_key or not value.public_url or not customer:
+    if not value.checkout_ready or not customer:
         raise BillingError("billing_portal_unavailable")
     result = _stripe_post(
         "/v1/billing_portal/sessions",

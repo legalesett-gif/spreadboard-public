@@ -6670,12 +6670,18 @@ def fmt_renewal_date(value: Any) -> str:
 def render_subscription_page() -> str:
     user = accounts.current_user()
     billing_state = billing.status()
-    action = (
-        '<button class="sheet-button primary" type="button" data-billing-action="portal">Manage billing</button>'
-        if user and user.billing_customer_id
-        else f'<button class="sheet-button primary" type="button" data-billing-action="checkout">Subscribe · {h(billing_state["plan_label"])}</button>'
-    ) if billing_state["checkout_ready"] else '<p class="pricing-note">Card checkout is being configured. Pay with crypto below.</p>'
     active = bool(user and user.subscription_active)
+    billing_managed = bool(user and user.billing_customer_id)
+    if not user:
+        action = '<a class="sheet-button primary" href="/login?next=/subscription">Sign in to subscribe</a>'
+    elif billing_state["checkout_ready"] and billing_managed:
+        action = '<button class="sheet-button primary" type="button" data-billing-action="portal">Manage billing</button>'
+    elif billing_state["checkout_ready"] and not active:
+        action = f'<button class="sheet-button primary" type="button" data-billing-action="checkout">Subscribe · {h(billing_state["plan_label"])}</button>'
+    elif active:
+        action = '<p class="pricing-note">This access is managed directly. Contact support to change it.</p>'
+    else:
+        action = '<p class="pricing-note">Card checkout is not live yet. Pay with crypto below.</p>'
     renews = fmt_renewal_date(getattr(user, "subscription_expires_at", None)) if user else "\u2014"
     terms = membership_terms()
     monthly = terms[0]["per_month"] if terms else 180.0
@@ -6698,7 +6704,7 @@ def render_subscription_page() -> str:
         <div>
           <span class="page-kicker">Membership</span>
           <h1>{'Your membership' if active else 'Activate membership'}</h1>
-          <p>{'Renews automatically. Cancel any time.' if active else 'Your account is signed in; market access is not active yet.'}</p>
+          <p>{(('Renews automatically. Cancel any time.' if billing_managed else 'Access is managed directly.') if active else 'Your account is signed in; market access is not active yet.') if user else 'Sign in or create an account to activate market access.'}</p>
         </div>
       </header>
 
@@ -6707,7 +6713,7 @@ def render_subscription_page() -> str:
         <div class="sub-facts">
           <div><span>Monthly price</span><strong>${monthly:,.2f}</strong></div>
           <div><span>Billing cycle</span><strong>Monthly</strong></div>
-          <div><span>{'Next payment' if active else 'Status'}</span><strong>{h(renews if active else (user.subscription_status if user else 'inactive'))}</strong></div>
+          <div><span>{('Next payment' if billing_managed else 'Access until') if active else 'Status'}</span><strong>{h(renews if active else (user.subscription_status if user else 'inactive'))}</strong></div>
         </div>
         <ul class="tick-list">{render_membership_ticks()}</ul>
         <label class="subscription-consent"><input type="checkbox" data-subscription-consent>
@@ -7052,7 +7058,12 @@ def render_account_settings(user: accounts.User, accounts_path: Path | str = acc
         billing_action = f'<a class="sheet-button" href="/subscription">Subscribe · {h(billing.status()["plan_label"])}</a>'
     else:
         billing_action = '<span>Online billing is not active for this account.</span>'
-    cancel_note = "Cancellation scheduled at period end." if user.subscription_cancel_at_period_end else "Renews monthly while active."
+    if user.billing_customer_id:
+        cancel_note = "Cancellation scheduled at period end." if user.subscription_cancel_at_period_end else "Renews monthly while active."
+    elif user.subscription_active:
+        cancel_note = f"Managed access through {fmt_renewal_date(user.subscription_expires_at)}."
+    else:
+        cancel_note = "Access is not active."
     telegram_state = telegram_bot.status(db_path=accounts_path)
     telegram_link = accounts.telegram_link_status(user.id, db_path=accounts_path)
     if telegram_state["configured"] and telegram_link["linked"]:

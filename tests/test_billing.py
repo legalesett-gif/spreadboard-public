@@ -46,7 +46,8 @@ def test_webhook_signature_and_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_checkout_uses_recurring_price_and_user_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SPREADBOARD_STRIPE_SECRET_KEY", "sk_test")
+    monkeypatch.setenv("SPREADBOARD_STRIPE_SECRET_KEY", "sk_test_example")
+    monkeypatch.setenv("SPREADBOARD_ALLOW_TEST_BILLING", "1")
     monkeypatch.setenv("SPREADBOARD_STRIPE_PRICE_ID", "price_monthly")
     monkeypatch.setenv("SPREADBOARD_PUBLIC_URL", "https://spreadboard.example")
     captured = {}
@@ -64,6 +65,19 @@ def test_checkout_uses_recurring_price_and_user_metadata(monkeypatch: pytest.Mon
 def test_status_exposes_configured_plan_label(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SPREADBOARD_SUBSCRIPTION_LABEL", "$180/month")
     assert billing.status()["plan_label"] == "$180/month"
+
+
+def test_test_credentials_do_not_enable_public_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SPREADBOARD_STRIPE_SECRET_KEY", "rk_test_example")
+    monkeypatch.setenv("SPREADBOARD_STRIPE_PRICE_ID", "price_monthly")
+    monkeypatch.setenv("SPREADBOARD_PUBLIC_URL", "https://spreadboard.example")
+    monkeypatch.delenv("SPREADBOARD_ALLOW_TEST_BILLING", raising=False)
+
+    state = billing.status()
+    assert state["mode"] == "test"
+    assert state["checkout_ready"] is False
+    with pytest.raises(billing.BillingError, match="billing_not_configured"):
+        billing.create_checkout_session(accounts.User(7, "member@example.com", "Member", "member", "inactive", None, None))
 
 
 def test_subscription_event_is_idempotent(tmp_path: Path) -> None:

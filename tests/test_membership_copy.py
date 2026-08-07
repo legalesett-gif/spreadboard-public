@@ -85,6 +85,31 @@ def test_the_subscription_page_keeps_its_consent_and_checkout() -> None:
     assert "account-session" in html
 
 
+def test_directly_managed_access_is_not_described_as_auto_renewing() -> None:
+    class _User:
+        id = 1
+        display_name = "Member"
+        email = "member@example.com"
+        role = "member"
+        is_admin = False
+        subscription_active = True
+        subscription_status = "active"
+        csrf_token = "csrf"
+        subscription_expires_at = "2026-08-18T00:00:00+00:00"
+        billing_customer_id = None
+
+    accounts.set_current_user(_User())
+    try:
+        html = server.render_subscription_page()
+    finally:
+        accounts.set_current_user(None)
+
+    assert "Access is managed directly." in html
+    assert "Access until" in html
+    assert "Renews automatically" not in html
+    assert "Subscribe ·" not in html
+
+
 def test_the_subscription_page_leads_with_the_plan_facts() -> None:
     html = server.render_subscription_page()
 
