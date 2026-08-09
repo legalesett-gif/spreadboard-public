@@ -52,18 +52,19 @@ def main() -> int:
             for group in groups:
                 route = group.get("best_route") or {}
                 ours = float(group.get("best_edge_pct") or 0.0)
-                quoted = (
-                    {"status": "unavailable"}
-                    if route.get("depth_unverified")
-                    else refresher.quote_route(route, target_notional_usd=50.0)
-                )
+                # A stored row can be marked depth-unverified because its broad
+                # discovery pass used a ticker.  The point of this audit is to
+                # try the exact route again now, so that flag must not suppress
+                # a fresh order-book quote.
+                quoted = refresher.quote_route(route, target_notional_usd=50.0)
                 live_row = quoted.get("row") if isinstance(quoted.get("row"), dict) else {}
                 real = live_row.get("depth_weighted_spread_pct")
                 if quoted.get("status") != "ok" or real is None:
                     totals["unverifiable"] += 1
                     print(
                         f"   {group.get('token'):<12} {ours:>9.3f} {'n/a':>9} {'-':>8}  "
-                        f"{route.get('long_venue')} -> {route.get('short_venue')}"
+                        f"{route.get('long_venue')} -> {route.get('short_venue')} "
+                        f"({quoted.get('error') or 'unavailable'})"
                     )
                     continue
                 real = float(real)
