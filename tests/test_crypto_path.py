@@ -50,7 +50,7 @@ def test_each_invoice_gets_an_amount_nobody_else_is_using() -> None:
     taken: list[int] = []
     amounts = []
     for _ in range(5):
-        slot, amount = crypto_billing._allocate_amount(taken, 18_000)
+        slot, amount = crypto_billing._allocate_amount(taken, 14_900)
         taken.append(amount)
         amounts.append(amount)
 
@@ -72,11 +72,11 @@ def test_telegram_subscribe_leads_with_crypto() -> None:
     assert subscribe.index("crypto_billing") < subscribe.index("create_checkout_session")
 
 
-def test_an_amount_outside_the_band_is_not_credited() -> None:
-    """Tolerance absorbs a withdrawal fee, not a wrong invoice."""
+def test_only_the_exact_invoice_amount_is_credited() -> None:
+    """A wrong amount is parked rather than guessed into a paid tier."""
     from spreadboard import crypto_billing
 
-    assert crypto_billing.TOLERANCE_CENTS == 200
+    assert crypto_billing.TOLERANCE_CENTS == 0
 
 
 def test_alchemy_uses_asset_transfers_not_a_range_scan(monkeypatch) -> None:

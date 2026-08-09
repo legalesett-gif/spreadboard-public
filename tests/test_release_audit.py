@@ -502,6 +502,9 @@ def test_production_board_does_not_admit_hour_old_routes_as_live() -> None:
 def test_price_worker_invalidates_grouped_market_payloads() -> None:
     from scripts import run_spreadboard_service as service
 
+    api_spreads._RESULT_CACHE.clear()
+    server._MARKET_CACHE.clear()
+    server._MARKET_STALE_CACHE.clear()
     api_spreads._RESULT_CACHE[("test",)] = (0, 0.0, {"old": True})
     server._MARKET_CACHE[("test",)] = (0.0, {"old": True})
     server._MARKET_STALE_CACHE[("test",)] = (0.0, {"old": True})
@@ -510,7 +513,7 @@ def test_price_worker_invalidates_grouped_market_payloads() -> None:
 
     assert api_spreads._RESULT_CACHE == {}
     assert server._MARKET_CACHE == {}
-    assert server._MARKET_STALE_CACHE == {}
+    assert server._MARKET_STALE_CACHE == {("test",): (0.0, {"old": True})}
 
 
 def test_fast_quote_budget_covers_top_25_across_all_five_public_lanes() -> None:

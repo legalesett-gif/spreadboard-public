@@ -76,7 +76,7 @@ def test_slot_step_exceeds_full_tolerance_band():
 
 
 def test_prices_match_the_agreed_ladder():
-    assert crypto_billing.PERIODS == {30: 18_000, 90: 45_000, 365: 165_000}
+    assert crypto_billing.PERIODS == {30: 14_900, 90: 37_500, 365: 136_500}
 
 
 def test_receiving_address_and_rpc_come_from_env(monkeypatch):
@@ -100,7 +100,7 @@ def test_source_contains_no_hardcoded_receiving_address():
 
 def test_first_invoice_is_the_exact_list_price(db):
     invoice = crypto_billing.create_invoice(make_user(db, "a@example.com"), 30, db_path=db, now=NOW)
-    assert invoice["amount_cents"] == 18_000
+    assert invoice["amount_cents"] == 14_900
     assert invoice["slot_index"] == 0
 
 
@@ -110,10 +110,10 @@ def test_invoice_has_exact_token_specific_wallet_options(db):
 
     assert sorted(options) == ["USDC", "USDT"]
     assert options["USDC"]["contract_address"] == USDC.lower()
-    assert options["USDC"]["amount_raw"] == "180000000"
+    assert options["USDC"]["amount_raw"] == "149000000"
     assert options["USDC"]["wallet_uri"] == (
         f"ethereum:{USDC.lower()}@42161/transfer"
-        f"?address={RECEIVER.lower()}&uint256=180000000"
+        f"?address={RECEIVER.lower()}&uint256=149000000"
     )
     assert options["USDT"]["wallet_uri"].startswith(
         f"ethereum:{USDT.lower()}@42161/transfer?"
@@ -168,7 +168,7 @@ def test_invoice_creation_fails_closed_when_unconfigured(db, monkeypatch):
 def test_exact_payment_activates_for_the_period(db):
     user_id = make_user(db, "a@example.com")
     crypto_billing.create_invoice(user_id, 30, db_path=db, now=NOW)
-    result = pay(db, 180.00, tx="0xaaa")
+    result = pay(db, 149.00, tx="0xaaa")
     assert result["resolution"] == "settled"
     user = accounts.get_user_object(user_id, db_path=db)
     assert user.subscription_status == "active"
@@ -176,30 +176,30 @@ def test_exact_payment_activates_for_the_period(db):
     assert user.subscription_expires_at.startswith("2026-08-31")
 
 
-def test_underpayment_within_two_dollars_still_settles(db):
-    """An exchange withdrawal fee must not cost the member their access."""
+def test_even_one_cent_underpayment_parks_for_admin(db):
+    """A mistyped or fee-deducted payment must never be guessed into a tier."""
     user_id = make_user(db, "a@example.com")
     crypto_billing.create_invoice(user_id, 30, db_path=db, now=NOW)
-    assert pay(db, 178.00, tx="0xaaa")["resolution"] == "settled"
-    assert accounts.get_user_object(user_id, db_path=db).subscription_status == "active"
+    assert pay(db, 148.99, tx="0xaaa")["resolution"] == "unmatched"
+    assert accounts.get_user_object(user_id, db_path=db).subscription_status == "inactive"
 
 
 def test_underpayment_beyond_tolerance_parks_for_admin(db):
     user_id = make_user(db, "a@example.com")
     crypto_billing.create_invoice(user_id, 30, db_path=db, now=NOW)
-    result = pay(db, 177.99, tx="0xaaa")
+    result = pay(db, 148.00, tx="0xaaa")
     assert result["resolution"] == "unmatched"
     assert accounts.get_user_object(user_id, db_path=db).subscription_status == "inactive"
     assert len(crypto_billing.pending_payments(db_path=db)) == 1
 
 
-def test_clear_overpayment_is_honoured_when_unambiguous(db):
+def test_overpayment_is_parked_instead_of_guessing_a_tier(db):
     user_id = make_user(db, "a@example.com")
     crypto_billing.create_invoice(user_id, 30, db_path=db, now=NOW)
     result = pay(db, 250.00, tx="0xaaa")
-    assert result["resolution"] == "settled"
-    assert "overpaid" in result["note"]
-    assert accounts.get_user_object(user_id, db_path=db).subscription_status == "active"
+    assert result["resolution"] == "unmatched"
+    assert "exact amount" in result["note"]
+    assert accounts.get_user_object(user_id, db_path=db).subscription_status == "inactive"
 
 
 def test_overpayment_matching_two_invoices_activates_nobody(db):
@@ -208,13 +208,13 @@ def test_overpayment_matching_two_invoices_activates_nobody(db):
     crypto_billing.create_invoice(first, 30, db_path=db, now=NOW)
     crypto_billing.create_invoice(second, 90, db_path=db, now=NOW)
     result = pay(db, 900.00, tx="0xaaa")
-    assert result["resolution"] == "ambiguous"
+    assert result["resolution"] == "unmatched"
     for user_id in (first, second):
         assert accounts.get_user_object(user_id, db_path=db).subscription_status == "inactive"
 
 
 def test_unsolicited_payment_with_no_open_invoice_parks(db):
-    result = pay(db, 180.00, tx="0xaaa")
+    result = pay(db, 149.00, tx="0xaaa")
     assert result["resolution"] == "unmatched"
     assert len(crypto_billing.pending_payments(db_path=db)) == 1
 
@@ -227,14 +227,14 @@ def test_unsolicited_payment_with_no_open_invoice_parks(db):
 def test_usdt_is_accepted(db):
     user_id = make_user(db, "a@example.com")
     crypto_billing.create_invoice(user_id, 30, db_path=db, now=NOW)
-    assert pay(db, 180.00, tx="0xaaa", token=USDT)["resolution"] == "settled"
+    assert pay(db, 149.00, tx="0xaaa", token=USDT)["resolution"] == "settled"
 
 
 def test_impostor_token_contract_is_ignored(db):
     """A token calling itself USDC must not buy access."""
     user_id = make_user(db, "a@example.com")
     crypto_billing.create_invoice(user_id, 30, db_path=db, now=NOW)
-    result = pay(db, 180.00, tx="0xaaa", token="0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+    result = pay(db, 149.00, tx="0xaaa", token="0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
     assert result["resolution"] == "ignored"
     assert accounts.get_user_object(user_id, db_path=db).subscription_status == "inactive"
     assert crypto_billing.pending_payments(db_path=db) == []
@@ -248,10 +248,10 @@ def test_impostor_token_contract_is_ignored(db):
 def test_replaying_the_same_transfer_grants_nothing_extra(db):
     user_id = make_user(db, "a@example.com")
     crypto_billing.create_invoice(user_id, 30, db_path=db, now=NOW)
-    first = pay(db, 180.00, tx="0xaaa")
+    first = pay(db, 149.00, tx="0xaaa")
     expiry = accounts.get_user_object(user_id, db_path=db).subscription_expires_at
 
-    second = pay(db, 180.00, tx="0xaaa")
+    second = pay(db, 149.00, tx="0xaaa")
     assert first["resolution"] == "settled"
     assert second["resolution"] == "duplicate"
     assert accounts.get_user_object(user_id, db_path=db).subscription_expires_at == expiry
@@ -260,8 +260,8 @@ def test_replaying_the_same_transfer_grants_nothing_extra(db):
 def test_distinct_logs_in_one_transaction_are_separate_payments(db):
     user_id = make_user(db, "a@example.com")
     crypto_billing.create_invoice(user_id, 30, db_path=db, now=NOW)
-    assert pay(db, 180.00, tx="0xaaa", log_index=0)["resolution"] == "settled"
-    assert pay(db, 180.00, tx="0xaaa", log_index=1)["resolution"] == "unmatched"
+    assert pay(db, 149.00, tx="0xaaa", log_index=0)["resolution"] == "settled"
+    assert pay(db, 149.00, tx="0xaaa", log_index=1)["resolution"] == "unmatched"
 
 
 # --------------------------------------------------------------------------
@@ -273,12 +273,12 @@ def test_early_renewal_extends_from_existing_expiry(db):
     """Renewing with time left must not forfeit the days already paid for."""
     user_id = make_user(db, "a@example.com")
     crypto_billing.create_invoice(user_id, 30, db_path=db, now=NOW)
-    pay(db, 180.00, tx="0xaaa")
+    pay(db, 149.00, tx="0xaaa")
     first_expiry = accounts.get_user_object(user_id, db_path=db).subscription_expires_at
 
     ten_days_later = NOW + timedelta(days=10)
     crypto_billing.create_invoice(user_id, 30, db_path=db, now=ten_days_later)
-    pay(db, 180.00, tx="0xbbb", now=ten_days_later)
+    pay(db, 149.00, tx="0xbbb", now=ten_days_later)
 
     second = accounts.get_user_object(user_id, db_path=db).subscription_expires_at
     assert second.startswith("2026-09-30")  # 31 Aug + 30 days, not 11 Aug + 30
@@ -288,11 +288,11 @@ def test_early_renewal_extends_from_existing_expiry(db):
 def test_renewal_after_lapse_starts_from_today(db):
     user_id = make_user(db, "a@example.com")
     crypto_billing.create_invoice(user_id, 30, db_path=db, now=NOW)
-    pay(db, 180.00, tx="0xaaa")
+    pay(db, 149.00, tx="0xaaa")
 
     much_later = NOW + timedelta(days=200)
     crypto_billing.create_invoice(user_id, 30, db_path=db, now=much_later)
-    pay(db, 180.00, tx="0xbbb", now=much_later)
+    pay(db, 149.00, tx="0xbbb", now=much_later)
     expiry = accounts.get_user_object(user_id, db_path=db).subscription_expires_at
     assert expiry.startswith("2027-03-19")  # 1 Aug + 200d = 17 Feb, + 30d
 
@@ -300,7 +300,7 @@ def test_renewal_after_lapse_starts_from_today(db):
 def test_annual_period_grants_a_year(db):
     user_id = make_user(db, "a@example.com")
     crypto_billing.create_invoice(user_id, 365, db_path=db, now=NOW)
-    assert pay(db, 1650.00, tx="0xaaa")["resolution"] == "settled"
+    assert pay(db, 1365.00, tx="0xaaa")["resolution"] == "settled"
     assert accounts.get_user_object(user_id, db_path=db).subscription_expires_at.startswith("2027-08-01")
 
 

@@ -80,7 +80,7 @@ def test_member_without_subscription_can_still_create_an_invoice(client):
     response = post(client, "/api/billing/crypto/invoice", cookie, csrf, CONSENT)
     assert response.status == 201, "checkout must not sit behind the subscription gate"
     invoice = json.loads(response.read())["invoice"]
-    assert invoice["amount_cents"] == 18_000
+    assert invoice["amount_cents"] == 14_900
     assert invoice["receiving_address"] == RECEIVER
     assert invoice["chain_id"] == 42161
 
@@ -194,7 +194,7 @@ def test_subscription_page_offers_crypto_checkout(client):
     assert "Arbitrum One" in page
     assert "USDC" in page and "USDT" in page
     # all three prepaid periods must be offered
-    for label in ("$180.00", "$450.00", "$1,650.00"):
+    for label in ("$149.00", "$375.00", "$1,365.00"):
         assert label in page, f"missing period {label}"
     for days in ("30", "90", "365"):
         assert f'data-crypto-period="{days}"' in page

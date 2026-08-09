@@ -222,6 +222,7 @@ def test_the_visitor_nav_only_offers_pages_a_visitor_can_open() -> None:
         "/privacy",
         "/refunds",
         "/free",
+        "/status",
     }
     hrefs = {
         part.split('"', 1)[0]

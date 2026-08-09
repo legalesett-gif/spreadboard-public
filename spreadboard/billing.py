@@ -97,7 +97,7 @@ def status() -> dict[str, Any]:
         "plan_label": value.plan_label,
         "tiers": {
             "scanner": {"checkout_ready": value.tier_checkout_ready("scanner"), "monthly_cents": 4_900},
-            "research_pro": {"checkout_ready": value.tier_checkout_ready("research_pro"), "monthly_cents": 18_000},
+            "research_pro": {"checkout_ready": value.tier_checkout_ready("research_pro"), "monthly_cents": 14_900},
         },
         "providers": {
             "stripe": {

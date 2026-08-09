@@ -366,6 +366,12 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
             );
             CREATE INDEX IF NOT EXISTS web_push_subscriptions_user ON web_push_subscriptions(user_id, active);
             CREATE INDEX IF NOT EXISTS web_push_deliveries_status ON web_push_deliveries(status, attempts, updated_at);
+            CREATE TABLE IF NOT EXISTS daily_page_views (
+                day TEXT NOT NULL,
+                path TEXT NOT NULL,
+                view_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (day, path)
+            );
             """
         )
         connection.executescript(
@@ -619,6 +625,73 @@ def get_user_object(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> U
     try:
         row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return _user_from_row(row) if row is not None else None
+    finally:
+        connection.close()
+
+
+def user_id_for_email(email: str, *, db_path: Path | str = DEFAULT_DB_PATH) -> int | None:
+    """Resolve an account for password recovery without returning user data."""
+    connection = _connect(db_path)
+    try:
+        row = connection.execute(
+            "SELECT id FROM users WHERE email = ? COLLATE NOCASE",
+            (str(email or "").strip(),),
+        ).fetchone()
+        return int(row["id"]) if row is not None else None
+    finally:
+        connection.close()
+
+
+def record_page_view(
+    path: str,
+    *,
+    at: datetime | None = None,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> None:
+    """Increment a path/day counter without storing cookies, IPs, or user agents."""
+    clean_path = "/" + str(path or "/").strip().lstrip("/")
+    if len(clean_path) > 180 or not clean_path.startswith("/"):
+        clean_path = "/other"
+    day = (at or datetime.now(tz=timezone.utc)).astimezone(timezone.utc).date().isoformat()
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """INSERT INTO daily_page_views (day, path, view_count) VALUES (?, ?, 1)
+               ON CONFLICT(day, path) DO UPDATE SET view_count = view_count + 1""",
+            (day, clean_path),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def page_view_summary(
+    *, days: int = 30, db_path: Path | str = DEFAULT_DB_PATH
+) -> dict[str, Any]:
+    """Return privacy-safe aggregate traffic for the owner dashboard."""
+    bounded_days = max(1, min(365, int(days)))
+    since = (datetime.now(tz=timezone.utc).date() - timedelta(days=bounded_days - 1)).isoformat()
+    connection = _connect(db_path)
+    try:
+        daily = [dict(row) for row in connection.execute(
+            """SELECT day, SUM(view_count) AS views
+               FROM daily_page_views WHERE day >= ? GROUP BY day ORDER BY day""",
+            (since,),
+        ).fetchall()]
+        paths = [dict(row) for row in connection.execute(
+            """SELECT path, SUM(view_count) AS views
+               FROM daily_page_views WHERE day >= ?
+               GROUP BY path ORDER BY views DESC, path LIMIT 25""",
+            (since,),
+        ).fetchall()]
+        return {
+            "days": bounded_days,
+            "since": since,
+            "total_views": sum(int(row["views"] or 0) for row in daily),
+            "daily": daily,
+            "paths": paths,
+            "privacy": "aggregate_path_counts_only",
+        }
     finally:
         connection.close()
 

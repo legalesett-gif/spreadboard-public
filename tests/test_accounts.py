@@ -50,6 +50,29 @@ def test_login_uses_opaque_session_and_subscription_expiry(
     assert accounts.user_for_session(token, path) is None
 
 
+def test_page_analytics_store_only_aggregate_path_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _database(tmp_path, monkeypatch)
+    when = datetime(2026, 8, 9, 12, 0, tzinfo=timezone.utc)
+    accounts.record_page_view("/pricing", at=when, db_path=path)
+    accounts.record_page_view("/pricing", at=when, db_path=path)
+    accounts.record_page_view("/free", at=when, db_path=path)
+
+    summary = accounts.page_view_summary(days=365, db_path=path)
+    assert summary["privacy"] == "aggregate_path_counts_only"
+    assert summary["total_views"] == 3
+    assert summary["paths"][0] == {"path": "/pricing", "views": 2}
+
+    import sqlite3
+    connection = sqlite3.connect(path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(daily_page_views)")}
+    finally:
+        connection.close()
+    assert columns == {"day", "path", "view_count"}
+
+
 def test_position_funding_and_alert_records_are_user_scoped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -8,7 +8,10 @@ admin knows it.
 
 from __future__ import annotations
 
+import http.client
+import json
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -135,3 +138,68 @@ def test_the_page_and_endpoints_are_reachable_without_a_session() -> None:
     gate = inspect.getsource(server.SpreadBoardHandler._authorize)
     assert '"/set-password"' in gate
     assert '"/api/set-password"' in gate
+    assert '"/forgot-password"' in gate
+    assert '"/api/request-password-reset"' in gate
+
+
+def test_email_lookup_is_case_insensitive_and_returns_no_profile(db: Path) -> None:
+    assert accounts.user_id_for_email("ANATOLIJ@EXAMPLE.COM", db_path=db) == _user_id(db)
+    assert accounts.user_id_for_email("missing@example.com", db_path=db) is None
+
+
+def test_forgot_password_page_fails_closed_until_email_is_configured(monkeypatch) -> None:
+    from spreadboard import server
+
+    for name in (
+        "SPREADBOARD_SMTP_HOST", "SPREADBOARD_SMTP_USERNAME",
+        "SPREADBOARD_SMTP_PASSWORD", "SPREADBOARD_SMTP_FROM",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    page = server.render_forgot_password_page()
+    assert "Email recovery is temporarily unavailable" in page
+    assert "Send reset link" in page
+    assert " disabled" in page
+
+
+def test_reset_request_is_generic_and_sends_a_single_use_link(tmp_path, monkeypatch) -> None:
+    from spreadboard import mailer, server
+
+    monkeypatch.setenv("SPREADBOARD_AUTH_REQUIRED", "1")
+    monkeypatch.setenv("SPREADBOARD_SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("SPREADBOARD_SMTP_FROM", "support@example.test")
+    monkeypatch.setenv("SPREADBOARD_PUBLIC_URL", "https://spreadboard.example")
+    db_path = tmp_path / "accounts.sqlite3"
+    accounts.initialize(db_path)
+    accounts.create_user(
+        email="recover@example.test", display_name="Recover",
+        password="original-password-long", subscription_status="inactive", db_path=db_path,
+    )
+    sent = []
+    monkeypatch.setattr(mailer, "send_password_reset", lambda **kwargs: sent.append(kwargs))
+    server.SpreadBoardHandler._login_attempts.clear()
+    app = server.SpreadBoardServer(
+        ("127.0.0.1", 0), server.SpreadBoardHandler,
+        board_path=tmp_path / "missing.jsonl", config={}, accounts_path=db_path,
+    )
+    threading.Thread(target=app.serve_forever, daemon=True).start()
+    client = http.client.HTTPConnection("127.0.0.1", app.server_port, timeout=10)
+    try:
+        responses = []
+        for email in ("missing@example.test", "recover@example.test"):
+            client.request(
+                "POST", "/api/request-password-reset",
+                body=json.dumps({"email": email}), headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            responses.append((response.status, json.loads(response.read())))
+        assert responses[0] == responses[1]
+        assert responses[0][0] == 202
+        assert len(sent) == 1
+        assert sent[0]["recipient"] == "recover@example.test"
+        token = sent[0]["reset_url"].split("token=", 1)[1]
+        assert accounts.password_token_status(token, db_path=db_path)["purpose"] == "reset"
+    finally:
+        client.close()
+        app.shutdown()
+        app.server_close()
+        server.SpreadBoardHandler._login_attempts.clear()

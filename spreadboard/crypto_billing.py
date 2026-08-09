@@ -40,17 +40,22 @@ TOKENS: dict[str, dict[str, Any]] = {
 }
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
-# period_days -> list price in cents. PERIODS remains the Research Pro alias so
-# existing integrations and invoices keep the original $180 economics.
+# period_days -> list price in cents. PERIODS remains the Research Pro alias for
+# integrations which display the primary plan without a tier selector.
 TIER_PERIODS: dict[str, dict[int, int]] = {
     "scanner": {30: 4_900, 90: 13_500, 365: 49_000},
-    "research_pro": {30: 18_000, 90: 45_000, 365: 165_000},
+    "research_pro": {30: 14_900, 90: 37_500, 365: 136_500},
 }
 PERIODS: dict[int, int] = TIER_PERIODS["research_pro"]
 
-TOLERANCE_CENTS = 200          # +/- $2.00 absorbs exchange withdrawal fees
-SLOT_STEP_CENTS = 401          # > 2 * TOLERANCE, so bands can never overlap
-MAX_SLOTS = 50
+# The QR and wallet URI encode raw token units, so the received transfer can and
+# should match the invoice exactly.  A fee-deducted or mistyped transfer is
+# parked for admin review instead of being guessed into a tier.  One-cent slots
+# keep simultaneous invoices unique without making later customers pay dollars
+# more merely because another checkout is open.
+TOLERANCE_CENTS = 0
+SLOT_STEP_CENTS = 1
+MAX_SLOTS = 100
 INVOICE_WINDOW_SECONDS = 3600  # 60 minutes, then the amount slot is reusable
 
 assert SLOT_STEP_CENTS > 2 * TOLERANCE_CENTS, "slot step must exceed the full tolerance band"
@@ -239,6 +244,32 @@ def create_invoice(
     connection = accounts._connect(db_path)
     try:
         connection.execute("BEGIN IMMEDIATE")
+        member = connection.execute(
+            """SELECT role, subscription_status, subscription_expires_at, subscription_tier
+               FROM users WHERE id = ?""",
+            (int(user_id),),
+        ).fetchone()
+        if member is None:
+            raise CryptoBillingError("user_not_found")
+        expiry = None
+        try:
+            expiry = datetime.fromisoformat(
+                str(member["subscription_expires_at"] or "").replace("Z", "+00:00")
+            )
+        except ValueError:
+            expiry = None
+        active_now = (
+            str(member["role"]) == "admin"
+            or (
+                str(member["subscription_status"]) in {"active", "trialing"}
+                and (expiry is None or expiry > moment)
+            )
+        )
+        if active_now and str(member["subscription_tier"]) != tier:
+            # A user row stores one tier and one expiry. Applying a different
+            # tier now would silently re-label the unused part of the current
+            # prepaid term. Keep renewal exact until queued grants exist.
+            raise CryptoBillingError("tier_change_available_after_current_term")
         connection.execute(
             "UPDATE crypto_invoices SET status = 'expired' WHERE status = 'open' AND expires_at <= ?",
             (now_iso,),
@@ -380,25 +411,19 @@ def record_transfer(
         )
         open_rows = _open_invoice_rows(connection, now_iso)
 
-        exact = [r for r in open_rows if abs(int(r["expected_amount_cents"]) - amount_cents) <= TOLERANCE_CENTS]
+        exact = [
+            r for r in open_rows
+            if int(r["expected_amount_cents"]) == amount_cents
+        ]
         if len(exact) == 1:
             chosen, note = exact[0], ""
         elif len(exact) > 1:
             chosen, note = None, "multiple open invoices matched this amount"
         else:
-            # No exact match. A clear overpayment is still honoured, but only
-            # when exactly one open invoice can possibly be its target.
-            over = [r for r in open_rows if amount_cents > int(r["expected_amount_cents"]) + TOLERANCE_CENTS]
-            if len(over) == 1:
-                chosen = over[0]
-                note = f"overpaid by {format_amount(amount_cents - int(chosen['expected_amount_cents']))}"
-            elif len(over) > 1:
-                chosen, note = None, "overpayment could match more than one open invoice"
-            else:
-                chosen, note = None, "no open invoice within tolerance (underpaid or unsolicited)"
+            chosen, note = None, "no open invoice matched the exact amount"
 
         if chosen is None:
-            resolution = "ambiguous" if "match" in note else "unmatched"
+            resolution = "ambiguous" if len(exact) > 1 else "unmatched"
             connection.execute(
                 "INSERT INTO crypto_payments (tx_hash, log_index, token, from_address, amount_cents, "
                 "block_number, invoice_id, resolution, note, observed_at) "
@@ -410,6 +435,13 @@ def record_transfer(
             return {"resolution": resolution, "amount_cents": amount_cents, "note": note}
 
         invoice_id = int(chosen["id"])
+        user_id = int(chosen["user_id"])
+        user = connection.execute(
+            "SELECT * FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if user is None:
+            raise CryptoBillingError("invoice_user_missing")
+        expires_at = _next_expiry(dict(user), int(chosen["period_days"]), moment)
         connection.execute(
             "UPDATE crypto_invoices SET status = 'paid', token = ?, tx_hash = ?, from_address = ?, "
             "paid_amount_cents = ?, block_number = ?, settled_at = ? WHERE id = ?",
@@ -422,23 +454,21 @@ def record_transfer(
             (tx_hash, log_index, token["symbol"], from_address, amount_cents,
              block_number, invoice_id, note, now_iso),
         )
+        connection.execute(
+            "UPDATE users SET subscription_status = 'active', subscription_expires_at = ?, "
+            "subscription_tier = ?, updated_at = ? WHERE id = ?",
+            (expires_at, str(chosen["subscription_tier"]), now_iso, user_id),
+        )
         connection.commit()
     finally:
         connection.close()
-
-    user = accounts.get_user(int(chosen["user_id"]), db_path=db_path)
-    if user is None:
-        raise CryptoBillingError("invoice_user_missing")
-    expires_at = _next_expiry(user, int(chosen["period_days"]), moment)
-    accounts.update_subscription(
-        int(chosen["user_id"]), status="active", expires_at=expires_at,
-        tier=str(chosen["subscription_tier"]), db_path=db_path
-    )
     return {
         "resolution": "settled",
         "invoice_id": invoice_id,
-        "user_id": int(chosen["user_id"]),
+        "user_id": user_id,
         "amount_cents": amount_cents,
+        "period_days": int(chosen["period_days"]),
+        "subscription_tier": str(chosen["subscription_tier"]),
         "expires_at": expires_at,
         "note": note,
     }
@@ -463,26 +493,30 @@ def settle_manually(
             raise CryptoBillingError("invoice_not_found")
         if str(row["status"]) == "paid":
             return {"resolution": "already_paid", "invoice_id": invoice_id}
+        user = connection.execute(
+            "SELECT * FROM users WHERE id = ?", (int(row["user_id"]),)
+        ).fetchone()
+        if user is None:
+            raise CryptoBillingError("invoice_user_missing")
+        expires_at = _next_expiry(dict(user), int(row["period_days"]), moment)
         connection.execute(
             "UPDATE crypto_invoices SET status = 'paid', settled_at = ? WHERE id = ?",
             (now_iso, invoice_id),
         )
+        connection.execute(
+            "UPDATE users SET subscription_status = 'active', subscription_expires_at = ?, "
+            "subscription_tier = ?, updated_at = ? WHERE id = ?",
+            (expires_at, str(row["subscription_tier"]), now_iso, int(row["user_id"])),
+        )
         connection.commit()
     finally:
         connection.close()
-
-    user = accounts.get_user(int(row["user_id"]), db_path=db_path)
-    if user is None:
-        raise CryptoBillingError("invoice_user_missing")
-    expires_at = _next_expiry(user, int(row["period_days"]), moment)
-    accounts.update_subscription(
-        int(row["user_id"]), status="active", expires_at=expires_at,
-        tier=str(row["subscription_tier"]), db_path=db_path
-    )
     return {
         "resolution": "settled",
         "invoice_id": invoice_id,
         "user_id": int(row["user_id"]),
+        "period_days": int(row["period_days"]),
+        "subscription_tier": str(row["subscription_tier"]),
         "expires_at": expires_at,
         "note": note,
     }

@@ -44,6 +44,7 @@ from spreadboard import (  # noqa: E402
     intel,
     live,
     live_book_cache,
+    mailer,
     market_history,
     venue_funding_history,
     web_push,
@@ -112,6 +113,14 @@ _PUBLIC_INTEL_FEED_URL = os.environ.get(
 )
 _PUBLIC_INTEL_FEED_CACHE: tuple[float, dict[str, Any]] | None = None
 TERMS_VERSION = "2026-08-09"
+
+# Exact server-side Research Pro gates.  Navigation is presentation only; these
+# checks are the authority that prevents a Scanner account from opening the
+# intelligence workspace or its fair-price lane by typing a URL directly.
+RESEARCH_PRO_PATHS = frozenset({
+    "/fair", "/intel", "/triage", "/signals", "/community", "/playbook",
+    "/api/intel", "/api/triage", "/api/signals", "/api/community", "/api/playbook",
+})
 
 DISPLAY_LABELS = {
     "available_on_pair_page": "Available on pair page",
@@ -283,6 +292,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             "/guide",
             "/subscription",
             "/register",
+            "/forgot-password",
+            "/status",
             "/account",
             "/markets",
             "/intel",
@@ -317,6 +328,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_login_page(query))
             elif parsed.path == "/register":
                 self._send_html(render_register_page())
+            elif parsed.path == "/forgot-password":
+                self._send_html(render_forgot_password_page())
+            elif parsed.path == "/status":
+                self._send_html(render_status_page(api_public_status(
+                    self.server.board_path,
+                    self.server.config,
+                    self.server.position_alert_worker,
+                )))
             elif parsed.path == "/pricing":
                 self._send_html(render_pricing_page())
             elif parsed.path == "/telegram":
@@ -453,6 +472,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
                 else:
                     self._send_json({"ok": True, "users": accounts.list_users(db_path=self.server.accounts_path)})
+            elif parsed.path == "/api/admin/analytics":
+                user = self._required_user()
+                if not user.is_admin:
+                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                else:
+                    self._send_json({
+                        "ok": True,
+                        "analytics": accounts.page_view_summary(db_path=self.server.accounts_path),
+                    })
             elif parsed.path == "/":
                 self._send_html(render_markets_page(
                     self.server.board_path, self.server.config, query,
@@ -569,6 +597,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     self.server.alert_watcher,
                     self.server.position_alert_worker,
                 ))
+            elif parsed.path == "/api/status":
+                self._send_json(api_public_status(
+                    self.server.board_path,
+                    self.server.config,
+                    self.server.position_alert_worker,
+                ))
             elif parsed.path == "/api/executor-boundary":
                 self._send_json({"ok": True, **executor_boundary.status()})
             elif parsed.path == "/assets/lightweight-charts.js":
@@ -627,6 +661,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 # is the credential -- single use, time limited, and spending it
                 # revokes every existing session for that account.
                 self._handle_set_password()
+                return
+            if parsed.path == "/api/request-password-reset":
+                self._handle_password_reset_request()
                 return
             if parsed.path == "/api/register":
                 self._handle_register()
@@ -890,6 +927,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         sys.stderr.write("spreadboard: " + format % args + "\n")
 
     def _send_html(self, body: str) -> None:
+        try:
+            path = _analytics_path(urlparse(self.path).path)
+            accounts.record_page_view(path, db_path=self.server.accounts_path)
+        except Exception:
+            # Analytics must never be able to take a product page down.
+            pass
         payload = body.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -939,7 +982,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.current_user = None
         if not accounts.auth_required():
             return True
-        public = path in {"/login", "/register", "/pricing", "/telegram", "/methodology", "/proof", "/executor", "/guide", "/terms", "/privacy", "/refunds", "/free", "/api/stream/free", "/set-password", "/api/set-password", "/api/login", "/api/register", "/api/health", "/api/executor-boundary", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico", "/service-worker.js"} or path.startswith("/assets/")
+        public = path in {"/login", "/register", "/forgot-password", "/pricing", "/telegram", "/methodology", "/proof", "/executor", "/guide", "/terms", "/privacy", "/refunds", "/free", "/status", "/api/status", "/api/stream/free", "/set-password", "/api/set-password", "/api/request-password-reset", "/api/login", "/api/register", "/api/health", "/api/executor-boundary", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico", "/service-worker.js"} or path.startswith("/assets/")
         token = self._session_token()
         user = accounts.user_for_session(token, self.server.accounts_path) if token else None
         self.current_user = user
@@ -972,11 +1015,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             else:
                 self._redirect("/subscription")
             return False
-        research_only = {
-            "/intel", "/triage", "/signals", "/community", "/playbook",
-            "/api/intel", "/api/triage", "/api/signals", "/api/community", "/api/playbook",
-        }
-        if path in research_only and not user.has_tier("research_pro"):
+        if path in RESEARCH_PRO_PATHS and not user.has_tier("research_pro"):
             if path.startswith("/api/"):
                 self._send_json(
                     {"ok": False, "error": "research_pro_required"},
@@ -1017,6 +1056,53 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "link_not_valid"}, status=HTTPStatus.BAD_REQUEST)
             return
         self._send_json({"ok": True})
+
+    def _handle_password_reset_request(self) -> None:
+        """Send a reset link without revealing whether an email is registered."""
+        if not mailer.status()["configured"]:
+            self._send_json(
+                {"ok": False, "error": "recovery_delivery_unavailable"},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        payload = self._read_payload()
+        email = str(payload.get("email") or "").strip().casefold()
+        ip = self.client_address[0] if self.client_address else "unknown"
+        key = "reset:" + ip
+        email_key = "reset-email:" + hashlib.sha256(email.encode("utf-8")).hexdigest()
+        now = time.monotonic()
+        with self._login_attempts_lock:
+            recent_ip = [item for item in self._login_attempts.get(key, []) if now - item < 3600]
+            recent_email = [item for item in self._login_attempts.get(email_key, []) if now - item < 3600]
+            if len(recent_ip) >= 10 or len(recent_email) >= 3:
+                self._send_json({"ok": True, "message": "If that account exists, a reset link will be sent."}, status=HTTPStatus.ACCEPTED)
+                return
+            self._login_attempts[key] = recent_ip + [now]
+            self._login_attempts[email_key] = recent_email + [now]
+        user_id = accounts.user_id_for_email(email, db_path=self.server.accounts_path)
+        if user_id is not None:
+            user = accounts.get_user_object(user_id, db_path=self.server.accounts_path)
+            if user is not None:
+                token = accounts.create_password_token(
+                    user.id, purpose="reset", db_path=self.server.accounts_path
+                )
+                base = os.environ.get(
+                    "SPREADBOARD_PUBLIC_URL", "https://spreadarbitrage.ink"
+                ).strip().rstrip("/")
+                try:
+                    mailer.send_password_reset(
+                        recipient=user.email,
+                        display_name=user.display_name,
+                        reset_url=f"{base}/set-password?{urlencode({'token': token})}",
+                    )
+                except Exception:
+                    # The public response stays identical: SMTP failures must
+                    # not become an account-enumeration side channel.
+                    pass
+        self._send_json(
+            {"ok": True, "message": "If that account exists, a reset link will be sent."},
+            status=HTTPStatus.ACCEPTED,
+        )
 
     def _handle_login(self) -> None:
         payload = self._read_payload()
@@ -2830,6 +2916,60 @@ def api_health(
         "crypto_billing": crypto_billing.status(),
         "telegram_bot": telegram_bot.status(),
     }
+
+
+def api_public_status(
+    board_path: Path,
+    config: dict[str, Any],
+    position_alert_worker: Any = None,
+) -> dict[str, Any]:
+    """A public, secret-free operational summary for members and prospects."""
+    sources = api_source_health(board_path, config)
+    canonical = sources.get("canonical_api") or {}
+    crypto = crypto_billing.status()
+    telegram = telegram_bot.status()
+    market_ok = bool(sources.get("ok"))
+    return {
+        "ok": market_ok,
+        "service": "SpreadBoard",
+        "checked_at": datetime.now(tz=timezone.utc).isoformat(),
+        "components": {
+            "website": {"status": "operational"},
+            "market_data": {
+                "status": "operational" if market_ok else "degraded",
+                "updated_at": canonical.get("updated_at"),
+                "age_min": canonical.get("age_min"),
+                "row_count": canonical.get("row_count"),
+            },
+            "crypto_checkout": {
+                "status": "operational" if crypto.get("checkout_ready") else "setup_needed",
+                "chain": crypto.get("chain"),
+                "tokens": crypto.get("tokens"),
+                "confirmations": crypto.get("confirmations"),
+            },
+            "telegram": {
+                "status": "operational" if telegram.get("configured") else "setup_needed",
+                "community": "operational" if telegram.get("community_configured") else "setup_needed",
+            },
+            "background_alerts": {
+                "status": "operational"
+                if position_alert_worker and position_alert_worker.running
+                else "degraded"
+            },
+            "email_recovery": {
+                "status": "operational" if mailer.status()["configured"] else "setup_needed"
+            },
+        },
+    }
+
+
+def _analytics_path(path: str) -> str:
+    """Keep useful aggregate routes without collecting identifiers in paths."""
+    clean = str(path or "/")
+    for prefix, label in (("/pair/", "/pair/:route"), ("/token/", "/token/:symbol")):
+        if clean.startswith(prefix):
+            return label
+    return clean[:180]
 
 
 def render_board_stream_script(
@@ -6842,7 +6982,7 @@ button {{ width:100%; min-height:46px; border:0; border-radius:5px; background:v
 </style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div>
 <section class="login-panel"><h1>Welcome back</h1><p>Sign in to your private market workspace and position journal.</p>
 <form id="loginForm"><label>Email<input name="email" type="email" autocomplete="username" required autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">Sign in</button><div class="login-error" role="alert"></div></form></section>
-<div class="login-note">New here? <a href="/register">Create an account</a><br><br><a href="/pricing">See membership details</a> · secure, opaque session cookie</div></main>
+<div class="login-note"><a href="/forgot-password">Forgot your password?</a><br><br>New here? <a href="/register">Create an account</a><br><br><a href="/pricing">See membership details</a> · secure, opaque session cookie</div></main>
 <script>
 document.getElementById('loginForm').addEventListener('submit', async (event) => {{
   event.preventDefault(); const form=event.currentTarget; const button=form.querySelector('button'); const error=form.querySelector('.login-error'); button.disabled=true; error.textContent='';
@@ -6850,6 +6990,65 @@ document.getElementById('loginForm').addEventListener('submit', async (event) =>
   catch(exc) {{ error.textContent=exc.message || 'Sign in failed.'; }} finally {{ button.disabled=false; }}
 }});
 </script></body></html>"""
+
+
+def render_forgot_password_page() -> str:
+    ready = bool(mailer.status()["configured"])
+    disabled = "" if ready else " disabled"
+    intro = (
+        "Enter your account email. A single-use link will expire after two hours."
+        if ready
+        else "Email recovery is temporarily unavailable. The owner must finish SMTP setup."
+    )
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reset password - SpreadBoard</title>
+<style>
+:root {{ color-scheme:dark;--bg:#07110f;--panel:#101d1a;--line:#29443d;--ink:#edf8f4;--muted:#9bb1aa;--accent:#38d4bd;--danger:#ff8695; }}
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}}.login-shell{{width:min(440px,100%)}}.login-brand{{display:flex;align-items:center;gap:12px;margin-bottom:28px;font-size:24px;font-weight:800}}.login-mark{{width:26px;height:26px;border-radius:50%;background:var(--accent);border:3px solid #dffff8;box-shadow:12px 9px 0 -5px #7fdccf}}.login-panel{{border:1px solid var(--line);background:var(--panel);padding:28px;border-radius:8px}}h1{{margin:0 0 8px;font-size:28px}}p{{color:var(--muted);margin:0 0 24px;line-height:1.5}}label{{display:grid;gap:7px;margin:0 0 16px;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}}input{{width:100%;min-height:46px;border:1px solid var(--line);background:#081310;color:var(--ink);border-radius:5px;padding:0 13px;font:inherit}}input:focus{{outline:2px solid var(--accent);outline-offset:1px}}button{{width:100%;min-height:46px;border:0;border-radius:5px;background:var(--accent);color:#052c26;font:inherit;font-weight:900;cursor:pointer}}button:disabled{{opacity:.55;cursor:not-allowed}}.login-error{{min-height:20px;margin:14px 0 0;color:var(--muted);font-size:13px}}.login-note{{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}}.login-note a{{color:var(--accent);font-weight:800}}
+</style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div>
+<section class="login-panel"><h1>Reset your password</h1><p>{h(intro)}</p><form id="resetForm"><label>Email<input name="email" type="email" autocomplete="email" required autofocus{disabled}></label><button type="submit"{disabled}>Send reset link</button><div class="login-error" role="status"></div></form></section><div class="login-note"><a href="/login">Back to sign in</a></div></main>
+<script>document.getElementById('resetForm').addEventListener('submit',async(event)=>{{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),message=form.querySelector('.login-error');button.disabled=true;message.textContent='Sending...';try{{const response=await fetch('/api/request-password-reset',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(Object.fromEntries(new FormData(form)))}});const data=await response.json();if(!response.ok)throw new Error(data.error==='recovery_delivery_unavailable'?'Email recovery is temporarily unavailable.':'The request could not be completed.');message.textContent='If that account exists, a reset link has been sent.';form.reset();}}catch(error){{message.textContent=error.message;button.disabled={str(not ready).lower()};}}}});</script></body></html>"""
+
+
+def render_status_page(payload: dict[str, Any]) -> str:
+    components = payload.get("components") or {}
+    labels = {
+        "website": "Website",
+        "market_data": "Market data",
+        "crypto_checkout": "Crypto checkout",
+        "telegram": "Telegram",
+        "background_alerts": "Background alerts",
+        "email_recovery": "Email recovery",
+    }
+    cards = []
+    for key, label in labels.items():
+        item = components.get(key) or {}
+        status = str(item.get("status") or "unknown")
+        detail = ""
+        if key == "market_data":
+            detail = f"{h(item.get('row_count') or 0)} current rows · updated {h(item.get('updated_at') or 'unavailable')}"
+        elif key == "crypto_checkout":
+            detail = f"{h(item.get('chain') or 'Not configured')} · {h(', '.join(item.get('tokens') or []))}"
+        elif key == "telegram":
+            detail = f"Private forum: {h(item.get('community') or 'unknown')}"
+        cards.append(
+            f'<article class="status-card {h(status)}"><span>{h(label)}</span>'
+            f'<strong>{h(label_text(status))}</strong><p>{detail or "Live service check"}</p></article>'
+        )
+    body = f"""
+    <style>
+      .public-status {{ max-width:1120px;margin:0 auto;padding:52px 24px 80px }}
+      .status-grid {{ display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:28px }}
+      .status-card {{ border:1px solid var(--terminal-line);background:var(--terminal-panel);padding:18px;display:grid;gap:9px }}
+      .status-card span {{ color:var(--terminal-muted);font-size:12px;text-transform:uppercase;font-weight:800 }}
+      .status-card strong {{ font-size:21px }} .status-card p {{ margin:0;color:var(--terminal-muted);font-size:12px }}
+      .status-card.operational {{ border-top:3px solid var(--green) }} .status-card.degraded,.status-card.setup_needed {{ border-top:3px solid var(--red) }}
+      @media(max-width:760px) {{ .status-grid {{ grid-template-columns:1fr }} }}
+    </style>
+    <section class="public-status"><header class="terminal-heading"><div><span class="page-kicker">Live service status</span><h1>{'All monitored systems operational' if payload.get('ok') else 'Some systems need attention'}</h1><p>This page reports current market-data, payment, alert, recovery and Telegram readiness without exposing account or infrastructure details.</p></div><div class="terminal-live-box {'live' if payload.get('ok') else 'unavailable'}"><span>Checked now</span><strong>{h(payload.get('checked_at'))}</strong><em>UTC</em></div></header><div class="status-grid">{''.join(cards)}</div></section>
+    """
+    return shell("Status - SpreadBoard", "status", body)
 
 
 def render_register_page() -> str:
@@ -6873,7 +7072,7 @@ MEMBERSHIP_FEATURES = (
     "Spread, funding, token price and token funding alerts",
     "Convergence charts, custom pairs and saved charts",
     "Fair-price gaps: contracts trading away from their own venue's mark",
-    "Free updates and priority support",
+    "Private Research Pro Telegram forum and priority support",
 )
 
 PLAN_CATALOG: dict[str, dict[str, Any]] = {
@@ -6899,7 +7098,7 @@ PLAN_CATALOG: dict[str, dict[str, Any]] = {
     },
     "research_pro": {
         "name": "Research Pro",
-        "monthly": 180,
+        "monthly": 149,
         "tagline": "The complete evidence and intelligence workspace.",
         "features": MEMBERSHIP_FEATURES,
     },
@@ -7079,7 +7278,7 @@ def render_telegram_landing_page(board_path: Path) -> str:
     <section class="telegram-page">
       <header class="telegram-hero">
         <div><span class="page-kicker">Telegram</span><h1>Research alerts that open into evidence</h1>
-          <p>Start with a public route preview. Link an account only when you want saved access, private alerts, and the subscriber group.</p>
+          <p>Start with a public route preview. Link an account for saved access and private alerts. The subscriber forum is included only with Research Pro.</p>
           <div class="telegram-actions">{f'<a class="pricing-button primary" href="{h(bot_url)}">Open @{h(username)}</a>' if bot_url else '<a class="pricing-button primary" href="/register">Create account</a>'}<a class="pricing-button" href="/markets?view=table">Open Pro Table</a></div>
         </div>
         <aside><span>{h(community_state)}</span><strong>/top</strong><em>works in a direct chat with the bot</em><span>{h(public_feed_state)}</span></aside>
@@ -7087,9 +7286,9 @@ def render_telegram_landing_page(board_path: Path) -> str:
       <section class="telegram-flow">
         <article><b>01</b><h2>Preview</h2><p>Use <code>/top</code> without linking an account. Every token opens the matching Pro Table filter.</p></article>
         <article><b>02</b><h2>Link</h2><p>Create a one-time link in Portfolio settings. Telegram never receives your password or payment credentials.</p></article>
-        <article><b>03</b><h2>Activate</h2><p>Use <code>/subscribe</code> for signed checkout and <code>/access</code> for the private subscriber group.</p></article>
+        <article><b>03</b><h2>Activate</h2><p>Use <code>/subscribe</code> for signed checkout. Research Pro members use <code>/access</code> for the private subscriber forum.</p></article>
       </section>
-      <section class="telegram-preview"><div><span>Sample digest</span><h2>What /top returns now</h2></div><pre>{h(preview_text)}</pre><p>The private subscriber forum is the paid community and is already connected. A separate public broadcast channel can be added later for acquisition; it is optional and the private forum is never reused automatically.</p></section>
+      <section class="telegram-preview"><div><span>Sample digest</span><h2>What /top returns now</h2></div><pre>{h(preview_text)}</pre><p>The private subscriber forum is a Research Pro entitlement and is already connected. Scanner members retain website scanners and personal alerts but are not admitted to this group. A separate public broadcast channel remains optional.</p></section>
       <section class="telegram-command-grid">
         <article><code>/top</code><span>Fresh public route preview</span></article><article><code>$SIREN</code><span>Exact-token lookup in the subscriber group</span></article><article><code>/funding SIREN</code><span>Paired funding view</span></article><article><code>/transfer SIREN</code><span>Deposit and withdrawal state</span></article>
       </section>
@@ -7148,7 +7347,7 @@ def render_pricing_page() -> str:
     <section class="pricing-page">
       <header class="pricing-intro"><span class="page-kicker">Membership</span><h1>Every spread, live.</h1><p>Start with proof, then pay once in USDC or USDT on Arbitrum for the access period you choose. No card, no automatic renewal. Scanner unlocks live discovery; Research Pro adds the full evidence and intelligence workspace.</p></header>
       <section class="pricing-tiers">{"".join(cards)}</section>
-      <section class="pricing-block"><h2>What you get &mdash; and how to start</h2><div class="pricing-steps"><article><b>01</b><h3>Create your account</h3><p>Compare the free proof pages first, then sign in to choose Scanner or Research Pro.</p></article><article><b>02</b><h3>Pay the exact crypto invoice</h3><p>Select USDC or USDT on Arbitrum, scan the token-specific QR, and send the exact amount shown.</p></article><article><b>03</b><h3>Open the workspace and Telegram</h3><p>Access activates after confirmation. Link the bot for saved access and the private subscriber forum.</p></article></div></section>
+      <section class="pricing-block"><h2>What you get &mdash; and how to start</h2><div class="pricing-steps"><article><b>01</b><h3>Create your account</h3><p>Compare the free proof pages first, then sign in to choose Scanner or Research Pro.</p></article><article><b>02</b><h3>Pay the exact crypto invoice</h3><p>Select USDC or USDT on Arbitrum, scan the token-specific QR, and send the exact amount shown.</p></article><article><b>03</b><h3>Open your exact tier</h3><p>The invoice activates only the tier printed on it. Research Pro also unlocks the private Telegram forum.</p></article></div></section>
       <section class="pricing-block"><h2>Research Pro prepaid terms</h2>{render_membership_terms(tier='research_pro')}<p class="pricing-note">Each amount is billed once in crypto. Access lapses unless you create and pay a new invoice.</p></section>
       <section class="pricing-block"><h2>Why membership</h2><div class="reason-grid">{render_membership_reasons()}</div></section>
       <p class="pricing-note">Public market data, not investment advice. Every route carries execution risk. See the <a href="/terms">Terms</a> and <a href="/refunds">Refund Policy</a>.</p>
@@ -7181,7 +7380,8 @@ def render_crypto_checkout_panel() -> str:
     <section class="account-empty-panel crypto-checkout" data-crypto-checkout>
       <strong>Pay with crypto</strong>
       <p class="crypto-lede">Prepaid access on <b>{h(state.get('chain'))}</b> in <b>{h(tokens)}</b>.
-      There is no auto-renewal &mdash; access simply lapses at the end of the period.</p>
+      There is no auto-renewal &mdash; access simply lapses at the end of the period. Same-tier
+      renewals extend access; tier changes are available after the current prepaid term ends.</p>
       <div class="crypto-periods">{periods}</div>
       <div class="crypto-invoice" data-crypto-invoice hidden>
         <div class="crypto-token-picker" data-crypto-token-picker aria-label="Payment token"></div>
@@ -7318,7 +7518,7 @@ def render_crypto_checkout_script() -> str:
         headers:{'Content-Type':'application/json','X-CSRF-Token':csrf()||''},
         body:JSON.stringify({period_days:parseInt(btn.dataset.cryptoPeriod,10),tier:btn.dataset.cryptoTier,terms_accepted:true,immediate_access_consent:true})
       }).then(function(r){return r.json();}).then(function(d){
-        if(!d||!d.ok||!d.invoice){ errEl.textContent=(d&&d.error)||'Could not create an invoice.'; return; }
+        if(!d||!d.ok||!d.invoice){ errEl.textContent=d&&d.error==='tier_change_available_after_current_term'?'Your current prepaid tier stays exact until its end date. Renew the same tier now, or change tier after it expires.':((d&&d.error)||'Could not create an invoice.'); return; }
         invoice=d.invoice;
         addrEl.textContent=invoice.receiving_address;
         renderTokenPicker();
@@ -7645,7 +7845,7 @@ def render_legal_page(page: str) -> str:
             [
                 ("Service", "SpreadBoard presents public-market data, calculated spreads, funding information, charts, alerts, and research tools. It does not execute trades, hold client assets, provide custody, or provide personalised investment advice."),
                 ("Market risk", "Prices, liquidity, funding, transfer status, and availability can change without notice. Displayed values may be delayed, incomplete, or unavailable. You remain responsible for checking any decision directly with the relevant venue."),
-                ("Membership", "Crypto membership is prepaid for the access period shown before checkout and does not renew automatically. Access is personal and may not be resold, shared, scraped, or used to disrupt the service."),
+                ("Membership", "Crypto membership is prepaid for the access period and tier shown before checkout and does not renew automatically. The exact invoice amount activates only that invoice's tier. Different-tier purchases become available after an active prepaid term ends. Access is personal and may not be resold, shared, scraped, or used to disrupt the service."),
                 ("Acceptable use", "Do not attempt to bypass access controls, overload data providers, reverse engineer credentials, or use the service for unlawful activity. We may suspend access needed to protect users, providers, or the service."),
                 ("Availability", "We aim to run continuously but do not guarantee uninterrupted access or that every venue, token, route, chart, or alert will always be available."),
                 ("Liability", "Nothing excludes liability that cannot lawfully be excluded. To the extent permitted by law, SpreadBoard is not liable for trading losses, missed opportunities, exchange failures, or decisions based on market information."),
@@ -7659,7 +7859,7 @@ def render_legal_page(page: str) -> str:
                 ("Account data", "We store your name, email address, password hash, subscription state, linked Telegram identifier, settings, alerts, and journal entries to operate your account."),
                 ("Payments", "Crypto checkout is watch-only. SpreadBoard stores the invoice amount, selected access period, receiving address, token and chain details, status, and matching public transaction hash. It never stores a wallet private key or seed phrase."),
                 ("Notifications", "Pushover user keys are encrypted at rest. Telegram and Pushover identifiers are used only to deliver the features you enable."),
-                ("Technical data", "We may retain security and operational records such as session identifiers, IP address, browser information, consent records, and service logs."),
+                ("Technical data", "We may retain security and operational records such as session identifiers, IP address, browser information, consent records, and service logs. Product analytics store only daily aggregate page-path counts, without IP addresses, cookies, referrers, or user agents."),
                 ("Sharing and retention", "Data is shared only with providers needed to run the service, such as blockchain RPC, Telegram, Pushover, hosting, and market-data providers. We keep it only as long as needed for service, security, accounting, and legal obligations."),
                 ("Your choices", f"You may request access, correction, deletion, or account closure through {support_url} or by contacting {support}. Some records may need to be retained for legal or fraud-prevention purposes."),
             ],
@@ -7671,7 +7871,7 @@ def render_legal_page(page: str) -> str:
                 ("No automatic renewal", "Crypto access is a one-time prepaid purchase. There is no recurring charge to cancel; access normally continues until the end of the paid period and lapses unless you pay a new invoice."),
                 ("Immediate access", "At checkout you are asked to request immediate digital access and acknowledge that beginning supply may affect the statutory 14-day cancellation right. This does not remove rights that cannot legally be waived."),
                 ("Service faults", "If paid access is materially unavailable or not supplied as described, contact us promptly. We will investigate and provide the remedy required by applicable consumer law, which may include restoration, a credit, or a refund."),
-                ("Duplicate or incorrect payments", "Report a duplicate or incorrect payment with the account email and public transaction hash. Never send a wallet seed phrase, private key, or exchange password."),
+                ("Duplicate or incorrect payments", "Only the exact amount shown on an open invoice is matched automatically. Underpayments, overpayments, duplicate payments, expired-invoice payments, and unmatched transfers are parked for owner review rather than assigned to a member or tier by guesswork. Report them with the account email and public transaction hash. Never send a wallet seed phrase, private key, or exchange password."),
                 ("How to request", f"Contact {support} or {support_url}. Include the account email, payment date, public transaction hash, and reason. Refunds, when due, are handled to a verified destination using the original payment asset where practical."),
             ],
         ),
@@ -7784,6 +7984,14 @@ def render_account_settings(user: accounts.User, accounts_path: Path | str = acc
     else:
         telegram_action = '<span>Telegram subscription commands are awaiting the dedicated bot credentials.</span>'
         telegram_note = "No Telegram account data is stored until you explicitly link it."
+    if not telegram_state.get("community_configured"):
+        telegram_access_note = "The community owner still needs to run /setupgroup after granting the bot invite permissions."
+    elif user.has_tier("research_pro"):
+        telegram_access_note = "Research Pro forum access is active. Use /access in the private bot for a one-use invite."
+    elif user.has_tier("scanner"):
+        telegram_access_note = "Scanner includes personal bot alerts. The private forum is reserved for Research Pro."
+    else:
+        telegram_access_note = "Activate Scanner for personal bot alerts or Research Pro for alerts plus the private forum."
     push = accounts.notification_preferences(user.id, db_path=accounts_path)
     push_checked = "checked" if push.get("pushover_enabled") else ""
     push_key_note = "Key saved securely" if push.get("pushover_configured") else "No key saved"
@@ -7794,7 +8002,7 @@ def render_account_settings(user: accounts.User, accounts_path: Path | str = acc
       <div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is used only as the denominator for your return statistics.</p></div></div>
       <form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Tracked monthly capital, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or '')}"></label><button class="sheet-button primary" type="submit">Save settings</button></form>
       <div class="account-empty-panel"><strong>Prepaid membership</strong><p>{h(user.subscription_status)} · {h(cancel_note)}</p>{billing_action}<p role="alert" data-billing-error></p></div>
-      <div class="account-empty-panel"><strong>Telegram subscriber access</strong><p>{telegram_note}</p>{telegram_action}<p>{'Subscriber group connected. Use /access in the private bot.' if telegram_state.get('community_configured') else 'The community owner still needs to run /setupgroup after granting the bot invite permissions.'}</p><p role="alert" data-telegram-error></p></div>
+      <div class="account-empty-panel"><strong>Telegram subscriber access</strong><p>{telegram_note}</p>{telegram_action}<p>{h(telegram_access_note)}</p><p role="alert" data-telegram-error></p></div>
       <form data-pushover-settings>
         <label><span>Pushover user key</span><input name="pushover_user_key" type="password" autocomplete="off" placeholder="{h(push_key_note)}"></label>
         <label><span>Device</span><input name="pushover_device" value="{h(push.get('pushover_device') or '')}" placeholder="Optional"></label>
@@ -7826,7 +8034,7 @@ def render_billing_script() -> str:
 
 
 def render_member_admin() -> str:
-    return """<section data-account-panel="members" hidden><div class="account-panel-head"><div><h2>Member access</h2><p>Create time-limited accounts and manage access status. Passwords are hashed immediately and never shown again.</p></div></div><form class="member-create-form" data-member-create><label><span>Name</span><input name="display_name" autocomplete="name" required></label><label><span>Email</span><input name="email" type="email" autocomplete="email" required></label><label><span>Temporary password</span><input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label><span>Access days</span><input name="subscription_days" type="number" min="1" max="3660" value="30"></label><button class="sheet-button primary" type="submit">Create member</button></form><div data-member-list></div></section>"""
+    return """<section data-account-panel="members" hidden><div class="account-panel-head"><div><h2>Member access</h2><p>Create time-limited accounts and manage access status. Passwords are hashed immediately and never shown again.</p></div></div><form class="member-create-form" data-member-create><label><span>Name</span><input name="display_name" autocomplete="name" required></label><label><span>Email</span><input name="email" type="email" autocomplete="email" required></label><label><span>Temporary password</span><input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label><span>Access days</span><input name="subscription_days" type="number" min="1" max="3660" value="30"></label><button class="sheet-button primary" type="submit">Create member</button></form><div class="account-empty-panel" data-analytics-summary><strong>Privacy-safe traffic</strong><p>Loading aggregate path counts. No IP address, cookie, referrer, or user agent is stored.</p></div><div data-member-list></div></section>"""
 
 
 def render_position_dialog() -> str:
@@ -7870,7 +8078,7 @@ def render_account_script() -> str:
   root.querySelector('[data-telegram-action]')?.addEventListener('click',async event=>{const button=event.currentTarget,error=root.querySelector('[data-telegram-error]');button.disabled=true;if(error)error.textContent='';try{const data=await request(`/api/telegram/${button.dataset.telegramAction}`,{});if(data.url){window.open(data.url,'_blank','noopener');button.textContent='Link opened';}else location.reload();}catch(exc){if(error)error.textContent=exc.message;button.disabled=false;}});
   root.querySelector('[data-notifications-read]')?.addEventListener('click',async()=>{await request('/api/notifications/read',{});location.reload();});
   root.querySelector('[data-member-create]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;try{await request('/api/account-users',Object.fromEntries(new FormData(form)));form.reset();loadMembers();}catch(error){alert(error.message);}});
-  async function loadMembers(){const target=root.querySelector('[data-member-list]');if(!target)return;const response=await fetch('/api/account-users');const data=await response.json();target.innerHTML=(data.users||[]).map(user=>`<article class="member-row"><div><strong>${escapeHtml(user.display_name)}</strong><span>${escapeHtml(user.email)}</span></div><span>${escapeHtml(user.subscription_status)}</span><em>${escapeHtml(user.subscription_expires_at||'No expiry')}</em></article>`).join('');}
+  async function loadMembers(){const target=root.querySelector('[data-member-list]'),summary=root.querySelector('[data-analytics-summary]');if(!target)return;const [memberResponse,analyticsResponse]=await Promise.all([fetch('/api/account-users'),fetch('/api/admin/analytics')]);const data=await memberResponse.json();target.innerHTML=(data.users||[]).map(user=>`<article class="member-row"><div><strong>${escapeHtml(user.display_name)}</strong><span>${escapeHtml(user.email)}</span></div><span>${escapeHtml(user.subscription_status)} · ${escapeHtml(user.subscription_tier)}</span><em>${escapeHtml(user.subscription_expires_at||'No expiry')}</em></article>`).join('');if(summary&&analyticsResponse.ok){const result=await analyticsResponse.json(),analytics=result.analytics||{},paths=(analytics.paths||[]).slice(0,6);summary.innerHTML=`<strong>${escapeHtml(analytics.total_views||0)} page views · last ${escapeHtml(analytics.days||30)} days</strong><p>${paths.map(item=>`${escapeHtml(item.path)}: ${escapeHtml(item.views)}`).join(' · ')||'No traffic recorded yet.'}</p><p>No IP address, cookie, referrer, or user agent is stored.</p>`;}}
   const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 })();
 </script>"""
@@ -11014,6 +11222,7 @@ _VISITOR_NAV: tuple[tuple[str, str, str], ...] = (
     ("guide", "/guide", "Guide"),
     ("methodology", "/methodology", "Method"),
     ("telegram", "/telegram", "Telegram"),
+    ("status", "/status", "Status"),
     ("login", "/login", "Sign in"),
 )
 
@@ -11042,7 +11251,7 @@ def render_primary_nav(active: str, *, signed_in: bool) -> str:
     links = _MEMBER_NAV if signed_in else _VISITOR_NAV
     user = accounts.current_user()
     if signed_in and user is not None and not _user_has_tier(user, "research_pro"):
-        links = tuple(item for item in links if item[0] != "intel")
+        links = tuple(item for item in links if item[0] not in {"intel", "fair"})
     return "".join(
         f'<a class="{active_class(active, key)}" href="{href}">{h(label)}</a>'
         for key, href, label in links

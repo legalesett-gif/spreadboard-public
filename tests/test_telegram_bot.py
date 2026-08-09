@@ -5,12 +5,13 @@ import pytest
 from spreadboard import accounts, billing, telegram_bot
 
 
-def _linked_user(tmp_path):
+def _linked_user(tmp_path, *, tier="research_pro"):
     db_path = tmp_path / "accounts.sqlite3"
     accounts.initialize(db_path)
     created = accounts.create_user(
         email="member@example.test", display_name="Member",
-        password="secure-member-password", subscription_status="active", db_path=db_path,
+        password="secure-member-password", subscription_status="active",
+        subscription_tier=tier, db_path=db_path,
     )
     token = accounts.create_telegram_link_token(created["id"], db_path=db_path)
     accounts.bind_telegram_chat(token, 77, db_path=db_path)
@@ -101,6 +102,54 @@ def test_join_request_only_approves_active_linked_subscriber(tmp_path, monkeypat
     )
     assert calls[0][0] == "approveChatJoinRequest"
     assert accounts.telegram_membership_candidates(db_path=db_path)[0]["membership_state"] == "active"
+
+
+def test_scanner_member_cannot_request_or_join_the_research_pro_forum(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = _linked_user(tmp_path, tier="scanner")
+    accounts.configure_telegram_community(
+        -100123, title="Subscribers", configured_by_telegram_user_id=42, db_path=db_path
+    )
+    calls = []
+    monkeypatch.setattr(
+        telegram_bot,
+        "_api_call",
+        lambda method, params: calls.append((method, params)) or {"ok": True, "result": True},
+    )
+
+    response = telegram_bot.handle_update(
+        {"message": {"chat": {"id": 77, "type": "private"}, "text": "/access"}},
+        db_path=db_path,
+    )
+    assert "Research Pro" in response["text"]
+    assert calls == [], "a Scanner account must not receive an invite link"
+
+    telegram_bot.handle_update(
+        {"chat_join_request": {"chat": {"id": -100123}, "from": {"id": 77}}},
+        db_path=db_path,
+    )
+    assert calls[0][0] == "declineChatJoinRequest"
+
+
+def test_membership_worker_removes_an_active_scanner_member(tmp_path, monkeypatch) -> None:
+    db_path = _linked_user(tmp_path, tier="scanner")
+    accounts.configure_telegram_community(
+        -100123, title="Subscribers", configured_by_telegram_user_id=42, db_path=db_path
+    )
+    calls = []
+
+    def fake_api(method, params):
+        calls.append(method)
+        if method == "getChatMember":
+            return {"ok": True, "result": {"status": "member"}}
+        return {"ok": True, "result": True}
+
+    monkeypatch.setattr(telegram_bot, "_api_call", fake_api)
+    summary = telegram_bot.MembershipWorker(db_path=db_path).check_once()
+
+    assert summary == {"checked": 1, "removed": 1, "errors": 0}
+    assert calls == ["getChatMember", "banChatMember", "unbanChatMember"]
 
 
 def test_membership_worker_removes_expired_non_admin(tmp_path, monkeypatch) -> None:

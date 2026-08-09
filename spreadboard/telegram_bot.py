@@ -251,7 +251,15 @@ def handle_update(
             user = accounts.bind_telegram_chat(argument.strip(), chat_id, db_path=db_path)
         except ValueError:
             return _reply(chat_id, "This link is invalid or expired. Generate a new link in your SpreadBoard account.")
-        suffix = " Use /access to request the subscriber group." if user.subscription_active else " Use /subscribe to activate access."
+        suffix = (
+            " Use /access to request the Research Pro forum."
+            if user.has_tier("research_pro")
+            else (
+                " Your Scanner access is active; upgrade to Research Pro for the private forum."
+                if user.has_tier("scanner")
+                else " Use /subscribe to activate access."
+            )
+        )
         return _reply(chat_id, f"Linked to {user.display_name}.{suffix}")
     if command == "/top":
         if board_path is None:
@@ -270,7 +278,8 @@ def handle_update(
     if command == "/mysubscription":
         expiry = user.subscription_expires_at or "no fixed expiry"
         state = "active" if user.subscription_active else user.subscription_status
-        return _reply(chat_id, f"Subscription: {state}. Valid until: {expiry}.")
+        tier = user.entitlement_tier.replace("_", " ").title()
+        return _reply(chat_id, f"Subscription: {state}. Tier: {tier}. Valid until: {expiry}.")
     if command == "/subscribe":
         # Crypto is the way this is sold, so it leads. The payment page carries
         # the exact amount and address, and the chain watcher credits it -- a
@@ -279,14 +288,13 @@ def handle_update(
         public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
         crypto = crypto_billing.status()
         if crypto.get("checkout_ready") and public_url:
-            prices = " · ".join(
-                f"{p['days'] // 30 if p['days'] >= 30 else p['days']}m {p['label']}"
-                for p in crypto.get("periods") or []
-            )
+            tiers = crypto.get("tiers") or {}
+            scanner = ((tiers.get("scanner") or {}).get("periods") or [{}])[0].get("label", "$49.00")
+            research = ((tiers.get("research_pro") or {}).get("periods") or [{}])[0].get("label", "$149.00")
             return _reply(
                 chat_id,
                 "Pay in USDC or USDT on "
-                f"{crypto.get('chain')}.\n{prices}\n\n"
+                f"{crypto.get('chain')}.\nScanner from {scanner} · Research Pro from {research}\n\n"
                 "Open the page to get your exact amount and address. The amount "
                 "is unique to your invoice, so send it exactly as shown.",
                 button=("Get payment details", f"{public_url}/subscription"),
@@ -303,6 +311,12 @@ def handle_update(
     if command == "/access":
         if not user.subscription_active:
             return _reply(chat_id, "An active membership is required. Use /subscribe to activate access.")
+        if not user.has_tier("research_pro"):
+            return _reply(
+                chat_id,
+                "The private subscriber forum is included with Research Pro. "
+                "Your Scanner subscription remains active on the website; use /subscribe to view upgrade pricing.",
+            )
         community = accounts.telegram_community(db_path=db_path)
         if community is None:
             return _reply(chat_id, "The subscriber group is being configured. Please try again shortly.")
@@ -314,7 +328,7 @@ def handle_update(
             state="pending",
             db_path=db_path,
         )
-        return _reply(chat_id, "Tap below, then request to join. Active memberships are approved automatically.", button=("Request group access", invite))
+        return _reply(chat_id, "Tap below, then request to join. Active Research Pro memberships are approved automatically.", button=("Request group access", invite))
     return _reply(chat_id, "Commands: /top, /subscribe, /mysubscription, /access")
 
 
@@ -414,7 +428,7 @@ def _handle_join_request(request: dict[str, Any], *, db_path: Any) -> None:
     if community is None or int(community["chat_id"]) != chat_id:
         return
     user = accounts.user_for_telegram_chat(sender_id, db_path=db_path)
-    if user is None or not user.subscription_active:
+    if user is None or not user.has_tier("research_pro"):
         _api_call("declineChatJoinRequest", {"chat_id": chat_id, "user_id": sender_id})
         return
     _api_call("approveChatJoinRequest", {"chat_id": chat_id, "user_id": sender_id})
@@ -489,7 +503,7 @@ class MembershipWorker:
                 accounts.record_telegram_membership(user.id, telegram_user_id=telegram_user_id, community_chat_id=chat_id, state="exempt", db_path=self.db_path)
                 continue
             present = state == "member" or (state == "restricted" and bool(member.get("is_member")))
-            if user is not None and user.subscription_active:
+            if user is not None and user.has_tier("research_pro"):
                 if present:
                     accounts.record_telegram_membership(user.id, telegram_user_id=telegram_user_id, community_chat_id=chat_id, state="active", db_path=self.db_path)
                 continue

@@ -72,7 +72,7 @@ def fake_rpc(head: int, logs: list[dict]):
 def test_settles_a_matching_transfer(db):
     user_id = make_user(db)
     crypto_billing.create_invoice(user_id, 30, db_path=db)
-    result = crypto_watcher.scan_once(db_path=db, rpc_call=fake_rpc(1000, [transfer_log(180.0)]))
+    result = crypto_watcher.scan_once(db_path=db, rpc_call=fake_rpc(1000, [transfer_log(149.0)]))
     assert result["ok"] is True
     assert [r["resolution"] for r in result["results"]] == ["settled"]
     assert accounts.get_user_object(user_id, db_path=db).subscription_status == "active"
@@ -97,7 +97,7 @@ def test_filter_is_scoped_to_allowlisted_tokens_and_receiver(db):
 def test_cursor_advances_and_prevents_reprocessing(db):
     user_id = make_user(db)
     crypto_billing.create_invoice(user_id, 30, db_path=db)
-    log = transfer_log(180.0)
+    log = transfer_log(149.0)
 
     first = crypto_watcher.scan_once(db_path=db, rpc_call=fake_rpc(1000, [log]))
     cursor = crypto_watcher.get_cursor(db_path=db)
@@ -114,7 +114,7 @@ def test_impostor_token_in_logs_is_ignored(db):
     user_id = make_user(db)
     crypto_billing.create_invoice(user_id, 30, db_path=db)
     result = crypto_watcher.scan_once(
-        db_path=db, rpc_call=fake_rpc(1000, [transfer_log(180.0, token=OTHER)])
+        db_path=db, rpc_call=fake_rpc(1000, [transfer_log(149.0, token=OTHER)])
     )
     assert [r["resolution"] for r in result["results"]] == ["ignored"]
     assert accounts.get_user_object(user_id, db_path=db).subscription_status == "inactive"
@@ -125,7 +125,7 @@ def test_one_malformed_log_does_not_stall_the_cursor(db):
     crypto_billing.create_invoice(user_id, 30, db_path=db)
     broken = {"address": USDC, "topics": [], "data": "0x", "transactionHash": "0xbad"}
     result = crypto_watcher.scan_once(
-        db_path=db, rpc_call=fake_rpc(1000, [broken, transfer_log(180.0, tx="0xgood")])
+        db_path=db, rpc_call=fake_rpc(1000, [broken, transfer_log(149.0, tx="0xgood")])
     )
     assert result["ok"] is True
     assert crypto_watcher.get_cursor(db_path=db) > 0
@@ -134,7 +134,7 @@ def test_one_malformed_log_does_not_stall_the_cursor(db):
 
 def test_unconfigured_watcher_is_inert(db, monkeypatch):
     monkeypatch.delenv("SPREADBOARD_CRYPTO_RECEIVING_ADDRESS", raising=False)
-    result = crypto_watcher.scan_once(db_path=db, rpc_call=fake_rpc(1000, [transfer_log(180.0)]))
+    result = crypto_watcher.scan_once(db_path=db, rpc_call=fake_rpc(1000, [transfer_log(149.0)]))
     assert result == {"ok": False, "reason": "not_configured"}
 
 
