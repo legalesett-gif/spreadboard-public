@@ -4461,7 +4461,7 @@ def rail_text(value: Any) -> str:
 def render_market_lane(title: str, rows: list[dict[str, Any]], kind: str) -> str:
     return f"""
     <section class="market-side-panel">
-      <div class="panel-head flat"><div><h2>{h(title)}</h2><p>{'Unique assets ranked by executable edge' if kind == 'edge' else 'Unique assets ranked by paired carry'}</p></div></div>
+      <div class="panel-head flat"><div><h2>{h(title)}</h2><p>{'Unique assets ranked by matched $50 VWAP edge' if kind == 'edge' else 'Unique assets ranked by paired carry'}</p></div></div>
       <div class="market-mini-list">
         {''.join(render_market_mini(row, kind) for row in rows[:8]) or '<p class="watch-empty">No rows in this lane.</p>'}
       </div>
