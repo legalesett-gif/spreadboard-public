@@ -99,3 +99,7 @@ def test_pricing_page_compares_all_three_tiers_and_entitlements():
     assert "Research Pro" in html and "$180" in html
     assert "Full market and funding scanners" in html
     assert "complete evidence and intelligence workspace" in html
+    assert "USDC or USDT on Arbitrum" in html
+    assert "No card, no automatic renewal" in html
+    assert "What you get &mdash; and how to start" in html
+    assert "Pay the exact crypto invoice" in html

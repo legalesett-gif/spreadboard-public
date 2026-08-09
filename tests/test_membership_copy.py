@@ -119,6 +119,18 @@ def test_the_subscription_page_leads_with_the_plan_facts() -> None:
     assert len(prose) <= 6, "\n".join(prose)
 
 
+def test_legal_pages_describe_the_live_prepaid_crypto_path() -> None:
+    terms = server.render_legal_page("terms")
+    privacy = server.render_legal_page("privacy")
+    refunds = server.render_legal_page("refunds")
+
+    assert "does not renew automatically" in terms
+    assert "wallet private key or seed phrase" in privacy
+    assert "public transaction hash" in refunds
+    assert "Stripe processes" not in privacy
+    assert "recurring billing through the account billing portal" not in refunds
+
+
 def test_a_renewal_date_reads_as_a_date() -> None:
     assert server.fmt_renewal_date("2026-08-18T00:00:00+00:00") == "18 August 2026"
     assert server.fmt_renewal_date(None) == "—"

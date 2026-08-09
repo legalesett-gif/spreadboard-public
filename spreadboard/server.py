@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -23,6 +24,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 import urllib.request
 
 import click
+import segno
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -109,7 +111,7 @@ _PUBLIC_INTEL_FEED_URL = os.environ.get(
     "b348e50f10b0ad7de8b71fd619ea7151/raw/spreadboard-community-feed.json",
 )
 _PUBLIC_INTEL_FEED_CACHE: tuple[float, dict[str, Any]] | None = None
-TERMS_VERSION = "2026-07-31"
+TERMS_VERSION = "2026-08-09"
 
 DISPLAY_LABELS = {
     "available_on_pair_page": "Available on pair page",
@@ -345,6 +347,37 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_subscription_page(query))
             elif parsed.path == "/account":
                 self._send_html(render_account_page(self.server.board_path, self.server.accounts_path))
+            elif parsed.path.startswith("/api/billing/crypto/qr/"):
+                user = self._required_user()
+                try:
+                    invoice_id = int(parsed.path.rsplit("/", 1)[-1])
+                except ValueError:
+                    raise ValueError("invalid_invoice_id") from None
+                invoice = crypto_billing.get_invoice(invoice_id, db_path=self.server.accounts_path)
+                if invoice is None or (invoice["user_id"] != user.id and not user.is_admin):
+                    raise ValueError("invoice_not_found")
+                symbol = str((query.get("token") or [""])[0]).upper()
+                option = next(
+                    (
+                        item for item in invoice.get("payment_options") or []
+                        if str(item.get("symbol") or "").upper() == symbol
+                    ),
+                    None,
+                )
+                if option is None:
+                    raise ValueError("invalid_payment_token")
+                qr = segno.make(str(option["wallet_uri"]), error="m", micro=False)
+                output = io.BytesIO()
+                qr.save(
+                    output,
+                    kind="svg",
+                    scale=5,
+                    border=2,
+                    dark="#0a1713",
+                    light="#ffffff",
+                    xmldecl=False,
+                )
+                self._send_bytes(output.getvalue(), "image/svg+xml; charset=utf-8")
             elif parsed.path.startswith("/api/billing/crypto/invoice/"):
                 user = self._required_user()
                 try:
@@ -841,7 +874,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_json(alerts.send_user_test_alert(user.id, accounts_path=self.server.accounts_path))
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "not found")
-        except (ValueError, billing.BillingError, telegram_bot.TelegramBotError) as exc:
+        except (
+            ValueError,
+            billing.BillingError,
+            crypto_billing.CryptoBillingError,
+            telegram_bot.TelegramBotError,
+        ) as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
         except Exception as exc:  # noqa: BLE001
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
@@ -855,6 +893,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         payload = body.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self._send_security_headers()
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _send_bytes(self, payload: bytes, content_type: str) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")
         self._send_security_headers()
         self.send_header("Content-Length", str(len(payload)))
@@ -915,6 +962,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         allowed_without_subscription = (
             path in subscription_paths
             or path.startswith("/api/billing/crypto/invoice/")
+            or path.startswith("/api/billing/crypto/qr/")
         )
         if not user.subscription_active and not allowed_without_subscription and not (user.is_admin and path.startswith("/api/account-users")):
             if path.startswith("/api/"):
@@ -3759,7 +3807,7 @@ def render_market_filter_bar(
           <div>
             <label><span>Quote currency</span><select name="quote">
               <option value="">Any quote</option>
-              {''.join(f'<option value="{value}" {"selected" if value == selected_quote else ""}>{value}</option>' for value in ('USD','USDT','USDC','FDUSD','EUR','BTC','ETH'))}
+              {''.join(f'<option value="{value}" {"selected" if value == selected_quote else ""}>{value}</option>' for value in ('USD','USDT','USDC','USD1','FDUSD','EUR','BTC','ETH'))}
             </select></label>
             <label><span>Min thinner-leg 24h volume, USD</span><input name="min_volume_24h_usd" type="number" min="0" step="1000" value="{h(_query_first(query, 'min_volume_24h_usd') or '')}" placeholder="1000000"></label>
             <label><span>Min market cap, USD</span><input name="min_market_cap_usd" type="number" min="0" step="100000" value="{h(_query_first(query, 'min_market_cap_usd') or '')}" placeholder="10000000"></label>
@@ -6811,7 +6859,7 @@ def render_register_page() -> str:
 <style>
 :root { color-scheme:dark;--bg:#07110f;--panel:#101d1a;--line:#29443d;--ink:#edf8f4;--muted:#9bb1aa;--accent:#38d4bd;--danger:#ff8695; }
 *{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}.login-shell{width:min(440px,100%)}.login-brand{display:flex;align-items:center;gap:12px;margin-bottom:28px;font-size:24px;font-weight:800}.login-mark{width:26px;height:26px;border-radius:50%;background:var(--accent);border:3px solid #dffff8;box-shadow:12px 9px 0 -5px #7fdccf}.login-panel{border:1px solid var(--line);background:var(--panel);padding:28px;border-radius:8px}h1{margin:0 0 8px;font-size:28px}p{color:var(--muted);margin:0 0 24px;line-height:1.5}label{display:grid;gap:7px;margin:0 0 16px;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}input{width:100%;min-height:46px;border:1px solid var(--line);background:#081310;color:var(--ink);border-radius:5px;padding:0 13px;font:inherit}input:focus{outline:2px solid var(--accent);outline-offset:1px}button{width:100%;min-height:46px;border:0;border-radius:5px;background:var(--accent);color:#052c26;font:inherit;font-weight:900;cursor:pointer}button:disabled{opacity:.55;cursor:wait}.login-error{min-height:20px;margin:14px 0 0;color:var(--danger);font-size:13px}.login-note{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}.login-note a{color:var(--accent);font-weight:800}
-</style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div><section class="login-panel"><h1>Create your account</h1><p>Set up your private workspace, then choose monthly access.</p><form id="registerForm"><label>Name<input name="display_name" maxlength="100" autocomplete="name" required autofocus></label><label>Email<input name="email" type="email" maxlength="254" autocomplete="email" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><button type="submit">Continue</button><div class="login-error" role="alert"></div></form></section><div class="login-note">Already registered? <a href="/login">Sign in</a><br><br><a href="/pricing">See membership details</a></div></main>
+</style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div><section class="login-panel"><h1>Create your account</h1><p>Set up your private workspace, then choose prepaid crypto access.</p><form id="registerForm"><label>Name<input name="display_name" maxlength="100" autocomplete="name" required autofocus></label><label>Email<input name="email" type="email" maxlength="254" autocomplete="email" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><button type="submit">Continue</button><div class="login-error" role="alert"></div></form></section><div class="login-note">Already registered? <a href="/login">Sign in</a><br><br><a href="/pricing">See membership details</a></div></main>
 <script>document.getElementById('registerForm').addEventListener('submit',async(event)=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),error=form.querySelector('.login-error');button.disabled=true;error.textContent='';try{const response=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(form)))});const data=await response.json();if(!response.ok)throw new Error(({email_already_registered:'An account already exists for this email.',invalid_email:'Enter a valid email address.',password_must_be_at_least_12_characters:'Use at least 12 characters.',too_many_registration_attempts:'Too many attempts. Try again later.'})[data.error]||'Could not create the account.');location.assign(data.next||'/subscription')}catch(exc){error.textContent=exc.message||'Could not create the account.';button.disabled=false}});</script></body></html>"""
 
 
@@ -7017,10 +7065,15 @@ def render_telegram_landing_page(board_path: Path) -> str:
     # Telegram receives a small, controlled HTML subset. The website preview
     # should show what a reader sees, not the transport markup itself.
     preview_text = html.unescape(re.sub(r"<[^>]*>", "", preview))
-    feed_state = (
-        "Public channel connected"
+    community_state = (
+        "Private subscriber forum connected"
+        if state.get("community_configured")
+        else "Private subscriber forum awaiting setup"
+    )
+    public_feed_state = (
+        "Optional public broadcast connected"
         if state.get("public_feed_outbound_ready")
-        else "Feed preview ready · public channel pending"
+        else "Optional public broadcast not configured"
     )
     body = f"""
     <section class="telegram-page">
@@ -7029,14 +7082,14 @@ def render_telegram_landing_page(board_path: Path) -> str:
           <p>Start with a public route preview. Link an account only when you want saved access, private alerts, and the subscriber group.</p>
           <div class="telegram-actions">{f'<a class="pricing-button primary" href="{h(bot_url)}">Open @{h(username)}</a>' if bot_url else '<a class="pricing-button primary" href="/register">Create account</a>'}<a class="pricing-button" href="/markets?view=table">Open Pro Table</a></div>
         </div>
-        <aside><span>{h(feed_state)}</span><strong>/top</strong><em>public research preview</em></aside>
+        <aside><span>{h(community_state)}</span><strong>/top</strong><em>works in a direct chat with the bot</em><span>{h(public_feed_state)}</span></aside>
       </header>
       <section class="telegram-flow">
         <article><b>01</b><h2>Preview</h2><p>Use <code>/top</code> without linking an account. Every token opens the matching Pro Table filter.</p></article>
         <article><b>02</b><h2>Link</h2><p>Create a one-time link in Portfolio settings. Telegram never receives your password or payment credentials.</p></article>
         <article><b>03</b><h2>Activate</h2><p>Use <code>/subscribe</code> for signed checkout and <code>/access</code> for the private subscriber group.</p></article>
       </section>
-      <section class="telegram-preview"><div><span>Sample digest</span><h2>What the public feed publishes</h2></div><pre>{h(preview_text)}</pre><p>Outbound publishing remains disabled until a dedicated public channel is configured. The existing private group is never reused automatically.</p></section>
+      <section class="telegram-preview"><div><span>Sample digest</span><h2>What /top returns now</h2></div><pre>{h(preview_text)}</pre><p>The private subscriber forum is the paid community and is already connected. A separate public broadcast channel can be added later for acquisition; it is optional and the private forum is never reused automatically.</p></section>
       <section class="telegram-command-grid">
         <article><code>/top</code><span>Fresh public route preview</span></article><article><code>$SIREN</code><span>Exact-token lookup in the subscriber group</span></article><article><code>/funding SIREN</code><span>Paired funding view</span></article><article><code>/transfer SIREN</code><span>Deposit and withdrawal state</span></article>
       </section>
@@ -7062,7 +7115,7 @@ def render_pricing_page() -> str:
             f'<article class="pricing-tier {"featured" if tier == "research_pro" else ""}">'
             f'<span>{"Current plan" if current == tier else ("Complete workspace" if tier == "research_pro" else "")}</span>'
             f'<h2>{h(plan["name"])}</h2><p>{h(plan["tagline"])}</p>'
-            f'<div class="pricing-price"><strong>${int(plan["monthly"]):,}</strong><em>{" / month" if plan["monthly"] else " forever"}</em></div>'
+            f'<div class="pricing-price"><strong>${int(plan["monthly"]):,}</strong><em>{" / 30 days" if plan["monthly"] else " forever"}</em></div>'
             f'<ul class="tick-list">{render_membership_ticks(tier)}</ul>{action}</article>'
         )
     body = f"""
@@ -7083,15 +7136,20 @@ def render_pricing_page() -> str:
       .pricing-button.primary {{ background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }}
       .pricing-block {{ padding:26px 28px; border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
       .pricing-block h2 {{ margin:0 0 16px; font-size:20px; }}
+      .pricing-steps {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }}
+      .pricing-steps article {{ padding:18px; border:1px solid var(--terminal-line); background:var(--terminal-row); }}
+      .pricing-steps b {{ color:var(--accent); font-size:11px; }}
+      .pricing-steps h3 {{ margin:8px 0 6px; font-size:17px; }}
+      .pricing-steps p {{ margin:0; color:var(--terminal-muted); font-size:13px; line-height:1.5; }}
       .pricing-note {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
       {MEMBERSHIP_STYLE}
-      @media(max-width:820px) {{ .pricing-tiers {{ grid-template-columns:1fr; }} .pricing-tier p {{ min-height:0; }} }}
+      @media(max-width:820px) {{ .pricing-tiers,.pricing-steps {{ grid-template-columns:1fr; }} .pricing-tier p {{ min-height:0; }} }}
     </style>
     <section class="pricing-page">
-      <header class="pricing-intro"><span class="page-kicker">Membership</span><h1>Every spread, live.</h1><p>Start with proof, then pay for the workflow you use. Scanner unlocks live discovery; Research Pro adds the full evidence and intelligence workspace.</p></header>
+      <header class="pricing-intro"><span class="page-kicker">Membership</span><h1>Every spread, live.</h1><p>Start with proof, then pay once in USDC or USDT on Arbitrum for the access period you choose. No card, no automatic renewal. Scanner unlocks live discovery; Research Pro adds the full evidence and intelligence workspace.</p></header>
       <section class="pricing-tiers">{"".join(cards)}</section>
-      <section class="pricing-block"><h2>What you get</h2><p class="pricing-note">Free for proof, Scanner for live discovery, and Research Pro for the complete evidence workspace.</p></section>
-      <section class="pricing-block"><h2>Research Pro prepaid terms</h2>{render_membership_terms(tier='research_pro')}</section>
+      <section class="pricing-block"><h2>What you get &mdash; and how to start</h2><div class="pricing-steps"><article><b>01</b><h3>Create your account</h3><p>Compare the free proof pages first, then sign in to choose Scanner or Research Pro.</p></article><article><b>02</b><h3>Pay the exact crypto invoice</h3><p>Select USDC or USDT on Arbitrum, scan the token-specific QR, and send the exact amount shown.</p></article><article><b>03</b><h3>Open the workspace and Telegram</h3><p>Access activates after confirmation. Link the bot for saved access and the private subscriber forum.</p></article></div></section>
+      <section class="pricing-block"><h2>Research Pro prepaid terms</h2>{render_membership_terms(tier='research_pro')}<p class="pricing-note">Each amount is billed once in crypto. Access lapses unless you create and pay a new invoice.</p></section>
       <section class="pricing-block"><h2>Why membership</h2><div class="reason-grid">{render_membership_reasons()}</div></section>
       <p class="pricing-note">Public market data, not investment advice. Every route carries execution risk. See the <a href="/terms">Terms</a> and <a href="/refunds">Refund Policy</a>.</p>
     </section>
@@ -7126,14 +7184,18 @@ def render_crypto_checkout_panel() -> str:
       There is no auto-renewal &mdash; access simply lapses at the end of the period.</p>
       <div class="crypto-periods">{periods}</div>
       <div class="crypto-invoice" data-crypto-invoice hidden>
+        <div class="crypto-token-picker" data-crypto-token-picker aria-label="Payment token"></div>
         <div class="crypto-row"><span>Send exactly</span>
           <b data-crypto-amount></b>
           <button class="sheet-button ghost" type="button" data-copy="amount">Copy</button></div>
         <div class="crypto-row"><span>To address</span>
           <code data-crypto-address></code>
           <button class="sheet-button ghost" type="button" data-copy="address">Copy</button></div>
-        <div class="crypto-qr" data-crypto-qr></div>
-        <p class="crypto-warn">Send only <b>{h(tokens)}</b> on <b>{h(state.get('chain'))}</b>.
+        <div class="crypto-row"><span>Verified token contract</span>
+          <code data-crypto-contract></code>
+          <button class="sheet-button ghost" type="button" data-copy="contract">Copy</button></div>
+        <div class="crypto-qr"><img data-crypto-qr alt="" width="196" height="196"><a class="sheet-button" data-crypto-wallet-link>Open in wallet</a></div>
+        <p class="crypto-warn">Send only <b data-crypto-selected-token>{h(tokens)}</b> on <b>{h(state.get('chain'))}</b>.
         Funds sent on another chain or in another token cannot be credited.
         The amount shown is unique to your order &mdash; send it exactly.</p>
         <p class="crypto-status" data-crypto-status>Waiting for payment&hellip;</p>
@@ -7160,10 +7222,12 @@ def render_crypto_checkout_script() -> str:
 .crypto-period-price{font-weight:700}
 .crypto-period-days{font-size:.78rem;opacity:.7}
 .crypto-period[aria-pressed="true"]{outline:2px solid var(--terminal-accent,#2f9e79)}
+.crypto-token-picker{display:flex;gap:.5rem;flex-wrap:wrap;margin:.8rem 0}
+.crypto-token-picker button[aria-pressed="true"]{outline:2px solid var(--terminal-accent,#2f9e79);background:var(--terminal-accent,#2f9e79);color:#07110e}
 .crypto-row{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin:.35rem 0}
 .crypto-row code,.crypto-row b{font-family:ui-monospace,Menlo,monospace;word-break:break-all}
-.crypto-qr{margin:.6rem 0}
-.crypto-qr img{image-rendering:pixelated;width:180px;height:180px;background:#fff;padding:8px;border-radius:6px}
+.crypto-qr{display:flex;align-items:center;gap:.8rem;flex-wrap:wrap;margin:.8rem 0}
+.crypto-qr img{image-rendering:pixelated;width:196px;height:196px;background:#fff;padding:8px;border-radius:6px}
 .crypto-warn{font-size:.82rem;opacity:.85;border-left:3px solid #d08a00;padding-left:.6rem}
 .crypto-status{font-weight:600}
 .sheet-button.ghost{padding:.2rem .5rem;font-size:.78rem}
@@ -7175,22 +7239,46 @@ def render_crypto_checkout_script() -> str:
   var box=root.querySelector('[data-crypto-invoice]');
   var amountEl=root.querySelector('[data-crypto-amount]');
   var addrEl=root.querySelector('[data-crypto-address]');
+  var contractEl=root.querySelector('[data-crypto-contract]');
+  var tokenPicker=root.querySelector('[data-crypto-token-picker]');
+  var tokenWarning=root.querySelector('[data-crypto-selected-token]');
   var qrEl=root.querySelector('[data-crypto-qr]');
+  var walletEl=root.querySelector('[data-crypto-wallet-link]');
   var statusEl=root.querySelector('[data-crypto-status]');
   var errEl=root.querySelector('[data-crypto-error]');
   var cdEl=root.querySelector('[data-crypto-countdown]');
-  var timer=null, poll=null, invoice=null;
+  var timer=null, poll=null, invoice=null, paymentOption=null;
 
   function csrf(){ try{ return JSON.parse(document.getElementById('account-session').textContent).csrf_token; }catch(e){ return null; } }
   function consent(){ var c=document.querySelector('[data-subscription-consent]'); return !!(c && c.checked); }
 
-  function qr(text){
-    // Minimal QR via a data-URI-free canvas fallback: link out if unavailable.
-    qrEl.innerHTML='';
-    var a=document.createElement('a');
-    a.textContent='Open in wallet';
-    a.className='sheet-button';
-    a.href=text; qrEl.appendChild(a);
+  function selectToken(symbol){
+    if(!invoice) return;
+    paymentOption=(invoice.payment_options||[]).find(function(option){return option.symbol===symbol;});
+    if(!paymentOption) return;
+    tokenPicker.querySelectorAll('button').forEach(function(button){
+      button.setAttribute('aria-pressed',button.dataset.cryptoToken===symbol?'true':'false');
+    });
+    amountEl.textContent=invoice.amount_display+' '+paymentOption.symbol+' · '+String(invoice.subscription_tier||'').replace('_',' ');
+    contractEl.textContent=paymentOption.contract_address;
+    tokenWarning.textContent=paymentOption.symbol;
+    qrEl.alt='QR for exact '+paymentOption.symbol+' payment on '+invoice.chain;
+    qrEl.src='/api/billing/crypto/qr/'+invoice.id+'?token='+encodeURIComponent(paymentOption.symbol);
+    walletEl.href=paymentOption.wallet_uri;
+  }
+
+  function renderTokenPicker(){
+    tokenPicker.innerHTML='';
+    (invoice.payment_options||[]).forEach(function(option,index){
+      var button=document.createElement('button');
+      button.type='button'; button.className='sheet-button';
+      button.dataset.cryptoToken=option.symbol; button.textContent='Pay with '+option.symbol;
+      button.setAttribute('aria-pressed','false');
+      button.addEventListener('click',function(){selectToken(option.symbol);});
+      tokenPicker.appendChild(button);
+      if(index===0) paymentOption=option;
+    });
+    if(paymentOption) selectToken(paymentOption.symbol);
   }
 
   function countdown(iso){
@@ -7232,9 +7320,8 @@ def render_crypto_checkout_script() -> str:
       }).then(function(r){return r.json();}).then(function(d){
         if(!d||!d.ok||!d.invoice){ errEl.textContent=(d&&d.error)||'Could not create an invoice.'; return; }
         invoice=d.invoice;
-        amountEl.textContent=invoice.amount_display+' '+(invoice.tokens||[]).join(' or ')+' · '+String(invoice.subscription_tier||'').replace('_',' ');
         addrEl.textContent=invoice.receiving_address;
-        qr('ethereum:'+invoice.receiving_address+'@'+invoice.chain_id);
+        renderTokenPicker();
         box.hidden=false;
         statusEl.textContent='Waiting for payment\u2026 confirmed automatically once it lands.';
         countdown(invoice.expires_at); watch(invoice.id);
@@ -7245,7 +7332,8 @@ def render_crypto_checkout_script() -> str:
   root.querySelectorAll('[data-copy]').forEach(function(b){
     b.addEventListener('click',function(){
       if(!invoice) return;
-      var v=b.dataset.copy==='amount'?invoice.amount_display:invoice.receiving_address;
+      var values={amount:invoice.amount_display,address:invoice.receiving_address,contract:paymentOption&&paymentOption.contract_address};
+      var v=values[b.dataset.copy]; if(!v) return;
       navigator.clipboard&&navigator.clipboard.writeText(v);
       var t=b.textContent; b.textContent='Copied'; setTimeout(function(){b.textContent=t;},1200);
     });
@@ -7289,12 +7377,12 @@ def render_subscription_page(query: dict[str, list[str]] | None = None) -> str:
         action = (
             f'<button class="sheet-button primary" type="button" data-billing-action="checkout" data-billing-tier="{h(requested_tier)}">Subscribe to {h(PLAN_CATALOG[requested_tier]["name"])}</button>'
             if tier_state.get("checkout_ready")
-            else '<p class="pricing-note">Card checkout is not live for this tier yet. Pay with crypto below.</p>'
+            else '<p class="pricing-note">Crypto is the active payment method. Choose a prepaid term below.</p>'
         )
     renews = fmt_renewal_date(getattr(user, "subscription_expires_at", None)) if user else "\u2014"
     selected_plan = PLAN_CATALOG[requested_tier]
     plan_choices = "".join(
-        f'<a class="sub-tier-choice {"selected" if tier == requested_tier else ""}" href="/subscription?tier={h(tier)}"><span>{h(plan["name"])}</span><strong>${h(plan["monthly"])}/mo</strong><em>{h(plan["tagline"])}</em></a>'
+        f'<a class="sub-tier-choice {"selected" if tier == requested_tier else ""}" href="/subscription?tier={h(tier)}"><span>{h(plan["name"])}</span><strong>${h(plan["monthly"])}/30d</strong><em>{h(plan["tagline"])}</em></a>'
         for tier, plan in PLAN_CATALOG.items()
         if tier != "free"
     )
@@ -7332,8 +7420,8 @@ def render_subscription_page(query: dict[str, list[str]] | None = None) -> str:
         <div class="sub-tier-choices">{plan_choices}</div>
         <div class="sub-facts">
           <div><span>Selected tier</span><strong>{h(selected_plan['name'])}</strong></div>
-          <div><span>Monthly price</span><strong>${selected_plan['monthly']:,.2f}</strong></div>
-          <div><span>Billing cycle</span><strong>Monthly or prepaid</strong></div>
+          <div><span>Monthly price (30 days)</span><strong>${selected_plan['monthly']:,.2f}</strong></div>
+          <div><span>Billing cycle</span><strong>Prepaid crypto</strong></div>
           <div><span>{('Next payment' if billing_managed else 'Access until') if active else 'Status'}</span><strong>{h(renews if active else (user.subscription_status if user else 'inactive'))}</strong></div>
         </div>
         <ul class="tick-list">{render_membership_ticks(requested_tier)}</ul>
@@ -7557,7 +7645,7 @@ def render_legal_page(page: str) -> str:
             [
                 ("Service", "SpreadBoard presents public-market data, calculated spreads, funding information, charts, alerts, and research tools. It does not execute trades, hold client assets, provide custody, or provide personalised investment advice."),
                 ("Market risk", "Prices, liquidity, funding, transfer status, and availability can change without notice. Displayed values may be delayed, incomplete, or unavailable. You remain responsible for checking any decision directly with the relevant venue."),
-                ("Membership", "Membership is billed monthly at the price shown before checkout and renews until cancelled. Access is personal and may not be resold, shared, scraped, or used to disrupt the service."),
+                ("Membership", "Crypto membership is prepaid for the access period shown before checkout and does not renew automatically. Access is personal and may not be resold, shared, scraped, or used to disrupt the service."),
                 ("Acceptable use", "Do not attempt to bypass access controls, overload data providers, reverse engineer credentials, or use the service for unlawful activity. We may suspend access needed to protect users, providers, or the service."),
                 ("Availability", "We aim to run continuously but do not guarantee uninterrupted access or that every venue, token, route, chart, or alert will always be available."),
                 ("Liability", "Nothing excludes liability that cannot lawfully be excluded. To the extent permitted by law, SpreadBoard is not liable for trading losses, missed opportunities, exchange failures, or decisions based on market information."),
@@ -7569,22 +7657,22 @@ def render_legal_page(page: str) -> str:
             "What SpreadBoard stores and why.",
             [
                 ("Account data", "We store your name, email address, password hash, subscription state, linked Telegram identifier, settings, alerts, and journal entries to operate your account."),
-                ("Payments", "Stripe processes payment-card details. SpreadBoard stores provider customer, subscription, and event identifiers, but not full card numbers."),
+                ("Payments", "Crypto checkout is watch-only. SpreadBoard stores the invoice amount, selected access period, receiving address, token and chain details, status, and matching public transaction hash. It never stores a wallet private key or seed phrase."),
                 ("Notifications", "Pushover user keys are encrypted at rest. Telegram and Pushover identifiers are used only to deliver the features you enable."),
                 ("Technical data", "We may retain security and operational records such as session identifiers, IP address, browser information, consent records, and service logs."),
-                ("Sharing and retention", "Data is shared only with providers needed to run the service, such as Stripe, Telegram, Pushover, hosting, and market-data providers. We keep it only as long as needed for service, security, accounting, and legal obligations."),
+                ("Sharing and retention", "Data is shared only with providers needed to run the service, such as blockchain RPC, Telegram, Pushover, hosting, and market-data providers. We keep it only as long as needed for service, security, accounting, and legal obligations."),
                 ("Your choices", f"You may request access, correction, deletion, or account closure through {support_url} or by contacting {support}. Some records may need to be retained for legal or fraud-prevention purposes."),
             ],
         ),
         "refunds": (
             "Cancellation and Refund Policy",
-            "How recurring membership cancellation and service problems are handled.",
+            "How prepaid crypto access, cancellation rights, and service problems are handled.",
             [
-                ("Cancel any time", "You can cancel recurring billing through the account billing portal. Access normally continues until the end of the paid billing period."),
+                ("No automatic renewal", "Crypto access is a one-time prepaid purchase. There is no recurring charge to cancel; access normally continues until the end of the paid period and lapses unless you pay a new invoice."),
                 ("Immediate access", "At checkout you are asked to request immediate digital access and acknowledge that beginning supply may affect the statutory 14-day cancellation right. This does not remove rights that cannot legally be waived."),
                 ("Service faults", "If paid access is materially unavailable or not supplied as described, contact us promptly. We will investigate and provide the remedy required by applicable consumer law, which may include restoration, a credit, or a refund."),
-                ("Duplicate or incorrect charges", "Report a duplicate or incorrect charge with the account email and Stripe receipt identifier. Do not send card details."),
-                ("How to request", f"Contact {support} or {support_url}. Include the account email, payment date, and reason. Refunds, when due, are returned through the original payment method."),
+                ("Duplicate or incorrect payments", "Report a duplicate or incorrect payment with the account email and public transaction hash. Never send a wallet seed phrase, private key, or exchange password."),
+                ("How to request", f"Contact {support} or {support_url}. Include the account email, payment date, public transaction hash, and reason. Refunds, when due, are handled to a verified destination using the original payment asset where practical."),
             ],
         ),
     }
@@ -7705,7 +7793,7 @@ def render_account_settings(user: accounts.User, accounts_path: Path | str = acc
     <section class="account-settings">
       <div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is used only as the denominator for your return statistics.</p></div></div>
       <form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Tracked monthly capital, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or '')}"></label><button class="sheet-button primary" type="submit">Save settings</button></form>
-      <div class="account-empty-panel"><strong>Monthly membership</strong><p>{h(user.subscription_status)} · {h(cancel_note)}</p>{billing_action}<p role="alert" data-billing-error></p></div>
+      <div class="account-empty-panel"><strong>Prepaid membership</strong><p>{h(user.subscription_status)} · {h(cancel_note)}</p>{billing_action}<p role="alert" data-billing-error></p></div>
       <div class="account-empty-panel"><strong>Telegram subscriber access</strong><p>{telegram_note}</p>{telegram_action}<p>{'Subscriber group connected. Use /access in the private bot.' if telegram_state.get('community_configured') else 'The community owner still needs to run /setupgroup after granting the bot invite permissions.'}</p><p role="alert" data-telegram-error></p></div>
       <form data-pushover-settings>
         <label><span>Pushover user key</span><input name="pushover_user_key" type="password" autocomplete="off" placeholder="{h(push_key_note)}"></label>
@@ -7738,7 +7826,7 @@ def render_billing_script() -> str:
 
 
 def render_member_admin() -> str:
-    return """<section data-account-panel="members" hidden><div class="account-panel-head"><div><h2>Member access</h2><p>Create monthly accounts and manage subscription status. Passwords are hashed immediately and never shown again.</p></div></div><form class="member-create-form" data-member-create><label><span>Name</span><input name="display_name" autocomplete="name" required></label><label><span>Email</span><input name="email" type="email" autocomplete="email" required></label><label><span>Temporary password</span><input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label><span>Access days</span><input name="subscription_days" type="number" min="1" max="3660" value="30"></label><button class="sheet-button primary" type="submit">Create member</button></form><div data-member-list></div></section>"""
+    return """<section data-account-panel="members" hidden><div class="account-panel-head"><div><h2>Member access</h2><p>Create time-limited accounts and manage access status. Passwords are hashed immediately and never shown again.</p></div></div><form class="member-create-form" data-member-create><label><span>Name</span><input name="display_name" autocomplete="name" required></label><label><span>Email</span><input name="email" type="email" autocomplete="email" required></label><label><span>Temporary password</span><input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label><span>Access days</span><input name="subscription_days" type="number" min="1" max="3660" value="30"></label><button class="sheet-button primary" type="submit">Create member</button></form><div data-member-list></div></section>"""
 
 
 def render_position_dialog() -> str:

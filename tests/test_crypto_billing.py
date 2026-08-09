@@ -104,6 +104,22 @@ def test_first_invoice_is_the_exact_list_price(db):
     assert invoice["slot_index"] == 0
 
 
+def test_invoice_has_exact_token_specific_wallet_options(db):
+    invoice = crypto_billing.create_invoice(make_user(db, "a@example.com"), 30, db_path=db, now=NOW)
+    options = {option["symbol"]: option for option in invoice["payment_options"]}
+
+    assert sorted(options) == ["USDC", "USDT"]
+    assert options["USDC"]["contract_address"] == USDC.lower()
+    assert options["USDC"]["amount_raw"] == "180000000"
+    assert options["USDC"]["wallet_uri"] == (
+        f"ethereum:{USDC.lower()}@42161/transfer"
+        f"?address={RECEIVER.lower()}&uint256=180000000"
+    )
+    assert options["USDT"]["wallet_uri"].startswith(
+        f"ethereum:{USDT.lower()}@42161/transfer?"
+    )
+
+
 def test_concurrent_invoices_never_share_an_overlapping_band(db):
     amounts = []
     for index in range(6):

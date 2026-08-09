@@ -86,6 +86,7 @@ def test_market_filter_ui_labels_scanner_age_honestly():
     assert "Max scanner age" in html
     assert "not presented as an exchange's official listing date" in html
     assert 'value="USDC" selected' in html
+    assert 'value="USD1"' in html
 
 
 def test_metadata_refresh_preserves_first_seen_and_adds_market_metrics(tmp_path, monkeypatch):

@@ -27,6 +27,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("SPREADBOARD_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.setenv("SPREADBOARD_CRYPTO_RECEIVING_ADDRESS", RECEIVER)
     monkeypatch.setenv("SPREADBOARD_CRYPTO_RPC_URL", "https://example.invalid/rpc")
+    SpreadBoardHandler._login_attempts.clear()
     server = SpreadBoardServer(
         ("127.0.0.1", 0), SpreadBoardHandler,
         board_path=tmp_path / "missing.jsonl", config={},
@@ -40,6 +41,7 @@ def client(tmp_path, monkeypatch):
         connection.close()
         server.shutdown()
         server.server_close()
+        SpreadBoardHandler._login_attempts.clear()
 
 
 def register(connection, email: str) -> tuple[str, str]:
@@ -92,6 +94,46 @@ def test_invoice_polling_is_reachable_without_a_subscription(client):
     response = client.getresponse()
     assert response.status == 200
     assert json.loads(response.read())["invoice"]["id"] == invoice_id
+
+
+def test_exact_token_qr_is_reachable_without_a_subscription(client):
+    cookie, csrf = register(client, "qr-buyer@example.test")
+    response = post(client, "/api/billing/crypto/invoice", cookie, csrf, CONSENT)
+    invoice = json.loads(response.read())["invoice"]
+
+    client.request(
+        "GET", f"/api/billing/crypto/qr/{invoice['id']}?token=USDC",
+        headers={"Cookie": cookie},
+    )
+    response = client.getresponse()
+    payload = response.read()
+    assert response.status == 200
+    assert response.getheader("Content-Type").startswith("image/svg+xml")
+    assert payload.startswith(b"<svg")
+    assert len(payload) > 500
+
+
+def test_qr_rejects_unknown_token_and_another_members_invoice(client):
+    first_cookie, first_csrf = register(client, "qr-first@example.test")
+    response = post(client, "/api/billing/crypto/invoice", first_cookie, first_csrf, CONSENT)
+    invoice_id = json.loads(response.read())["invoice"]["id"]
+
+    client.request(
+        "GET", f"/api/billing/crypto/qr/{invoice_id}?token=ETH",
+        headers={"Cookie": first_cookie},
+    )
+    response = client.getresponse()
+    assert response.status >= 400
+    response.read()
+
+    second_cookie, _ = register(client, "qr-second@example.test")
+    client.request(
+        "GET", f"/api/billing/crypto/qr/{invoice_id}?token=USDC",
+        headers={"Cookie": second_cookie},
+    )
+    response = client.getresponse()
+    assert response.status >= 400
+    response.read()
 
 
 def test_a_member_cannot_poll_someone_elses_invoice(client):
@@ -159,6 +201,9 @@ def test_subscription_page_offers_crypto_checkout(client):
     # the wrong-chain warning must be present, not buried
     assert "cannot be credited" in page
     assert "no auto-renewal" in page.lower()
+    assert "data-crypto-token-picker" in page
+    assert "data-crypto-contract" in page
+    assert "/api/billing/crypto/qr/" in page
 
 
 def test_checkout_panel_fails_closed_when_unconfigured(client, monkeypatch):

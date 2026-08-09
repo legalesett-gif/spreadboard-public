@@ -141,6 +141,36 @@ def units_to_cents(raw_units: int, decimals: int) -> int:
     return int(raw_units) // (10 ** (decimals - 2))
 
 
+def payment_options(amount_cents: int, receiving_address: str) -> list[dict[str, Any]]:
+    """Return exact ERC-681 token transfers for a checkout amount.
+
+    A generic ``ethereum:<receiver>`` URI asks compatible wallets to prepare a
+    native ETH transfer.  That is the wrong asset for this checkout.  Each
+    option therefore targets the allowlisted token contract and carries the
+    exact raw token amount in the ERC-20 ``transfer`` call.
+    """
+    if int(amount_cents) <= 0:
+        raise CryptoBillingError("invalid_invoice_amount")
+    if not _is_address(receiving_address):
+        raise CryptoBillingError("invalid_receiving_address")
+
+    options = []
+    for contract, token in TOKENS.items():
+        decimals = int(token["decimals"])
+        amount_raw = int(amount_cents) * (10 ** (decimals - 2))
+        options.append({
+            "symbol": str(token["symbol"]),
+            "contract_address": contract,
+            "decimals": decimals,
+            "amount_raw": str(amount_raw),
+            "wallet_uri": (
+                f"ethereum:{contract}@{CHAIN_ID}/transfer"
+                f"?address={receiving_address.lower()}&uint256={amount_raw}"
+            ),
+        })
+    return sorted(options, key=lambda option: option["symbol"])
+
+
 # ---------------------------------------------------------------------------
 # Invoices
 # ---------------------------------------------------------------------------
@@ -245,14 +275,15 @@ def create_invoice(
 
 def _invoice_dict(row: sqlite3.Row) -> dict[str, Any]:
     settings = config()
+    amount_cents = int(row["expected_amount_cents"])
     return {
         "id": int(row["id"]),
         "user_id": int(row["user_id"]),
         "period_days": int(row["period_days"]),
         "subscription_tier": str(row["subscription_tier"]),
         "status": str(row["status"]),
-        "amount_cents": int(row["expected_amount_cents"]),
-        "amount_display": f"{int(row['expected_amount_cents']) / 100:.2f}",
+        "amount_cents": amount_cents,
+        "amount_display": f"{amount_cents / 100:.2f}",
         "list_amount_cents": int(row["list_amount_cents"]),
         "slot_index": int(row["slot_index"]),
         "tolerance_display": f"{TOLERANCE_CENTS / 100:.2f}",
@@ -260,6 +291,7 @@ def _invoice_dict(row: sqlite3.Row) -> dict[str, Any]:
         "chain": CHAIN_NAME,
         "chain_id": CHAIN_ID,
         "tokens": sorted(token["symbol"] for token in TOKENS.values()),
+        "payment_options": payment_options(amount_cents, settings.receiving_address),
         "created_at": str(row["created_at"]),
         "expires_at": str(row["expires_at"]),
         "settled_at": row["settled_at"],
