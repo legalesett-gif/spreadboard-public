@@ -3668,9 +3668,26 @@ def render_set_password_page(query: dict[str, list[str]], accounts_path: Path) -
           <div class="login-note">At least 12 characters. Signing in anywhere else will be ended.</div>
         """
     return shell("Set password - SpreadBoard", "login", f"""
-    <main class="login-shell">
-      <div class="login-brand"><span class="login-mark"></span>SpreadBoard</div>
-      <section class="login-panel">{inner}</section>
+    <style>
+      .set-password-shell {{ width:min(480px,calc(100% - 32px)); margin:76px auto 100px; }}
+      .set-password-brand {{ display:flex;align-items:center;gap:11px;margin:0 0 22px;font-size:22px;font-weight:900; }}
+      .set-password-mark {{ width:24px;height:24px;border-radius:50%;background:var(--terminal-accent);border:3px solid #dffff8;box-shadow:11px 8px 0 -5px #7fdccf; }}
+      .set-password-panel {{ padding:30px;border:1px solid var(--terminal-line);border-radius:9px;background:var(--terminal-panel);box-shadow:0 16px 50px rgba(9,25,21,.08); }}
+      .set-password-panel h1 {{ margin:0 0 8px;font-size:32px;line-height:1.1; }}
+      .set-password-panel > p {{ margin:0 0 24px;color:var(--terminal-muted); }}
+      .set-password-panel form {{ display:grid;gap:16px; }}
+      .set-password-panel label {{ display:grid;gap:7px;color:var(--terminal-muted);font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.04em; }}
+      .set-password-panel input:not([type="hidden"]) {{ width:100%;min-height:46px;padding:0 13px;border:1px solid var(--terminal-line);border-radius:5px;background:var(--terminal-panel-2);color:var(--terminal-text);font:inherit; }}
+      .set-password-panel input:focus {{ outline:2px solid var(--terminal-accent);outline-offset:1px; }}
+      .set-password-panel button {{ min-height:46px;border:0;border-radius:5px;background:var(--terminal-accent);color:#052c26;font:inherit;font-weight:900;cursor:pointer; }}
+      .set-password-panel .login-error {{ min-height:20px;color:var(--red);font-size:13px; }}
+      .set-password-panel .login-note {{ margin-top:18px;color:var(--terminal-muted);font-size:12px;line-height:1.5; }}
+      .set-password-panel .login-note a {{ color:var(--terminal-accent);font-weight:900; }}
+      @media(max-width:560px) {{ .set-password-shell {{ margin-top:36px; }} .set-password-panel {{ padding:22px; }} .set-password-panel h1 {{ font-size:27px; }} }}
+    </style>
+    <main class="set-password-shell" data-password-setup>
+      <div class="set-password-brand"><span class="set-password-mark"></span>SpreadBoard</div>
+      <section class="set-password-panel">{inner}</section>
     </main>
     <script>
     (function(){{

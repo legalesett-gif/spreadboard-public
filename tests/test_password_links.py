@@ -148,6 +148,17 @@ def test_invited_admin_chooses_their_own_password(db: Path) -> None:
     )
 
 
+def test_password_setup_page_uses_the_product_form_layout(db: Path) -> None:
+    from spreadboard import server
+
+    token = accounts.create_password_token(_user_id(db), purpose="invite", db_path=db)
+    page = server.render_set_password_page({"token": [token]}, db)
+
+    assert 'data-password-setup' in page
+    assert '.set-password-panel form' in page
+    assert '@media(max-width:560px)' in page
+
+
 def test_the_page_and_endpoints_are_reachable_without_a_session() -> None:
     """The person using the link cannot sign in yet -- that is the point."""
     import inspect
