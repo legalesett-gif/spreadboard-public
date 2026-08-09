@@ -30,9 +30,10 @@ never receives or stores card data. Add these values to the production
 
 ```bash
 SPREADBOARD_STRIPE_SECRET_KEY=sk_live_...
-SPREADBOARD_STRIPE_PRICE_ID=price_...
+SPREADBOARD_STRIPE_SCANNER_PRICE_ID=price_...       # $49/month
+SPREADBOARD_STRIPE_RESEARCH_PRO_PRICE_ID=price_...  # $180/month
 SPREADBOARD_STRIPE_WEBHOOK_SECRET=whsec_...
-SPREADBOARD_SUBSCRIPTION_LABEL=$180/month
+SPREADBOARD_SUBSCRIPTION_LABEL=SpreadBoard membership
 ```
 
 Create a recurring monthly Price in Stripe, then register this HTTPS webhook:
@@ -77,6 +78,29 @@ SPREADBOARD_PUBLIC_URL=https://spreadarbitrage.ink \
 Members connect the bot from Account settings using a single-use link that
 expires after ten minutes. Supported commands are `/subscribe` and
 `/mysubscription`.
+
+For the separate public research feed, create a dedicated Telegram channel,
+add the bot as an administrator, and set its channel username or numeric chat
+ID. Never point this value at the private subscriber group:
+
+```bash
+SPREADBOARD_TELEGRAM_PUBLIC_FEED_CHAT_ID=@spreadboard_research
+SPREADBOARD_TELEGRAM_OUTBOUND=1
+```
+
+## Browser Push
+
+Browser alerts use an application-specific VAPID key pair. Keep the private
+key in production secrets and expose only the public key to the browser:
+
+```bash
+SPREADBOARD_VAPID_PUBLIC_KEY=base64url_public_key
+SPREADBOARD_VAPID_PRIVATE_KEY=base64url_private_key
+SPREADBOARD_VAPID_SUBJECT=mailto:support@spreadarbitrage.ink
+```
+
+The account page reports delivery as unavailable until all three values are
+configured. The service worker and push worker remain fail-closed otherwise.
 
 ## Crypto Checkout
 

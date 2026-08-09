@@ -215,6 +215,8 @@ def test_the_visitor_nav_only_offers_pages_a_visitor_can_open() -> None:
         "/login",
         "/register",
         "/pricing",
+        "/telegram",
+        "/methodology",
         "/guide",
         "/terms",
         "/privacy",

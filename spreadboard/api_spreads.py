@@ -15,7 +15,15 @@ from threading import Lock
 import time
 from typing import Any
 
-from spreadboard import board, exchange_links, public_rails, token_metadata
+from spreadboard import (
+    board,
+    exchange_links,
+    market_events,
+    public_rails,
+    token_metadata,
+    tokenized_assets,
+    venue_funding_history,
+)
 from spreadarb.api_discovery.identity import WatchAsset, load_watchlist
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,6 +107,14 @@ class SpreadTerminalRow:
     raw_source_kind: str | None = None
     mirage_guarded: bool = False
     live_book: bool = False
+    long_quote: str | None = None
+    short_quote: str | None = None
+    market_cap_usd: float | None = None
+    fdv_usd: float | None = None
+    metadata_volume_24h_usd: float | None = None
+    listing_age_days: float | None = None
+    listing_age_source: str | None = None
+    asset_class: str = "crypto"
 
     def to_dict(self) -> dict[str, Any]:
         # asdict() recurses and deep-copies; every field on this row is a scalar
@@ -118,6 +134,15 @@ def load_spreads(
     min_spread_pct: float | None = None,
     min_abs_funding_24h_pct: float | None = None,
     min_abs_funding_apr_pct: float | None = None,
+    quote: str | None = None,
+    min_volume_24h_usd: float | None = None,
+    min_market_cap_usd: float | None = None,
+    max_market_cap_usd: float | None = None,
+    min_fdv_usd: float | None = None,
+    max_fdv_usd: float | None = None,
+    max_listing_age_days: float | None = None,
+    persistence: str | None = None,
+    asset_class: str | None = None,
     funding_only: bool = False,
     include_stale: bool = False,
     require_deliverable: bool = False,
@@ -144,13 +169,29 @@ def load_spreads(
     # snapshot are served from the last result.
     cache_key = (
         str(api_path), str(board_path), q, exchange, kind, source, min_spread_pct,
-        min_abs_funding_24h_pct, min_abs_funding_apr_pct, funding_only, include_stale,
-        include_unverified, max_age_min, sort_by, direction, offset, limit,
+        min_abs_funding_24h_pct, min_abs_funding_apr_pct, quote, min_volume_24h_usd,
+        min_market_cap_usd, max_market_cap_usd, min_fdv_usd, max_fdv_usd,
+        max_listing_age_days, persistence, asset_class, funding_only, include_stale,
+        include_unverified, require_deliverable, max_age_min, sort_by, direction, offset, limit,
     )
     try:
-        stamp = api_path.stat().st_mtime_ns
+        stamp = (
+            api_path.stat().st_mtime_ns,
+            token_metadata.DEFAULT_CACHE_PATH.stat().st_mtime_ns
+            if token_metadata.DEFAULT_CACHE_PATH.exists()
+            else 0,
+            venue_funding_history.DEFAULT_CACHE_PATH.stat().st_mtime_ns
+            if venue_funding_history.DEFAULT_CACHE_PATH.exists()
+            else 0,
+            market_events.DEFAULT_CACHE_PATH.stat().st_mtime_ns
+            if market_events.DEFAULT_CACHE_PATH.exists()
+            else 0,
+            tokenized_assets.DEFAULT_REGISTRY_PATH.stat().st_mtime_ns
+            if tokenized_assets.DEFAULT_REGISTRY_PATH.exists()
+            else 0,
+        )
     except OSError:
-        stamp = 0
+        stamp = (0, 0, 0, 0, 0)
     with _SNAPSHOT_CACHE_LOCK:
         cached = _RESULT_CACHE.get(cache_key)
     if (
@@ -216,7 +257,9 @@ def load_spreads(
     rankable_universe = [
         row
         for row in public_universe
-        if route_deliverable(row) is not False and row_is_presentable(row)
+        if route_deliverable(row) is not False
+        and row_is_presentable(row)
+        and tokenized_route_rankable(row)
     ]
     # A funding farm holds both legs -- long spot on one venue, short futures on
     # another -- and never moves the coin between them, so transfer rails are
@@ -230,6 +273,7 @@ def load_spreads(
         and not leg_volume_too_thin(row)
         and not is_venue_specific_leveraged_token(row)
         and not is_non_perpetual_or_inverse(row)
+        and tokenized_route_rankable(row)
     ]
     route_kind_token_counts = _route_kind_token_counts(public_universe)
     release_lane_token_counts = _release_lane_token_counts(public_universe)
@@ -249,6 +293,15 @@ def load_spreads(
                 else None
             )
         ),
+        quote=quote,
+        min_volume_24h_usd=min_volume_24h_usd,
+        min_market_cap_usd=min_market_cap_usd,
+        max_market_cap_usd=max_market_cap_usd,
+        min_fdv_usd=min_fdv_usd,
+        max_fdv_usd=max_fdv_usd,
+        max_listing_age_days=max_listing_age_days,
+        persistence=persistence,
+        asset_class=asset_class,
         funding_only=funding_only,
         include_stale=include_stale,
     )
@@ -344,6 +397,15 @@ def load_spreads(
             "min_spread_pct": min_spread_pct,
             "min_abs_funding_24h_pct": min_abs_funding_24h_pct,
             "min_abs_funding_apr_pct": min_abs_funding_apr_pct,
+            "quote": quote,
+            "min_volume_24h_usd": min_volume_24h_usd,
+            "min_market_cap_usd": min_market_cap_usd,
+            "max_market_cap_usd": max_market_cap_usd,
+            "min_fdv_usd": min_fdv_usd,
+            "max_fdv_usd": max_fdv_usd,
+            "max_listing_age_days": max_listing_age_days,
+            "persistence": persistence,
+            "asset_class": asset_class,
             "funding_only": funding_only,
             "include_stale": include_stale,
             "include_unverified": include_unverified,
@@ -378,6 +440,7 @@ def load_spreads(
         "route_kind_counts": dict(
             sorted(Counter(row.route_kind for row in public_universe).items())
         ),
+        "asset_class_counts": dict(Counter(row.asset_class for row in public_universe)),
         "route_kind_token_counts": route_kind_token_counts,
         "lane_token_counts": release_lane_token_counts,
         "top_edges": _top_unique_groups(rankable_universe, metric="edge"),
@@ -416,11 +479,17 @@ def lane_rankable(row: "SpreadTerminalRow") -> bool:
     whether its carry is collectable -- which is why deliverability is applied
     per lane rather than across the board.
     """
-    if price_ratio_implausible(row) or leg_volume_too_thin(row):
+    if price_ratio_implausible(row) or leg_volume_too_thin(row) or not tokenized_route_rankable(row):
         return False
     if getattr(row, "route_kind", None) in TRANSFER_ROUTE_KINDS:
         return route_deliverable(row) is not False
     return True
+
+
+def tokenized_route_rankable(row: "SpreadTerminalRow") -> bool:
+    if getattr(row, "asset_class", "crypto") != "tokenized":
+        return True
+    return tokenized_assets.classify(row.to_dict()).get("status") == "verified"
 
 
 def _release_lane_token_counts(
@@ -464,7 +533,7 @@ _ROW_CACHE: dict[
 # five-second TTL therefore only forced the same 40-80 MB snapshot to be parsed
 # once per warmed view; it added CPU load without improving freshness.
 _ROW_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_ROW_CACHE_SECONDS", "900"))
-_RESULT_CACHE: dict[tuple[Any, ...], tuple[int, float, dict[str, Any]]] = {}
+_RESULT_CACHE: dict[tuple[Any, ...], tuple[Any, float, dict[str, Any]]] = {}
 _RESULT_CACHE_TTL_SECONDS = float(os.environ.get("SPREADBOARD_RESULT_CACHE_SECONDS", "90"))
 _RESULT_CACHE_MAX_ENTRIES = int(os.environ.get("SPREADBOARD_RESULT_CACHE_ENTRIES", "4"))
 # Shortlist a few more tokens than we display so lane filtering inside the
@@ -1294,6 +1363,7 @@ def _row_from_api(
     )
     quote_ts_us = _int_or_none(raw.get("quote_ts_us"))
     age = _age_min(now, quote_ts_us)
+    metadata_entry = (metadata or {}).get(token) or {}
     source_group = "public_api"
     executor_status = _str_or_none(raw.get("executor_status"))
     validation = _str_or_none(raw.get("validation_state"))
@@ -1340,6 +1410,14 @@ def _row_from_api(
     )
     dex_chain = _str_or_none(dex_identity.get("chain_id"))
     dex_contract = _str_or_none(dex_identity.get("token_address"))
+    asset_class = tokenized_assets.classify(
+        {
+            "token": token,
+            "token_name": token_metadata.token_name(token, metadata or {}),
+            "long_market_symbol": long_market_symbol,
+            "short_market_symbol": short_market_symbol,
+        }
+    )["asset_class"]
     long_rails = public_rails.rail_state(rails or {}, long_venue, token)
     short_rails = public_rails.rail_state(rails or {}, short_venue, token)
     blockers.extend(
@@ -1488,6 +1566,16 @@ def _row_from_api(
         ),
         dex_chain=dex_chain,
         dex_contract=dex_contract,
+        long_quote=_market_quote(route_inputs, "long", long_market_symbol, token),
+        short_quote=_market_quote(route_inputs, "short", short_market_symbol, token),
+        market_cap_usd=_float_or_none(metadata_entry.get("market_cap_usd")),
+        fdv_usd=_float_or_none(metadata_entry.get("fdv_usd")),
+        metadata_volume_24h_usd=_float_or_none(
+            metadata_entry.get("market_volume_24h_usd")
+        ),
+        listing_age_days=_listing_age_days(metadata_entry.get("first_seen_at"), now),
+        listing_age_source=_str_or_none(metadata_entry.get("listing_age_source")),
+        asset_class=str(asset_class),
         raw_source_kind=source_kind or bucket,
         mirage_guarded=any(str(item).startswith("mirage_guard:") for item in blockers),
     )
@@ -1579,6 +1667,15 @@ def _filter_rows(rows: list[SpreadTerminalRow], **filters: Any) -> list[SpreadTe
     kind = _normalize_kind_filter(filters.get("kind"))
     min_spread = filters.get("min_spread_pct")
     min_funding = filters.get("min_abs_funding_24h_pct")
+    quote = str(filters.get("quote") or "").upper().strip()
+    min_volume = _float_or_none(filters.get("min_volume_24h_usd"))
+    min_market_cap = _float_or_none(filters.get("min_market_cap_usd"))
+    max_market_cap = _float_or_none(filters.get("max_market_cap_usd"))
+    min_fdv = _float_or_none(filters.get("min_fdv_usd"))
+    max_fdv = _float_or_none(filters.get("max_fdv_usd"))
+    max_listing_age = _float_or_none(filters.get("max_listing_age_days"))
+    persistence = str(filters.get("persistence") or "").casefold().strip()
+    asset_class = str(filters.get("asset_class") or "").casefold().strip()
     funding_only = bool(filters.get("funding_only"))
     include_stale = bool(filters.get("include_stale"))
 
@@ -1594,6 +1691,31 @@ def _filter_rows(rows: list[SpreadTerminalRow], **filters: Any) -> list[SpreadTe
                     continue
             elif row.route_kind != kind:
                 continue
+        if asset_class and row.asset_class != asset_class:
+            continue
+        if quote and quote not in {str(row.long_quote or "").upper(), str(row.short_quote or "").upper()}:
+            continue
+        route_volume = _route_volume_24h(row)
+        if min_volume is not None and (route_volume is None or route_volume < min_volume):
+            continue
+        if min_market_cap is not None and (
+            row.market_cap_usd is None or row.market_cap_usd < min_market_cap
+        ):
+            continue
+        if max_market_cap is not None and (
+            row.market_cap_usd is None or row.market_cap_usd > max_market_cap
+        ):
+            continue
+        if min_fdv is not None and (row.fdv_usd is None or row.fdv_usd < min_fdv):
+            continue
+        if max_fdv is not None and (row.fdv_usd is None or row.fdv_usd > max_fdv):
+            continue
+        if max_listing_age is not None and (
+            row.listing_age_days is None or row.listing_age_days > max_listing_age
+        ):
+            continue
+        if persistence and _funding_persistence_status(row) != persistence:
+            continue
         if not include_stale and row.freshness == "stale":
             continue
         spread = _entrance_spread(row)
@@ -1616,6 +1738,32 @@ def _filter_rows(rows: list[SpreadTerminalRow], **filters: Any) -> list[SpreadTe
             continue
         output.append(row)
     return output
+
+
+def _route_volume_24h(row: SpreadTerminalRow) -> float | None:
+    values = [
+        value
+        for value in (
+            _float_or_none(row.long_volume_24h_usd),
+            _float_or_none(row.short_volume_24h_usd),
+        )
+        if value is not None and value >= 0
+    ]
+    # A two-leg route is only as liquid as its thinner leg. Metadata-wide token
+    # volume is intentionally not substituted for a missing venue leg.
+    return min(values) if len(values) == 2 else None
+
+
+def _funding_persistence_status(row: SpreadTerminalRow) -> str:
+    windows = venue_funding_history.route_windows(row.to_dict())
+    values = [float(value) for value in windows.values() if value is not None]
+    if len(values) < 2:
+        return "insufficient"
+    if all(value > 0 for value in values):
+        return "persistent"
+    if all(value <= 0 for value in values):
+        return "reversing"
+    return "mixed"
 
 
 def _route_mirage_reasons(
@@ -2362,6 +2510,8 @@ def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | 
 
 def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload = row.to_dict()
+    payload["market_events"] = market_events.events_for_route(payload)
+    payload["tokenized_guard"] = tokenized_assets.classify(payload)
     payload["deliverable"] = route_deliverable(row)
     payload["requires_transfer"] = getattr(row, "route_kind", None) in TRANSFER_ROUTE_KINDS
     payload["identity_mismatch"] = price_ratio_implausible(row)
@@ -2636,6 +2786,50 @@ def _nested_float(value: Any, section: str, key: str) -> float | None:
     if not isinstance(section_value, dict):
         return None
     return _float_or_none(section_value.get(key))
+
+
+_KNOWN_QUOTES = ("USDT", "USDC", "FDUSD", "TUSD", "DAI", "USD", "EUR", "GBP", "BTC", "ETH", "BNB")
+
+
+def _market_quote(
+    route_inputs: dict[str, Any],
+    side: str,
+    market_symbol: str | None,
+    token: str,
+) -> str | None:
+    leg = route_inputs.get(side) if isinstance(route_inputs, dict) else None
+    if isinstance(leg, dict):
+        for key in ("quote", "quote_currency", "quoteAsset", "settle"):
+            value = str(leg.get(key) or "").upper().strip()
+            if value:
+                return value
+    symbol = str(market_symbol or "").upper().strip()
+    if not symbol:
+        return None
+    if "/" in symbol:
+        value = symbol.split("/", 1)[1].split(":", 1)[0].split("-", 1)[0]
+        return value or None
+    compact = re.sub(r"[^A-Z0-9]", "", symbol)
+    token_compact = re.sub(r"[^A-Z0-9]", "", str(token or "").upper())
+    if token_compact and compact.startswith(token_compact):
+        compact = compact[len(token_compact) :]
+    for quote in _KNOWN_QUOTES:
+        if compact.startswith(quote) or compact.endswith(quote):
+            return quote
+    return None
+
+
+def _listing_age_days(value: Any, now: float) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - parsed.timestamp()) / 86_400.0)
 
 
 def _freshness(age_min: float | None, max_age_min: float | None) -> str:

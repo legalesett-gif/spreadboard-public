@@ -193,7 +193,7 @@ def test_reply_carries_a_risk_note_and_site_link(board_file):
         board_path=board_file, public_url="https://spreadarbitrage.ink",
     )
     assert "not advice" in body
-    assert "https://spreadarbitrage.ink/markets?q=SIREN" in body
+    assert "https://spreadarbitrage.ink/markets?q=SIREN&amp;view=table" in body
 
 
 def test_injected_markup_never_reaches_the_reply(board_file):

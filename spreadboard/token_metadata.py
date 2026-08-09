@@ -1,7 +1,8 @@
-"""Public token-name metadata used by SpreadBoard.
+"""Public token metadata used by SpreadBoard.
 
 The page render path is disk-only. A background refresh fetches CoinGecko's
-public coin list and writes a compact symbol-to-name cache.
+public coin list and market snapshot, then writes a compact cache. No page
+request reaches a third-party metadata service.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_CACHE_PATH = RUNTIME_DIR / "token_metadata.json"
 COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/list"
+COINGECKO_MARKETS_URL = "https://api.coingecko.com/api/v3/coins/markets"
 DEFAULT_TTL_SECONDS = 24 * 60 * 60
 
 PREFERRED_IDS = {
@@ -137,14 +139,18 @@ def refresh_token_metadata(
             }
         )
 
+    timestamp = _iso_timestamp(current_time)
     tokens: dict[str, dict[str, Any]] = {}
     for symbol in wanted:
         resolved = _resolve_candidate(symbol, candidates.get(symbol) or [])
+        previous = current_tokens.get(symbol) if isinstance(current_tokens.get(symbol), dict) else {}
         if resolved is None:
             tokens[symbol] = {
                 "name": None,
                 "status": "unresolved",
                 "candidate_count": len(candidates.get(symbol) or []),
+                "first_seen_at": previous.get("first_seen_at") or timestamp,
+                "listing_age_source": "scanner_first_seen",
             }
             continue
         tokens[symbol] = {
@@ -152,15 +158,38 @@ def refresh_token_metadata(
             "coin_id": resolved["id"],
             "status": resolved["status"],
             "candidate_count": len(candidates.get(symbol) or []),
+            "first_seen_at": previous.get("first_seen_at") or timestamp,
+            "listing_age_source": "scanner_first_seen",
         }
+        for key in (
+            "market_cap_usd",
+            "fdv_usd",
+            "market_volume_24h_usd",
+            "market_data_updated_at",
+        ):
+            if previous.get(key) is not None:
+                tokens[symbol][key] = previous[key]
+
+    # Market metrics are best-effort enrichment. A rate limit or transient
+    # CoinGecko error must not discard the already-resolved identity cache.
+    try:
+        market_metrics = _fetch_market_metrics(
+            {entry["coin_id"] for entry in tokens.values() if entry.get("coin_id")},
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception:  # noqa: BLE001 - names remain useful without a market snapshot.
+        market_metrics = {}
+    for entry in tokens.values():
+        metrics = market_metrics.get(str(entry.get("coin_id") or ""))
+        if not metrics:
+            continue
+        entry.update(metrics)
+        entry["market_data_updated_at"] = timestamp
 
     payload = {
-        "schema": "spreadboard.token_metadata.v1",
-        "updated_at": datetime.fromtimestamp(current_time, tz=timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z"),
-        "source": "CoinGecko public coins list",
+        "schema": "spreadboard.token_metadata.v2",
+        "updated_at": timestamp,
+        "source": "CoinGecko public coins list and markets snapshot",
         "tokens": tokens,
     }
     _atomic_write(path, payload)
@@ -197,6 +226,62 @@ def _resolve_candidate(symbol: str, candidates: list[dict[str, str]]) -> dict[st
     if len(exact_name) == 1:
         return {**exact_name[0], "status": "exact_name"}
     return None
+
+
+def _fetch_market_metrics(
+    coin_ids: set[str],
+    *,
+    timeout_seconds: float,
+) -> dict[str, dict[str, float | None]]:
+    output: dict[str, dict[str, float | None]] = {}
+    ordered = sorted({str(value) for value in coin_ids if value})
+    # CoinGecko accepts up to 250 ids per page. Smaller chunks keep URLs within
+    # conservative proxy limits and make the cache refresh easy to retry.
+    for start in range(0, len(ordered), 200):
+        params = urlencode(
+            {
+                "vs_currency": "usd",
+                "ids": ",".join(ordered[start : start + 200]),
+                "order": "market_cap_desc",
+                "per_page": "200",
+                "page": "1",
+                "sparkline": "false",
+            }
+        )
+        request = Request(
+            f"{COINGECKO_MARKETS_URL}?{params}",
+            headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"},
+        )
+        with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - public metadata API.
+            rows = json.loads(response.read().decode("utf-8"))
+        if not isinstance(rows, list):
+            raise ValueError("CoinGecko markets response was not a list")
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("id"):
+                continue
+            output[str(row["id"])] = {
+                "market_cap_usd": _number_or_none(row.get("market_cap")),
+                "fdv_usd": _number_or_none(row.get("fully_diluted_valuation")),
+                "market_volume_24h_usd": _number_or_none(row.get("total_volume")),
+            }
+    return output
+
+
+def _number_or_none(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
+def _iso_timestamp(value: float) -> str:
+    return (
+        datetime.fromtimestamp(value, tz=timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _load_payload(path: Path) -> dict[str, Any]:

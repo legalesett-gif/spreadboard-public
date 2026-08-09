@@ -249,7 +249,7 @@ def keyboard(query: Query, *, public_url: str = "") -> dict[str, Any]:
     if public_url:
         rows.append([{
             "text": "Open on SpreadBoard",
-            "url": f"{public_url.rstrip('/')}/markets?q={query.symbol}",
+            "url": f"{public_url.rstrip('/')}/markets?q={query.symbol}&view=table",
         }])
     return {"inline_keyboard": rows}
 
@@ -323,7 +323,7 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
     extra = f"\n<i>Showing top {MAX_ROWS} of {total}.</i>" if total > MAX_ROWS else ""
     link = ""
     if public_url:
-        link = f'\n\n<a href="{escape(public_url.rstrip("/"))}/markets?q={escape(symbol)}">Open full detail on SpreadBoard</a>'
+        link = f'\n\n<a href="{escape(public_url.rstrip("/"))}/markets?q={escape(symbol)}&amp;view=table">Open full detail on SpreadBoard</a>'
     return (
         f"<b>{escape(title)}</b>\n<pre>{escape(body)}</pre>"
         f"{extra}"

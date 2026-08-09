@@ -183,3 +183,42 @@ def test_a_member_cannot_touch_someone_elses_alert(tmp_path, monkeypatch) -> Non
     other_id = other["id"] if isinstance(other, dict) else other.id
     assert accounts.update_market_alert_rule(other_id, rule["id"], {"threshold": 1.0}, db_path=db) is None
     assert accounts.delete_market_alert_rule(other_id, rule["id"], db_path=db) is False
+
+
+def test_filter_presets_and_watchlist_are_account_scoped(tmp_path, monkeypatch) -> None:
+    db = _database(tmp_path, monkeypatch)
+    first = accounts.create_user(
+        email="preset-first@example.com", display_name="First",
+        password="first-secure-password", subscription_status="active", db_path=db,
+    )
+    second = accounts.create_user(
+        email="preset-second@example.com", display_name="Second",
+        password="second-secure-password", subscription_status="active", db_path=db,
+    )
+    preset = accounts.save_filter_preset(first["id"], {
+        "name": "Persistent DEX farms",
+        "query": {"kind": "DEX-FUTURES", "min_spread_pct": "0.5", "funding_only": "1"},
+    }, db_path=db)
+    assert preset["name"] == "Persistent DEX farms"
+    assert preset["query"]["kind"] == "DEX-FUTURES"
+    assert accounts.list_filter_presets(second["id"], db_path=db) == []
+
+    tokens = accounts.replace_watchlist(first["id"], ["siren", "ESPORTS", "SIREN"], db_path=db)
+    assert tokens == ["SIREN", "ESPORTS"]
+    assert accounts.list_watchlist(first["id"], db_path=db) == ["SIREN", "ESPORTS"]
+    assert accounts.list_watchlist(second["id"], db_path=db) == []
+
+    assert accounts.delete_filter_preset(second["id"], preset["id"], db_path=db) is False
+    assert accounts.delete_filter_preset(first["id"], preset["id"], db_path=db) is True
+
+
+def test_filter_presets_reject_unknown_query_fields(tmp_path, monkeypatch) -> None:
+    db = _database(tmp_path, monkeypatch)
+    user = accounts.create_user(
+        email="preset-validation@example.com", display_name="Member",
+        password="member-secure-password", subscription_status="active", db_path=db,
+    )
+    with pytest.raises(ValueError, match="invalid_filter_field"):
+        accounts.save_filter_preset(
+            user["id"], {"name": "Unsafe", "query": {"redirect": "https://example.com"}}, db_path=db
+        )

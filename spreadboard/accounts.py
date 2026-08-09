@@ -34,6 +34,7 @@ class User:
     subscription_status: str
     subscription_expires_at: str | None
     monthly_capital_usd: float | None
+    subscription_tier: str = "research_pro"
     billing_customer_id: str | None = None
     billing_subscription_id: str | None = None
     subscription_cancel_at_period_end: bool = False
@@ -57,6 +58,16 @@ class User:
             return False
         return expires > datetime.now(tz=timezone.utc)
 
+    @property
+    def entitlement_tier(self) -> str:
+        if self.is_admin:
+            return "research_pro"
+        return self.subscription_tier if self.subscription_active else "free"
+
+    def has_tier(self, minimum: str) -> bool:
+        order = {"free": 0, "scanner": 1, "research_pro": 2}
+        return order.get(self.entitlement_tier, 0) >= order.get(str(minimum), 99)
+
     def public_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -67,6 +78,7 @@ class User:
             "subscription_status": self.subscription_status,
             "subscription_expires_at": self.subscription_expires_at,
             "subscription_active": self.subscription_active,
+            "subscription_tier": self.entitlement_tier,
             "monthly_capital_usd": self.monthly_capital_usd,
             "billing_managed": bool(self.billing_customer_id),
             "subscription_cancel_at_period_end": self.subscription_cancel_at_period_end,
@@ -96,6 +108,8 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 subscription_status TEXT NOT NULL DEFAULT 'inactive'
                     CHECK (subscription_status IN ('inactive', 'trialing', 'active', 'past_due', 'cancelled')),
                 subscription_expires_at TEXT,
+                subscription_tier TEXT NOT NULL DEFAULT 'research_pro'
+                    CHECK (subscription_tier IN ('free', 'scanner', 'research_pro')),
                 monthly_capital_usd REAL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -267,6 +281,8 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 period_days INTEGER NOT NULL,
+                subscription_tier TEXT NOT NULL DEFAULT 'research_pro'
+                    CHECK (subscription_tier IN ('scanner', 'research_pro')),
                 list_amount_cents INTEGER NOT NULL,
                 slot_index INTEGER NOT NULL,
                 expected_amount_cents INTEGER NOT NULL,
@@ -308,6 +324,48 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 UNIQUE (user_id, route_key)
             );
             CREATE INDEX IF NOT EXISTS saved_charts_user ON saved_charts(user_id, created_at);
+            CREATE TABLE IF NOT EXISTS filter_presets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                query_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (user_id, name)
+            );
+            CREATE TABLE IF NOT EXISTS watchlist_tokens (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                symbol TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, symbol)
+            );
+            CREATE INDEX IF NOT EXISTS filter_presets_user ON filter_presets(user_id, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS watchlist_tokens_user ON watchlist_tokens(user_id, position);
+            CREATE TABLE IF NOT EXISTS web_push_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                endpoint TEXT NOT NULL UNIQUE,
+                p256dh TEXT NOT NULL,
+                auth TEXT NOT NULL,
+                user_agent TEXT NOT NULL DEFAULT '',
+                active INTEGER NOT NULL DEFAULT 1,
+                failure_count INTEGER NOT NULL DEFAULT 0,
+                last_success_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS web_push_deliveries (
+                notification_id INTEGER NOT NULL REFERENCES in_app_notifications(id) ON DELETE CASCADE,
+                subscription_id INTEGER NOT NULL REFERENCES web_push_subscriptions(id) ON DELETE CASCADE,
+                status TEXT NOT NULL CHECK (status IN ('pending', 'success', 'permanent_failure')),
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (notification_id, subscription_id)
+            );
+            CREATE INDEX IF NOT EXISTS web_push_subscriptions_user ON web_push_subscriptions(user_id, active);
+            CREATE INDEX IF NOT EXISTS web_push_deliveries_status ON web_push_deliveries(status, attempts, updated_at);
             """
         )
         connection.executescript(
@@ -338,6 +396,10 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
             "billing_subscription_id": "TEXT",
             "subscription_cancel_at_period_end": "INTEGER NOT NULL DEFAULT 0",
             "billing_updated_at": "TEXT",
+            "subscription_tier": "TEXT NOT NULL DEFAULT 'research_pro'",
+        })
+        _ensure_columns(connection, "crypto_invoices", {
+            "subscription_tier": "TEXT NOT NULL DEFAULT 'research_pro'",
         })
         _ensure_columns(connection, "position_alert_rules", {
             "last_condition_met": "INTEGER NOT NULL DEFAULT 0",
@@ -501,6 +563,7 @@ def create_user(
     display_name: str,
     password: str,
     subscription_status: str = "trialing",
+    subscription_tier: str | None = None,
     subscription_days: int = 30,
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> dict[str, Any]:
@@ -516,6 +579,9 @@ def create_user(
     if not clean_name or len(clean_name) > 100:
         raise ValueError("invalid_display_name")
     status = subscription_status if subscription_status in {"inactive", "trialing", "active"} else "trialing"
+    tier = str(subscription_tier or ("free" if status == "inactive" else "research_pro"))
+    if tier not in {"free", "scanner", "research_pro"}:
+        raise ValueError("invalid_subscription_tier")
     now = datetime.now(tz=timezone.utc)
     expires = now + timedelta(days=max(1, min(3660, int(subscription_days))))
     connection = _connect(db_path)
@@ -525,11 +591,11 @@ def create_user(
                 """
                 INSERT INTO users (
                     email, display_name, password_hash, role, subscription_status,
-                    subscription_expires_at, created_at, updated_at
-                ) VALUES (?, ?, ?, 'member', ?, ?, ?, ?)
+                    subscription_expires_at, subscription_tier, created_at, updated_at
+                ) VALUES (?, ?, ?, 'member', ?, ?, ?, ?, ?)
                 """,
                 (normalized_email, clean_name, hash_password(password), status,
-                 _utc_iso(expires), _utc_iso(now), _utc_iso(now)),
+                 _utc_iso(expires), tier, _utc_iso(now), _utc_iso(now)),
             )
         except sqlite3.IntegrityError as exc:
             raise ValueError("email_already_registered") from exc
@@ -1122,17 +1188,26 @@ def update_subscription(
     *,
     status: str,
     expires_at: str | None,
+    tier: str | None = None,
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
     if status not in {"inactive", "trialing", "active", "past_due", "cancelled"}:
         raise ValueError("invalid_subscription_status")
     normalized_expiry = _normalize_iso(expires_at) if expires_at else None
+    if tier is not None and tier not in {"free", "scanner", "research_pro"}:
+        raise ValueError("invalid_subscription_tier")
     connection = _connect(db_path)
     try:
-        connection.execute(
-            "UPDATE users SET subscription_status = ?, subscription_expires_at = ?, updated_at = ? WHERE id = ?",
-            (status, normalized_expiry, _utc_iso(), user_id),
-        )
+        if tier is None:
+            connection.execute(
+                "UPDATE users SET subscription_status = ?, subscription_expires_at = ?, updated_at = ? WHERE id = ?",
+                (status, normalized_expiry, _utc_iso(), user_id),
+            )
+        else:
+            connection.execute(
+                "UPDATE users SET subscription_status = ?, subscription_expires_at = ?, subscription_tier = ?, updated_at = ? WHERE id = ?",
+                (status, normalized_expiry, tier, _utc_iso(), user_id),
+            )
         connection.commit()
     finally:
         connection.close()
@@ -1173,6 +1248,7 @@ def apply_billing_event(
             )
         subscription_id = _stripe_id(raw_subscription, "sub_")
         user_id = _billing_user_id(connection, obj, customer_id)
+        billing_tier = _billing_tier(obj)
         result = "ignored_no_user"
         if user_id is not None:
             _assert_customer_owner(connection, user_id, customer_id)
@@ -1191,8 +1267,9 @@ def apply_billing_event(
             if event_type == "checkout.session.completed":
                 connection.execute(
                     """UPDATE users SET billing_provider = 'stripe', billing_customer_id = COALESCE(?, billing_customer_id),
-                       billing_subscription_id = COALESCE(?, billing_subscription_id), billing_updated_at = ?, updated_at = ? WHERE id = ?""",
-                    (customer_id, subscription_id, now, now, user_id),
+                       billing_subscription_id = COALESCE(?, billing_subscription_id),
+                       subscription_tier = COALESCE(?, subscription_tier), billing_updated_at = ?, updated_at = ? WHERE id = ?""",
+                    (customer_id, subscription_id, billing_tier, now, now, user_id),
                 )
                 result = "customer_linked"
             elif event_type.startswith("customer.subscription.") and mismatched_subscription and not explicit_user:
@@ -1203,9 +1280,10 @@ def apply_billing_event(
                 connection.execute(
                     """UPDATE users SET billing_provider = 'stripe', billing_customer_id = COALESCE(?, billing_customer_id),
                        billing_subscription_id = COALESCE(?, billing_subscription_id), subscription_status = ?,
-                       subscription_expires_at = ?, subscription_cancel_at_period_end = ?, billing_updated_at = ?, updated_at = ?
+                       subscription_expires_at = ?, subscription_tier = COALESCE(?, subscription_tier),
+                       subscription_cancel_at_period_end = ?, billing_updated_at = ?, updated_at = ?
                        WHERE id = ?""",
-                    (customer_id, subscription_id, status, expiry, int(bool(obj.get("cancel_at_period_end"))), now, now, user_id),
+                    (customer_id, subscription_id, status, expiry, billing_tier, int(bool(obj.get("cancel_at_period_end"))), now, now, user_id),
                 )
                 result = f"subscription_{status}"
             elif event_type.startswith("invoice.") and (not subscription_id or mismatched_subscription):
@@ -1833,6 +1911,7 @@ def _user_from_row(row: sqlite3.Row, *, csrf_token: str | None = None) -> User:
         subscription_status=str(row["subscription_status"]),
         subscription_expires_at=row["subscription_expires_at"],
         monthly_capital_usd=float(row["monthly_capital_usd"]) if row["monthly_capital_usd"] is not None else None,
+        subscription_tier=(str(row["subscription_tier"]) if "subscription_tier" in keys else "research_pro"),
         billing_customer_id=row["billing_customer_id"] if "billing_customer_id" in keys else None,
         billing_subscription_id=row["billing_subscription_id"] if "billing_subscription_id" in keys else None,
         subscription_cancel_at_period_end=bool(row["subscription_cancel_at_period_end"]) if "subscription_cancel_at_period_end" in keys else False,
@@ -1843,6 +1922,12 @@ def _user_from_row(row: sqlite3.Row, *, csrf_token: str | None = None) -> User:
 def _stripe_id(value: Any, prefix: str) -> str | None:
     candidate = str(value or "")
     return candidate[:255] if candidate.startswith(prefix) else None
+
+
+def _billing_tier(obj: dict[str, Any]) -> str | None:
+    metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+    value = str(metadata.get("spreadboard_tier") or "").strip()
+    return value if value in {"scanner", "research_pro"} else None
 
 
 def _billing_user_id(
@@ -2010,3 +2095,297 @@ def delete_saved_chart(
         return cursor.rowcount > 0
     finally:
         connection.close()
+
+
+FILTER_PRESET_FIELDS = {
+    "q", "exchange", "kind", "min_spread_pct", "min_abs_funding_24h_pct",
+    "sort", "direction", "funding_only", "quote", "min_volume_24h_usd",
+    "min_market_cap_usd", "max_market_cap_usd", "min_fdv_usd", "max_fdv_usd",
+    "max_listing_age_days", "asset_class", "persistence", "view", "notional_usd",
+}
+
+
+def _preset_query(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError("invalid_filter_query")
+    output: dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        key = str(raw_key).strip()
+        if key not in FILTER_PRESET_FIELDS:
+            raise ValueError(f"invalid_filter_field:{key[:40]}")
+        text = str(raw_value or "").strip()[:120]
+        if text:
+            output[key] = text
+    return output
+
+
+def save_filter_preset(
+    user_id: int, payload: dict[str, Any], *, db_path: Path | str = DEFAULT_DB_PATH
+) -> dict[str, Any]:
+    name = " ".join(str(payload.get("name") or "").split())[:60]
+    if not name:
+        raise ValueError("filter_preset_requires_name")
+    query = _preset_query(payload.get("query"))
+    now = _utc_iso()
+    connection = _connect(db_path)
+    try:
+        count = connection.execute(
+            "SELECT COUNT(*) FROM filter_presets WHERE user_id = ?", (int(user_id),)
+        ).fetchone()[0]
+        existing = connection.execute(
+            "SELECT id FROM filter_presets WHERE user_id = ? AND name = ?", (int(user_id), name)
+        ).fetchone()
+        if count >= 20 and existing is None:
+            raise ValueError("filter_preset_limit_reached")
+        connection.execute(
+            """INSERT INTO filter_presets (user_id, name, query_json, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(user_id, name) DO UPDATE SET
+                   query_json = excluded.query_json, updated_at = excluded.updated_at""",
+            (int(user_id), name, json.dumps(query, sort_keys=True), now, now),
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM filter_presets WHERE user_id = ? AND name = ?", (int(user_id), name)
+        ).fetchone()
+        result = dict(row) if row else {}
+        result["query"] = json.loads(result.pop("query_json", "{}"))
+        return result
+    finally:
+        connection.close()
+
+
+def list_filter_presets(
+    user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> list[dict[str, Any]]:
+    connection = _connect(db_path)
+    try:
+        rows = connection.execute(
+            "SELECT * FROM filter_presets WHERE user_id = ? ORDER BY updated_at DESC, id DESC",
+            (int(user_id),),
+        ).fetchall()
+        output = []
+        for row in rows:
+            item = dict(row)
+            item["query"] = json.loads(item.pop("query_json", "{}"))
+            output.append(item)
+        return output
+    finally:
+        connection.close()
+
+
+def delete_filter_preset(
+    user_id: int, preset_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> bool:
+    connection = _connect(db_path)
+    try:
+        cursor = connection.execute(
+            "DELETE FROM filter_presets WHERE id = ? AND user_id = ?", (int(preset_id), int(user_id))
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    finally:
+        connection.close()
+
+
+def _watch_symbol(value: Any) -> str:
+    symbol = "".join(char for char in str(value or "").upper() if char.isalnum() or char in "_-")[:24]
+    return symbol
+
+
+def replace_watchlist(
+    user_id: int, symbols: Any, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> list[str]:
+    if not isinstance(symbols, list):
+        raise ValueError("watchlist_requires_tokens")
+    clean = list(dict.fromkeys(filter(None, (_watch_symbol(item) for item in symbols))))[:100]
+    connection = _connect(db_path)
+    try:
+        connection.execute("DELETE FROM watchlist_tokens WHERE user_id = ?", (int(user_id),))
+        now = _utc_iso()
+        connection.executemany(
+            "INSERT INTO watchlist_tokens (user_id, symbol, position, created_at) VALUES (?, ?, ?, ?)",
+            [(int(user_id), symbol, position, now) for position, symbol in enumerate(clean)],
+        )
+        connection.commit()
+        return clean
+    finally:
+        connection.close()
+
+
+def list_watchlist(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> list[str]:
+    connection = _connect(db_path)
+    try:
+        return [
+            str(row["symbol"])
+            for row in connection.execute(
+                "SELECT symbol FROM watchlist_tokens WHERE user_id = ? ORDER BY position, created_at",
+                (int(user_id),),
+            )
+        ]
+    finally:
+        connection.close()
+
+
+def save_web_push_subscription(
+    user_id: int,
+    payload: dict[str, Any],
+    *,
+    user_agent: str = "",
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    endpoint = str(payload.get("endpoint") or "").strip()
+    keys = payload.get("keys") if isinstance(payload.get("keys"), dict) else {}
+    p256dh = str(keys.get("p256dh") or "").strip()
+    auth = str(keys.get("auth") or "").strip()
+    _validate_web_push_endpoint(endpoint)
+    if not (40 <= len(p256dh) <= 256 and 8 <= len(auth) <= 128):
+        raise ValueError("invalid_web_push_keys")
+    if not all(char.isalnum() or char in "-_=" for char in p256dh + auth):
+        raise ValueError("invalid_web_push_keys")
+    now = _utc_iso()
+    connection = _connect(db_path)
+    try:
+        existing = connection.execute(
+            "SELECT user_id FROM web_push_subscriptions WHERE endpoint = ?", (endpoint,)
+        ).fetchone()
+        if existing is not None and int(existing["user_id"]) != int(user_id):
+            raise ValueError("web_push_subscription_owned_by_another_account")
+        connection.execute(
+            """INSERT INTO web_push_subscriptions (
+                   user_id, endpoint, p256dh, auth, user_agent, active,
+                   failure_count, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)
+               ON CONFLICT(endpoint) DO UPDATE SET
+                   user_id = excluded.user_id, p256dh = excluded.p256dh,
+                   auth = excluded.auth, user_agent = excluded.user_agent,
+                   active = 1, failure_count = 0, updated_at = excluded.updated_at""",
+            (int(user_id), endpoint, p256dh, auth, str(user_agent or "")[:300], now, now),
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT id, user_id, active, created_at, updated_at FROM web_push_subscriptions WHERE endpoint = ? AND user_id = ?",
+            (endpoint, int(user_id)),
+        ).fetchone()
+        return dict(row) if row else {}
+    finally:
+        connection.close()
+
+
+def remove_web_push_subscription(
+    user_id: int,
+    endpoint: str,
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> bool:
+    connection = _connect(db_path)
+    try:
+        cursor = connection.execute(
+            "DELETE FROM web_push_subscriptions WHERE user_id = ? AND endpoint = ?",
+            (int(user_id), str(endpoint or "").strip()),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    finally:
+        connection.close()
+
+
+def web_push_subscription_count(
+    user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> int:
+    connection = _connect(db_path)
+    try:
+        return int(
+            connection.execute(
+                "SELECT COUNT(*) FROM web_push_subscriptions WHERE user_id = ? AND active = 1",
+                (int(user_id),),
+            ).fetchone()[0]
+        )
+    finally:
+        connection.close()
+
+
+def pending_web_push_deliveries(
+    *, db_path: Path | str = DEFAULT_DB_PATH, limit: int = 100
+) -> list[dict[str, Any]]:
+    connection = _connect(db_path)
+    try:
+        rows = connection.execute(
+            """SELECT n.id AS notification_id, n.user_id, n.title, n.body,
+                      s.id AS subscription_id, s.endpoint, s.p256dh, s.auth,
+                      COALESCE(d.attempts, 0) AS attempts
+               FROM in_app_notifications n
+               JOIN web_push_subscriptions s
+                 ON s.user_id = n.user_id AND s.active = 1
+                    AND n.created_at >= s.created_at
+               LEFT JOIN web_push_deliveries d
+                 ON d.notification_id = n.id AND d.subscription_id = s.id
+               WHERE (d.status IS NULL OR d.status = 'pending')
+                 AND COALESCE(d.attempts, 0) < 3
+               ORDER BY n.id, s.id LIMIT ?""",
+            (max(1, min(500, int(limit))),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
+
+
+def record_web_push_delivery(
+    notification_id: int,
+    subscription_id: int,
+    *,
+    status: str,
+    error: str = "",
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> None:
+    if status not in {"pending", "success", "permanent_failure"}:
+        raise ValueError("invalid_web_push_delivery_status")
+    now = _utc_iso()
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """INSERT INTO web_push_deliveries (
+                   notification_id, subscription_id, status, attempts, last_error, updated_at
+               ) VALUES (?, ?, ?, 1, ?, ?)
+               ON CONFLICT(notification_id, subscription_id) DO UPDATE SET
+                   status = excluded.status, attempts = web_push_deliveries.attempts + 1,
+                   last_error = excluded.last_error, updated_at = excluded.updated_at""",
+            (int(notification_id), int(subscription_id), status, str(error or "")[:300], now),
+        )
+        if status == "success":
+            connection.execute(
+                "UPDATE web_push_subscriptions SET failure_count = 0, last_success_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, int(subscription_id)),
+            )
+        else:
+            connection.execute(
+                """UPDATE web_push_subscriptions SET
+                       failure_count = failure_count + 1,
+                       active = CASE WHEN ? = 'permanent_failure' THEN 0 ELSE active END,
+                       updated_at = ? WHERE id = ?""",
+                (status, now, int(subscription_id)),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _validate_web_push_endpoint(endpoint: str) -> None:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(endpoint)
+    host = str(parsed.hostname or "").casefold()
+    allowed = {
+        "fcm.googleapis.com",
+        "web.push.apple.com",
+        "push.services.mozilla.com",
+        "updates.push.services.mozilla.com",
+    }
+    allowed.update(
+        item.strip().casefold()
+        for item in os.environ.get("SPREADBOARD_WEB_PUSH_ALLOWED_HOSTS", "").split(",")
+        if item.strip()
+    )
+    host_allowed = host in allowed or host.endswith(".notify.windows.com")
+    if parsed.scheme != "https" or not host_allowed or not parsed.path or len(endpoint) > 2048:
+        raise ValueError("invalid_web_push_endpoint")

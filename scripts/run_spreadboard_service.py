@@ -38,6 +38,7 @@ from spreadboard import (
     rail_watch,
     telegram_bot,
     token_metadata,
+    web_push,
     verified_identity,
 )  # noqa: E402
 from spreadboard.server import SpreadBoardHandler, SpreadBoardServer  # noqa: E402
@@ -477,10 +478,18 @@ def main() -> int:
         db_path=server.accounts_path,
         poll_seconds=float(os.environ.get("SPREADBOARD_TELEGRAM_MEMBERSHIP_SECONDS", "60")),
     )
+    public_feed_worker = telegram_bot.PublicFeedWorker(
+        board_path=board_path,
+        poll_seconds=float(os.environ.get("SPREADBOARD_TELEGRAM_PUBLIC_FEED_SECONDS", "900")),
+    )
     market_alert_worker = alerts.UserMarketAlertWorker(
         board_path=board_path,
         accounts_path=server.accounts_path,
         poll_seconds=float(os.environ.get("SPREADBOARD_MARKET_ALERT_SECONDS", "10")),
+    )
+    web_push_worker = web_push.Worker(
+        accounts_path=server.accounts_path,
+        poll_seconds=float(os.environ.get("SPREADBOARD_WEB_PUSH_SECONDS", "5")),
     )
     rail_reopen_worker = rail_watch.RailReopenWatcher(
         poll_seconds=float(os.environ.get("SPREADBOARD_RAIL_REOPEN_SECONDS", "300")),
@@ -508,7 +517,9 @@ def main() -> int:
     bulk_quote_loop.start()
     position_alert_worker.start()
     membership_worker.start()
+    public_feed_worker.start()
     market_alert_worker.start()
+    web_push_worker.start()
     rail_reopen_worker.start()
     _log(f"serving http://{host}:{port}")
     try:
@@ -516,7 +527,9 @@ def main() -> int:
     finally:
         position_alert_worker.stop()
         membership_worker.stop()
+        public_feed_worker.stop()
         market_alert_worker.stop()
+        web_push_worker.stop()
         rail_reopen_worker.stop()
         refresh_loop.stop()
         server.server_close()

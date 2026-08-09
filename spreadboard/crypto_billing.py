@@ -40,8 +40,13 @@ TOKENS: dict[str, dict[str, Any]] = {
 }
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
-# period_days -> list price in cents
-PERIODS: dict[int, int] = {30: 18_000, 90: 45_000, 365: 165_000}
+# period_days -> list price in cents. PERIODS remains the Research Pro alias so
+# existing integrations and invoices keep the original $180 economics.
+TIER_PERIODS: dict[str, dict[int, int]] = {
+    "scanner": {30: 4_900, 90: 13_500, 365: 49_000},
+    "research_pro": {30: 18_000, 90: 45_000, 365: 165_000},
+}
+PERIODS: dict[int, int] = TIER_PERIODS["research_pro"]
 
 TOLERANCE_CENTS = 200          # +/- $2.00 absorbs exchange withdrawal fees
 SLOT_STEP_CENTS = 401          # > 2 * TOLERANCE, so bands can never overlap
@@ -99,6 +104,15 @@ def status() -> dict[str, Any]:
             {"days": days, "amount_cents": cents, "label": format_amount(cents)}
             for days, cents in sorted(PERIODS.items())
         ],
+        "tiers": {
+            tier: {
+                "periods": [
+                    {"days": days, "amount_cents": cents, "label": format_amount(cents)}
+                    for days, cents in sorted(periods.items())
+                ]
+            }
+            for tier, periods in TIER_PERIODS.items()
+        },
     }
 
 
@@ -174,10 +188,14 @@ def create_invoice(
     user_id: int,
     period_days: int,
     *,
+    tier: str = "research_pro",
     db_path=accounts.DEFAULT_DB_PATH,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    if period_days not in PERIODS:
+    periods = TIER_PERIODS.get(str(tier))
+    if periods is None:
+        raise CryptoBillingError("unknown_subscription_tier")
+    if period_days not in periods:
         raise CryptoBillingError("unknown_period")
     settings = config()
     if not settings.configured:
@@ -186,7 +204,7 @@ def create_invoice(
     moment = (now or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
     now_iso = accounts._utc_iso(moment)
     expires_iso = accounts._utc_iso(moment + timedelta(seconds=INVOICE_WINDOW_SECONDS))
-    list_amount = PERIODS[period_days]
+    list_amount = periods[period_days]
 
     connection = accounts._connect(db_path)
     try:
@@ -200,17 +218,21 @@ def create_invoice(
         # Reuse this member's own live invoice for the same period rather than
         # burning a second amount slot on someone who simply reloaded the page.
         for row in open_rows:
-            if int(row["user_id"]) == int(user_id) and int(row["period_days"]) == period_days:
+            if (
+                int(row["user_id"]) == int(user_id)
+                and int(row["period_days"]) == period_days
+                and str(row["subscription_tier"]) == tier
+            ):
                 connection.commit()
                 return _invoice_dict(row)
 
         taken = [int(row["expected_amount_cents"]) for row in open_rows]
         slot, expected = _allocate_amount(taken, list_amount)
         cursor = connection.execute(
-            "INSERT INTO crypto_invoices (user_id, period_days, list_amount_cents, slot_index, "
+            "INSERT INTO crypto_invoices (user_id, period_days, subscription_tier, list_amount_cents, slot_index, "
             "expected_amount_cents, status, created_at, expires_at) "
-            "VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
-            (user_id, period_days, list_amount, slot, expected, now_iso, expires_iso),
+            "VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+            (user_id, period_days, tier, list_amount, slot, expected, now_iso, expires_iso),
         )
         connection.commit()
         row = connection.execute(
@@ -227,6 +249,7 @@ def _invoice_dict(row: sqlite3.Row) -> dict[str, Any]:
         "id": int(row["id"]),
         "user_id": int(row["user_id"]),
         "period_days": int(row["period_days"]),
+        "subscription_tier": str(row["subscription_tier"]),
         "status": str(row["status"]),
         "amount_cents": int(row["expected_amount_cents"]),
         "amount_display": f"{int(row['expected_amount_cents']) / 100:.2f}",
@@ -376,7 +399,8 @@ def record_transfer(
         raise CryptoBillingError("invoice_user_missing")
     expires_at = _next_expiry(user, int(chosen["period_days"]), moment)
     accounts.update_subscription(
-        int(chosen["user_id"]), status="active", expires_at=expires_at, db_path=db_path
+        int(chosen["user_id"]), status="active", expires_at=expires_at,
+        tier=str(chosen["subscription_tier"]), db_path=db_path
     )
     return {
         "resolution": "settled",
@@ -420,7 +444,8 @@ def settle_manually(
         raise CryptoBillingError("invoice_user_missing")
     expires_at = _next_expiry(user, int(row["period_days"]), moment)
     accounts.update_subscription(
-        int(row["user_id"]), status="active", expires_at=expires_at, db_path=db_path
+        int(row["user_id"]), status="active", expires_at=expires_at,
+        tier=str(row["subscription_tier"]), db_path=db_path
     )
     return {
         "resolution": "settled",

@@ -23,6 +23,8 @@ class StripeConfig:
     secret_key: str
     webhook_secret: str
     price_id: str
+    scanner_price_id: str
+    research_pro_price_id: str
     public_url: str
     plan_label: str
 
@@ -35,16 +37,31 @@ class StripeConfig:
         return "unknown"
 
     @property
-    def checkout_ready(self) -> bool:
+    def provider_ready(self) -> bool:
         allow_test = os.environ.get("SPREADBOARD_ALLOW_TEST_BILLING", "").strip().lower() in {
             "1", "true", "yes", "on",
         }
         return bool(
             self.secret_key
-            and self.price_id
             and self.public_url
             and (self.mode == "live" or (self.mode == "test" and allow_test))
         )
+
+    @property
+    def checkout_ready(self) -> bool:
+        return self.provider_ready and bool(self.research_pro_price_id)
+
+    def tier_checkout_ready(self, tier: str) -> bool:
+        price_id = self.scanner_price_id if tier == "scanner" else self.research_pro_price_id
+        return self.provider_ready and bool(price_id)
+
+    def tier_price_id(self, tier: str) -> str:
+        if tier not in {"scanner", "research_pro"}:
+            raise BillingError("unknown_subscription_tier")
+        price_id = self.scanner_price_id if tier == "scanner" else self.research_pro_price_id
+        if not price_id:
+            raise BillingError("tier_checkout_not_configured")
+        return price_id
 
     @property
     def webhook_ready(self) -> bool:
@@ -55,10 +72,14 @@ def config() -> StripeConfig:
     public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
     if public_url and urlparse(public_url).scheme not in {"https", "http"}:
         public_url = ""
+    legacy_price = os.environ.get("SPREADBOARD_STRIPE_PRICE_ID", "").strip()
+    research_price = os.environ.get("SPREADBOARD_STRIPE_RESEARCH_PRO_PRICE_ID", "").strip() or legacy_price
     return StripeConfig(
         secret_key=os.environ.get("SPREADBOARD_STRIPE_SECRET_KEY", "").strip(),
         webhook_secret=os.environ.get("SPREADBOARD_STRIPE_WEBHOOK_SECRET", "").strip(),
-        price_id=os.environ.get("SPREADBOARD_STRIPE_PRICE_ID", "").strip(),
+        price_id=research_price,
+        scanner_price_id=os.environ.get("SPREADBOARD_STRIPE_SCANNER_PRICE_ID", "").strip(),
+        research_pro_price_id=research_price,
         public_url=public_url,
         plan_label=os.environ.get("SPREADBOARD_SUBSCRIPTION_LABEL", "Monthly membership").strip()
         or "Monthly membership",
@@ -74,6 +95,10 @@ def status() -> dict[str, Any]:
         "webhook_ready": value.webhook_ready,
         "configured": value.checkout_ready and value.webhook_ready,
         "plan_label": value.plan_label,
+        "tiers": {
+            "scanner": {"checkout_ready": value.tier_checkout_ready("scanner"), "monthly_cents": 4_900},
+            "research_pro": {"checkout_ready": value.tier_checkout_ready("research_pro"), "monthly_cents": 18_000},
+        },
         "providers": {
             "stripe": {
                 "mode": value.mode,
@@ -91,18 +116,22 @@ def status() -> dict[str, Any]:
     }
 
 
-def create_checkout_session(user: Any) -> str:
+def create_checkout_session(user: Any, *, tier: str = "research_pro") -> str:
     value = config()
-    if not value.checkout_ready:
+    if not value.tier_checkout_ready(tier):
         raise BillingError("billing_not_configured")
+    price_id = value.tier_price_id(tier)
     params: dict[str, str] = {
         "mode": "subscription",
-        "line_items[0][price]": value.price_id,
+        "line_items[0][price]": price_id,
         "line_items[0][quantity]": "1",
         "success_url": f"{value.public_url}/account?billing=success",
         "cancel_url": f"{value.public_url}/subscription?billing=cancelled",
         "client_reference_id": str(user.id),
         "subscription_data[metadata][spreadboard_user_id]": str(user.id),
+        "subscription_data[metadata][spreadboard_tier]": tier,
+        "metadata[spreadboard_user_id]": str(user.id),
+        "metadata[spreadboard_tier]": tier,
         "allow_promotion_codes": "true",
     }
     if getattr(user, "billing_customer_id", None):
@@ -112,7 +141,7 @@ def create_checkout_session(user: Any) -> str:
     result = _stripe_post(
         "/v1/checkout/sessions",
         params,
-        idempotency_key=f"spreadboard-checkout-{user.id}-{int(time.time() // 86400)}",
+        idempotency_key=f"spreadboard-checkout-{user.id}-{tier}-{int(time.time() // 86400)}",
     )
     return _trusted_stripe_url(result.get("url"), {"checkout.stripe.com"})
 

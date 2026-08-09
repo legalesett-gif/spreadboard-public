@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sqlite3
 from http.cookies import SimpleCookie
 import subprocess
@@ -35,6 +36,7 @@ from spreadboard import (  # noqa: E402
     chart_catalog,
     crypto_billing,
     crypto_watcher,
+    executor_boundary,
     fair_price,
     historical_spreads,
     intel,
@@ -42,6 +44,7 @@ from spreadboard import (  # noqa: E402
     live_book_cache,
     market_history,
     venue_funding_history,
+    web_push,
     portfolio,
     telegram_bot,
 )
@@ -293,6 +296,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             "/alerts",
             "/watchlist",
             "/favicon.ico",
+            "/service-worker.js",
+            "/executor",
         }
         if parsed.path in public_paths or parsed.path.startswith(("/pair/", "/token/", "/api/", "/assets/")):
             self._send_empty(HTTPStatus.OK)
@@ -312,6 +317,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_register_page())
             elif parsed.path == "/pricing":
                 self._send_html(render_pricing_page())
+            elif parsed.path == "/telegram":
+                self._send_html(render_telegram_landing_page(self.server.board_path))
+            elif parsed.path == "/methodology":
+                self._send_html(render_methodology_page())
+            elif parsed.path == "/proof":
+                self._send_html(render_proof_page())
+            elif parsed.path == "/executor":
+                self._send_html(render_executor_boundary_page())
             elif parsed.path == "/fair":
                 self._send_html(render_fair_price_page())
             elif parsed.path == "/set-password":
@@ -329,7 +342,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/refunds":
                 self._send_html(render_legal_page("refunds"))
             elif parsed.path == "/subscription":
-                self._send_html(render_subscription_page())
+                self._send_html(render_subscription_page(query))
             elif parsed.path == "/account":
                 self._send_html(render_account_page(self.server.board_path, self.server.accounts_path))
             elif parsed.path.startswith("/api/billing/crypto/invoice/"):
@@ -371,6 +384,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/notification-preferences":
                 user = self._required_user()
                 self._send_json({"ok": True, "preferences": accounts.notification_preferences(user.id, db_path=self.server.accounts_path)})
+            elif parsed.path == "/api/web-push/status":
+                user = self._required_user()
+                self._send_json({
+                    "ok": True,
+                    **web_push.status(),
+                    "subscription_count": accounts.web_push_subscription_count(
+                        user.id, db_path=self.server.accounts_path
+                    ),
+                })
             elif parsed.path == "/api/market-alert-rules":
                 user = self._required_user()
                 self._send_json({"ok": True, "rules": accounts.list_market_alert_rules(user.id, db_path=self.server.accounts_path)})
@@ -380,6 +402,18 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "charts": accounts.list_saved_charts(user.id, db_path=self.server.accounts_path),
                 })
+            elif parsed.path == "/api/filter-presets":
+                user = self._required_user()
+                self._send_json({
+                    "ok": True,
+                    "presets": accounts.list_filter_presets(user.id, db_path=self.server.accounts_path),
+                })
+            elif parsed.path == "/api/watchlist":
+                user = self._required_user()
+                self._send_json({
+                    "ok": True,
+                    "tokens": accounts.list_watchlist(user.id, db_path=self.server.accounts_path),
+                })
             elif parsed.path == "/api/account-users":
                 user = self._required_user()
                 if not user.is_admin:
@@ -387,15 +421,24 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 else:
                     self._send_json({"ok": True, "users": accounts.list_users(db_path=self.server.accounts_path)})
             elif parsed.path == "/":
-                self._send_html(render_markets_page(self.server.board_path, self.server.config, query))
+                self._send_html(render_markets_page(
+                    self.server.board_path, self.server.config, query,
+                    user=getattr(self, "current_user", None), accounts_path=self.server.accounts_path,
+                ))
             elif parsed.path == "/markets":
-                self._send_html(render_markets_page(self.server.board_path, self.server.config, query))
+                self._send_html(render_markets_page(
+                    self.server.board_path, self.server.config, query,
+                    user=getattr(self, "current_user", None), accounts_path=self.server.accounts_path,
+                ))
             elif parsed.path == "/intel":
                 self._send_html(render_intel_page(self.server.board_path, self.server.config, query))
             elif parsed.path == "/triage":
                 self._send_html(render_triage_page(self.server.board_path, self.server.config, query))
             elif parsed.path == "/arbitrage":
-                self._send_html(render_markets_page(self.server.board_path, self.server.config, query))
+                self._send_html(render_markets_page(
+                    self.server.board_path, self.server.config, query,
+                    user=getattr(self, "current_user", None), accounts_path=self.server.accounts_path,
+                ))
             elif parsed.path == "/charts":
                 self._send_html(render_charts_page(
                     self.server.board_path,
@@ -493,11 +536,19 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     self.server.alert_watcher,
                     self.server.position_alert_worker,
                 ))
+            elif parsed.path == "/api/executor-boundary":
+                self._send_json({"ok": True, **executor_boundary.status()})
             elif parsed.path == "/assets/lightweight-charts.js":
                 self._send_asset(
                     Path(__file__).with_name("static")
                     / "lightweight-charts.standalone.production.js",
                     "text/javascript; charset=utf-8",
+                )
+            elif parsed.path == "/service-worker.js":
+                self._send_asset(
+                    Path(__file__).with_name("static") / "service-worker.js",
+                    "text/javascript; charset=utf-8",
+                    cache_control="no-cache",
                 )
             elif parsed.path == "/favicon.ico":
                 self._send_empty(HTTPStatus.NO_CONTENT)
@@ -571,7 +622,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     user_agent=self.headers.get("User-Agent", ""),
                     db_path=self.server.accounts_path,
                 )
-                self._send_json({"ok": True, "url": billing.create_checkout_session(user)})
+                tier = str(payload.get("tier") or "research_pro")
+                if tier not in {"scanner", "research_pro"}:
+                    raise ValueError("invalid_subscription_tier")
+                checkout_url = (
+                    billing.create_checkout_session(user)
+                    if tier == "research_pro"
+                    else billing.create_checkout_session(user, tier=tier)
+                )
+                self._send_json({"ok": True, "url": checkout_url})
             elif parsed.path == "/api/billing/portal":
                 self._send_json({"ok": True, "url": billing.create_portal_session(user)})
             elif parsed.path == "/api/billing/crypto/invoice":
@@ -590,7 +649,10 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 except (TypeError, ValueError):
                     raise ValueError("invalid_period") from None
                 invoice = crypto_billing.create_invoice(
-                    user.id, period_days, db_path=self.server.accounts_path
+                    user.id,
+                    period_days,
+                    tier=str(payload.get("tier") or "research_pro"),
+                    db_path=self.server.accounts_path,
                 )
                 self._send_json({"ok": True, "invoice": invoice}, status=HTTPStatus.CREATED)
             elif parsed.path == "/api/billing/crypto/settle":
@@ -639,6 +701,33 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     user.id, payload, db_path=self.server.accounts_path
                 )
                 self._send_json({"ok": True, "preferences": preferences})
+            elif parsed.path == "/api/web-push/subscribe":
+                if not web_push.status()["configured"]:
+                    raise ValueError("web_push_not_configured")
+                subscription = accounts.save_web_push_subscription(
+                    user.id,
+                    payload,
+                    user_agent=self.headers.get("User-Agent", ""),
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json({"ok": True, "subscription": subscription}, status=HTTPStatus.CREATED)
+            elif parsed.path == "/api/web-push/unsubscribe":
+                removed = accounts.remove_web_push_subscription(
+                    user.id,
+                    str(payload.get("endpoint") or ""),
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json({"ok": True, "removed": removed})
+            elif parsed.path == "/api/web-push/test":
+                if not web_push.status()["configured"]:
+                    raise ValueError("web_push_not_configured")
+                notification = accounts.create_notification(
+                    user.id,
+                    title="SpreadBoard browser test",
+                    body="Web Push is connected. Future route alerts can reach this browser while SpreadBoard is closed.",
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json({"ok": True, "queued": True, "notification_id": notification["id"]})
             elif parsed.path == "/api/market-alert-rules":
                 try:
                     rule = accounts.add_market_alert_rule(
@@ -669,6 +758,22 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     db_path=self.server.accounts_path,
                 )
                 self._send_json({"ok": removed})
+            elif parsed.path == "/api/filter-presets":
+                preset = accounts.save_filter_preset(
+                    user.id, payload, db_path=self.server.accounts_path
+                )
+                self._send_json({"ok": True, "preset": preset}, status=HTTPStatus.CREATED)
+            elif parsed.path == "/api/filter-presets/delete":
+                preset_id = int(payload.get("id") or 0)
+                removed = accounts.delete_filter_preset(
+                    user.id, preset_id, db_path=self.server.accounts_path
+                )
+                self._send_json({"ok": removed}, status=HTTPStatus.OK if removed else HTTPStatus.NOT_FOUND)
+            elif parsed.path == "/api/watchlist":
+                tokens = accounts.replace_watchlist(
+                    user.id, payload.get("tokens"), db_path=self.server.accounts_path
+                )
+                self._send_json({"ok": True, "tokens": tokens})
             elif parsed.path.startswith("/api/market-alert-rules/"):
                 # This server speaks GET and POST only, so a member's edits and
                 # deletes ride on POST sub-paths rather than PATCH/DELETE.
@@ -787,7 +892,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.current_user = None
         if not accounts.auth_required():
             return True
-        public = path in {"/login", "/register", "/pricing", "/guide", "/terms", "/privacy", "/refunds", "/free", "/api/stream/free", "/set-password", "/api/set-password", "/api/login", "/api/register", "/api/health", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico"} or path.startswith("/assets/")
+        public = path in {"/login", "/register", "/pricing", "/telegram", "/methodology", "/proof", "/executor", "/guide", "/terms", "/privacy", "/refunds", "/free", "/api/stream/free", "/set-password", "/api/set-password", "/api/login", "/api/register", "/api/health", "/api/executor-boundary", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico", "/service-worker.js"} or path.startswith("/assets/")
         token = self._session_token()
         user = accounts.user_for_session(token, self.server.accounts_path) if token else None
         self.current_user = user
@@ -818,6 +923,21 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_empty(HTTPStatus.PAYMENT_REQUIRED)
             else:
                 self._redirect("/subscription")
+            return False
+        research_only = {
+            "/intel", "/triage", "/signals", "/community", "/playbook",
+            "/api/intel", "/api/triage", "/api/signals", "/api/community", "/api/playbook",
+        }
+        if path in research_only and not user.has_tier("research_pro"):
+            if path.startswith("/api/"):
+                self._send_json(
+                    {"ok": False, "error": "research_pro_required"},
+                    status=HTTPStatus.FORBIDDEN,
+                )
+            elif head_only:
+                self._send_empty(HTTPStatus.FORBIDDEN)
+            else:
+                self._redirect("/pricing?upgrade=research_pro")
             return False
         return True
 
@@ -1053,11 +1173,17 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def _send_asset(self, path: Path, content_type: str) -> None:
+    def _send_asset(
+        self,
+        path: Path,
+        content_type: str,
+        *,
+        cache_control: str = "public, max-age=604800, immutable",
+    ) -> None:
         payload = path.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", "public, max-age=604800, immutable")
+        self.send_header("Cache-Control", cache_control)
         self._send_security_headers()
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
@@ -1223,6 +1349,15 @@ def api_market_spreads(
             min_spread_pct=_query_float(query, "min_spread_pct"),
             min_abs_funding_24h_pct=min_funding_24h,
             min_abs_funding_apr_pct=min_funding_apr,
+            quote=_query_first(query, "quote"),
+            min_volume_24h_usd=_query_float(query, "min_volume_24h_usd"),
+            min_market_cap_usd=_query_float(query, "min_market_cap_usd"),
+            max_market_cap_usd=_query_float(query, "max_market_cap_usd"),
+            min_fdv_usd=_query_float(query, "min_fdv_usd"),
+            max_fdv_usd=_query_float(query, "max_fdv_usd"),
+            max_listing_age_days=_query_float(query, "max_listing_age_days"),
+            persistence=_query_first(query, "persistence"),
+            asset_class=_query_first(query, "asset_class"),
             funding_only=_query_bool(query, "funding_only"),
             include_stale=_market_include_stale(query),
             include_unverified=_query_bool(query, "include_unverified"),
@@ -2788,7 +2923,14 @@ def _board_stream_rows(
     return rows
 
 
-def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
+def render_markets_page(
+    board_path: Path,
+    config: dict[str, Any],
+    query: dict[str, list[str]],
+    *,
+    user: accounts.User | None = None,
+    accounts_path: Path | str = accounts.DEFAULT_DB_PATH,
+) -> str:
     del config
     data = api_market_spreads(board_path, query)
     summary = data.get("summary") or {}
@@ -2796,6 +2938,7 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
     source_health = data.get("source_health") or {}
     api_health_data = source_health.get("canonical_api") or {}
     pagination = data.get("pagination") or {}
+    pro_view = (_query_first(query, "view") or "grouped") == "table"
     source_ready = data.get("ok") and api_health_data.get("status") == "fresh"
     # Prices arrive over the stream, so a reload is only needed to pick up
     # structural changes -- a token entering or leaving the board. Reloading the
@@ -2824,6 +2967,15 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
         """
         return shell("Markets - SpreadBoard", "markets", body)
 
+    market_results = (
+        render_pro_market_table(data.get("rows") or [])
+        if pro_view
+        else '<div class="token-group-list">' + (
+            ''.join(render_market_token_group(group) for group in groups)
+            or render_live_market_empty(api_health_data)
+        ) + '</div>'
+    )
+
     body = f"""
     <section class="markets-page terminal-page" data-refresh="{refresh_seconds}" data-refresh-silent="1">
       {heading}
@@ -2833,21 +2985,25 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
         {render_market_metric('Funding pairs', summary.get('funding_rows'), 'paired carry')}
         {render_market_metric('Largest edge', fmt_pct(summary.get('max_executable_spread_pct')), 'live ask → bid')}
       </section>
-      {render_market_filter_bar(data, query)}
+      {render_market_filter_bar(
+          data,
+          query,
+          presets=accounts.list_filter_presets(user.id, db_path=accounts_path) if user else [],
+          signed_in=user is not None,
+      )}
       <section class="market-layout terminal-layout grouped-layout">
         <main class="market-main">
           <div class="panel-head flat token-board-title">
             <div>
-              <h2>Live Assets</h2>
-              <p>Top {h(min(int(pagination.get('returned_rows') or 0), api_spreads.DEFAULT_LIMIT))} assets by live open spread. Select a token to reveal every venue route.</p>
+              <h2>{'Pro Table' if pro_view else 'Live Assets'}</h2>
+              <p>{'One row per executable venue route with evidence and actions.' if pro_view else f"Top {h(min(int(pagination.get('returned_rows') or 0), api_spreads.DEFAULT_LIMIT))} assets by live open spread. Select a token to reveal every venue route."}</p>
             </div>
-            <a class="mini-action primary-link" href="/api/spreads?{h(urlencode(_query_with(query, limit=500, offset=0)))}">JSON</a>
+            <div class="market-head-actions"><button class="mini-action" type="button" data-share-market>Copy view link</button><a class="mini-action primary-link" href="/api/spreads?{h(urlencode(_query_with(query, limit=500, offset=0)))}">JSON</a></div>
           </div>
-          <div class="token-group-list">
-            {''.join(render_market_token_group(group) for group in groups) or render_live_market_empty(api_health_data)}
-          </div>
+          {market_results}
           {render_market_pagination(query, pagination)}
           {render_board_stream_script(query)}
+          <script>document.querySelector('[data-share-market]')?.addEventListener('click',async event=>{{try{{await navigator.clipboard.writeText(location.href);event.currentTarget.textContent='Link copied';}}catch(error){{event.currentTarget.textContent='Copy unavailable';}}}});</script>
         </main>
         <aside class="market-side">
           {render_market_lane('Top Arbitrage Edges', data.get('top_edges') or [], 'edge')}
@@ -2858,6 +3014,7 @@ def render_markets_page(board_path: Path, config: dict[str, Any], query: dict[st
           </section>
         </aside>
       </section>
+      {render_net_edge_dialog()}
     </section>
     """
     return shell("Markets - SpreadBoard", "markets", body)
@@ -3421,7 +3578,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
       <summary class="token-route-summary">
         <div class="asset-identity">
           <span class="asset-monogram">{h(str(group.get('token') or '?')[:2])}</span>
-          <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best live route chart">{h(group.get('token'))}</a><em>{h(name)}</em></span>
+          <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best live route chart">{h(group.get('token'))}</a><em>{h(name)}</em>{render_tokenized_guard_badge(best)}</span>
         </div>
         <div class="best-route">
           <span>Best pair</span>
@@ -3500,8 +3657,9 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         <span>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)} / {fmt_signed_pct(row.get('short_funding_pct'), digits=4)}</span>
         <em>{h(funding_cadence_pair(row))}</em>
       </div>
-      <div class="route-rails">{render_market_dw(row)}</div>
+      <div class="route-rails">{render_market_dw(row)}{render_market_event_badges(row)}{render_tokenized_guard_badge(row)}</div>
       <div class="route-actions">
+        {render_net_edge_button(row)}
         {render_alert_draft_button(row, alert_type='token_spread', compact=True)}
         <a href="/pair/{h(board.route_key_url(str(row.get('route_key') or '')))}" title="Open route details">Details</a>
         <a href="/charts?route_key={h(board.route_key_url(str(row.get('route_key') or '')))}" title="Open route chart">Chart</a>
@@ -3522,14 +3680,33 @@ def render_market_source_card(title: str, health: dict[str, Any], count: Any, no
     """
 
 
-def render_market_filter_bar(data: dict[str, Any], query: dict[str, list[str]]) -> str:
+def render_market_filter_bar(
+    data: dict[str, Any],
+    query: dict[str, list[str]],
+    *,
+    presets: list[dict[str, Any]] | None = None,
+    signed_in: bool = False,
+) -> str:
     selected_kind = _query_first(query, "kind") or ""
     exchange = _query_first(query, "exchange") or ""
     selected_sort = _query_first(query, "sort") or "edge"
     selected_direction = _query_first(query, "direction") or "desc"
+    selected_view = _query_first(query, "view") or "grouped"
+    selected_quote = (_query_first(query, "quote") or "").upper()
+    selected_persistence = (_query_first(query, "persistence") or "").casefold()
+    selected_asset_class = (_query_first(query, "asset_class") or "").casefold()
+    advanced_open = any(
+        _query_first(query, key)
+        for key in (
+            "quote", "min_volume_24h_usd", "min_market_cap_usd",
+            "max_market_cap_usd", "min_fdv_usd", "max_fdv_usd",
+            "max_listing_age_days", "persistence",
+        )
+    )
     summary = data.get("summary") or {}
     kind_counts = data.get("route_kind_token_counts") or {}
     lane_counts = data.get("lane_token_counts") or {}
+    asset_counts = data.get("asset_class_counts") or {}
     # Futures-Spot and Spot-Futures are one directional pair family. All routes
     # stays last so the primary lane order remains predictable.
     kind_tabs = [
@@ -3549,6 +3726,19 @@ def render_market_filter_bar(data: dict[str, Any], query: dict[str, list[str]]) 
           {''.join(render_market_tab(label, _query_with(query, kind=value or None, offset=None), str(selected_kind).upper() == value, market_kind_count(value, kind_counts, summary, lane_counts)) for value, label in kind_tabs)}
         </div>
       </div>
+      <div class="terminal-filter-row view-row">
+        <span>View</span>
+        <div class="market-tabs route-tabs" aria-label="Display mode">
+          <a class="market-tab {'active' if selected_view != 'table' else ''}" href="/markets?{h(urlencode(_query_with(query, view=None, offset=None)))}"><span>Grouped assets</span></a>
+          <a class="market-tab {'active' if selected_view == 'table' else ''}" href="/markets?{h(urlencode(_query_with(query, view='table', offset=None)))}"><span>Pro Table</span></a>
+        </div>
+      </div>
+      <div class="terminal-filter-row asset-row">
+        <span>Asset</span>
+        <div class="market-tabs route-tabs" aria-label="Asset-class filters">
+          {''.join(render_market_tab(label, _query_with(query, asset_class=value or None, offset=None), selected_asset_class == value, sum(int(item or 0) for item in asset_counts.values()) if not value else asset_counts.get(value, 0)) for value, label in (('', 'All assets'), ('crypto', 'Crypto'), ('tokenized', 'Tokenized assets')))}
+        </div>
+      </div>
       <form class="market-filter-form" method="get" action="/markets">
         <label><span>Token</span><input name="q" value="{h(_query_first(query, 'q') or '')}" placeholder="SIREN, VANRY, GUA"></label>
         <label><span>Exchanges</span><select name="exchange">
@@ -3564,15 +3754,264 @@ def render_market_filter_bar(data: dict[str, Any], query: dict[str, list[str]]) 
           <option value="desc" {'selected' if selected_direction == 'desc' else ''}>High to low</option>
           <option value="asc" {'selected' if selected_direction == 'asc' else ''}>Low to high</option>
         </select></label>
+        <details class="advanced-market-filters" {'open' if advanced_open else ''}>
+          <summary>Advanced discovery filters <span>quote · liquidity · valuation · scanner age · settled carry</span></summary>
+          <div>
+            <label><span>Quote currency</span><select name="quote">
+              <option value="">Any quote</option>
+              {''.join(f'<option value="{value}" {"selected" if value == selected_quote else ""}>{value}</option>' for value in ('USD','USDT','USDC','FDUSD','EUR','BTC','ETH'))}
+            </select></label>
+            <label><span>Min thinner-leg 24h volume, USD</span><input name="min_volume_24h_usd" type="number" min="0" step="1000" value="{h(_query_first(query, 'min_volume_24h_usd') or '')}" placeholder="1000000"></label>
+            <label><span>Min market cap, USD</span><input name="min_market_cap_usd" type="number" min="0" step="100000" value="{h(_query_first(query, 'min_market_cap_usd') or '')}" placeholder="10000000"></label>
+            <label><span>Max market cap, USD</span><input name="max_market_cap_usd" type="number" min="0" step="100000" value="{h(_query_first(query, 'max_market_cap_usd') or '')}" placeholder="500000000"></label>
+            <label><span>Min FDV, USD</span><input name="min_fdv_usd" type="number" min="0" step="100000" value="{h(_query_first(query, 'min_fdv_usd') or '')}" placeholder="10000000"></label>
+            <label><span>Max FDV, USD</span><input name="max_fdv_usd" type="number" min="0" step="100000" value="{h(_query_first(query, 'max_fdv_usd') or '')}" placeholder="1000000000"></label>
+            <label><span>Max scanner age, days</span><input name="max_listing_age_days" type="number" min="0" step="1" value="{h(_query_first(query, 'max_listing_age_days') or '')}" placeholder="30"></label>
+            <label><span>Settled funding persistence</span><select name="persistence">
+              {''.join(f'<option value="{value}" {"selected" if value == selected_persistence else ""}>{label}</option>' for value, label in (('', 'Any history'), ('persistent', 'Persistent positive'), ('mixed', 'Mixed history'), ('reversing', 'Non-positive'), ('insufficient', 'History pending')))}
+            </select></label>
+          </div>
+          <p>Scanner age starts when SpreadBoard first resolves the asset; it is not presented as an exchange's official listing date. Unknown metadata is excluded only while its filter is active.</p>
+        </details>
         <input type="hidden" name="limit" value="25">
         <input type="hidden" name="kind" value="{h(selected_kind)}">
+        <input type="hidden" name="asset_class" value="{h(selected_asset_class)}">
+        <input type="hidden" name="view" value="{h(selected_view if selected_view == 'table' else '')}">
         <label class="market-check"><input type="checkbox" name="funding_only" value="1" {'checked' if _query_bool(query, 'funding_only') else ''}> Funding</label>
         <button class="sheet-button primary" type="submit">Apply</button>
         <a class="sheet-button" href="/markets">Reset</a>
       </form>
       {render_market_active_filters(query)}
+      {render_filter_preset_panel(presets or [], signed_in=signed_in)}
     </section>
     """
+
+
+def render_filter_preset_panel(presets: list[dict[str, Any]], *, signed_in: bool) -> str:
+    if not signed_in:
+        return '<div class="filter-preset-guest"><a href="/login">Sign in to save filter presets</a></div>'
+    chips = "".join(
+        f'<span class="filter-preset-chip"><a href="/markets?{h(urlencode(item.get("query") or {}))}">{h(item.get("name"))}</a>'
+        f'<button type="button" data-preset-delete="{h(item.get("id"))}" aria-label="Delete {h(item.get("name"))}">×</button></span>'
+        for item in presets
+    ) or '<em data-preset-empty>No saved presets yet</em>'
+    return f"""
+      <div class="filter-preset-row" data-filter-presets>
+        <span>Presets</span><div class="filter-preset-list">{chips}</div>
+        <form class="filter-preset-save" data-preset-form>
+          <input name="name" maxlength="60" placeholder="Name current filters" aria-label="Preset name" required>
+          <button type="submit">Save current</button>
+        </form>
+        <output data-preset-status aria-live="polite"></output>
+      </div>
+      <script>{FILTER_PRESET_SCRIPT}</script>
+    """
+
+
+FILTER_PRESET_SCRIPT = r"""
+(() => {
+  const root = document.querySelector('[data-filter-presets]');
+  if (!root) return;
+  const csrf = document.querySelector('[data-logout]')?.dataset.csrf || '';
+  const status = root.querySelector('[data-preset-status]');
+  const request = async (path, body) => {
+    const response = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, body:JSON.stringify(body)});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Preset request failed');
+    return data;
+  };
+  root.querySelector('[data-preset-form]')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const name = new FormData(event.currentTarget).get('name');
+    const query = Object.fromEntries(new URLSearchParams(location.search));
+    delete query.offset; delete query.limit;
+    try { await request('/api/filter-presets', {name, query}); location.reload(); }
+    catch (error) { status.textContent = error.message; }
+  });
+  root.addEventListener('click', async event => {
+    const button = event.target.closest('[data-preset-delete]');
+    if (!button) return;
+    try { await request('/api/filter-presets/delete', {id:Number(button.dataset.presetDelete)}); button.closest('.filter-preset-chip')?.remove(); }
+    catch (error) { status.textContent = error.message; }
+  });
+})();
+"""
+
+
+def render_pro_market_table(rows: list[dict[str, Any]]) -> str:
+    body = "".join(
+        f"""
+        <tr data-route-key="{h(row.get('route_key') or '')}">
+          <td data-label="Asset"><a class="pro-token" href="/token/{h(row.get('token'))}">{h(row.get('token'))}</a><small>{h(row.get('kind') or '')}</small></td>
+          <td data-label="Market evidence">{render_route_market_metadata(row)}</td>
+          <td data-label="Buy"><strong>{h(row.get('long_venue'))}</strong><small>{h(leg_market_label(row.get('long_venue'), row.get('long_market_type')))} · {fmt_price(row.get('long_price'))}</small></td>
+          <td data-label="Sell"><strong>{h(row.get('short_venue'))}</strong><small>{h(leg_market_label(row.get('short_venue'), row.get('short_market_type')))} · {fmt_price(row.get('short_price'))}</small></td>
+          <td data-label="Matched edge"><strong class="{spread_class(row.get('depth_weighted_spread_pct'))}">{fmt_pct(row.get('depth_weighted_spread_pct'))}</strong><small>{fmt_pct(row.get('executable_spread_pct'))} top book</small></td>
+          <td data-label="Funding 24h"><strong>{fmt_signed_pct(funding_24h_value(row), digits=3)}</strong><small>{h(funding_cadence_pair(row))}</small>{render_persistence_badge(row)}</td>
+          <td data-label="Depth"><strong>{fmt_money(row.get('depth_usd'))}</strong><small>{'matched' if not row.get('depth_unverified') else 'unverified'}</small></td>
+          <td data-label="Rail">{render_market_dw(row)}</td>
+          <td data-label="Actions" class="pro-actions">{render_net_edge_button(row)}{render_alert_draft_button(row, alert_type='token_spread', compact=True)}<a href="/pair/{h(board.route_key_url(str(row.get('route_key') or '')))}">Details</a><a href="/charts?route_key={h(board.route_key_url(str(row.get('route_key') or '')))}">Chart</a></td>
+        </tr>
+        """
+        for row in rows
+    )
+    if not body:
+        return '<p class="empty market-empty">No live routes match these filters.</p>'
+    return f"""
+    <div class="pro-market-wrap" role="region" aria-label="Pro Table" tabindex="0">
+      <table class="pro-market-table">
+        <caption>Pro Table · matched executable route evidence</caption>
+        <thead><tr><th>Asset</th><th>Market evidence</th><th>Buy</th><th>Sell</th><th>Matched edge</th><th>Funding 24h</th><th>Depth</th><th>Rail</th><th>Actions</th></tr></thead>
+        <tbody>{body}</tbody>
+      </table>
+    </div>
+    """
+
+
+def render_route_market_metadata(row: dict[str, Any]) -> str:
+    long_quote = str(row.get("long_quote") or "?")
+    short_quote = str(row.get("short_quote") or "?")
+    quotes = long_quote if long_quote == short_quote else f"{long_quote}↔{short_quote}"
+    cap = fmt_money(row.get("market_cap_usd"))
+    fdv = fmt_money(row.get("fdv_usd"))
+    age = _float_or_none(row.get("listing_age_days"))
+    age_label = f"{age:.0f}d scanner age" if age is not None else "age unknown"
+    return f'<strong>{h(quotes)}</strong><small>Cap {h(cap)} · FDV {h(fdv)}</small><small>{h(age_label)}</small>{render_market_event_badges(row)}{render_tokenized_guard_badge(row)}'
+
+
+def render_tokenized_guard_badge(row: dict[str, Any]) -> str:
+    guard = row.get("tokenized_guard") if isinstance(row.get("tokenized_guard"), dict) else {}
+    if guard.get("asset_class") != "tokenized":
+        return ""
+    status = str(guard.get("status") or "blocked")
+    reasons = ", ".join(str(item).replace("_", " ") for item in guard.get("reasons") or [])
+    label = "Tokenized verified" if status == "verified" else "Tokenized · research only"
+    return f'<span class="tokenized-guard {h(status)}" title="{h(reasons or "Tokenized instrument evidence")}">{h(label)}</span>'
+
+
+def render_market_event_badges(row: dict[str, Any]) -> str:
+    events = [item for item in row.get("market_events") or [] if isinstance(item, dict)][:3]
+    if not events:
+        return ""
+    badges = []
+    for event in events:
+        label = str(event.get("type") or "event").replace("_", " ")
+        title = f"{event.get('title') or label} · {event.get('source_label') or 'source unknown'}"
+        content = f'<span class="market-event {h(event.get("severity") or "watch")}" title="{h(title)}">{h(label)}</span>'
+        if event.get("source_url"):
+            content = f'<a href="{h(event["source_url"])}" target="_blank" rel="noopener noreferrer">{content}</a>'
+        badges.append(content)
+    return '<span class="market-event-list" aria-label="Active market events">' + "".join(badges) + "</span>"
+
+
+def funding_persistence(row: dict[str, Any]) -> dict[str, Any]:
+    windows = venue_funding_history.route_windows(row)
+    values = [float(value) for value in windows.values() if value is not None]
+    if len(values) < 2:
+        status = "insufficient"
+    elif all(value > 0 for value in values):
+        status = "persistent"
+    elif all(value <= 0 for value in values):
+        status = "reversing"
+    else:
+        status = "mixed"
+    return {"status": status, "observed_windows": len(values), "windows": windows}
+
+
+def render_persistence_badge(row: dict[str, Any]) -> str:
+    result = funding_persistence(row)
+    label = {
+        "persistent": "Persistent",
+        "mixed": "Mixed history",
+        "reversing": "Not persistent",
+        "insufficient": "History pending",
+    }[result["status"]]
+    return f'<span class="persistence-badge {h(result["status"])}" title="Based on settled funding windows">{h(label)}</span>'
+
+
+def render_net_edge_button(row: dict[str, Any]) -> str:
+    windows = venue_funding_history.route_windows(row)
+    payload = {
+        "token": row.get("token"),
+        "route_key": row.get("route_key"),
+        "matched_edge_pct": _float_or_none(row.get("depth_weighted_spread_pct")),
+        "current_funding_24h_pct": funding_24h_value(row),
+        "windows": windows,
+    }
+    return (
+        '<button type="button" class="net-edge-open" data-net-edge="'
+        + h(json.dumps(payload, separators=(",", ":")))
+        + '">Net edge</button>'
+    )
+
+
+def render_net_edge_dialog() -> str:
+    return f"""
+    <dialog class="net-edge-dialog" id="netEdgeDialog" aria-labelledby="netEdgeTitle">
+      <form method="dialog" class="net-edge-card">
+        <header><div><span>Route economics</span><h2 id="netEdgeTitle">Net edge calculator</h2></div><button value="cancel" aria-label="Close calculator">×</button></header>
+        <p data-net-route>Choose a route from the board.</p>
+        <div class="net-edge-fields">
+          <label>Notional per leg, USD<input name="notional" type="number" min="10" step="10" value="1000"></label>
+          <label>Taker fee per order, %<input name="fee_pct" type="number" min="0" step="0.01" value="0.10"></label>
+          <label>Exit slippage, %<input name="exit_slippage_pct" type="number" min="0" step="0.01" value="0.20"></label>
+          <label>Transfer / gas, USD<input name="transfer_usd" type="number" min="0" step="0.01" value="0"></label>
+          <label>Funding horizon<select name="days"><option value="1">1 day</option><option value="3">3 days</option><option value="7" selected>7 days</option><option value="30">30 days</option></select></label>
+        </div>
+        <section class="net-edge-results" aria-live="polite">
+          <article><span>Opening basis</span><strong data-net-opening>—</strong></article>
+          <article><span>Funding</span><strong data-net-funding>—</strong></article>
+          <article><span>Round-trip costs</span><strong data-net-costs>—</strong></article>
+          <article class="total"><span>Estimated net</span><strong data-net-total>—</strong></article>
+          <article><span>Break-even</span><strong data-net-breakeven>—</strong></article>
+          <article><span>Funding source</span><strong data-net-source>—</strong></article>
+        </section>
+        <p class="net-edge-note">Scenario estimate only. Unknown venue tiers, borrow costs, conversion, tax and market movement are not silently assumed.</p>
+      </form>
+    </dialog>
+    <script>{NET_EDGE_SCRIPT}</script>
+    """
+
+
+NET_EDGE_SCRIPT = r"""
+(() => {
+  const dialog = document.getElementById('netEdgeDialog');
+  if (!dialog) return;
+  let route = null;
+  const money = value => Number.isFinite(value) ? `${value >= 0 ? '+' : '-'}$${Math.abs(value).toFixed(2)}` : '—';
+  const number = name => Number(dialog.elements[name]?.value || 0);
+  function calculate() {
+    if (!route) return;
+    const notional = Math.max(0, number('notional'));
+    const days = Math.max(1, number('days'));
+    const opening = notional * Number(route.matched_edge_pct || 0) / 100;
+    const fee = notional * Math.max(0, number('fee_pct')) / 100 * 4;
+    const slippage = notional * Math.max(0, number('exit_slippage_pct')) / 100;
+    const costs = fee + slippage + Math.max(0, number('transfer_usd'));
+    const exact = route.windows?.[`${days}d`];
+    const daily = Number(route.current_funding_24h_pct);
+    const funding = Number.isFinite(Number(exact)) ? notional * Number(exact) / 100 : (Number.isFinite(daily) ? notional * daily * days / 100 : NaN);
+    const net = opening + funding - costs;
+    const dailyUsd = Number.isFinite(funding) ? funding / days : NaN;
+    const breakEven = dailyUsd > 0 ? Math.max(0, (costs - opening) / dailyUsd) : NaN;
+    dialog.querySelector('[data-net-opening]').textContent = money(opening);
+    dialog.querySelector('[data-net-funding]').textContent = money(funding);
+    dialog.querySelector('[data-net-costs]').textContent = money(-costs);
+    dialog.querySelector('[data-net-total]').textContent = money(net);
+    dialog.querySelector('[data-net-breakeven]').textContent = Number.isFinite(breakEven) ? `${breakEven.toFixed(1)} days` : 'Not reached';
+    dialog.querySelector('[data-net-source]').textContent = Number.isFinite(Number(exact)) ? `Settled ${days}d` : (Number.isFinite(daily) ? 'Current rate projection' : 'Funding unavailable');
+  }
+  document.addEventListener('click', event => {
+    const button = event.target.closest('[data-net-edge]');
+    if (!button) return;
+    try { route = JSON.parse(button.dataset.netEdge); } catch (error) { return; }
+    dialog.querySelector('[data-net-route]').textContent = `${route.token || 'Route'} · matched edge ${Number(route.matched_edge_pct || 0).toFixed(3)}%`;
+    calculate();
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+  });
+  dialog.querySelectorAll('input,select').forEach(input => input.addEventListener('input', calculate));
+})();
+"""
 
 
 def market_kind_count(
@@ -3607,6 +4046,15 @@ def render_market_active_filters(query: dict[str, list[str]]) -> str:
         ("exchange", "Exchange"),
         ("min_spread_pct", "Edge"),
         ("min_abs_funding_24h_pct", "Funding 24h"),
+        ("quote", "Quote"),
+        ("min_volume_24h_usd", "Min volume"),
+        ("min_market_cap_usd", "Min cap"),
+        ("max_market_cap_usd", "Max cap"),
+        ("min_fdv_usd", "Min FDV"),
+        ("max_fdv_usd", "Max FDV"),
+        ("max_listing_age_days", "Scanner age ≤"),
+        ("persistence", "Persistence"),
+        ("asset_class", "Asset class"),
         ("kind", "Route"),
     ]:
         value = _query_first(query, key)
@@ -4638,6 +5086,8 @@ def render_pair_page(route_key: str, board_path: Path, config: dict[str, Any]) -
       {render_pair_snapshot_banner(row)}
       {render_pair_cockpit(row, detail, pair_intel, history)}
       {render_pair_intel_strip(row, pair_intel)}
+      {render_pair_market_events(row)}
+      {render_pair_tokenized_guard(row)}
 
       <section class="pair-layout">
         <main class="pair-main">
@@ -4669,6 +5119,38 @@ def render_pair_page(route_key: str, board_path: Path, config: dict[str, Any]) -
     {render_funding_history_script()}
     """
     return shell(f"{row.get('symbol')} route - SpreadBoard", "board", body)
+
+
+def render_pair_market_events(row: dict[str, Any]) -> str:
+    events = [item for item in row.get("market_events") or [] if isinstance(item, dict)]
+    if not events:
+        return ""
+    cards = []
+    for event in events:
+        source = h(event.get("source_label") or "source unknown")
+        if event.get("source_url"):
+            source = f'<a href="{h(event["source_url"])}" target="_blank" rel="noopener noreferrer">{source}</a>'
+        cards.append(
+            f'<article class="{h(event.get("severity") or "watch")}"><span>{h(str(event.get("type") or "event").replace("_", " "))}</span><strong>{h(event.get("title"))}</strong><p>{h(event.get("detail"))}</p><em>{source}</em></article>'
+        )
+    return f'<section class="pair-market-events" aria-label="Active market events"><header><span class="page-kicker">Market events</span><h2>Route conditions that can change execution</h2></header><div>{"".join(cards)}</div></section>'
+
+
+def render_pair_tokenized_guard(row: dict[str, Any]) -> str:
+    guard = row.get("tokenized_guard") if isinstance(row.get("tokenized_guard"), dict) else {}
+    if guard.get("asset_class") != "tokenized":
+        return ""
+    source = h(guard.get("source_url") or "No verified registry source")
+    if guard.get("source_url"):
+        source = f'<a href="{h(guard["source_url"])}" target="_blank" rel="noopener noreferrer">Registry source ↗</a>'
+    reasons = "".join(f'<li>{h(str(reason).replace("_", " "))}</li>' for reason in guard.get("reasons") or [])
+    return f"""
+    <section class="tokenized-evidence {h(guard.get('status') or 'blocked')}">
+      <header><div><span class="page-kicker">Tokenized-asset lane</span><h2>{'Registry verified' if guard.get('status') == 'verified' else 'Research only · evidence incomplete'}</h2></div><strong>{h(guard.get('underlying_symbol') or 'Underlying unresolved')}</strong></header>
+      <dl><div><dt>Instrument</dt><dd>{h(guard.get('instrument_type') or 'unresolved')}</dd></div><div><dt>Oracle / reference</dt><dd>{h(guard.get('oracle_source') or 'unresolved')}</dd></div><div><dt>Trading hours</dt><dd>{h(guard.get('trading_hours') or 'unresolved')}</dd></div><div><dt>Corporate actions</dt><dd>{h(guard.get('corporate_action_policy') or 'unresolved')}</dd></div></dl>
+      {f'<ul>{reasons}</ul>' if reasons else ''}<p>{source} · SpreadBoard never treats a matching equity ticker as proof of the same instrument, shareholder rights, redemption, or 24/7 price continuity.</p>
+    </section>
+    """
 
 
 def render_saved_charts_panel(
@@ -6346,6 +6828,35 @@ MEMBERSHIP_FEATURES = (
     "Free updates and priority support",
 )
 
+PLAN_CATALOG: dict[str, dict[str, Any]] = {
+    "free": {
+        "name": "Free",
+        "monthly": 0,
+        "tagline": "Verify the product before paying.",
+        "features": (
+            "Public live-spread preview",
+            "Methodology and audit proof",
+            "Telegram /top research preview",
+        ),
+    },
+    "scanner": {
+        "name": "Scanner",
+        "monthly": 49,
+        "tagline": "Live discovery and personal alerts.",
+        "features": (
+            "Full market and funding scanners",
+            "Pro Table, filters, presets and watchlists",
+            "Charts, net-edge calculator and browser alerts",
+        ),
+    },
+    "research_pro": {
+        "name": "Research Pro",
+        "monthly": 180,
+        "tagline": "The complete evidence and intelligence workspace.",
+        "features": MEMBERSHIP_FEATURES,
+    },
+}
+
 #: Three reasons, one line each.
 MEMBERSHIP_REASONS = (
     ("\u26a1", "Live, not polled", "Prices move as the books move."),
@@ -6354,13 +6865,13 @@ MEMBERSHIP_REASONS = (
 )
 
 
-def membership_terms() -> list[dict[str, Any]]:
+def membership_terms(tier: str = "research_pro") -> list[dict[str, Any]]:
     """The real terms, derived from the prices that are actually charged.
 
     Written out by hand they drift from `crypto_billing.PERIODS` the first time
     a price changes, and a pricing page that lies is worse than a verbose one.
     """
-    periods = dict(crypto_billing.PERIODS)
+    periods = dict(crypto_billing.TIER_PERIODS.get(tier) or {})
     if not periods:
         return []
     monthly_days = min(periods)
@@ -6382,15 +6893,16 @@ def membership_terms() -> list[dict[str, Any]]:
     return terms
 
 
-def render_membership_ticks() -> str:
+def render_membership_ticks(tier: str = "research_pro") -> str:
+    features = (PLAN_CATALOG.get(tier) or PLAN_CATALOG["research_pro"])["features"]
     return "".join(
         f'<li><span aria-hidden="true">\u2713</span>{h(item)}</li>'
-        for item in MEMBERSHIP_FEATURES
+        for item in features
     )
 
 
-def render_membership_terms(*, selected_days: int | None = None) -> str:
-    terms = membership_terms()
+def render_membership_terms(*, tier: str = "research_pro", selected_days: int | None = None) -> str:
+    terms = membership_terms(tier)
     if not terms:
         return ""
     best = max(term["saving_pct"] for term in terms)
@@ -6443,69 +6955,145 @@ MEMBERSHIP_STYLE = """
 """
 
 
+def render_methodology_page() -> str:
+    body = """
+    <section class="research-page">
+      <header class="research-hero"><div><span class="page-kicker">Methodology</span><h1>Every number should answer “could I actually trade it?”</h1><p>SpreadBoard separates market discovery from execution evidence. Unknown inputs stay unknown instead of being replaced by optimistic defaults.</p></div><aside><strong>Read-only</strong><span>Public market APIs</span><a href="/proof">See verified audits →</a></aside></header>
+      <nav class="research-jump"><a href="#prices">Prices</a><a href="#funding">Funding</a><a href="#identity">Identity</a><a href="#rails">Rails</a><a href="#labels">Evidence labels</a></nav>
+      <section class="research-grid" id="prices"><article><span>01 · Prices</span><h2>Matched-size VWAP</h2><p>The buy leg is walked through asks and the sell leg through bids for the same economic size. Contract multipliers and available depth are applied before the spread is shown.</p><code>(sell VWAP − buy VWAP) ÷ midpoint × 100</code></article><article><span>What it prevents</span><h2>Top-book mirages</h2><p>A tiny best quote cannot make an entire position executable. When depth is unavailable, the row says so and the calculator does not invent it.</p></article></section>
+      <section class="research-grid" id="funding"><article><span>02 · Funding</span><h2>Settled funding first</h2><p>Current rate, projected 24-hour carry, and settled venue payments are separate fields. Persistence uses completed 1d, 7d, and 30d windows when those windows have enough coverage.</p></article><article><span>Direction</span><h2>Who pays whom</h2><p>Funding is normalized to the displayed long/short direction. Positive means the shown hedge receives; negative means it pays.</p></article></section>
+      <section class="research-grid" id="identity"><article><span>03 · Identity</span><h2>Identity before price</h2><p>Matching tickers are not enough. Market base/quote metadata and shared contracts or mints are used where available. Implausible ratios, leveraged products, and ambiguous DEX identities are held out.</p></article><article><span>Policy</span><h2>Unknown stays unknown</h2><p>A route without enough identity evidence is research context, never silently upgraded into an executable claim.</p></article></section>
+      <section class="research-grid" id="rails"><article><span>04 · Rails</span><h2>Directional transfer proof</h2><p>Spot transfer routes require withdrawal from the buy venue and deposit to the sell venue on a compatible network. Generic green deposit/withdraw badges are not sufficient.</p></article><article><span>DEX</span><h2>Exact chain and contract</h2><p>DEX quotes are tied to a chain and contract. Quote failure, unsupported assets, and suspected honeypots remain visible source conditions.</p></article></section>
+      <section class="evidence-labels" id="labels"><div><span>Live</span><p>Current public API or streaming book inside the freshness window.</p></div><div><span>Settled</span><p>A completed venue funding payment, not a projection.</p></div><div><span>Modeled</span><p>A scenario using explicitly displayed assumptions.</p></div><div><span>Unresolved</span><p>Evidence is missing; no positive assumption was inserted.</p></div></section>
+      <footer class="research-footer"><a class="pricing-button primary" href="/markets?view=table">Inspect live routes</a><a class="pricing-button" href="/proof">Audits and worked examples</a></footer>
+    </section>
+    """
+    return shell("Methodology - SpreadBoard", "methodology", body)
+
+
+def render_proof_page() -> str:
+    body = """
+    <section class="research-page">
+      <header class="research-hero"><div><span class="page-kicker">Proof library</span><h1>Audits, assumptions, wins and losses</h1><p>Release evidence is timestamped. Worked examples show the calculation shape and are labeled modeled unless tied to a reconciled account ledger.</p></div><aside><strong>9e706b0</strong><span>Verified release audit · 7 August 2026</span><a href="/api/health">Current service health →</a></aside></header>
+      <section class="audit-scoreboard"><article><strong>638</strong><span>automated tests passed</span></article><article><strong>12 / 12</strong><span>exact live charts advanced</span></article><article><strong>44</strong><span>funding rows reconciled</span></article><article><strong>26 / 26</strong><span>authenticated pages traversed</span></article></section>
+      <p class="audit-caveat">These are historical release-audit results, not a claim that current markets or every future deployment are correct. Use current health and fresh route timestamps for “now”.</p>
+      <section class="example-grid"><article class="worked-example positive"><span>Modeled example · positive carry</span><h2>$1,000 per leg</h2><dl><div><dt>Matched opening edge</dt><dd>+$12.00</dd></div><div><dt>Settled 7d funding</dt><dd>+$15.00</dd></div><div><dt>Four 0.10% orders</dt><dd>−$4.00</dd></div><div><dt>Exit slippage</dt><dd>−$2.00</dd></div><div><dt>Transfer / gas</dt><dd>−$1.00</dd></div><div class="total"><dt>Modeled net</dt><dd>+$20.00</dd></div></dl><p>Before borrow, conversion, tax and market movement. Those remain separate inputs.</p></article><article class="worked-example negative"><span>Modeled example · Losing example</span><h2>A headline APR that flips</h2><dl><div><dt>Matched opening edge</dt><dd>+$5.00</dd></div><div><dt>Funding reversal</dt><dd>−$8.00</dd></div><div><dt>Trading costs</dt><dd>−$4.00</dd></div><div><dt>Exit slippage</dt><dd>−$6.00</dd></div><div class="total"><dt>Modeled net</dt><dd>−$13.00</dd></div></dl><p>A positive opening spread does not protect against adverse exit basis or reversed funding.</p></article></section>
+      <section class="audit-process"><h2>What each release audit must prove</h2><ol><li>Fresh canonical route and source timestamps.</li><li>Matched-size prices and formula parity.</li><li>Funding settlement and cadence parity.</li><li>Identity and shared-network rules.</li><li>Desktop and mobile rendering without overflow or dead controls.</li><li>Authentication, account scope, CSRF, billing signatures, and disabled execution.</li></ol></section>
+      <footer class="research-footer"><a class="pricing-button primary" href="/methodology">Read the methodology</a><a class="pricing-button" href="/pricing">Compare access</a></footer>
+    </section>
+    """
+    return shell("Proof - SpreadBoard", "methodology", body)
+
+
+def render_executor_boundary_page() -> str:
+    boundary = executor_boundary.status()
+    forbidden = "".join(
+        f'<li><span aria-hidden="true">×</span>{h(item)}</li>'
+        for item in boundary["forbidden_in_spreadboard"]
+    )
+    required = "".join(
+        f'<li><span aria-hidden="true">✓</span>{h(item)}</li>'
+        for item in boundary["required_separate_controls"]
+    )
+    body = f"""
+    <section class="research-page executor-boundary-page">
+      <header class="research-hero"><div><span class="page-kicker">Trust boundary</span><h1>Research here. Execution somewhere else.</h1><p>SpreadBoard intentionally cannot place orders. A future executor must be a separately secured product that repeats every preflight from fresh evidence.</p></div><aside><strong>0</strong><span>order capabilities in this deployment</span><a href="/api/executor-boundary">Machine-readable attestation →</a></aside></header>
+      <section class="executor-boundary-grid"><article class="forbidden"><span>SpreadBoard</span><h2>Never loaded here</h2><ul>{forbidden}</ul></article><article><span>Separate executor</span><h2>Required before live use</h2><ul>{required}</ul></article></section>
+      <section class="audit-process"><h2>Current verdict: {h(str(boundary['verdict']).replace('_', ' '))}</h2><p>No handoff endpoint is exposed. Configuring a different HTTPS origin reserves a product boundary; it does not make that product safe or authorize a trade.</p></section>
+      <footer class="research-footer"><a class="pricing-button primary" href="/markets?view=table">Return to research</a><a class="pricing-button" href="/methodology">Read methodology</a></footer>
+    </section>
+    """
+    return shell("Executor boundary - SpreadBoard", "methodology", body)
+
+
+def render_telegram_landing_page(board_path: Path) -> str:
+    state = telegram_bot.status()
+    username = state.get("bot_username")
+    bot_url = f"https://t.me/{quote(str(username))}" if username else None
+    try:
+        preview = telegram_bot.render_public_digest(board_path=board_path)
+    except Exception:  # noqa: BLE001 - marketing page must survive a warming feed
+        preview = "SpreadBoard public feed is warming."
+    # Telegram receives a small, controlled HTML subset. The website preview
+    # should show what a reader sees, not the transport markup itself.
+    preview_text = html.unescape(re.sub(r"<[^>]*>", "", preview))
+    feed_state = (
+        "Public channel connected"
+        if state.get("public_feed_outbound_ready")
+        else "Feed preview ready · public channel pending"
+    )
+    body = f"""
+    <section class="telegram-page">
+      <header class="telegram-hero">
+        <div><span class="page-kicker">Telegram</span><h1>Research alerts that open into evidence</h1>
+          <p>Start with a public route preview. Link an account only when you want saved access, private alerts, and the subscriber group.</p>
+          <div class="telegram-actions">{f'<a class="pricing-button primary" href="{h(bot_url)}">Open @{h(username)}</a>' if bot_url else '<a class="pricing-button primary" href="/register">Create account</a>'}<a class="pricing-button" href="/markets?view=table">Open Pro Table</a></div>
+        </div>
+        <aside><span>{h(feed_state)}</span><strong>/top</strong><em>public research preview</em></aside>
+      </header>
+      <section class="telegram-flow">
+        <article><b>01</b><h2>Preview</h2><p>Use <code>/top</code> without linking an account. Every token opens the matching Pro Table filter.</p></article>
+        <article><b>02</b><h2>Link</h2><p>Create a one-time link in Portfolio settings. Telegram never receives your password or payment credentials.</p></article>
+        <article><b>03</b><h2>Activate</h2><p>Use <code>/subscribe</code> for signed checkout and <code>/access</code> for the private subscriber group.</p></article>
+      </section>
+      <section class="telegram-preview"><div><span>Sample digest</span><h2>What the public feed publishes</h2></div><pre>{h(preview_text)}</pre><p>Outbound publishing remains disabled until a dedicated public channel is configured. The existing private group is never reused automatically.</p></section>
+      <section class="telegram-command-grid">
+        <article><code>/top</code><span>Fresh public route preview</span></article><article><code>$SIREN</code><span>Exact-token lookup in the subscriber group</span></article><article><code>/funding SIREN</code><span>Paired funding view</span></article><article><code>/transfer SIREN</code><span>Deposit and withdrawal state</span></article>
+      </section>
+    </section>
+    """
+    return shell("Telegram - SpreadBoard", "telegram", body)
+
+
 def render_pricing_page() -> str:
     user = accounts.current_user()
-    if user and user.subscription_active:
-        primary_action = '<a class="pricing-button primary" href="/">Open market terminal</a>'
-        secondary_action = '<a class="pricing-button" href="/account">Open portfolio</a>'
-    elif user:
-        primary_action = '<a class="pricing-button primary" href="/subscription">Continue to payment</a>'
-        secondary_action = '<a class="pricing-button" href="/account">Open account</a>'
-    else:
-        primary_action = '<a class="pricing-button primary" href="/register">Create account</a>'
-        secondary_action = '<a class="pricing-button" href="/login">Sign in</a>'
-    terms = membership_terms()
-    monthly = terms[0]["per_month"] if terms else 180.0
+    current = _user_entitlement_tier(user) if user else "free"
+    cards = []
+    for tier, plan in PLAN_CATALOG.items():
+        if tier == "free":
+            action = '<a class="pricing-button" href="/free">Open free preview</a>'
+        elif user and user.subscription_active and current == tier:
+            action = '<a class="pricing-button primary" href="/">Open current plan</a>'
+        elif user:
+            action = f'<a class="pricing-button primary" href="/subscription?tier={h(tier)}">Choose {h(plan["name"])}</a>'
+        else:
+            action = f'<a class="pricing-button primary" href="/register">Create account</a>'
+        cards.append(
+            f'<article class="pricing-tier {"featured" if tier == "research_pro" else ""}">'
+            f'<span>{"Current plan" if current == tier else ("Complete workspace" if tier == "research_pro" else "")}</span>'
+            f'<h2>{h(plan["name"])}</h2><p>{h(plan["tagline"])}</p>'
+            f'<div class="pricing-price"><strong>${int(plan["monthly"]):,}</strong><em>{" / month" if plan["monthly"] else " forever"}</em></div>'
+            f'<ul class="tick-list">{render_membership_ticks(tier)}</ul>{action}</article>'
+        )
     body = f"""
     <style>
-      .pricing-page {{ width:min(1000px,calc(100% - 36px)); margin:36px auto 72px; display:grid; gap:28px; }}
-      .pricing-intro {{ display:grid; grid-template-columns:minmax(0,1.2fr) minmax(260px,.8fr); border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
-      .pricing-copy {{ padding:34px 32px; }}
-      .pricing-copy h1 {{ margin:8px 0 10px; font-size:clamp(30px,4.4vw,48px); line-height:1.05; max-width:16ch; }}
-      .pricing-copy p {{ margin:0; color:var(--terminal-muted); font-size:16px; line-height:1.5; max-width:44ch; }}
-      .pricing-plan {{ padding:30px 28px; border-left:1px solid var(--terminal-line); display:grid; align-content:center; gap:14px; }}
-      .pricing-price strong {{ font-size:44px; line-height:1; }}
+      .pricing-page {{ width:min(1120px,calc(100% - 36px)); margin:36px auto 72px; display:grid; gap:28px; }}
+      .pricing-intro {{ padding:34px 32px; border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
+      .pricing-intro h1 {{ margin:8px 0 10px; font-size:clamp(30px,4.4vw,48px); line-height:1.05; }}
+      .pricing-intro p {{ margin:0; color:var(--terminal-muted); font-size:16px; line-height:1.5; }}
+      .pricing-tiers {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }}
+      .pricing-tier {{ display:grid; align-content:start; gap:14px; padding:25px; border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
+      .pricing-tier.featured {{ border-color:var(--accent); box-shadow:inset 0 3px 0 var(--accent); }}
+      .pricing-tier > span {{ min-height:15px; color:var(--accent); font-size:10px; font-weight:900; text-transform:uppercase; }}
+      .pricing-tier h2,.pricing-tier p {{ margin:0; }}
+      .pricing-tier p {{ min-height:40px; color:var(--terminal-muted); line-height:1.45; }}
+      .pricing-price strong {{ font-size:42px; line-height:1; }}
       .pricing-price em {{ color:var(--terminal-muted); font-style:normal; }}
-      .pricing-actions {{ display:flex; gap:8px; flex-wrap:wrap; }}
-      .pricing-button {{ min-height:43px; padding:11px 16px; border:1px solid var(--terminal-line); color:var(--terminal-text); text-decoration:none; font-weight:900; display:inline-flex; align-items:center; }}
+      .pricing-button {{ min-height:43px; padding:11px 16px; border:1px solid var(--terminal-line); color:var(--terminal-text); text-decoration:none; font-weight:900; display:inline-flex; justify-content:center; align-items:center; }}
       .pricing-button.primary {{ background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }}
       .pricing-block {{ padding:26px 28px; border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
       .pricing-block h2 {{ margin:0 0 16px; font-size:20px; }}
       .pricing-note {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
       {MEMBERSHIP_STYLE}
-      @media(max-width:820px) {{ .pricing-intro {{ grid-template-columns:1fr; }} .pricing-plan {{ border-left:0; border-top:1px solid var(--terminal-line); }} }}
+      @media(max-width:820px) {{ .pricing-tiers {{ grid-template-columns:1fr; }} .pricing-tier p {{ min-height:0; }} }}
     </style>
     <section class="pricing-page">
-      <header class="pricing-intro">
-        <div class="pricing-copy">
-          <span class="page-kicker">Membership</span>
-          <h1>Every spread, live.</h1>
-          <p>Cross-venue spreads and funding across 22 exchanges and OKX DEX, priced continuously.</p>
-        </div>
-        <aside class="pricing-plan">
-          <div class="pricing-price"><strong>${monthly:,.0f}</strong> <em>/ month</em></div>
-          <div class="pricing-actions">{primary_action}{secondary_action}</div>
-          <p class="pricing-note">Cancel any time.</p>
-        </aside>
-      </header>
-
-      <section class="pricing-block">
-        <h2>What you get</h2>
-        <ul class="tick-list">{render_membership_ticks()}</ul>
-      </section>
-
-      <section class="pricing-block">
-        <h2>Terms</h2>
-        {render_membership_terms()}
-      </section>
-
-      <section class="pricing-block">
-        <h2>Why membership</h2>
-        <div class="reason-grid">{render_membership_reasons()}</div>
-      </section>
-
-      <p class="pricing-note">Public market data, not investment advice. Every route carries execution
-         risk. See the <a href="/terms">Terms</a> and <a href="/refunds">Refund Policy</a>.</p>
+      <header class="pricing-intro"><span class="page-kicker">Membership</span><h1>Every spread, live.</h1><p>Start with proof, then pay for the workflow you use. Scanner unlocks live discovery; Research Pro adds the full evidence and intelligence workspace.</p></header>
+      <section class="pricing-tiers">{"".join(cards)}</section>
+      <section class="pricing-block"><h2>What you get</h2><p class="pricing-note">Free for proof, Scanner for live discovery, and Research Pro for the complete evidence workspace.</p></section>
+      <section class="pricing-block"><h2>Research Pro prepaid terms</h2>{render_membership_terms(tier='research_pro')}</section>
+      <section class="pricing-block"><h2>Why membership</h2><div class="reason-grid">{render_membership_reasons()}</div></section>
+      <p class="pricing-note">Public market data, not investment advice. Every route carries execution risk. See the <a href="/terms">Terms</a> and <a href="/refunds">Refund Policy</a>.</p>
     </section>
     """
     return shell("Membership - SpreadBoard", "pricing", body)
@@ -6519,10 +7107,16 @@ def render_crypto_checkout_panel() -> str:
             "<p>Crypto checkout is being configured. No payment can be taken yet.</p></section>"
         )
     periods = "".join(
-        f'<button class="sheet-button crypto-period" type="button" data-crypto-period="{p["days"]}">'
-        f'<span class="crypto-period-price">{h(p["label"])}</span>'
-        f'<span class="crypto-period-days">{p["days"]} days</span></button>'
-        for p in state.get("periods", [])
+        f'<section class="crypto-tier-periods"><strong>{h(PLAN_CATALOG[tier]["name"])}</strong><div>'
+        + "".join(
+            f'<button class="sheet-button crypto-period" type="button" data-crypto-tier="{h(tier)}" data-crypto-period="{p["days"]}">'
+            f'<span class="crypto-period-price">{h(p["label"])}</span>'
+            f'<span class="crypto-period-days">{p["days"]} days</span></button>'
+            for p in tier_state.get("periods", [])
+        )
+        + "</div></section>"
+        for tier, tier_state in (state.get("tiers") or {}).items()
+        if tier in {"scanner", "research_pro"}
     )
     tokens = " or ".join(state.get("tokens", []))
     return f"""
@@ -6561,7 +7155,7 @@ def render_crypto_checkout_script() -> str:
 <style>
 .crypto-checkout{margin-top:16px}
 .crypto-lede{opacity:.85;margin:.4rem 0 .8rem}
-.crypto-periods{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.8rem}
+.crypto-periods{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:.8rem}.crypto-tier-periods{display:grid;gap:.35rem}.crypto-tier-periods>div{display:flex;gap:.5rem;flex-wrap:wrap}
 .crypto-period{display:flex;flex-direction:column;align-items:flex-start;gap:.15rem;min-width:120px}
 .crypto-period-price{font-weight:700}
 .crypto-period-days{font-size:.78rem;opacity:.7}
@@ -6573,6 +7167,7 @@ def render_crypto_checkout_script() -> str:
 .crypto-warn{font-size:.82rem;opacity:.85;border-left:3px solid #d08a00;padding-left:.6rem}
 .crypto-status{font-weight:600}
 .sheet-button.ghost{padding:.2rem .5rem;font-size:.78rem}
+@media(max-width:700px){.crypto-periods{grid-template-columns:1fr}}
 </style>
 <script>
 (function(){
@@ -6633,11 +7228,11 @@ def render_crypto_checkout_script() -> str:
       fetch('/api/billing/crypto/invoice',{
         method:'POST', credentials:'same-origin',
         headers:{'Content-Type':'application/json','X-CSRF-Token':csrf()||''},
-        body:JSON.stringify({period_days:parseInt(btn.dataset.cryptoPeriod,10),terms_accepted:true,immediate_access_consent:true})
+        body:JSON.stringify({period_days:parseInt(btn.dataset.cryptoPeriod,10),tier:btn.dataset.cryptoTier,terms_accepted:true,immediate_access_consent:true})
       }).then(function(r){return r.json();}).then(function(d){
         if(!d||!d.ok||!d.invoice){ errEl.textContent=(d&&d.error)||'Could not create an invoice.'; return; }
         invoice=d.invoice;
-        amountEl.textContent=invoice.amount_display+' '+(invoice.tokens||[]).join(' or ');
+        amountEl.textContent=invoice.amount_display+' '+(invoice.tokens||[]).join(' or ')+' · '+String(invoice.subscription_tier||'').replace('_',' ');
         addrEl.textContent=invoice.receiving_address;
         qr('ethereum:'+invoice.receiving_address+'@'+invoice.chain_id);
         box.hidden=false;
@@ -6672,24 +7267,37 @@ def fmt_renewal_date(value: Any) -> str:
     return moment.strftime("%d %B %Y")
 
 
-def render_subscription_page() -> str:
+def render_subscription_page(query: dict[str, list[str]] | None = None) -> str:
+    query = query or {}
     user = accounts.current_user()
     billing_state = billing.status()
     active = bool(user and user.subscription_active)
     billing_managed = bool(user and user.billing_customer_id)
+    requested_tier = _query_first(query, "tier") or (
+        _user_entitlement_tier(user) if user and _user_entitlement_tier(user) != "free" else "research_pro"
+    )
+    if requested_tier not in {"scanner", "research_pro"}:
+        requested_tier = "research_pro"
     if not user:
         action = '<a class="sheet-button primary" href="/login?next=/subscription">Sign in to subscribe</a>'
-    elif billing_state["checkout_ready"] and billing_managed:
+    elif billing_managed:
         action = '<button class="sheet-button primary" type="button" data-billing-action="portal">Manage billing</button>'
-    elif billing_state["checkout_ready"] and not active:
-        action = f'<button class="sheet-button primary" type="button" data-billing-action="checkout">Subscribe · {h(billing_state["plan_label"])}</button>'
     elif active:
         action = '<p class="pricing-note">This access is managed directly. Contact support to change it.</p>'
     else:
-        action = '<p class="pricing-note">Card checkout is not live yet. Pay with crypto below.</p>'
+        tier_state = (billing_state.get("tiers") or {}).get(requested_tier) or {}
+        action = (
+            f'<button class="sheet-button primary" type="button" data-billing-action="checkout" data-billing-tier="{h(requested_tier)}">Subscribe to {h(PLAN_CATALOG[requested_tier]["name"])}</button>'
+            if tier_state.get("checkout_ready")
+            else '<p class="pricing-note">Card checkout is not live for this tier yet. Pay with crypto below.</p>'
+        )
     renews = fmt_renewal_date(getattr(user, "subscription_expires_at", None)) if user else "\u2014"
-    terms = membership_terms()
-    monthly = terms[0]["per_month"] if terms else 180.0
+    selected_plan = PLAN_CATALOG[requested_tier]
+    plan_choices = "".join(
+        f'<a class="sub-tier-choice {"selected" if tier == requested_tier else ""}" href="/subscription?tier={h(tier)}"><span>{h(plan["name"])}</span><strong>${h(plan["monthly"])}/mo</strong><em>{h(plan["tagline"])}</em></a>'
+        for tier, plan in PLAN_CATALOG.items()
+        if tier != "free"
+    )
     body = f"""
     <style>
       .sub-page {{ width:min(860px,calc(100% - 36px)); margin:32px auto 64px; display:grid; gap:22px; }}
@@ -6700,9 +7308,15 @@ def render_subscription_page() -> str:
       .sub-facts span {{ color:var(--terminal-muted); font-size:13px; }}
       .sub-facts strong {{ font-size:15px; font-variant-numeric:tabular-nums; }}
       .sub-actions {{ display:flex; gap:8px; flex-wrap:wrap; }}
+      .sub-tier-choices {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
+      .sub-tier-choice {{ display:grid; gap:3px; padding:14px; border:1px solid var(--terminal-line); color:var(--terminal-text); text-decoration:none; }}
+      .sub-tier-choice.selected {{ border-color:var(--accent); box-shadow:inset 3px 0 0 var(--accent); }}
+      .sub-tier-choice strong {{ font-size:20px; }}
+      .sub-tier-choice em {{ color:var(--terminal-muted); font-size:11px; font-style:normal; }}
       .subscription-consent {{ display:flex; gap:9px; align-items:flex-start; color:var(--terminal-muted); font-size:12px; line-height:1.45; }}
       .pricing-note {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
       {MEMBERSHIP_STYLE}
+      @media(max-width:650px) {{ .sub-tier-choices {{ grid-template-columns:1fr; }} }}
     </style>
     <section class="sub-page" data-account-page>
       <header class="terminal-heading">
@@ -6714,13 +7328,15 @@ def render_subscription_page() -> str:
       </header>
 
       <section class="sub-plan">
-        <span class="sub-badge">{'Current plan' if active else 'Not active'}</span>
+        <span class="sub-badge">{'Current plan' if active and _user_entitlement_tier(user) == requested_tier else 'Choose plan'}</span>
+        <div class="sub-tier-choices">{plan_choices}</div>
         <div class="sub-facts">
-          <div><span>Monthly price</span><strong>${monthly:,.2f}</strong></div>
-          <div><span>Billing cycle</span><strong>Monthly</strong></div>
+          <div><span>Selected tier</span><strong>{h(selected_plan['name'])}</strong></div>
+          <div><span>Monthly price</span><strong>${selected_plan['monthly']:,.2f}</strong></div>
+          <div><span>Billing cycle</span><strong>Monthly or prepaid</strong></div>
           <div><span>{('Next payment' if billing_managed else 'Access until') if active else 'Status'}</span><strong>{h(renews if active else (user.subscription_status if user else 'inactive'))}</strong></div>
         </div>
-        <ul class="tick-list">{render_membership_ticks()}</ul>
+        <ul class="tick-list">{render_membership_ticks(requested_tier)}</ul>
         <label class="subscription-consent"><input type="checkbox" data-subscription-consent>
           <span>I accept the <a href="/terms" target="_blank">Terms</a> and
           <a href="/refunds" target="_blank">Refund Policy</a>, request immediate access, and
@@ -6731,8 +7347,8 @@ def render_subscription_page() -> str:
       </section>
 
       <section class="sub-plan">
-        <span class="sub-badge">Longer terms</span>
-        {render_membership_terms()}
+        <span class="sub-badge">{h(selected_plan['name'])} longer terms</span>
+        {render_membership_terms(tier=requested_tier)}
         <p class="pricing-note">Longer terms are prepaid in one payment.</p>
       </section>
 
@@ -6998,7 +7614,7 @@ def render_account_page(
     <section class="account-page" data-account-page>
       <header class="terminal-heading account-heading">
         <div><span class="page-kicker">Private workspace</span><h1>{h(user.display_name)}</h1><p>Track multi-exchange positions, price PnL, funding income, returns, and exit conditions in one place.</p></div>
-        <div class="account-membership"><span>Membership</span><strong>{h(user.subscription_status)}</strong><em>{h(user.subscription_expires_at or 'No expiry')}</em></div>
+        <div class="account-membership"><span>Membership</span><strong>{h(PLAN_CATALOG.get(user.entitlement_tier, PLAN_CATALOG['free'])['name'])}</strong><em>{h(user.subscription_status)} · {h(user.subscription_expires_at or 'No expiry')}</em></div>
       </header>
       <section class="account-kpis">
         {render_account_kpi('Open positions', summary.get('open_positions'), 'actively marked')}
@@ -7083,6 +7699,8 @@ def render_account_settings(user: accounts.User, accounts_path: Path | str = acc
     push = accounts.notification_preferences(user.id, db_path=accounts_path)
     push_checked = "checked" if push.get("pushover_enabled") else ""
     push_key_note = "Key saved securely" if push.get("pushover_configured") else "No key saved"
+    browser_push = web_push.status()
+    browser_push_count = accounts.web_push_subscription_count(user.id, db_path=accounts_path)
     return f"""
     <section class="account-settings">
       <div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is used only as the denominator for your return statistics.</p></div></div>
@@ -7098,6 +7716,12 @@ def render_account_settings(user: accounts.User, accounts_path: Path | str = acc
         <button class="sheet-button" type="button" data-pushover-test>Send test</button>
         <p role="alert" data-pushover-status>{h(push_key_note)}</p>
       </form>
+      <div class="account-empty-panel web-push-panel" data-web-push data-vapid-key="{h(browser_push.get('public_key') or '')}">
+        <strong>Browser Push</strong>
+        <p>{'Server delivery is ready.' if browser_push.get('configured') else 'Server delivery awaits VAPID keys.'} Permission is requested only after you click Enable. Browser subscriptions are account-owned and removable here.</p>
+        <div><button class="sheet-button primary" type="button" data-web-push-enable {'disabled' if not browser_push.get('configured') else ''}>Enable on this browser</button><button class="sheet-button" type="button" data-web-push-disable>Disable on this browser</button><button class="sheet-button" type="button" data-web-push-test {'disabled' if not browser_push.get('configured') else ''}>Queue test</button></div>
+        <p role="status" data-web-push-status>{h(browser_push_count)} active browser subscription{'s' if browser_push_count != 1 else ''} on this account.</p>
+      </div>
     </section>"""
 
 
@@ -7107,7 +7731,7 @@ def render_billing_script() -> str:
   const session=JSON.parse(document.getElementById('account-session')?.textContent||'{}');
   document.querySelectorAll('[data-billing-action]').forEach(button=>button.addEventListener('click',async()=>{
     button.disabled=true;const error=document.querySelector('[data-billing-error]');if(error)error.textContent='';
-    try{const checkout=button.dataset.billingAction==='checkout';const consent=document.querySelector('[data-subscription-consent]');if(checkout&&!consent?.checked)throw new Error('Accept the terms and immediate-access acknowledgement before continuing.');const payload=checkout?{terms_accepted:true,immediate_access_consent:true}:{};const response=await fetch(`/api/billing/${button.dataset.billingAction}`,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf_token},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok||!data.url)throw new Error(data.error||'Billing is temporarily unavailable.');location.assign(data.url);}catch(exc){if(error)error.textContent=exc.message||'Billing is temporarily unavailable.';button.disabled=false;}
+    try{const checkout=button.dataset.billingAction==='checkout';const consent=document.querySelector('[data-subscription-consent]');if(checkout&&!consent?.checked)throw new Error('Accept the terms and immediate-access acknowledgement before continuing.');const payload=checkout?{terms_accepted:true,immediate_access_consent:true,tier:button.dataset.billingTier||'research_pro'}:{};const response=await fetch(`/api/billing/${button.dataset.billingAction}`,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf_token},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok||!data.url)throw new Error(data.error||'Billing is temporarily unavailable.');location.assign(data.url);}catch(exc){if(error)error.textContent=exc.message||'Billing is temporarily unavailable.';button.disabled=false;}
   }));
 })();
 </script>"""
@@ -7149,6 +7773,12 @@ def render_account_script() -> str:
   root.querySelector('[data-account-settings]')?.addEventListener('submit',async event=>{event.preventDefault();await request('/api/account-settings',Object.fromEntries(new FormData(event.currentTarget)));location.reload();});
   root.querySelector('[data-pushover-settings]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,status=form.querySelector('[data-pushover-status]');const payload=Object.fromEntries(new FormData(form));payload.pushover_enabled=form.elements.pushover_enabled.checked;try{await request('/api/notification-preferences',payload);form.elements.pushover_user_key.value='';status.textContent='Pushover settings saved securely.';}catch(error){status.textContent=error.message;}});
   root.querySelector('[data-pushover-test]')?.addEventListener('click',async event=>{const status=root.querySelector('[data-pushover-status]');event.currentTarget.disabled=true;try{const result=await request('/api/alert-test',{});status.textContent=result.ok?'Test sent to Pushover.':(result.error||'Test failed.');}catch(error){status.textContent=error.message;}finally{event.currentTarget.disabled=false;}});
+  const webPush=root.querySelector('[data-web-push]'),webPushStatus=webPush?.querySelector('[data-web-push-status]');
+  const vapidBytes=value=>{const padding='='.repeat((4-value.length%4)%4),base64=(value+padding).replace(/-/g,'+').replace(/_/g,'/'),raw=atob(base64);return Uint8Array.from([...raw].map(char=>char.charCodeAt(0)));};
+  async function pushRegistration(){if(!('serviceWorker' in navigator)||!('PushManager' in window))throw new Error('This browser does not support Web Push.');return navigator.serviceWorker.register('/service-worker.js',{scope:'/'});}
+  webPush?.querySelector('[data-web-push-enable]')?.addEventListener('click',async event=>{event.currentTarget.disabled=true;try{const registration=await pushRegistration();const permission=await Notification.requestPermission();if(permission!=='granted')throw new Error('Browser notification permission was not granted.');let subscription=await registration.pushManager.getSubscription();if(!subscription)subscription=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:vapidBytes(webPush.dataset.vapidKey)});await request('/api/web-push/subscribe',subscription.toJSON());webPushStatus.textContent='Web Push enabled on this browser.';}catch(error){webPushStatus.textContent=error.message;}finally{event.currentTarget.disabled=false;}});
+  webPush?.querySelector('[data-web-push-disable]')?.addEventListener('click',async()=>{try{const registration=await navigator.serviceWorker.getRegistration('/service-worker.js'),subscription=await registration?.pushManager.getSubscription();if(!subscription){webPushStatus.textContent='No Web Push subscription exists on this browser.';return;}await request('/api/web-push/unsubscribe',{endpoint:subscription.endpoint});await subscription.unsubscribe();webPushStatus.textContent='Web Push disabled on this browser.';}catch(error){webPushStatus.textContent=error.message;}});
+  webPush?.querySelector('[data-web-push-test]')?.addEventListener('click',async()=>{try{await request('/api/web-push/test',{});webPushStatus.textContent='Browser test queued. It will arrive through the background delivery worker.';}catch(error){webPushStatus.textContent=error.message;}});
   root.querySelector('[data-telegram-action]')?.addEventListener('click',async event=>{const button=event.currentTarget,error=root.querySelector('[data-telegram-error]');button.disabled=true;if(error)error.textContent='';try{const data=await request(`/api/telegram/${button.dataset.telegramAction}`,{});if(data.url){window.open(data.url,'_blank','noopener');button.textContent='Link opened';}else location.reload();}catch(exc){if(error)error.textContent=exc.message;button.disabled=false;}});
   root.querySelector('[data-notifications-read]')?.addEventListener('click',async()=>{await request('/api/notifications/read',{});location.reload();});
   root.querySelector('[data-member-create]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;try{await request('/api/account-users',Object.fromEntries(new FormData(form)));form.reset();loadMembers();}catch(error){alert(error.message);}});
@@ -8165,7 +8795,33 @@ WATCHLIST_SCRIPT = """
   }
 
   function saveTokens(tokens) {
-    localStorage.setItem(storageKey, JSON.stringify([...new Set(tokens.map(normaliseSymbol).filter(Boolean))]));
+    const clean = [...new Set(tokens.map(normaliseSymbol).filter(Boolean))];
+    localStorage.setItem(storageKey, JSON.stringify(clean));
+    syncTokens(clean);
+  }
+
+  let syncTimer = 0;
+  function csrf() { return document.querySelector('[data-logout]')?.dataset.csrf || ''; }
+  function syncTokens(tokens) {
+    window.clearTimeout(syncTimer);
+    syncTimer = window.setTimeout(async () => {
+      try {
+        await fetch('/api/watchlist', {method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf()}, body:JSON.stringify({tokens})});
+      } catch (error) { /* browser copy remains available offline */ }
+    }, 120);
+  }
+
+  async function hydrateAccountWatchlist() {
+    try {
+      const response = await fetch('/api/watchlist');
+      if (!response.ok) return;
+      const payload = await response.json();
+      const serverTokens = Array.isArray(payload.tokens) ? payload.tokens.map(normaliseSymbol).filter(Boolean) : [];
+      const merged = [...new Set([...serverTokens, ...loadTokens()])].slice(0, 100);
+      localStorage.setItem(storageKey, JSON.stringify(merged));
+      if (merged.length !== serverTokens.length || merged.some((token, index) => token !== serverTokens[index])) syncTokens(merged);
+      renderAll();
+    } catch (error) { /* localStorage fallback is intentional */ }
   }
 
   function addToken(symbol) {
@@ -8310,6 +8966,7 @@ WATCHLIST_SCRIPT = """
   });
 
   renderAll();
+  hydrateAccountWatchlist();
 })();
 </script>
 """
@@ -10267,6 +10924,8 @@ _VISITOR_NAV: tuple[tuple[str, str, str], ...] = (
     ("free", "/free", "Live spreads"),
     ("pricing", "/pricing", "Membership"),
     ("guide", "/guide", "Guide"),
+    ("methodology", "/methodology", "Method"),
+    ("telegram", "/telegram", "Telegram"),
     ("login", "/login", "Sign in"),
 )
 
@@ -10293,6 +10952,9 @@ _MOBILE_SECONDARY_NAV: tuple[tuple[str, str, str], ...] = (
 
 def render_primary_nav(active: str, *, signed_in: bool) -> str:
     links = _MEMBER_NAV if signed_in else _VISITOR_NAV
+    user = accounts.current_user()
+    if signed_in and user is not None and not _user_has_tier(user, "research_pro"):
+        links = tuple(item for item in links if item[0] != "intel")
     return "".join(
         f'<a class="{active_class(active, key)}" href="{href}">{h(label)}</a>'
         for key, href, label in links
@@ -10300,9 +10962,13 @@ def render_primary_nav(active: str, *, signed_in: bool) -> str:
 
 
 def render_mobile_secondary_nav(active: str) -> str:
+    items = _MOBILE_SECONDARY_NAV
+    user = accounts.current_user()
+    if user is not None and not _user_has_tier(user, "research_pro"):
+        items = tuple(item for item in items if item[0] == "alerts")
     links = "".join(
         f'<a class="{active_class(active, key)}" href="{href}">{h(label)}</a>'
-        for key, href, label in _MOBILE_SECONDARY_NAV
+        for key, href, label in items
     )
     return (
         '<nav class="mobile-secondary-nav" aria-label="Mobile community navigation">'
@@ -10310,10 +10976,25 @@ def render_mobile_secondary_nav(active: str) -> str:
     )
 
 
+def _user_entitlement_tier(user: Any) -> str:
+    value = getattr(user, "entitlement_tier", None)
+    if isinstance(value, str):
+        return value
+    if getattr(user, "is_admin", False):
+        return "research_pro"
+    stored = str(getattr(user, "subscription_tier", "research_pro"))
+    return stored if getattr(user, "subscription_active", False) else "free"
+
+
+def _user_has_tier(user: Any, minimum: str) -> bool:
+    order = {"free": 0, "scanner": 1, "research_pro": 2}
+    return order.get(_user_entitlement_tier(user), 0) >= order.get(minimum, 99)
+
+
 def shell(title: str, active: str, body: str) -> str:
     user = accounts.current_user()
     account_action = (
-        f'<a class="account-chip" href="/account"><span>{h(user.display_name)}</span><em>{h(user.subscription_status)}</em></a>'
+        f'<a class="account-chip" href="/account"><span>{h(user.display_name)}</span><em>{h(PLAN_CATALOG.get(_user_entitlement_tier(user), PLAN_CATALOG["free"])["name"])}</em></a>'
         f'<button class="logout-button" type="button" data-logout data-csrf="{h(user.csrf_token or "")}" aria-label="Sign out" title="Sign out">&#x21AA;</button>'
         if user
         else ''
@@ -10548,6 +11229,158 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .terminal-filter-panel .market-filter-form input, .terminal-filter-panel .market-filter-form select {{ border-color: var(--terminal-line); background: var(--terminal-row); color: var(--terminal-text); }}
 .terminal-filter-panel .market-check, .terminal-filter-panel .sheet-button {{ background: var(--terminal-panel-2); color: var(--terminal-text); border: 1px solid var(--terminal-line); }}
 .terminal-filter-panel .sheet-button.primary {{ background: var(--terminal-accent); color: #062f2b; border-color: transparent; }}
+.advanced-market-filters {{ grid-column:1 / -1; border:1px solid var(--terminal-line); border-radius:6px; background:var(--terminal-panel-2); }}
+.advanced-market-filters summary {{ min-height:36px; display:flex; align-items:center; gap:10px; padding:0 11px; cursor:pointer; color:var(--terminal-text); font-size:12px; font-weight:900; }}
+.advanced-market-filters summary span {{ color:var(--terminal-muted); font-size:10px; font-weight:700; }}
+.advanced-market-filters > div {{ display:grid; grid-template-columns:repeat(4,minmax(150px,1fr)); gap:8px; padding:10px; border-top:1px solid var(--terminal-line); }}
+.advanced-market-filters > p {{ margin:0; padding:0 10px 10px; color:var(--terminal-muted); font-size:10px; line-height:1.45; }}
+.filter-preset-row {{ display:grid; grid-template-columns:auto minmax(180px,1fr) auto; gap:8px; align-items:center; padding-top:8px; border-top:1px solid var(--terminal-line); }}
+.filter-preset-row > span {{ color:var(--terminal-muted); font-size:10px; font-weight:900; text-transform:uppercase; }}
+.filter-preset-list {{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; }}
+.filter-preset-list > em {{ color:var(--terminal-muted); font-size:12px; font-style:normal; }}
+.filter-preset-chip {{ display:inline-flex; min-height:30px; align-items:center; border:1px solid var(--terminal-line); border-radius:5px; overflow:hidden; background:var(--terminal-panel-2); }}
+.filter-preset-chip a {{ padding:6px 9px; color:var(--terminal-text); font-size:12px; font-weight:800; text-decoration:none; }}
+.filter-preset-chip button {{ align-self:stretch; min-width:28px; border:0; border-left:1px solid var(--terminal-line); background:transparent; color:var(--terminal-muted); cursor:pointer; }}
+.filter-preset-save {{ display:flex; gap:6px; }}
+.filter-preset-save input {{ width:170px; min-height:30px; padding:0 8px; border:1px solid var(--terminal-line); border-radius:5px; background:var(--terminal-row); color:var(--terminal-text); }}
+.filter-preset-save button {{ min-height:30px; border:0; border-radius:5px; padding:0 10px; background:var(--terminal-accent); color:#062f2b; font-weight:900; cursor:pointer; }}
+.filter-preset-row output {{ grid-column:2 / -1; color:var(--red); font-size:11px; }}
+.filter-preset-guest {{ padding-top:8px; border-top:1px solid var(--terminal-line); font-size:12px; }}
+.filter-preset-guest a {{ color:var(--terminal-accent); }}
+.market-head-actions {{ display:flex; gap:6px; align-items:center; }}
+.market-head-actions button {{ cursor:pointer; background:var(--terminal-panel-2); color:var(--terminal-text); }}
+.pro-market-wrap {{ width:100%; overflow:auto; border:1px solid var(--terminal-line); border-radius:8px; background:var(--terminal-panel); }}
+.pro-market-table {{ width:100%; min-width:1060px; border-collapse:collapse; color:var(--terminal-text); font-size:12px; }}
+.pro-market-table caption {{ padding:9px 12px; text-align:left; color:var(--terminal-muted); font-size:10px; font-weight:900; text-transform:uppercase; letter-spacing:.06em; }}
+.pro-market-table th {{ position:sticky; top:0; z-index:1; padding:9px 10px; background:var(--terminal-shell); color:var(--terminal-shell-text); text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.05em; white-space:nowrap; }}
+.pro-market-table td {{ padding:10px; border-top:1px solid var(--terminal-line); vertical-align:middle; font-variant-numeric:tabular-nums; }}
+.pro-market-table tbody tr:hover {{ background:var(--terminal-row-hover); }}
+.pro-market-table td > strong, .pro-market-table td > small {{ display:block; white-space:nowrap; }}
+.pro-market-table td > small {{ margin-top:3px; color:var(--terminal-muted); font-size:10px; }}
+.pro-token {{ color:var(--terminal-text); font-size:14px; font-weight:950; text-decoration:none; }}
+.pro-actions {{ white-space:nowrap; }}
+.pro-actions > * {{ margin-right:6px; }}
+.pro-actions a {{ color:var(--terminal-accent); font-weight:850; text-decoration:none; }}
+.persistence-badge {{ display:inline-flex; width:max-content; margin-top:5px; padding:2px 6px; border-radius:999px; font-size:9px; font-weight:900; background:var(--terminal-panel-2); color:var(--terminal-muted); }}
+.persistence-badge.persistent {{ background:var(--terminal-accent-soft); color:var(--accent-ink); }}
+.persistence-badge.mixed {{ background:var(--terminal-warning-soft); color:var(--terminal-warning); }}
+.persistence-badge.reversing {{ background:var(--terminal-danger-soft); color:var(--red); }}
+.market-event-list {{ display:flex; gap:4px; flex-wrap:wrap; margin-top:4px; }}
+.market-event-list a {{ text-decoration:none; }}
+.market-event {{ display:inline-flex; min-height:19px; align-items:center; padding:0 5px; border:1px solid var(--terminal-line); border-radius:4px; color:var(--terminal-muted); font-size:8px; font-weight:900; text-transform:uppercase; letter-spacing:.04em; }}
+.market-event.info {{ color:var(--terminal-accent); }}
+.market-event.watch {{ color:var(--terminal-warning); border-color:var(--terminal-warning); }}
+.market-event.block {{ color:var(--red); border-color:var(--red); background:var(--terminal-danger-soft); }}
+.tokenized-guard {{ display:inline-flex; width:max-content; margin-top:4px; padding:3px 6px; border:1px solid var(--terminal-warning); border-radius:4px; color:var(--terminal-warning); font-size:8px; font-weight:900; text-transform:uppercase; }}
+.tokenized-guard.verified {{ border-color:var(--terminal-accent); color:var(--terminal-accent); }}
+.tokenized-evidence {{ display:grid; gap:12px; padding:16px; border:1px solid var(--terminal-warning); border-radius:8px; background:var(--terminal-panel); }}
+.tokenized-evidence.verified {{ border-color:var(--terminal-accent); }}
+.tokenized-evidence header {{ display:flex; justify-content:space-between; gap:16px; align-items:center; }}
+.tokenized-evidence h2 {{ margin:3px 0 0; font-size:18px; }}
+.tokenized-evidence > dl {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin:0; }}
+.tokenized-evidence dl div {{ padding:10px; background:var(--terminal-panel-2); }}
+.tokenized-evidence dt {{ color:var(--terminal-muted); font-size:9px; font-weight:900; text-transform:uppercase; }}
+.tokenized-evidence dd {{ margin:5px 0 0; font-size:12px; }}
+.tokenized-evidence ul,.tokenized-evidence p {{ margin:0; color:var(--terminal-muted); font-size:11px; line-height:1.45; }}
+.tokenized-evidence a {{ color:var(--terminal-accent); }}
+.pair-market-events {{ display:grid; gap:10px; padding:16px; border:1px solid var(--terminal-line); border-radius:8px; background:var(--terminal-panel); }}
+.pair-market-events header h2 {{ margin:3px 0 0; font-size:18px; }}
+.pair-market-events > div {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }}
+.pair-market-events article {{ display:grid; gap:5px; padding:12px; border:1px solid var(--terminal-line); border-radius:6px; }}
+.pair-market-events article.block {{ border-color:var(--red); }}
+.pair-market-events article span {{ color:var(--terminal-muted); font-size:9px; font-weight:900; text-transform:uppercase; }}
+.pair-market-events article p {{ margin:0; color:var(--terminal-muted); font-size:11px; line-height:1.45; }}
+.pair-market-events article em, .pair-market-events article a {{ color:var(--terminal-accent); font-size:10px; font-style:normal; }}
+.net-edge-open {{ min-height:28px; padding:4px 7px; border:1px solid var(--terminal-line); border-radius:5px; background:var(--terminal-panel-2); color:var(--terminal-text); font:inherit; font-size:10px; font-weight:900; cursor:pointer; }}
+.net-edge-dialog {{ width:min(720px,calc(100% - 24px)); max-height:calc(100vh - 24px); padding:0; border:1px solid var(--terminal-line); border-radius:10px; background:var(--terminal-panel); color:var(--terminal-text); box-shadow:0 24px 80px rgba(0,0,0,.35); }}
+.net-edge-dialog::backdrop {{ background:rgba(4,14,12,.72); }}
+.net-edge-card {{ display:grid; gap:16px; padding:20px; }}
+.net-edge-card header {{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }}
+.net-edge-card header span {{ color:var(--terminal-accent); font-size:10px; font-weight:900; text-transform:uppercase; letter-spacing:.07em; }}
+.net-edge-card h2 {{ margin:3px 0 0; }}
+.net-edge-card header button {{ width:36px; height:36px; border:1px solid var(--terminal-line); border-radius:50%; background:transparent; color:var(--terminal-text); font-size:20px; cursor:pointer; }}
+.net-edge-card > p {{ margin:0; color:var(--terminal-muted); }}
+.net-edge-fields {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }}
+.net-edge-fields label {{ display:grid; gap:5px; color:var(--terminal-muted); font-size:10px; font-weight:900; text-transform:uppercase; }}
+.net-edge-fields input, .net-edge-fields select {{ width:100%; min-height:38px; padding:0 9px; border:1px solid var(--terminal-line); border-radius:5px; background:var(--terminal-row); color:var(--terminal-text); }}
+.net-edge-results {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }}
+.net-edge-results article {{ display:grid; gap:5px; padding:12px; border:1px solid var(--terminal-line); border-radius:7px; background:var(--terminal-panel-2); }}
+.net-edge-results span {{ color:var(--terminal-muted); font-size:10px; text-transform:uppercase; font-weight:900; }}
+.net-edge-results strong {{ font-size:16px; font-variant-numeric:tabular-nums; }}
+.net-edge-results .total {{ background:var(--terminal-accent-soft); color:var(--accent-ink); }}
+.net-edge-note {{ font-size:11px; line-height:1.5; }}
+.telegram-page {{ width:min(1080px,calc(100% - 36px)); margin:34px auto 72px; display:grid; gap:20px; }}
+.telegram-hero {{ display:grid; grid-template-columns:minmax(0,1.4fr) minmax(240px,.6fr); border:1px solid var(--terminal-line); border-radius:10px; overflow:hidden; background:var(--terminal-panel); }}
+.telegram-hero > div {{ padding:34px; }}
+.telegram-hero h1 {{ margin:8px 0 12px; font-size:clamp(30px,5vw,52px); line-height:1.02; max-width:18ch; }}
+.telegram-hero p {{ color:var(--terminal-muted); line-height:1.55; max-width:58ch; }}
+.telegram-hero aside {{ display:grid; align-content:center; gap:8px; padding:28px; background:var(--terminal-shell); color:var(--terminal-shell-text); }}
+.telegram-hero aside span, .telegram-hero aside em {{ color:#9cb2ab; font-size:11px; font-style:normal; }}
+.telegram-hero aside strong {{ font-size:40px; color:var(--terminal-accent); }}
+.telegram-actions {{ display:flex; gap:8px; flex-wrap:wrap; margin-top:20px; }}
+.telegram-flow {{ display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }}
+.telegram-flow article, .telegram-command-grid article {{ padding:18px; border:1px solid var(--terminal-line); border-radius:8px; background:var(--terminal-panel); }}
+.telegram-flow b {{ color:var(--terminal-accent); font-size:11px; }}
+.telegram-flow h2 {{ margin:7px 0; font-size:18px; }}
+.telegram-flow p {{ margin:0; color:var(--terminal-muted); line-height:1.5; }}
+.telegram-preview {{ display:grid; grid-template-columns:minmax(200px,.7fr) minmax(0,1.3fr); gap:18px; padding:22px; border:1px solid var(--terminal-line); border-radius:8px; background:var(--terminal-panel); }}
+.telegram-preview h2 {{ margin:5px 0; }}
+.telegram-preview pre {{ margin:0; padding:16px; overflow:auto; border-radius:7px; background:var(--terminal-shell); color:var(--terminal-shell-text); white-space:pre-wrap; font-size:12px; line-height:1.55; }}
+.telegram-preview > p {{ grid-column:1 / -1; margin:0; color:var(--terminal-muted); font-size:11px; }}
+.telegram-command-grid {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }}
+.telegram-command-grid article {{ display:grid; gap:7px; }}
+.telegram-command-grid code {{ color:var(--terminal-accent); font-size:14px; font-weight:900; }}
+.telegram-command-grid span {{ color:var(--terminal-muted); font-size:12px; line-height:1.4; }}
+.research-page {{ width:min(1080px,calc(100% - 36px)); margin:34px auto 72px; display:grid; gap:20px; }}
+.research-hero {{ display:grid; grid-template-columns:minmax(0,1.45fr) minmax(250px,.55fr); border:1px solid var(--terminal-line); border-radius:10px; overflow:hidden; background:var(--terminal-panel); }}
+.research-hero > div {{ padding:36px; }}
+.research-hero h1 {{ margin:8px 0 12px; max-width:20ch; font-size:clamp(30px,5vw,50px); line-height:1.04; }}
+.research-hero p {{ margin:0; max-width:60ch; color:var(--terminal-muted); font-size:15px; line-height:1.6; }}
+.research-hero aside {{ display:grid; align-content:center; gap:8px; padding:28px; background:var(--terminal-shell); color:var(--terminal-shell-text); }}
+.research-hero aside strong {{ color:var(--terminal-accent); font-size:28px; }}
+.research-hero aside span {{ color:#9cb2ab; font-size:12px; line-height:1.5; }}
+.research-hero aside a {{ color:var(--terminal-shell-text); font-size:12px; font-weight:900; }}
+.research-jump {{ display:flex; gap:7px; flex-wrap:wrap; }}
+.research-jump a {{ padding:7px 10px; border:1px solid var(--terminal-line); border-radius:999px; color:var(--terminal-text); text-decoration:none; font-size:11px; font-weight:850; }}
+.research-grid {{ display:grid; grid-template-columns:1fr 1fr; border:1px solid var(--terminal-line); border-radius:8px; overflow:hidden; background:var(--terminal-panel); }}
+.research-grid article {{ padding:24px; }}
+.research-grid article + article {{ border-left:1px solid var(--terminal-line); }}
+.research-grid article > span, .worked-example > span {{ color:var(--terminal-accent); font-size:10px; font-weight:900; text-transform:uppercase; letter-spacing:.07em; }}
+.research-grid h2 {{ margin:7px 0 9px; }}
+.research-grid p {{ margin:0; color:var(--terminal-muted); line-height:1.6; }}
+.research-grid code {{ display:block; margin-top:16px; padding:10px; border-radius:6px; background:var(--terminal-shell); color:var(--terminal-shell-text); white-space:normal; }}
+.executor-boundary-grid {{ display:grid; grid-template-columns:1fr 1fr; border:1px solid var(--terminal-line); border-radius:8px; overflow:hidden; background:var(--terminal-panel); }}
+.executor-boundary-grid article {{ padding:24px; }}
+.executor-boundary-grid article + article {{ border-left:1px solid var(--terminal-line); }}
+.executor-boundary-grid article > span {{ color:var(--terminal-accent); font-size:10px; font-weight:900; text-transform:uppercase; letter-spacing:.07em; }}
+.executor-boundary-grid article.forbidden > span {{ color:var(--red); }}
+.executor-boundary-grid h2 {{ margin:7px 0 12px; }}
+.executor-boundary-grid ul {{ display:grid; gap:9px; margin:0; padding:0; list-style:none; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
+.executor-boundary-grid li {{ display:flex; align-items:flex-start; gap:8px; }}
+.executor-boundary-grid li span {{ color:var(--green); font-weight:900; }}
+.executor-boundary-grid .forbidden li span {{ color:var(--red); }}
+.evidence-labels, .audit-scoreboard {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }}
+.evidence-labels > div, .audit-scoreboard article {{ padding:16px; border:1px solid var(--terminal-line); border-radius:8px; background:var(--terminal-panel); }}
+.evidence-labels span {{ color:var(--terminal-accent); font-size:11px; font-weight:900; text-transform:uppercase; }}
+.evidence-labels p {{ margin:7px 0 0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
+.audit-scoreboard strong {{ display:block; font-size:28px; color:var(--terminal-accent); }}
+.audit-scoreboard span {{ color:var(--terminal-muted); font-size:11px; }}
+.audit-caveat {{ margin:0; padding:12px 14px; border-left:3px solid var(--terminal-warning); background:var(--terminal-warning-soft); color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
+.example-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }}
+.worked-example {{ padding:22px; border:1px solid var(--terminal-line); border-radius:8px; background:var(--terminal-panel); }}
+.worked-example h2 {{ margin:7px 0 15px; }}
+.worked-example dl {{ margin:0; }}
+.worked-example dl div {{ display:flex; justify-content:space-between; gap:15px; padding:9px 0; border-top:1px solid var(--terminal-line); }}
+.worked-example dt {{ color:var(--terminal-muted); }}
+.worked-example dd {{ margin:0; font-weight:900; font-variant-numeric:tabular-nums; }}
+.worked-example .total {{ font-size:17px; }}
+.worked-example.positive .total dd {{ color:var(--green); }}
+.worked-example.negative .total dd {{ color:var(--red); }}
+.worked-example p {{ color:var(--terminal-muted); font-size:11px; line-height:1.5; }}
+.audit-process {{ padding:22px; border:1px solid var(--terminal-line); border-radius:8px; background:var(--terminal-panel); }}
+.audit-process h2 {{ margin-top:0; }}
+.audit-process ol {{ display:grid; grid-template-columns:1fr 1fr; gap:8px 28px; margin-bottom:0; color:var(--terminal-muted); line-height:1.5; }}
+.research-footer {{ display:flex; gap:8px; flex-wrap:wrap; }}
 .terminal-active-filters {{ display: flex; gap: 7px; align-items: center; flex-wrap: wrap; min-height: 30px; }}
 .terminal-active-filters > span {{ color: var(--terminal-muted); font-size: 10px; font-weight: 900; text-transform: uppercase; }}
 .terminal-active-filters a, .terminal-active-filters em {{ min-height: 26px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border-radius: 5px; background: var(--terminal-panel-2); color: var(--terminal-text); border: 1px solid var(--terminal-line); font-size: 11px; font-style: normal; font-weight: 900; }}
@@ -11746,6 +12579,39 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   .terminal-filter-panel .market-tabs {{ flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }}
   .terminal-filter-panel .market-tab {{ flex: 0 0 auto; }}
   .terminal-filter-panel .market-filter-form {{ grid-template-columns: 1fr; }}
+  .advanced-market-filters > div {{ grid-template-columns:1fr; }}
+  .advanced-market-filters summary {{ align-items:flex-start; flex-direction:column; gap:2px; padding:9px 11px; }}
+  .filter-preset-row {{ grid-template-columns:1fr; align-items:stretch; }}
+  .filter-preset-row output {{ grid-column:auto; }}
+  .filter-preset-save {{ display:grid; grid-template-columns:minmax(0,1fr) auto; }}
+  .filter-preset-save input {{ width:100%; }}
+  .market-head-actions {{ flex-wrap:wrap; justify-content:flex-start; }}
+  .pro-market-wrap {{ overflow:visible; border:0; background:transparent; }}
+  .pro-market-table {{ min-width:0; display:block; }}
+  .pro-market-table caption {{ display:none; }}
+  .pro-market-table thead {{ display:none; }}
+  .pro-market-table tbody {{ display:grid; gap:10px; }}
+  .pro-market-table tr {{ display:grid; grid-template-columns:1fr 1fr; border:1px solid var(--terminal-line); border-radius:8px; overflow:hidden; background:var(--terminal-panel); }}
+  .pro-market-table td {{ display:block; min-width:0; padding:9px 10px; border-top:1px solid var(--terminal-line); }}
+  .pro-market-table td::before {{ content:attr(data-label); display:block; margin-bottom:4px; color:var(--terminal-muted); font-size:9px; font-weight:900; text-transform:uppercase; letter-spacing:.05em; }}
+  .pro-market-table td:first-child, .pro-market-table .pro-actions {{ grid-column:1 / -1; }}
+  .net-edge-fields, .net-edge-results {{ grid-template-columns:1fr 1fr; }}
+  .net-edge-card {{ padding:16px; }}
+  .telegram-page {{ width:min(100% - 20px,1080px); margin-top:18px; }}
+  .telegram-hero, .telegram-preview {{ grid-template-columns:1fr; }}
+  .telegram-hero > div {{ padding:24px 20px; }}
+  .telegram-flow {{ grid-template-columns:1fr; }}
+  .telegram-command-grid {{ grid-template-columns:1fr 1fr; }}
+  .research-page {{ width:min(100% - 20px,1080px); margin-top:18px; }}
+  .research-hero, .research-grid, .example-grid, .executor-boundary-grid {{ grid-template-columns:1fr; }}
+  .research-hero > div {{ padding:24px 20px; }}
+  .research-grid article + article {{ border-left:0; border-top:1px solid var(--terminal-line); }}
+  .executor-boundary-grid article + article {{ border-left:0; border-top:1px solid var(--terminal-line); }}
+  .evidence-labels, .audit-scoreboard {{ grid-template-columns:1fr 1fr; }}
+  .audit-process ol {{ grid-template-columns:1fr; }}
+  .pair-market-events > div {{ grid-template-columns:1fr; }}
+  .tokenized-evidence header {{ align-items:flex-start; flex-direction:column; }}
+  .tokenized-evidence > dl {{ grid-template-columns:1fr 1fr; }}
   .terminal-active-filters {{ overflow-x: auto; flex-wrap: nowrap; }}
   .terminal-active-filters a, .terminal-active-filters em {{ flex: 0 0 auto; }}
   .terminal-layout {{ grid-template-columns: 1fr; }}

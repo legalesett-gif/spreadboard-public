@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import threading
+import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -55,7 +56,20 @@ def status(*, db_path: Any = accounts.DEFAULT_DB_PATH) -> dict[str, Any]:
         "membership_errors": sum(
             1 for candidate in candidates if candidate.get("membership_state") == "error"
         ),
+        "public_feed_configured": bool(public_feed_chat_id()),
+        "public_feed_outbound_ready": bool(public_feed_chat_id() and outbound_posting_enabled()),
     }
+
+
+def public_feed_chat_id() -> str | None:
+    value = os.environ.get("SPREADBOARD_TELEGRAM_PUBLIC_FEED_CHAT_ID", "").strip()
+    if not value:
+        return None
+    if value.startswith("@") and all(char.isalnum() or char in "_@" for char in value):
+        return value
+    if value.lstrip("-").isdigit():
+        return value
+    return None
 
 
 def link_url(token: str) -> str:
@@ -239,6 +253,17 @@ def handle_update(
             return _reply(chat_id, "This link is invalid or expired. Generate a new link in your SpreadBoard account.")
         suffix = " Use /access to request the subscriber group." if user.subscription_active else " Use /subscribe to activate access."
         return _reply(chat_id, f"Linked to {user.display_name}.{suffix}")
+    if command == "/top":
+        if board_path is None:
+            return _reply(chat_id, "The live scanner is warming. Try /top again shortly.")
+        return _reply(chat_id, render_public_digest(board_path=board_path), html=True)
+    if command in {"/start", "/help"}:
+        public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
+        text = (
+            "SpreadBoard checks executable cross-venue routes, settled funding, and transfer rails.\n\n"
+            "Use /top for a public research preview. Link your account on the website for /subscribe, /mysubscription and /access."
+        )
+        return _reply(chat_id, text, button=("Open SpreadBoard", f"{public_url}/telegram") if public_url else None)
     user = accounts.user_for_telegram_chat(chat_id, db_path=db_path)
     if user is None:
         return _reply(chat_id, "Link this chat from Account settings in SpreadBoard first.")
@@ -290,7 +315,73 @@ def handle_update(
             db_path=db_path,
         )
         return _reply(chat_id, "Tap below, then request to join. Active memberships are approved automatically.", button=("Request group access", invite))
-    return _reply(chat_id, "Commands: /subscribe, /mysubscription, /access")
+    return _reply(chat_id, "Commands: /top, /subscribe, /mysubscription, /access")
+
+
+def render_public_digest(*, board_path: Any, limit: int = 5) -> str:
+    """Small public research preview; no account data and no execution claims."""
+    public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
+    rows = telegram_queries.suggest("", board_path=board_path, limit=max(1, min(8, limit)))
+    lines = ["<b>SpreadBoard · live research preview</b>"]
+    for index, item in enumerate(rows, 1):
+        token = str(item.get("token") or "")
+        edge = item.get("best_edge_pct")
+        value = f"{float(edge):+.2f}%" if edge is not None else "—"
+        venues = " / ".join(str(value) for value in (item.get("venues") or [])[:3])
+        link = f"{public_url}/markets?q={quote(token)}&view=table" if public_url else ""
+        title = f'<a href="{link}">{token}</a>' if link else token
+        lines.append(f"{index}. <b>{title}</b> · {value} · {int(item.get('route_count') or 0)} routes · {venues}")
+    if not rows:
+        lines.append("No fresh routes matched the public safety filters.")
+    lines.append("\n<i>Public market research, not a trade signal. Recheck depth, identity, fees and funding before acting.</i>")
+    return "\n".join(lines)
+
+
+class PublicFeedWorker:
+    """Publish a deduplicated public preview only when a dedicated chat is configured."""
+
+    def __init__(self, *, board_path: Any, poll_seconds: float = 900.0) -> None:
+        self.board_path = board_path
+        self.poll_seconds = max(300.0, float(poll_seconds))
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="spreadboard-telegram-public-feed", daemon=True)
+        self._last_text = ""
+
+    @property
+    def running(self) -> bool:
+        return self._thread.is_alive()
+
+    def start(self) -> None:
+        if public_feed_chat_id() and config().ready and not self.running:
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self.running:
+            self._thread.join(timeout=5.0)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.poll_seconds):
+            try:
+                self.check_once()
+            except Exception as exc:  # noqa: BLE001
+                print(f"spreadboard-telegram-public-feed: {type(exc).__name__}: {exc}", flush=True)
+
+    def check_once(self) -> dict[str, Any]:
+        chat_id = public_feed_chat_id()
+        if not chat_id:
+            return {"status": "not_configured", "sent": 0}
+        if not outbound_posting_enabled():
+            return {"status": "outbound_disabled", "sent": 0}
+        text = render_public_digest(board_path=self.board_path)
+        if text == self._last_text:
+            return {"status": "unchanged", "sent": 0}
+        _api_call("sendMessage", {
+            "chat_id": chat_id, "text": text, "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        })
+        self._last_text = text
+        return {"status": "sent", "sent": 1, "at": int(time.time())}
 
 
 def _configure_group(chat: dict[str, Any], *, sender_id: int, db_path: Any) -> None:

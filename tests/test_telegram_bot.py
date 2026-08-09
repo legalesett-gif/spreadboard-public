@@ -142,3 +142,30 @@ def test_membership_worker_records_one_invalid_link_and_continues(tmp_path, monk
     assert summary == {"checked": 1, "removed": 0, "errors": 1}
     candidate = accounts.telegram_membership_candidates(db_path=db_path)[0]
     assert candidate["membership_state"] == "error"
+
+
+def test_public_digest_has_deep_links_without_claiming_tradeability(monkeypatch) -> None:
+    monkeypatch.setenv("SPREADBOARD_PUBLIC_URL", "https://spreadarbitrage.ink")
+    monkeypatch.setattr(telegram_bot.telegram_queries, "suggest", lambda *_args, **_kwargs: [
+        {"token": "SIREN", "best_edge_pct": 2.5, "route_count": 4, "venues": ["Gate", "OKX DEX"]}
+    ])
+    text = telegram_bot.render_public_digest(board_path="ignored")
+    assert "SIREN" in text and "+2.50%" in text
+    assert "view=table" in text and "research" in text.lower()
+
+
+def test_top_command_is_available_before_account_linking(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "accounts.sqlite3"
+    accounts.initialize(db_path)
+    monkeypatch.setattr(telegram_bot, "render_public_digest", lambda **_: "Top routes preview")
+    response = telegram_bot.handle_update(
+        {"message": {"chat": {"id": 88, "type": "private"}, "text": "/top"}},
+        db_path=db_path, board_path="board",
+    )
+    assert response["text"] == "Top routes preview"
+
+
+def test_public_feed_worker_requires_an_explicit_chat(monkeypatch) -> None:
+    monkeypatch.delenv("SPREADBOARD_TELEGRAM_PUBLIC_FEED_CHAT_ID", raising=False)
+    worker = telegram_bot.PublicFeedWorker(board_path="board", poll_seconds=300)
+    assert worker.check_once() == {"status": "not_configured", "sent": 0}

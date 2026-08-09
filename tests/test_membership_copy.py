@@ -172,3 +172,50 @@ def test_the_watchlist_follows_the_theme_and_is_legible() -> None:
     # Tap targets big enough to hit.
     heights = {int(m) for r in rules for m in re.findall(r"min-height:\s*(\d+)px", r)}
     assert all(h >= 38 for h in heights if h < 100), f"small tap target: {sorted(heights)}"
+
+
+def test_pro_table_keeps_execution_evidence_and_route_actions() -> None:
+    html = server.render_pro_market_table([{
+        "token": "SIREN", "route_key": "SIREN|OKX DEX|Spot|Gate|Futures",
+        "long_venue": "OKX DEX", "long_market_type": "Spot", "long_price": 0.03,
+        "short_venue": "Gate", "short_market_type": "Futures", "short_price": 0.031,
+        "depth_weighted_spread_pct": 3.2, "executable_spread_pct": 3.5,
+        "funding_24h_pct": 0.4, "depth_usd": 2500,
+        "long_deposit_enabled": True, "long_withdraw_enabled": True,
+        "short_deposit_enabled": True, "short_withdraw_enabled": True,
+    }])
+    for expected in ("Pro Table", "Matched edge", "Funding 24h", "SIREN", "Details", "Chart"):
+        assert expected in html
+
+
+def test_persistence_score_uses_realised_windows_not_current_apr(monkeypatch) -> None:
+    monkeypatch.setattr(
+        server.venue_funding_history, "route_windows",
+        lambda row: {"1d": 0.2, "7d": 1.1, "30d": 3.0},
+    )
+    result = server.funding_persistence({"route_key": "X"})
+    assert result["status"] == "persistent"
+    assert result["observed_windows"] == 3
+
+
+def test_net_edge_button_carries_matched_spread_and_realised_funding(monkeypatch) -> None:
+    monkeypatch.setattr(
+        server.venue_funding_history, "route_windows",
+        lambda row: {"1d": 0.25, "7d": 1.5, "30d": 4.0},
+    )
+    html = server.render_net_edge_button({
+        "token": "CASHCAT", "route_key": "cashcat-route",
+        "depth_weighted_spread_pct": 1.2, "funding_24h_pct": 0.25,
+    })
+    assert "Net edge" in html
+    assert "1.2" in html and "1d" in html and "0.25" in html
+
+
+def test_public_methodology_and_proof_label_evidence_honestly() -> None:
+    methodology = server.render_methodology_page()
+    proof = server.render_proof_page()
+    for expected in ("Matched-size VWAP", "Settled funding", "Identity", "Unknown stays unknown"):
+        assert expected in methodology
+    for expected in ("Verified release audit", "638", "12 / 12", "Modeled example", "Losing example"):
+        assert expected in proof
+    assert "guaranteed" not in (methodology + proof).lower()
