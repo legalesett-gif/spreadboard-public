@@ -449,6 +449,27 @@ def _refresh_enrichment_subprocess() -> None:
     _log(f"isolated enrichment exit={result.returncode} {summary}")
 
 
+def _warm_telegram_payload_at_startup(board_path: Path) -> None:
+    """Make bot queries available without waiting for the first quote cycle.
+
+    A production restart already has a complete canonical snapshot on the
+    runtime volume. The first exchange refresh can take several minutes, so
+    tying bot readiness to that cycle made every deployment look like a broken
+    bot even while the website was healthy.
+    """
+    try:
+        from spreadboard import telegram_queries
+
+        started = time.monotonic()
+        telegram_queries.refresh_payload(board_path)
+        _log(
+            "telegram startup payload ready "
+            f"in {time.monotonic() - started:.1f}s"
+        )
+    except Exception as exc:  # noqa: BLE001 - the regular warmer retries later.
+        _log(f"telegram startup payload skipped: {type(exc).__name__}: {exc}")
+
+
 def main() -> int:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8200"))
@@ -503,6 +524,12 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, stop_service)
     signal.signal(signal.SIGINT, stop_service)
+    threading.Thread(
+        target=_warm_telegram_payload_at_startup,
+        args=(board_path,),
+        name="spreadboard-telegram-startup-warm",
+        daemon=True,
+    ).start()
     refresh_loop.start()
     MemoryWatchdog(refresh_loop.stop_event).start()
     # Without this nothing watches the chain, so a member could send USDC and

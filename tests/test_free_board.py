@@ -335,6 +335,21 @@ def test_freed_memory_is_returned_to_the_kernel_after_each_warm() -> None:
     service._return_freed_memory()
 
 
+def test_telegram_snapshot_can_warm_before_the_first_quote_cycle(tmp_path, monkeypatch) -> None:
+    from scripts import run_spreadboard_service as service
+    from spreadboard import telegram_queries
+
+    seen = []
+    monkeypatch.setattr(
+        telegram_queries, "refresh_payload", lambda path: seen.append(Path(path)) or {}
+    )
+
+    board_path = tmp_path / "existing-board.json"
+    service._warm_telegram_payload_at_startup(board_path)
+
+    assert seen == [board_path]
+
+
 def test_the_snapshot_pipeline_runs_outside_the_web_server() -> None:
     """Parsing a 40MB snapshot costs ~1GB, and it was done up to three times.
 
