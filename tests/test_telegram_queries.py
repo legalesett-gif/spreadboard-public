@@ -50,7 +50,7 @@ SIREN_ROUTES = [
 
 
 @pytest.fixture()
-def board_file(tmp_path, monkeypatch):
+def board_file(tmp_path, monkeypatch, request):
     """Patch the real feed loader; the returned path is unused but kept for the API."""
     def fake_load_spreads(*, q=None, **kwargs):
         # The bot must never be more permissive than the site. It now passes
@@ -70,7 +70,11 @@ def board_file(tmp_path, monkeypatch):
         ]}
 
     monkeypatch.setattr(telegram_queries.api_spreads, "load_spreads", fake_load_spreads)
-    return tmp_path / "unused.jsonl"
+    path = tmp_path / "unused.jsonl"
+    telegram_queries.reset_payload()
+    telegram_queries.refresh_payload(path)
+    request.addfinalizer(telegram_queries.reset_payload)
+    return path
 
 
 # --------------------------------------------------------------------------
@@ -88,10 +92,15 @@ def board_file(tmp_path, monkeypatch):
         ("/transfer SIREN", "transfer", "SIREN"),
         ("/spread@spreadbot SIREN", "spread", "SIREN"),
         ("/funding $siren", "funding", "SIREN"),
+        ("@spreadarbitragesubscription_bot SIREN", "spread", "SIREN"),
+        ("@spreadarbitragesubscription_bot funding SIREN", "funding", "SIREN"),
+        ("@spreadarbitragesubscription_bot SIREN rails", "transfer", "SIREN"),
     ],
 )
 def test_recognised_triggers(text, kind, symbol):
-    query = telegram_queries.parse_query(text)
+    query = telegram_queries.parse_query(
+        text, bot_username="spreadarbitragesubscription_bot"
+    )
     assert query is not None
     assert (query.kind, query.symbol) == (kind, symbol)
 
@@ -133,6 +142,24 @@ def test_repeat_question_is_suppressed_within_cooldown():
     query = telegram_queries.Query(kind="spread", symbol="SIREN")
     assert telegram_queries.allow(GROUP_ID, query, now=1000.0) is True
     assert telegram_queries.allow(GROUP_ID, query, now=1005.0) is False
+
+
+def test_repeat_group_question_gets_an_explanation_instead_of_silence(
+    db, board_file
+):
+    accounts.configure_telegram_community(
+        GROUP_ID, title="Subscribers", configured_by_telegram_user_id=1,
+        invite_link="https://t.me/+abc", db_path=db,
+    )
+    telegram_queries.reset_cooldowns()
+    first = telegram_bot.handle_update(
+        message(GROUP_ID, "$SIREN"), db_path=db, board_path=board_file
+    )
+    second = telegram_bot.handle_update(
+        message(GROUP_ID, "$SIREN"), db_path=db, board_path=board_file
+    )
+    assert first is not None
+    assert second is not None and "less than a minute" in second["text"]
 
 
 def test_cooldown_expires():
@@ -232,6 +259,25 @@ def test_query_is_ignored_in_an_unregistered_group(db, board_file):
     assert reply is None, "the bot must stay silent in groups it does not serve"
 
 
+def test_missing_snapshot_fails_fast_with_a_visible_warming_reply(db, monkeypatch):
+    accounts.configure_telegram_community(
+        GROUP_ID, title="Subscribers", configured_by_telegram_user_id=1,
+        invite_link="https://t.me/+abc", db_path=db,
+    )
+    telegram_queries.reset_payload()
+    monkeypatch.setattr(
+        telegram_queries.api_spreads,
+        "load_spreads",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("webhook rebuilt board")),
+    )
+
+    reply = telegram_bot.handle_update(
+        message(GROUP_ID, "$SIREN"), db_path=db, board_path="board"
+    )
+
+    assert reply is not None and "warming" in reply["text"]
+
+
 def test_query_is_answered_in_the_registered_group(db, board_file):
     accounts.configure_telegram_community(
         GROUP_ID, title="Subscribers", configured_by_telegram_user_id=1,
@@ -243,6 +289,47 @@ def test_query_is_answered_in_the_registered_group(db, board_file):
     assert reply is not None
     assert reply["parse_mode"] == "HTML"
     assert reply["chat_id"] == GROUP_ID
+    assert "SIREN" in reply["text"]
+
+
+def test_tagging_the_bot_then_typing_a_token_is_answered(db, board_file, monkeypatch):
+    monkeypatch.setenv(
+        "SPREADBOARD_TELEGRAM_BOT_USERNAME", "spreadarbitragesubscription_bot"
+    )
+    accounts.configure_telegram_community(
+        GROUP_ID, title="Subscribers", configured_by_telegram_user_id=1,
+        invite_link="https://t.me/+abc", db_path=db,
+    )
+
+    reply = telegram_bot.handle_update(
+        message(GROUP_ID, "@spreadarbitragesubscription_bot SIREN"),
+        db_path=db,
+        board_path=board_file,
+    )
+
+    assert reply is not None and "SIREN" in reply["text"]
+
+
+def test_linked_active_member_can_query_in_private_chat(db, board_file):
+    user = accounts.create_user(
+        email="private-member@example.test",
+        display_name="Private Member",
+        password="a-secure-member-password",
+        subscription_status="active",
+        subscription_days=30,
+        db_path=db,
+    )
+    token = accounts.create_telegram_link_token(user["id"], db_path=db)
+    accounts.bind_telegram_chat(token, 4242, db_path=db)
+    telegram_queries.reset_cooldowns()
+
+    reply = telegram_bot.handle_update(
+        message(4242, "/token SIREN", chat_type="private"),
+        db_path=db,
+        board_path=board_file,
+    )
+
+    assert reply is not None and reply["parse_mode"] == "HTML"
     assert "SIREN" in reply["text"]
 
 
@@ -400,6 +487,8 @@ def test_a_bare_dollar_offers_tokens_to_tap(monkeypatch, tmp_path) -> None:
             {"token": "SOL", "best_edge_pct": 1.0},
         ]},
     )
+    q.reset_payload()
+    q.refresh_payload(tmp_path / "board.json")
 
     picks = q.suggestions("", board_path=tmp_path / "board.json")
 
@@ -421,6 +510,8 @@ def test_a_prefix_puts_matches_first(monkeypatch, tmp_path) -> None:
             {"token": "SOSO", "best_edge_pct": 1.0},
         ]},
     )
+    q.reset_payload()
+    q.refresh_payload(tmp_path / "board.json")
 
     picks = q.suggestions("so", board_path=tmp_path / "board.json")
 

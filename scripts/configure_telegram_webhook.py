@@ -33,7 +33,9 @@ def main() -> int:
             "url": f"{public_url}/api/telegram/webhook",
             "secret_token": secret,
             "allowed_updates": ["message", "chat_join_request", "my_chat_member", "callback_query", "inline_query"],
-            "drop_pending_updates": True,
+            # Deployments must not discard messages that arrived during a
+            # container restart. Telegram will redeliver them to this URL.
+            "drop_pending_updates": False,
         },
         separators=(",", ":"),
     ).encode()
@@ -47,6 +49,8 @@ def main() -> int:
                 {"command": "subscribe", "description": "Open secure membership checkout"},
                 {"command": "mysubscription", "description": "Check membership status"},
                 {"command": "access", "description": "Request subscriber group access"},
+                {"command": "top", "description": "Public live research preview"},
+                {"command": "token", "description": "Spread view for a token"},
                 {"command": "spread", "description": "Spread across all parsed venues"},
                 {"command": "funding", "description": "Funding rate and APR per route"},
                 {"command": "transfer", "description": "Deposit / withdrawal rails per venue"},
@@ -60,6 +64,7 @@ def main() -> int:
             "scope": {"type": "all_group_chats"},
             "commands": [
                 {"command": "setupgroup", "description": "Connect this subscriber group"},
+                {"command": "token", "description": "Spread view for a token"},
                 {"command": "spread", "description": "Spread across all parsed venues"},
                 {"command": "funding", "description": "Funding rate and APR per route"},
                 {"command": "transfer", "description": "Deposit / withdrawal rails per venue"}

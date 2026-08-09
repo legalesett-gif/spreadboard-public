@@ -91,3 +91,36 @@ def send_password_reset(*, recipient: str, display_name: str, reset_url: str) ->
         if settings.username:
             client.login(settings.username, settings.password)
         client.send_message(message)
+
+
+def send_subscription_notice(
+    *, recipient: str, display_name: str, subject: str, body: str, action_url: str
+) -> None:
+    """Send one non-marketing membership lifecycle notice."""
+    settings = config()
+    if not settings.configured:
+        raise RuntimeError("email_delivery_not_configured")
+
+    message = EmailMessage()
+    message["Subject"] = str(subject or "SpreadBoard membership update")[:180]
+    message["From"] = settings.sender
+    message["To"] = recipient
+    name = str(display_name or "there").strip() or "there"
+    message.set_content(
+        f"Hello {name},\n\n{str(body).strip()}\n\n"
+        f"Manage your membership:\n{action_url}\n\n"
+        "This is a service notice about your prepaid SpreadBoard access.\n"
+    )
+
+    context = ssl.create_default_context()
+    client_context = (
+        smtplib.SMTP_SSL(settings.host, settings.port, timeout=10, context=context)
+        if settings.use_ssl
+        else smtplib.SMTP(settings.host, settings.port, timeout=10)
+    )
+    with client_context as client:
+        if settings.starttls and not settings.use_ssl:
+            client.starttls(context=context)
+        if settings.username:
+            client.login(settings.username, settings.password)
+        client.send_message(message)

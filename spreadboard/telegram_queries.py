@@ -53,11 +53,22 @@ _LAST_ANSWERED: dict[tuple[int, str, str], float] = {}
 _LOCK = threading.Lock()
 
 
-def parse_query(text: str) -> Query | None:
+def parse_query(text: str, *, bot_username: str = "") -> Query | None:
     """Extract a token lookup from a group message, or None if it is just chat."""
     raw = str(text or "").strip()
     if not raw:
         return None
+
+    # A Telegram mention is itself an explicit trigger. Privacy-mode messages
+    # such as ``@spreadarbitragesubscription_bot SIREN`` reach the bot, but used
+    # to fall through because only cashtags and slash commands were parsed.
+    mentioned = False
+    username = str(bot_username or "").strip().lstrip("@")
+    if username:
+        mention = re.compile(rf"^@{re.escape(username)}\b", re.IGNORECASE)
+        if mention.search(raw):
+            mentioned = True
+            raw = mention.sub("", raw, count=1).strip()
 
     # Members write these in any order: "/funding SIREN", "$SIREN /funding",
     # "$SIREN funding". Scan the whole message for an intent word rather than
@@ -81,6 +92,19 @@ def parse_query(text: str) -> Query | None:
         if not symbol:
             return None
         return Query(kind=COMMANDS[head], symbol=_normalise(symbol))
+    if mentioned:
+        candidates = re.findall(r"\b[A-Za-z][A-Za-z0-9._-]{1,11}\b", raw)
+        symbol = next(
+            (
+                value
+                for value in candidates
+                if value.casefold() not in KIND_WORDS
+                and value.casefold() not in COMMANDS
+            ),
+            "",
+        )
+        if symbol:
+            return Query(kind=kind or "spread", symbol=_normalise(symbol))
     return None
 
 
@@ -140,15 +164,60 @@ def _route(row: dict[str, Any]) -> str:
 #: Telegram's webhook gave up long before either returned. The member saw
 #: nothing at all, which is exactly what "the $ is not working" looked like.
 WARM_QUERY: dict[str, Any] = {}
+_WARM_QUERY_UPDATED_AT = 0.0
+_WARM_QUERY_LOCK = threading.Lock()
 
 
-def _warm_payload(board_path: Path | str) -> dict[str, Any]:
-    return api_spreads.load_spreads(
+def refresh_payload(board_path: Path | str) -> dict[str, Any]:
+    """Build and atomically replace the bot's dedicated read snapshot.
+
+    Telegram gives a webhook only a short response window. The website's
+    request cache is deliberately invalidated after every quote publication,
+    so it cannot also be the bot's availability boundary: a member happened to
+    ask during invalidation and paid the whole multi-second board build.
+
+    The service calls this after each successful board warm. Webhook threads
+    only read the last complete payload and therefore never wait on grouping,
+    exchange I/O, or a cache rebuild.
+    """
+    payload = api_spreads.load_spreads(
         board_path=board_path,
         include_stale=False,
         include_unverified=False,
         limit=None,
     )
+    if not isinstance(payload, dict):
+        raise TypeError("telegram_payload_must_be_a_mapping")
+    global WARM_QUERY, _WARM_QUERY_UPDATED_AT
+    with _WARM_QUERY_LOCK:
+        WARM_QUERY = payload
+        _WARM_QUERY_UPDATED_AT = time.time()
+    return payload
+
+
+def _warm_payload(_board_path: Path | str) -> dict[str, Any]:
+    """Return the last complete Telegram snapshot without doing heavy work."""
+    with _WARM_QUERY_LOCK:
+        return WARM_QUERY
+
+
+def payload_status(*, now: float | None = None) -> dict[str, Any]:
+    moment = time.time() if now is None else float(now)
+    with _WARM_QUERY_LOCK:
+        ready = bool(WARM_QUERY)
+        updated_at = _WARM_QUERY_UPDATED_AT
+    return {
+        "ready": ready,
+        "age_seconds": max(0.0, moment - updated_at) if ready and updated_at else None,
+    }
+
+
+def reset_payload() -> None:
+    """Test/support hook; production refreshes by replacing, never mutating."""
+    global WARM_QUERY, _WARM_QUERY_UPDATED_AT
+    with _WARM_QUERY_LOCK:
+        WARM_QUERY = {}
+        _WARM_QUERY_UPDATED_AT = 0.0
 
 
 #: A bare "$" is a request for suggestions, not a token.
@@ -241,7 +310,7 @@ def keyboard(query: Query, *, public_url: str = "") -> dict[str, Any]:
     Telegram has no hook for autocompleting a bare "$", so the discoverable
     equivalent is to offer the other views right under the answer.
     """
-    others = [(k, l) for k, l in VIEW_LABELS.items() if k != query.kind]
+    others = [(kind, label) for kind, label in VIEW_LABELS.items() if kind != query.kind]
     rows = [[
         {"text": label, "callback_data": f"v:{kind}:{query.symbol}"[:64]}
         for kind, label in others

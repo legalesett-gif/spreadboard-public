@@ -49,6 +49,7 @@ from spreadboard import (  # noqa: E402
     venue_funding_history,
     web_push,
     portfolio,
+    subscription_lifecycle,
     telegram_bot,
 )
 
@@ -271,6 +272,7 @@ class SpreadBoardServer(ThreadingHTTPServer):
         accounts.initialize(self.accounts_path)
         self.alert_watcher: alerts.AlertWatcher | None = None
         self.position_alert_worker: Any = None
+        self.subscription_lifecycle_worker: Any = None
 
 
 class SpreadBoardHandler(BaseHTTPRequestHandler):
@@ -480,6 +482,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     self._send_json({
                         "ok": True,
                         "analytics": accounts.page_view_summary(db_path=self.server.accounts_path),
+                        "subscriptions": subscription_lifecycle.status(
+                            db_path=self.server.accounts_path
+                        ),
                     })
             elif parsed.path == "/":
                 self._send_html(render_markets_page(
@@ -596,12 +601,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     self.server.config,
                     self.server.alert_watcher,
                     self.server.position_alert_worker,
+                    self.server.subscription_lifecycle_worker,
                 ))
             elif parsed.path == "/api/status":
                 self._send_json(api_public_status(
                     self.server.board_path,
                     self.server.config,
                     self.server.position_alert_worker,
+                    self.server.subscription_lifecycle_worker,
                 ))
             elif parsed.path == "/api/executor-boundary":
                 self._send_json({"ok": True, **executor_boundary.status()})
@@ -874,15 +881,37 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 if not user.is_admin:
                     self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
                 else:
-                    created = accounts.create_user(
-                        email=str(payload.get("email") or ""),
-                        display_name=str(payload.get("display_name") or ""),
-                        password=str(payload.get("password") or ""),
-                        subscription_status=str(payload.get("subscription_status") or "trialing"),
-                        subscription_days=int(payload.get("subscription_days") or 30),
-                        db_path=self.server.accounts_path,
-                    )
-                    self._send_json({"ok": True, "user": created}, status=HTTPStatus.CREATED)
+                    password = str(payload.get("password") or "")
+                    if password:
+                        created = accounts.create_user(
+                            email=str(payload.get("email") or ""),
+                            display_name=str(payload.get("display_name") or ""),
+                            password=password,
+                            subscription_status=str(payload.get("subscription_status") or "trialing"),
+                            subscription_tier=str(payload.get("subscription_tier") or "research_pro"),
+                            subscription_days=int(payload.get("subscription_days") or 30),
+                            db_path=self.server.accounts_path,
+                        )
+                        self._send_json({"ok": True, "user": created}, status=HTTPStatus.CREATED)
+                    else:
+                        created, token = accounts.create_invited_user(
+                            email=str(payload.get("email") or ""),
+                            display_name=str(payload.get("display_name") or ""),
+                            role=str(payload.get("role") or "member"),
+                            subscription_status=str(payload.get("subscription_status") or "trialing"),
+                            subscription_tier=str(payload.get("subscription_tier") or "research_pro"),
+                            subscription_days=int(payload.get("subscription_days") or 30),
+                            db_path=self.server.accounts_path,
+                        )
+                        base = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
+                        self._send_json(
+                            {
+                                "ok": True,
+                                "user": created,
+                                "setup_url": f"{base}/set-password?token={token}",
+                            },
+                            status=HTTPStatus.CREATED,
+                        )
             elif parsed.path.startswith("/api/account-users/") and parsed.path.endswith("/invite"):
                 if not user.is_admin:
                     self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
@@ -2896,6 +2925,7 @@ def api_health(
     config: dict[str, Any],
     watcher: alerts.AlertWatcher | None,
     position_alert_worker: Any = None,
+    subscription_lifecycle_worker: Any = None,
 ) -> dict[str, Any]:
     del watcher
     source_health = api_source_health(board_path, config)
@@ -2915,6 +2945,19 @@ def api_health(
         "billing": billing.status(),
         "crypto_billing": crypto_billing.status(),
         "telegram_bot": telegram_bot.status(),
+        "subscription_lifecycle": {
+            "running": bool(
+                subscription_lifecycle_worker
+                and subscription_lifecycle_worker.running
+            ),
+            "poll_seconds": getattr(
+                subscription_lifecycle_worker, "poll_seconds", None
+            ),
+            "last_result": getattr(
+                subscription_lifecycle_worker, "last_result", None
+            ),
+            **subscription_lifecycle.status(),
+        },
     }
 
 
@@ -2922,6 +2965,7 @@ def api_public_status(
     board_path: Path,
     config: dict[str, Any],
     position_alert_worker: Any = None,
+    subscription_lifecycle_worker: Any = None,
 ) -> dict[str, Any]:
     """A public, secret-free operational summary for members and prospects."""
     sources = api_source_health(board_path, config)
@@ -2950,6 +2994,12 @@ def api_public_status(
             "background_alerts": {
                 "status": "operational"
                 if position_alert_worker and position_alert_worker.running
+                else "degraded"
+            },
+            "subscription_access": {
+                "status": "operational"
+                if subscription_lifecycle_worker
+                and subscription_lifecycle_worker.running
                 else "degraded"
             },
             "email_recovery": {
@@ -7327,7 +7377,7 @@ def render_pricing_page() -> str:
         elif user:
             action = f'<a class="pricing-button primary" href="/subscription?tier={h(tier)}">Choose {h(plan["name"])}</a>'
         else:
-            action = f'<a class="pricing-button primary" href="/register">Create account</a>'
+            action = '<a class="pricing-button primary" href="/register">Create account</a>'
         cards.append(
             f'<article class="pricing-tier {"featured" if tier == "research_pro" else ""}">'
             f'<span>{"Current plan" if current == tier else ("Complete workspace" if tier == "research_pro" else "")}</span>'
@@ -8052,7 +8102,7 @@ def render_billing_script() -> str:
 
 
 def render_member_admin() -> str:
-    return """<section data-account-panel="members" hidden><div class="account-panel-head"><div><h2>Member access</h2><p>Create time-limited accounts and manage access status. Passwords are hashed immediately and never shown again.</p></div></div><form class="member-create-form" data-member-create><label><span>Name</span><input name="display_name" autocomplete="name" required></label><label><span>Email</span><input name="email" type="email" autocomplete="email" required></label><label><span>Temporary password</span><input name="password" type="password" minlength="12" autocomplete="new-password" required></label><label><span>Access days</span><input name="subscription_days" type="number" min="1" max="3660" value="30"></label><button class="sheet-button primary" type="submit">Create member</button></form><div class="account-empty-panel" data-analytics-summary><strong>Privacy-safe traffic</strong><p>Loading aggregate path counts. No IP address, cookie, referrer, or user agent is stored.</p></div><div data-member-list></div></section>"""
+    return """<section data-account-panel="members" hidden><div class="account-panel-head"><div><h2>Member access</h2><p>Create time-limited accounts with a single-use setup link. The administrator never sees or transmits the member's password.</p></div></div><form class="member-create-form" data-member-create><label><span>Name</span><input name="display_name" autocomplete="name" required></label><label><span>Email</span><input name="email" type="email" autocomplete="email" required></label><label><span>Tier</span><select name="subscription_tier"><option value="scanner">Scanner</option><option value="research_pro" selected>Research Pro</option></select></label><label><span>Access days</span><input name="subscription_days" type="number" min="1" max="3660" value="30"></label><button class="sheet-button primary" type="submit">Create &amp; generate setup link</button></form><div class="account-empty-panel" data-invite-output hidden></div><div class="account-empty-panel" data-analytics-summary><strong>Subscriber operations</strong><p>Loading active-tier, expiry, delivery, and privacy-safe traffic counts.</p></div><div data-member-list></div></section>"""
 
 
 def render_position_dialog() -> str:
@@ -8095,8 +8145,8 @@ def render_account_script() -> str:
   webPush?.querySelector('[data-web-push-test]')?.addEventListener('click',async()=>{try{await request('/api/web-push/test',{});webPushStatus.textContent='Browser test queued. It will arrive through the background delivery worker.';}catch(error){webPushStatus.textContent=error.message;}});
   root.querySelector('[data-telegram-action]')?.addEventListener('click',async event=>{const button=event.currentTarget,error=root.querySelector('[data-telegram-error]');button.disabled=true;if(error)error.textContent='';try{const data=await request(`/api/telegram/${button.dataset.telegramAction}`,{});if(data.url){window.open(data.url,'_blank','noopener');button.textContent='Link opened';}else location.reload();}catch(exc){if(error)error.textContent=exc.message;button.disabled=false;}});
   root.querySelector('[data-notifications-read]')?.addEventListener('click',async()=>{await request('/api/notifications/read',{});location.reload();});
-  root.querySelector('[data-member-create]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;try{await request('/api/account-users',Object.fromEntries(new FormData(form)));form.reset();loadMembers();}catch(error){alert(error.message);}});
-  async function loadMembers(){const target=root.querySelector('[data-member-list]'),summary=root.querySelector('[data-analytics-summary]');if(!target)return;const [memberResponse,analyticsResponse]=await Promise.all([fetch('/api/account-users'),fetch('/api/admin/analytics')]);const data=await memberResponse.json();target.innerHTML=(data.users||[]).map(user=>`<article class="member-row"><div><strong>${escapeHtml(user.display_name)}</strong><span>${escapeHtml(user.email)}</span></div><span>${escapeHtml(user.subscription_status)} · ${escapeHtml(user.subscription_tier)}</span><em>${escapeHtml(user.subscription_expires_at||'No expiry')}</em></article>`).join('');if(summary&&analyticsResponse.ok){const result=await analyticsResponse.json(),analytics=result.analytics||{},paths=(analytics.paths||[]).slice(0,6);summary.innerHTML=`<strong>${escapeHtml(analytics.total_views||0)} page views · last ${escapeHtml(analytics.days||30)} days</strong><p>${paths.map(item=>`${escapeHtml(item.path)}: ${escapeHtml(item.views)}`).join(' · ')||'No traffic recorded yet.'}</p><p>No IP address, cookie, referrer, or user agent is stored.</p>`;}}
+  root.querySelector('[data-member-create]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,output=root.querySelector('[data-invite-output]');try{const result=await request('/api/account-users',Object.fromEntries(new FormData(form)));if(result.setup_url&&output){output.hidden=false;output.innerHTML=`<strong>Setup link created</strong><p><a href="${escapeHtml(result.setup_url)}" target="_blank" rel="noopener">Open the single-use password link</a></p><p>It expires in seven days and is replaced if a new link is generated.</p>`;try{await navigator.clipboard.writeText(result.setup_url);}catch(_error){}}form.reset();loadMembers();}catch(error){alert(error.message);}});
+  async function loadMembers(){const target=root.querySelector('[data-member-list]'),summary=root.querySelector('[data-analytics-summary]');if(!target)return;const [memberResponse,analyticsResponse]=await Promise.all([fetch('/api/account-users'),fetch('/api/admin/analytics')]);const data=await memberResponse.json();target.innerHTML=(data.users||[]).map(user=>`<article class="member-row"><div><strong>${escapeHtml(user.display_name)}</strong><span>${escapeHtml(user.email)}</span></div><span>${escapeHtml(user.subscription_status)} · ${escapeHtml(user.subscription_tier)}</span><em>${escapeHtml(user.subscription_expires_at||'No expiry')}</em></article>`).join('');if(summary&&analyticsResponse.ok){const result=await analyticsResponse.json(),analytics=result.analytics||{},subscriptions=result.subscriptions||{},paths=(analytics.paths||[]).slice(0,6),tiers=subscriptions.active_by_tier||{};summary.innerHTML=`<strong>${escapeHtml(subscriptions.active_total||0)} active · ${escapeHtml(tiers.scanner||0)} Scanner · ${escapeHtml(tiers.research_pro||0)} Research Pro</strong><p>${escapeHtml(subscriptions.expiring_within_7_days||0)} expire within 7 days · ${escapeHtml(subscriptions.telegram_linked_accounts||0)} Telegram-linked · ${escapeHtml(subscriptions.delivery_errors||0)} lifecycle delivery errors</p><p>${escapeHtml(analytics.total_views||0)} page views · ${paths.map(item=>`${escapeHtml(item.path)}: ${escapeHtml(item.views)}`).join(' · ')||'no traffic yet'}. No IP, cookie, referrer, or user agent is stored.</p>`;}}
   const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 })();
 </script>"""

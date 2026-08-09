@@ -46,6 +46,7 @@ def status(*, db_path: Any = accounts.DEFAULT_DB_PATH) -> dict[str, Any]:
     value = config()
     community = accounts.telegram_community(db_path=db_path) if value.ready else None
     candidates = accounts.telegram_membership_candidates(db_path=db_path) if value.ready else []
+    query_snapshot = telegram_queries.payload_status()
     return {
         "configured": value.ready,
         "bot_username": value.bot_username or None,
@@ -58,6 +59,8 @@ def status(*, db_path: Any = accounts.DEFAULT_DB_PATH) -> dict[str, Any]:
         ),
         "public_feed_configured": bool(public_feed_chat_id()),
         "public_feed_outbound_ready": bool(public_feed_chat_id() and outbound_posting_enabled()),
+        "query_snapshot_ready": query_snapshot["ready"],
+        "query_snapshot_age_seconds": query_snapshot["age_seconds"],
     }
 
 
@@ -109,8 +112,18 @@ def _handle_group_query(
     bare = text.strip() == "$"
     if bare and board_path is not None:
         prefix = ""
+        if not telegram_queries.payload_status()["ready"]:
+            return _reply(
+                chat_id,
+                "The live Telegram snapshot is warming. Try again shortly.",
+                thread_id=thread_id,
+            )
         if not telegram_queries.allow(chat_id, telegram_queries.Query(kind="spread", symbol=prefix or "$")):
-            return None
+            return _reply(
+                chat_id,
+                "I answered this lookup less than a minute ago. Tap the previous result or try again shortly.",
+                thread_id=thread_id,
+            )
         try:
             symbols = telegram_queries.suggestions(prefix, board_path=board_path)
         except Exception:  # noqa: BLE001 - a lookup failure must never break the webhook
@@ -122,11 +135,23 @@ def _handle_group_query(
             chat_id, heading, html=True, thread_id=thread_id,
             markup=telegram_queries.suggestion_keyboard(symbols, public_url=public_url),
         )
-    query = telegram_queries.parse_query(text)
-    if query is None or not telegram_queries.allow(chat_id, query):
+    query = telegram_queries.parse_query(text, bot_username=config().bot_username)
+    if query is None:
         return None
     if board_path is None:
-        return None
+        return _reply(chat_id, "The live scanner is warming. Try again shortly.", thread_id=thread_id)
+    if not telegram_queries.payload_status()["ready"]:
+        return _reply(
+            chat_id,
+            "The live Telegram snapshot is warming. Try again shortly.",
+            thread_id=thread_id,
+        )
+    if not telegram_queries.allow(chat_id, query):
+        return _reply(
+            chat_id,
+            f"I answered ${query.symbol} {query.kind} less than a minute ago. Tap the previous result or try again shortly.",
+            thread_id=thread_id,
+        )
     try:
         body = telegram_queries.render(
             query, board_path=board_path, public_url=public_url
@@ -182,7 +207,6 @@ def _handle_callback(cb: dict[str, Any], *, db_path: Any, board_path: Any) -> di
 
 def _handle_inline_query(iq: dict[str, Any], *, board_path: Any) -> dict[str, Any] | None:
     """Token autocomplete via inline mode (@bot SIREN)."""
-    public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip()
     try:
         matches = telegram_queries.suggest(str(iq.get("query") or ""), board_path=board_path)
     except Exception:  # noqa: BLE001
@@ -275,6 +299,34 @@ def handle_update(
     user = accounts.user_for_telegram_chat(chat_id, db_path=db_path)
     if user is None:
         return _reply(chat_id, "Link this chat from Account settings in SpreadBoard first.")
+    query = telegram_queries.parse_query(text, bot_username=config().bot_username)
+    if query is not None:
+        if not user.subscription_active:
+            return _reply(chat_id, "An active membership is required. Use /subscribe to activate access.")
+        if board_path is None or not telegram_queries.payload_status()["ready"]:
+            return _reply(chat_id, "The live Telegram snapshot is warming. Try again shortly.")
+        if not telegram_queries.allow(chat_id, query):
+            return _reply(
+                chat_id,
+                f"I answered ${query.symbol} {query.kind} less than a minute ago. Tap the previous result or try again shortly.",
+            )
+        try:
+            body = telegram_queries.render(
+                query,
+                board_path=board_path,
+                public_url=os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip(),
+            )
+        except Exception:  # noqa: BLE001 - a lookup failure must not break the webhook.
+            return _reply(chat_id, "The live Telegram snapshot is warming. Try again shortly.")
+        return _reply(
+            chat_id,
+            body,
+            html=True,
+            markup=telegram_queries.keyboard(
+                query,
+                public_url=os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip(),
+            ),
+        )
     if command == "/mysubscription":
         expiry = user.subscription_expires_at or "no fixed expiry"
         state = "active" if user.subscription_active else user.subscription_status
@@ -329,7 +381,10 @@ def handle_update(
             db_path=db_path,
         )
         return _reply(chat_id, "Tap below, then request to join. Active Research Pro memberships are approved automatically.", button=("Request group access", invite))
-    return _reply(chat_id, "Commands: /top, /subscribe, /mysubscription, /access")
+    return _reply(
+        chat_id,
+        "Commands: /top, /token, /spread, /funding, /transfer, /subscribe, /mysubscription, /access",
+    )
 
 
 def render_public_digest(*, board_path: Any, limit: int = 5) -> str:
@@ -607,6 +662,14 @@ def _reply(
 def send_group_message(chat_id: str | int, text: str) -> dict[str, Any]:
     """Push an unsolicited message to the subscriber group."""
     return _api_call("sendMessage", {"chat_id": chat_id, "text": text, "disable_web_page_preview": True})
+
+
+def send_direct_message(chat_id: int, text: str) -> dict[str, Any]:
+    """Send a service notice to one account-linked Telegram chat."""
+    return _api_call(
+        "sendMessage",
+        {"chat_id": int(chat_id), "text": str(text)[:4000], "disable_web_page_preview": True},
+    )
 
 
 def parse_update(raw: bytes) -> dict[str, Any]:

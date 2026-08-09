@@ -129,6 +129,25 @@ def test_the_raw_token_is_never_stored(db: Path) -> None:
     assert stored and token not in stored
 
 
+def test_invited_admin_chooses_their_own_password(db: Path) -> None:
+    created, token = accounts.create_invited_user(
+        email="alex@spreadarbitrage.ink",
+        display_name="Alex",
+        role="admin",
+        db_path=db,
+    )
+
+    assert created["is_admin"] is True
+    assert created["subscription_active"] is True
+    assert accounts.password_token_status(token, db_path=db)["display_name"] == "Alex"
+    assert accounts.consume_password_token(
+        token, "alex-chooses-this-password", db_path=db
+    ) is not None
+    assert accounts.login(
+        "alex@spreadarbitrage.ink", "alex-chooses-this-password", db_path=db
+    )
+
+
 def test_the_page_and_endpoints_are_reachable_without_a_session() -> None:
     """The person using the link cannot sign in yet -- that is the point."""
     import inspect

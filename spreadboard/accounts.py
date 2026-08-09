@@ -13,7 +13,6 @@ from pathlib import Path
 import secrets
 import sqlite3
 import threading
-import time
 from typing import Any, Iterator
 
 
@@ -372,6 +371,24 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 view_count INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (day, path)
             );
+            CREATE TABLE IF NOT EXISTS subscription_lifecycle_events (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                subscription_expires_at TEXT NOT NULL,
+                event_type TEXT NOT NULL CHECK (
+                    event_type IN ('seven_days', 'three_days', 'one_day', 'expired')
+                ),
+                state TEXT NOT NULL DEFAULT 'pending' CHECK (
+                    state IN ('pending', 'sent', 'error')
+                ),
+                attempts INTEGER NOT NULL DEFAULT 0,
+                in_app_notification_id INTEGER REFERENCES in_app_notifications(id) ON DELETE SET NULL,
+                email_status TEXT,
+                telegram_status TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, subscription_expires_at, event_type)
+            );
             """
         )
         connection.executescript(
@@ -394,6 +411,8 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS crypto_invoices_open ON crypto_invoices(status, expected_amount_cents, expires_at);
             CREATE INDEX IF NOT EXISTS crypto_invoices_user ON crypto_invoices(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS crypto_payments_resolution ON crypto_payments(resolution, observed_at DESC);
+            CREATE INDEX IF NOT EXISTS subscription_lifecycle_state
+                ON subscription_lifecycle_events(state, attempts, updated_at);
             """
         )
         _ensure_columns(connection, "users", {
@@ -609,6 +628,49 @@ def create_user(
         return get_user(int(cursor.lastrowid), db_path=db_path) or {}
     finally:
         connection.close()
+
+
+def create_invited_user(
+    *,
+    email: str,
+    display_name: str,
+    role: str = "member",
+    subscription_status: str = "trialing",
+    subscription_tier: str = "research_pro",
+    subscription_days: int = 30,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> tuple[dict[str, Any], str]:
+    """Create an account whose password is known only to its owner.
+
+    A random, undisclosed placeholder satisfies the password column; the
+    returned one-time invite token immediately replaces it when the person sets
+    their password. Only an authenticated administrator can reach the HTTP
+    endpoint that calls this function.
+    """
+    if role not in {"admin", "member"}:
+        raise ValueError("invalid_role")
+    created = create_user(
+        email=email,
+        display_name=display_name,
+        password=secrets.token_urlsafe(48),
+        subscription_status=subscription_status,
+        subscription_tier=subscription_tier,
+        subscription_days=subscription_days,
+        db_path=db_path,
+    )
+    if role == "admin":
+        connection = _connect(db_path)
+        try:
+            connection.execute(
+                "UPDATE users SET role = 'admin', subscription_status = 'active', subscription_expires_at = NULL, updated_at = ? WHERE id = ?",
+                (_utc_iso(), int(created["id"])),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        created = get_user(int(created["id"]), db_path=db_path) or created
+    token = create_password_token(int(created["id"]), purpose="invite", db_path=db_path)
+    return created, token
 
 
 def get_user(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any] | None:

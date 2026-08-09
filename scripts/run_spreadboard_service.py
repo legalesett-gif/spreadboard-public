@@ -30,16 +30,12 @@ from spreadboard import (
     api_spreads,
     crypto_watcher,
     board,
-    chart_catalog,
-    live,
-    market_history,
     portfolio,
-    public_rails,
     rail_watch,
+    subscription_lifecycle,
     telegram_bot,
     token_metadata,
     web_push,
-    verified_identity,
 )  # noqa: E402
 from spreadboard.server import SpreadBoardHandler, SpreadBoardServer  # noqa: E402
 
@@ -478,6 +474,13 @@ def main() -> int:
         db_path=server.accounts_path,
         poll_seconds=float(os.environ.get("SPREADBOARD_TELEGRAM_MEMBERSHIP_SECONDS", "60")),
     )
+    subscription_worker = subscription_lifecycle.Worker(
+        db_path=server.accounts_path,
+        poll_seconds=float(
+            os.environ.get("SPREADBOARD_SUBSCRIPTION_LIFECYCLE_SECONDS", "900")
+        ),
+    )
+    server.subscription_lifecycle_worker = subscription_worker
     public_feed_worker = telegram_bot.PublicFeedWorker(
         board_path=board_path,
         poll_seconds=float(os.environ.get("SPREADBOARD_TELEGRAM_PUBLIC_FEED_SECONDS", "900")),
@@ -517,6 +520,7 @@ def main() -> int:
     bulk_quote_loop.start()
     position_alert_worker.start()
     membership_worker.start()
+    subscription_worker.start()
     public_feed_worker.start()
     market_alert_worker.start()
     web_push_worker.start()
@@ -527,6 +531,7 @@ def main() -> int:
     finally:
         position_alert_worker.stop()
         membership_worker.stop()
+        subscription_worker.stop()
         public_feed_worker.stop()
         market_alert_worker.stop()
         web_push_worker.stop()
@@ -769,7 +774,7 @@ def _warm_board_cache(*, force: bool = False) -> None:
         # a bare "$" took 36s and Telegram's webhook gave up first.
         from spreadboard import telegram_queries
 
-        telegram_queries._warm_payload(_board_path())
+        telegram_queries.refresh_payload(_board_path())
     except Exception as exc:  # noqa: BLE001 - warming is best effort.
         _log(f"telegram payload warm skipped: {type(exc).__name__}: {exc}")
     _yield_to_requests()
