@@ -242,6 +242,25 @@ def test_the_member_nav_is_unchanged() -> None:
     assert 'href="/"' in nav
 
 
+def test_status_page_compacts_market_timestamp_for_small_cards() -> None:
+    page = server.render_status_page(
+        {
+            "ok": False,
+            "checked_at": "2026-08-09T21:59:40.556000+00:00",
+            "components": {
+                "market_data": {
+                    "status": "operational",
+                    "row_count": 25967,
+                    "updated_at": "2026-08-09T21:56:37Z",
+                }
+            },
+        }
+    )
+
+    assert "09 Aug 2026 · 21:56 UTC" in page
+    assert "2026-08-09T21:56:37Z" not in page
+
+
 def test_warming_yields_between_builds_so_the_server_can_answer() -> None:
     """The warm holds the GIL; without a yield the site is unreachable, not slow."""
     import inspect

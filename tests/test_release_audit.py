@@ -1333,20 +1333,33 @@ def test_spread_ceiling_can_be_disabled_without_hiding_large_exact_routes() -> N
     assert sources._spread_ceiling_exceeded(102.2, max_spread_pct=100)
 
 
-def test_open_spread_selects_route_before_depth_vwap() -> None:
+def test_measured_depth_vwap_selects_route_before_top_book() -> None:
     first = SimpleNamespace(
         displayed_open_spread_pct=4.4,
         executable_spread_pct=4.4,
         depth_weighted_spread_pct=1.1,
+        blockers=[],
     )
     second = SimpleNamespace(
         displayed_open_spread_pct=2.0,
         executable_spread_pct=2.0,
         depth_weighted_spread_pct=1.8,
+        blockers=[],
     )
 
-    assert api_spreads._entrance_spread(first) == 4.4
-    assert api_spreads._entrance_spread(first) > api_spreads._entrance_spread(second)
+    assert api_spreads._entrance_spread(first) == 1.1
+    assert api_spreads._entrance_spread(first) < api_spreads._entrance_spread(second)
+
+
+def test_unverified_depth_falls_back_to_top_book() -> None:
+    row = SimpleNamespace(
+        displayed_open_spread_pct=4.4,
+        executable_spread_pct=4.4,
+        depth_weighted_spread_pct=1.1,
+        blockers=["depth_unverified"],
+    )
+
+    assert api_spreads._entrance_spread(row) == 4.4
 
 
 def test_short_chart_windows_filter_exact_elapsed_time() -> None:

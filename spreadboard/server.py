@@ -3172,7 +3172,7 @@ def render_markets_page(
         {render_market_metric('Assets', min(int(summary.get('matching_tokens') or 0), api_spreads.DEFAULT_LIMIT), 'top 25, grouped')}
         {render_market_metric('Venue pairs', summary.get('matching_rows'), 'expandable routes')}
         {render_market_metric('Funding pairs', summary.get('funding_rows'), 'paired carry')}
-        {render_market_metric('Largest edge', fmt_pct(summary.get('max_executable_spread_pct')), 'live ask → bid')}
+        {render_market_metric('Largest matched edge', fmt_pct(summary.get('max_depth_weighted_spread_pct')), '$50 VWAP')}
       </section>
       {render_market_filter_bar(
           data,
@@ -3309,9 +3309,9 @@ def render_teaser_row(group: dict[str, Any], *, metric: str) -> str:
           <span>Sell leg</span><strong>{h(sell_leg)}</strong>
         </div>
         <div class="group-number">
-          <span>Spread</span>
+          <span>Matched spread</span>
           <strong class="{spread_class(group.get('best_edge_pct'))}" data-live-spread>{fmt_pct(group.get('best_edge_pct'))}</strong>
-          <em>{fmt_pct(route.get('depth_weighted_spread_pct'))} matched $50 VWAP</em>
+          <em>{fmt_pct(route.get('executable_spread_pct'))} top book</em>
         </div>
         <div class="group-number">
           <span>Funding 24h</span>
@@ -3775,9 +3775,9 @@ def render_market_token_group(group: dict[str, Any]) -> str:
           <em>{h(route_kind_display(best.get('route_kind')))}</em>
         </div>
         <div class="group-number">
-          <span>Best spread</span>
+          <span>Best matched spread</span>
           <strong class="{spread_class(group.get('best_edge_pct'))}" data-live-spread>{fmt_pct(group.get('best_edge_pct'))}</strong>
-          <em>{fmt_pct(best.get('depth_weighted_spread_pct'))} matched $50 VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book</em>
+          <em>matched $50 VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book</em>
         </div>
         <div class="group-number">
           <span>Best-route funding</span>
@@ -4911,7 +4911,7 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
         {render_market_metric('Assets', summary.get('matching_tokens'), 'unique tokens')}
         {render_market_metric('Funding pairs', summary.get('matching_rows'), 'live venue routes')}
         {render_market_metric('Largest 24h', fmt_signed_pct(summary.get('max_abs_funding_24h_pct'), digits=3), 'absolute paired carry')}
-        {render_market_metric('Largest basis', fmt_pct(summary.get('max_executable_spread_pct')), 'entry spread')}
+        {render_market_metric('Largest matched basis', fmt_pct(summary.get('max_depth_weighted_spread_pct')), '$50 VWAP')}
       </section>
       <section class="funding-terminal-panel">
         <div class="panel-head flat terminal-table-title">
@@ -7023,6 +7023,14 @@ def render_status_page(payload: dict[str, Any]) -> str:
         "email_recovery": "Email recovery",
     }
     cards = []
+
+    def compact_timestamp(value: Any) -> str:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return "unavailable"
+        return parsed.astimezone(timezone.utc).strftime("%d %b %Y · %H:%M UTC")
+
     try:
         checked_at = datetime.fromisoformat(str(payload.get("checked_at"))).strftime(
             "%d %b %Y · %H:%M"
@@ -7034,7 +7042,10 @@ def render_status_page(payload: dict[str, Any]) -> str:
         status = str(item.get("status") or "unknown")
         detail = ""
         if key == "market_data":
-            detail = f"{h(item.get('row_count') or 0)} current rows · updated {h(item.get('updated_at') or 'unavailable')}"
+            detail = (
+                f"{h(item.get('row_count') or 0)} current rows · "
+                f"updated {h(compact_timestamp(item.get('updated_at')))}"
+            )
         elif key == "crypto_checkout":
             detail = f"{h(item.get('chain') or 'Not configured')} · {h(', '.join(item.get('tokens') or []))}"
         elif key == "telegram":
@@ -13093,7 +13104,7 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 .notification-list article {{ display:grid; grid-template-columns:180px 220px 1fr; gap:14px; }} .notification-list p {{ margin:0; color:var(--terminal-muted); }} .member-row {{ display:grid; grid-template-columns:1fr auto auto; gap:20px; margin-top:8px; }} .member-row div {{ display:grid; }} .member-row span,.member-row em {{ color:var(--terminal-muted); font-style:normal; }}
 .account-chip {{ display:grid; color:var(--terminal-shell-text); text-decoration:none; text-align:right; line-height:1.1; }} .account-chip em {{ color:var(--accent); font-size:10px; font-style:normal; text-transform:uppercase; }} .logout-button {{ width:38px; height:38px; border:1px solid rgba(255,255,255,.25); background:transparent; color:var(--terminal-shell-text); font-size:19px; cursor:pointer; }}
 @media(max-width:900px) {{ .account-kpis {{ grid-template-columns:repeat(2,1fr); }} .position-metrics {{ grid-template-columns:repeat(3,1fr); }} .position-legs {{ align-items:stretch; flex-direction:column; }} .account-chip,.logout-button {{ display:none; }} }}
-@media(max-width:600px) {{ .account-heading {{ flex-direction:column; }} .account-membership {{ width:100%; }} .account-kpis {{ grid-template-columns:1fr 1fr; }} .position-metrics {{ grid-template-columns:1fr 1fr; }} .position-card header,.position-card footer {{ align-items:flex-start; flex-direction:column; }} .position-form-grid,.account-dialog [data-action-fields],.account-settings form,.member-create-form {{ grid-template-columns:1fr; }} .position-form-grid .wide {{ grid-column:auto; }} .notification-list article {{ grid-template-columns:1fr; }} }}
+@media(max-width:600px) {{ .account-heading {{ flex-direction:column; }} .account-membership {{ width:100%; }} .account-kpis {{ grid-template-columns:1fr 1fr; }} .position-metrics {{ grid-template-columns:1fr 1fr; }} .position-card header,.position-card footer {{ align-items:flex-start; flex-direction:column; }} .position-form-grid,.account-dialog [data-action-fields],.account-settings form,.member-create-form {{ grid-template-columns:1fr; }} .position-form-grid .wide {{ grid-column:auto; }} .notification-list article,.member-row {{ grid-template-columns:1fr; }} .member-row > * {{ min-width:0;overflow-wrap:anywhere; }} }}
 </style>
 </head>
 <body>

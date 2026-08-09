@@ -2279,8 +2279,9 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
         grouped.setdefault(row.token, []).append(row)
     output: list[dict[str, Any]] = []
     for token, token_rows in grouped.items():
-        # The headline matches the board convention: buy at the current ask and
-        # sell at the current bid. Matched-size VWAP remains execution context.
+        # Rank by the matched-size result whenever depth was actually measured.
+        # A one-lot top-book edge is useful context, but it must not put a route
+        # in the top results when $50 already crosses the opportunity away.
         token_rows.sort(
             key=lambda row: (
                 _entrance_spread(row),
@@ -2579,26 +2580,30 @@ def _sort_value(row: SpreadTerminalRow, sort_by: str) -> Any:
 
 
 def _entrance_spread(row: SpreadTerminalRow) -> float:
+    depth_spread = _float_or_none(row.depth_weighted_spread_pct)
+    if depth_spread is not None and "depth_unverified" not in (getattr(row, "blockers", []) or []):
+        return depth_spread
     open_spread = _float_or_none(row.displayed_open_spread_pct)
     if open_spread is not None:
         return open_spread
     executable = _float_or_none(row.executable_spread_pct)
     if executable is not None:
         return executable
-    depth_spread = _float_or_none(row.depth_weighted_spread_pct)
     if depth_spread is not None:
         return depth_spread
     return -999999.0
 
 
 def _entrance_spread_dict(row: dict[str, Any]) -> float:
+    depth_spread = _float_or_none(row.get("depth_weighted_spread_pct"))
+    if depth_spread is not None and not row.get("depth_unverified"):
+        return depth_spread
     open_spread = _float_or_none(row.get("displayed_open_spread_pct"))
     if open_spread is not None:
         return open_spread
     executable = _float_or_none(row.get("executable_spread_pct"))
     if executable is not None:
         return executable
-    depth_spread = _float_or_none(row.get("depth_weighted_spread_pct"))
     if depth_spread is not None:
         return depth_spread
     return -999999.0
