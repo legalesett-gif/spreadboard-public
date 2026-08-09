@@ -184,6 +184,16 @@ def test_health_reports_crypto_provider(client):
     assert sorted(crypto["tokens"]) == ["USDC", "USDT"]
 
 
+def test_public_status_exposes_setup_gaps_without_claiming_all_operational(client):
+    client.request("GET", "/api/status")
+    response = client.getresponse()
+    payload = json.loads(response.read())
+    assert response.status == 200
+    assert payload["components"]["crypto_checkout"]["status"] == "operational"
+    assert payload["components"]["email_recovery"]["status"] == "setup_needed"
+    assert payload["ok"] is False
+
+
 def test_subscription_page_offers_crypto_checkout(client):
     cookie, _ = register(client, "buyer@example.test")
     client.request("GET", "/subscription", headers={"Cookie": cookie})

@@ -149,7 +149,7 @@ DISPLAY_LABELS = {
     "refresh_or_explain_source": "Refresh or explain source",
     "requires_exact_chain_contract": "Exact chain and contract needed",
     "research_from_telegram": "Research from Telegram",
-    "setup_needed": "Limited data",
+    "setup_needed": "Setup needed",
     "normalized_funding_time_required": "Funding schedule unavailable",
     "basis_and_exit_monitor_required": "History is collecting",
     "source_unavailable": "Source unavailable",
@@ -2929,11 +2929,7 @@ def api_public_status(
     crypto = crypto_billing.status()
     telegram = telegram_bot.status()
     market_ok = bool(sources.get("ok"))
-    return {
-        "ok": market_ok,
-        "service": "SpreadBoard",
-        "checked_at": datetime.now(tz=timezone.utc).isoformat(),
-        "components": {
+    components = {
             "website": {"status": "operational"},
             "market_data": {
                 "status": "operational" if market_ok else "degraded",
@@ -2959,7 +2955,12 @@ def api_public_status(
             "email_recovery": {
                 "status": "operational" if mailer.status()["configured"] else "setup_needed"
             },
-        },
+        }
+    return {
+        "ok": all(item.get("status") == "operational" for item in components.values()),
+        "service": "SpreadBoard",
+        "checked_at": datetime.now(tz=timezone.utc).isoformat(),
+        "components": components,
     }
 
 
@@ -7022,6 +7023,12 @@ def render_status_page(payload: dict[str, Any]) -> str:
         "email_recovery": "Email recovery",
     }
     cards = []
+    try:
+        checked_at = datetime.fromisoformat(str(payload.get("checked_at"))).strftime(
+            "%d %b %Y · %H:%M"
+        )
+    except ValueError:
+        checked_at = "just now"
     for key, label in labels.items():
         item = components.get(key) or {}
         status = str(item.get("status") or "unknown")
@@ -7046,7 +7053,7 @@ def render_status_page(payload: dict[str, Any]) -> str:
       .status-card.operational {{ border-top:3px solid var(--green) }} .status-card.degraded,.status-card.setup_needed {{ border-top:3px solid var(--red) }}
       @media(max-width:760px) {{ .status-grid {{ grid-template-columns:1fr }} }}
     </style>
-    <section class="public-status"><header class="terminal-heading"><div><span class="page-kicker">Live service status</span><h1>{'All monitored systems operational' if payload.get('ok') else 'Some systems need attention'}</h1><p>This page reports current market-data, payment, alert, recovery and Telegram readiness without exposing account or infrastructure details.</p></div><div class="terminal-live-box {'live' if payload.get('ok') else 'unavailable'}"><span>Checked now</span><strong>{h(payload.get('checked_at'))}</strong><em>UTC</em></div></header><div class="status-grid">{''.join(cards)}</div></section>
+    <section class="public-status"><header class="terminal-heading"><div><span class="page-kicker">Live service status</span><h1>{'All monitored systems operational' if payload.get('ok') else 'Core service live · setup items remain'}</h1><p>This page reports current market-data, payment, alert, recovery and Telegram readiness without exposing account or infrastructure details.</p></div><div class="terminal-live-box {'live' if payload.get('ok') else 'unavailable'}"><span>Checked now</span><strong>{h(checked_at)}</strong><em>UTC</em></div></header><div class="status-grid">{''.join(cards)}</div></section>
     """
     return shell("Status - SpreadBoard", "status", body)
 

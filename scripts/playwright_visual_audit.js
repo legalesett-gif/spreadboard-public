@@ -31,6 +31,8 @@ const memberPages = [
   ["fair", `${productionBase}/fair`],
   ["alerts", `${productionBase}/alerts`],
   ["account", `${productionBase}/account`],
+  ["account-settings", `${productionBase}/account?audit=settings#settings`],
+  ["account-members", `${productionBase}/account?audit=members#members`],
   ["subscription", `${productionBase}/subscription`],
 ];
 
@@ -69,11 +71,16 @@ async function main() {
       page.on("console", message => {
         if (message.type() === "error") errors.push(`console:${message.text()}`);
       });
-      const signedIn = mode === "production" ? await signIn(page) : false;
       const pages = mode === "reference"
         ? referencePages
-        : [...publicPages, ...(signedIn ? memberPages : [])];
+        : [...publicPages, ["__sign_in__", ""], ...memberPages];
+      let signedIn = false;
       for (const [name, url] of pages) {
+        if (name === "__sign_in__") {
+          signedIn = await signIn(page);
+          continue;
+        }
+        if (memberPages.some(([memberName]) => memberName === name) && !signedIn) continue;
         errors.length = 0;
         const started = Date.now();
         let response = null;
