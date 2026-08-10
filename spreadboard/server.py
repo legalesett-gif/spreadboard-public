@@ -5840,6 +5840,12 @@ def render_charts_page(
     selected_row = _find_canonical_route(selected_route, board_path) if selected_route else None
     requested_token = _clean_symbol(_query_first(query, "token") or "")
     catalog_tokens = {str(item or "").upper() for item in (catalogue.get("tokens") or [])}
+    if not catalog_tokens:
+        catalog_tokens = {
+            str(item.get("token") or "").upper()
+            for item in markets
+            if item.get("token")
+        }
     if requested_token not in catalog_tokens:
         requested_token = ""
     builder_token = str((selected_row or {}).get("token") or requested_token)

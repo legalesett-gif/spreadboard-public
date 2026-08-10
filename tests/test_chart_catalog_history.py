@@ -102,6 +102,29 @@ def test_chart_builder_can_prefill_a_requested_token_without_selecting_a_route()
     assert 'data-chart-token list="chart-token-list" value="ESPORTS"' in html
 
 
+def test_chart_page_prefills_token_when_persisted_catalog_has_no_tokens_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server, "api_source_health", lambda *_args: {"ok": True})
+    monkeypatch.setattr(
+        server.chart_catalog,
+        "load",
+        lambda: {
+            "token_count": 1,
+            "count": 2,
+            "markets": [
+                {"token": "ESPORTS", "venue": "OKX DEX 56", "market_type": "Spot", "symbol": "ESPORTS"},
+                {"token": "ESPORTS", "venue": "Mexc", "market_type": "Futures", "symbol": "ESPORTS/USDT:USDT"},
+            ],
+        },
+    )
+
+    html = server.render_charts_page(None, {}, {"token": ["ESPORTS"]})
+
+    assert 'data-chart-token list="chart-token-list" value="ESPORTS"' in html
+    assert '"venue": "OKX DEX 56"' in html
+
+
 def test_historical_spread_aligns_matching_candles_only() -> None:
     long_rows = [[0, 0, 0, 0, 100], [60_000, 0, 0, 0, 105], [120_000, 0, 0, 0, 110]]
     short_rows = [[0, 0, 0, 0, 110], [120_000, 0, 0, 0, 121]]
