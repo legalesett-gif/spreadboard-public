@@ -7419,7 +7419,7 @@ def render_telegram_landing_page(board_path: Path) -> str:
       </section>
       <section class="telegram-preview"><div><span>Sample digest</span><h2>What /top returns now</h2></div><pre>{h(preview_text)}</pre><p>The private subscriber forum is a Research Pro entitlement and is already connected. Scanner members retain website scanners and personal alerts but are not admitted to this group. A separate public broadcast channel remains optional.</p></section>
       <section class="telegram-command-grid">
-        <article><code>/top</code><span>Fresh public route preview</span></article><article><code>$SIREN</code><span>Exact-token lookup in the subscriber group</span></article><article><code>/funding SIREN</code><span>Paired funding view</span></article><article><code>/transfer SIREN</code><span>Deposit and withdrawal state</span></article>
+        <article><code>/top</code><span>Fresh public route preview</span></article><article><code>$SIREN</code><span>Exact-token lookup in the subscriber group</span></article><article><code>/token SIREN</code><span>The same exact-token lookup as a slash command</span></article><article><code>@{h(username or 'spreadarbitragesubscription_bot')} SIREN</code><span>Tag the bot, then type any token</span></article><article><code>/funding SIREN</code><span>Paired funding view</span></article><article><code>/transfer SIREN</code><span>Deposit and withdrawal state</span></article>
       </section>
     </section>
     """

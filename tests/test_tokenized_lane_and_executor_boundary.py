@@ -231,3 +231,6 @@ def test_telegram_landing_preview_shows_reader_text_not_transport_html(tmp_path,
 
     assert "SpreadBoard\n1. SIREN · +1.00%" in page
     assert "&lt;b&gt;SpreadBoard" not in page
+    assert "$SIREN" in page
+    assert "/token SIREN" in page
+    assert "@spreadarbitragesubscription_bot SIREN" in page

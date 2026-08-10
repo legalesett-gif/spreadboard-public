@@ -307,7 +307,9 @@ def handle_update(
         public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
         text = (
             "SpreadBoard checks executable cross-venue routes, settled funding, and transfer rails.\n\n"
-            "Use /top for a public research preview. Link your account on the website for /subscribe, /mysubscription and /access."
+            "Use /top for a public research preview. In the subscriber forum, look up any exact token with "
+            "$SIREN, /token SIREN, or @spreadarbitragesubscription_bot SIREN. "
+            "Link your account on the website for /subscribe, /mysubscription and /access."
         )
         return _reply(chat_id, text, button=("Open SpreadBoard", f"{public_url}/telegram") if public_url else None)
     user = accounts.user_for_telegram_chat(chat_id, db_path=db_path)
@@ -397,7 +399,10 @@ def handle_update(
         return _reply(chat_id, "Tap below, then request to join. Active Research Pro memberships are approved automatically.", button=("Request group access", invite))
     return _reply(
         chat_id,
-        "Commands: /top, /token, /spread, /funding, /transfer, /subscribe, /mysubscription, /access",
+        "Token lookup: $SIREN, /token SIREN, or "
+        "@spreadarbitragesubscription_bot SIREN\n"
+        "Commands: /top, /spread, /funding, /transfer, /subscribe, "
+        "/mysubscription, /access",
     )
 
 

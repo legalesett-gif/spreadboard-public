@@ -46,6 +46,19 @@ def test_unlinked_chat_cannot_read_subscription(tmp_path) -> None:
     assert "Link this chat" in response["text"]
 
 
+def test_private_help_lists_every_exact_token_lookup_form(tmp_path) -> None:
+    db_path = _linked_user(tmp_path)
+
+    response = telegram_bot.handle_update(
+        {"message": {"chat": {"id": 77, "type": "private"}, "text": "/help"}},
+        db_path=db_path,
+    )
+
+    assert "$SIREN" in response["text"]
+    assert "/token SIREN" in response["text"]
+    assert "@spreadarbitragesubscription_bot SIREN" in response["text"]
+
+
 def test_group_messages_are_ignored(tmp_path) -> None:
     db_path = _linked_user(tmp_path)
     response = telegram_bot.handle_update(
