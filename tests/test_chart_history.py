@@ -9,13 +9,14 @@ empty panel reading "1 observations, 0% window coverage".
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from spreadboard import historical_spreads, server
+from spreadboard import chart_catalog, historical_spreads, live, server
 
 
 CEX_ROUTE = {
@@ -122,6 +123,180 @@ def test_a_cold_chart_does_not_block_the_request(monkeypatch: pytest.MonkeyPatch
             return
         time.sleep(0.1)
     pytest.fail("the background backfill never landed")
+
+
+def test_the_chart_stream_does_not_wait_for_an_exact_quote(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The first SSE event must deliver retained history while quoting runs."""
+
+    row = {**CEX_ROUTE, "route_key": "PERF|Gate|Spot|Binance|Spot"}
+    finished = threading.Event()
+
+    def slow_refresh(_row: dict[str, Any]) -> dict[str, Any]:
+        time.sleep(0.3)
+        finished.set()
+        return {"status": "ok"}
+
+    monkeypatch.setattr(server, "_find_canonical_route", lambda *_args: row)
+    monkeypatch.setattr(server, "_refresh_chart_route", slow_refresh)
+    monkeypatch.setattr(
+        server,
+        "api_history",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "rows": [{"quote_ts_us": int(time.time() * 1_000_000)}],
+            "meta": {"age_seconds": 1},
+        },
+    )
+    with server._CHART_SAMPLE_LOCK:
+        server._CHART_SAMPLE_CACHE.pop(row["route_key"], None)
+        server._CHART_SAMPLE_BACKGROUND.discard(row["route_key"])
+
+    began = time.monotonic()
+    payload = server._chart_stream_payload(row["route_key"], tmp_path / "board.json", 1.0)
+    elapsed = time.monotonic() - began
+
+    assert elapsed < 0.15, f"the stream waited {elapsed:.2f}s for the quote"
+    assert payload["row"] is not None
+    assert payload["sample"]["status"] == "warming"
+    assert finished.wait(2.0)
+
+
+def test_wait_zero_history_schedules_instead_of_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    row = {**CEX_ROUTE, "route_key": "WAITZERO|Gate|Spot|Binance|Spot"}
+    scheduled: list[str] = []
+    monkeypatch.setattr(server, "_find_canonical_route", lambda *_args: row)
+    monkeypatch.setattr(
+        server,
+        "_refresh_chart_route",
+        lambda *_args: pytest.fail("wait=0 must not call the blocking sampler"),
+    )
+    monkeypatch.setattr(
+        server,
+        "_schedule_chart_route_refresh",
+        lambda selected: scheduled.append(selected["route_key"]) or {"status": "warming"},
+    )
+    monkeypatch.setattr(server.market_history, "load_history", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        historical_spreads,
+        "load_or_fetch",
+        lambda *_args, **_kwargs: {"status": "warming", "rows": []},
+    )
+
+    payload = server.api_history(
+        row["route_key"],
+        tmp_path / "board.json",
+        {"live": ["1"], "wait": ["0"], "hours": ["1"]},
+    )
+
+    assert scheduled == [row["route_key"]]
+    assert payload["sample"]["status"] == "warming"
+
+
+def test_custom_selection_reuses_the_exact_canonical_history(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    custom = {
+        "route_key": "CUSTOM:test",
+        "token": "ESPORTS",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "Spot",
+        "long_market_symbol": "ESPORTS",
+        "short_venue": "Mexc",
+        "short_market_type": "Futures",
+        "short_market_symbol": "ESPORTS/USDT:USDT",
+        "dex_chain": "56",
+        "dex_contract": "0xabc",
+    }
+    canonical = {**custom, "route_key": "ESPORTS|OKX DEX 56|Spot|Mexc|Futures"}
+    monkeypatch.setattr(chart_catalog, "route_from_key", lambda _key: custom)
+    monkeypatch.setitem(
+        server._ROUTE_INDEX,
+        "rows",
+        {canonical["route_key"]: canonical},
+    )
+
+    selected = server._find_canonical_route("CUSTOM:test", tmp_path / "board.json")
+
+    assert selected is canonical
+
+
+def test_custom_selection_loads_history_under_the_canonical_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    canonical = {
+        **CEX_ROUTE,
+        "route_key": "ESPORTS|Kraken|Spot|Mexc|Futures",
+        "quote_ts_us": int(time.time() * 1_000_000),
+    }
+    captured: list[str] = []
+    monkeypatch.setattr(server, "_find_canonical_route", lambda *_args: canonical)
+    monkeypatch.setattr(
+        server.market_history,
+        "load_history",
+        lambda **kwargs: captured.append(kwargs["route_key"]) or [],
+    )
+    monkeypatch.setattr(
+        historical_spreads,
+        "load_or_fetch",
+        lambda *_args, **_kwargs: {"status": "not_applicable", "rows": []},
+    )
+
+    server.api_history("CUSTOM:selection", tmp_path / "board.json", {"hours": ["1"]})
+
+    assert captured == [canonical["route_key"]]
+
+
+def test_custom_history_key_matches_the_equivalent_board_route() -> None:
+    row = {
+        "route_key": "CUSTOM:opaque",
+        "token": "ESPORTS",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "Spot",
+        "short_venue": "Mexc",
+        "short_market_type": "Futures",
+    }
+
+    assert server._chart_history_route_key(row) == (
+        "ESPORTS|OKX DEX 56|Spot|Mexc|Futures"
+    )
+
+
+def test_snapshot_detail_keeps_exact_leg_funding_without_network() -> None:
+    row = {
+        "route_key": "ESPORTS|OKX DEX 56|Spot|Mexc|Futures",
+        "symbol": "ESPORTS",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "Spot",
+        "long_market_symbol": "ESPORTS",
+        "short_venue": "Mexc",
+        "short_market_type": "Futures",
+        "short_market_symbol": "ESPORTS/USDT:USDT",
+        "notes": {
+            "funding": {
+                "short": {
+                    "current_funding_pct": 0.125,
+                    "funding_24h_pct": 0.5,
+                    "funding_interval_hours": 4.0,
+                    "status": "ok",
+                }
+            }
+        },
+    }
+
+    detail = live.get_route_snapshot_detail(row)
+
+    assert detail["legs"]["long"]["current_funding_pct"] is None
+    assert detail["legs"]["short"]["current_funding_pct"] == pytest.approx(0.125)
+    assert detail["legs"]["short"]["funding_interval_hours"] == pytest.approx(4.0)
+    assert detail["funding"]["net_24h_pct"] == pytest.approx(0.5)
 
 
 def test_one_fetch_serves_concurrent_readers(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -106,6 +106,7 @@ _MARKET_BUILD_SLOTS = threading.BoundedSemaphore(
 _CHART_SAMPLE_LOCK = threading.Lock()
 _CHART_SAMPLE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CHART_SAMPLE_INFLIGHT: dict[str, threading.Event] = {}
+_CHART_SAMPLE_BACKGROUND: set[str] = set()
 _CHART_SAMPLE_SLOTS = threading.BoundedSemaphore(
     max(1, int(os.environ.get("SPREADBOARD_CHART_SAMPLE_CONCURRENCY", "2")))
 )
@@ -2683,13 +2684,18 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
     bucket_seconds = max(0, min(int(_query_float(query, "bucket_seconds", 0) or 0), 3600))
     since_us = int((time.time() - hours * 3600) * 1_000_000)
     current = _find_canonical_route(route_key, board_path)
-    sample = (
-        _refresh_chart_route(current)
-        if current is not None and _query_bool(query, "live")
-        else {"status": "idle"}
-    )
+    history_route_key = _chart_history_route_key(current) if current is not None else route_key
+    wants_live = current is not None and _query_bool(query, "live")
+    wait_value = _query_first(query, "wait")
+    wait_for_live = wait_value is None or _query_bool(query, "wait")
+    if wants_live and wait_for_live:
+        sample = _refresh_chart_route(current)
+    elif wants_live:
+        sample = _schedule_chart_route_refresh(current)
+    else:
+        sample = {"status": "idle"}
     public_rows = market_history.load_history(
-        route_key=route_key,
+        route_key=history_route_key,
         max_points=points,
         since_us=since_us,
         bucket_seconds=bucket_seconds or None,
@@ -2740,7 +2746,7 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
             },
             "rows": rows,
         }
-    rows = board.load_history(board_path, route_key=route_key, max_points=points)
+    rows = board.load_history(board_path, route_key=history_route_key, max_points=points)
     return {
         "ok": bool(rows),
         "route_key": route_key,
@@ -2781,11 +2787,16 @@ def _merge_history_rows(
 
 
 def _chart_stream_payload(route_key: str, board_path: Path, hours: float) -> dict[str, Any]:
+    current = _find_canonical_route(route_key, board_path)
+    sample = (
+        _schedule_chart_route_refresh(current)
+        if current is not None
+        else {"status": "unavailable", "error": "route_not_found"}
+    )
     history = api_history(
         route_key,
         board_path,
         {
-            "live": ["1"],
             "hours": [str(hours)],
             "max_points": ["1"],
             "no_cache": ["1"],
@@ -2796,7 +2807,7 @@ def _chart_stream_payload(route_key: str, board_path: Path, hours: float) -> dic
         "ok": bool(history.get("ok")),
         "route_key": route_key,
         "row": rows[-1] if rows else None,
-        "sample": history.get("sample") or {},
+        "sample": sample,
         "meta": history.get("meta") or {},
     }
 
@@ -2841,18 +2852,129 @@ def _route_index(board_path: Path) -> dict[str, dict[str, Any]]:
 def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | None:
     custom = chart_catalog.route_from_key(route_key)
     if custom is not None:
+        # The builder represents every selection as a CUSTOM key.  When those
+        # exact legs already exist on the canonical board, reuse that route and
+        # its hot history instead of creating a second empty time series.  This
+        # is especially important for DEX-long/perp-short funding farms.
+        # Do not build the full board for a catalogue route.  If another page
+        # has already warmed the index, use it; otherwise the custom row still
+        # shares the same stable history key and the exact sampler fills the
+        # missing live fields in the background.
+        required = (
+            "token",
+            "long_venue",
+            "long_market_type",
+            "short_venue",
+            "short_market_type",
+        )
+        if not all(custom.get(key) for key in required) or not all(
+            _chart_leg_symbol(custom, side) for side in ("long", "short")
+        ):
+            return custom
+        with _ROUTE_INDEX_LOCK:
+            warm_candidates = tuple(_ROUTE_INDEX["rows"].values())
+        for candidate in warm_candidates:
+            if _same_chart_route(candidate, custom):
+                return candidate
         return custom
     return _route_index(board_path).get(route_key)
 
 
+def _chart_leg_symbol(row: dict[str, Any], side: str) -> str:
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    route_inputs = (
+        notes.get("route_inputs")
+        if isinstance(notes.get("route_inputs"), dict)
+        else {}
+    )
+    leg = route_inputs.get(side) if isinstance(route_inputs.get(side), dict) else {}
+    return str(
+        row.get(f"{side}_market_symbol")
+        or row.get(f"{side}_symbol")
+        or leg.get("symbol")
+        or ""
+    )
+
+
+def _same_chart_route(candidate: dict[str, Any], selected: dict[str, Any]) -> bool:
+    fields = ("token", "long_venue", "long_market_type", "short_venue", "short_market_type")
+    if any(str(candidate.get(key) or "") != str(selected.get(key) or "") for key in fields):
+        return False
+    if any(
+        _chart_leg_symbol(candidate, side) != _chart_leg_symbol(selected, side)
+        for side in ("long", "short")
+    ):
+        return False
+    selected_chain = str(selected.get("dex_chain") or "")
+    selected_contract = str(selected.get("dex_contract") or "").casefold()
+    if selected_chain and str(candidate.get("dex_chain") or "") != selected_chain:
+        return False
+    return not selected_contract or (
+        str(candidate.get("dex_contract") or "").casefold() == selected_contract
+    )
+
+
+def _chart_sample_interval(row: dict[str, Any]) -> float:
+    configured = float(os.environ.get("SPREADBOARD_CHART_SAMPLE_SECONDS", "2"))
+    return max(1.0, configured) if _native_chart_route(row) else max(4.0, configured)
+
+
+def _chart_history_route_key(row: dict[str, Any]) -> str:
+    """One time-series key for a canonical row and the same custom selection."""
+
+    route_key = str(row.get("route_key") or "")
+    if route_key and not route_key.startswith("CUSTOM:"):
+        return route_key
+    return "|".join(
+        [
+            str(row.get("token") or "").upper() or "?",
+            str(row.get("long_venue") or "?"),
+            str(row.get("long_market_type") or "?"),
+            str(row.get("short_venue") or "?"),
+            str(row.get("short_market_type") or "?"),
+        ]
+    )
+
+
+def _schedule_chart_route_refresh(row: dict[str, Any]) -> dict[str, Any]:
+    """Start one shared exact quote without holding a page or stream open."""
+
+    route_key = str(row.get("route_key") or "")
+    now = time.monotonic()
+    with _CHART_SAMPLE_LOCK:
+        cached = _CHART_SAMPLE_CACHE.get(route_key)
+        if cached and now - cached[0] < _chart_sample_interval(row):
+            return {**cached[1], "cached": True}
+        if route_key in _CHART_SAMPLE_BACKGROUND:
+            return (
+                {**cached[1], "cached": True, "refresh_scheduled": True}
+                if cached
+                else {"status": "warming", "refresh_scheduled": True}
+            )
+        _CHART_SAMPLE_BACKGROUND.add(route_key)
+
+    def run() -> None:
+        try:
+            _refresh_chart_route(row)
+        finally:
+            with _CHART_SAMPLE_LOCK:
+                _CHART_SAMPLE_BACKGROUND.discard(route_key)
+
+    threading.Thread(
+        target=run,
+        name=f"chart-route-warm-{hash(route_key) & 0xffff:x}",
+        daemon=True,
+    ).start()
+    return (
+        {**cached[1], "cached": True, "refresh_scheduled": True}
+        if cached
+        else {"status": "warming", "refresh_scheduled": True}
+    )
+
+
 def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
     route_key = str(row.get("route_key") or "")
-    configured_interval = float(os.environ.get("SPREADBOARD_CHART_SAMPLE_SECONDS", "2"))
-    min_interval = (
-        max(1.0, configured_interval)
-        if _native_chart_route(row)
-        else max(4.0, configured_interval)
-    )
+    min_interval = _chart_sample_interval(row)
     now = time.monotonic()
     with _CHART_SAMPLE_LOCK:
         cached = _CHART_SAMPLE_CACHE.get(route_key)
@@ -2952,8 +3074,13 @@ def _record_live_chart_route(row: dict[str, Any]) -> tuple[int, str | None]:
     """
 
     try:
+        history_row = dict(row)
+        history_row["route_key"] = _chart_history_route_key(row)
         return (
-            market_history.record_route(row, sample_source="live_chart_exact_route"),
+            market_history.record_route(
+                history_row,
+                sample_source="live_chart_exact_route",
+            ),
             None,
         )
     except sqlite3.OperationalError as exc:
@@ -5703,12 +5830,11 @@ def render_charts_page(
     accounts_path: Any = None,
 ) -> str:
     selected_route = _query_first(query, "route_key") or ""
-    market_query: dict[str, list[str]] = {
-        "limit": ["500"],
-        "sort": ["edge"],
-        "direction": ["desc"],
-    }
-    market_data = api_market_spreads(board_path, market_query)
+    # The builder gets its universe from chart_catalog below.  Building and
+    # serialising a 500-token, multi-megabyte market response here served no UI
+    # purpose and added seconds to every chart.  Health is a shared lightweight
+    # cache and prices arrive from the exact route stream.
+    market_health = api_source_health(board_path, config)
     catalogue = chart_catalog.load()
     markets = catalogue.get("markets") or []
     selected_row = _find_canonical_route(selected_route, board_path) if selected_route else None
@@ -5724,20 +5850,21 @@ def render_charts_page(
                 "max_points": [str(window_config["max_points"])],
                 "hours": [str(window_config["hours"])],
                 "bucket_seconds": [str(window_config["bucket_seconds"])],
-                "live": ["1"],
             },
         )
         if selected_row is not None
         else {"rows": [], "meta": {}}
     )
-    sampled_row = (history_payload.get("sample") or {}).get("row")
-    if isinstance(sampled_row, dict):
-        selected_row = sampled_row
     detail = (
-        {"ok": True, **live.get_route_detail(_canonical_pair_row(selected_row), config=config)}
+        {
+            "ok": True,
+            **live.get_route_snapshot_detail(_canonical_pair_row(selected_row)),
+        }
         if selected_row is not None
         else None
     )
+    if selected_row is not None:
+        _schedule_chart_route_refresh(selected_row)
     history = history_payload.get("rows") or []
     history = filter_chart_history(history, window)
     body = f"""
@@ -5748,9 +5875,9 @@ def render_charts_page(
           <h1>Build a spread chart</h1>
           <p>Select a token and the exact long and short venue. Nothing is plotted until a route is chosen.</p>
         </div>
-        <div class="terminal-live-box {'live' if market_data.get('ok') else 'unavailable'}">
-          <span>{'Live' if market_data.get('ok') else 'Updating'}</span>
-          <strong>{fmt_age(((market_data.get('source_health') or {}).get('canonical_api') or {}).get('age_min'))}</strong>
+        <div class="terminal-live-box {'live' if market_health.get('ok') else 'unavailable'}">
+          <span>{'Live' if market_health.get('ok') else 'Updating'}</span>
+          <strong>{fmt_age((market_health.get('canonical_api') or {}).get('age_min'))}</strong>
           <em>canonical public APIs</em>
         </div>
       </header>
@@ -6388,7 +6515,7 @@ def render_live_spread_chart(
         controller = new AbortController();
         state.textContent = 'Sampling exact public order books...';
         try {{
-          const response = await fetch(`/api/history/${{encodeURIComponent(routeKey)}}?live=1&hours=${{hours}}&bucket_seconds=${{bucketSeconds}}&max_points=${{maxPoints}}`, {{
+          const response = await fetch(`/api/history/${{encodeURIComponent(routeKey)}}?live=1&wait=0&hours=${{hours}}&bucket_seconds=${{bucketSeconds}}&max_points=${{maxPoints}}`, {{
             cache: 'no-store',
             signal: controller.signal,
           }});
@@ -11231,8 +11358,9 @@ def render_funding_history_dialog(detail: dict[str, Any]) -> str:
     else:
         empty_text = "Historical funding is temporarily unavailable; current and projected 24h funding remain shown above."
     empty = f'<tr><td colspan="5">{h(empty_text)}</td></tr>'
+    route_key = str((detail.get("board_row") or {}).get("route_key") or "")
     return f"""
-    <dialog class="funding-history-dialog" data-funding-dialog>
+    <dialog class="funding-history-dialog" data-funding-dialog data-funding-route="{h(route_key)}">
       <div class="funding-history-head">
         <div><strong>Funding history</strong><span>{h(long_leg.get('market_type'))} / {h(short_leg.get('market_type'))}</span></div>
         <button type="button" data-funding-close aria-label="Close funding history">x</button>
@@ -11240,7 +11368,7 @@ def render_funding_history_dialog(detail: dict[str, Any]) -> str:
       <div class="funding-history-scroll">
         <table>
           <thead><tr><th>Time</th><th>{h(long_leg.get('venue') or 'Long')}</th><th>Long sum</th><th>{h(short_leg.get('venue') or 'Short')}</th><th>Short sum</th></tr></thead>
-          <tbody>{''.join(rows) or empty}</tbody>
+          <tbody data-funding-history-rows>{''.join(rows) or empty}</tbody>
         </table>
       </div>
     </dialog>
@@ -11258,8 +11386,62 @@ def render_funding_history_script() -> str:
     (() => {
       const dialog = document.querySelector('[data-funding-dialog]');
       if (!dialog) return;
+      const body = dialog.querySelector('[data-funding-history-rows]');
+      const routeKey = dialog.dataset.fundingRoute || '';
+      let loading = false;
+      let loaded = false;
+      const pct = (value) => Number.isFinite(Number(value))
+        ? `${Number(value) >= 0 ? '+' : ''}${Number(value).toFixed(4)}%`
+        : '—';
+      const minute = (value) => Math.round(Number(value || 0) / 60000) * 60000;
+      function message(text) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 5; cell.textContent = text; row.appendChild(cell);
+        body.replaceChildren(row);
+      }
+      function populate(legs) {
+        const longRows = legs?.long?.funding_history || [];
+        const shortRows = legs?.short?.funding_history || [];
+        const longMap = new Map(longRows.map(item => [minute(item.timestamp_ms), item]));
+        const shortMap = new Map(shortRows.map(item => [minute(item.timestamp_ms), item]));
+        const stamps = [...new Set([...longMap.keys(), ...shortMap.keys()])]
+          .filter(Number.isFinite).sort((a, b) => b - a);
+        if (!stamps.length) {
+          message('Current funding is available, but settled history is unavailable for this route.');
+          return;
+        }
+        body.replaceChildren(...stamps.map(stamp => {
+          const longItem = longMap.get(stamp) || {};
+          const shortItem = shortMap.get(stamp) || {};
+          const values = [
+            `${new Date(stamp).toLocaleString([], {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'UTC'})} UTC`,
+            pct(longItem.rate_pct), pct(longItem.cumulative_pct),
+            pct(shortItem.rate_pct), pct(shortItem.cumulative_pct),
+          ];
+          const row = document.createElement('tr');
+          values.forEach(value => { const cell=document.createElement('td'); cell.textContent=value; row.appendChild(cell); });
+          return row;
+        }));
+      }
+      async function loadHistory() {
+        if (loading || loaded || !routeKey) return;
+        loading = true;
+        message('Loading settled funding from the exact venues...');
+        try {
+          const response = await fetch(`/api/pair/${encodeURIComponent(routeKey)}`, {cache:'no-store'});
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const payload = await response.json();
+          populate(payload.legs || {});
+          loaded = true;
+        } catch (_error) {
+          message('Settled funding history is temporarily unavailable; live funding remains on the chart.');
+        } finally {
+          loading = false;
+        }
+      }
       document.querySelectorAll('[data-funding-open]').forEach((button) => {
-        button.addEventListener('click', () => dialog.showModal());
+        button.addEventListener('click', () => { dialog.showModal(); loadHistory(); });
       });
       dialog.querySelector('[data-funding-close]')?.addEventListener('click', () => dialog.close());
       dialog.addEventListener('click', (event) => {

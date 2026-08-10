@@ -108,6 +108,80 @@ def get_route_detail(
     return data
 
 
+def get_route_snapshot_detail(board_row: dict[str, Any]) -> dict[str, Any]:
+    """Build the chart shell from already-canonical data without public I/O.
+
+    A selected chart used to wait for OHLCV, funding-history, market-stat and
+    DEX enrichment before the HTML could be sent.  Those are useful on the
+    pair research page, but they are not prerequisites for drawing the chart:
+    the exact sampler updates prices and current funding immediately after the
+    shell arrives.  Reusing the canonical row here keeps the initial values on
+    the same venue/symbol while making a cold chart request deterministic.
+    """
+
+    notes = board_row.get("notes") if isinstance(board_row.get("notes"), dict) else {}
+    funding_notes = (
+        notes.get("funding") if isinstance(notes.get("funding"), dict) else {}
+    )
+    legs: dict[str, dict[str, Any]] = {}
+    for side in ("long", "short"):
+        funding = (
+            funding_notes.get(side)
+            if isinstance(funding_notes.get(side), dict)
+            else {}
+        )
+        legs[side] = _leg_detail_from_board(
+            board_row,
+            side=side,
+            funding=funding,
+            reason="public_enrichment_deferred",
+        )
+    long_leg = legs["long"]
+    short_leg = legs["short"]
+    long_24h = _leg_funding_24h(long_leg)
+    short_24h = _leg_funding_24h(short_leg)
+    net_24h = (
+        short_24h - long_24h
+        if long_24h is not None and short_24h is not None
+        else board_row.get("funding_24h_pct")
+        or board_row.get("funding_daily_pct")
+    )
+    return {
+        "symbol": str(board_row.get("symbol") or "").upper(),
+        "generated_at": int(time.time()),
+        "cache_ttl_seconds": CACHE_TTL_SECONDS,
+        "trade_authorized": False,
+        "mode": "read_only_snapshot_then_live",
+        "board_row": board_row,
+        "legs": legs,
+        "route_volatility_24h": {
+            "status": "deferred",
+            "reason": "public_enrichment_deferred",
+        },
+        "funding": {
+            "spread_pct": board_row.get("funding_spread_pct"),
+            "net_24h_pct": net_24h,
+            "long_24h_pct": long_24h,
+            "short_24h_pct": short_24h,
+            "history_complete": False,
+            "note": (
+                "Current funding comes from the exact venue/symbol sampler; "
+                "settled history loads only when the full pair detail is requested."
+            ),
+        },
+        "okx_dex_quote": {
+            "status": "deferred",
+            "reason": "exact_chart_sample_runs_in_background",
+        },
+        "token_overview": {
+            "status": "lazy",
+            "url": f"/token/{str(board_row.get('symbol') or '').upper()}",
+            "note": "Token-wide public exchange scan loads separately.",
+        },
+        "route_health": route_health(board_row),
+    }
+
+
 def _build_route_detail(board_row: dict[str, Any], *, config: dict[str, Any]) -> dict[str, Any]:
     symbol = str(board_row.get("symbol") or "").upper()
     legs = _route_leg_details(board_row)

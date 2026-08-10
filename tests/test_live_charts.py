@@ -1235,7 +1235,7 @@ def test_live_chart_surface_explains_series_and_streams_exact_route() -> None:
     assert "Open ask → bid" in html
     assert "Out top book" in html
     assert "?live=1&amp;" not in html
-    assert "?live=1&hours=" in html
+    assert "?live=1&wait=0&hours=" in html
     assert "gap_threshold_seconds" in html
     assert "new EventSource" in html
     assert "/api/stream/" in html
