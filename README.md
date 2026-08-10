@@ -93,6 +93,21 @@ SPREADBOARD_TELEGRAM_PUBLIC_FEED_CHAT_ID=@spreadboard_research
 SPREADBOARD_TELEGRAM_OUTBOUND=1
 ```
 
+## Transactional Email
+
+Password recovery and membership lifecycle notices prefer Resend's HTTPS API,
+which works even when a hosting provider blocks outbound SMTP ports. Keep the
+send-only key in the production secret file, never in source control:
+
+```bash
+SPREADBOARD_RESEND_API_KEY=re_...
+SPREADBOARD_SMTP_FROM='SpreadBoard <support@spreadarbitrage.ink>'
+```
+
+The existing `SPREADBOARD_SMTP_*` settings remain a fallback for deployments
+whose network permits SMTP. The public status page reports recovery as ready
+when either delivery path is fully configured.
+
 ## Browser Push
 
 Browser alerts use an application-specific VAPID key pair. Keep the private

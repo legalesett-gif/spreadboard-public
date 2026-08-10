@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import http.client
 import json
-from pathlib import Path
 import threading
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -32,7 +33,9 @@ def db(tmp_path: Path) -> Path:
 
 
 def _user_id(db: Path) -> int:
-    return [u for u in accounts.list_users(db_path=db) if u["email"] == "anatolij@example.com"][0]["id"]
+    return next(
+        u for u in accounts.list_users(db_path=db) if u["email"] == "anatolij@example.com"
+    )["id"]
 
 
 def test_a_link_lets_someone_set_their_own_password(db: Path) -> None:
@@ -193,6 +196,7 @@ def test_forgot_password_page_fails_closed_until_email_is_configured(monkeypatch
     for name in (
         "SPREADBOARD_SMTP_HOST", "SPREADBOARD_SMTP_USERNAME",
         "SPREADBOARD_SMTP_PASSWORD", "SPREADBOARD_SMTP_FROM",
+        "SPREADBOARD_RESEND_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
     page = server.render_forgot_password_page()
@@ -243,3 +247,44 @@ def test_reset_request_is_generic_and_sends_a_single_use_link(tmp_path, monkeypa
         app.shutdown()
         app.server_close()
         server.SpreadBoardHandler._login_attempts.clear()
+
+
+def test_resend_https_delivery_is_preferred_over_smtp(monkeypatch) -> None:
+    from spreadboard import mailer
+
+    monkeypatch.setenv("SPREADBOARD_SMTP_HOST", "smtp.resend.com")
+    monkeypatch.setenv("SPREADBOARD_SMTP_FROM", "SpreadBoard <support@example.test>")
+    monkeypatch.setenv("SPREADBOARD_RESEND_API_KEY", "re_test_only_not_a_real_secret")
+    sent = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def fake_urlopen(request, *, timeout):
+        sent.append((request, timeout))
+        return Response()
+
+    monkeypatch.setattr(mailer, "urlopen", fake_urlopen)
+    mailer.send_password_reset(
+        recipient="alex@example.test",
+        display_name="Alex",
+        reset_url="https://spreadboard.example/set-password?token=one-use",
+    )
+
+    assert mailer.status()["provider"] == "resend_api"
+    assert len(sent) == 1
+    request, timeout = sent[0]
+    assert request.full_url == "https://api.resend.com/emails"
+    assert timeout == 10
+    assert request.get_header("Authorization") == "Bearer re_test_only_not_a_real_secret"
+    payload = json.loads(request.data)
+    assert payload["to"] == ["alex@example.test"]
+    assert payload["from"] == "SpreadBoard <support@example.test>"
+    assert payload["subject"] == "Reset your SpreadBoard password"
+    assert parse_qs(urlparse(payload["text"].splitlines()[4]).query)["token"] == ["one-use"]

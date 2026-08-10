@@ -7,11 +7,13 @@ responses.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from email.message import EmailMessage
+import json
 import os
 import smtplib
 import ssl
+from dataclasses import dataclass
+from email.message import EmailMessage
+from urllib.request import Request, urlopen
 
 
 @dataclass(frozen=True)
@@ -23,10 +25,17 @@ class MailConfig:
     sender: str
     use_ssl: bool
     starttls: bool
+    resend_api_key: str
+    resend_api_url: str
 
     @property
     def configured(self) -> bool:
-        return bool(self.host and self.sender and (not self.username or self.password))
+        smtp_ready = bool(self.host and (not self.username or self.password))
+        return bool(self.sender and (self.resend_api_key or smtp_ready))
+
+    @property
+    def provider(self) -> str:
+        return "resend_api" if self.resend_api_key else "smtp"
 
 
 def _flag(name: str, default: bool = False) -> bool:
@@ -50,34 +59,53 @@ def config() -> MailConfig:
         sender=os.environ.get("SPREADBOARD_SMTP_FROM", "").strip(),
         use_ssl=use_ssl,
         starttls=_flag("SPREADBOARD_SMTP_STARTTLS", default=not use_ssl),
+        resend_api_key=os.environ.get("SPREADBOARD_RESEND_API_KEY", ""),
+        resend_api_url=os.environ.get(
+            "SPREADBOARD_RESEND_API_URL", "https://api.resend.com/emails"
+        ).strip(),
     )
 
 
 def status() -> dict[str, object]:
     settings = config()
     return {
-        "provider": "smtp",
+        "provider": settings.provider,
         "configured": settings.configured,
         "recovery_ready": settings.configured,
     }
 
 
-def send_password_reset(*, recipient: str, display_name: str, reset_url: str) -> None:
-    settings = config()
-    if not settings.configured:
-        raise RuntimeError("email_delivery_not_configured")
+def _send_text(*, settings: MailConfig, recipient: str, subject: str, body: str) -> None:
+    """Deliver through HTTPS when configured, with SMTP as the portable fallback."""
+    if settings.resend_api_key:
+        payload = json.dumps(
+            {
+                "from": settings.sender,
+                "to": [recipient],
+                "subject": subject,
+                "text": body,
+            }
+        ).encode("utf-8")
+        request = Request(
+            settings.resend_api_url,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {settings.resend_api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "SpreadBoard/1.0",
+            },
+            method="POST",
+        )
+        with urlopen(request, timeout=10) as response:
+            if not 200 <= int(response.status) < 300:
+                raise RuntimeError("email_delivery_failed")
+        return
 
     message = EmailMessage()
-    message["Subject"] = "Reset your SpreadBoard password"
+    message["Subject"] = subject
     message["From"] = settings.sender
     message["To"] = recipient
-    name = str(display_name or "there").strip() or "there"
-    message.set_content(
-        f"Hello {name},\n\n"
-        "Use this single-use link within two hours to choose a new SpreadBoard password:\n\n"
-        f"{reset_url}\n\n"
-        "If you did not request this, ignore this email. Your current password remains unchanged.\n"
-    )
+    message.set_content(body)
 
     context = ssl.create_default_context()
     client_context = (
@@ -91,6 +119,26 @@ def send_password_reset(*, recipient: str, display_name: str, reset_url: str) ->
         if settings.username:
             client.login(settings.username, settings.password)
         client.send_message(message)
+
+
+def send_password_reset(*, recipient: str, display_name: str, reset_url: str) -> None:
+    settings = config()
+    if not settings.configured:
+        raise RuntimeError("email_delivery_not_configured")
+
+    name = str(display_name or "there").strip() or "there"
+    body = (
+        f"Hello {name},\n\n"
+        "Use this single-use link within two hours to choose a new SpreadBoard password:\n\n"
+        f"{reset_url}\n\n"
+        "If you did not request this, ignore this email. Your current password remains unchanged.\n"
+    )
+    _send_text(
+        settings=settings,
+        recipient=recipient,
+        subject="Reset your SpreadBoard password",
+        body=body,
+    )
 
 
 def send_subscription_notice(
@@ -101,26 +149,15 @@ def send_subscription_notice(
     if not settings.configured:
         raise RuntimeError("email_delivery_not_configured")
 
-    message = EmailMessage()
-    message["Subject"] = str(subject or "SpreadBoard membership update")[:180]
-    message["From"] = settings.sender
-    message["To"] = recipient
     name = str(display_name or "there").strip() or "there"
-    message.set_content(
+    text = (
         f"Hello {name},\n\n{str(body).strip()}\n\n"
         f"Manage your membership:\n{action_url}\n\n"
         "This is a service notice about your prepaid SpreadBoard access.\n"
     )
-
-    context = ssl.create_default_context()
-    client_context = (
-        smtplib.SMTP_SSL(settings.host, settings.port, timeout=10, context=context)
-        if settings.use_ssl
-        else smtplib.SMTP(settings.host, settings.port, timeout=10)
+    _send_text(
+        settings=settings,
+        recipient=recipient,
+        subject=str(subject or "SpreadBoard membership update")[:180],
+        body=text,
     )
-    with client_context as client:
-        if settings.starttls and not settings.use_ssl:
-            client.starttls(context=context)
-        if settings.username:
-            client.login(settings.username, settings.password)
-        client.send_message(message)
