@@ -51,6 +51,7 @@ from spreadboard import (  # noqa: E402
     portfolio,
     subscription_lifecycle,
     telegram_bot,
+    telegram_queries,
 )
 
 #: Same story as the board cache: intel takes ~24s to build and a 20s life meant
@@ -1438,7 +1439,7 @@ def api_market_spreads(
     if cache_key is not None:
         cached = _market_cache_get(cache_key)
         if cached is not None:
-            return cached
+            return _sync_telegram_client_universe(cached)
         with _MARKET_CACHE_LOCK:
             inflight = _MARKET_CACHE_INFLIGHT.get(cache_key)
             if inflight is None:
@@ -1460,19 +1461,19 @@ def api_market_spreads(
             # the answer sitting in the stale cache the whole time.
             stale = _market_cache_stale_get(cache_key) if allow_stale else None
             if stale is not None:
-                return stale
+                return _sync_telegram_client_universe(stale)
             # Nothing to serve yet, so waiting is the only option.
             deadline = time.monotonic() + _MARKET_BUILD_WAIT_SECONDS
             while not inflight.wait(timeout=1.0) and time.monotonic() < deadline:
                 cached = _market_cache_get(cache_key)
                 if cached is not None:
-                    return cached
+                    return _sync_telegram_client_universe(cached)
             cached = _market_cache_get(cache_key)
             if cached is not None:
-                return cached
+                return _sync_telegram_client_universe(cached)
             stale = _market_cache_stale_get(cache_key) if allow_stale else None
             if stale is not None:
-                return stale
+                return _sync_telegram_client_universe(stale)
             # The owner is still building. Say so rather than start a second
             # copy of the same work.
             return _market_warming_payload()
@@ -1486,7 +1487,7 @@ def api_market_spreads(
                 args=(board_path, dict(query), cache_key),
                 daemon=True,
             ).start()
-            return stale
+            return _sync_telegram_client_universe(stale)
 
     acquired = _MARKET_BUILD_SLOTS.acquire(timeout=_MARKET_BUILD_SLOT_WAIT_SECONDS)
     if not acquired:
@@ -1498,7 +1499,7 @@ def api_market_spreads(
             stale = _market_cache_stale_get(cache_key) if allow_stale else None
             _market_cache_finish(cache_key, None)
             if stale is not None:
-                return stale
+                return _sync_telegram_client_universe(stale)
             return _market_warming_payload()
     try:
         min_funding_24h = _query_float(query, "min_abs_funding_24h_pct")
@@ -1542,7 +1543,50 @@ def api_market_spreads(
             _MARKET_BUILD_SLOTS.release()
     if cache_key is not None:
         _market_cache_finish(cache_key, data)
-    return data
+    return _sync_telegram_client_universe(data)
+
+
+def _sync_telegram_client_universe(payload: dict[str, Any]) -> dict[str, Any]:
+    """Make Telegram use the exact unfiltered all-token generation clients got."""
+    filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+    pagination = (
+        payload.get("pagination")
+        if isinstance(payload.get("pagination"), dict)
+        else {}
+    )
+    filtered_keys = (
+        "q",
+        "exchange",
+        "kind",
+        "min_spread_pct",
+        "min_abs_funding_24h_pct",
+        "min_abs_funding_apr_pct",
+        "quote",
+        "min_volume_24h_usd",
+        "min_market_cap_usd",
+        "max_market_cap_usd",
+        "min_fdv_usd",
+        "max_fdv_usd",
+        "max_listing_age_days",
+        "persistence",
+        "asset_class",
+    )
+    try:
+        full_page = int(pagination.get("limit") or 0) >= 500
+        first_page = int(pagination.get("offset") or 0) == 0
+    except (TypeError, ValueError):
+        full_page = first_page = False
+    unfiltered = not any(filters.get(key) not in (None, "") for key in filtered_keys)
+    safe_defaults = (
+        not bool(filters.get("funding_only"))
+        and not bool(filters.get("include_stale"))
+        and not bool(filters.get("include_unverified"))
+        and str(filters.get("sort") or "edge") == "edge"
+        and str(filters.get("direction") or "desc") == "desc"
+    )
+    if full_page and first_page and unfiltered and safe_defaults:
+        telegram_queries.replace_payload(payload)
+    return payload
 
 
 def _rebuild_market_cache(

@@ -458,10 +458,14 @@ def _warm_telegram_payload_at_startup(board_path: Path) -> None:
     bot even while the website was healthy.
     """
     try:
-        from spreadboard import telegram_queries
+        from spreadboard import server, telegram_queries
 
         started = time.monotonic()
-        telegram_queries.refresh_payload(board_path)
+        payload = server.api_market_spreads(
+            board_path,
+            {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
+        )
+        telegram_queries.replace_payload(payload)
         _log(
             "telegram startup payload ready "
             f"in {time.monotonic() - started:.1f}s"
@@ -797,11 +801,16 @@ def _warm_board_cache(*, force: bool = False) -> None:
         _log(f"route index warm skipped: {type(exc).__name__}: {exc}")
     _yield_to_requests()
     try:
-        # The Telegram bot filters this one payload for every lookup. Unwarmed,
-        # a bare "$" took 36s and Telegram's webhook gave up first.
+        # The Telegram bot installs this exact website payload. Building a
+        # separate direct-load generation let the two sets drift even when the
+        # counts happened to match.
         from spreadboard import telegram_queries
 
-        telegram_queries.refresh_payload(_board_path())
+        payload = server.api_market_spreads(
+            _board_path(),
+            {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
+        )
+        telegram_queries.replace_payload(payload)
     except Exception as exc:  # noqa: BLE001 - warming is best effort.
         _log(f"telegram payload warm skipped: {type(exc).__name__}: {exc}")
     _yield_to_requests()

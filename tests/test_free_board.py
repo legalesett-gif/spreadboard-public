@@ -337,17 +337,23 @@ def test_freed_memory_is_returned_to_the_kernel_after_each_warm() -> None:
 
 def test_telegram_snapshot_can_warm_before_the_first_quote_cycle(tmp_path, monkeypatch) -> None:
     from scripts import run_spreadboard_service as service
-    from spreadboard import telegram_queries
+    from spreadboard import server, telegram_queries
 
     seen = []
+    payload = {"groups": []}
     monkeypatch.setattr(
-        telegram_queries, "refresh_payload", lambda path: seen.append(Path(path)) or {}
+        server,
+        "api_market_spreads",
+        lambda path, query: seen.append((Path(path), query)) or payload,
     )
+    monkeypatch.setattr(telegram_queries, "replace_payload", lambda value: value)
 
     board_path = tmp_path / "existing-board.json"
     service._warm_telegram_payload_at_startup(board_path)
 
-    assert seen == [board_path]
+    assert seen == [
+        (board_path, {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]})
+    ]
 
 
 def test_the_snapshot_pipeline_runs_outside_the_web_server() -> None:

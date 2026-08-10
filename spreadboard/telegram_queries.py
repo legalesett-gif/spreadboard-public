@@ -201,8 +201,22 @@ def refresh_payload(board_path: Path | str) -> dict[str, Any]:
         require_deliverable=True,
         limit=None,
     )
+    return replace_payload(payload)
+
+
+def replace_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Atomically install the exact all-token payload served to clients.
+
+    Production normally calls this from ``server.api_market_spreads`` when its
+    unfiltered 500-token view is served or rebuilt. Keeping the install step
+    separate from the expensive build makes the website response and Telegram
+    lookup share one immutable generation instead of independently producing
+    equal-sized but different token sets during a quote refresh.
+    """
     if not isinstance(payload, dict):
         raise TypeError("telegram_payload_must_be_a_mapping")
+    if not isinstance(payload.get("groups"), list):
+        raise TypeError("telegram_payload_groups_must_be_a_list")
     global WARM_QUERY, _WARM_QUERY_UPDATED_AT
     with _WARM_QUERY_LOCK:
         WARM_QUERY = payload
