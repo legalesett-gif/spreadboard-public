@@ -125,6 +125,12 @@ def test_chart_page_prefills_token_when_persisted_catalog_has_no_tokens_key(
     assert '"venue": "OKX DEX 56"' in html
 
 
+def test_funding_history_dialog_overrides_global_table_minimum_width() -> None:
+    html = server.shell("Charts", "charts", "")
+
+    assert ".funding-history-dialog table { width: 100%; min-width: 0;" in html
+
+
 def test_historical_spread_aligns_matching_candles_only() -> None:
     long_rows = [[0, 0, 0, 0, 100], [60_000, 0, 0, 0, 105], [120_000, 0, 0, 0, 110]]
     short_rows = [[0, 0, 0, 0, 110], [120_000, 0, 0, 0, 121]]

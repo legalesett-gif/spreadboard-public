@@ -13280,7 +13280,7 @@ body.alert-modal-open {{ overflow: hidden; }}
 .funding-history-head span {{ color: var(--terminal-muted); font-size: 11px; }}
 .funding-history-head button {{ width: 30px; height: 30px; border: 1px solid var(--terminal-line); border-radius: 5px; background: var(--terminal-row); color: var(--terminal-text); cursor: pointer; }}
 .funding-history-scroll {{ max-height: calc(100vh - 110px); overflow: auto; }}
-.funding-history-dialog table {{ width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; }}
+.funding-history-dialog table {{ width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; font-size: 11px; }}
 .funding-history-dialog th, .funding-history-dialog td {{ overflow: hidden; padding: 9px 11px; border-bottom: 1px solid var(--terminal-line); text-align: right; text-overflow: ellipsis; white-space: nowrap; }}
 .funding-history-dialog th:first-child, .funding-history-dialog td:first-child {{ width: 30%; }}
 .funding-history-dialog th:first-child, .funding-history-dialog td:first-child {{ text-align: left; }}
