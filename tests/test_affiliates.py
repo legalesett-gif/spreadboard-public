@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from spreadboard import accounts, affiliates, crypto_billing, server
-
 
 NOW = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
 RECEIVER = "0xe45cedb238f0a90f111a283eb5f67f7e4d80b937"
@@ -65,6 +64,21 @@ def test_referral_token_is_opaque_hashed_and_expires(db) -> None:
     assert token not in stored
     assert affiliates.valid_click_token(token, db_path=db, now=NOW + timedelta(days=89))
     assert not affiliates.valid_click_token(token, db_path=db, now=NOW + timedelta(days=91))
+
+
+def test_partner_slug_is_generated_and_collision_suffixed(db) -> None:
+    first_slug, name = affiliates.available_partner_slug(
+        display_name="The Funding Channel", db_path=db
+    )
+    assert first_slug == "the-funding-channel"
+    first_user = _user(db, "funding-one@example.test")
+    affiliates.create_partner(first_user, slug=first_slug, display_name=name, db_path=db)
+
+    second_slug, _name = affiliates.available_partner_slug(
+        display_name="The Funding Channel", db_path=db
+    )
+
+    assert second_slug == "the-funding-channel-2"
 
 
 def test_first_qualifying_registration_is_fixed(db) -> None:
@@ -175,7 +189,7 @@ def test_weekly_payout_requires_and_snapshots_the_partner_wallet(db) -> None:
 
     affiliates.save_payout_profile(
         partner_user,
-        asset="USDC",
+        asset="USDT",
         network="Arbitrum",
         destination=PAYOUT,
         db_path=db,
@@ -187,12 +201,33 @@ def test_weekly_payout_requires_and_snapshots_the_partner_wallet(db) -> None:
         batch["id"], payment_reference="0xabc123", db_path=db, now=NOW + timedelta(days=8)
     )
 
-    assert batch["payout_asset"] == "USDC"
+    assert batch["payout_asset"] == "USDT"
     assert batch["payout_network"] == "Arbitrum"
     assert batch["payout_destination"] == PAYOUT
     assert paid["status"] == "paid"
     summary = affiliates.partner_summary(partner_user, db_path=db, now=NOW + timedelta(days=8))
     assert summary["metrics"]["paid"] == 5_960
+
+
+def test_partner_payouts_are_usdt_only(db) -> None:
+    partner_user, _partner_row = _partner(db)
+
+    with pytest.raises(ValueError, match="invalid_payout_asset"):
+        affiliates.save_payout_profile(
+            partner_user,
+            asset="USDC",
+            network="Arbitrum",
+            destination=PAYOUT,
+            db_path=db,
+        )
+
+    saved = affiliates.save_payout_profile(
+        partner_user,
+        network="Arbitrum",
+        destination=PAYOUT,
+        db_path=db,
+    )
+    assert saved["payout_asset"] == "USDT"
 
 
 def test_referral_offer_and_affiliate_terms_are_visible() -> None:
@@ -202,4 +237,5 @@ def test_referral_offer_and_affiliate_terms_are_visible() -> None:
     assert "Your channel discount is saved" in pricing
     assert "20% off the first 30-day" in pricing
     assert "50% of subscription plan revenue" in terms
-    assert "in the video and in the description near the link" in terms
+    assert "AD — paid affiliate promotion" in terms
+    assert "Payouts are always USDT on Arbitrum" in terms

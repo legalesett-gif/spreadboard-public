@@ -8,16 +8,16 @@ the browser can never submit an amount or create an earning.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import hashlib
 import os
 import re
 import secrets
 import sqlite3
+import unicodedata
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import accounts
-
 
 REFERRAL_COOKIE = "spreadboard_ref"
 DEFAULT_ATTRIBUTION_DAYS = 90
@@ -41,14 +41,40 @@ def public_url(slug: str) -> str:
     return f"{base}/r/{slug}"
 
 
-def validate_partner(*, slug: str, display_name: str) -> tuple[str, str]:
-    """Validate fields before the corresponding invited user is created."""
-    clean_slug = slug.strip().casefold()
+def _slug_from_name(display_name: str) -> str:
+    ascii_name = unicodedata.normalize("NFKD", display_name).encode("ascii", "ignore").decode()
+    clean = re.sub(r"[^a-z0-9]+", "-", ascii_name.casefold()).strip("-")
+    if len(clean) < 3:
+        clean = f"{clean or 'partner'}-channel"
+    return clean[:64].rstrip("-")
+
+
+def validate_partner(*, slug: str = "", display_name: str) -> tuple[str, str]:
+    """Validate a partner name and generate a readable link slug when omitted."""
     clean_name = display_name.strip()
-    if not _SLUG_RE.fullmatch(clean_slug):
-        raise ValueError("invalid_partner_slug")
     if not clean_name or len(clean_name) > 100:
         raise ValueError("invalid_partner_name")
+    clean_slug = slug.strip().casefold() or _slug_from_name(clean_name)
+    if not _SLUG_RE.fullmatch(clean_slug):
+        raise ValueError("invalid_partner_slug")
+    return clean_slug, clean_name
+
+
+def available_partner_slug(
+    *, slug: str = "", display_name: str, db_path=accounts.DEFAULT_DB_PATH
+) -> tuple[str, str]:
+    """Return a unique public slug, suffixing auto-generated collisions."""
+    clean_slug, clean_name = validate_partner(slug=slug, display_name=display_name)
+    if slug.strip():
+        if slug_exists(clean_slug, db_path=db_path):
+            raise ValueError("partner_or_slug_already_exists")
+        return clean_slug, clean_name
+    base = clean_slug
+    suffix = 1
+    while slug_exists(clean_slug, db_path=db_path):
+        suffix += 1
+        marker = f"-{suffix}"
+        clean_slug = f"{base[:64 - len(marker)].rstrip('-')}{marker}"
     return clean_slug, clean_name
 
 
@@ -171,16 +197,17 @@ def update_partner_status(
 def save_payout_profile(
     user_id: int,
     *,
-    asset: str,
+    asset: str = "USDT",
     network: str,
     destination: str,
     db_path=accounts.DEFAULT_DB_PATH,
 ) -> dict[str, Any]:
     """Save a partner-owned Arbitrum stablecoin payout destination."""
-    clean_asset = asset.strip().upper()
+    requested_asset = asset.strip().upper() or "USDT"
+    clean_asset = "USDT"
     clean_network = network.strip()
     clean_destination = destination.strip()
-    if clean_asset not in {"USDC", "USDT"}:
+    if requested_asset != "USDT":
         raise ValueError("invalid_payout_asset")
     if clean_network.casefold() != "arbitrum":
         raise ValueError("invalid_payout_network")

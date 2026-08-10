@@ -800,12 +800,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/partners":
                 if not user.is_admin:
                     raise PermissionError("admin_required")
-                clean_slug, clean_name = affiliates.validate_partner(
+                clean_slug, clean_name = affiliates.available_partner_slug(
                     slug=str(payload.get("slug") or ""),
                     display_name=str(payload.get("display_name") or ""),
+                    db_path=self.server.accounts_path,
                 )
-                if affiliates.slug_exists(clean_slug, db_path=self.server.accounts_path):
-                    raise ValueError("partner_or_slug_already_exists")
                 created, token = accounts.create_invited_user(
                     email=str(payload.get("email") or ""),
                     display_name=clean_name,
@@ -833,7 +832,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/partner/payout-profile":
                 partner = affiliates.save_payout_profile(
                     user.id,
-                    asset=str(payload.get("asset") or ""),
+                    asset=str(payload.get("asset") or "USDT"),
                     network=str(payload.get("network") or ""),
                     destination=str(payload.get("destination") or ""),
                     db_path=self.server.accounts_path,
@@ -8361,9 +8360,9 @@ def render_legal_page(page: str) -> str:
                 ("Attribution", "A valid first-party referral cookie lasts up to 90 days. The first qualifying referral is fixed when the new user registers and then persists for later manual crypto renewals. A registration or payment that cannot be linked by the system is not assigned retrospectively without reliable evidence."),
                 ("Subscriber discount", "The referred member receives 20% off the first 30-day membership value. On a longer first term, only one 30-day portion is discounted. Later renewals are charged at the then-current full price unless a separate written offer applies."),
                 ("Commission", "The partner earns 50% of subscription plan revenue actually settled for each attributed invoice, after the subscriber discount and excluding the small invoice-identification amount. Commission is created only after confirmed settlement and is shown in the partner ledger."),
-                ("Hold and payout", "Commission remains on hold for seven days, then enters the next weekly manual payout batch. The partner must maintain a valid USDC or USDT address on Arbitrum. Each batch freezes the amount, asset, network, and destination, and is marked paid with a transaction hash or other transfer reference."),
+                ("Hold and payout", "Commission remains on hold for seven days, then enters the next weekly manual payout batch. Payouts are always USDT on Arbitrum, and the partner must maintain a valid address for that network. Each batch freezes the amount, network, and destination, and is marked paid with a transaction hash or other transfer reference."),
                 ("Reversals and records", "We may void unpaid commission connected to refunds, charge reversals, duplicate or fraudulent accounts, self-referrals, prohibited promotion, or calculation error, with a recorded reason. Paid batches and their transaction references remain in the ledger for accounting and dispute review."),
-                ("Marketing disclosure", "Partners must make the commercial relationship clear and conspicuous. For YouTube, disclose in the video and in the description near the link that the partner may receive commission. Promotions must be truthful, distinguish market research from investment advice, and must not promise profits or guaranteed returns."),
+                ("Marketing disclosure", "Partners must make the commercial relationship clear and conspicuous. For YouTube, say and show near the start of the promotion, and repeat immediately before the link in the description: ‘AD — paid affiliate promotion. I receive a commission if you subscribe through this link.’ A platform disclosure tool may be used as well, but does not replace this disclosure. Promotions must be truthful, distinguish market research from investment advice, and must not promise profits or guaranteed returns."),
                 ("Tax and termination", "Partners are responsible for their own tax, legal, and reporting obligations and for accurate payout details. Either side may stop future promotion. Pausing or closing a link prevents new attribution; renewals from users already attributed continue to earn commission, subject to these terms, fraud review, and applicable law."),
                 ("Contact and version", f"Questions or payout disputes can be sent to {support} or {support_url}. Version {TERMS_VERSION}."),
             ],
@@ -8410,7 +8409,7 @@ def render_partner_page(
             <form class="partner-create-form" data-partner-create>
               <label><span>Channel / partner name</span><input name="display_name" required maxlength="100"></label>
               <label><span>Login email</span><input name="email" type="email" required autocomplete="email"></label>
-              <label><span>Link slug</span><input name="slug" required pattern="[a-z0-9][a-z0-9-]{{2,63}}" placeholder="channel-name"></label>
+              <label><span>Custom link name (optional)</span><input name="slug" pattern="[a-z0-9][a-z0-9-]{{2,63}}" placeholder="Generated from channel name"></label>
               <button class="sheet-button primary" type="submit">Create cabinet &amp; links</button>
             </form>
             <div class="account-empty-panel" data-partner-invite hidden></div>
@@ -8463,9 +8462,9 @@ def render_partner_page(
         <article><span>In payout batch</span><strong>{_fmt_cents(metrics.get('batched'))}</strong><p>Frozen into a weekly batch awaiting transfer.</p></article>
         <article><span>Paid to date</span><strong>{_fmt_cents(metrics.get('paid'))}</strong><p>Recorded transfers with an operator reference.</p></article>
       </section>
-      <section class="partner-panel"><div class="account-panel-head"><div><h2>Payout destination</h2><p>Weekly payouts are sent in your chosen stablecoin on Arbitrum. Check the address carefully; every payout batch freezes a snapshot of these details.</p></div></div>
+      <section class="partner-panel"><div class="account-panel-head"><div><h2>Payout destination</h2><p>Weekly payouts are always sent in USDT on Arbitrum. Check the address carefully; every payout batch freezes a snapshot of these details.</p></div></div>
         <form class="partner-payout-form" data-partner-payout-profile>
-          <label><span>Asset</span><select name="asset"><option value="USDT" {'selected' if partner.get('payout_asset') == 'USDT' else ''}>USDT</option><option value="USDC" {'selected' if partner.get('payout_asset') == 'USDC' else ''}>USDC</option></select></label>
+          <label><span>Asset</span><input name="asset" value="USDT" readonly></label>
           <label><span>Network</span><input name="network" value="Arbitrum" readonly></label>
           <label><span>Wallet address</span><input name="destination" value="{h(partner.get('payout_destination') or '')}" placeholder="0x…" pattern="0x[a-fA-F0-9]{{40}}" required></label>
           <button class="sheet-button primary" type="submit">Save payout details</button><output role="status"></output>
