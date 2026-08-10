@@ -5838,6 +5838,11 @@ def render_charts_page(
     catalogue = chart_catalog.load()
     markets = catalogue.get("markets") or []
     selected_row = _find_canonical_route(selected_route, board_path) if selected_route else None
+    requested_token = _clean_symbol(_query_first(query, "token") or "")
+    catalog_tokens = {str(item or "").upper() for item in (catalogue.get("tokens") or [])}
+    if requested_token not in catalog_tokens:
+        requested_token = ""
+    builder_token = str((selected_row or {}).get("token") or requested_token)
     window = (_query_first(query, "window") or "1h").casefold()
     if window not in CHART_WINDOWS:
         window = "1h"
@@ -5882,11 +5887,11 @@ def render_charts_page(
         </div>
       </header>
       {render_saved_charts_panel(user, selected_route, accounts_path)}
-      {render_chart_builder(markets, selected_row, catalogue)}
+      {render_chart_builder(markets, selected_row, catalogue, selected_token=builder_token)}
       {render_selected_chart(selected_row, detail, history, window, history_payload.get('meta') or {}) if selected_row and detail else render_chart_blank_state()}
       {render_funding_history_dialog(detail) if detail else ''}
     </section>
-    {render_chart_builder_script([item for item in markets if item.get('token') == str((selected_row or {}).get('token') or '')], selected_row)}
+    {render_chart_builder_script([item for item in markets if item.get('token') == builder_token], selected_row)}
     {render_funding_history_script() if detail else ''}
     """
     return shell("Charts - SpreadBoard", "charts", body)
@@ -5896,8 +5901,10 @@ def render_chart_builder(
     markets: list[dict[str, Any]],
     selected_row: dict[str, Any] | None,
     catalogue: dict[str, Any],
+    *,
+    selected_token: str = "",
 ) -> str:
-    selected_token = str((selected_row or {}).get("token") or "")
+    selected_token = str((selected_row or {}).get("token") or selected_token)
     skhx_route = board.route_key_url(chart_catalog.skhx_skhynix_route_key())
     return f"""
     <section class="chart-builder">
@@ -13252,8 +13259,9 @@ body.alert-modal-open {{ overflow: hidden; }}
 .funding-history-head span {{ color: var(--terminal-muted); font-size: 11px; }}
 .funding-history-head button {{ width: 30px; height: 30px; border: 1px solid var(--terminal-line); border-radius: 5px; background: var(--terminal-row); color: var(--terminal-text); cursor: pointer; }}
 .funding-history-scroll {{ max-height: calc(100vh - 110px); overflow: auto; }}
-.funding-history-dialog table {{ width: 100%; border-collapse: collapse; font-size: 11px; }}
-.funding-history-dialog th, .funding-history-dialog td {{ padding: 9px 11px; border-bottom: 1px solid var(--terminal-line); text-align: right; white-space: nowrap; }}
+.funding-history-dialog table {{ width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; }}
+.funding-history-dialog th, .funding-history-dialog td {{ overflow: hidden; padding: 9px 11px; border-bottom: 1px solid var(--terminal-line); text-align: right; text-overflow: ellipsis; white-space: nowrap; }}
+.funding-history-dialog th:first-child, .funding-history-dialog td:first-child {{ width: 30%; }}
 .funding-history-dialog th:first-child, .funding-history-dialog td:first-child {{ text-align: left; }}
 .funding-history-dialog th {{ position: sticky; top: 0; background: var(--terminal-panel-2); color: var(--terminal-muted); font-size: 9px; text-transform: uppercase; }}
 .funding-history-dialog td {{ color: var(--terminal-text); }}

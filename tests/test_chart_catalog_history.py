@@ -91,6 +91,17 @@ def test_chart_builder_keeps_dex_identity_in_the_signed_route_key() -> None:
     assert "dex_chain:leg.dex_chain" in html
 
 
+def test_chart_builder_can_prefill_a_requested_token_without_selecting_a_route() -> None:
+    html = server.render_chart_builder(
+        [],
+        None,
+        {"token_count": 1, "count": 2},
+        selected_token="ESPORTS",
+    )
+
+    assert 'data-chart-token list="chart-token-list" value="ESPORTS"' in html
+
+
 def test_historical_spread_aligns_matching_candles_only() -> None:
     long_rows = [[0, 0, 0, 0, 100], [60_000, 0, 0, 0, 105], [120_000, 0, 0, 0, 110]]
     short_rows = [[0, 0, 0, 0, 110], [120_000, 0, 0, 0, 121]]
