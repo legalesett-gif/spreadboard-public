@@ -5478,7 +5478,7 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
         <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
         <div><span>Payouts</span><strong>{h(funding_cadence_pair(best))}</strong></div>
         <div><span>{'Last basis' if historical else 'Entry basis'}</span><strong data-live-spread>{fmt_pct(best.get('executable_spread_pct'))}</strong></div>
-        <div><span>Realised</span>{render_funding_windows(best, best.get('route_key'))}</div>
+        <div class="funding-realised"><span>Realised</span>{render_funding_windows(best, best.get('route_key'))}</div>
         <div><span>Pairs</span><strong>{h(group.get('route_count') or 0)}</strong></div>
         <span class="funding-chevron" aria-hidden="true">⌄</span>
       </summary>
@@ -13722,6 +13722,9 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   .funding-farm-tabs a {{ flex: 0 0 auto; }}
   .funding-token-group > summary {{ grid-template-columns: repeat(2, minmax(0, 1fr)); min-height: 0; }}
   .funding-token-group > summary .asset-identity {{ grid-column: 1 / -1; }}
+  .funding-token-group > summary .funding-realised {{ grid-column: 1 / -1; }}
+  .funding-token-group > summary .funding-realised .funding-window {{ padding-inline: 4px; }}
+  .funding-token-group > summary .funding-realised .funding-window strong {{ overflow: visible; text-overflow: clip; }}
   .funding-chevron {{ grid-column: 1 / -1; justify-self: end; }}
   .funding-pair-row {{ grid-template-columns: repeat(2, minmax(0, 1fr)); min-height: 0; }}
   .funding-pair-row .route-actions {{ grid-column: 1 / -1; }}

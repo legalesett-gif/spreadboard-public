@@ -161,3 +161,5 @@ def test_realised_windows_have_three_cells_and_an_explicit_summary_column() -> N
         "minmax(82px,.62fr) minmax(82px,.68fr) minmax(76px,.58fr) "
         "minmax(174px,1.05fr) 46px 24px"
     ) in page
+    assert ".funding-realised { grid-column: 1 / -1; }" in page
+    assert ".funding-realised .funding-window strong { overflow: visible; text-overflow: clip; }" in page
