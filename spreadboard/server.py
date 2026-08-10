@@ -2877,6 +2877,21 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
             if _same_chart_route(candidate, custom):
                 return candidate
         return custom
+    # A discovery generation can change while somebody has a chart open. The
+    # previous structural row remains sufficient to render the shell, and the
+    # exact sampler revalidates both public books and funding immediately in
+    # the background. Do not make that member pay the 15-second full-index
+    # rebuild merely because the discovery file's signature changed.
+    with _ROUTE_INDEX_LOCK:
+        retained_signature = _ROUTE_INDEX["signature"]
+        retained = (
+            _ROUTE_INDEX["rows"].get(route_key)
+            if retained_signature
+            and retained_signature[0] == str(board_path)
+            else None
+        )
+    if retained is not None:
+        return retained
     return _route_index(board_path).get(route_key)
 
 

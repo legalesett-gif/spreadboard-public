@@ -523,6 +523,12 @@ def main() -> int:
         poll_seconds=float(os.environ.get("SPREADBOARD_RAIL_REOPEN_SECONDS", "300")),
     )
 
+    # Route links are a primary navigation path. Building their index on the
+    # first request cost 14-15 seconds and made the first chart after every
+    # deploy look broken. Pay that one-time cost inside Docker's startup grace
+    # period, before the service announces that it is serving traffic.
+    _warm_route_index()
+
     def stop_service(_signum: int, _frame: Any) -> None:
         threading.Thread(target=server.shutdown, daemon=True).start()
 
@@ -779,6 +785,11 @@ def _warm_board_cache(*, force: bool = False) -> None:
 
     started = time.monotonic()
     _log("board cache warm starting")
+    # A new discovery snapshot invalidates route links before it invalidates a
+    # member's need to click them. Rebuild this small lookup first; the larger
+    # navigation views can continue warming afterwards.
+    _warm_route_index()
+    _yield_to_requests()
     for query in WARM_QUERIES:
         try:
             server.api_market_spreads(_board_path(), dict(query))
@@ -792,13 +803,6 @@ def _warm_board_cache(*, force: bool = False) -> None:
         server.api_intel(_board_path())
     except Exception as exc:  # noqa: BLE001 - warming is best effort.
         _log(f"intel warm skipped: {type(exc).__name__}: {exc}")
-    _yield_to_requests()
-    try:
-        # Opening a chart by route needs this index; building it on demand cost
-        # 14.6s of the thirty a member waited.
-        server._route_index(_board_path())
-    except Exception as exc:  # noqa: BLE001 - warming is best effort.
-        _log(f"route index warm skipped: {type(exc).__name__}: {exc}")
     _yield_to_requests()
     try:
         # The Telegram bot installs this exact website payload. Building a
@@ -827,6 +831,19 @@ def _warm_board_cache(*, force: bool = False) -> None:
     _refresh_funding_windows()
     # The generation this pass replaced is now unreferenced; give it back.
     _return_freed_memory()
+
+
+def _warm_route_index() -> None:
+    """Build chart-route lookup state before a browser can be charged for it."""
+    from spreadboard import server as server_module
+
+    started = time.monotonic()
+    try:
+        rows = server_module._route_index(_board_path())
+    except Exception as exc:  # noqa: BLE001 - service can still run without it.
+        _log(f"route index warm skipped: {type(exc).__name__}: {exc}")
+        return
+    _log(f"route index warmed rows={len(rows)} in {time.monotonic() - started:.1f}s")
 
 
 def _refresh_funding_windows() -> None:

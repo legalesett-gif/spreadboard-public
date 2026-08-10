@@ -26,6 +26,7 @@ def test_the_board_is_built_once_and_then_indexed(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(server.chart_catalog, "route_from_key", lambda _k: None)
     with server._ROUTE_INDEX_LOCK:
         server._ROUTE_INDEX["signature"] = None
+        server._ROUTE_INDEX["rows"] = {}
 
     board = Path("board.jsonl")
     first = server._find_canonical_route("A|X|Spot|Y|Spot", board)
@@ -48,13 +49,35 @@ def test_a_new_snapshot_rebuilds_the_index(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(server.chart_catalog, "route_from_key", lambda _k: None)
     with server._ROUTE_INDEX_LOCK:
         server._ROUTE_INDEX["signature"] = None
+        server._ROUTE_INDEX["rows"] = {}
 
     board = Path("board.jsonl")
     server._find_canonical_route("A|X|Spot|Y|Spot", board)
     signature["value"] = "two"
-    server._find_canonical_route("A|X|Spot|Y|Spot", board)
+    server._route_index(board)
 
-    assert len(builds) == 2, "a changed snapshot must refresh the index"
+    assert len(builds) == 2, "the background warmer must refresh a changed snapshot"
+
+
+def test_existing_route_uses_retained_index_during_snapshot_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server.chart_catalog, "route_from_key", lambda _k: None)
+    with server._ROUTE_INDEX_LOCK:
+        server._ROUTE_INDEX["signature"] = (str(Path("new-board.jsonl")), "old")
+        server._ROUTE_INDEX["rows"] = {
+            "A|X|Spot|Y|Spot": {"route_key": "A|X|Spot|Y|Spot", "token": "A"}
+        }
+
+    monkeypatch.setattr(
+        server.api_spreads,
+        "load_spreads",
+        lambda **_kwargs: pytest.fail("retained route must render without a synchronous rebuild"),
+    )
+
+    row = server._find_canonical_route("A|X|Spot|Y|Spot", Path("new-board.jsonl"))
+
+    assert row and row["token"] == "A"
 
 
 def test_a_catalogue_route_short_circuits(monkeypatch: pytest.MonkeyPatch) -> None:
