@@ -152,6 +152,13 @@ def test_product_guide_and_fair_price_explain_every_major_tool() -> None:
     assert "not guaranteed true value" in fair
 
 
+def test_long_telegram_bot_handle_can_wrap_on_mobile() -> None:
+    css = server.shell("Test", "telegram", "")
+    assert ".telegram-command-grid article { min-width:0;" in css
+    assert ".telegram-command-grid code {" in css
+    assert "overflow-wrap:anywhere" in css
+
+
 def test_telegram_link_uses_same_tab_and_has_confirmation_fallback(tmp_path: Path) -> None:
     script = server.render_account_script()
     assert "location.assign(data.url)" in script

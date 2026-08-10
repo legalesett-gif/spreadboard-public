@@ -12704,8 +12704,8 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .telegram-preview pre {{ margin:0; padding:16px; overflow:auto; border-radius:7px; background:var(--terminal-shell); color:var(--terminal-shell-text); white-space:pre-wrap; font-size:12px; line-height:1.55; }}
 .telegram-preview > p {{ grid-column:1 / -1; margin:0; color:var(--terminal-muted); font-size:11px; }}
 .telegram-command-grid {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }}
-.telegram-command-grid article {{ display:grid; gap:7px; }}
-.telegram-command-grid code {{ color:var(--terminal-accent); font-size:14px; font-weight:900; }}
+.telegram-command-grid article {{ min-width:0; display:grid; gap:7px; }}
+.telegram-command-grid code {{ color:var(--terminal-accent); font-size:14px; font-weight:900; overflow-wrap:anywhere; word-break:break-word; }}
 .telegram-command-grid span {{ color:var(--terminal-muted); font-size:12px; line-height:1.4; }}
 .research-page {{ width:min(1080px,calc(100% - 36px)); margin:34px auto 72px; display:grid; gap:20px; }}
 .research-hero {{ display:grid; grid-template-columns:minmax(0,1.45fr) minmax(250px,.55fr); border:1px solid var(--terminal-line); border-radius:10px; overflow:hidden; background:var(--terminal-panel); }}
