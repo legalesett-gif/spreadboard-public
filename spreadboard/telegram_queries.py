@@ -18,24 +18,26 @@ Design notes:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from html import escape
-from pathlib import Path
 import re
 import threading
 import time
+from dataclasses import dataclass
+from html import escape
+from pathlib import Path
 from typing import Any
 
 from . import api_spreads
-
 
 MAX_ROWS = 8
 COOLDOWN_SECONDS = 60.0
 PUBLIC_URL_ENV = "SPREADBOARD_PUBLIC_URL"
 
-# $TICKER, or an explicit command. Tickers are 2-12 chars to avoid matching
-# dollar amounts and stray punctuation.
-CASHTAG = re.compile(r"(?:^|\s)\$([A-Za-z][A-Za-z0-9._-]{1,11})\b")
+# $TICKER, or an explicit command. Scanner symbols are 1-12 characters and can
+# start with a digit (for example 1INCH). A purely numeric cashtag is accepted
+# only when it is the whole message, so ordinary prose such as "I paid $4" is
+# not mistaken for a token query while the real one-character token ``$4`` is
+# still reachable.
+CASHTAG = re.compile(r"(?:^|\s)\$([\w.-]{1,12})\b", re.UNICODE)
 COMMANDS = {"/spread": "spread", "/funding": "funding", "/transfer": "transfer", "/token": "spread"}
 VIEW_LABELS = {"spread": "Spread", "funding": "Funding", "transfer": "Deposits / Withdrawals"}
 # Bare intent words, accepted alongside a cashtag ("$SIREN funding").
@@ -80,7 +82,9 @@ def parse_query(text: str, *, bot_username: str = "") -> Query | None:
 
     match = CASHTAG.search(raw)
     if match:
-        return Query(kind=kind or "spread", symbol=_normalise(match.group(1)))
+        symbol = _normalise(match.group(1))
+        if not symbol.isdigit() or raw == f"${symbol}":
+            return Query(kind=kind or "spread", symbol=symbol)
 
     head = words[0] if words else ""
     if head in COMMANDS:
@@ -93,7 +97,7 @@ def parse_query(text: str, *, bot_username: str = "") -> Query | None:
             return None
         return Query(kind=COMMANDS[head], symbol=_normalise(symbol))
     if mentioned:
-        candidates = re.findall(r"\b[A-Za-z][A-Za-z0-9._-]{1,11}\b", raw)
+        candidates = re.findall(r"\b[\w.-]{1,12}\b", raw, re.UNICODE)
         symbol = next(
             (
                 value
@@ -109,7 +113,14 @@ def parse_query(text: str, *, bot_username: str = "") -> Query | None:
 
 
 def _normalise(symbol: str) -> str:
-    return re.sub(r"[^A-Z0-9._-]", "", str(symbol).upper())[:12]
+    # Scanner symbols are not guaranteed to be ASCII (for example ``龙虾``).
+    # Keep Unicode letters/numbers plus the three venue-safe separators, while
+    # stripping markup, spaces and control characters before HTML escaping.
+    return "".join(
+        character
+        for character in str(symbol).upper()
+        if character.isalnum() or character in "._-"
+    )[:12]
 
 
 def allow(chat_id: int, query: Query, *, now: float | None = None) -> bool:
@@ -184,6 +195,10 @@ def refresh_payload(board_path: Path | str) -> dict[str, Any]:
         board_path=board_path,
         include_stale=False,
         include_unverified=False,
+        # This is the same gate used by /api/spreads and the member markets
+        # page. The bot must neither lose a client-visible route nor surface a
+        # transfer route the website has correctly removed from consideration.
+        require_deliverable=True,
         limit=None,
     )
     if not isinstance(payload, dict):
@@ -206,9 +221,14 @@ def payload_status(*, now: float | None = None) -> dict[str, Any]:
     with _WARM_QUERY_LOCK:
         ready = bool(WARM_QUERY)
         updated_at = _WARM_QUERY_UPDATED_AT
+        groups = WARM_QUERY.get("groups") or []
+        token_count = len(groups)
+        route_count = sum(len(group.get("routes") or []) for group in groups)
     return {
         "ready": ready,
         "age_seconds": max(0.0, moment - updated_at) if ready and updated_at else None,
+        "token_count": token_count,
+        "route_count": route_count,
     }
 
 
@@ -221,7 +241,7 @@ def reset_payload() -> None:
 
 
 #: A bare "$" is a request for suggestions, not a token.
-BARE_CASHTAG = re.compile(r"^\$([A-Za-z0-9._-]{0,11})$")
+BARE_CASHTAG = re.compile(r"^\$([\w.-]{0,12})$", re.UNICODE)
 
 #: How many tokens to offer. Three to a row, four rows, fits a phone.
 SUGGESTION_LIMIT = 12
@@ -325,10 +345,11 @@ def keyboard(query: Query, *, public_url: str = "") -> dict[str, Any]:
 
 def suggest(prefix: str, *, board_path: Path | str = "", limit: int = 20) -> list[dict[str, Any]]:
     """Token suggestions for inline mode, ranked by best edge."""
-    try:
-        payload = api_spreads.load_spreads(limit=None)
-    except Exception:  # noqa: BLE001
-        return []
+    # Inline queries share Telegram's short webhook deadline. Rebuilding the
+    # full board here took tens of seconds and made autocomplete another source
+    # of silent failures. The resident service already maintains this atomic
+    # client-visible snapshot; every Telegram entry point must use it.
+    payload = _warm_payload(board_path)
     needle = _normalise(prefix)
     out = []
     for group in payload.get("groups") or []:
@@ -352,9 +373,18 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
     symbol = _normalise(query.symbol)
     rows = _rows_for(symbol, board_path)
     if not rows:
+        link = ""
+        if public_url:
+            link = (
+                f'\n\n<a href="{escape(public_url.rstrip("/"))}/markets?'
+                f'q={escape(symbol)}&amp;include_unverified=1&amp;view=table">'
+                "Check audit-only routes on SpreadBoard</a>"
+            )
         return (
-            f"<b>{escape(symbol)}</b> — no parsed routes right now.\n"
-            "It may be unlisted, stale, or filtered out of the current scan."
+            f"<b>{escape(symbol)}</b> — query recognised; no parsed routes right now.\n"
+            "There are no current client-visible routes. The token may be "
+            "unlisted, stale, or available only behind the board's explicit "
+            f"unverified/audit filter.{link}"
         )
 
     if query.kind == "funding":
@@ -365,7 +395,7 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
         )
         title = f"{symbol} · funding · {len(rows)} routes"
     elif query.kind == "transfer":
-        venues: dict[str, tuple[Any, Any]] = {}  # noqa: F841 - used in the count below
+        venues: dict[str, tuple[Any, Any]] = {}
         for r in rows:
             if r.get("long_venue"):
                 venues.setdefault(r.get("long_venue"), (r.get("long_deposit_enabled"), r.get("long_withdraw_enabled")))

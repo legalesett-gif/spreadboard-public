@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hmac
 import json
 import os
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from spreadboard import accounts, crypto_billing, billing, telegram_queries
+from spreadboard import accounts, billing, crypto_billing, telegram_queries
 
 
 class TelegramBotError(RuntimeError):
@@ -61,6 +61,8 @@ def status(*, db_path: Any = accounts.DEFAULT_DB_PATH) -> dict[str, Any]:
         "public_feed_outbound_ready": bool(public_feed_chat_id() and outbound_posting_enabled()),
         "query_snapshot_ready": query_snapshot["ready"],
         "query_snapshot_age_seconds": query_snapshot["age_seconds"],
+        "query_snapshot_token_count": query_snapshot["token_count"],
+        "query_snapshot_route_count": query_snapshot["route_count"],
     }
 
 
@@ -205,8 +207,20 @@ def _handle_callback(cb: dict[str, Any], *, db_path: Any, board_path: Any) -> di
     }
 
 
-def _handle_inline_query(iq: dict[str, Any], *, board_path: Any) -> dict[str, Any] | None:
-    """Token autocomplete via inline mode (@bot SIREN)."""
+def _handle_inline_query(
+    iq: dict[str, Any], *, board_path: Any, db_path: Any
+) -> dict[str, Any] | None:
+    """Token autocomplete via inline mode (@bot SIREN) for active members."""
+    sender = iq.get("from") if isinstance(iq.get("from"), dict) else {}
+    user = accounts.user_for_telegram_chat(int(sender.get("id") or 0), db_path=db_path)
+    if user is None or not user.subscription_active:
+        return {
+            "method": "answerInlineQuery",
+            "inline_query_id": str(iq.get("id") or ""),
+            "results": [],
+            "cache_time": 5,
+            "is_personal": True,
+        }
     try:
         matches = telegram_queries.suggest(str(iq.get("query") or ""), board_path=board_path)
     except Exception:  # noqa: BLE001
@@ -228,7 +242,7 @@ def _handle_inline_query(iq: dict[str, Any], *, board_path: Any) -> dict[str, An
         "inline_query_id": str(iq.get("id") or ""),
         "results": results,
         "cache_time": 30,
-        "is_personal": False,
+        "is_personal": True,
     }
 
 
@@ -240,7 +254,7 @@ def handle_update(
         return _handle_callback(callback, db_path=db_path, board_path=board_path)
     inline = update.get("inline_query")
     if isinstance(inline, dict):
-        return _handle_inline_query(inline, board_path=board_path)
+        return _handle_inline_query(inline, board_path=board_path, db_path=db_path)
     join_request = update.get("chat_join_request")
     if isinstance(join_request, dict):
         _handle_join_request(join_request, db_path=db_path)
@@ -621,7 +635,7 @@ def _api_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=15) as response:  # noqa: S310 - fixed Telegram origin
+        with urlopen(request, timeout=15) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         # Telegram sends useful, non-secret JSON errors (for example an invalid

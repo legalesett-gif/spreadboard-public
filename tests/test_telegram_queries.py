@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from spreadboard import accounts, telegram_bot, telegram_queries  # noqa: E402
-
+from spreadboard import accounts, telegram_bot, telegram_queries
 
 GROUP_ID = -1002222222222
 
@@ -60,6 +59,7 @@ def board_file(tmp_path, monkeypatch, request):
         # out. What matters is the value, not whether the kwarg is present.
         assert kwargs.get('include_stale', False) is False, 'bot must not be laxer than the site'
         assert kwargs.get('include_unverified', False) is False, 'bot must not be laxer than the site'
+        assert kwargs.get('require_deliverable', False) is True, 'bot must match the member board'
         assert 'max_age_min' not in kwargs, 'bot must not bypass freshness filters'
         # One warm payload carrying the whole board; the bot filters it itself
         # rather than asking for a per-token query it would have to build.
@@ -95,6 +95,14 @@ def board_file(tmp_path, monkeypatch, request):
         ("@spreadarbitragesubscription_bot SIREN", "spread", "SIREN"),
         ("@spreadarbitragesubscription_bot funding SIREN", "funding", "SIREN"),
         ("@spreadarbitragesubscription_bot SIREN rails", "transfer", "SIREN"),
+        ("$S", "spread", "S"),
+        ("$4", "spread", "4"),
+        ("$1INCH", "spread", "1INCH"),
+        ("$龙虾", "spread", "龙虾"),
+        ("@spreadarbitragesubscription_bot 4", "spread", "4"),
+        ("@spreadarbitragesubscription_bot 龙虾", "spread", "龙虾"),
+        ("/token 4", "spread", "4"),
+        ("/token 龙虾", "spread", "龙虾"),
     ],
 )
 def test_recognised_triggers(text, kind, symbol):
@@ -111,6 +119,7 @@ def test_recognised_triggers(text, kind, symbol):
         "",
         "GUA looks interesting",          # bare ticker in conversation
         "I made $500 today",              # dollar amount, not a cashtag
+        "I paid $4 today",                # numeric token syntax only wins alone
         "good morning everyone",
         "SKY is the limit",
         "/spread",                        # command with no token
@@ -130,7 +139,7 @@ def test_symbol_is_sanitised(raw):
     query = telegram_queries.parse_query(f"/spread {raw}")
     assert query is not None
     assert len(query.symbol) <= 12
-    assert set(query.symbol) <= set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+    assert all(character.isalnum() or character in "._-" for character in query.symbol)
 
 
 # --------------------------------------------------------------------------
@@ -211,7 +220,16 @@ def test_unknown_token_answers_plainly(board_file):
     body = telegram_queries.render(
         telegram_queries.Query("spread", "NOTATOKEN"), board_path=board_file
     )
-    assert "no parsed routes" in body
+    assert "query recognised" in body and "no parsed routes" in body
+
+
+def test_unknown_token_links_to_explicit_audit_filter(board_file):
+    body = telegram_queries.render(
+        telegram_queries.Query("spread", "NOTATOKEN"),
+        board_path=board_file,
+        public_url="https://spreadarbitrage.ink",
+    )
+    assert "include_unverified=1" in body
 
 
 def test_reply_carries_a_risk_note_and_site_link(board_file):
@@ -443,16 +461,20 @@ def test_callback_from_an_unregistered_chat_is_ignored(db, board_file):
 
 
 def test_inline_query_suggests_tokens(db, board_file, monkeypatch):
-    monkeypatch.setattr(
-        telegram_queries.api_spreads, "load_spreads",
-        lambda **kw: {"groups": [
-            {"token": "SIREN", "best_edge_pct": 1.7, "route_count": 3, "venues": ["Bybit"]},
-            {"token": "SILVER", "best_edge_pct": 2.9, "route_count": 2, "venues": ["Xt"]},
-            {"token": "GUA", "best_edge_pct": 0.7, "route_count": 1, "venues": ["MEXC"]},
-        ]},
+    user = accounts.create_user(
+        email="inline@example.test", display_name="Inline", password="a-secure-password",
+        subscription_status="active", subscription_days=30, db_path=db,
     )
+    token = accounts.create_telegram_link_token(user["id"], db_path=db)
+    accounts.bind_telegram_chat(token, 42, db_path=db)
+    monkeypatch.setattr(telegram_queries, "_warm_payload", lambda *_args: {"groups": [
+        {"token": "SIREN", "best_edge_pct": 1.7, "route_count": 3, "venues": ["Bybit"]},
+        {"token": "SILVER", "best_edge_pct": 2.9, "route_count": 2, "venues": ["Xt"]},
+        {"token": "GUA", "best_edge_pct": 0.7, "route_count": 1, "venues": ["MEXC"]},
+    ]})
     reply = telegram_bot.handle_update(
-        {"inline_query": {"id": "q1", "query": "SI"}}, db_path=db, board_path=board_file
+        {"inline_query": {"id": "q1", "from": {"id": 42}, "query": "SI"}},
+        db_path=db, board_path=board_file,
     )
     assert reply["method"] == "answerInlineQuery"
     titles = [r["title"] for r in reply["results"]]
@@ -461,14 +483,30 @@ def test_inline_query_suggests_tokens(db, board_file, monkeypatch):
 
 
 def test_inline_query_with_empty_prefix_returns_top_tokens(db, board_file, monkeypatch):
+    user = accounts.create_user(
+        email="inline-empty@example.test", display_name="Inline", password="a-secure-password",
+        subscription_status="active", subscription_days=30, db_path=db,
+    )
+    token = accounts.create_telegram_link_token(user["id"], db_path=db)
+    accounts.bind_telegram_chat(token, 42, db_path=db)
     monkeypatch.setattr(
-        telegram_queries.api_spreads, "load_spreads",
-        lambda **kw: {"groups": [{"token": "AAA", "best_edge_pct": 0.5, "route_count": 1}]},
+        telegram_queries, "_warm_payload",
+        lambda *_args: {"groups": [{"token": "AAA", "best_edge_pct": 0.5, "route_count": 1}]},
     )
     reply = telegram_bot.handle_update(
-        {"inline_query": {"id": "q1", "query": ""}}, db_path=db, board_path=board_file
+        {"inline_query": {"id": "q1", "from": {"id": 42}, "query": ""}},
+        db_path=db, board_path=board_file,
     )
     assert [r["title"] for r in reply["results"]] == ["AAA"]
+
+
+def test_inline_query_is_empty_for_an_unlinked_user(db, board_file):
+    reply = telegram_bot.handle_update(
+        {"inline_query": {"id": "q1", "from": {"id": 999}, "query": "SIREN"}},
+        db_path=db, board_path=board_file,
+    )
+    assert reply["results"] == []
+    assert reply["is_personal"] is True
 
 
 def test_a_bare_dollar_offers_tokens_to_tap(monkeypatch, tmp_path) -> None:
