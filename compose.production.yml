@@ -97,7 +97,11 @@ services:
     # scan finished, why the container restarted five times, and why the board
     # went blank mid-session. 6g leaves room for Caddy and the host.
     mem_limit: 6g
-    cpus: 1.8
+    # The current Droplet has four vCPUs. The former 1.8 cap was inherited from
+    # the two-vCPU host and became the measured bottleneck in the 100-client
+    # acceptance probe. Leave 0.8 vCPU for Caddy and the host while allowing the
+    # market workers and HTTP threads to use the capacity already paid for.
+    cpus: 3.2
     logging:
       driver: json-file
       options:
