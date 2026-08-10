@@ -26,7 +26,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from . import api_spreads
+from . import api_spreads, funding_radar
 
 MAX_ROWS = 8
 COOLDOWN_SECONDS = 60.0
@@ -43,7 +43,13 @@ MAX_SYMBOL_LENGTH = 32
 CASHTAG = re.compile(
     rf"(?:^|\s)\$([\w.-]{{1,{MAX_SYMBOL_LENGTH}}})\b", re.UNICODE
 )
-COMMANDS = {"/spread": "spread", "/funding": "funding", "/transfer": "transfer", "/token": "spread"}
+COMMANDS = {
+    "/spread": "spread",
+    "/funding": "funding",
+    "/transfer": "transfer",
+    "/token": "spread",
+    "/radar": "radar",
+}
 VIEW_LABELS = {"spread": "Spread", "funding": "Funding", "transfer": "Deposits / Withdrawals"}
 # Bare intent words, accepted alongside a cashtag ("$SIREN funding").
 KIND_WORDS = {"spread": "spread", "funding": "funding", "transfer": "transfer",
@@ -98,6 +104,8 @@ def parse_query(text: str, *, bot_username: str = "") -> Query | None:
         # Strip a trailing intent word: "/spread SIREN funding"
         if symbol.casefold() in KIND_WORDS or symbol.casefold() in COMMANDS:
             symbol = ""
+        if not symbol and COMMANDS[head] == "radar":
+            return Query(kind="radar", symbol="")
         if not symbol:
             return None
         return Query(kind=COMMANDS[head], symbol=_normalise(symbol))
@@ -172,6 +180,93 @@ def _route(row: dict[str, Any]) -> str:
     """
     mark = "?" if row.get("mirage_guarded") else ""
     return f"{row.get('long_venue') or '?'}>{row.get('short_venue') or '?'}{mark}"[:22]
+
+
+def _radar_age(minutes: Any) -> str:
+    try:
+        value = max(0.0, float(minutes))
+    except (TypeError, ValueError):
+        return "unknown"
+    if value < 60:
+        return f"{value:.0f}m"
+    if value < 1_440:
+        return f"{value / 60:.1f}h"
+    return f"{value / 1_440:.1f}d"
+
+
+def _radar_rows(symbol: str) -> list[dict[str, Any]]:
+    rows = funding_radar.routes_for(symbol)
+    rows.sort(key=_radar_score, reverse=True)
+    return rows
+
+
+def _radar_score(row: dict[str, Any]) -> float:
+    """Compare unlike windows as average settled carry per day."""
+    windows = row.get("radar_windows") if isinstance(row.get("radar_windows"), dict) else {}
+    scores = []
+    for label, days in (("1d", 1), ("7d", 7), ("30d", 30)):
+        try:
+            scores.append(float(windows[label]) / days)
+        except (KeyError, TypeError, ValueError):
+            continue
+    return max(scores, default=float("-inf"))
+
+
+def _radar_summary(rows: list[dict[str, Any]]) -> str:
+    """Compact settled-history context that fits beneath a Telegram answer."""
+    if not rows:
+        return ""
+    best = rows[0]
+    windows = best.get("radar_windows") if isinstance(best.get("radar_windows"), dict) else {}
+    return (
+        f"<b>Funding radar</b> · {escape(_route(best))} · last live {_radar_age(best.get('radar_last_seen_age_min'))} ago\n"
+        f"Settled: 24h {_pct(windows.get('1d'))} · 7d {_pct(windows.get('7d'))} · 30d {_pct(windows.get('30d'))}; "
+        f"last basis {_pct(best.get('executable_spread_pct'))}."
+    )
+
+
+def _radar_leaders() -> list[dict[str, Any]]:
+    """One retained leader per token, ranked on its best settled window."""
+    best_by_token: dict[str, dict[str, Any]] = {}
+    for row in funding_radar.routes_for():
+        token = str(row.get("token") or "").upper()
+        if not token:
+            continue
+        score = _radar_score(row)
+        if score <= 0:
+            continue
+        current = best_by_token.get(token)
+        current_score = float(current["_radar_score"]) if current else float("-inf")
+        if score > current_score:
+            best_by_token[token] = {**row, "_radar_score": score}
+    return sorted(best_by_token.values(), key=lambda row: -float(row.get("_radar_score") or 0.0))
+
+
+def _render_radar(*, public_url: str = "") -> str:
+    leaders = _radar_leaders()
+    if not leaders:
+        return "<b>Funding radar</b> — history is warming. Try again after the next board refresh."
+    lines = []
+    for row in leaders[:MAX_ROWS]:
+        windows = row.get("radar_windows") or {}
+        lines.append(
+            (
+                str(row.get("token") or "")[:10],
+                _pct(windows.get("1d"), 2),
+                _pct(windows.get("7d"), 2),
+                _pct(windows.get("30d"), 2),
+            )
+        )
+    body = _table(("TOKEN", "24H", "7D", "30D"), (10, 8, 8, 8), lines)
+    extra = f"\n<i>Showing top {MAX_ROWS} of {len(leaders)} retained tokens.</i>" if len(leaders) > MAX_ROWS else ""
+    link = ""
+    if public_url:
+        link = f'\n\n<a href="{escape(public_url.rstrip("/"))}/funding?rank=1d">Open the full funding radar</a>'
+    return (
+        f"<b>Funding radar · last 30 days</b>\n<pre>{escape(body)}</pre>{extra}\n"
+        "<i>Settled historical carry. A retained token may be cooled now; re-check the live route before acting.</i>"
+        f"{link}"
+    )
 
 
 #: The one query the bot builds from. It is warmed by the service, so a
@@ -352,14 +447,21 @@ def keyboard(query: Query, *, public_url: str = "") -> dict[str, Any]:
     equivalent is to offer the other views right under the answer.
     """
     others = [(kind, label) for kind, label in VIEW_LABELS.items() if kind != query.kind]
-    rows = [[
+    rows = [] if query.kind == "radar" else [[
         {"text": label, "callback_data": f"v:{kind}:{query.symbol}"[:64]}
         for kind, label in others
     ]]
     if public_url:
+        destination = (
+            "/funding?rank=1d"
+            if query.kind == "radar"
+            else f"/funding?q={query.symbol}&rank=1d"
+            if query.kind == "funding"
+            else f"/markets?q={query.symbol}&view=table"
+        )
         rows.append([{
             "text": "Open on SpreadBoard",
-            "url": f"{public_url.rstrip('/')}/markets?q={query.symbol}&view=table",
+            "url": f"{public_url.rstrip('/')}{destination}",
         }])
     return {"inline_keyboard": rows}
 
@@ -389,11 +491,29 @@ def suggest(prefix: str, *, board_path: Path | str = "", limit: int = 20) -> lis
 
 def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str:
     """Build the HTML reply for a token lookup."""
+    if query.kind == "radar":
+        return _render_radar(public_url=public_url)
     # Normalise here too, not only in parse_query, so render() is safe for any
     # caller and the symbol can never carry markup into an HTML-parsed message.
     symbol = _normalise(query.symbol)
     rows = _rows_for(symbol, board_path)
+    radar_rows = _radar_rows(symbol) if query.kind in {"spread", "funding"} else []
     if not rows:
+        if radar_rows:
+            summary = _radar_summary(radar_rows)
+            link = ""
+            if public_url:
+                link = (
+                    f'\n\n<a href="{escape(public_url.rstrip("/"))}/funding?'
+                    f'q={escape(symbol)}&amp;rank=1d">Open the historical radar on SpreadBoard</a>'
+                )
+            return (
+                f"<b>{escape(symbol)} · historical funding radar</b>\n"
+                "No client-visible route passes the live Now filters. The retained rate and basis below are the last live observation, not a current entry quote.\n\n"
+                f"{summary}\n"
+                "<i>Kept for 30 days so a cooled leader stays on the watch radar. Re-check live books, identity, rails, and carry before acting.</i>"
+                f"{link}"
+            )
         link = ""
         if public_url:
             link = (
@@ -444,9 +564,11 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
     link = ""
     if public_url:
         link = f'\n\n<a href="{escape(public_url.rstrip("/"))}/markets?q={escape(symbol)}&amp;view=table">Open full detail on SpreadBoard</a>'
+    radar = f"\n\n{_radar_summary(radar_rows)}" if radar_rows else ""
     return (
         f"<b>{escape(title)}</b>\n<pre>{escape(body)}</pre>"
         f"{extra}"
         "\n<i>? = token identity unverified on that route. Research data, not advice.</i>"
+        f"{radar}"
         f"{link}"
     )

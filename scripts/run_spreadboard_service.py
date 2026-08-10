@@ -853,15 +853,19 @@ def _refresh_funding_windows() -> None:
     cannot happen while rendering. Doing it here, for the routes the warm pass
     just built, means the page only ever reads the answer.
     """
-    from spreadboard import market_history, server
+    from spreadboard import funding_radar, market_history, server
 
     try:
         route_keys: list[str] = []
+        leaders: list[dict[str, Any]] = []
         for query in WARM_QUERIES:
             if not query.get("funding_only"):
                 continue
             payload = server.api_market_spreads(_board_path(), dict(query))
             for group in payload.get("groups") or []:
+                leader = group.get("best_funding_route")
+                if isinstance(leader, dict):
+                    leaders.append(leader)
                 for route in group.get("routes") or []:
                     key = route.get("route_key")
                     if key:
@@ -871,7 +875,13 @@ def _refresh_funding_windows() -> None:
         started = time.monotonic()
         count = market_history.write_funding_windows(route_keys)
         _log(f"funding windows computed for {count} routes in {time.monotonic() - started:.1f}s")
-        _refresh_venue_funding_history()
+        # Capture every warm generation, not merely the three-hour venue sweep.
+        # A rate can lead for thirty minutes and cool before the next settlement
+        # history refresh; that brief leader still belongs on the historical
+        # radar, explicitly marked as no longer live.
+        radar_count = funding_radar.refresh(leaders)
+        _log(f"funding radar retained {radar_count} leader routes")
+        _refresh_venue_funding_history(leaders=leaders)
     except Exception as exc:  # noqa: BLE001 - a missing history file is not fatal.
         _log(f"funding windows skipped: {type(exc).__name__}: {exc}")
 
@@ -884,7 +894,7 @@ VENUE_HISTORY_INTERVAL_SECONDS = max(
 _LAST_VENUE_HISTORY_AT = 0.0
 
 
-def _refresh_venue_funding_history() -> None:
+def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = None) -> None:
     """Pull each venue's settled funding for the legs the board is showing."""
     global _LAST_VENUE_HISTORY_AT
 
@@ -893,7 +903,7 @@ def _refresh_venue_funding_history() -> None:
         return
     _LAST_VENUE_HISTORY_AT = now
 
-    from spreadboard import server, venue_funding_history
+    from spreadboard import funding_radar, server, venue_funding_history
 
     try:
         legs: list[tuple[str, str]] = []
@@ -914,6 +924,10 @@ def _refresh_venue_funding_history() -> None:
             return
         started = time.monotonic()
         windows = venue_funding_history.build(legs)
+        # Replace the just-captured settlement snapshots with the fresher venue
+        # history while these routes are still known live.
+        if leaders:
+            funding_radar.refresh(leaders)
         _log(
             f"venue funding history: {len(windows)} of {len(set(legs))} legs "
             f"in {time.monotonic() - started:.1f}s"

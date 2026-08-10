@@ -137,6 +137,12 @@ def test_ordinary_chat_is_not_a_query(text):
     assert telegram_queries.parse_query(text) is None
 
 
+def test_radar_command_needs_no_token():
+    assert telegram_queries.parse_query("/radar") == telegram_queries.Query(
+        kind="radar", symbol=""
+    )
+
+
 @pytest.mark.parametrize(
     "raw",
     ["../../etc/passwd", "<script>alert(1)</script>", "SIREN'; DROP TABLE users;--", "A" * 50],
@@ -237,6 +243,56 @@ def test_unknown_token_links_to_explicit_audit_filter(board_file):
         public_url="https://spreadarbitrage.ink",
     )
     assert "include_unverified=1" in body
+
+
+def test_cooled_token_falls_back_to_the_historical_funding_radar(board_file, monkeypatch):
+    monkeypatch.setattr(telegram_queries, "_rows_for", lambda *_args: [])
+    monkeypatch.setattr(
+        telegram_queries.funding_radar,
+        "routes_for",
+        lambda _symbol: [{
+            "token": "GUA",
+            "route_key": "GUA|Mexc|Spot|Aster|Futures",
+            "long_venue": "Mexc",
+            "short_venue": "Aster",
+            "executable_spread_pct": -0.12,
+            "radar_last_seen_age_min": 30,
+            "radar_windows": {"1d": 1.1, "7d": 2.4, "30d": 5.9},
+        }],
+    )
+
+    body = telegram_queries.render(
+        telegram_queries.Query("spread", "GUA"),
+        board_path=board_file,
+        public_url="https://spreadarbitrage.ink",
+    )
+
+    assert "historical funding radar" in body
+    assert "No client-visible route" in body
+    assert "+1.10%" in body and "+2.40%" in body and "+5.90%" in body
+    assert "last basis -0.12%" in body
+    assert "not a current entry quote" in body
+
+
+def test_radar_command_lists_retained_leaders(board_file, monkeypatch):
+    monkeypatch.setattr(
+        telegram_queries.funding_radar,
+        "routes_for",
+        lambda *_args, **_kwargs: [{
+            "token": "GUA",
+            "radar_windows": {"1d": 1.1, "7d": 2.4, "30d": 5.9},
+        }],
+    )
+
+    body = telegram_queries.render(
+        telegram_queries.Query("radar", ""),
+        board_path=board_file,
+        public_url="https://spreadarbitrage.ink",
+    )
+
+    assert "Funding radar" in body and "GUA" in body
+    assert "+1.10%" in body and "+5.90%" in body
+    assert "/funding?rank=1d" in body
 
 
 def test_server_full_client_universe_atomically_replaces_bot_snapshot(monkeypatch):

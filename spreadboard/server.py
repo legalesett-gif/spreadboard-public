@@ -41,6 +41,7 @@ from spreadboard import (  # noqa: E402
     crypto_watcher,
     executor_boundary,
     fair_price,
+    funding_radar,
     historical_spreads,
     intel,
     live,
@@ -5234,13 +5235,9 @@ def render_funding_windows(route: dict[str, Any] | None, route_key: Any) -> str:
     # thirty days where our samples hold about eighty-six hours, and each entry
     # is a payment that really happened. Our samples remain the fallback for a
     # leg whose venue publishes no history.
-    venue_windows = venue_funding_history.route_windows(route or {})
-    sampled = market_history.load_funding_windows().get(str(route_key or "")) or {}
     cells = []
     for label in ("1d", "7d", "30d"):
-        value = venue_windows.get(label)
-        if value is None:
-            value = (sampled.get(label) or {}).get("net")
+        value = funding_radar.window_value(route or {}, label)
         if value is None:
             cells.append(f'<span class="funding-window unknown"><em>{label}</em><strong>—</strong></span>')
         else:
@@ -5250,6 +5247,85 @@ def render_funding_windows(route: dict[str, Any] | None, route_key: Any) -> str:
                 f"<strong>{fmt_signed_pct(value, digits=2)}</strong></span>"
             )
     return f'<div class="funding-window-strip" title="Carry actually realised over each window">{"".join(cells)}</div>'
+
+
+def _historical_funding_groups(
+    current_groups: list[dict[str, Any]],
+    *,
+    route_kind: str,
+    window: str,
+    limit: int,
+    symbol: str | None = None,
+) -> list[dict[str, Any]]:
+    """Union live groups with retained leaders, ranked on the chosen window.
+
+    ``Now`` never calls this function.  Historical routes are separate radar
+    records and remain visibly non-live, so retention cannot weaken any current
+    funding, freshness, book, identity, or deliverability gate.
+    """
+    groups: dict[str, dict[str, Any]] = {}
+    live_keys: set[str] = set()
+    for original in current_groups:
+        group = dict(original)
+        routes = []
+        for original_route in original.get("routes") or []:
+            route = dict(original_route)
+            route["radar_historical"] = False
+            routes.append(route)
+            if route.get("route_key"):
+                live_keys.add(str(route["route_key"]))
+        group["routes"] = routes
+        groups[str(group.get("token") or "").upper()] = group
+
+    for route in funding_radar.routes_for(symbol, route_kind=route_kind, window=window):
+        key = str(route.get("route_key") or "")
+        value = funding_radar.window_value(route, window)
+        # The radar is for opportunities which paid.  Negative historical
+        # carry remains queryable in raw history but should not displace a
+        # positive farm from this bounded client list.
+        if key in live_keys or value is None or value <= 0:
+            continue
+        token = str(route.get("token") or "").upper()
+        if not token:
+            continue
+        group = groups.setdefault(
+            token,
+            {
+                "token": token,
+                "token_name": route.get("token_name") or "Metadata pending",
+                "href": route.get("href") or f"/markets?q={quote(token)}&view=table",
+                "venues": sorted(
+                    value
+                    for value in (route.get("long_venue"), route.get("short_venue"))
+                    if value
+                ),
+                "route_kinds": [route.get("route_kind")],
+                "routes": [],
+            },
+        )
+        group["routes"].append(route)
+
+    ranked: list[dict[str, Any]] = []
+    for group in groups.values():
+        routes = group.get("routes") or []
+        candidates = [
+            (funding_radar.window_value(route, window), route)
+            for route in routes
+        ]
+        candidates = [(value, route) for value, route in candidates if value is not None]
+        if not candidates:
+            continue
+        candidates.sort(key=lambda item: float(item[0]), reverse=True)
+        best_value, best = candidates[0]
+        group["best_funding_route"] = best
+        group["best_funding_window_pct"] = best_value
+        group["route_count"] = len(routes)
+        group["routes"] = [route for _value, route in candidates] + [
+            route for route in routes if all(route is not item[1] for item in candidates)
+        ]
+        ranked.append(group)
+    ranked.sort(key=lambda group: float(group.get("best_funding_window_pct") or float("-inf")), reverse=True)
+    return ranked[: max(1, min(100, int(limit)))]
 
 
 def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
@@ -5284,15 +5360,26 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
     if selected_window not in {value for value, _ in FUNDING_RANK_TABS}:
         selected_window = "now"
     if selected_window != "now":
-        def realised(group: dict[str, Any]) -> float:
-            best = group.get("best_funding_route") or {}
-            value = venue_funding_history.route_windows(best).get(selected_window)
-            # A group we have no settled figure for sorts last rather than
-            # jumping to the top on a zero.
-            return value if value is not None else float("-inf")
-
-        funding_groups = sorted(funding_groups, key=realised, reverse=True)
+        funding_groups = _historical_funding_groups(
+            funding_groups,
+            route_kind=farm_kinds[selected_farm],
+            window=selected_window,
+            limit=int(_query_first(query, "limit") or 25),
+            symbol=_query_first(data_query, "q"),
+        )
     summary = market_data.get("summary") or {}
+    displayed_assets = (
+        len(funding_groups) if selected_window != "now" else summary.get("matching_tokens")
+    )
+    displayed_largest = (
+        max(
+            (float(group.get("best_funding_window_pct")) for group in funding_groups if group.get("best_funding_window_pct") is not None),
+            default=None,
+        )
+        if selected_window != "now"
+        else summary.get("max_abs_funding_24h_pct")
+    )
+    displayed_largest_label = "Largest 24h" if selected_window in {"now", "1d"} else f"Largest {selected_window}"
     api_health_data = (market_data.get("source_health") or {}).get("canonical_api") or {}
     tabs = [
         ("futures-futures", "Futures-Futures"),
@@ -5306,7 +5393,7 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
         <div>
           <span class="page-kicker">Funding</span>
           <h1>Paired carry farms</h1>
-          <p>Funding is ranked as a hedge pair, never as a floating single contract. Expand a token to compare both legs, settled 24h carry, payout cadence, basis, and alerts.</p>
+          <p>Funding is ranked as a hedge pair, never as a floating single contract. Now stays strictly live; 24h, 7d, and 30d retain cooled leaders as a clearly labelled research radar.</p>
         </div>
         <div class="terminal-live-box">
           <span>{'Live' if market_data.get('ok') else 'Updating'}</span>
@@ -5325,10 +5412,11 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
             for value, label in FUNDING_RANK_TABS
         )}
       </nav>
+      {('<p class="funding-radar-note"><strong>Historical radar:</strong> cooled rows remain discoverable for 30 days. Their rate and basis are the last live observation, not a current entry quote.</p>' if selected_window != 'now' else '')}
       <section class="terminal-tape funding-tape" aria-label="Funding summary">
-        {render_market_metric('Assets', summary.get('matching_tokens'), 'unique tokens')}
+        {render_market_metric('Assets', displayed_assets, 'radar tokens' if selected_window != 'now' else 'unique tokens')}
         {render_market_metric('Funding pairs', summary.get('matching_rows'), 'live venue routes')}
-        {render_market_metric('Largest 24h', fmt_signed_pct(summary.get('max_abs_funding_24h_pct'), digits=3), 'absolute paired carry')}
+        {render_market_metric(displayed_largest_label, fmt_signed_pct(displayed_largest, digits=3), 'settled paired carry' if selected_window != 'now' else 'absolute paired carry')}
         {render_market_metric('Largest matched basis', fmt_pct(summary.get('max_depth_weighted_spread_pct')), '$50 VWAP')}
       </section>
       <section class="funding-terminal-panel">
@@ -5350,12 +5438,18 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
 
 def render_funding_token_group(group: dict[str, Any]) -> str:
     best = group.get("best_funding_route") or group.get("best_route") or {}
+    historical = bool(best.get("radar_historical"))
     funding_24h = (
-        best.get("funding_24h_pct")
+        funding_radar.window_value(best, "1d")
+        if historical
+        else best.get("funding_24h_pct")
         if best.get("funding_24h_pct") is not None
         else best.get("funding_projected_24h_pct")
     )
     funding_basis = (
+        "last live observation"
+        if historical
+        else
         "settled 24h"
         if best.get("funding_24h_pct") is not None
         else "24h at current rate"
@@ -5368,17 +5462,22 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
         if best.get("route_key")
         else f"/charts?token={quote(str(group.get('token') or ''))}"
     )
+    status_badge = (
+        f'<span class="funding-radar-badge">Cooled now · seen {fmt_age(best.get("radar_last_seen_age_min"))} ago</span>'
+        if historical
+        else '<span class="funding-live-badge">Live now</span>'
+    )
     return f"""
-    <details class="funding-token-group" data-route-key="{h(best.get('route_key') or '')}">
+    <details class="funding-token-group {'historical-radar' if historical else ''}" data-route-key="{h(best.get('route_key') or '')}">
       <summary>
         <div class="asset-identity">
           <span class="asset-monogram">{h(str(group.get('token') or '?')[:2])}</span>
-          <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best funding-pair chart">{h(group.get('token'))}</a><em>{h(name)}</em></span>
+          <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best funding-pair chart">{h(group.get('token'))}</a><em>{h(name)}</em>{status_badge}</span>
         </div>
         <div><span>Best farm</span><strong>{h(best.get('long_venue'))} → {h(best.get('short_venue'))}</strong></div>
         <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
         <div><span>Payouts</span><strong>{h(funding_cadence_pair(best))}</strong></div>
-        <div><span>Entry basis</span><strong data-live-spread>{fmt_pct(best.get('executable_spread_pct'))}</strong></div>
+        <div><span>{'Last basis' if historical else 'Entry basis'}</span><strong data-live-spread>{fmt_pct(best.get('executable_spread_pct'))}</strong></div>
         <div><span>Realised</span>{render_funding_windows(best, best.get('route_key'))}</div>
         <div><span>Pairs</span><strong>{h(group.get('route_count') or 0)}</strong></div>
         <span class="funding-chevron" aria-hidden="true">⌄</span>
@@ -5391,12 +5490,18 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
 
 
 def render_funding_pair(row: dict[str, Any]) -> str:
+    historical = bool(row.get("radar_historical"))
     funding_24h = (
-        row.get("funding_24h_pct")
+        funding_radar.window_value(row, "1d")
+        if historical
+        else row.get("funding_24h_pct")
         if row.get("funding_24h_pct") is not None
         else row.get("funding_projected_24h_pct")
     )
     funding_basis = (
+        "last live observation"
+        if historical
+        else
         "settled"
         if row.get("funding_24h_pct") is not None
         else "at current rate"
@@ -5404,13 +5509,13 @@ def render_funding_pair(row: dict[str, Any]) -> str:
         else "history unavailable"
     )
     return f"""
-    <article class="funding-pair-row" data-route-key="{h(row.get('route_key') or '')}">
+    <article class="funding-pair-row {'historical-radar' if historical else ''}" data-route-key="{h(row.get('route_key') or '')}">
       <div><span>Long</span>{render_exchange_link(row, 'long', include_market_type=True)}<em>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)} · {h(funding_interval_label(row.get('long_funding_interval_hours'), row.get('long_funding_interval_assumed')))}</em></div>
       <div><span>Short</span>{render_exchange_link(row, 'short', include_market_type=True)}<em>{fmt_signed_pct(row.get('short_funding_pct'), digits=4)} · {h(funding_interval_label(row.get('short_funding_interval_hours'), row.get('short_funding_interval_assumed')))}</em></div>
       <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)} · {h(funding_cadence_pair(row))}</em></div>
       <div><span>Basis / VWAP</span><strong data-live-spread>{fmt_pct(row.get('executable_spread_pct'))}</strong><em>{fmt_pct(row.get('depth_weighted_spread_pct'))}</em></div>
-      <div><span>Updated</span><strong>{fmt_age(row.get('age_min'))}</strong></div>
-      <div class="route-actions">{render_alert_draft_button(row, alert_type='funding', compact=True)}<a href="/pair/{h(board.route_key_url(str(row.get('route_key') or '')))}">Details</a><a href="/charts?route_key={h(board.route_key_url(str(row.get('route_key') or '')))}">Chart</a></div>
+      <div><span>{'Last seen' if historical else 'Updated'}</span><strong>{fmt_age(row.get('radar_last_seen_age_min') if historical else row.get('age_min'))}</strong></div>
+      <div class="route-actions">{'' if historical else render_alert_draft_button(row, alert_type='funding', compact=True)}{'' if historical else f'<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a>'}<a href="/charts?route_key={h(board.route_key_url(str(row.get('route_key') or '')))}">Chart</a></div>
     </article>
     """
 
@@ -12102,6 +12207,8 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .funding-window-tabs a {{ font-size: 11px; padding: 3px 9px; border-radius: 999px; text-decoration: none;
   background: rgba(255,255,255,0.05); color: inherit; }}
 .funding-window-tabs a.active {{ background: #7dd3c0; color: #04211b; font-weight: 700; }}
+.funding-radar-note {{ margin: 8px 0 2px; padding: 8px 11px; border: 1px solid rgba(250,204,21,.28); border-radius: 7px; background: rgba(250,204,21,.06); color: var(--terminal-muted); font-size: 11px; }}
+.funding-radar-note strong {{ color: #facc15; }}
 .funding-window-strip {{ display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 5px; align-items: stretch; width: 100%; min-width: 0; }}
 .funding-window {{ display: flex; flex-direction: column; gap: 1px; padding: 2px 6px; border-radius: 6px;
   background: rgba(255,255,255,0.04); line-height: 1.15; min-width: 0; }}
@@ -13397,6 +13504,11 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 .token-board-title {{ padding: 2px 2px 8px; }}
 .token-group-list, .funding-group-list {{ display: grid; gap: 7px; }}
 .token-route-group, .funding-token-group {{ min-width: 0; border: 1px solid var(--terminal-line); border-radius: 7px; background: var(--terminal-row); overflow: hidden; }}
+.funding-token-group.historical-radar {{ border-color: rgba(250,204,21,.3); background: linear-gradient(90deg,rgba(250,204,21,.035),var(--terminal-row) 24%); }}
+.funding-radar-badge, .funding-live-badge {{ display: block; width: fit-content; margin-top: 4px; padding: 2px 6px; border-radius: 999px; font-size: 9px; font-style: normal; font-weight: 700; letter-spacing: .02em; }}
+.funding-radar-badge {{ color: #facc15; background: rgba(250,204,21,.10); border: 1px solid rgba(250,204,21,.24); }}
+.funding-live-badge {{ color: #4ade80; background: rgba(74,222,128,.08); border: 1px solid rgba(74,222,128,.18); }}
+.funding-pair-row.historical-radar {{ border-left: 2px solid rgba(250,204,21,.45); }}
 .token-route-group[open], .funding-token-group[open] {{ border-color: rgba(31,184,165,.58); }}
 .token-route-summary, .funding-token-group > summary {{ list-style: none; cursor: pointer; }}
 .token-route-summary::-webkit-details-marker, .funding-token-group > summary::-webkit-details-marker {{ display: none; }}

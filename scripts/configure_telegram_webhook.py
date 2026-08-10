@@ -53,6 +53,7 @@ def main() -> int:
                 {"command": "token", "description": "Spread view for a token"},
                 {"command": "spread", "description": "Spread across all parsed venues"},
                 {"command": "funding", "description": "Funding rate and APR per route"},
+                {"command": "radar", "description": "Retained 24h / 7d / 30d funding leaders"},
                 {"command": "transfer", "description": "Deposit / withdrawal rails per venue"},
             ],
         },
@@ -67,6 +68,7 @@ def main() -> int:
                 {"command": "token", "description": "Spread view for a token"},
                 {"command": "spread", "description": "Spread across all parsed venues"},
                 {"command": "funding", "description": "Funding rate and APR per route"},
+                {"command": "radar", "description": "Retained 24h / 7d / 30d funding leaders"},
                 {"command": "transfer", "description": "Deposit / withdrawal rails per venue"}
             ],
         },
