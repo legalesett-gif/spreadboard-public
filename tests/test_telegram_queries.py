@@ -98,11 +98,18 @@ def board_file(tmp_path, monkeypatch, request):
         ("$S", "spread", "S"),
         ("$4", "spread", "4"),
         ("$1INCH", "spread", "1INCH"),
+        ("$1000000BABYDOGE", "spread", "1000000BABYDOGE"),
         ("$龙虾", "spread", "龙虾"),
         ("@spreadarbitragesubscription_bot 4", "spread", "4"),
         ("@spreadarbitragesubscription_bot 龙虾", "spread", "龙虾"),
         ("/token 4", "spread", "4"),
+        ("/token 1000000BABYDOGE", "spread", "1000000BABYDOGE"),
         ("/token 龙虾", "spread", "龙虾"),
+        (
+            "@spreadarbitragesubscription_bot 1000000BABYDOGE",
+            "spread",
+            "1000000BABYDOGE",
+        ),
     ],
 )
 def test_recognised_triggers(text, kind, symbol):
@@ -138,7 +145,7 @@ def test_symbol_is_sanitised(raw):
     """Whatever a member types becomes a bounded, inert token string."""
     query = telegram_queries.parse_query(f"/spread {raw}")
     assert query is not None
-    assert len(query.symbol) <= 12
+    assert len(query.symbol) <= telegram_queries.MAX_SYMBOL_LENGTH
     assert all(character.isalnum() or character in "._-" for character in query.symbol)
 
 

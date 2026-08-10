@@ -32,12 +32,17 @@ MAX_ROWS = 8
 COOLDOWN_SECONDS = 60.0
 PUBLIC_URL_ENV = "SPREADBOARD_PUBLIC_URL"
 
-# $TICKER, or an explicit command. Scanner symbols are 1-12 characters and can
-# start with a digit (for example 1INCH). A purely numeric cashtag is accepted
+# $TICKER, or an explicit command. Scanner symbols can be longer than ordinary
+# tickers (for example 1000000BABYDOGE), so keep a bounded 32-character ceiling
+# rather than truncating a live symbol. They can start with a digit (for example
+# 1INCH). A purely numeric cashtag is accepted
 # only when it is the whole message, so ordinary prose such as "I paid $4" is
 # not mistaken for a token query while the real one-character token ``$4`` is
 # still reachable.
-CASHTAG = re.compile(r"(?:^|\s)\$([\w.-]{1,12})\b", re.UNICODE)
+MAX_SYMBOL_LENGTH = 32
+CASHTAG = re.compile(
+    rf"(?:^|\s)\$([\w.-]{{1,{MAX_SYMBOL_LENGTH}}})\b", re.UNICODE
+)
 COMMANDS = {"/spread": "spread", "/funding": "funding", "/transfer": "transfer", "/token": "spread"}
 VIEW_LABELS = {"spread": "Spread", "funding": "Funding", "transfer": "Deposits / Withdrawals"}
 # Bare intent words, accepted alongside a cashtag ("$SIREN funding").
@@ -97,7 +102,9 @@ def parse_query(text: str, *, bot_username: str = "") -> Query | None:
             return None
         return Query(kind=COMMANDS[head], symbol=_normalise(symbol))
     if mentioned:
-        candidates = re.findall(r"\b[\w.-]{1,12}\b", raw, re.UNICODE)
+        candidates = re.findall(
+            rf"\b[\w.-]{{1,{MAX_SYMBOL_LENGTH}}}\b", raw, re.UNICODE
+        )
         symbol = next(
             (
                 value
@@ -120,7 +127,7 @@ def _normalise(symbol: str) -> str:
         character
         for character in str(symbol).upper()
         if character.isalnum() or character in "._-"
-    )[:12]
+    )[:MAX_SYMBOL_LENGTH]
 
 
 def allow(chat_id: int, query: Query, *, now: float | None = None) -> bool:
