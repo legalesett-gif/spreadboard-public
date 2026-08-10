@@ -594,6 +594,15 @@ def test_large_cex_dislocation_requires_exact_public_contract_identity() -> None
     assert reasons == ["mirage_guard:high_dislocation_exact_identity_required"]
 
 
+def test_guarded_routes_are_badged_by_default_and_can_be_hidden(monkeypatch) -> None:
+    """The client/bot default must not silently erase a whole new token."""
+    monkeypatch.delenv("SPREADBOARD_HIDE_GUARDED_ROWS", raising=False)
+    assert api_spreads._hide_guarded_rows() is False
+
+    monkeypatch.setenv("SPREADBOARD_HIDE_GUARDED_ROWS", "1")
+    assert api_spreads._hide_guarded_rows() is True
+
+
 def test_large_cex_dislocation_survives_exact_contract_match() -> None:
     reasons = api_spreads._route_mirage_reasons(
         raw={

@@ -1871,7 +1871,13 @@ def _dex_contract_mirage_reasons(
 
 def _hide_guarded_rows() -> bool:
     """Whether identity-unverified rows are dropped instead of badged."""
-    return str(os.environ.get("SPREADBOARD_HIDE_GUARDED_ROWS", "1")).strip().lower() in {
+    # The product policy is to keep plausible, fresh routes visible and mark
+    # unresolved identity with ``mirage_guarded``/``?``.  The stricter
+    # price-ratio, book-quality, instrument and deliverability checks below
+    # still apply when ``include_unverified`` is false.  Defaulting this flag
+    # to true accidentally removed every route for newly listed tokens such as
+    # GUA from both the member board and the Telegram snapshot.
+    return str(os.environ.get("SPREADBOARD_HIDE_GUARDED_ROWS", "0")).strip().lower() in {
         "1", "true", "yes", "on",
     }
 
