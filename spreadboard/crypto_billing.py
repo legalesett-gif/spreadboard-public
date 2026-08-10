@@ -23,7 +23,7 @@ import os
 import sqlite3
 from typing import Any
 
-from . import accounts
+from . import accounts, affiliates
 
 
 class CryptoBillingError(RuntimeError):
@@ -287,13 +287,26 @@ def create_invoice(
                 connection.commit()
                 return _invoice_dict(row)
 
+        offer = affiliates.invoice_offer(
+            connection,
+            user_id,
+            tier=tier,
+            # "20% off the first month" means one month's value, even when the
+            # first crypto prepayment buys 90 or 365 days.
+            monthly_list_amount_cents=periods[30],
+        )
+        discount = int(offer["discount_cents"] or 0)
+        discounted_amount = max(0, list_amount - discount)
         taken = [int(row["expected_amount_cents"]) for row in open_rows]
-        slot, expected = _allocate_amount(taken, list_amount)
+        slot, expected = _allocate_amount(taken, discounted_amount)
         cursor = connection.execute(
-            "INSERT INTO crypto_invoices (user_id, period_days, subscription_tier, list_amount_cents, slot_index, "
-            "expected_amount_cents, status, created_at, expires_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)",
-            (user_id, period_days, tier, list_amount, slot, expected, now_iso, expires_iso),
+            "INSERT INTO crypto_invoices (user_id, period_days, subscription_tier, list_amount_cents, "
+            "discount_cents, affiliate_partner_id, slot_index, expected_amount_cents, status, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+            (
+                user_id, period_days, tier, list_amount, discount,
+                offer["partner_id"], slot, expected, now_iso, expires_iso,
+            ),
         )
         connection.commit()
         row = connection.execute(
@@ -307,6 +320,7 @@ def create_invoice(
 def _invoice_dict(row: sqlite3.Row) -> dict[str, Any]:
     settings = config()
     amount_cents = int(row["expected_amount_cents"])
+    discount_cents = int(row["discount_cents"] or 0)
     return {
         "id": int(row["id"]),
         "user_id": int(row["user_id"]),
@@ -316,6 +330,11 @@ def _invoice_dict(row: sqlite3.Row) -> dict[str, Any]:
         "amount_cents": amount_cents,
         "amount_display": f"{amount_cents / 100:.2f}",
         "list_amount_cents": int(row["list_amount_cents"]),
+        "list_amount_display": f"{int(row['list_amount_cents']) / 100:.2f}",
+        "discount_cents": discount_cents,
+        "discount_display": f"{discount_cents / 100:.2f}",
+        "discounted_list_amount_cents": int(row["list_amount_cents"]) - discount_cents,
+        "affiliate_partner_id": row["affiliate_partner_id"],
         "slot_index": int(row["slot_index"]),
         "tolerance_display": f"{TOLERANCE_CENTS / 100:.2f}",
         "receiving_address": settings.receiving_address,
@@ -459,6 +478,7 @@ def record_transfer(
             "subscription_tier = ?, updated_at = ? WHERE id = ?",
             (expires_at, str(chosen["subscription_tier"]), now_iso, user_id),
         )
+        affiliates.record_settled_commission(connection, chosen, settled_at=moment)
         connection.commit()
     finally:
         connection.close()
@@ -486,12 +506,14 @@ def settle_manually(
     now_iso = accounts._utc_iso(moment)
     connection = accounts._connect(db_path)
     try:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             "SELECT * FROM crypto_invoices WHERE id = ?", (invoice_id,)
         ).fetchone()
         if row is None:
             raise CryptoBillingError("invoice_not_found")
         if str(row["status"]) == "paid":
+            connection.commit()
             return {"resolution": "already_paid", "invoice_id": invoice_id}
         user = connection.execute(
             "SELECT * FROM users WHERE id = ?", (int(row["user_id"]),)
@@ -508,6 +530,7 @@ def settle_manually(
             "subscription_tier = ?, updated_at = ? WHERE id = ?",
             (expires_at, str(row["subscription_tier"]), now_iso, int(row["user_id"])),
         )
+        affiliates.record_settled_commission(connection, row, settled_at=moment)
         connection.commit()
     finally:
         connection.close()

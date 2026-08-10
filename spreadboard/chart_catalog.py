@@ -1,4 +1,4 @@
-"""Broad public CEX market catalogue for user-selected spread charts."""
+"""Public CEX and identity-verified DEX markets for user-selected charts."""
 
 from __future__ import annotations
 
@@ -14,12 +14,14 @@ import tempfile
 from typing import Any
 
 from spreadboard.fast_quotes import NATIVE_FUTURES_VENUES, NATIVE_SPOT_VENUES, VENUE_IDS
+from spreadarb.api_discovery.identity import load_watchlist
 
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_PATH = RUNTIME_DIR / "chart_market_catalog.json"
 STABLE_QUOTES = {"USD", "USDC", "USDT"}
+DEX_WATCHLIST_PATH = ROOT / "data" / "api_discovery_watchlist.json"
 
 
 def refresh(path: Path | str = DEFAULT_PATH, *, workers: int = 4) -> dict[str, Any]:
@@ -61,6 +63,9 @@ def refresh(path: Path | str = DEFAULT_PATH, *, workers: int = 4) -> dict[str, A
                     "error": type(exc).__name__,
                     "catalogued_at": previous_generated_at if retained else None,
                 }
+    dex_markets = dex_market_entries()
+    markets.extend(dex_markets)
+    health["OKX DEX|Spot"] = {"status": "ok", "markets": len(dex_markets)}
     markets.sort(key=lambda item: (item["token"], item["venue"], item["market_type"], item["symbol"]))
     payload = {
         "ok": bool(markets),
@@ -95,8 +100,45 @@ def load(path: Path | str = DEFAULT_PATH) -> dict[str, Any]:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"ok": False, "generated_at": None, "count": 0, "token_count": 0, "markets": [], "health": {}}
-    return payload if isinstance(payload, dict) else {"ok": False, "markets": []}
+        payload = {"ok": False, "generated_at": None, "count": 0, "token_count": 0, "markets": [], "health": {}}
+    if not isinstance(payload, dict):
+        payload = {"ok": False, "markets": []}
+    # DEX identities are a small, local allowlist and must not wait for the
+    # slower multi-venue CEX catalogue job. Merging on read makes a deployed
+    # identity immediately usable even when the persisted catalogue predates
+    # the code release.
+    dex_markets = dex_market_entries()
+    markets = [item for item in payload.get("markets") or [] if isinstance(item, dict)]
+    known = {
+        (
+            str(item.get("token") or ""), str(item.get("venue") or ""),
+            str(item.get("market_type") or ""), str(item.get("symbol") or ""),
+            str(item.get("dex_chain") or ""), str(item.get("dex_contract") or "").casefold(),
+        )
+        for item in markets
+    }
+    for item in dex_markets:
+        key = (
+            item["token"], item["venue"], item["market_type"], item["symbol"],
+            item["dex_chain"], item["dex_contract"].casefold(),
+        )
+        if key not in known:
+            markets.append(item)
+            known.add(key)
+    markets.sort(key=lambda item: (
+        str(item.get("token") or ""), str(item.get("venue") or ""),
+        str(item.get("market_type") or ""), str(item.get("symbol") or ""),
+    ))
+    health = dict(payload.get("health") or {})
+    health["OKX DEX|Spot"] = {"status": "ok", "markets": len(dex_markets)}
+    return {
+        **payload,
+        "ok": bool(markets),
+        "count": len(markets),
+        "token_count": len({item.get("token") for item in markets if item.get("token")}),
+        "markets": markets,
+        "health": health,
+    }
 
 
 def custom_route_key(
@@ -125,14 +167,15 @@ def route_from_key(route_key: str) -> dict[str, Any] | None:
         encoded = route_key.split(":", 1)[1]
         payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
         token = str(payload["token"]).upper()
-        long_leg = _validated_leg(payload["long"])
-        short_leg = _validated_leg(payload["short"])
+        long_leg = _validated_leg(payload["long"], token=token)
+        short_leg = _validated_leg(payload["short"], token=token)
         long_multiplier = _validated_multiplier(payload.get("long_multiplier", 1.0))
         short_multiplier = _validated_multiplier(payload.get("short_multiplier", 1.0))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
     route_kind = _route_kind(long_leg, short_leg)
-    return {
+    dex_leg = next((leg for leg in (long_leg, short_leg) if _is_dex_leg(leg)), None)
+    result = {
         "route_key": route_key,
         "token": token,
         "route_kind": route_kind,
@@ -155,6 +198,20 @@ def route_from_key(route_key: str) -> dict[str, Any] | None:
         },
         "blockers": ["custom_chart_research_only"],
     }
+    if dex_leg is not None:
+        result["dex_chain"] = dex_leg["dex_chain"]
+        result["dex_contract"] = dex_leg["dex_contract"]
+        result["notes"]["identity"] = {
+            side: {
+                "chain_id": leg.get("dex_chain"),
+                "token_address": leg.get("dex_contract"),
+                "venue": leg["venue"],
+                "market_type": leg["market_type"],
+            }
+            for side, leg in (("long", long_leg), ("short", short_leg))
+            if _is_dex_leg(leg)
+        }
+    return result
 
 
 def _load_venue(venue: str, market_type: str) -> list[dict[str, Any]]:
@@ -206,16 +263,68 @@ def _catalog_market_supported(market: dict[str, Any], market_type: str) -> bool:
     return str(market.get("settle") or "").upper() in STABLE_QUOTES
 
 
+def dex_market_entries(path: Path | str = DEX_WATCHLIST_PATH) -> list[dict[str, Any]]:
+    """Every allowlisted DEX identity the quote path can price exactly."""
+    rows: list[dict[str, Any]] = []
+    for asset in load_watchlist(Path(path)).values():
+        if not asset.dex_enabled:
+            continue
+        for chain_id, contract in sorted((asset.evm_contracts or {}).items()):
+            rows.append({
+                "token": asset.token,
+                "venue": f"OKX DEX {chain_id}",
+                "market_type": "Spot",
+                "symbol": asset.token,
+                "market_id": str(contract),
+                "quote": "USDC",
+                "contract_size": 1.0,
+                "dex_chain": str(chain_id),
+                "dex_contract": str(contract).casefold(),
+            })
+        if asset.solana_mint:
+            rows.append({
+                "token": asset.token,
+                "venue": "OKX DEX 501",
+                "market_type": "Spot",
+                "symbol": asset.token,
+                "market_id": asset.solana_mint,
+                "quote": "USDC",
+                "contract_size": 1.0,
+                "dex_chain": "501",
+                "dex_contract": asset.solana_mint,
+            })
+    return rows
+
+
 def _compact_leg(leg: dict[str, Any]) -> dict[str, str]:
-    return {key: str(leg.get(key) or "") for key in ("venue", "market_type", "symbol")}
+    keys = ("venue", "market_type", "symbol", "dex_chain", "dex_contract")
+    return {key: str(leg.get(key) or "") for key in keys if leg.get(key)}
 
 
-def _validated_leg(value: Any) -> dict[str, str]:
+def _validated_leg(value: Any, *, token: str) -> dict[str, str]:
     if not isinstance(value, dict):
         raise ValueError("invalid_leg")
     leg = _compact_leg(value)
-    if leg["venue"] not in VENUE_IDS or leg["market_type"] not in {"Spot", "Futures"} or not leg["symbol"]:
+    if not leg.get("symbol") or leg.get("market_type") not in {"Spot", "Futures"}:
         raise ValueError("invalid_leg")
+    if leg["venue"] in VENUE_IDS:
+        return leg
+    known = next(
+        (
+            item for item in dex_market_entries()
+            if item["token"] == token
+            and item["venue"] == leg["venue"]
+            and item["market_type"] == leg["market_type"]
+            and item["symbol"] == leg["symbol"]
+            and item["dex_chain"] == leg.get("dex_chain")
+            and item["dex_contract"].casefold() == str(leg.get("dex_contract") or "").casefold()
+        ),
+        None,
+    )
+    if known is None:
+        raise ValueError("invalid_leg")
+    leg["dex_chain"] = str(known["dex_chain"])
+    leg["dex_contract"] = str(known["dex_contract"])
     return leg
 
 
@@ -246,11 +355,17 @@ def skhx_skhynix_route_key() -> str:
 
 def _route_kind(long_leg: dict[str, str], short_leg: dict[str, str]) -> str:
     types = {long_leg["market_type"], short_leg["market_type"]}
+    if _is_dex_leg(long_leg) or _is_dex_leg(short_leg):
+        return "DEX-FUTURES" if "Futures" in types else "DEX-SPOT"
     if types == {"Futures"}:
         return "FUTURES"
     if types == {"Spot"}:
         return "SPOT"
     return "FUTURES-SPOT"
+
+
+def _is_dex_leg(leg: dict[str, str]) -> bool:
+    return "okx dex" in str(leg.get("venue") or "").casefold()
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:

@@ -310,6 +310,81 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 observed_at TEXT NOT NULL,
                 PRIMARY KEY (tx_hash, log_index)
             );
+            CREATE TABLE IF NOT EXISTS affiliate_partners (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                slug TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                display_name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'paused', 'closed')),
+                discount_bps INTEGER NOT NULL DEFAULT 2000
+                    CHECK (discount_bps BETWEEN 0 AND 10000),
+                commission_bps INTEGER NOT NULL DEFAULT 5000
+                    CHECK (commission_bps BETWEEN 0 AND 10000),
+                attribution_days INTEGER NOT NULL DEFAULT 90
+                    CHECK (attribution_days BETWEEN 1 AND 3650),
+                payout_hold_days INTEGER NOT NULL DEFAULT 7
+                    CHECK (payout_hold_days BETWEEN 0 AND 365),
+                payout_asset TEXT NOT NULL DEFAULT 'USDT',
+                payout_network TEXT NOT NULL DEFAULT 'Arbitrum',
+                payout_destination TEXT NOT NULL DEFAULT '',
+                payout_updated_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS affiliate_clicks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                partner_id INTEGER NOT NULL REFERENCES affiliate_partners(id) ON DELETE CASCADE,
+                token_hash TEXT NOT NULL UNIQUE,
+                landing_path TEXT NOT NULL DEFAULT '/',
+                clicked_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                registered_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                registered_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS affiliate_attributions (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                partner_id INTEGER NOT NULL REFERENCES affiliate_partners(id) ON DELETE RESTRICT,
+                click_id INTEGER REFERENCES affiliate_clicks(id) ON DELETE SET NULL,
+                attributed_at TEXT NOT NULL,
+                first_payment_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS affiliate_payout_batches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                partner_id INTEGER NOT NULL REFERENCES affiliate_partners(id) ON DELETE RESTRICT,
+                period_start TEXT,
+                period_end TEXT,
+                amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
+                status TEXT NOT NULL DEFAULT 'draft'
+                    CHECK (status IN ('draft', 'paid', 'cancelled')),
+                payment_reference TEXT NOT NULL DEFAULT '',
+                payout_asset TEXT NOT NULL DEFAULT 'USDT',
+                payout_network TEXT NOT NULL DEFAULT 'Arbitrum',
+                payout_destination TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                paid_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS affiliate_commissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                partner_id INTEGER NOT NULL REFERENCES affiliate_partners(id) ON DELETE RESTRICT,
+                referred_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+                invoice_id INTEGER NOT NULL UNIQUE REFERENCES crypto_invoices(id) ON DELETE RESTRICT,
+                subscription_tier TEXT NOT NULL,
+                period_days INTEGER NOT NULL,
+                list_amount_cents INTEGER NOT NULL,
+                discount_cents INTEGER NOT NULL DEFAULT 0,
+                commission_base_cents INTEGER NOT NULL,
+                commission_bps INTEGER NOT NULL,
+                commission_cents INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'in_batch', 'paid', 'void')),
+                earned_at TEXT NOT NULL,
+                available_at TEXT NOT NULL,
+                payout_batch_id INTEGER REFERENCES affiliate_payout_batches(id) ON DELETE SET NULL,
+                paid_at TEXT,
+                void_reason TEXT NOT NULL DEFAULT ''
+            );
             CREATE TABLE IF NOT EXISTS saved_charts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -411,6 +486,10 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS crypto_invoices_open ON crypto_invoices(status, expected_amount_cents, expires_at);
             CREATE INDEX IF NOT EXISTS crypto_invoices_user ON crypto_invoices(user_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS crypto_payments_resolution ON crypto_payments(resolution, observed_at DESC);
+            CREATE INDEX IF NOT EXISTS affiliate_clicks_partner_time ON affiliate_clicks(partner_id, clicked_at DESC);
+            CREATE INDEX IF NOT EXISTS affiliate_attributions_partner_time ON affiliate_attributions(partner_id, attributed_at DESC);
+            CREATE INDEX IF NOT EXISTS affiliate_commissions_partner_status ON affiliate_commissions(partner_id, status, available_at);
+            CREATE INDEX IF NOT EXISTS affiliate_payouts_partner_time ON affiliate_payout_batches(partner_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS subscription_lifecycle_state
                 ON subscription_lifecycle_events(state, attempts, updated_at);
             """
@@ -425,6 +504,19 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
         })
         _ensure_columns(connection, "crypto_invoices", {
             "subscription_tier": "TEXT NOT NULL DEFAULT 'research_pro'",
+            "discount_cents": "INTEGER NOT NULL DEFAULT 0",
+            "affiliate_partner_id": "INTEGER",
+        })
+        _ensure_columns(connection, "affiliate_partners", {
+            "payout_asset": "TEXT NOT NULL DEFAULT 'USDT'",
+            "payout_network": "TEXT NOT NULL DEFAULT 'Arbitrum'",
+            "payout_destination": "TEXT NOT NULL DEFAULT ''",
+            "payout_updated_at": "TEXT",
+        })
+        _ensure_columns(connection, "affiliate_payout_batches", {
+            "payout_asset": "TEXT NOT NULL DEFAULT 'USDT'",
+            "payout_network": "TEXT NOT NULL DEFAULT 'Arbitrum'",
+            "payout_destination": "TEXT NOT NULL DEFAULT ''",
         })
         _ensure_columns(connection, "position_alert_rules", {
             "last_condition_met": "INTEGER NOT NULL DEFAULT 0",

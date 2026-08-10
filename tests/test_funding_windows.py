@@ -7,7 +7,6 @@ a farm that has paid for a week from a rate that spiked this morning. Ours said
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from pathlib import Path
 
@@ -107,7 +106,7 @@ def test_the_funding_lane_can_be_ranked_on_a_realised_window() -> None:
 
 def test_a_group_with_no_settled_figure_sorts_last(monkeypatch) -> None:
     """It must not reach the top on a missing value read as zero."""
-    from spreadboard import server, venue_funding_history
+    from spreadboard import venue_funding_history
 
     windows = {
         "A": {"7d": 2.0},
@@ -147,3 +146,18 @@ def test_presentation_parameters_do_not_fragment_the_cache() -> None:
 
     source = inspect.getsource(server.render_funding_page)
     assert 'k not in {"rank", "farm"}' in source
+
+
+def test_realised_windows_have_three_cells_and_an_explicit_summary_column() -> None:
+    """The page used to render eight fields into seven grid columns, which
+    pushed 7d/30d returns beyond the right edge at desktop widths."""
+    from spreadboard import server
+
+    page = server.shell("Funding", "funding", "")
+
+    assert "grid-template-columns: repeat(3,minmax(0,1fr))" in page
+    assert (
+        "grid-template-columns: minmax(150px,1.3fr) minmax(140px,1.15fr) "
+        "minmax(82px,.62fr) minmax(82px,.68fr) minmax(76px,.58fr) "
+        "minmax(174px,1.05fr) 46px 24px"
+    ) in page

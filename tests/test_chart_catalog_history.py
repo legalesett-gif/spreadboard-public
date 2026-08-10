@@ -43,6 +43,54 @@ def test_custom_chart_route_rejects_unknown_venue() -> None:
     assert chart_catalog.route_from_key(key) is None
 
 
+def test_identity_verified_dex_can_be_the_long_custom_chart_leg() -> None:
+    dex = next(
+        item for item in chart_catalog.dex_market_entries()
+        if item["token"] == "ESPORTS" and item["venue"] == "OKX DEX 56"
+    )
+    key = chart_catalog.custom_route_key(
+        "ESPORTS",
+        dex,
+        {"venue": "Mexc", "market_type": "Futures", "symbol": "ESPORTS/USDT:USDT"},
+    )
+
+    row = chart_catalog.route_from_key(key)
+
+    assert row is not None
+    assert row["route_kind"] == "DEX-FUTURES"
+    assert row["long_venue"] == "OKX DEX 56"
+    assert row["dex_chain"] == "56"
+    assert row["dex_contract"] == "0xf39e4b21c84e737df08e2c3b32541d856f508e48"
+    assert row["notes"]["identity"]["long"]["token_address"] == row["dex_contract"]
+
+
+def test_custom_dex_leg_rejects_a_ticker_with_the_wrong_contract() -> None:
+    key = chart_catalog.custom_route_key(
+        "ESPORTS",
+        {
+            "token": "ESPORTS",
+            "venue": "OKX DEX 56",
+            "market_type": "Spot",
+            "symbol": "ESPORTS",
+            "dex_chain": "56",
+            "dex_contract": "0x0000000000000000000000000000000000000000",
+        },
+        {"venue": "Mexc", "market_type": "Futures", "symbol": "ESPORTS/USDT:USDT"},
+    )
+
+    assert chart_catalog.route_from_key(key) is None
+
+
+def test_chart_builder_keeps_dex_identity_in_the_signed_route_key() -> None:
+    dex = next(item for item in chart_catalog.dex_market_entries() if item["token"] == "ESPORTS")
+    html = server.render_chart_builder_script([dex], None)
+
+    assert '"venue": "OKX DEX 56"' in html
+    assert '"dex_chain": "56"' in html
+    assert '"dex_contract": "0xf39e4b21c84e737df08e2c3b32541d856f508e48"' in html
+    assert "dex_chain:leg.dex_chain" in html
+
+
 def test_historical_spread_aligns_matching_candles_only() -> None:
     long_rows = [[0, 0, 0, 0, 100], [60_000, 0, 0, 0, 105], [120_000, 0, 0, 0, 110]]
     short_rows = [[0, 0, 0, 0, 110], [120_000, 0, 0, 0, 121]]

@@ -8,7 +8,7 @@ import threading
 import pytest
 
 from spreadboard import accounts, billing, portfolio
-from spreadboard.server import SpreadBoardHandler, SpreadBoardServer
+from spreadboard.server import TERMS_VERSION, SpreadBoardHandler, SpreadBoardServer
 
 
 def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,7 +129,7 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
                 "SELECT terms_version, immediate_access, ip_address, user_agent FROM subscription_consents"
             ).fetchone()
         assert consent is not None
-        assert consent[0] == "2026-08-09"
+        assert consent[0] == TERMS_VERSION
         assert consent[1] == 1
         assert consent[2]
 

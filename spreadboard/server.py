@@ -31,6 +31,7 @@ if __package__ in (None, ""):
 
 from spreadboard import (  # noqa: E402
     accounts,
+    affiliates,
     alerts,
     api_spreads,
     billing,
@@ -114,7 +115,7 @@ _PUBLIC_INTEL_FEED_URL = os.environ.get(
     "b348e50f10b0ad7de8b71fd619ea7151/raw/spreadboard-community-feed.json",
 )
 _PUBLIC_INTEL_FEED_CACHE: tuple[float, dict[str, Any]] | None = None
-TERMS_VERSION = "2026-08-09"
+TERMS_VERSION = "2026-08-10"
 
 # Exact server-side Research Pro gates.  Navigation is presentation only; these
 # checks are the authority that prevents a Scanner account from opening the
@@ -292,6 +293,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             "/terms",
             "/privacy",
             "/refunds",
+            "/affiliate-terms",
             "/guide",
             "/subscription",
             "/register",
@@ -340,7 +342,23 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     self.server.position_alert_worker,
                 )))
             elif parsed.path == "/pricing":
-                self._send_html(render_pricing_page())
+                self._send_html(render_pricing_page(query))
+            elif parsed.path.startswith("/r/"):
+                slug = parsed.path.removeprefix("/r/").strip("/")
+                existing_token = self._cookie_value(affiliates.REFERRAL_COOKIE)
+                if affiliates.valid_click_token(existing_token, db_path=self.server.accounts_path):
+                    self._redirect("/pricing?referred=1")
+                else:
+                    try:
+                        _partner, referral_token = affiliates.create_click(
+                            slug,
+                            landing_path="/pricing",
+                            db_path=self.server.accounts_path,
+                        )
+                    except ValueError:
+                        self._redirect("/pricing")
+                    else:
+                        self._redirect("/pricing?referred=1", referral_token=referral_token)
             elif parsed.path == "/telegram":
                 self._send_html(render_telegram_landing_page(self.server.board_path))
             elif parsed.path == "/methodology":
@@ -365,10 +383,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_guide_page())
             elif parsed.path == "/refunds":
                 self._send_html(render_legal_page("refunds"))
+            elif parsed.path == "/affiliate-terms":
+                self._send_html(render_legal_page("affiliate"))
             elif parsed.path == "/subscription":
                 self._send_html(render_subscription_page(query))
             elif parsed.path == "/account":
                 self._send_html(render_account_page(self.server.board_path, self.server.accounts_path))
+            elif parsed.path == "/partner":
+                self._send_html(render_partner_page(self._required_user(), self.server.accounts_path))
             elif parsed.path.startswith("/api/billing/crypto/qr/"):
                 user = self._required_user()
                 try:
@@ -487,6 +509,32 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                             db_path=self.server.accounts_path
                         ),
                     })
+            elif parsed.path == "/api/partner/summary":
+                user = self._required_user()
+                summary = affiliates.partner_summary(user.id, db_path=self.server.accounts_path)
+                if summary is None and not user.is_admin:
+                    self._send_json({"ok": False, "error": "partner_account_required"}, status=HTTPStatus.FORBIDDEN)
+                else:
+                    self._send_json({"ok": True, "summary": summary})
+            elif parsed.path == "/api/admin/partners":
+                user = self._required_user()
+                if not user.is_admin:
+                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                else:
+                    self._send_json({"ok": True, "partners": affiliates.list_partners(db_path=self.server.accounts_path)})
+            elif parsed.path.startswith("/api/admin/partners/") and parsed.path.endswith("/summary"):
+                user = self._required_user()
+                if not user.is_admin:
+                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                else:
+                    partner_id = int(parsed.path.split("/")[4])
+                    summary = affiliates.partner_summary_for_id(
+                        partner_id, db_path=self.server.accounts_path
+                    )
+                    self._send_json(
+                        {"ok": summary is not None, "summary": summary},
+                        status=HTTPStatus.OK if summary is not None else HTTPStatus.NOT_FOUND,
+                    )
             elif parsed.path == "/":
                 self._send_html(render_markets_page(
                     self.server.board_path, self.server.config, query,
@@ -631,6 +679,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self.send_error(HTTPStatus.NOT_FOUND, "not found")
         except (BrokenPipeError, ConnectionResetError):
             return
+        except PermissionError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.FORBIDDEN)
         except Exception as exc:  # noqa: BLE001
             try:
                 self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
@@ -746,6 +796,88 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         invoice_id, db_path=self.server.accounts_path
                     ),
                 })
+            elif parsed.path == "/api/admin/partners":
+                if not user.is_admin:
+                    raise PermissionError("admin_required")
+                clean_slug, clean_name = affiliates.validate_partner(
+                    slug=str(payload.get("slug") or ""),
+                    display_name=str(payload.get("display_name") or ""),
+                )
+                if affiliates.slug_exists(clean_slug, db_path=self.server.accounts_path):
+                    raise ValueError("partner_or_slug_already_exists")
+                created, token = accounts.create_invited_user(
+                    email=str(payload.get("email") or ""),
+                    display_name=clean_name,
+                    role="member",
+                    subscription_status="inactive",
+                    subscription_tier="free",
+                    subscription_days=1,
+                    db_path=self.server.accounts_path,
+                )
+                partner = affiliates.create_partner(
+                    int(created["id"]),
+                    slug=clean_slug,
+                    display_name=clean_name,
+                    db_path=self.server.accounts_path,
+                )
+                base = os.environ.get("SPREADBOARD_PUBLIC_URL", "https://spreadarbitrage.ink").strip().rstrip("/")
+                self._send_json(
+                    {
+                        "ok": True,
+                        "partner": partner,
+                        "setup_url": f"{base}/set-password?{urlencode({'token': token, 'next': '/partner'})}",
+                    },
+                    status=HTTPStatus.CREATED,
+                )
+            elif parsed.path == "/api/partner/payout-profile":
+                partner = affiliates.save_payout_profile(
+                    user.id,
+                    asset=str(payload.get("asset") or ""),
+                    network=str(payload.get("network") or ""),
+                    destination=str(payload.get("destination") or ""),
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json({"ok": True, "partner": partner})
+            elif parsed.path.startswith("/api/admin/partners/") and parsed.path.endswith("/status"):
+                if not user.is_admin:
+                    raise PermissionError("admin_required")
+                partner_id = int(parsed.path.split("/")[4])
+                partner = affiliates.update_partner_status(
+                    partner_id,
+                    status=str(payload.get("status") or ""),
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json({"ok": True, "partner": partner})
+            elif parsed.path.startswith("/api/admin/partners/") and parsed.path.endswith("/payouts"):
+                if not user.is_admin:
+                    raise PermissionError("admin_required")
+                partner_id = int(parsed.path.split("/")[4])
+                batch = affiliates.create_payout_batch(
+                    partner_id,
+                    note=str(payload.get("note") or "weekly payout"),
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json({"ok": True, "batch": batch}, status=HTTPStatus.CREATED)
+            elif parsed.path.startswith("/api/admin/payouts/") and parsed.path.endswith("/paid"):
+                if not user.is_admin:
+                    raise PermissionError("admin_required")
+                batch_id = int(parsed.path.split("/")[4])
+                batch = affiliates.mark_payout_paid(
+                    batch_id,
+                    payment_reference=str(payload.get("payment_reference") or ""),
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json({"ok": True, "batch": batch})
+            elif parsed.path.startswith("/api/admin/commissions/") and parsed.path.endswith("/void"):
+                if not user.is_admin:
+                    raise PermissionError("admin_required")
+                commission_id = int(parsed.path.split("/")[4])
+                commission = affiliates.void_commission(
+                    commission_id,
+                    reason=str(payload.get("reason") or ""),
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json({"ok": True, "commission": commission})
             elif parsed.path == "/api/positions":
                 position = accounts.create_position(user.id, payload, db_path=self.server.accounts_path)
                 self._send_json({"ok": True, "position": position}, status=HTTPStatus.CREATED)
@@ -941,6 +1073,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_json(alerts.send_user_test_alert(user.id, accounts_path=self.server.accounts_path))
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "not found")
+        except PermissionError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.FORBIDDEN)
         except (
             ValueError,
             billing.BillingError,
@@ -988,6 +1122,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         status: HTTPStatus = HTTPStatus.OK,
         session_token: str | None = None,
         clear_session: bool = False,
+        clear_referral: bool = False,
     ) -> None:
         payload = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(status)
@@ -1003,6 +1138,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 "Set-Cookie",
                 f"{accounts.SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
             )
+        if clear_referral:
+            self.send_header(
+                "Set-Cookie",
+                f"{affiliates.REFERRAL_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+            )
         self._send_security_headers()
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
@@ -1012,7 +1152,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.current_user = None
         if not accounts.auth_required():
             return True
-        public = path in {"/login", "/register", "/forgot-password", "/pricing", "/telegram", "/methodology", "/proof", "/executor", "/guide", "/terms", "/privacy", "/refunds", "/free", "/status", "/api/status", "/api/stream/free", "/set-password", "/api/set-password", "/api/request-password-reset", "/api/login", "/api/register", "/api/health", "/api/executor-boundary", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico", "/service-worker.js"} or path.startswith("/assets/")
+        public = path in {"/login", "/register", "/forgot-password", "/pricing", "/telegram", "/methodology", "/proof", "/executor", "/guide", "/terms", "/privacy", "/refunds", "/affiliate-terms", "/free", "/status", "/api/status", "/api/stream/free", "/set-password", "/api/set-password", "/api/request-password-reset", "/api/login", "/api/register", "/api/health", "/api/executor-boundary", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico", "/service-worker.js"} or path.startswith(("/assets/", "/r/"))
         token = self._session_token()
         user = accounts.user_for_session(token, self.server.accounts_path) if token else None
         self.current_user = user
@@ -1029,7 +1169,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             else:
                 self._redirect("/login?" + urlencode({"next": self.path[:500]}))
             return False
-        subscription_paths = {"/subscription", "/account", "/profile", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings", "/api/notifications/read", "/api/billing/checkout", "/api/billing/portal", "/api/billing/crypto/invoice", "/api/telegram/link", "/api/telegram/unlink"}
+        subscription_paths = {"/subscription", "/account", "/profile", "/partner", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings", "/api/notifications/read", "/api/billing/checkout", "/api/billing/portal", "/api/billing/crypto/invoice", "/api/telegram/link", "/api/telegram/unlink", "/api/partner/summary", "/api/partner/payout-profile"}
         # Paying members-to-be have no active subscription yet, so the checkout
         # and invoice-polling routes must stay reachable or nobody can ever buy.
         allowed_without_subscription = (
@@ -1037,7 +1177,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             or path.startswith("/api/billing/crypto/invoice/")
             or path.startswith("/api/billing/crypto/qr/")
         )
-        if not user.subscription_active and not allowed_without_subscription and not (user.is_admin and path.startswith("/api/account-users")):
+        admin_path = path.startswith(("/api/account-users", "/api/admin/")) or path == "/partner"
+        if not user.subscription_active and not allowed_without_subscription and not (user.is_admin and admin_path):
             if path.startswith("/api/"):
                 self._send_json({"ok": False, "error": "subscription_required"}, status=HTTPStatus.PAYMENT_REQUIRED)
             elif head_only:
@@ -1161,7 +1302,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         with self._login_attempts_lock:
             self._login_attempts.pop(key, None)
         self._send_json(
-            {"ok": True, "user": user.public_dict(), "csrf_token": user.csrf_token},
+            {
+                "ok": True,
+                "user": user.public_dict(),
+                "csrf_token": user.csrf_token,
+                "next": "/partner" if (
+                    not user.subscription_active
+                    and affiliates.partner_for_user(user.id, db_path=self.server.accounts_path)
+                ) else None,
+            },
             session_token=token,
         )
 
@@ -1175,12 +1324,17 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "too_many_registration_attempts"}, status=HTTPStatus.TOO_MANY_REQUESTS)
                 return
             self._login_attempts[key] = recent + [now]
-        accounts.create_user(
+        created = accounts.create_user(
             email=str(payload.get("email") or ""),
             display_name=str(payload.get("display_name") or ""),
             password=str(payload.get("password") or ""),
             subscription_status="inactive",
             subscription_days=1,
+            db_path=self.server.accounts_path,
+        )
+        affiliates.attach_registration(
+            int(created["id"]),
+            self._cookie_value(affiliates.REFERRAL_COOKIE),
             db_path=self.server.accounts_path,
         )
         user, token = accounts.login(
@@ -1190,7 +1344,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         )
         self._send_json(
             {"ok": True, "user": user.public_dict(), "csrf_token": user.csrf_token, "next": "/subscription"},
-            status=HTTPStatus.CREATED, session_token=token,
+            status=HTTPStatus.CREATED, session_token=token, clear_referral=True,
         )
 
     def _required_user(self) -> accounts.User:
@@ -1206,12 +1360,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             raise ValueError("invalid_csrf_token")
 
     def _session_token(self) -> str:
+        return self._cookie_value(accounts.SESSION_COOKIE)
+
+    def _cookie_value(self, name: str) -> str:
         cookie = SimpleCookie()
         try:
             cookie.load(self.headers.get("Cookie", ""))
         except Exception:
             return ""
-        morsel = cookie.get(accounts.SESSION_COOKIE)
+        morsel = cookie.get(name)
         return morsel.value if morsel is not None else ""
 
     def _read_payload(self) -> dict[str, Any]:
@@ -1231,10 +1388,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             raise ValueError("request_body_too_large")
         return self.rfile.read(declared) if declared else b""
 
-    def _redirect(self, location: str) -> None:
+    def _redirect(self, location: str, *, referral_token: str | None = None) -> None:
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_header("Location", location)
         self.send_header("Cache-Control", "no-store")
+        if referral_token:
+            self.send_header(
+                "Set-Cookie",
+                f"{affiliates.REFERRAL_COOKIE}={referral_token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={affiliates.DEFAULT_ATTRIBUTION_DAYS * 86400}",
+            )
         self._send_security_headers()
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -3687,6 +3849,10 @@ def render_set_password_page(query: dict[str, list[str]], accounts_path: Path) -
     time limited, and revokes every existing session when spent.
     """
     token = _query_first(query, "token") or ""
+    next_path = _query_first(query, "next") or "/"
+    if not next_path.startswith("/") or next_path.startswith("//"):
+        next_path = "/"
+    login_target = "/login" + ("?" + urlencode({"next": next_path}) if next_path != "/" else "")
     state = accounts.password_token_status(token, db_path=accounts_path) if token else None
     if state is None:
         inner = (
@@ -3752,7 +3918,7 @@ def render_set_password_page(query: dict[str, list[str]], accounts_path: Path) -
           const body = await response.json().catch(() => ({{}}));
           if(!response.ok || body.ok === false) throw new Error(body.error || 'Could not save');
           box.textContent = 'Saved. Taking you to sign in...';
-          setTimeout(() => window.location.assign('/login'), 900);
+          setTimeout(() => window.location.assign({json.dumps(login_target)}), 900);
         }}catch(error){{ box.textContent = error.message; }}
       }});
     }})();
@@ -5636,7 +5802,13 @@ def render_chart_builder_script(
     markets: list[dict[str, Any]],
     selected_row: dict[str, Any] | None,
 ) -> str:
-    route_data = [{key: row.get(key) for key in ("token", "venue", "market_type", "symbol", "quote")} for row in markets]
+    route_data = [
+        {key: row.get(key) for key in (
+            "token", "venue", "market_type", "symbol", "quote",
+            "dex_chain", "dex_contract",
+        )}
+        for row in markets
+    ]
     selected_long = (
         f"{selected_row.get('long_venue')}|{selected_row.get('long_market_type')}|{selected_row.get('long_market_symbol') or ((selected_row.get('notes') or {}).get('route_inputs') or {}).get('long', {}).get('symbol', '')}"
         if selected_row
@@ -5693,7 +5865,8 @@ def render_chart_builder_script(
         return tokenMarkets().find((item) => combo(item) === value) || null;
       }}
       function customKey(longLeg, shortLeg) {{
-        const payload=JSON.stringify({{token:token.value,long:{{market_type:longLeg.market_type,symbol:longLeg.symbol,venue:longLeg.venue}},short:{{market_type:shortLeg.market_type,symbol:shortLeg.symbol,venue:shortLeg.venue}}}});
+        const compact=(leg)=>Object.fromEntries(Object.entries({{market_type:leg.market_type,symbol:leg.symbol,venue:leg.venue,dex_chain:leg.dex_chain,dex_contract:leg.dex_contract}}).filter(([,value])=>value));
+        const payload=JSON.stringify({{token:token.value,long:compact(longLeg),short:compact(shortLeg)}});
         const bytes=new TextEncoder().encode(payload); let binary=''; bytes.forEach(byte=>binary+=String.fromCharCode(byte));
         return `CUSTOM:${{btoa(binary).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'')}}`;
       }}
@@ -7098,7 +7271,7 @@ button {{ width:100%; min-height:46px; border:0; border-radius:5px; background:v
 <script>
 document.getElementById('loginForm').addEventListener('submit', async (event) => {{
   event.preventDefault(); const form=event.currentTarget; const button=form.querySelector('button'); const error=form.querySelector('.login-error'); button.disabled=true; error.textContent='';
-  try {{ const response=await fetch('/api/login',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(Object.fromEntries(new FormData(form)))}}); const data=await response.json(); if(!response.ok) throw new Error(data.error==='too_many_login_attempts'?'Too many attempts. Try again later.':'Email or password is incorrect.'); window.location.assign({json.dumps(next_path)}); }}
+  try {{ const response=await fetch('/api/login',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(Object.fromEntries(new FormData(form)))}}); const data=await response.json(); if(!response.ok) throw new Error(data.error==='too_many_login_attempts'?'Too many attempts. Try again later.':'Email or password is incorrect.'); window.location.assign(data.next || {json.dumps(next_path)}); }}
   catch(exc) {{ error.textContent=exc.message || 'Sign in failed.'; }} finally {{ button.disabled=false; }}
 }});
 </script></body></html>"""
@@ -7426,9 +7599,17 @@ def render_telegram_landing_page(board_path: Path) -> str:
     return shell("Telegram - SpreadBoard", "telegram", body)
 
 
-def render_pricing_page() -> str:
+def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
+    query = query or {}
     user = accounts.current_user()
     current = _user_entitlement_tier(user) if user else "free"
+    referral_banner = (
+        '<aside class="referral-offer" role="status"><strong>Your channel discount is saved.</strong>'
+        '<span>Get 20% off the first 30-day membership value at crypto checkout. '
+        'For 90- or 365-day access, the discount is still one 30-day discount, not a recurring discount.</span></aside>'
+        if _query_first(query, "referred") == "1"
+        else ""
+    )
     cards = []
     for tier, plan in PLAN_CATALOG.items():
         if tier == "free":
@@ -7452,6 +7633,9 @@ def render_pricing_page() -> str:
       .pricing-intro {{ padding:34px 32px; border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
       .pricing-intro h1 {{ margin:8px 0 10px; font-size:clamp(30px,4.4vw,48px); line-height:1.05; }}
       .pricing-intro p {{ margin:0; color:var(--terminal-muted); font-size:16px; line-height:1.5; }}
+      .referral-offer {{ display:grid;gap:4px;padding:15px 18px;border:1px solid var(--accent);background:rgba(56,212,189,.09); }}
+      .referral-offer strong {{ color:var(--accent);font-size:15px; }}
+      .referral-offer span {{ color:var(--terminal-text);font-size:13px;line-height:1.45; }}
       .pricing-tiers {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }}
       .pricing-tier {{ display:grid; align-content:start; gap:14px; padding:25px; border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
       .pricing-tier.featured {{ border-color:var(--accent); box-shadow:inset 0 3px 0 var(--accent); }}
@@ -7474,6 +7658,7 @@ def render_pricing_page() -> str:
       @media(max-width:820px) {{ .pricing-tiers,.pricing-steps {{ grid-template-columns:1fr; }} .pricing-tier p {{ min-height:0; }} }}
     </style>
     <section class="pricing-page">
+      {referral_banner}
       <header class="pricing-intro"><span class="page-kicker">Membership</span><h1>Every spread, live.</h1><p>Start with proof, then pay once in USDC or USDT on Arbitrum for the access period you choose. No card, no automatic renewal. Scanner unlocks live discovery; Research Pro adds the full evidence and intelligence workspace.</p></header>
       <section class="pricing-tiers">{"".join(cards)}</section>
       <section class="pricing-block"><h2>What you get &mdash; and how to start</h2><div class="pricing-steps"><article><b>01</b><h3>Create your account</h3><p>Compare the free proof pages first, then sign in to choose Scanner or Research Pro.</p></article><article><b>02</b><h3>Pay the exact crypto invoice</h3><p>Select USDC or USDT on Arbitrum, scan the token-specific QR, and send the exact amount shown.</p></article><article><b>03</b><h3>Open your exact tier</h3><p>The invoice activates only the tier printed on it. Research Pro also unlocks the private Telegram forum.</p></article></div></section>
@@ -7513,6 +7698,7 @@ def render_crypto_checkout_panel() -> str:
       renewals extend access; tier changes are available after the current prepaid term ends.</p>
       <div class="crypto-periods">{periods}</div>
       <div class="crypto-invoice" data-crypto-invoice hidden>
+        <p class="crypto-discount" data-crypto-discount hidden></p>
         <div class="crypto-token-picker" data-crypto-token-picker aria-label="Payment token"></div>
         <div class="crypto-row"><span>Send exactly</span>
           <b data-crypto-amount></b>
@@ -7552,6 +7738,7 @@ def render_crypto_checkout_script() -> str:
 .crypto-period-days{font-size:.78rem;opacity:.7}
 .crypto-period[aria-pressed="true"]{outline:2px solid var(--terminal-accent,#2f9e79)}
 .crypto-token-picker{display:flex;gap:.5rem;flex-wrap:wrap;margin:.8rem 0}
+.crypto-discount{margin:.7rem 0;padding:.65rem .75rem;border:1px solid var(--terminal-accent,#2f9e79);background:rgba(56,212,189,.09);font-weight:700}
 .crypto-token-picker button[aria-pressed="true"]{outline:2px solid var(--terminal-accent,#2f9e79);background:var(--terminal-accent,#2f9e79);color:#07110e}
 .crypto-row{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin:.35rem 0}
 .crypto-row code,.crypto-row b{font-family:ui-monospace,Menlo,monospace;word-break:break-all}
@@ -7566,6 +7753,7 @@ def render_crypto_checkout_script() -> str:
 (function(){
   var root=document.querySelector('[data-crypto-checkout]'); if(!root) return;
   var box=root.querySelector('[data-crypto-invoice]');
+  var discountEl=root.querySelector('[data-crypto-discount]');
   var amountEl=root.querySelector('[data-crypto-amount]');
   var addrEl=root.querySelector('[data-crypto-address]');
   var contractEl=root.querySelector('[data-crypto-contract]');
@@ -7650,6 +7838,10 @@ def render_crypto_checkout_script() -> str:
         if(!d||!d.ok||!d.invoice){ errEl.textContent=d&&d.error==='tier_change_available_after_current_term'?'Your current prepaid tier stays exact until its end date. Renew the same tier now, or change tier after it expires.':((d&&d.error)||'Could not create an invoice.'); return; }
         invoice=d.invoice;
         addrEl.textContent=invoice.receiving_address;
+        if(Number(invoice.discount_cents||0)>0){
+          discountEl.hidden=false;
+          discountEl.textContent='Channel offer applied: -$'+invoice.discount_display+' (20% off the first 30-day membership value).';
+        }else{ discountEl.hidden=true; discountEl.textContent=''; }
         renderTokenPicker();
         box.hidden=false;
         statusEl.textContent='Waiting for payment\u2026 confirmed automatically once it lands.';
@@ -7975,6 +8167,7 @@ def render_legal_page(page: str) -> str:
                 ("Service", "SpreadBoard presents public-market data, calculated spreads, funding information, charts, alerts, and research tools. It does not execute trades, hold client assets, provide custody, or provide personalised investment advice."),
                 ("Market risk", "Prices, liquidity, funding, transfer status, and availability can change without notice. Displayed values may be delayed, incomplete, or unavailable. You remain responsible for checking any decision directly with the relevant venue."),
                 ("Membership", "Crypto membership is prepaid for the access period and tier shown before checkout and does not renew automatically. The exact invoice amount activates only that invoice's tier. Different-tier purchases become available after an active prepaid term ends. Access is personal and may not be resold, shared, scraped, or used to disrupt the service."),
+                ("Referral offers", "A qualifying affiliate referral gives a new member 20% off the first 30-day membership value only. If the first invoice prepays 90 or 365 days, the same single 30-day discount applies. The offer is attached at registration, cannot be combined, transferred, or exchanged for cash, and does not discount later renewals."),
                 ("Acceptable use", "Do not attempt to bypass access controls, overload data providers, reverse engineer credentials, or use the service for unlawful activity. We may suspend access needed to protect users, providers, or the service."),
                 ("Availability", "We aim to run continuously but do not guarantee uninterrupted access or that every venue, token, route, chart, or alert will always be available."),
                 ("Liability", "Nothing excludes liability that cannot lawfully be excluded. To the extent permitted by law, SpreadBoard is not liable for trading losses, missed opportunities, exchange failures, or decisions based on market information."),
@@ -7989,6 +8182,7 @@ def render_legal_page(page: str) -> str:
                 ("Payments", "Crypto checkout is watch-only. SpreadBoard stores the invoice amount, selected access period, receiving address, token and chain details, status, and matching public transaction hash. It never stores a wallet private key or seed phrase."),
                 ("Notifications", "Pushover user keys are encrypted at rest. Telegram and Pushover identifiers are used only to deliver the features you enable."),
                 ("Technical data", "We may retain security and operational records such as session identifiers, IP address, browser information, consent records, and service logs. Product analytics store only daily aggregate page-path counts, without IP addresses, cookies, referrers, or user agents."),
+                ("Affiliate attribution", "When you open a partner link, a first-party referral cookie stores an opaque token for up to 90 days. If you register while it is valid, we keep the partner, click, registration, invoice tier, settled amount, commission, and payout status needed to administer the offer and prevent fraud. Partners see aggregate visits and registrations plus invoice-level tier, amount, commission, and status; they do not receive your email address or wallet credentials."),
                 ("Sharing and retention", "Data is shared only with providers needed to run the service, such as blockchain RPC, Telegram, Pushover, hosting, and market-data providers. We keep it only as long as needed for service, security, accounting, and legal obligations."),
                 ("Your choices", f"You may request access, correction, deletion, or account closure through {support_url} or by contacting {support}. Some records may need to be retained for legal or fraud-prevention purposes."),
             ],
@@ -8004,16 +8198,156 @@ def render_legal_page(page: str) -> str:
                 ("How to request", f"Contact {support} or {support_url}. Include the account email, payment date, public transaction hash, and reason. Refunds, when due, are handled to a verified destination using the original payment asset where practical."),
             ],
         ),
+        "affiliate": (
+            "Affiliate Program Terms",
+            "The operating rules for SpreadBoard influencer links and weekly manual payouts.",
+            [
+                ("Appointment and link", "Each approved channel receives one named cabinet and one unique referral link. The link is personal to that partner and must not be transferred, impersonated, used for self-referrals, or placed through misleading, automated, spam, paid-search brand bidding, cookie stuffing, or duplicate-account activity."),
+                ("Attribution", "A valid first-party referral cookie lasts up to 90 days. The first qualifying referral is fixed when the new user registers and then persists for later manual crypto renewals. A registration or payment that cannot be linked by the system is not assigned retrospectively without reliable evidence."),
+                ("Subscriber discount", "The referred member receives 20% off the first 30-day membership value. On a longer first term, only one 30-day portion is discounted. Later renewals are charged at the then-current full price unless a separate written offer applies."),
+                ("Commission", "The partner earns 50% of subscription plan revenue actually settled for each attributed invoice, after the subscriber discount and excluding the small invoice-identification amount. Commission is created only after confirmed settlement and is shown in the partner ledger."),
+                ("Hold and payout", "Commission remains on hold for seven days, then enters the next weekly manual payout batch. The partner must maintain a valid USDC or USDT address on Arbitrum. Each batch freezes the amount, asset, network, and destination, and is marked paid with a transaction hash or other transfer reference."),
+                ("Reversals and records", "We may void unpaid commission connected to refunds, charge reversals, duplicate or fraudulent accounts, self-referrals, prohibited promotion, or calculation error, with a recorded reason. Paid batches and their transaction references remain in the ledger for accounting and dispute review."),
+                ("Marketing disclosure", "Partners must make the commercial relationship clear and conspicuous. For YouTube, disclose in the video and in the description near the link that the partner may receive commission. Promotions must be truthful, distinguish market research from investment advice, and must not promise profits or guaranteed returns."),
+                ("Tax and termination", "Partners are responsible for their own tax, legal, and reporting obligations and for accurate payout details. Either side may stop future promotion. Pausing or closing a link prevents new attribution; renewals from users already attributed continue to earn commission, subject to these terms, fraud review, and applicable law."),
+                ("Contact and version", f"Questions or payout disputes can be sent to {support} or {support_url}. Version {TERMS_VERSION}."),
+            ],
+        ),
     }
     title, intro, sections = pages.get(page, pages["terms"])
     body = f"""
     <section class="legal-page">
       <header><span class="page-kicker">SpreadBoard</span><h1>{h(title)}</h1><p>{h(intro)}</p></header>
       <main>{''.join(f'<section><h2>{h(heading)}</h2><p>{h(copy)}</p></section>' for heading, copy in sections)}</main>
-      <nav><a href="/pricing">Membership</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/refunds">Refunds</a></nav>
+      <nav><a href="/pricing">Membership</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/refunds">Refunds</a><a href="/affiliate-terms">Affiliate terms</a></nav>
     </section>
     """
     return shell(f"{title} - SpreadBoard", "pricing", body)
+
+
+def _fmt_cents(value: Any) -> str:
+    try:
+        return f"${int(value or 0) / 100:,.2f}"
+    except (TypeError, ValueError):
+        return "$0.00"
+
+
+def render_partner_page(
+    user: accounts.User,
+    accounts_path: Path | str = accounts.DEFAULT_DB_PATH,
+) -> str:
+    """Affiliate cabinet for a partner, and the operator's payout console."""
+    if user.is_admin:
+        body = f"""
+        <section class="partner-page" data-partner-admin>
+          <header class="terminal-heading partner-heading">
+            <div><span class="page-kicker">Affiliate operations</span><h1>Partner cabinet</h1><p>Create one identity and one link per YouTube channel. Registrations, paid crypto renewals, holds, and weekly payout batches remain auditable here.</p></div>
+            <div class="terminal-live-box live"><span>Policy</span><strong>20% / 50%</strong><em>first month / settled revenue</em></div>
+          </header>
+          <section class="partner-policy-grid">
+            <article><span>Attribution</span><strong>90 days</strong><p>The qualifying link is attached at registration and persists for every later renewal.</p></article>
+            <article><span>Subscriber offer</span><strong>20% once</strong><p>Applied to the first 30-day membership value, including when the first invoice prepays a longer term.</p></article>
+            <article><span>Commission</span><strong>Lifetime 50%</strong><p>Calculated from the actual plan amount collected after discount, excluding invoice-identification cents.</p></article>
+            <article><span>Payout</span><strong>Weekly</strong><p>Eligible after a seven-day hold; the operator records a wallet transfer reference when paid.</p></article>
+          </section>
+          <section class="partner-panel">
+            <div class="account-panel-head"><div><h2>Create influencer</h2><p>The influencer sets their own password using a single-use link. Never send or store a shared password.</p></div></div>
+            <form class="partner-create-form" data-partner-create>
+              <label><span>Channel / partner name</span><input name="display_name" required maxlength="100"></label>
+              <label><span>Login email</span><input name="email" type="email" required autocomplete="email"></label>
+              <label><span>Link slug</span><input name="slug" required pattern="[a-z0-9][a-z0-9-]{{2,63}}" placeholder="channel-name"></label>
+              <button class="sheet-button primary" type="submit">Create cabinet &amp; links</button>
+            </form>
+            <div class="account-empty-panel" data-partner-invite hidden></div>
+          </section>
+          <section class="partner-panel"><div class="account-panel-head"><div><h2>Partners and weekly payouts</h2><p>A draft freezes the eligible commissions in one batch. Mark it paid only after the crypto transfer is sent.</p></div></div><div class="partner-admin-list" data-partner-list><p>Loading partners…</p></div></section>
+          <p role="alert" data-partner-error></p>
+        </section>
+        <script type="application/json" id="partner-session">{json_script_data({'csrf_token': user.csrf_token})}</script>
+        {render_partner_admin_script()}
+        """
+        return shell("Affiliate operations - SpreadBoard", "partner", body)
+
+    summary = affiliates.partner_summary(user.id, db_path=accounts_path)
+    if summary is None:
+        body = """<section class="partner-page"><div class="account-empty-panel"><strong>No partner cabinet is assigned to this account.</strong><p>Ask the SpreadBoard operator for an influencer setup link.</p><a class="sheet-button" href="/pricing">Membership</a></div></section>"""
+        return shell("Partner cabinet - SpreadBoard", "partner", body)
+    partner = summary.get("partner") or {}
+    metrics = summary.get("metrics") or {}
+    now_iso = accounts._utc_iso()
+    commission_rows = []
+    for item in summary.get("commissions") or []:
+        status = str(item.get("status") or "pending")
+        if status == "pending" and str(item.get("available_at") or "") <= now_iso:
+            status = "payable"
+        commission_rows.append(
+            f'<tr><td>#{h(item.get("invoice_id"))}</td><td>{h(PLAN_CATALOG.get(str(item.get("subscription_tier")), {}).get("name") or item.get("subscription_tier"))}</td>'
+            f'<td>{h(item.get("period_days"))} days</td><td>{_fmt_cents(item.get("commission_base_cents"))}</td>'
+            f'<td><strong>{_fmt_cents(item.get("commission_cents"))}</strong></td><td><span class="partner-status {h(status)}">{h(status)}</span></td>'
+            f'<td>{h(item.get("earned_at"))}</td></tr>'
+        )
+    payout_rows = [
+        f'<tr><td>#{h(item.get("id"))}</td><td>{_fmt_cents(item.get("amount_cents"))}</td><td>{h(item.get("payout_asset") or "USDT")} on {h(item.get("payout_network") or "Arbitrum")}</td><td>{h(item.get("status"))}</td><td>{h(item.get("created_at"))}</td><td>{h(item.get("payment_reference") or "—")}</td></tr>'
+        for item in summary.get("payouts") or []
+    ]
+    body = f"""
+    <section class="partner-page">
+      <header class="terminal-heading partner-heading">
+        <div><span class="page-kicker">Influencer cabinet</span><h1>{h(partner.get('display_name'))}</h1><p>Your link, referred membership revenue, earned commission, and weekly payout history.</p></div>
+        <div class="terminal-live-box live"><span>Commission</span><strong>{int(partner.get('commission_bps') or 0) / 100:.0f}%</strong><em>of settled subscription revenue</em></div>
+      </header>
+      <section class="partner-link-card"><div><span>Your referral link</span><strong>{h(partner.get('referral_url'))}</strong><p>New users receive 20% off their first 30-day membership value. Your attribution continues on later manual renewals.</p></div><button class="sheet-button primary" type="button" data-copy-partner-link data-link="{h(partner.get('referral_url'))}">Copy link</button></section>
+      <section class="account-kpis partner-kpis">
+        {render_account_kpi('Link visits', metrics.get('clicks'), 'qualifying clicks')}
+        {render_account_kpi('Registrations', metrics.get('registrations'), 'accounts attributed')}
+        {render_account_kpi('Paying customers', metrics.get('customers'), 'at least one settlement')}
+        {render_account_kpi('Payable now', _fmt_cents(metrics.get('payable')), 'after seven-day hold')}
+      </section>
+      <section class="partner-policy-grid">
+        <article><span>On hold</span><strong>{_fmt_cents(metrics.get('on_hold'))}</strong><p>Settled, still inside the seven-day review window.</p></article>
+        <article><span>In payout batch</span><strong>{_fmt_cents(metrics.get('batched'))}</strong><p>Frozen into a weekly batch awaiting transfer.</p></article>
+        <article><span>Paid to date</span><strong>{_fmt_cents(metrics.get('paid'))}</strong><p>Recorded transfers with an operator reference.</p></article>
+      </section>
+      <section class="partner-panel"><div class="account-panel-head"><div><h2>Payout destination</h2><p>Weekly payouts are sent in your chosen stablecoin on Arbitrum. Check the address carefully; every payout batch freezes a snapshot of these details.</p></div></div>
+        <form class="partner-payout-form" data-partner-payout-profile>
+          <label><span>Asset</span><select name="asset"><option value="USDT" {'selected' if partner.get('payout_asset') == 'USDT' else ''}>USDT</option><option value="USDC" {'selected' if partner.get('payout_asset') == 'USDC' else ''}>USDC</option></select></label>
+          <label><span>Network</span><input name="network" value="Arbitrum" readonly></label>
+          <label><span>Wallet address</span><input name="destination" value="{h(partner.get('payout_destination') or '')}" placeholder="0x…" pattern="0x[a-fA-F0-9]{{40}}" required></label>
+          <button class="sheet-button primary" type="submit">Save payout details</button><output role="status"></output>
+        </form>
+      </section>
+      <section class="partner-panel"><div class="account-panel-head"><div><h2>Commission ledger</h2><p>One immutable earning per settled crypto invoice. Invoice-identification cents are not commissionable revenue.</p></div></div><div class="partner-table-wrap"><table class="partner-table"><thead><tr><th>Invoice</th><th>Tier</th><th>Term</th><th>Net revenue</th><th>Your 50%</th><th>Status</th><th>Earned</th></tr></thead><tbody>{''.join(commission_rows) or '<tr><td colspan="7">No paid referred subscriptions yet.</td></tr>'}</tbody></table></div></section>
+      <section class="partner-panel"><div class="account-panel-head"><div><h2>Payout history</h2><p>Payouts are processed weekly after the hold period.</p></div></div><div class="partner-table-wrap"><table class="partner-table"><thead><tr><th>Batch</th><th>Amount</th><th>Method</th><th>Status</th><th>Created</th><th>Reference</th></tr></thead><tbody>{''.join(payout_rows) or '<tr><td colspan="6">No payout batches yet.</td></tr>'}</tbody></table></div></section>
+      <section class="partner-panel partner-terms"><h2>Program rules</h2><p>Attribution is fixed when the referred person registers. Commission is 50% of subscription revenue actually collected after the first-month discount, for every settled renewal attributed to you. Refunds, reversals, fraud, self-referrals, duplicate accounts, or misleading promotions may be voided before payout. You must clearly disclose that you may receive commission, in the video and near the link, and must not promise returns. See the <a href="/affiliate-terms">Affiliate Terms</a>.</p></section>
+    </section>
+    <script type="application/json" id="partner-session">{json_script_data({'csrf_token': user.csrf_token})}</script>
+    <script>
+    document.querySelector('[data-copy-partner-link]')?.addEventListener('click',async event=>{{try{{await navigator.clipboard.writeText(event.currentTarget.dataset.link);event.currentTarget.textContent='Copied';}}catch(_error){{event.currentTarget.textContent='Copy failed';}}}});
+    document.querySelector('[data-partner-payout-profile]')?.addEventListener('submit',async event=>{{
+      event.preventDefault();const form=event.currentTarget,output=form.querySelector('output'),csrf=JSON.parse(document.getElementById('partner-session').textContent).csrf_token;output.textContent='Saving…';
+      try{{const response=await fetch('/api/partner/payout-profile',{{method:'POST',headers:{{'Content-Type':'application/json','X-CSRF-Token':csrf}},body:JSON.stringify(Object.fromEntries(new FormData(form)))}});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not save');output.textContent='Payout details saved.';}}
+      catch(error){{output.textContent=error.message||'Could not save payout details.';}}
+    }});
+    </script>
+    """
+    return shell("Partner cabinet - SpreadBoard", "partner", body)
+
+
+def render_partner_admin_script() -> str:
+    return """<script>
+    (()=>{
+      const root=document.querySelector('[data-partner-admin]');if(!root)return;
+      const csrf=JSON.parse(document.getElementById('partner-session').textContent||'{}').csrf_token;
+      const list=root.querySelector('[data-partner-list]'),error=root.querySelector('[data-partner-error]'),invite=root.querySelector('[data-partner-invite]');
+      const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+      const money=value=>new Intl.NumberFormat(undefined,{style:'currency',currency:'USD'}).format(Number(value||0)/100);
+      async function request(url,body){const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body||{})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Request failed');return data;}
+      async function load(){const response=await fetch('/api/admin/partners'),data=await response.json();list.innerHTML=(data.partners||[]).map(item=>`<article class="partner-admin-row" data-partner-id="${esc(item.id)}"><div><strong>${esc(item.display_name)} · ${esc(item.status)}</strong><span>${esc(item.email)}</span><a href="${esc(item.referral_url)}" target="_blank" rel="noopener">${esc(item.referral_url)}</a></div><div><span>${esc(item.registrations)} registrations · ${esc(item.customers)} customers</span><strong>${money(item.pending_cents)} pending · ${money(item.paid_cents)} paid</strong><span>${item.payout_destination?`${esc(item.payout_asset)} on ${esc(item.payout_network)} · ${esc(item.payout_destination)}`:'Payout wallet not set'}</span></div><div class="partner-row-actions"><button class="sheet-button" data-partner-detail>Invoice ledger</button><button class="sheet-button" data-partner-status="${item.status==='active'?'paused':'active'}">${item.status==='active'?'Pause link':'Reactivate link'}</button>${item.draft_batch_id?`<button class="sheet-button primary" data-mark-paid="${esc(item.draft_batch_id)}">Mark ${money(item.draft_batch_amount_cents)} paid</button>`:`<button class="sheet-button" data-create-payout ${item.payout_destination?'':'disabled'}>Build weekly payout</button>`}</div><div class="partner-admin-detail" data-partner-detail-body hidden></div></article>`).join('')||'<p>No partners yet.</p>';}
+      root.querySelector('[data-partner-create]')?.addEventListener('submit',async event=>{event.preventDefault();error.textContent='';try{const result=await request('/api/admin/partners',Object.fromEntries(new FormData(event.currentTarget)));invite.hidden=false;invite.innerHTML=`<strong>Partner created</strong><p><a href="${esc(result.partner.referral_url)}" target="_blank" rel="noopener">Referral link</a></p><p><a href="${esc(result.setup_url)}" target="_blank" rel="noopener">Single-use password setup link</a></p>`;try{await navigator.clipboard.writeText(result.setup_url);}catch(_error){}event.currentTarget.reset();await load();}catch(exc){error.textContent=exc.message;}});
+      list.addEventListener('click',async event=>{const row=event.target.closest('[data-partner-id]');if(!row)return;error.textContent='';try{if(event.target.matches('[data-partner-detail]')){const panel=row.querySelector('[data-partner-detail-body]');if(!panel.hidden){panel.hidden=true;return;}const response=await fetch(`/api/admin/partners/${row.dataset.partnerId}/summary`),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load ledger');const summary=data.summary||{},metrics=summary.metrics||{};panel.innerHTML=`<strong>${esc(metrics.clicks||0)} visits · ${esc(metrics.registrations||0)} registrations · ${esc(metrics.customers||0)} customers</strong><div class="partner-table-wrap"><table class="partner-table"><thead><tr><th>Invoice</th><th>Tier</th><th>Term</th><th>Net revenue</th><th>Commission</th><th>Status</th><th>Earned</th></tr></thead><tbody>${(summary.commissions||[]).map(item=>`<tr><td>#${esc(item.invoice_id)}</td><td>${esc(String(item.subscription_tier||'').replace('_',' '))}</td><td>${esc(item.period_days)} days</td><td>${money(item.commission_base_cents)}</td><td>${money(item.commission_cents)}</td><td>${esc(item.status)}</td><td>${esc(item.earned_at)}</td></tr>`).join('')||'<tr><td colspan="7">No settled referred invoices yet.</td></tr>'}</tbody></table></div>`;panel.hidden=false;return;}if(event.target.matches('[data-partner-status]'))await request(`/api/admin/partners/${row.dataset.partnerId}/status`,{status:event.target.dataset.partnerStatus});if(event.target.matches('[data-create-payout]'))await request(`/api/admin/partners/${row.dataset.partnerId}/payouts`,{note:'weekly payout'});if(event.target.matches('[data-mark-paid]')){const reference=prompt('Crypto transaction hash or payout reference');if(!reference)return;await request(`/api/admin/payouts/${event.target.dataset.markPaid}/paid`,{payment_reference:reference});}await load();}catch(exc){error.textContent=exc.message;}});
+      load().catch(exc=>error.textContent=exc.message);
+    })();
+    </script>"""
 
 
 def render_account_page(
@@ -8023,6 +8357,8 @@ def render_account_page(
     user = accounts.current_user()
     if user is None:
         return render_login_page({})
+    if not user.is_admin and affiliates.partner_for_user(user.id, db_path=accounts_path) is not None and not user.subscription_active:
+        return render_partner_page(user, accounts_path)
     data = api_portfolio(user, board_path, accounts_path)
     summary = data.get("summary") or {}
     positions = data.get("positions") or []
@@ -11379,6 +11715,8 @@ _MOBILE_SECONDARY_NAV: tuple[tuple[str, str, str], ...] = (
 def render_primary_nav(active: str, *, signed_in: bool) -> str:
     links = _MEMBER_NAV if signed_in else _VISITOR_NAV
     user = accounts.current_user()
+    if active == "partner" and user is not None and not user.is_admin:
+        links = (("partner", "/partner", "Partner cabinet"), ("pricing", "/pricing", "Membership"))
     if signed_in and user is not None and not _user_has_tier(user, "research_pro"):
         links = tuple(item for item in links if item[0] not in {"intel", "fair"})
     return "".join(
@@ -11419,8 +11757,9 @@ def _user_has_tier(user: Any, minimum: str) -> bool:
 
 def shell(title: str, active: str, body: str) -> str:
     user = accounts.current_user()
+    partner_cabinet = bool(user and active == "partner" and not user.is_admin)
     account_action = (
-        f'<a class="account-chip" href="/account"><span>{h(user.display_name)}</span><em>{h(PLAN_CATALOG.get(_user_entitlement_tier(user), PLAN_CATALOG["free"])["name"])}</em></a>'
+        f'<a class="account-chip" href="{"/partner" if partner_cabinet else "/account"}"><span>{h(user.display_name)}</span><em>{"Partner" if partner_cabinet else h(PLAN_CATALOG.get(_user_entitlement_tier(user), PLAN_CATALOG["free"])["name"])}</em></a>'
         f'<button class="logout-button" type="button" data-logout data-csrf="{h(user.csrf_token or "")}" aria-label="Sign out" title="Sign out">&#x21AA;</button>'
         if user
         else ''
@@ -11554,9 +11893,9 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .funding-window-tabs a {{ font-size: 11px; padding: 3px 9px; border-radius: 999px; text-decoration: none;
   background: rgba(255,255,255,0.05); color: inherit; }}
 .funding-window-tabs a.active {{ background: #7dd3c0; color: #04211b; font-weight: 700; }}
-.funding-window-strip {{ display: inline-flex; gap: 6px; align-items: stretch; }}
+.funding-window-strip {{ display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 5px; align-items: stretch; width: 100%; min-width: 0; }}
 .funding-window {{ display: flex; flex-direction: column; gap: 1px; padding: 2px 6px; border-radius: 6px;
-  background: rgba(255,255,255,0.04); line-height: 1.15; }}
+  background: rgba(255,255,255,0.04); line-height: 1.15; min-width: 0; }}
 .funding-window em {{ font-size: 9px; font-style: normal; opacity: 0.6; letter-spacing: 0.04em; }}
 .funding-window strong {{ font-size: 11px; font-variant-numeric: tabular-nums; }}
 .funding-window.positive strong {{ color: #4ade80; }}
@@ -12924,7 +13263,7 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 .funding-farm-tabs {{ display: flex; gap: 7px; padding: 7px; border: 1px solid var(--terminal-line); border-radius: 7px; background: var(--terminal-panel); }}
 .funding-farm-tabs a {{ min-height: 34px; display: inline-flex; align-items: center; padding: 0 12px; border-radius: 5px; color: var(--terminal-muted); font-size: 12px; font-weight: 900; }}
 .funding-farm-tabs a.active {{ background: var(--terminal-accent); color: #062f2b; }}
-.funding-token-group > summary {{ display: grid; grid-template-columns: minmax(180px,1.3fr) minmax(170px,1.2fr) 100px 100px 100px 62px 24px; gap: 10px; min-height: 70px; align-items: center; padding: 9px 12px; }}
+.funding-token-group > summary {{ display: grid; grid-template-columns: minmax(150px,1.3fr) minmax(140px,1.15fr) minmax(82px,.62fr) minmax(82px,.68fr) minmax(76px,.58fr) minmax(174px,1.05fr) 46px 24px; gap: 10px; min-height: 70px; align-items: center; padding: 9px 12px; }}
 .funding-token-group > summary > div:not(.asset-identity) {{ display: grid; gap: 3px; min-width: 0; }}
 .funding-token-group > summary > div:not(.asset-identity) span {{ color: var(--terminal-muted); font-size: 9px; text-transform: uppercase; }}
 .funding-token-group > summary > div:not(.asset-identity) strong {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }}
@@ -13181,6 +13520,40 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   .selected-chart-foot {{ min-height: 58px; }}
 }}
 .account-page {{ width:min(1480px,calc(100% - 36px)); margin:34px auto 70px; }}
+.partner-page {{ width:min(1320px,calc(100% - 36px)); margin:34px auto 70px; display:grid; gap:18px; }}
+.partner-heading {{ margin-bottom:0; }}
+.partner-policy-grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }}
+.partner-policy-grid article,.partner-panel,.partner-link-card {{ border:1px solid var(--terminal-line); background:var(--terminal-panel); padding:18px; }}
+.partner-policy-grid article {{ display:grid; gap:7px; }}
+.partner-policy-grid span {{ color:var(--terminal-muted); font-size:10px; font-weight:900; text-transform:uppercase; }}
+.partner-policy-grid strong {{ font-size:23px; }}
+.partner-policy-grid p,.partner-link-card p,.partner-terms p {{ margin:0; color:var(--terminal-muted); line-height:1.5; }}
+.partner-link-card {{ display:flex; align-items:center; justify-content:space-between; gap:24px; }}
+.partner-link-card>div {{ min-width:0; display:grid; gap:7px; }}
+.partner-link-card span {{ color:var(--terminal-muted); font-size:11px; font-weight:900; text-transform:uppercase; }}
+.partner-link-card strong {{ overflow-wrap:anywhere; color:var(--accent); font-size:18px; }}
+.partner-create-form {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)) auto; gap:12px; align-items:end; }}
+.partner-create-form label {{ display:grid; gap:6px; color:var(--terminal-muted); font-size:11px; font-weight:900; text-transform:uppercase; }}
+.partner-create-form input {{ min-height:40px; width:100%; border:1px solid var(--terminal-line); background:var(--terminal-row); color:var(--terminal-text); padding:8px; }}
+.partner-payout-form {{ display:grid;grid-template-columns:130px 160px minmax(260px,1fr) auto;gap:12px;align-items:end; }}
+.partner-payout-form label {{ display:grid;gap:6px;color:var(--terminal-muted);font-size:11px;font-weight:900;text-transform:uppercase; }}
+.partner-payout-form input,.partner-payout-form select {{ min-height:40px;width:100%;border:1px solid var(--terminal-line);background:var(--terminal-row);color:var(--terminal-text);padding:8px;font:inherit; }}
+.partner-payout-form output {{ grid-column:1/-1;min-height:18px;color:var(--terminal-muted);font-size:12px; }}
+.partner-admin-list {{ display:grid; gap:9px; }}
+.partner-admin-row {{ display:grid; grid-template-columns:minmax(260px,1fr) minmax(250px,.8fr) auto; gap:20px; align-items:center; padding:14px; border:1px solid var(--terminal-line); background:var(--terminal-row); }}
+.partner-admin-row>div {{ display:grid; gap:4px; }}
+.partner-admin-row span,.partner-admin-row a {{ color:var(--terminal-muted); font-size:12px; overflow-wrap:anywhere; }}
+.partner-admin-row a {{ color:var(--accent); }}
+.partner-row-actions {{ justify-items:end; }}
+.partner-admin-detail {{ grid-column:1/-1;display:grid;gap:10px;padding-top:14px;border-top:1px solid var(--terminal-line); }}
+.partner-admin-detail[hidden] {{ display:none; }}
+.partner-table-wrap {{ overflow-x:auto; }}
+.partner-table {{ min-width:820px; }}
+.partner-table td,.partner-table th {{ border-color:var(--terminal-line); }}
+.partner-status {{ display:inline-flex; padding:3px 7px; border-radius:999px; background:var(--terminal-panel-2); font-size:10px; font-weight:900; text-transform:uppercase; }}
+.partner-status.payable,.partner-status.paid {{ color:var(--green); }}
+.partner-status.void {{ color:var(--red); }}
+.partner-terms h2 {{ margin-top:0; }}
 .narrow-account {{ width:min(820px,calc(100% - 36px)); }}
 .account-heading {{ display:flex; justify-content:space-between; gap:24px; align-items:flex-start; }}
 .account-membership {{ min-width:180px; border:1px solid var(--terminal-line); padding:13px 15px; display:grid; gap:4px; background:var(--terminal-panel); }}
@@ -13215,7 +13588,9 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 .notification-list article {{ display:grid; grid-template-columns:180px 220px 1fr; gap:14px; }} .notification-list p {{ margin:0; color:var(--terminal-muted); }} .member-row {{ display:grid; grid-template-columns:1fr auto auto; gap:20px; margin-top:8px; }} .member-row div {{ display:grid; }} .member-row span,.member-row em {{ color:var(--terminal-muted); font-style:normal; }}
 .account-chip {{ display:grid; color:var(--terminal-shell-text); text-decoration:none; text-align:right; line-height:1.1; }} .account-chip em {{ color:var(--accent); font-size:10px; font-style:normal; text-transform:uppercase; }} .logout-button {{ width:38px; height:38px; border:1px solid rgba(255,255,255,.25); background:transparent; color:var(--terminal-shell-text); font-size:19px; cursor:pointer; }}
 @media(max-width:900px) {{ .account-kpis {{ grid-template-columns:repeat(2,1fr); }} .position-metrics {{ grid-template-columns:repeat(3,1fr); }} .position-legs {{ align-items:stretch; flex-direction:column; }} .account-chip,.logout-button {{ display:none; }} }}
+@media(max-width:900px) {{ .partner-policy-grid {{ grid-template-columns:1fr; }} .partner-create-form,.partner-payout-form {{ grid-template-columns:1fr 1fr; }} .partner-admin-row {{ grid-template-columns:1fr; }} .partner-row-actions {{ justify-items:start; }} }}
 @media(max-width:600px) {{ .account-heading {{ flex-direction:column; }} .account-membership {{ width:100%; }} .account-kpis {{ grid-template-columns:1fr 1fr; }} .position-metrics {{ grid-template-columns:1fr 1fr; }} .position-card header,.position-card footer {{ align-items:flex-start; flex-direction:column; }} .position-form-grid,.account-dialog [data-action-fields],.account-settings form,.member-create-form {{ grid-template-columns:1fr; }} .position-form-grid .wide {{ grid-column:auto; }} .notification-list article,.member-row {{ grid-template-columns:1fr; }} .member-row > * {{ min-width:0;overflow-wrap:anywhere; }} }}
+@media(max-width:600px) {{ .partner-create-form,.partner-payout-form {{ grid-template-columns:1fr; }} .partner-link-card {{ align-items:stretch; flex-direction:column; }} }}
 </style>
 </head>
 <body>

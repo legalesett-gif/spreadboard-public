@@ -15,7 +15,7 @@ import threading
 
 import pytest
 
-from spreadboard import accounts
+from spreadboard import accounts, server
 
 
 @pytest.fixture()
@@ -156,6 +156,16 @@ def test_password_setup_page_uses_the_product_form_layout(db: Path) -> None:
 
     assert 'data-password-setup' in page
     assert '.set-password-panel form' in page
+
+
+def test_partner_password_setup_returns_to_the_partner_cabinet(db: Path) -> None:
+    token = accounts.create_password_token(_user_id(db), purpose="invite", db_path=db)
+
+    page = server.render_set_password_page(
+        {"token": [token], "next": ["/partner"]}, db
+    )
+
+    assert 'window.location.assign("/login?next=%2Fpartner")' in page
     assert '@media(max-width:560px)' in page
 
 
