@@ -332,6 +332,17 @@ def _warm_payload(_board_path: Path | str) -> dict[str, Any]:
         return WARM_QUERY
 
 
+def client_visible_payload() -> dict[str, Any]:
+    """The last complete all-token snapshot shared by website and Telegram.
+
+    The payload is replaced atomically and treated as immutable.  Watchlist and
+    Portfolio can therefore join exact client-visible routes without paying a
+    new 20+ second board build or drifting from what ``$TOKEN`` returns.
+    """
+    with _WARM_QUERY_LOCK:
+        return WARM_QUERY
+
+
 def payload_status(*, now: float | None = None) -> dict[str, Any]:
     moment = time.time() if now is None else float(now)
     with _WARM_QUERY_LOCK:

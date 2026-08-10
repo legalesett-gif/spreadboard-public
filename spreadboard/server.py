@@ -277,6 +277,7 @@ class SpreadBoardServer(ThreadingHTTPServer):
         self.alert_watcher: alerts.AlertWatcher | None = None
         self.position_alert_worker: Any = None
         self.subscription_lifecycle_worker: Any = None
+        self.web_push_worker: Any = None
 
 
 class SpreadBoardHandler(BaseHTTPRequestHandler):
@@ -463,11 +464,21 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/notification-preferences":
                 user = self._required_user()
                 self._send_json({"ok": True, "preferences": accounts.notification_preferences(user.id, db_path=self.server.accounts_path)})
+            elif parsed.path == "/api/telegram/status":
+                user = self._required_user()
+                self._send_json({
+                    "ok": True,
+                    **accounts.telegram_link_status(user.id, db_path=self.server.accounts_path),
+                })
             elif parsed.path == "/api/web-push/status":
                 user = self._required_user()
                 self._send_json({
                     "ok": True,
                     **web_push.status(),
+                    "worker_running": bool(
+                        self.server.web_push_worker
+                        and self.server.web_push_worker.running
+                    ),
                     "subscription_count": accounts.web_push_subscription_count(
                         user.id, db_path=self.server.accounts_path
                     ),
@@ -495,14 +506,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 })
             elif parsed.path == "/api/account-users":
                 user = self._required_user()
-                if not user.is_admin:
-                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                if not user.can_manage_members:
+                    self._send_json({"ok": False, "error": "member_manager_required"}, status=HTTPStatus.FORBIDDEN)
                 else:
                     self._send_json({"ok": True, "users": accounts.list_users(db_path=self.server.accounts_path)})
             elif parsed.path == "/api/admin/analytics":
                 user = self._required_user()
-                if not user.is_admin:
-                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                if not user.can_manage_members:
+                    self._send_json({"ok": False, "error": "member_manager_required"}, status=HTTPStatus.FORBIDDEN)
                 else:
                     self._send_json({
                         "ok": True,
@@ -1012,8 +1023,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 count = accounts.mark_notifications_read(user.id, db_path=self.server.accounts_path)
                 self._send_json({"ok": True, "updated": count})
             elif parsed.path == "/api/account-users":
-                if not user.is_admin:
-                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                if not user.can_manage_members:
+                    self._send_json({"ok": False, "error": "member_manager_required"}, status=HTTPStatus.FORBIDDEN)
                 else:
                     password = str(payload.get("password") or "")
                     if password:
@@ -1047,8 +1058,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                             status=HTTPStatus.CREATED,
                         )
             elif parsed.path.startswith("/api/account-users/") and parsed.path.endswith("/invite"):
-                if not user.is_admin:
-                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                if not user.can_manage_members:
+                    self._send_json({"ok": False, "error": "member_manager_required"}, status=HTTPStatus.FORBIDDEN)
                 else:
                     target_id = int(parsed.path.split("/")[3])
                     token = accounts.create_password_token(
@@ -1059,8 +1070,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     base = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
                     self._send_json({"ok": True, "url": f"{base}/set-password?token={token}"})
             elif parsed.path.startswith("/api/account-users/") and parsed.path.endswith("/subscription"):
-                if not user.is_admin:
-                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                if not user.can_manage_members:
+                    self._send_json({"ok": False, "error": "member_manager_required"}, status=HTTPStatus.FORBIDDEN)
                 else:
                     target_id = int(parsed.path.split("/")[3])
                     updated = accounts.update_subscription(
@@ -1170,7 +1181,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             else:
                 self._redirect("/login?" + urlencode({"next": self.path[:500]}))
             return False
-        subscription_paths = {"/subscription", "/account", "/profile", "/partner", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings", "/api/notifications/read", "/api/billing/checkout", "/api/billing/portal", "/api/billing/crypto/invoice", "/api/telegram/link", "/api/telegram/unlink", "/api/partner/summary", "/api/partner/payout-profile"}
+        subscription_paths = {"/subscription", "/account", "/profile", "/partner", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings", "/api/notifications/read", "/api/billing/checkout", "/api/billing/portal", "/api/billing/crypto/invoice", "/api/telegram/link", "/api/telegram/unlink", "/api/telegram/status", "/api/partner/summary", "/api/partner/payout-profile"}
         # Paying members-to-be have no active subscription yet, so the checkout
         # and invoice-polling routes must stay reachable or nobody can ever buy.
         allowed_without_subscription = (
@@ -1179,7 +1190,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             or path.startswith("/api/billing/crypto/qr/")
         )
         admin_path = path.startswith(("/api/account-users", "/api/admin/")) or path == "/partner"
-        if not user.subscription_active and not allowed_without_subscription and not (user.is_admin and admin_path):
+        privileged_path = (user.is_admin and admin_path) or (
+            user.can_manage_members
+            and path.startswith(("/api/account-users", "/api/admin/analytics"))
+        )
+        if not user.subscription_active and not allowed_without_subscription and not privileged_path:
             if path.startswith("/api/"):
                 self._send_json({"ok": False, "error": "subscription_required"}, status=HTTPStatus.PAYMENT_REQUIRED)
             elif head_only:
@@ -2287,17 +2302,142 @@ def api_profile_shell(board_path: Path, query: dict[str, list[str]] | None = Non
 
 
 def api_watchlist_suggestions(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+    query = query or {}
     data = api_intel(board_path, query)
+    user = accounts.current_user()
+    try:
+        saved = accounts.list_watchlist(user.id) if user is not None else []
+    except sqlite3.OperationalError:
+        # Direct template/unit rendering may not have initialised an accounts
+        # database.  The HTTP server always does so before serving members.
+        saved = []
+    requested = []
+    for raw in query.get("symbols") or []:
+        requested.extend(str(raw).split(","))
+    symbols = []
+    for raw in [*saved, *requested]:
+        symbol = _clean_symbol(str(raw or ""))
+        if symbol and symbol not in symbols:
+            symbols.append(symbol)
+    if not symbols:
+        symbols = [
+            _clean_symbol(str(item.get("symbol") or ""))
+            for item in data.get("hot_symbols") or []
+            if isinstance(item, dict)
+        ][:12]
+    route_reality = _watchlist_market_context(board_path, symbols[:100])
+    profile_shell = dict(data.get("profile_shell") or {})
+    profile_shell["watchlist"] = saved
     return {
-        "ok": data.get("ok"),
-        "mode": "local_only_watchlist_shell",
+        "ok": True,
+        "mode": "account_watchlist_with_market_context",
         "filters": data.get("filters"),
         "source_freshness": data.get("source_freshness") or {},
-        "profile_shell": data.get("profile_shell") or {},
+        "profile_shell": profile_shell,
         "hot_symbols": data.get("hot_symbols") or [],
-        "route_reality": data.get("route_reality") or [],
+        "route_reality": route_reality,
         "alert_preview": data.get("alert_preview") or {},
     }
+
+
+def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict[str, Any]]:
+    """Join pins to live routes, retained funding leaders, and chart coverage."""
+    if not symbols:
+        return []
+    wanted = {str(symbol).upper() for symbol in symbols}
+    market = telegram_queries.client_visible_payload()
+    if not market:
+        market = api_spreads.load_spreads(
+            board_path=board_path,
+            include_stale=False,
+            include_unverified=False,
+            limit=None,
+            sort_by="edge",
+            direction="desc",
+        )
+    live_by_token: dict[str, list[dict[str, Any]]] = {symbol: [] for symbol in wanted}
+    for group in market.get("groups") or []:
+        token = str(group.get("token") or "").upper()
+        if token in live_by_token:
+            live_by_token[token].extend(
+                row for row in group.get("routes") or [] if isinstance(row, dict)
+            )
+    # Tests and a cold local process may only expose flat rows.
+    if not any(live_by_token.values()):
+        for row in market.get("rows") or []:
+            token = str(row.get("token") or "").upper()
+            if token in live_by_token:
+                live_by_token[token].append(row)
+    catalog_tokens = {
+        str(item.get("token") or "").upper()
+        for item in chart_catalog.load().get("markets") or []
+        if isinstance(item, dict)
+    }
+
+    def route_card(row: dict[str, Any], *, historical: bool) -> dict[str, Any]:
+        route_key = str(row.get("route_key") or "")
+        long_label = leg_market_label(row.get("long_venue"), row.get("long_market_type"))
+        short_label = leg_market_label(row.get("short_venue"), row.get("short_market_type"))
+        return {
+            "kind": route_kind_display(row.get("route_kind")),
+            "route_line": (
+                f"{row.get('long_venue') or '?'} {long_label} → "
+                f"{row.get('short_venue') or '?'} {short_label}"
+            ),
+            "pair_url": (
+                f"/charts?route_key={board.route_key_url(route_key)}"
+                if historical
+                else f"/pair/{board.route_key_url(route_key)}"
+            ),
+            "chart_url": f"/charts?route_key={board.route_key_url(route_key)}",
+            "open_spread_pct": row.get("executable_spread_pct"),
+            "funding_24h_pct": funding_radar.window_value(row, "1d")
+            if historical
+            else row.get("funding_24h_pct")
+            if row.get("funding_24h_pct") is not None
+            else row.get("funding_projected_24h_pct"),
+            "freshness": "cooled funding radar" if historical else row.get("freshness") or "live",
+            "identity_unresolved": bool(row.get("mirage_guarded")),
+        }
+
+    output = []
+    for symbol in symbols:
+        live = live_by_token.get(symbol, [])
+        retained = funding_radar.routes_for(symbol)
+        chosen = [route_card(row, historical=False) for row in live[:3]]
+        if len(chosen) < 3:
+            existing = {item.get("route_line") for item in chosen}
+            chosen.extend(
+                item
+                for item in (route_card(row, historical=True) for row in retained)
+                if item.get("route_line") not in existing
+            )
+        chosen = chosen[:3]
+        if live:
+            status = "live routes"
+        elif retained:
+            status = "cooled funding radar"
+        elif symbol in catalog_tokens:
+            status = "chart markets available"
+        else:
+            status = "no current market coverage"
+        next_actions = ["open live pair"] if live else ["open chart", "set alert"] if retained or symbol in catalog_tokens else ["keep watching"]
+        output.append({
+            "symbol": symbol,
+            "status": status,
+            "routes": chosen,
+            "best_board": chosen[0] if chosen else None,
+            "chart_url": f"/charts?token={quote(symbol)}",
+            "token_url": f"/token/{quote(symbol)}",
+            "top_blockers": [] if chosen else ["No executable route is live at this instant"],
+            "next_actions": next_actions,
+            "okx_dex_identity": (
+                "available"
+                if any("dex" in str(item.get("route_line") or "").casefold() for item in chosen)
+                else "not present in current matches"
+            ),
+        })
+    return output
 
 
 def api_position_suggestions(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
@@ -2306,16 +2446,24 @@ def api_position_suggestions(board_path: Path, query: dict[str, list[str]] | Non
     limit = max(1, min(50, int(_query_float(query, "limit", 20) or 20)))
     catalogue = chart_catalog.load()
     catalog_markets = [item for item in catalogue.get("markets") or [] if isinstance(item, dict)]
-    market = api_spreads.load_spreads(
-        board_path=board_path,
-        q=requested or None,
-        include_stale=False,
-        include_unverified=False,
-        limit=None,
-        sort_by="edge",
-        direction="desc",
-    )
-    live_rows = [item for item in market.get("rows") or [] if isinstance(item, dict)]
+    market = telegram_queries.client_visible_payload()
+    if not market:
+        market = api_spreads.load_spreads(
+            board_path=board_path,
+            q=requested or None,
+            include_stale=False,
+            include_unverified=False,
+            limit=None,
+            sort_by="edge",
+            direction="desc",
+        )
+    live_rows = [
+        row
+        for group in market.get("groups") or []
+        if isinstance(group, dict)
+        for row in group.get("routes") or []
+        if isinstance(row, dict)
+    ] or [item for item in market.get("rows") or [] if isinstance(item, dict)]
     tokens = sorted(
         {
             str(item.get("token") or "").upper()
@@ -2360,6 +2508,45 @@ def api_position_suggestions(board_path: Path, query: dict[str, list[str]] | Non
         for item in catalog_markets
         if requested and str(item.get("token") or "").upper() == requested
     ][:200]
+    existing_pairs = {
+        (route.get("long_venue"), route.get("long_symbol"), route.get("short_venue"), route.get("short_symbol"))
+        for route in routes
+    }
+    combinations = []
+    for long_leg in legs:
+        for short_leg in legs:
+            pair = (
+                long_leg.get("venue"), long_leg.get("symbol"),
+                short_leg.get("venue"), short_leg.get("symbol"),
+            )
+            if pair in existing_pairs or pair[:2] == pair[2:]:
+                continue
+            long_type = "DEX" if "dex" in str(long_leg.get("venue") or "").casefold() else long_leg.get("market_type")
+            short_type = "DEX" if "dex" in str(short_leg.get("venue") or "").casefold() else short_leg.get("market_type")
+            combinations.append({
+                "token": requested,
+                "route_key": "",
+                "route_kind": f"{str(long_type or '').upper()}-{str(short_type or '').upper()}",
+                "long_venue": long_leg.get("venue"),
+                "long_market_type": long_type,
+                "long_symbol": long_leg.get("symbol"),
+                "long_entry_price": None,
+                "short_venue": short_leg.get("venue"),
+                "short_market_type": short_type,
+                "short_symbol": short_leg.get("symbol"),
+                "short_entry_price": None,
+                "entry_spread_pct": None,
+                "funding_24h_pct": None,
+                "age_min": None,
+                "source": "chart catalogue",
+            })
+    combinations.sort(key=lambda item: (
+        0 if item.get("short_market_type") == "Futures" else 1,
+        0 if item.get("long_market_type") in {"DEX", "Spot"} else 1,
+        str(item.get("long_venue")),
+        str(item.get("short_venue")),
+    ))
+    routes.extend(combinations[: max(0, limit - len(routes))])
     return {
         "ok": bool(tokens or routes or legs),
         "query": requested,
@@ -3944,16 +4131,21 @@ def render_fair_price_page() -> str:
                     padding:5px 0; border:1px solid var(--terminal-line); }}
       .fair-side.long {{ color:var(--accent-ink); background:var(--accent); border-color:var(--accent); }}
       .fair-side.short {{ color:var(--terminal-text); }}
-      @media(max-width:820px) {{ .fair-row {{ grid-template-columns:1fr 1fr; }} .fair-token {{ grid-column:1 / -1; }} }}
+      .fair-usage {{ display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px; }}
+      .fair-usage article {{ padding:17px;border:1px solid var(--terminal-line);border-radius:8px;background:var(--terminal-panel); }}
+      .fair-usage span {{ color:var(--terminal-accent);font-weight:900; }}
+      .fair-usage strong {{ display:block;margin:7px 0; }}
+      .fair-usage p {{ margin:0;color:var(--terminal-muted);font-size:13px;line-height:1.5; }}
+      @media(max-width:820px) {{ .fair-row {{ grid-template-columns:1fr 1fr; }} .fair-token {{ grid-column:1 / -1; }} .fair-usage {{ grid-template-columns:1fr; }} }}
     </style>
     <section class="fair-page">
       <header class="terminal-heading">
         <div>
           <span class="page-kicker">Fair price</span>
-          <h1>Trading away from its own mark</h1>
-          <p>Not an arbitrage between venues &mdash; a contract against the fair price its own
-             exchange computes and liquidates against. Last below fair reads Long, above reads
-             Short. Thin and newly listed contracts drift furthest, so size to the volume shown.</p>
+          <h1>A contract versus its own reference price</h1>
+          <p>This is a mean-reversion scanner, not cross-exchange arbitrage. It compares a futures
+             contract's last trade with the mark, index or oracle reference its own venue uses.
+             Last below fair reads Long; last above fair reads Short.</p>
         </div>
         <div class="terminal-live-box {'live' if rows else 'unavailable'}">
           <span>{len(rows)} flagged</span>
@@ -3961,9 +4153,14 @@ def render_fair_price_page() -> str:
           <em>from the same sweep that prices the board</em>
         </div>
       </header>
+      <section class="fair-usage">
+        <article><span>1</span><strong>Find a meaningful gap</strong><p>Start with the largest gaps, then reject thin markets where one small trade can distort Last.</p></article>
+        <article><span>2</span><strong>Verify the reference</strong><p>Open the venue and check its mark/index composition, funding direction, book depth and next settlement.</p></article>
+        <article><span>3</span><strong>Plan mean reversion</strong><p>Below fair can favour a long and above fair can favour a short, but define invalidation and liquidation distance first.</p></article>
+      </section>
       <div class="fair-list">{body_rows or empty}</div>
-      <p class="free-note">Public market data, not advice. A gap can persist or widen, and a thin
-         contract can be hard to leave.</p>
+      <p class="free-note">“Fair” is the venue's reference, not guaranteed true value. A gap can
+         persist or widen, the index can lag, and a thin contract can be hard to leave. Public market data, not advice.</p>
     </section>
     """
     return shell("Fair price - SpreadBoard", "fair", body)
@@ -4816,15 +5013,24 @@ def funding_interval_label(hours: Any, assumed: Any = False) -> str:
 def funding_cadence_pair(row: dict[str, Any]) -> str:
     labels = []
     for side in ("long", "short"):
-        if row.get(f"{side}_market_type") != "Futures":
+        if not leg_pays_funding(row, side):
             continue
-        venue = row.get(f"{side}_venue") or side.title()
         cadence = funding_interval_label(
             row.get(f"{side}_funding_interval_hours"),
             row.get(f"{side}_funding_interval_assumed"),
         )
-        labels.append(f"{venue}: {cadence}")
+        if cadence not in labels:
+            labels.append(cadence)
     return " · ".join(labels) if labels else "no futures leg"
+
+
+def leg_pays_funding(row: dict[str, Any], side: str) -> bool:
+    """Only an actual derivatives leg can pay or receive periodic funding."""
+    venue = str(row.get(f"{side}_venue") or "")
+    return (
+        str(row.get(f"{side}_market_type") or "").casefold() == "futures"
+        and "dex" not in venue.casefold()
+    )
 
 
 def funding_24h_value(row: dict[str, Any]) -> float | None:
@@ -4833,7 +5039,7 @@ def funding_24h_value(row: dict[str, Any]) -> float | None:
 
 def funding_economic_label(value: Any, row: dict[str, Any]) -> str:
     if not any(
-        row.get(f"{side}_market_type") == "Futures"
+        leg_pays_funding(row, side)
         for side in ("long", "short")
     ):
         return "no futures funding"
@@ -4968,26 +5174,40 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
     brief = data.get("latest_brief") or {}
     profile = data.get("profile_shell") or {}
     alert_preview = data.get("alert_preview") or {}
+    community_source = next(
+        (
+            item for name, item in source.items()
+            if "telegram" in str(name).casefold() and isinstance(item, dict)
+        ),
+        {},
+    )
+    community_fresh = community_source.get("status") == "fresh"
+    source_notice = (
+        '<aside class="intel-source-notice live"><strong>Community source is current</strong><p>Structured token activity is joined to the current client-visible market snapshot. Read the route status before acting.</p></aside>'
+        if community_fresh
+        else '<aside class="intel-source-notice stale"><strong>Community connection is not live yet</strong><p>This page may contain a stale or limited bridge sample. Current routes, Funding, Charts and Watchlist remain usable; Telegram ingestion will not be enabled until the owner approves the privacy and retention design.</p></aside>'
+    )
     body = f"""
     <section class="intel-page" data-refresh="180">
       <div class="intel-hero">
         <div>
           <span class="page-kicker">Community Intel</span>
           <h1>What deserves attention now</h1>
-          <p>Telegram context, board reality, funding, D/W rails, and read-only alert previews in one local view.</p>
+          <p>An attention layer that joins community token activity to board routes, retained funding leaders and charts. It never proves a trade is executable.</p>
         </div>
         <div class="intel-actions">
           <a class="secondary" href="/arbitrage?kind=FUTURES">Arbitrage</a>
           <a class="secondary" href="/charts">Charts</a>
         </div>
       </div>
+      {source_notice}
       {render_change_digest(change_digest)}
       {render_action_queue(action_queue)}
       {render_intel_source_grid(source)}
       <section class="intel-layout">
         <main class="intel-main">
           <section class="intel-section">
-            <div class="panel-head flat"><div><h2>What's Hot</h2><p>Ranked from recent community and Telegram messages, DEX/funding signal, identity, liquidity, and matched market routes.</p></div></div>
+            <div class="panel-head flat"><div><h2>What's Hot</h2><p>Ranked only when the community source is current; source age and route status remain visible.</p></div></div>
             <div class="hot-grid">{''.join(render_hot_symbol(item) for item in hot[:12]) or '<p class="empty">No recent Telegram symbols matched this window.</p>'}</div>
           </section>
           <section class="intel-section">
@@ -5003,7 +5223,7 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
         </aside>
       </section>
       <section class="intel-section">
-        <div class="panel-head flat"><div><h2>Recent Feed</h2><p>Alerts, closes, momentum, and funding candidates from the local Telegram listener.</p></div></div>
+        <div class="panel-head flat"><div><h2>Recent Feed</h2><p>Sanitised structured activity from the connected source. When the source is stale or disconnected, this section is historical context only.</p></div></div>
         <div class="feed-columns">
           {render_event_column('Alerts', recent.get('alerts') or [])}
           {render_event_column('Closes', recent.get('closes') or [])}
@@ -5508,10 +5728,22 @@ def render_funding_pair(row: dict[str, Any]) -> str:
         if funding_24h is not None
         else "history unavailable"
     )
+    long_funding = (
+        f'<em>{fmt_signed_pct(row.get("long_funding_pct"), digits=4)} · '
+        f'{h(funding_interval_label(row.get("long_funding_interval_hours"), row.get("long_funding_interval_assumed")))}</em>'
+        if leg_pays_funding(row, "long")
+        else ""
+    )
+    short_funding = (
+        f'<em>{fmt_signed_pct(row.get("short_funding_pct"), digits=4)} · '
+        f'{h(funding_interval_label(row.get("short_funding_interval_hours"), row.get("short_funding_interval_assumed")))}</em>'
+        if leg_pays_funding(row, "short")
+        else ""
+    )
     return f"""
     <article class="funding-pair-row {'historical-radar' if historical else ''}" data-route-key="{h(row.get('route_key') or '')}">
-      <div><span>Long</span>{render_exchange_link(row, 'long', include_market_type=True)}<em>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)} · {h(funding_interval_label(row.get('long_funding_interval_hours'), row.get('long_funding_interval_assumed')))}</em></div>
-      <div><span>Short</span>{render_exchange_link(row, 'short', include_market_type=True)}<em>{fmt_signed_pct(row.get('short_funding_pct'), digits=4)} · {h(funding_interval_label(row.get('short_funding_interval_hours'), row.get('short_funding_interval_assumed')))}</em></div>
+      <div><span>Long</span>{render_exchange_link(row, 'long', include_market_type=True)}{long_funding}</div>
+      <div><span>Short</span>{render_exchange_link(row, 'short', include_market_type=True)}{short_funding}</div>
       <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)} · {h(funding_cadence_pair(row))}</em></div>
       <div><span>Basis / VWAP</span><strong data-live-spread>{fmt_pct(row.get('executable_spread_pct'))}</strong><em>{fmt_pct(row.get('depth_weighted_spread_pct'))}</em></div>
       <div><span>{'Last seen' if historical else 'Updated'}</span><strong>{fmt_age(row.get('radar_last_seen_age_min') if historical else row.get('age_min'))}</strong></div>
@@ -6276,17 +6508,23 @@ def render_selected_chart(
 
 
 def render_chart_leg_stats(label: str, leg: dict[str, Any]) -> str:
-    has_funding = leg.get("market_type") == "Futures"
+    has_funding = (
+        str(leg.get("market_type") or "").casefold() == "futures"
+        and "dex" not in str(leg.get("venue") or "").casefold()
+    )
     settled = leg.get("funding_24h_pct")
     funding_24h = settled if settled is not None else leg.get("projected_funding_24h_pct")
+    funding_rows = f"""
+      <div><span>Live funding</span><strong data-live-funding="{h(leg.get('side'))}">{fmt_signed_pct(leg.get('current_funding_pct'), digits=4)}</strong></div>
+      <div><span>{'Settled 24h' if settled is not None else '24h at current'}</span><strong>{fmt_signed_pct(funding_24h, digits=4)}</strong></div>
+      <div><span>Payout</span><strong data-live-cadence="{h(leg.get('side'))}">{h(funding_interval_label(leg.get('funding_interval_hours'), leg.get('funding_interval_assumed')))}</strong></div>
+      <div><span>Next</span><strong data-live-next="{h(leg.get('side'))}">{h(fmt_next_funding(leg.get('next_funding_ts_us')))}</strong></div>
+    """ if has_funding else ""
     return f"""
     <article>
       <header><span>{h(label)}</span>{render_venue_link(leg.get('venue'), leg.get('market_type'), leg.get('exchange_url'))}<em>{h(leg.get('market_type'))}</em></header>
       <div><span>Volume 24h</span><strong>{fmt_money(leg.get('volume_24h_usd'))}</strong></div>
-      <div><span>Live funding</span><strong data-live-funding="{h(leg.get('side'))}">{fmt_signed_pct(leg.get('current_funding_pct'), digits=4) if has_funding else 'not applicable'}</strong></div>
-      <div><span>{'Settled 24h' if settled is not None else '24h at current' if has_funding else 'Funding 24h'}</span><strong>{fmt_signed_pct(funding_24h, digits=4) if has_funding else 'not applicable'}</strong></div>
-      <div><span>Payout</span><strong data-live-cadence="{h(leg.get('side'))}">{h(funding_interval_label(leg.get('funding_interval_hours'), leg.get('funding_interval_assumed'))) if has_funding else 'not applicable'}</strong></div>
-      <div><span>Next</span><strong data-live-next="{h(leg.get('side'))}">{h(fmt_next_funding(leg.get('next_funding_ts_us'))) if has_funding else 'not applicable'}</strong></div>
+      {funding_rows}
     </article>
     """
 
@@ -8313,7 +8551,7 @@ GUIDE_LANES = [
 
 
 def render_guide_page() -> str:
-    """Plain-language tutorial on how each spread type is actually traded."""
+    """Plain-language product guide plus the deeper spread tutorial."""
     lanes = ""
     for lane in GUIDE_LANES:
         steps = "".join(f"<li>{step}</li>" for step in lane["how"])
@@ -8330,13 +8568,35 @@ def render_guide_page() -> str:
           <ul class="guide-risks">{risks}</ul>
         </article>
         """
-    return shell("How to trade spreads - SpreadBoard", "guide", f"""
+    product_sections = [
+        ("membership", "Membership", "/pricing", "Choose Scanner for the market tools and personal alerts; choose Research Pro when you also need the private Telegram forum. Crypto access is prepaid and does not renew itself.", "After payment, confirm the tier and expiry under Account. Never send funds to an address copied from chat."),
+        ("arbitrage", "Arbitrage", "/arbitrage", "Start here for price gaps. Pick the route type, compare the matched-size spread, inspect both books, fees, rails and token identity, then open the exact pair page.", "A large headline is a lead, not a fill. The $50 matched VWAP is evidence for that size only."),
+        ("funding", "Funding", "/funding", "Use Now for current carry and 1d, 7d or 30d for opportunities worth keeping on your radar. Cooled leaders remain labelled as historical instead of disappearing.", "Only Futures legs pay or receive funding. Spot and DEX legs contribute zero; check cadence and realised windows before extrapolating."),
+        ("fair", "Fair price", "/fair", "Use this to find a futures contract trading away from its own exchange mark or index. Below fair is a possible long mean-reversion setup; above fair is a possible short setup.", "It is not cross-exchange arbitrage and the mark is not guaranteed truth. Confirm the index, liquidity, funding and liquidation risk."),
+        ("charts", "Charts", "/charts", "Choose any indexed token and exact long and short markets, including a DEX long against a futures short. Use several windows to see whether the gap usually converges or can stay wide.", "Pin exact pairs you monitor. A chart shows observed quotes, not executable size or your personal fills."),
+        ("intel", "Intel", "/intel", "Use Intel as an attention layer: it groups token mentions and joins them to current routes, retained funding leaders and charts. Always read the source age and route status.", "Community attention is not an entry signal. If the source is stale or disconnected, the page must say so and market pages remain authoritative."),
+        ("watchlist", "Watchlist", "/watchlist", "Pin tokens you may trade later. Live routes appear first; cooled funding leaders and chart-only markets remain visible so a quiet current rate does not erase the idea.", "Use alerts for a threshold and Watchlist for research memory. Saved tokens sync to your account."),
+        ("portfolio", "Portfolio", "/account", "Record actual fills and quantities for both legs. Price PnL, settled funding, fees and total PnL stay separate. Optional capital per leg is only the return denominator.", "Public rates cannot prove what your account received. Record actual settled funding as positive when received and negative when paid."),
+        ("alerts", "Alerts and Telegram", "/alerts", "Create exact route spread, route funding or token-price rules. Enable Browser Push for this browser or add your Pushover user key for the Pushover app. Link Telegram from Account settings.", "After opening the Telegram link, tap Start and return to Account; the website confirms the link. Telegram results are research snapshots, not trade instructions."),
+    ]
+    functions = "".join(
+        f'<article class="guide-function" id="{section_id}"><div><span>{index:02d}</span><h2>{h(title)}</h2></div><p>{h(use)}</p><p><strong>Important:</strong> {h(caution)}</p><a href="{h(href)}">Open {h(title)}</a></article>'
+        for index, (section_id, title, href, use, caution) in enumerate(product_sections, start=1)
+    )
+    return shell("How to use SpreadBoard - SpreadBoard", "guide", f"""
     <section class="guide-page">
       <header class="terminal-heading">
-        <div><span class="page-kicker">Tutorial</span>
-        <h1>How to actually trade a spread</h1>
-        <p>Written for someone who has never done this before. No jargon, and nothing assumed.</p></div>
+        <div><span class="page-kicker">Product guide</span>
+        <h1>How to use SpreadBoard</h1>
+        <p>A practical map of every major tool, followed by the full spread-trading tutorial.</p></div>
       </header>
+
+      <nav class="guide-jump" aria-label="Guide sections">
+        {''.join(f'<a href="#{h(section_id)}">{h(title)}</a>' for section_id, title, _href, _use, _caution in product_sections)}
+      </nav>
+      <section class="guide-functions">{functions}</section>
+
+      <header class="guide-chapter"><span>Trading tutorial</span><h2>How to read and execute a spread</h2><p>Written for someone who has never done this before. No jargon, and nothing assumed.</p></header>
 
       <article class="guide-lane">
         <h2>The idea in one paragraph</h2>
@@ -8400,7 +8660,16 @@ def render_guide_page() -> str:
       <a href="/markets">Open the board</a> &middot; <a href="/pricing">Membership</a> &middot; <a href="/terms">Terms</a></p>
     </section>
     <style>
-    .guide-page{{max-width:820px;margin:0 auto;padding-bottom:48px}}
+    .guide-page{{max-width:980px;margin:0 auto;padding:0 18px 48px}}
+    .guide-jump{{display:flex;gap:8px;flex-wrap:wrap;margin:20px 0}}
+    .guide-jump a{{padding:9px 12px;border:1px solid var(--terminal-line);border-radius:999px;color:var(--terminal-text);font-weight:800;font-size:13px}}
+    .guide-functions{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}}
+    .guide-function{{padding:20px;border:1px solid var(--terminal-line);border-radius:10px;background:var(--terminal-panel)}}
+    .guide-function>div{{display:flex;align-items:center;gap:10px}} .guide-function>div span{{color:var(--terminal-accent);font-weight:900}}
+    .guide-function h2{{margin:0;font-size:20px}} .guide-function p{{line-height:1.55;color:var(--terminal-muted)}}
+    .guide-function a{{font-weight:900;color:var(--terminal-accent)}}
+    .guide-chapter{{margin:44px 0 6px}} .guide-chapter span{{color:var(--terminal-accent);font-weight:900;text-transform:uppercase;letter-spacing:.06em;font-size:12px}}
+    .guide-chapter h2{{font-size:clamp(28px,5vw,42px);margin:6px 0}}
     .guide-lane{{margin:26px 0;padding:18px 20px;border:1px solid rgba(128,128,128,.25);border-radius:10px}}
     .guide-lane h2{{margin:0 0 .4rem}}
     .guide-lane h3{{margin:1.1rem 0 .35rem;font-size:.95rem;opacity:.8;text-transform:uppercase;letter-spacing:.04em}}
@@ -8408,6 +8677,7 @@ def render_guide_page() -> str:
     .guide-steps li,.guide-risks li{{margin:.4rem 0;line-height:1.55}}
     .guide-steps{{padding-left:1.2rem}}
     .guide-risks{{padding-left:1.1rem}}
+    @media(max-width:720px){{.guide-functions{{grid-template-columns:1fr}}}}
     </style>
     """)
 
@@ -8632,16 +8902,16 @@ def render_account_page(
         {render_account_kpi('Open positions', summary.get('open_positions'), 'actively marked')}
         {render_account_kpi('Portfolio PnL', fmt_signed_money(summary.get('price_and_funding_pnl_usd')), 'price + funding - fees')}
         {render_account_kpi('Funding income', fmt_signed_money(summary.get('funding_income_usd')), 'recorded cashflows')}
-        {render_account_kpi('Return', fmt_signed_pct(summary.get('monthly_return_pct'), digits=2), 'on tracked capital')}
+        {render_account_kpi('Return', fmt_signed_pct(summary.get('monthly_return_pct'), digits=2), 'on allocated capital')}
       </section>
-      <nav class="account-tabs" aria-label="Account sections"><button class="active" data-account-tab="positions">Positions</button><button data-account-tab="alerts">Alerts <i>{h(len([item for item in notifications if not item.get('read_at')]))}</i></button><button data-account-tab="settings">Settings</button>{'<button data-account-tab="members">Members</button>' if user.is_admin else ''}</nav>
+      <nav class="account-tabs" aria-label="Account sections"><button class="active" data-account-tab="positions">Positions</button><button data-account-tab="alerts">Alerts <i>{h(len([item for item in notifications if not item.get('read_at')]))}</i></button><button data-account-tab="settings">Settings</button>{'<button data-account-tab="members">Members</button>' if user.can_manage_members else ''}</nav>
       <section data-account-panel="positions">
         <div class="account-panel-head"><div><h2>Position journal</h2><p>Manual records are marked with current public books whenever the exact route is available.</p></div><button class="sheet-button primary" type="button" data-position-new>Add position</button></div>
         <div class="position-list">{''.join(render_position_card(item) for item in positions) or '<div class="account-empty-panel"><strong>No positions yet</strong><p>Add the first spread or funding farm to start tracking it.</p></div>'}</div>
       </section>
       <section data-account-panel="alerts" hidden><div class="account-panel-head"><div><h2>Notifications</h2><p>Exit-spread, PnL, and funding rules are evaluated continuously, even while you are signed out.</p></div><button class="sheet-button" type="button" data-notifications-read>Mark all read</button></div><div class="notification-list">{''.join(render_account_notification(item) for item in notifications) or '<div class="account-empty-panel"><strong>No notifications</strong><p>Position alerts will appear here when a rule crosses its threshold.</p></div>'}</div></section>
       <section data-account-panel="settings" hidden>{render_account_settings(user, accounts_path)}</section>
-      {render_member_admin() if user.is_admin else ''}
+      {render_member_admin() if user.can_manage_members else ''}
       {render_position_dialog()}
       {render_position_action_dialog()}
     </section>
@@ -8723,10 +8993,10 @@ def render_account_settings(user: accounts.User, accounts_path: Path | str = acc
     browser_push_count = accounts.web_push_subscription_count(user.id, db_path=accounts_path)
     return f"""
     <section class="account-settings">
-      <div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is used only as the denominator for your return statistics.</p></div></div>
-      <form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Tracked monthly capital, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or '')}"></label><button class="sheet-button primary" type="submit">Save settings</button></form>
+      <div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is optional and is used only as the denominator for return statistics; it never changes position PnL.</p></div></div>
+      <form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Total capital allocated to this strategy, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or '')}"><em>Optional portfolio-level denominator. Leave blank to use each position's per-leg allocation.</em></label><button class="sheet-button primary" type="submit">Save settings</button></form>
       <div class="account-empty-panel"><strong>Prepaid membership</strong><p>{h(user.subscription_status)} · {h(cancel_note)}</p>{billing_action}<p role="alert" data-billing-error></p></div>
-      <div class="account-empty-panel"><strong>Telegram subscriber access</strong><p>{telegram_note}</p>{telegram_action}<p>{h(telegram_access_note)}</p><p role="alert" data-telegram-error></p></div>
+      <div class="account-empty-panel"><strong>Telegram subscriber access</strong><p>{telegram_note}</p>{telegram_action}<a class="sheet-button" data-telegram-fallback hidden rel="noopener">Open Telegram manually</a><p>{h(telegram_access_note)}</p><p role="alert" data-telegram-error></p></div>
       <form data-pushover-settings>
         <label><span>Pushover user key</span><input name="pushover_user_key" type="password" autocomplete="off" placeholder="{h(push_key_note)}"></label>
         <label><span>Device</span><input name="pushover_device" value="{h(push.get('pushover_device') or '')}" placeholder="Optional"></label>
@@ -8738,7 +9008,7 @@ def render_account_settings(user: accounts.User, accounts_path: Path | str = acc
       </form>
       <div class="account-empty-panel web-push-panel" data-web-push data-vapid-key="{h(browser_push.get('public_key') or '')}">
         <strong>Browser Push</strong>
-        <p>{'Server delivery is ready.' if browser_push.get('configured') else 'Server delivery awaits VAPID keys.'} Permission is requested only after you click Enable. Browser subscriptions are account-owned and removable here.</p>
+        <p>{'Server delivery is ready.' if browser_push.get('configured') else 'Server delivery awaits VAPID keys.'} This is browser notification delivery, separate from the Pushover app. Permission is requested only after you click Enable; subscriptions are account-owned and removable here.</p>
         <div><button class="sheet-button primary" type="button" data-web-push-enable {'disabled' if not browser_push.get('configured') else ''}>Enable on this browser</button><button class="sheet-button" type="button" data-web-push-disable>Disable on this browser</button><button class="sheet-button" type="button" data-web-push-test {'disabled' if not browser_push.get('configured') else ''}>Queue test</button></div>
         <p role="status" data-web-push-status>{h(browser_push_count)} active browser subscription{'s' if browser_push_count != 1 else ''} on this account.</p>
       </div>
@@ -8762,11 +9032,11 @@ def render_member_admin() -> str:
 
 
 def render_position_dialog() -> str:
-    return """<dialog class="account-dialog" data-position-dialog><form method="dialog" data-position-form><header><div><span>Position journal</span><h2>Add position</h2></div><button value="cancel" aria-label="Close">×</button></header><div class="position-form-grid"><input name="route_key" type="hidden"><input name="entry_spread_pct" type="hidden"><label><span>Token</span><input name="token" list="position-token-options" autocomplete="off" required><datalist id="position-token-options"></datalist></label><label><span>Capital, USD</span><input name="capital_usd" type="number" min="0" step="0.01"></label><label class="wide"><span>Suggested live route</span><select data-position-route><option value="">Select a token to see current routes</option></select><em data-position-suggestion-note>Suggestions use current public books. Confirm them against your actual fills.</em></label><label><span>Long venue</span><input name="long_venue" list="position-long-venues" required><datalist id="position-long-venues"></datalist></label><label><span>Long market</span><select name="long_market_type"><option>Spot</option><option>Futures</option></select></label><label><span>Long symbol</span><input name="long_symbol" list="position-long-symbols" placeholder="COTI/USDT"><datalist id="position-long-symbols"></datalist></label><label><span>Long quantity</span><input name="long_quantity" type="number" min="0" step="any" required></label><label><span>Long entry</span><input name="long_entry_price" type="number" min="0" step="any" required></label><label><span>Short venue</span><input name="short_venue" list="position-short-venues" required><datalist id="position-short-venues"></datalist></label><label><span>Short market</span><select name="short_market_type"><option>Futures</option><option>Spot</option></select></label><label><span>Short symbol</span><input name="short_symbol" list="position-short-symbols" placeholder="COTI/USDT:USDT"><datalist id="position-short-symbols"></datalist></label><label><span>Short quantity</span><input name="short_quantity" type="number" min="0" step="any" required></label><label><span>Short entry</span><input name="short_entry_price" type="number" min="0" step="any" required></label><label><span>Entry fees, USD</span><input name="entry_fees_usd" type="number" min="0" step="0.01" value="0"></label><label><span>Opened at</span><input name="opened_at" type="datetime-local"></label><label class="wide"><span>Notes</span><textarea name="notes" rows="3"></textarea></label></div><footer><button value="cancel">Cancel</button><button class="primary" type="submit" value="default">Add position</button></footer><p role="alert" data-form-error></p></form></dialog>"""
+    return """<dialog class="account-dialog" data-position-dialog><form method="dialog" data-position-form><header><div><span>Position journal</span><h2>Add position</h2></div><button type="button" data-dialog-cancel aria-label="Close">×</button></header><div class="position-form-grid"><input name="route_key" type="hidden"><input name="entry_spread_pct" type="hidden"><label><span>Token</span><input name="token" list="position-token-options" autocomplete="off" required><datalist id="position-token-options"></datalist></label><label><span>Allocated capital per leg, USD</span><input name="capital_usd" type="number" min="0" step="0.01"><em>Optional return denominator for one leg or its allocated margin. Quantity × fill already determines each leg's notional.</em></label><label class="wide"><span>Suggested route or market pair</span><select data-position-route><option value="">Select a token to see available pairs</option></select><em data-position-suggestion-note>Live board routes come first, followed by chart-catalogue combinations. Always replace quoted prices with your actual fills.</em></label><label class="wide"><span>Long market from full catalogue</span><select data-position-long-leg><option value="">Select a token first</option></select></label><label><span>Long venue</span><input name="long_venue" list="position-long-venues" required><datalist id="position-long-venues"></datalist></label><label><span>Long market</span><select name="long_market_type"><option>Spot</option><option>DEX</option><option>Futures</option></select></label><label><span>Long symbol</span><input name="long_symbol" list="position-long-symbols" placeholder="COTI/USDT"><datalist id="position-long-symbols"></datalist></label><label><span>Long quantity</span><input name="long_quantity" type="number" min="0" step="any" required></label><label><span>Long entry</span><input name="long_entry_price" type="number" min="0" step="any" required></label><label class="wide"><span>Short market from full catalogue</span><select data-position-short-leg><option value="">Select a token first</option></select></label><label><span>Short venue</span><input name="short_venue" list="position-short-venues" required><datalist id="position-short-venues"></datalist></label><label><span>Short market</span><select name="short_market_type"><option>Futures</option><option>Spot</option><option>DEX</option></select></label><label><span>Short symbol</span><input name="short_symbol" list="position-short-symbols" placeholder="COTI/USDT:USDT"><datalist id="position-short-symbols"></datalist></label><label><span>Short quantity</span><input name="short_quantity" type="number" min="0" step="any" required></label><label><span>Short entry</span><input name="short_entry_price" type="number" min="0" step="any" required></label><label><span>Entry fees, USD</span><input name="entry_fees_usd" type="number" min="0" step="0.01" value="0"></label><label><span>Opened at</span><input name="opened_at" type="datetime-local"></label><label class="wide"><span>Notes</span><textarea name="notes" rows="3"></textarea></label></div><footer><button type="button" data-dialog-cancel>Cancel</button><button class="primary" type="submit" value="default">Add position</button></footer><p role="alert" data-form-error></p></form></dialog>"""
 
 
 def render_position_action_dialog() -> str:
-    return """<dialog class="account-dialog compact" data-action-dialog><form method="dialog" data-action-form><header><div><span>Position</span><h2 data-action-title>Update</h2></div><button value="cancel" aria-label="Close">×</button></header><div data-action-fields></div><footer><button value="cancel">Cancel</button><button class="primary" type="submit" value="default">Save</button></footer><p role="alert" data-form-error></p></form></dialog>"""
+    return """<dialog class="account-dialog compact" data-action-dialog><form method="dialog" data-action-form><header><div><span>Position</span><h2 data-action-title>Update</h2></div><button type="button" data-dialog-cancel aria-label="Close">×</button></header><div data-action-fields></div><footer><button type="button" data-dialog-cancel>Cancel</button><button class="primary" type="submit" value="default">Save</button></footer><p role="alert" data-form-error></p></form></dialog>"""
 
 
 def render_account_script() -> str:
@@ -8779,16 +9049,19 @@ def render_account_script() -> str:
   root.querySelectorAll('[data-account-tab]').forEach(button=>button.addEventListener('click',()=>{activateAccountTab(button);history.replaceState(null,'',`#${button.dataset.accountTab}`);}));
   activateAccountTab(root.querySelector(`[data-account-tab="${location.hash.slice(1)}"]`));
   const positionDialog=root.querySelector('[data-position-dialog]');root.querySelector('[data-position-new]')?.addEventListener('click',()=>{positionDialog.showModal();refreshSuggestions('');});
-  const positionForm=positionDialog?.querySelector('form'),tokenInput=positionForm?.elements.token,routeSelect=positionForm?.querySelector('[data-position-route]');let suggestedRoutes=[],suggestionTimer;
+  root.querySelectorAll('[data-dialog-cancel]').forEach(button=>button.addEventListener('click',()=>{const dialog=button.closest('dialog');dialog?.close('cancel');dialog?.querySelector('form')?.reset();}));
+  const positionForm=positionDialog?.querySelector('form'),tokenInput=positionForm?.elements.token,routeSelect=positionForm?.querySelector('[data-position-route]'),longLegSelect=positionForm?.querySelector('[data-position-long-leg]'),shortLegSelect=positionForm?.querySelector('[data-position-short-leg]');let suggestedRoutes=[],catalogLegs=[],suggestionTimer;
   const setOptions=(id,values)=>{const list=document.getElementById(id);if(!list)return;list.replaceChildren(...[...new Set(values.filter(Boolean))].map(value=>new Option(value)));};
   const legLabel=(venue,marketType)=>String(venue||'').toLowerCase().endsWith(String(marketType||'').toLowerCase())?venue:`${venue} ${marketType}`;
-  async function refreshSuggestions(value){const token=String(value||'').trim().toUpperCase();try{const response=await fetch('/api/position-suggestions?'+new URLSearchParams({q:token,limit:'30'}));const data=await response.json();if(!response.ok)throw new Error(data.error||'Suggestions unavailable');setOptions('position-token-options',data.tokens||[]);suggestedRoutes=data.routes||[];routeSelect.replaceChildren(new Option(token?(suggestedRoutes.length?'Choose a current route':'No current route for this token'):'Select a token to see current routes',''),...suggestedRoutes.map((route,index)=>new Option(`${legLabel(route.long_venue,route.long_market_type)} → ${legLabel(route.short_venue,route.short_market_type)} · ${Number(route.entry_spread_pct??0).toFixed(3)}%`,String(index))));const legs=data.legs||[];setOptions('position-long-venues',legs.map(item=>item.venue));setOptions('position-short-venues',legs.map(item=>item.venue));setOptions('position-long-symbols',legs.map(item=>item.symbol));setOptions('position-short-symbols',legs.map(item=>item.symbol));}catch(error){positionForm.querySelector('[data-position-suggestion-note]').textContent=error.message;}}
+  async function refreshSuggestions(value){const token=String(value||'').trim().toUpperCase();try{const response=await fetch('/api/position-suggestions?'+new URLSearchParams({q:token,limit:'50'}));const data=await response.json();if(!response.ok)throw new Error(data.error||'Suggestions unavailable');setOptions('position-token-options',data.tokens||[]);suggestedRoutes=data.routes||[];routeSelect.replaceChildren(new Option(token?(suggestedRoutes.length?'Choose any available market pair':'No markets found for this token'):'Select a token to see available pairs',''),...suggestedRoutes.map((route,index)=>{const spread=Number(route.entry_spread_pct);const suffix=Number.isFinite(spread)?` · ${spread.toFixed(3)}%`:` · ${route.source||'chart catalogue'}`;return new Option(`${legLabel(route.long_venue,route.long_market_type)} → ${legLabel(route.short_venue,route.short_market_type)}${suffix}`,String(index));}));catalogLegs=data.legs||[];const legOptions=[new Option(token?(catalogLegs.length?'Choose any indexed market':'No indexed market found'):'Select a token first',''),...catalogLegs.map((leg,index)=>new Option(`${legLabel(leg.venue,String(leg.venue||'').toLowerCase().includes('dex')?'DEX':leg.market_type)} · ${leg.symbol}`,String(index)))];longLegSelect?.replaceChildren(...legOptions.map(option=>option.cloneNode(true)));shortLegSelect?.replaceChildren(...legOptions.map(option=>option.cloneNode(true)));setOptions('position-long-venues',catalogLegs.map(item=>item.venue));setOptions('position-short-venues',catalogLegs.map(item=>item.venue));setOptions('position-long-symbols',catalogLegs.map(item=>item.symbol));setOptions('position-short-symbols',catalogLegs.map(item=>item.symbol));positionForm.querySelector('[data-position-suggestion-note]').textContent=catalogLegs.length?`${catalogLegs.length} individual markets available for either leg; ${suggestedRoutes.length} ready-made pairs are listed above.`:'No matching markets are currently indexed.';}catch(error){positionForm.querySelector('[data-position-suggestion-note]').textContent=error.message;}}
   tokenInput?.addEventListener('input',()=>{clearTimeout(suggestionTimer);tokenInput.value=tokenInput.value.toUpperCase();suggestionTimer=setTimeout(()=>refreshSuggestions(tokenInput.value),180);});
-  routeSelect?.addEventListener('change',()=>{if(routeSelect.value==='')return;const route=suggestedRoutes[Number(routeSelect.value)];if(!route)return;for(const [name,key] of Object.entries({token:'token',route_key:'route_key',entry_spread_pct:'entry_spread_pct',long_venue:'long_venue',long_market_type:'long_market_type',long_symbol:'long_symbol',long_entry_price:'long_entry_price',short_venue:'short_venue',short_market_type:'short_market_type',short_symbol:'short_symbol',short_entry_price:'short_entry_price'})){positionForm.elements[name].value=route[key]??'';}positionForm.querySelector('[data-position-suggestion-note]').textContent=`Suggested from live public books · ${Number(route.age_min??0).toFixed(1)} min old. Replace prices with your actual fills.`;});
+  routeSelect?.addEventListener('change',()=>{if(routeSelect.value==='')return;const route=suggestedRoutes[Number(routeSelect.value)];if(!route)return;for(const [name,key] of Object.entries({token:'token',route_key:'route_key',entry_spread_pct:'entry_spread_pct',long_venue:'long_venue',long_market_type:'long_market_type',long_symbol:'long_symbol',long_entry_price:'long_entry_price',short_venue:'short_venue',short_market_type:'short_market_type',short_symbol:'short_symbol',short_entry_price:'short_entry_price'})){positionForm.elements[name].value=route[key]??'';}const age=Number(route.age_min);positionForm.querySelector('[data-position-suggestion-note]').textContent=Number.isFinite(age)?`Suggested from live public books · ${age.toFixed(1)} min old. Replace prices with your actual fills.`:'Pair from the full chart catalogue. Enter your actual fills and quantity; no live entry is assumed.';});
+  const applyCatalogLeg=(side,select)=>{if(!select||select.value==='')return;const leg=catalogLegs[Number(select.value)];if(!leg)return;positionForm.elements[`${side}_venue`].value=leg.venue||'';positionForm.elements[`${side}_market_type`].value=String(leg.venue||'').toLowerCase().includes('dex')?'DEX':leg.market_type||'';positionForm.elements[`${side}_symbol`].value=leg.symbol||'';positionForm.elements.route_key.value='';positionForm.elements.entry_spread_pct.value='';};
+  longLegSelect?.addEventListener('change',()=>applyCatalogLeg('long',longLegSelect));shortLegSelect?.addEventListener('change',()=>applyCatalogLeg('short',shortLegSelect));
   positionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const payload=Object.fromEntries(new FormData(form));try{await request('/api/positions',payload);location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   const actionDialog=root.querySelector('[data-action-dialog]');let actionPosition=null;let actionType='';
-  const fields={funding:'<label><span>Venue</span><input name="venue" required></label><label><span>Amount, USD</span><input name="amount_usd" type="number" step="any" required></label><label><span>Occurred at</span><input name="occurred_at" type="datetime-local"></label>',alert:'<label><span>Metric</span><select name="metric"><option value="exit_spread_pct">Exit spread %</option><option value="open_spread_pct">Open spread %</option><option value="pnl_usd">Total PnL USD</option><option value="funding_usd">Funding USD</option></select></label><label><span>Condition</span><select name="operator"><option value="lte">At or below</option><option value="gte">At or above</option></select></label><label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>',close:'<label><span>Long exit price</span><input name="long_exit_price" type="number" min="0" step="any" required></label><label><span>Short exit price</span><input name="short_exit_price" type="number" min="0" step="any" required></label><label><span>Exit fees, USD</span><input name="exit_fees_usd" type="number" min="0" step="0.01" value="0"></label>'};
-  root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;actionDialog.querySelector('[data-action-title]').textContent={funding:'Add funding cashflow',alert:'Create alert rule',close:'Close position'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=fields[actionType];actionDialog.showModal();});
+  const fields={funding:'<p>Record only funding that actually settled in your exchange account: positive when received, negative when paid. Public projected rates cannot prove your personal cashflow, so they remain separate from this journal.</p><label><span>Futures venue</span><input name="venue" required></label><label><span>Settled amount, USD</span><input name="amount_usd" type="number" step="any" required></label><label><span>Occurred at</span><input name="occurred_at" type="datetime-local"></label>',alert:'<label><span>Metric</span><select name="metric"><option value="exit_spread_pct">Exit spread %</option><option value="open_spread_pct">Open spread %</option><option value="pnl_usd">Total PnL USD</option><option value="funding_usd">Funding USD</option></select></label><label><span>Condition</span><select name="operator"><option value="lte">At or below</option><option value="gte">At or above</option></select></label><label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>',close:'<label><span>Long exit price</span><input name="long_exit_price" type="number" min="0" step="any" required></label><label><span>Short exit price</span><input name="short_exit_price" type="number" min="0" step="any" required></label><label><span>Exit fees, USD</span><input name="exit_fees_usd" type="number" min="0" step="0.01" value="0"></label>'};
+  root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;actionDialog.querySelector('[data-action-title]').textContent={funding:'Record settled funding',alert:'Create alert rule',close:'Close position'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=fields[actionType];actionDialog.showModal();});
   actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={funding:'funding',alert:'alerts',close:'close'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   root.querySelector('[data-account-settings]')?.addEventListener('submit',async event=>{event.preventDefault();await request('/api/account-settings',Object.fromEntries(new FormData(event.currentTarget)));location.reload();});
   root.querySelector('[data-pushover-settings]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,status=form.querySelector('[data-pushover-status]');const payload=Object.fromEntries(new FormData(form));payload.pushover_enabled=form.elements.pushover_enabled.checked;try{await request('/api/notification-preferences',payload);form.elements.pushover_user_key.value='';status.textContent='Pushover settings saved securely.';}catch(error){status.textContent=error.message;}});
@@ -8799,7 +9072,9 @@ def render_account_script() -> str:
   webPush?.querySelector('[data-web-push-enable]')?.addEventListener('click',async event=>{event.currentTarget.disabled=true;try{const registration=await pushRegistration();const permission=await Notification.requestPermission();if(permission!=='granted')throw new Error('Browser notification permission was not granted.');let subscription=await registration.pushManager.getSubscription();if(!subscription)subscription=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:vapidBytes(webPush.dataset.vapidKey)});await request('/api/web-push/subscribe',subscription.toJSON());webPushStatus.textContent='Web Push enabled on this browser.';}catch(error){webPushStatus.textContent=error.message;}finally{event.currentTarget.disabled=false;}});
   webPush?.querySelector('[data-web-push-disable]')?.addEventListener('click',async()=>{try{const registration=await navigator.serviceWorker.getRegistration('/service-worker.js'),subscription=await registration?.pushManager.getSubscription();if(!subscription){webPushStatus.textContent='No Web Push subscription exists on this browser.';return;}await request('/api/web-push/unsubscribe',{endpoint:subscription.endpoint});await subscription.unsubscribe();webPushStatus.textContent='Web Push disabled on this browser.';}catch(error){webPushStatus.textContent=error.message;}});
   webPush?.querySelector('[data-web-push-test]')?.addEventListener('click',async()=>{try{await request('/api/web-push/test',{});webPushStatus.textContent='Browser test queued. It will arrive through the background delivery worker.';}catch(error){webPushStatus.textContent=error.message;}});
-  root.querySelector('[data-telegram-action]')?.addEventListener('click',async event=>{const button=event.currentTarget,error=root.querySelector('[data-telegram-error]');button.disabled=true;if(error)error.textContent='';try{const data=await request(`/api/telegram/${button.dataset.telegramAction}`,{});if(data.url){window.open(data.url,'_blank','noopener');button.textContent='Link opened';}else location.reload();}catch(exc){if(error)error.textContent=exc.message;button.disabled=false;}});
+  async function checkTelegramLink(){try{const response=await fetch('/api/telegram/status'),data=await response.json();if(response.ok&&data.linked){sessionStorage.removeItem('spreadboard.telegramLinkPending');location.reload();}}catch(_error){}}
+  if(sessionStorage.getItem('spreadboard.telegramLinkPending')){window.addEventListener('focus',checkTelegramLink);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')checkTelegramLink();});checkTelegramLink();}
+  root.querySelector('[data-telegram-action]')?.addEventListener('click',async event=>{const button=event.currentTarget,error=root.querySelector('[data-telegram-error]'),fallback=root.querySelector('[data-telegram-fallback]');button.disabled=true;if(error)error.textContent='';try{const data=await request(`/api/telegram/${button.dataset.telegramAction}`,{});if(data.url){if(fallback){fallback.href=data.url;fallback.hidden=false;}if(error)error.textContent='Telegram will open in this tab. Tap Start, then return here; the connection status will refresh automatically.';sessionStorage.setItem('spreadboard.telegramLinkPending','1');location.assign(data.url);}else{sessionStorage.removeItem('spreadboard.telegramLinkPending');location.reload();}}catch(exc){if(error)error.textContent=exc.message;button.disabled=false;}});
   root.querySelector('[data-notifications-read]')?.addEventListener('click',async()=>{await request('/api/notifications/read',{});location.reload();});
   root.querySelector('[data-member-create]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,output=root.querySelector('[data-invite-output]');try{const result=await request('/api/account-users',Object.fromEntries(new FormData(form)));if(result.setup_url&&output){output.hidden=false;output.innerHTML=`<strong>Setup link created</strong><p><a href="${escapeHtml(result.setup_url)}" target="_blank" rel="noopener">Open the single-use password link</a></p><p>It expires in seven days and is replaced if a new link is generated.</p>`;try{await navigator.clipboard.writeText(result.setup_url);}catch(_error){}}form.reset();loadMembers();}catch(error){alert(error.message);}});
   async function loadMembers(){const target=root.querySelector('[data-member-list]'),summary=root.querySelector('[data-analytics-summary]');if(!target)return;const [memberResponse,analyticsResponse]=await Promise.all([fetch('/api/account-users'),fetch('/api/admin/analytics')]);const data=await memberResponse.json();target.innerHTML=(data.users||[]).map(user=>`<article class="member-row"><div><strong>${escapeHtml(user.display_name)}</strong><span>${escapeHtml(user.email)}</span></div><span>${escapeHtml(user.subscription_status)} · ${escapeHtml(user.subscription_tier)}</span><em>${escapeHtml(user.subscription_expires_at||'No expiry')}</em></article>`).join('');if(summary&&analyticsResponse.ok){const result=await analyticsResponse.json(),analytics=result.analytics||{},subscriptions=result.subscriptions||{},paths=(analytics.paths||[]).slice(0,6),tiers=subscriptions.active_by_tier||{};summary.innerHTML=`<strong>${escapeHtml(subscriptions.active_total||0)} active · ${escapeHtml(tiers.scanner||0)} Scanner · ${escapeHtml(tiers.research_pro||0)} Research Pro</strong><p>${escapeHtml(subscriptions.expiring_within_7_days||0)} expire within 7 days · ${escapeHtml(subscriptions.telegram_linked_accounts||0)} Telegram-linked · ${escapeHtml(subscriptions.delivery_errors||0)} lifecycle delivery errors</p><p>${escapeHtml(analytics.total_views||0)} page views · ${paths.map(item=>`${escapeHtml(item.path)}: ${escapeHtml(item.views)}`).join(' · ')||'no traffic yet'}. No IP, cookie, referrer, or user agent is stored.</p>`;}}
@@ -9363,8 +9638,8 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Watchlist</span>
-          <h1>Local watchlist</h1>
-          <p>Browser-only pins joined to hot symbols, route reality, funding, and preview alert context.</p>
+          <h1>Your market radar</h1>
+          <p>Account-synced tokens joined to live routes, cooled funding leaders, chart coverage, and alert context. A token remains visible even when its current rate cools.</p>
         </div>
         <div class="intel-actions">
           <a class="secondary" href="/intel">Intel</a>
@@ -9372,16 +9647,16 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
         </div>
       </div>
       <section class="watch-status-grid">
-        <article class="chart-summary-card"><span>Storage</span><strong>Browser only</strong><em>No server profile writes</em></article>
+        <article class="chart-summary-card"><span>Storage</span><strong>Account synced</strong><em>browser fallback remains available</em></article>
         <article class="chart-summary-card"><span>Account</span><strong>Active</strong><em>portfolio workspace available</em></article>
         <article class="chart-summary-card"><span>PnL</span><strong>Live</strong><em>tracked in Portfolio</em></article>
-        <article class="chart-summary-card"><span>Matched routes</span><strong>{h(route_count)}</strong><em>from local intel</em></article>
+        <article class="chart-summary-card"><span>Market context</span><strong>{h(route_count)}</strong><em>live routes or funding radar</em></article>
         <article class="chart-summary-card"><span>Reference matches</span><strong>{h(trigger_count)}</strong><em>preview context</em></article>
       </section>
       <section class="watchlist-layout">
         <main class="watchlist-main">
           <section class="watch-panel">
-            <div class="panel-head flat"><div><h2>Your Watchlist</h2><p>Tokens pinned in this browser, with no account storage or notification sending.</p></div></div>
+            <div class="panel-head flat"><div><h2>Your Watchlist</h2><p>Saved to your account, with a browser copy for resilient loading.</p></div></div>
             <form class="watch-control-row" id="watchForm">
               <input class="watch-input" id="watchInput" name="symbol" placeholder="Token symbol" autocomplete="off">
               <button class="sheet-button primary" type="submit">Add</button>
@@ -9391,7 +9666,7 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
             <div class="watch-items" id="watchItems"></div>
           </section>
           <section class="watch-panel">
-            <div class="panel-head flat"><div><h2>Matched Routes</h2><p>Current board/preflight context for pinned tokens.</p></div></div>
+            <div class="panel-head flat"><div><h2>Routes and radar</h2><p>Live executable routes first; retained funding leaders and chart-only coverage remain discoverable when the present rate cools.</p></div></div>
             <div class="watch-route-list" id="watchRoutes"></div>
           </section>
           <section class="watch-panel">
@@ -9407,7 +9682,7 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
             </div>
           </section>
           <section class="watch-panel">
-            <div class="panel-head flat"><div><h2>Account workspace</h2><p>Watchlist is browser-local; positions, PnL, notifications, and delivery settings live in Portfolio.</p></div></div>
+            <div class="panel-head flat"><div><h2>Account workspace</h2><p>Positions, personal PnL, notifications, and delivery settings live in Portfolio.</p></div></div>
             <div class="profile-shell-list">
               {''.join(render_watch_profile_row(item) for item in profile.get('sections') or []) or '<p class="watch-empty">No profile sections available.</p>'}
             </div>
@@ -9769,7 +10044,7 @@ WATCHLIST_SCRIPT = """
   const routeReality = Array.isArray(data.route_reality) ? data.route_reality : [];
   const alertCards = Array.isArray((data.alert_preview || {}).cards) ? data.alert_preview.cards : [];
   const profileWatchlist = Array.isArray((data.profile_shell || {}).watchlist) ? data.profile_shell.watchlist : [];
-  const routeBySymbol = new Map(routeReality.map((item) => [normaliseSymbol(item.symbol), item]).filter(([symbol]) => symbol));
+  let routeBySymbol = new Map(routeReality.map((item) => [normaliseSymbol(item.symbol), item]).filter(([symbol]) => symbol));
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -9818,6 +10093,18 @@ WATCHLIST_SCRIPT = """
     const clean = [...new Set(tokens.map(normaliseSymbol).filter(Boolean))];
     localStorage.setItem(storageKey, JSON.stringify(clean));
     syncTokens(clean);
+    refreshMarketContext(clean).then(renderAll);
+  }
+
+  async function refreshMarketContext(tokens) {
+    if (!tokens.length) { routeBySymbol = new Map(); return; }
+    try {
+      const response = await fetch('/api/watchlist-suggestions?' + new URLSearchParams({symbols: tokens.join(',')}));
+      if (!response.ok) return;
+      const payload = await response.json();
+      const reality = Array.isArray(payload.route_reality) ? payload.route_reality : [];
+      routeBySymbol = new Map(reality.map(item => [normaliseSymbol(item.symbol), item]).filter(([symbol]) => symbol));
+    } catch (_error) { /* retain last rendered market context */ }
   }
 
   let syncTimer = 0;
@@ -9840,6 +10127,7 @@ WATCHLIST_SCRIPT = """
       const merged = [...new Set([...serverTokens, ...loadTokens()])].slice(0, 100);
       localStorage.setItem(storageKey, JSON.stringify(merged));
       if (merged.length !== serverTokens.length || merged.some((token, index) => token !== serverTokens[index])) syncTokens(merged);
+      await refreshMarketContext(merged);
       renderAll();
     } catch (error) { /* localStorage fallback is intentional */ }
   }
@@ -9868,7 +10156,7 @@ WATCHLIST_SCRIPT = """
     const routes = Array.isArray(reality.routes) ? reality.routes : [];
     const routeRows = routes.slice(0, 3).map((route) => `
       <a class="watch-route-link" href="${escapeHtml(route.pair_url || `/token/${token}`)}">
-        <span>${escapeHtml(route.kind || "Route")}</span>
+        <span>${escapeHtml(route.route_line || route.kind || "Route")}</span>
         <strong>${formatPct(route.open_spread_pct)}</strong>
         <em>${escapeHtml(labelText(route.freshness || "unknown"))}</em>
       </a>
@@ -9881,7 +10169,7 @@ WATCHLIST_SCRIPT = """
           <a href="${escapeHtml((routes[0] || {}).pair_url || `/token/${token}`)}">${escapeHtml(token)}</a>
           <span>${escapeHtml(labelText(reality.status || "watch"))}</span>
         </div>
-        <div class="watch-route-links">${routeRows || `<p class="watch-empty compact">No matched board route.</p>`}</div>
+        <div class="watch-route-links">${routeRows || `<a class="watch-route-link" href="${escapeHtml(reality.chart_url || `/charts?token=${token}`)}"><span>Open available chart markets</span><strong>Chart</strong><em>${escapeHtml(labelText(reality.status || 'watch'))}</em></a>`}</div>
         <div class="watch-route-meta">
           <span>Next<strong>${escapeHtml(actions.slice(0, 2).map(labelText).join(", ") || "Watch")}</strong></span>
           <span>OKX DEX<strong>${escapeHtml(labelText(reality.okx_dex_identity || "unknown"))}</strong></span>
@@ -9900,14 +10188,15 @@ WATCHLIST_SCRIPT = """
     }
     target.innerHTML = tokens.map((token) => {
       const hot = hotSymbols.find((item) => normaliseSymbol(item.symbol) === token) || {};
-      const best = hot.best_board || {};
+      const reality = routeBySymbol.get(token) || {};
+      const best = reality.best_board || hot.best_board || {};
       return `
         <article class="watch-token-card">
-          <div><strong>${escapeHtml(token)}</strong><span>${escapeHtml(hot.event_count || 0)} msgs</span></div>
-          <p>${escapeHtml(best.route_line || "No matched board route in this window.")}</p>
+          <div><strong>${escapeHtml(token)}</strong><span>${escapeHtml(labelText(reality.status || 'watching'))}</span></div>
+          <p>${escapeHtml(best.route_line || "No live route now; chart coverage remains on the radar.")}</p>
           <div class="watch-token-metrics">
             <span>Open<strong>${formatPct(best.open_spread_pct)}</strong></span>
-            <span>Funding<strong>${formatSignedPct(best.funding_apr_pct, 0)}</strong></span>
+            <span>Funding 24h<strong>${formatSignedPct(best.funding_24h_pct ?? best.funding_apr_pct, 2)}</strong></span>
             <span>Score<strong>${escapeHtml(hot.score ?? "—")}</strong></span>
           </div>
           <button class="watch-remove" type="button" data-remove-symbol="${escapeHtml(token)}" aria-label="Remove ${escapeHtml(token)}">Remove</button>
@@ -9924,7 +10213,7 @@ WATCHLIST_SCRIPT = """
       return;
     }
     const cards = tokens.map((token) => {
-      const reality = routeBySymbol.get(token) || {symbol: token, routes: [], status: "telegram_only"};
+      const reality = routeBySymbol.get(token) || {symbol: token, routes: [], status: "checking market coverage", chart_url:`/charts?token=${token}`};
       return routeCard(token, reality);
     });
     target.innerHTML = cards.join("");
@@ -11375,11 +11664,20 @@ def render_signal_event(item: dict[str, Any]) -> str:
 
 def render_leg_card(title: str, leg: dict[str, Any]) -> str:
     volatility = leg.get("volatility_24h") or {}
-    has_funding = leg.get("market_type") == "Futures"
+    has_funding = (
+        str(leg.get("market_type") or "").casefold() == "futures"
+        and "dex" not in str(leg.get("venue") or "").casefold()
+    )
     settled_24h = leg.get("funding_24h_pct")
     projected = leg.get("projected_funding_24h_pct")
     funding_24h = settled_24h if settled_24h is not None else projected
-    funding_label = "24h settled" if settled_24h is not None else "24h at current" if has_funding else "24h funding"
+    funding_label = "24h settled" if settled_24h is not None else "24h at current"
+    funding_facts = f"""
+        <span>Live funding <strong>{fmt_signed_pct(leg.get('current_funding_pct'), digits=4)}</strong></span>
+        <span>{h(funding_label)} <strong>{fmt_signed_pct(funding_24h, digits=4)}</strong></span>
+        <span>Payout <strong>{h(funding_interval_label(leg.get('funding_interval_hours'), leg.get('funding_interval_assumed')))}</strong></span>
+        <span>Next payout <strong>{h(fmt_next_funding(leg.get('next_funding_ts_us')))}</strong></span>
+    """ if has_funding else ""
     return f"""
     <article class="leg-card">
       <div class="leg-card-head">
@@ -11391,10 +11689,7 @@ def render_leg_card(title: str, leg: dict[str, Any]) -> str:
         <span>Price <strong>{fmt_price(leg.get('price'))}</strong></span>
         <span>Depth <strong>{fmt_money(leg.get('depth_usd'))}</strong></span>
         <span>24h volume <strong>{fmt_money(leg.get('volume_24h_usd'))}</strong></span>
-        <span>Live funding <strong>{fmt_signed_pct(leg.get('current_funding_pct'), digits=4) if has_funding else 'not applicable'}</strong></span>
-        <span>{h(funding_label)} <strong>{fmt_signed_pct(funding_24h, digits=4) if has_funding else 'not applicable'}</strong></span>
-        <span>Payout <strong>{h(funding_interval_label(leg.get('funding_interval_hours'), leg.get('funding_interval_assumed'))) if has_funding else 'not applicable'}</strong></span>
-        <span>Next payout <strong>{h(fmt_next_funding(leg.get('next_funding_ts_us'))) if has_funding else 'not applicable'}</strong></span>
+        {funding_facts}
         <span>D/W <strong>{status_char(leg.get('deposit_enabled'))}/{status_char(leg.get('withdraw_enabled'))}</strong></span>
         <span>24h vol <strong>{fmt_pct(volatility.get('realized_volatility_pct'))}</strong></span>
       </div>
@@ -12947,6 +13242,10 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .compact-hero {{ min-height: 112px; }}
 .intel-hero h1 {{ margin: 4px 0 8px; max-width: 760px; font-size: 34px; line-height: 1.05; }}
 .intel-hero p {{ margin: 0; color: #c7d5d1; max-width: 760px; }}
+.intel-source-notice {{ padding:14px 16px;border:1px solid var(--terminal-line);border-left:4px solid var(--terminal-muted);border-radius:8px;background:var(--terminal-panel); }}
+.intel-source-notice.live {{ border-left-color:var(--terminal-accent); }}
+.intel-source-notice.stale {{ border-left-color:var(--terminal-warning); }}
+.intel-source-notice strong {{ display:block;margin-bottom:4px; }} .intel-source-notice p {{ margin:0;color:var(--terminal-muted);line-height:1.5; }}
 .intel-actions {{ display: flex; gap: 10px; flex-wrap: wrap; }}
 .intel-source-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px; }}
 .source-card {{ min-height: 78px; display: grid; gap: 5px; padding: 12px; border: 1px solid #d0d0d0; border-radius: 8px; background: #f7f7f7; }}

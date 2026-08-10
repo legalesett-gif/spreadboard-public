@@ -29,6 +29,8 @@ const memberPages = [
   ["funding", `${productionBase}/funding`],
   ["charts", `${productionBase}/charts`],
   ["fair", `${productionBase}/fair`],
+  ["intel", `${productionBase}/intel`],
+  ["watchlist", `${productionBase}/watchlist`],
   ["alerts", `${productionBase}/alerts`],
   ["account", `${productionBase}/account`],
   ["account-settings", `${productionBase}/account?audit=settings#settings`],

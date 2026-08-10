@@ -519,6 +519,7 @@ def main() -> int:
         accounts_path=server.accounts_path,
         poll_seconds=float(os.environ.get("SPREADBOARD_WEB_PUSH_SECONDS", "5")),
     )
+    server.web_push_worker = web_push_worker
     rail_reopen_worker = rail_watch.RailReopenWatcher(
         poll_seconds=float(os.environ.get("SPREADBOARD_RAIL_REOPEN_SECONDS", "300")),
     )

@@ -167,19 +167,35 @@ def build(
     killed.
     """
     deadline = time.monotonic() + budget_seconds
-    windows: dict[str, dict[str, float | None]] = {}
-    for venue, symbol in dict.fromkeys(legs):
+    path = Path(cache_path)
+    try:
+        previous = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        previous = {}
+    windows: dict[str, dict[str, float | None]] = dict(previous.get("legs") or {})
+    leg_updated_at: dict[str, str] = dict(previous.get("leg_updated_at") or {})
+    ordered = list(dict.fromkeys(legs))
+    start = int(previous.get("next_cursor") or 0) % max(1, len(ordered))
+    rotated = ordered[start:] + ordered[:start]
+    attempted = 0
+    refreshed_at = datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat()
+    for venue, symbol in rotated:
         if time.monotonic() >= deadline:
             break
+        attempted += 1
         entries = leg_history(venue, symbol)
         if entries:
-            windows[f"{venue}|{symbol}"] = realised_windows(entries)
+            key = f"{venue}|{symbol}"
+            windows[key] = realised_windows(entries)
+            leg_updated_at[key] = refreshed_at
     payload = {
-        "schema": "spreadboard.venue_funding_history.v1",
-        "updated_at": datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat(),
+        "schema": "spreadboard.venue_funding_history.v2",
+        "updated_at": refreshed_at,
+        "next_cursor": (start + attempted) % max(1, len(ordered)),
+        "leg_updated_at": leg_updated_at,
         "legs": windows,
     }
-    path = Path(cache_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
     temporary.replace(path)
@@ -216,7 +232,12 @@ def route_windows(route: dict[str, Any]) -> dict[str, float | None]:
     net: dict[str, float | None] = {f"{days}d": None for days in WINDOW_DAYS}
     sides: dict[str, dict[str, float | None] | None] = {}
     for side in ("long", "short"):
-        if str(route.get(f"{side}_market_type") or "") != "Futures":
+        venue = str(route.get(f"{side}_venue") or "")
+        is_futures = (
+            str(route.get(f"{side}_market_type") or "").casefold() == "futures"
+            and "dex" not in venue.casefold()
+        )
+        if not is_futures:
             sides[side] = {label: 0.0 for label in net}
             continue
         key = f"{route.get(f'{side}_venue')}|{route.get(f'{side}_market_symbol')}"

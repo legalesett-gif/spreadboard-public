@@ -24,6 +24,24 @@ SESSION_DAYS = 30
 _REQUEST_STATE = threading.local()
 
 
+def _member_manager_emails() -> set[str]:
+    """Accounts allowed to see and operate the subscriber ledger.
+
+    This is intentionally independent of the broad ``admin`` role.  Billing,
+    deployment, and subscriber operations are different powers; granting one
+    must not silently grant the others.
+    """
+    configured = os.environ.get(
+        "SPREADBOARD_MEMBER_MANAGER_EMAILS",
+        "alex@spreadarbitrage.ink,anatolij@spreadarbitrage.ink",
+    )
+    return {
+        item.strip().casefold()
+        for item in configured.split(",")
+        if item.strip()
+    }
+
+
 @dataclass(frozen=True)
 class User:
     id: int
@@ -42,6 +60,10 @@ class User:
     @property
     def is_admin(self) -> bool:
         return self.role == "admin"
+
+    @property
+    def can_manage_members(self) -> bool:
+        return self.email.strip().casefold() in _member_manager_emails()
 
     @property
     def subscription_active(self) -> bool:
@@ -74,6 +96,7 @@ class User:
             "display_name": self.display_name,
             "role": self.role,
             "is_admin": self.is_admin,
+            "can_manage_members": self.can_manage_members,
             "subscription_status": self.subscription_status,
             "subscription_expires_at": self.subscription_expires_at,
             "subscription_active": self.subscription_active,
