@@ -101,6 +101,7 @@ class MarketQuote:
     gas_estimate_usd: float | None = None
     slippage_bps: int | None = None
     price_impact_pct: float | None = None
+    quote_notional_usd: float | None = None
     route_plan: tuple[str, ...] = ()
     blockers: tuple[str, ...] = ()
     #: Which path produced this quote: "ticker" for a top-of-book ticker,
@@ -195,7 +196,10 @@ class DiscoveryCandidate:
             elif not self.identity_key:
                 state = QUOTE_VERIFIED_STATE
                 blockers.append("identity_required_for_route_feasibility")
-        if self.source_kind == SOURCE_DEX_DISCOVERED and self.long_market_type == "Spot":
+        if self.source_kind == SOURCE_DEX_DISCOVERED and "Spot" in {
+            self.long_market_type,
+            self.short_market_type,
+        }:
             if self.gas_adjusted_spread_pct is None:
                 blockers.append("gas_estimate_missing")
             if state_at_least(state, IDENTITY_VERIFIED_STATE):

@@ -44,7 +44,7 @@ def evaluate(
             "planning_buffer_label": "Collateral reserve unavailable",
             "risk_estimate": _unavailable_risk("no_route"),
             "reasons": ["No live or retained route is available for this token."],
-            "method": "deterministic_dual_opportunity_evidence_v3",
+            "method": "deterministic_dual_opportunity_evidence_v4",
         }
 
     windows = windows or {}
@@ -58,7 +58,9 @@ def evaluate(
         route.get("funding_daily_pct"),
     )
     daily = settled_daily if settled_daily is not None else projected_daily
-    carry = _clamp(max(0.0, daily or 0.0) * 40.0, 0.0, 20.0)
+    funding_outlook = assess_funding_outlook(route, windows=windows)
+    expected_daily = _number(funding_outlook.get("expected_24h_pct"))
+    carry = _clamp(max(0.0, expected_daily or 0.0) * 40.0, 0.0, 20.0)
 
     persistence = 0.0
     persistence_detail = []
@@ -80,6 +82,8 @@ def evaluate(
         persistence_detail.append(f"{positive_ratio * 100:.0f}% positive history samples")
 
     depth = _number(route.get("depth_usd"))
+    liquidity_kind = str(route.get("liquidity_evidence_kind") or "")
+    matched_notional = _number(route.get("matched_size_notional_usd"))
     volumes = [
         value
         for value in (
@@ -90,12 +94,18 @@ def evaluate(
         if value is not None and value > 0
     ]
     min_volume = min(volumes) if volumes else None
-    if depth is not None and depth > 0:
+    if depth is not None and depth > 0 and liquidity_kind != "minimum_leg_volume_24h":
         liquidity = 15.0 * _log_scale(depth, low=50.0, high=250_000.0)
         liquidity_basis = f"matched depth ${depth:,.0f}"
+    elif depth is not None and depth > 0:
+        liquidity = 10.0 * _log_scale(depth, low=10_000.0, high=50_000_000.0)
+        liquidity_basis = f"minimum leg 24h volume ${depth:,.0f}"
     elif min_volume is not None:
         liquidity = 10.0 * _log_scale(min_volume, low=10_000.0, high=50_000_000.0)
         liquidity_basis = f"minimum leg volume ${min_volume:,.0f}"
+    elif matched_notional is not None and matched_notional > 0:
+        liquidity = 8.0 * _log_scale(matched_notional, low=25.0, high=10_000.0)
+        liquidity_basis = f"matched-size quote proven at ${matched_notional:,.0f}; larger size unproven"
     else:
         liquidity = 0.0
         liquidity_basis = "liquidity unavailable"
@@ -107,6 +117,8 @@ def evaluate(
         route.get("executable_spread_pct"),
         route.get("displayed_open_spread_pct"),
     )
+    gas_adjusted_entry = _number(route.get("gas_adjusted_spread_pct"))
+    economic_entry = gas_adjusted_entry if gas_adjusted_entry is not None else executable
     execution = 0.0
     if not historical and freshness in {"fresh", "live"}:
         execution += 6.0
@@ -141,7 +153,7 @@ def evaluate(
 
     convergence = _convergence_evidence(history or [], current_basis=executable)
     expected_convergence = _number(convergence.get("expected_capture_pct"))
-    expected_funding = daily
+    expected_funding = expected_daily
     expected_gross = (
         (expected_convergence or 0.0) + (expected_funding or 0.0)
         if expected_convergence is not None or expected_funding is not None
@@ -154,15 +166,15 @@ def evaluate(
 
     stability_points = _funding_stability_score(funding_stability, maximum=15.0)
     spread_cross = 5.0 + _clamp((expected_convergence or 0.0) * 5.0, -5.0, 5.0)
-    funding_cross = 7.5 + _clamp((daily or 0.0) * 15.0, -7.5, 7.5)
+    funding_cross = 7.5 + _clamp((expected_daily or 0.0) * 15.0, -7.5, 7.5)
     convergence_points = _convergence_score(convergence, maximum=25.0)
-    entry_edge = _clamp(max(0.0, executable or 0.0) / 1.5 * 25.0, 0.0, 25.0)
+    entry_edge = _clamp(max(0.0, economic_entry or 0.0) / 1.5 * 25.0, 0.0, 25.0)
 
     funding_components = {
         "current_rate": _component(
-            _clamp(max(0.0, daily or 0.0) * 50.0, 0.0, 25.0),
+            _clamp(max(0.0, expected_daily or 0.0) * 50.0, 0.0, 25.0),
             25,
-            "Settled 24h carry where available; current-rate projection otherwise",
+            _funding_outlook_detail(funding_outlook),
         ),
         "persistence": _component(
             persistence / 15.0 * 20.0,
@@ -201,8 +213,12 @@ def evaluate(
             entry_edge,
             25,
             (
-                f"Executable opening basis {executable:+.3f}% before fees"
-                if executable is not None
+                (
+                    f"Gas-adjusted opening basis {economic_entry:+.3f}% at the quoted DEX size"
+                    if gas_adjusted_entry is not None
+                    else f"Executable opening basis {economic_entry:+.3f}% before fees"
+                )
+                if economic_entry is not None
                 else "Executable opening basis unavailable"
             ),
         ),
@@ -215,8 +231,8 @@ def evaluate(
             funding_cross,
             15,
             (
-                f"Expected 24h funding contribution {daily:+.3f}%"
-                if daily is not None
+                f"{_funding_outlook_detail(funding_outlook)}"
+                if expected_daily is not None
                 else "Funding contribution unavailable; treated as neutral"
             ),
         ),
@@ -286,9 +302,8 @@ def evaluate(
         )
 
     reasons = []
-    if daily is not None:
-        source = "settled" if settled_daily is not None else "current-rate projection"
-        reasons.append(f"Net carry {daily:+.3f}% per 24h ({source}).")
+    if expected_daily is not None:
+        reasons.append(_funding_outlook_detail(funding_outlook) + ".")
     if risk.get("summary"):
         reasons.append(str(risk["summary"]))
     if executable is not None:
@@ -316,7 +331,14 @@ def evaluate(
             "confidence": funding_confidence,
             "label": _opportunity_label("funding", funding_score, funding_confidence),
             "components": funding_components,
+            # Kept for compatible clients: this prefers a settled completed
+            # day when one exists. New clients should use the two explicit
+            # fields below and never label this ambiguous value as "live".
             "current_24h_pct": daily,
+            "current_projected_24h_pct": projected_daily,
+            "settled_24h_pct": settled_daily,
+            "expected_24h_pct": expected_daily,
+            "funding_outlook": funding_outlook,
             "spread_contribution_pct": expected_convergence,
         },
         "spread_opportunity": {
@@ -325,7 +347,8 @@ def evaluate(
             "label": _opportunity_label("spread", spread_score, spread_confidence),
             "components": spread_components,
             "entry_spread_pct": executable,
-            "funding_contribution_24h_pct": daily,
+            "funding_contribution_24h_pct": expected_daily,
+            "funding_outlook": funding_outlook,
             "convergence": convergence,
         },
         "route_economics": {
@@ -340,17 +363,117 @@ def evaluate(
                 else None
             ),
             "cost_status": "known" if known_costs is not None else "account_fee_and_exit_costs_required",
+            "known_dex_entry_gas_pct": _dex_entry_gas_pct(route),
         },
+        "dex_evidence": _dex_evidence(route),
         "planning_buffer_pct": reserve,
         "planning_buffer_label": reserve_label,
         "risk_estimate": risk,
         "reasons": reasons[:5],
-        "method": "deterministic_dual_opportunity_evidence_v3",
+        "method": "deterministic_dual_opportunity_evidence_v4",
         "disclaimer": (
             "Rule-based research evidence, not personalized advice, an AI prediction or a liquidation calculation. "
             "Gross edge excludes unknown account fees, borrow, gas and exit slippage. Exact leverage, maintenance "
             "tiers, account equity and other positions remain venue/account specific."
         ),
+    }
+
+
+def assess_funding_outlook(
+    route: dict[str, Any] | None,
+    *,
+    windows: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Blend distinct funding horizons into an inspectable 24h expectation.
+
+    The current-rate projection is responsive but noisy. Completed 1d, 7d and
+    30d settlements are increasingly stable but increasingly stale. Missing
+    horizons are omitted and the remaining weights are renormalised; a blank
+    is never converted to zero. If the current sign conflicts with the
+    settled-history sign, the blended magnitude is reduced by 25% and the
+    disagreement is exposed rather than silently choosing either regime.
+    """
+    route = route if isinstance(route, dict) else {}
+    windows = windows if isinstance(windows, dict) else {}
+    retained_only = bool(
+        route.get("radar_historical")
+        or str(route.get("freshness") or "").casefold() == "historical"
+    )
+    projected = (
+        None
+        if retained_only
+        else _first_number(
+            route.get("funding_projected_24h_pct"),
+            route.get("funding_daily_pct"),
+        )
+    )
+    settled_1d = _first_number(windows.get("1d"), route.get("funding_24h_pct"))
+    candidates = (
+        ("current", projected, 0.35),
+        ("1d", settled_1d, 0.30),
+        ("7d", _dailyised(windows.get("7d"), 7), 0.25),
+        ("30d", _dailyised(windows.get("30d"), 30), 0.10),
+    )
+    available = [(label, value, weight) for label, value, weight in candidates if value is not None]
+    if not available:
+        return {
+            "expected_24h_pct": None,
+            "raw_weighted_24h_pct": None,
+            "regime": "unavailable",
+            "regime_conflict": False,
+            "confidence": 0,
+            "horizons": {},
+            "weights": {},
+            "method": "recency_weighted_settled_funding_v1",
+        }
+
+    total_weight = sum(weight for _label, _value, weight in available)
+    normalised = {label: weight / total_weight for label, _value, weight in available}
+    horizons = {label: round(float(value), 8) for label, value, _weight in available}
+    raw = sum(float(value) * normalised[label] for label, value, _weight in available)
+
+    historical = [(value, weight) for label, value, weight in available if label != "current"]
+    historical_mean = (
+        sum(float(value) * weight for value, weight in historical) / sum(weight for _value, weight in historical)
+        if historical
+        else None
+    )
+    regime_conflict = bool(
+        projected is not None
+        and historical_mean is not None
+        and abs(projected) >= 0.001
+        and abs(historical_mean) >= 0.001
+        and math.copysign(1.0, projected) != math.copysign(1.0, historical_mean)
+    )
+    adjusted = raw * (0.75 if regime_conflict else 1.0)
+    if regime_conflict:
+        regime = (
+            "current_negative_historical_positive"
+            if projected is not None and projected < 0
+            else "current_positive_historical_negative"
+        )
+    elif raw > 0.001:
+        regime = "positive"
+    elif raw < -0.001:
+        regime = "negative"
+    else:
+        regime = "flat_or_mixed"
+
+    settled_count = sum(label != "current" for label, _value, _weight in available)
+    confidence = min(100, 25 + 20 * settled_count + (15 if projected is not None else 0))
+    if regime_conflict:
+        confidence = max(0, confidence - 15)
+    return {
+        "expected_24h_pct": round(adjusted, 8),
+        "raw_weighted_24h_pct": round(raw, 8),
+        "regime": regime,
+        "regime_conflict": regime_conflict,
+        "confidence": confidence,
+        "horizons": horizons,
+        "weights": {label: round(weight, 6) for label, weight in normalised.items()},
+        "historical_daily_pct": round(historical_mean, 8) if historical_mean is not None else None,
+        "conflict_haircut": 0.75 if regime_conflict else 1.0,
+        "method": "recency_weighted_settled_funding_v1",
     }
 
 
@@ -453,7 +576,11 @@ def assess_route_risk(
     )
     historical_addon = 10.0 if historical else 0.0
     route_kind = str(route.get("route_kind") or "").upper()
-    dex_addon = 5.0 if "DEX" in route_kind or "dex" in (long_type + short_type).casefold() else 0.0
+    if "DEX" in route_kind or "dex" in (long_type + short_type).casefold():
+        dex_evidence = _dex_evidence(route)
+        dex_addon = 2.0 if dex_evidence["status"] == "size_and_cost_evidenced" else 5.0 if dex_evidence["status"] == "partial" else 8.0
+    else:
+        dex_addon = 0.0
     borrow_addon = 8.0 if short_type.casefold() == "spot" else 0.0
     basis_addon = min(12.0, max(0.0, _first_number(basis_p95, basis_sigma_24) or 0.0) * 0.5)
     correlation_addon = (
@@ -910,6 +1037,78 @@ def _spread_cross_detail(evidence: dict[str, Any]) -> str:
     if capture is None:
         return "No evidence-backed convergence adjustment; neutral contribution"
     return f"Evidence-backed 24h convergence contribution {capture:+.3f}%"
+
+
+def _dailyised(value: Any, days: int) -> float | None:
+    number = _number(value)
+    if number is None:
+        return None
+    return number / max(1, int(days))
+
+
+def _funding_outlook_detail(outlook: dict[str, Any]) -> str:
+    expected = _number(outlook.get("expected_24h_pct"))
+    if expected is None:
+        return "Multi-horizon funding outlook unavailable"
+    horizons = outlook.get("horizons") if isinstance(outlook.get("horizons"), dict) else {}
+    labels = [label for label in ("current", "1d", "7d", "30d") if label in horizons]
+    evidence = "/".join(labels)
+    regime = str(outlook.get("regime") or "mixed").replace("_", " ")
+    conflict = "; 25% regime-conflict haircut" if outlook.get("regime_conflict") else ""
+    return (
+        f"Multi-horizon expected funding {expected:+.3f}% per 24h "
+        f"from {evidence or 'available'} evidence ({regime}{conflict})"
+    )
+
+
+def _dex_entry_gas_pct(route: dict[str, Any]) -> float | None:
+    gas = _number(route.get("dex_gas_estimate_usd"))
+    notional = _number(route.get("matched_size_notional_usd"))
+    if gas is None or notional is None or notional <= 0:
+        return None
+    return round(gas / notional * 100.0, 8)
+
+
+def _dex_evidence(route: dict[str, Any]) -> dict[str, Any]:
+    route_kind = str(route.get("route_kind") or "").upper()
+    long_type = str(route.get("long_market_type") or "").casefold()
+    short_type = str(route.get("short_market_type") or "").casefold()
+    is_dex = "DEX" in route_kind or "dex" in {long_type, short_type}
+    if not is_dex:
+        return {"status": "not_applicable"}
+    notional = _number(route.get("matched_size_notional_usd"))
+    gas = _number(route.get("dex_gas_estimate_usd"))
+    impact = _number(route.get("dex_price_impact_pct"))
+    slippage = _number(route.get("dex_slippage_bps"))
+    chain = route.get("dex_chain")
+    contract = route.get("dex_contract")
+    route_plan = route.get("dex_route_plan") or []
+    size_evidenced = notional is not None and notional > 0
+    cost_evidenced = gas is not None
+    identity_evidenced = bool(chain and contract)
+    if size_evidenced and cost_evidenced and identity_evidenced:
+        status = "size_and_cost_evidenced"
+    elif any((size_evidenced, cost_evidenced, identity_evidenced, impact is not None)):
+        status = "partial"
+    else:
+        status = "missing"
+    return {
+        "status": status,
+        "matched_size_notional_usd": notional,
+        "gas_estimate_usd": gas,
+        "entry_gas_pct": _dex_entry_gas_pct(route),
+        "price_impact_pct": impact,
+        "slippage_bps": slippage,
+        "chain": chain,
+        "contract": contract,
+        "quote_source": route.get("dex_quote_source"),
+        "route_plan_present": bool(route_plan),
+        "limitations": [
+            "The quote proves only the displayed notional; larger size must be re-quoted.",
+            "Gas can change before signing and a route quote does not quantify MEV or failed-transaction risk.",
+            "Price impact already embedded in executable quote prices must not be charged twice.",
+        ],
+    }
 
 
 def _funding_stability_score(stability: dict[str, Any], *, maximum: float) -> float:

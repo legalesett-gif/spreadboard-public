@@ -157,7 +157,7 @@ def test_watchlist_score_is_explainable_and_model_free() -> None:
         "integrity",
         "risk",
     }
-    assert result["method"] == "deterministic_dual_opportunity_evidence_v3"
+    assert result["method"] == "deterministic_dual_opportunity_evidence_v4"
     assert 0 <= result["funding_opportunity"]["score"] <= 100
     assert 0 <= result["spread_opportunity"]["score"] <= 100
     assert "spread_contribution" in result["funding_opportunity"]["components"]
@@ -211,6 +211,11 @@ def test_funding_and_spread_scores_are_separate_with_explicit_cross_effects() ->
         windows={"1d": 0.4, "7d": 2.8, "30d": 12.0},
         history=history(converging=False),
     )
+    cooled_spread = research_score.evaluate(
+        {**base_route, "executable_spread_pct": -0.2, "funding_24h_pct": 0.4},
+        windows={"1d": 0.4, "7d": 2.8, "30d": 12.0},
+        history=history(converging=True),
+    )
 
     assert (
         positive_funding["spread_opportunity"]["score"]
@@ -228,6 +233,103 @@ def test_funding_and_spread_scores_are_separate_with_explicit_cross_effects() ->
     assert 8 <= positive_funding["spread_opportunity"]["convergence"]["samples"] <= 11
     assert positive_funding["route_economics"]["expected_convergence_capture_pct"] > 0
     assert adverse_basis["route_economics"]["expected_convergence_capture_pct"] < 0
+    # A negative entry now gets no current opening-edge credit, while the
+    # separate historical convergence factor remains visible for radar value.
+    assert cooled_spread["spread_opportunity"]["components"]["entry_edge"]["value"] == 0
+    assert cooled_spread["spread_opportunity"]["components"]["convergence_history"]["value"] > 0
+    assert cooled_spread["route_economics"]["expected_convergence_capture_pct"] is None
+
+
+def test_spread_funding_cross_effect_uses_current_and_settled_horizons() -> None:
+    route = {
+        "route_kind": "SPOT-FUTURES",
+        "long_market_type": "Spot",
+        "short_market_type": "Futures",
+        "funding_projected_24h_pct": -0.10,
+        "funding_24h_pct": 0.30,
+        "depth_usd": 25_000,
+        "executable_spread_pct": 0.5,
+        "freshness": "fresh",
+        "long_market_symbol": "X/USDT",
+        "short_market_symbol": "X/USDT:USDT",
+        "blockers": [],
+    }
+    mixed = research_score.evaluate(
+        route,
+        windows={"1d": 0.30, "7d": 2.8, "30d": 9.0},
+    )
+    persistent_negative = research_score.evaluate(
+        {**route, "funding_24h_pct": -0.30},
+        windows={"1d": -0.30, "7d": -2.8, "30d": -9.0},
+    )
+
+    outlook = mixed["spread_opportunity"]["funding_outlook"]
+    assert outlook["regime"] == "current_negative_historical_positive"
+    assert outlook["regime_conflict"] is True
+    assert outlook["expected_24h_pct"] > 0
+    assert outlook["expected_24h_pct"] < outlook["historical_daily_pct"]
+    assert mixed["spread_opportunity"]["components"]["funding_contribution"]["value"] > 7.5
+    assert (
+        mixed["spread_opportunity"]["components"]["funding_contribution"]["value"]
+        > persistent_negative["spread_opportunity"]["components"]["funding_contribution"]["value"]
+    )
+
+
+def test_funding_outlook_renormalises_missing_windows_without_fake_zeroes() -> None:
+    outlook = research_score.assess_funding_outlook(
+        {"funding_projected_24h_pct": 0.4},
+        windows={"7d": 1.4},
+    )
+    assert set(outlook["horizons"]) == {"current", "7d"}
+    assert sum(outlook["weights"].values()) == pytest.approx(1.0)
+    assert "1d" not in outlook["weights"]
+    assert outlook["expected_24h_pct"] == pytest.approx((0.4 * 0.35 + 0.2 * 0.25) / 0.60)
+
+
+def test_retained_radar_outlook_never_relabels_last_live_projection_as_current() -> None:
+    outlook = research_score.assess_funding_outlook(
+        {
+            "radar_historical": True,
+            "freshness": "historical",
+            "funding_projected_24h_pct": 9.9,
+        },
+        windows={"1d": 0.3, "7d": 1.4, "30d": 3.0},
+    )
+    assert "current" not in outlook["horizons"]
+    assert outlook["regime_conflict"] is False
+    assert outlook["expected_24h_pct"] == pytest.approx(
+        (0.3 * 0.30 + 0.2 * 0.25 + 0.1 * 0.10) / 0.65
+    )
+
+
+def test_dex_score_exposes_size_cost_and_identity_evidence() -> None:
+    result = research_score.evaluate(
+        {
+            "route_kind": "DEX-FUTURES",
+            "long_market_type": "DEX",
+            "short_market_type": "Futures",
+            "funding_projected_24h_pct": 0.4,
+            "executable_spread_pct": 1.0,
+            "gas_adjusted_spread_pct": 0.9,
+            "matched_size_notional_usd": 50.0,
+            "dex_gas_estimate_usd": 0.05,
+            "dex_price_impact_pct": 0.2,
+            "dex_chain": "56",
+            "dex_contract": "0xabc",
+            "dex_quote_source": "okx_dex_quote",
+            "dex_route_plan": ["router"],
+            "freshness": "fresh",
+            "long_market_symbol": "0xabc",
+            "short_market_symbol": "X/USDT:USDT",
+            "blockers": [],
+        },
+        windows={"1d": 0.3},
+    )
+
+    assert result["dex_evidence"]["status"] == "size_and_cost_evidenced"
+    assert result["dex_evidence"]["entry_gas_pct"] == pytest.approx(0.1)
+    assert result["route_economics"]["known_dex_entry_gas_pct"] == pytest.approx(0.1)
+    assert "Gas-adjusted opening basis" in result["spread_opportunity"]["components"]["entry_edge"]["detail"]
 
 
 def test_watchlist_collateral_reserve_uses_volatility_and_tail_risk() -> None:

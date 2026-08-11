@@ -130,6 +130,35 @@ def test_unique_okx_identity_enriches_cex_quote_but_guards_large_dislocation() -
     )
 
 
+def test_dex_gas_evidence_reaches_candidate_without_false_missing_blocker() -> None:
+    identity = "eip155:56/erc20:0xabc"
+    dex = MarketQuote(
+        token="COSTED", venue="OKX DEX 56", market_type="Spot",
+        bid=1.0, ask=1.01, bid_vwap=1.0, ask_vwap=1.01,
+        quote_ts_us=1, source_name="okx_dex_quote", identity_key=identity,
+        chain_id=56, token_address="0xabc", gas_estimate_usd=0.05,
+        quote_notional_usd=50.0, price_impact_pct=0.2,
+        route_plan=("router",),
+    )
+    cex = MarketQuote(
+        token="COSTED", venue="Bybit", market_type="Futures",
+        bid=1.05, ask=1.06, bid_vwap=1.05, ask_vwap=1.06,
+        quote_ts_us=1, source_name="ccxt", identity_key=identity,
+        symbol="COSTED/USDT:USDT",
+    )
+
+    rows = sources.dex_candidates(
+        [dex], [cex], source_name="okx_dex_quote", min_spread_pct=-100
+    )
+
+    long_dex = next(row for row in rows if row["long_venue"] == "OKX DEX 56")
+    assert "gas_estimate_missing" not in long_dex["blockers"]
+    assert float(long_dex["gas_adjusted_spread_pct"]) == pytest.approx(
+        float(long_dex["executable_spread_pct"]) - 0.1
+    )
+    assert long_dex["notes"]["route_inputs"]["long"]["quote_notional_usd"] == 50.0
+
+
 def test_unique_okx_identity_does_not_infer_known_collision() -> None:
     quote = MarketQuote(
         token="SAME",

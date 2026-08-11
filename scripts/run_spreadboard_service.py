@@ -870,7 +870,7 @@ def _refresh_funding_windows() -> None:
     cannot happen while rendering. Doing it here, for the routes the warm pass
     just built, means the page only ever reads the answer.
     """
-    from spreadboard import funding_radar, market_history, server
+    from spreadboard import funding_radar, market_history, research_calibration, server
 
     try:
         route_keys: list[str] = []
@@ -898,6 +898,13 @@ def _refresh_funding_windows() -> None:
         # radar, explicitly marked as no longer live.
         radar_count = funding_radar.refresh(leaders)
         _log(f"funding radar retained {radar_count} leader routes")
+        calibration_capture = research_calibration.capture_routes(leaders)
+        calibration_labels = research_calibration.label_matured()
+        _log(
+            "research calibration shadow "
+            f"captured={calibration_capture['inserted']} "
+            f"labeled={calibration_labels['labeled']}"
+        )
         _refresh_venue_funding_history(leaders=leaders)
     except Exception as exc:  # noqa: BLE001 - a missing history file is not fatal.
         _log(f"funding windows skipped: {type(exc).__name__}: {exc}")

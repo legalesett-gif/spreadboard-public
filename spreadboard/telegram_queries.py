@@ -26,7 +26,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from . import api_spreads, funding_radar
+from . import api_spreads, funding_radar, research_score
 
 MAX_ROWS = 8
 COOLDOWN_SECONDS = 60.0
@@ -218,10 +218,19 @@ def _radar_summary(rows: list[dict[str, Any]]) -> str:
         return ""
     best = rows[0]
     windows = best.get("radar_windows") if isinstance(best.get("radar_windows"), dict) else {}
+    outlook = research_score.assess_funding_outlook(best, windows=windows)
+    expected = outlook.get("expected_24h_pct")
+    outlook_line = ""
+    if expected is not None:
+        regime = str(outlook.get("regime") or "mixed").replace("_", " ")
+        outlook_line = (
+            f"\nBlended outlook: {_pct(expected, 3)} per 24h · {escape(regime)}"
+            + (" · current/history conflict haircut applied." if outlook.get("regime_conflict") else ".")
+        )
     return (
         f"<b>Funding radar</b> · {escape(_route(best))} · last live {_radar_age(best.get('radar_last_seen_age_min'))} ago\n"
         f"Settled: 24h {_pct(windows.get('1d'))} · 7d {_pct(windows.get('7d'))} · 30d {_pct(windows.get('30d'))}; "
-        f"last basis {_pct(best.get('executable_spread_pct'))}."
+        f"last basis {_pct(best.get('executable_spread_pct'))}.{outlook_line}"
     )
 
 
@@ -580,6 +589,11 @@ def keyboard(query: Query, *, public_url: str = "") -> dict[str, Any]:
             "text": "Open on SpreadBoard",
             "url": f"{public_url.rstrip('/')}{destination}",
         }])
+        if query.kind in {"spread", "funding"} and query.symbol:
+            rows.append([{
+                "text": "Personalized margin stress",
+                "url": f"{public_url.rstrip('/')}/watchlist#margin-planner",
+            }])
     return {"inline_keyboard": rows}
 
 

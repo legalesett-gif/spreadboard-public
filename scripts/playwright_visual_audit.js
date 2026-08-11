@@ -26,6 +26,7 @@ const publicPages = [
   ["pricing", `${productionBase}/pricing`],
   ["telegram", `${productionBase}/telegram`],
   ["guide", `${productionBase}/guide`],
+  ["methodology", `${productionBase}/methodology`],
   ["status", `${productionBase}/status`],
   ["login", `${productionBase}/login`],
   ["forgot-password", `${productionBase}/forgot-password`],
@@ -59,6 +60,25 @@ async function signIn(page) {
 }
 
 async function exerciseMemberState(page, name) {
+  if (name === "watchlist") {
+    await page.getByLabel("Account mode").selectOption("isolated");
+    await page.getByLabel("Futures notional, USD").fill("10000");
+    await page.getByLabel("Chosen leverage").fill("3");
+    await page.getByLabel("Exact maintenance margin, %").fill("1");
+    await page.getByLabel("Public 24h stress move, %").fill("20");
+    await page.getByLabel("Collateral allocated to this position, USD").fill("4000");
+    await page.getByRole("button", { name: "Calculate stress margin" }).click();
+    await page.waitForFunction(() =>
+      document.querySelector("#marginPlanResult header strong")?.textContent?.includes("Within entered stress"),
+      null,
+      { timeout: 30_000 },
+    );
+    return await page.evaluate(() => ({
+      marginPlannerVisible: Boolean(document.querySelector("#margin-planner")),
+      marginVerdict: document.querySelector("#marginPlanResult header strong")?.textContent || "",
+      transientCopyVisible: document.querySelector("#margin-planner")?.textContent?.includes("not stored") || false,
+    }));
+  }
   if (name === "charts") {
     const token = page.locator("[data-chart-token]");
     await token.fill("GUA");

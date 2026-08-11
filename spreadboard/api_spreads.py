@@ -115,6 +115,14 @@ class SpreadTerminalRow:
     listing_age_days: float | None = None
     listing_age_source: str | None = None
     asset_class: str = "crypto"
+    liquidity_evidence_kind: str | None = None
+    matched_size_notional_usd: float | None = None
+    gas_adjusted_spread_pct: float | None = None
+    dex_gas_estimate_usd: float | None = None
+    dex_slippage_bps: float | None = None
+    dex_price_impact_pct: float | None = None
+    dex_quote_source: str | None = None
+    dex_route_plan: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         # asdict() recurses and deep-copies; every field on this row is a scalar
@@ -1401,6 +1409,15 @@ def _row_from_api(
         if isinstance(route_inputs.get("short"), dict)
         else None
     )
+    long_input = route_inputs.get("long") if isinstance(route_inputs.get("long"), dict) else {}
+    short_input = route_inputs.get("short") if isinstance(route_inputs.get("short"), dict) else {}
+    dex_input = (
+        long_input
+        if "dex" in f"{long_venue or ''} {long_market_type or ''}".casefold()
+        else short_input
+        if "dex" in f"{short_venue or ''} {short_market_type or ''}".casefold()
+        else {}
+    )
     dex_identity = (
         long_identity
         if "dex" in str(long_venue or "").casefold()
@@ -1576,6 +1593,31 @@ def _row_from_api(
         listing_age_days=_listing_age_days(metadata_entry.get("first_seen_at"), now),
         listing_age_source=_str_or_none(metadata_entry.get("listing_age_source")),
         asset_class=str(asset_class),
+        liquidity_evidence_kind="minimum_leg_volume_24h",
+        matched_size_notional_usd=_float_or_none(
+            raw.get("target_notional_usd"),
+            dex_input.get("quote_notional_usd") if isinstance(dex_input, dict) else None,
+            long_input.get("quote_notional_usd") if isinstance(long_input, dict) else None,
+            short_input.get("quote_notional_usd") if isinstance(short_input, dict) else None,
+        ),
+        gas_adjusted_spread_pct=_float_or_none(raw.get("gas_adjusted_spread_pct")),
+        dex_gas_estimate_usd=_float_or_none(
+            dex_input.get("gas_estimate_usd") if isinstance(dex_input, dict) else None
+        ),
+        dex_slippage_bps=_float_or_none(
+            dex_input.get("slippage_bps") if isinstance(dex_input, dict) else None
+        ),
+        dex_price_impact_pct=_float_or_none(
+            dex_input.get("price_impact_pct") if isinstance(dex_input, dict) else None
+        ),
+        dex_quote_source=_str_or_none(
+            dex_input.get("quote_source") if isinstance(dex_input, dict) else None
+        ),
+        dex_route_plan=tuple(
+            str(item)
+            for item in (dex_input.get("route_plan") or [])
+            if isinstance(dex_input, dict) and item
+        ),
         raw_source_kind=source_kind or bucket,
         mirage_guarded=any(str(item).startswith("mirage_guard:") for item in blockers),
     )

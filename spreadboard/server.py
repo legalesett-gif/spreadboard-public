@@ -47,6 +47,7 @@ from spreadboard import (  # noqa: E402
     live,
     live_book_cache,
     mailer,
+    margin_planner,
     market_history,
     venue_funding_history,
     web_push,
@@ -920,6 +921,10 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     db_path=self.server.accounts_path,
                 )
                 self._send_json({"ok": True, "user": updated})
+            elif parsed.path == "/api/margin-plan":
+                # Deliberately transient: private account equity and venue tier
+                # inputs are calculated, returned, and never written to disk.
+                self._send_json(margin_planner.calculate(payload))
             elif parsed.path == "/api/telegram/link":
                 token = accounts.create_telegram_link_token(user.id, db_path=self.server.accounts_path)
                 self._send_json({"ok": True, "url": telegram_bot.link_url(token), "expires_in_seconds": 600})
@@ -2496,6 +2501,10 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
             ),
             "chart_url": f"/charts?route_key={board.route_key_url(route_key)}",
             "open_spread_pct": row.get("executable_spread_pct"),
+            "funding_projected_24h_pct": (
+                None if historical else row.get("funding_projected_24h_pct")
+            ),
+            "funding_settled_24h_pct": funding_radar.window_value(row, "1d"),
             "funding_24h_pct": funding_radar.window_value(row, "1d")
             if historical
             else row.get("funding_24h_pct")
@@ -8372,12 +8381,13 @@ def render_methodology_page() -> str:
     body = """
     <section class="research-page">
       <header class="research-hero"><div><span class="page-kicker">Methodology</span><h1>Every number should answer “could I actually trade it?”</h1><p>SpreadBoard separates market discovery from execution evidence. Unknown inputs stay unknown instead of being replaced by optimistic defaults.</p></div><aside><strong>Read-only</strong><span>Public market APIs</span><a href="/proof">See verified audits →</a></aside></header>
-      <nav class="research-jump"><a href="#prices">Prices</a><a href="#funding">Funding</a><a href="#risk">Risk reserve</a><a href="#identity">Identity</a><a href="#rails">Rails</a><a href="#labels">Evidence labels</a></nav>
+      <nav class="research-jump"><a href="#prices">Prices</a><a href="#funding">Funding</a><a href="#risk">Risk reserve</a><a href="#identity">Identity</a><a href="#rails">Rails</a><a href="#ml">ML gate</a><a href="#labels">Evidence labels</a></nav>
       <section class="research-grid" id="prices"><article><span>01 · Prices</span><h2>Matched-size VWAP</h2><p>The buy leg is walked through asks and the sell leg through bids for the same economic size. Contract multipliers and available depth are applied before the spread is shown.</p><code>(sell VWAP − buy VWAP) ÷ midpoint × 100</code></article><article><span>What it prevents</span><h2>Top-book mirages</h2><p>A tiny best quote cannot make an entire position executable. When depth is unavailable, the row says so and the calculator does not invent it.</p></article></section>
-      <section class="research-grid" id="funding"><article><span>02 · Funding</span><h2>Settled funding first</h2><p>Current rate, projected 24-hour carry, and settled venue payments are separate fields. Persistence uses completed 1d, 7d, and 30d windows when those windows have enough coverage.</p></article><article><span>Direction</span><h2>Who pays whom</h2><p>Funding is normalized to the displayed long/short direction. Positive means the shown hedge receives; negative means it pays.</p></article></section>
-      <section class="research-grid" id="risk"><article><span>03 · Risk reserve</span><h2>Empirical adverse-tail stress</h2><p>The Watchlist estimates a collateral reserve for each futures leg from hourly prices: rolling maximum adverse 24-hour excursions, full-history and recent realized volatility, 99% parametric shocks, basis widening, and leg correlation. The larger supported shock is used rather than an average.</p></article><article><span>Conservative add-ons</span><h2>Risk is more than volatility</h2><p>Maintenance and operating room, shallow or unknown liquidity, sparse or gapped history, unresolved identity, DEX execution, spot-borrow exposure, stale radar routes, and weak hedge correlation add to the reserve. A rolling coverage check is shown when enough outcomes exist.</p><p>This is a transparent research stress estimate, not an AI prediction or a venue liquidation calculation. Exact maintenance tiers, account equity, fees and other positions remain account-specific.</p></article></section>
+      <section class="research-grid" id="funding"><article><span>02 · Funding</span><h2>Settled funding and current funding stay separate</h2><p>The multi-horizon 24h outlook weights the current-rate projection 35%, settled 1d 30%, dailyized 7d 25%, and dailyized 30d 10%, then renormalizes across only the horizons that exist. A current/history sign conflict cuts the blended magnitude by 25% and is shown explicitly; history can keep a cooled leader on the radar but cannot masquerade as a live rate.</p></article><article><span>Two theses</span><h2>Funding and spread interact</h2><p>Funding stability, persistence and rate form the funding thesis. Entry size, observed convergence, half-life and basis risk form the spread thesis. Multi-horizon expected funding adjusts the spread score; evidence-backed convergence adjusts the funding score. Positive means the shown hedge receives.</p></article></section>
+      <section class="research-grid" id="risk"><article><span>03 · Risk reserve</span><h2>Empirical adverse-tail stress</h2><p>The Watchlist estimates a collateral reserve for each futures leg from hourly prices: rolling maximum adverse 24-hour excursions, full-history and recent realized volatility, 99% parametric shocks, basis widening, and leg correlation. The larger supported shock is used rather than an average.</p></article><article><span>Personal inputs</span><h2>Account stress without invented liquidation</h2><p>The <a href="/watchlist#margin-planner">personalized margin planner</a> combines that public stress with the member's exact maintenance tier, leverage, isolated/cross equity, other positions, fees, borrow, gas and slippage. It returns stress headroom and refuses missing required inputs; it does not call that an exchange liquidation price.</p></article></section>
       <section class="research-grid" id="identity"><article><span>04 · Identity</span><h2>Identity before price</h2><p>Matching tickers are not enough. Market base/quote metadata and shared contracts or mints are used where available. Implausible ratios, leveraged products, and ambiguous DEX identities are held out.</p></article><article><span>Policy</span><h2>Unknown stays unknown</h2><p>A route without enough identity evidence is research context, never silently upgraded into an executable claim.</p></article></section>
-      <section class="research-grid" id="rails"><article><span>05 · Rails</span><h2>Directional transfer proof</h2><p>Spot transfer routes require withdrawal from the buy venue and deposit to the sell venue on a compatible network. Generic green deposit/withdraw badges are not sufficient.</p></article><article><span>DEX</span><h2>Exact chain and contract</h2><p>DEX quotes are tied to a chain and contract. Quote failure, unsupported assets, and suspected honeypots remain visible source conditions.</p></article></section>
+      <section class="research-grid" id="rails"><article><span>05 · Rails</span><h2>Directional transfer proof</h2><p>Spot transfer routes require withdrawal from the buy venue and deposit to the sell venue on a compatible network. Generic green deposit/withdraw badges are not sufficient.</p></article><article><span>DEX</span><h2>Exact chain, size and cost evidence</h2><p>DEX quotes preserve chain, contract, quoted notional, route plan, gas, slippage tolerance and provider price impact when supplied. Gas adjusts the opening edge once; price impact embedded in quoted buy/sell prices is not charged twice. Larger size, changing gas, MEV and transaction failure remain explicit limitations.</p></article></section>
+      <section class="research-grid" id="ml"><article><span>06 · Future ML</span><h2>Shadow data before a model</h2><p>Versioned score observations are frozen before 8h/24h outcomes exist. A future model must use chronological 60/20/20 train-calibration-test splits, pass leakage and class-balance checks, beat prevalence baselines, produce calibrated probabilities, survive drift checks, and run in shadow mode for at least 14 days.</p></article><article><span>Fail closed</span><h2>No AI score is active</h2><p>No OpenAI, Anthropic, Gemini, Ollama or predictive model is configured. Activation remains impossible until at least 5,000 labeled outcomes across 100 routes and 30 days exist, account-cost coverage is sufficient, and a tested deterministic fallback is present. LLM margin predictions are explicitly excluded.</p></article></section>
       <section class="evidence-labels" id="labels"><div><span>Live</span><p>Current public API or streaming book inside the freshness window.</p></div><div><span>Settled</span><p>A completed venue funding payment, not a projection.</p></div><div><span>Modeled</span><p>A scenario using explicitly displayed assumptions.</p></div><div><span>Unresolved</span><p>Evidence is missing; no positive assumption was inserted.</p></div></section>
       <footer class="research-footer"><a class="pricing-button primary" href="/markets?view=table">Inspect live routes</a><a class="pricing-button" href="/proof">Audits and worked examples</a></footer>
     </section>
@@ -10040,6 +10050,32 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
             </form>
             <div class="watch-items" id="watchItems"></div>
           </section>
+          <section class="watch-panel" id="margin-planner">
+            <div class="panel-head flat"><div><h2>Personalized margin stress</h2><p>Combine SpreadBoard's public route stress with the exact leverage, maintenance tier and collateral shown in your venue account. Inputs are calculated transiently and are not stored.</p></div></div>
+            <form class="margin-plan-form" id="marginPlanForm">
+              <label><span>Watchlist token</span><select id="marginToken" name="token"><option value="">Choose a token</option></select></label>
+              <label><span>Account mode</span><select id="marginMode" name="account_mode" required><option value="isolated">Isolated</option><option value="cross">Cross</option></select></label>
+              <label><span>Futures notional, USD</span><input name="position_notional_usd" type="number" min="0.01" step="0.01" required></label>
+              <label><span>Chosen leverage</span><input name="leverage" type="number" min="1" max="125" step="0.01" required></label>
+              <label><span>Exact maintenance margin, %</span><input name="maintenance_margin_pct" type="number" min="0.000001" max="50" step="any" required></label>
+              <label><span>Public 24h stress move, %</span><input id="marginStress" name="stress_move_pct" type="number" min="0" max="100" step="any" required><em id="marginStressSource">Choose a token to use its route evidence, or enter a conservative manual stress.</em></label>
+              <label data-isolated-input><span>Collateral allocated to this position, USD</span><input name="allocated_collateral_usd" type="number" min="0" step="0.01"></label>
+              <label data-cross-input hidden><span>Cross-account equity, USD</span><input name="account_equity_usd" type="number" min="0" step="0.01"></label>
+              <label data-cross-input hidden><span>Other positions/orders reserve, USD</span><input name="other_positions_reserve_usd" type="number" min="0" step="0.01" value="0"></label>
+              <label data-cross-input hidden><span>Cash not available to this trade, USD</span><input name="cash_reserve_usd" type="number" min="0" step="0.01" value="0"></label>
+              <details class="margin-cost-inputs"><summary>Exact costs and adverse funding</summary><div>
+                <label><span>Public expected gross edge, %</span><input id="marginGrossEdge" name="expected_gross_edge_pct" type="number" step="any"><em>Prefilled only when convergence and funding evidence support it.</em></label>
+                <label><span>Entry fee, %</span><input name="entry_fee_pct" type="number" min="0" step="any" value="0"></label>
+                <label><span>Exit fee, %</span><input name="exit_fee_pct" type="number" min="0" step="any" value="0"></label>
+                <label><span>Exit slippage, %</span><input name="exit_slippage_pct" type="number" min="0" step="any" value="0"></label>
+                <label><span>Adverse funding over hold, %</span><input name="adverse_funding_pct" type="number" min="0" step="any" value="0"></label>
+                <label><span>Borrow cost over hold, %</span><input name="borrow_cost_pct" type="number" min="0" step="any" value="0"></label>
+                <label><span>Gas + transfer, USD</span><input name="gas_transfer_cost_usd" type="number" min="0" step="any" value="0"></label>
+              </div></details>
+              <button class="sheet-button primary" type="submit">Calculate stress margin</button>
+            </form>
+            <div class="margin-plan-result" id="marginPlanResult" aria-live="polite"><p>Nothing is estimated until every required venue/account input is supplied. This does not read an exchange account or calculate an official liquidation price.</p></div>
+          </section>
           <section class="watch-panel">
             <div class="panel-head flat"><div><h2>Routes and radar</h2><p>Live executable routes first; retained funding leaders and chart-only coverage remain discoverable when the present rate cools.</p></div></div>
             <div class="watch-route-list" id="watchRoutes"></div>
@@ -10578,6 +10614,7 @@ WATCHLIST_SCRIPT = """
       const risk = funding.risk_estimate || research.risk_estimate || {};
       const basisRisk = risk.route_basis || {};
       const riskQuality = risk.data_quality || {};
+      const fundingOutlook = funding.funding_outlook || {};
       const scoreLabel = item => Number.isFinite(Number(item.score)) ? `${Number(item.score).toFixed(1)} / 100` : "Insufficient data";
       const componentLine = item => Object.entries(item.components || {}).map(([name,value]) => `${labelText(name)} ${Number(value.value||0).toFixed(0)}/${Number(value.max||0).toFixed(0)}`).join(" · ");
       const basisP95 = Number(basisRisk.adverse_24h_p95_pct_points);
@@ -10593,11 +10630,14 @@ WATCHLIST_SCRIPT = """
           <p><strong>Funding route:</strong> ${escapeHtml(fundingRoute.route_line || "No funding route evidence")}</p>
           <p><strong>Spread route:</strong> ${escapeHtml(spreadRoute.route_line || "No spread route evidence")}</p>
           <div class="watch-token-metrics">
-            <span>Funding 24h<strong>${formatSignedPct(fundingRoute.funding_24h_pct ?? funding.current_24h_pct, 2)}</strong></span>
+            <span>Current projected 24h<strong>${formatSignedPct(fundingRoute.funding_projected_24h_pct ?? funding.current_projected_24h_pct, 2)}</strong></span>
+            <span>Settled 24h<strong>${formatSignedPct(fundingRoute.funding_settled_24h_pct ?? funding.settled_24h_pct, 2)}</strong></span>
+            <span>Multi-horizon expected 24h<strong>${formatSignedPct(funding.expected_24h_pct, 2)}</strong></span>
             <span>Funding opportunity<strong>${escapeHtml(scoreLabel(funding))}</strong></span>
             <span>Entry spread<strong>${formatPct(spreadRoute.open_spread_pct ?? spread.entry_spread_pct)}</strong></span>
             <span>Spread opportunity<strong>${escapeHtml(scoreLabel(spread))}</strong></span>
           </div>
+          <p class="watch-score-explain"><strong>Funding regime:</strong> ${escapeHtml(labelText(fundingOutlook.regime || "unavailable"))}${fundingOutlook.regime_conflict ? " · current/history conflict haircut applied" : ""}. Uses only available current, settled 1d, dailyized 7d and dailyized 30d evidence.</p>
           <p class="watch-score-explain"><strong>${escapeHtml(funding.label || "Waiting for funding evidence")}</strong> · Evidence confidence ${escapeHtml(funding.confidence ?? 0)}%. ${escapeHtml(componentLine(funding) || "A live or retained route is required.")}</p>
           <p class="watch-score-explain"><strong>${escapeHtml(spread.label || "Waiting for convergence evidence")}</strong> · Evidence confidence ${escapeHtml(spread.confidence ?? 0)}%. ${escapeHtml(componentLine(spread) || "Executable basis and route history are required.")}</p>
           <p class="watch-score-explain">${escapeHtml(research.planning_buffer_label || "Collateral reserve unavailable.")} ${escapeHtml(riskLine)}</p>
@@ -10653,11 +10693,95 @@ WATCHLIST_SCRIPT = """
     target.innerHTML = rows.join("") || `<p class="watch-empty">No preview triggers match the pinned tokens right now.</p>`;
   }
 
+  function marginRiskFor(token) {
+    const reality = routeBySymbol.get(normaliseSymbol(token)) || {};
+    const opportunities = reality.opportunities || {};
+    const risks = [opportunities.funding?.risk_estimate, opportunities.spread?.risk_estimate, reality.research_score?.risk_estimate].filter(Boolean);
+    const moves = [];
+    for (const risk of risks) {
+      for (const leg of Object.values(risk.futures_legs || {})) {
+        const value = Number(leg?.stress_move_pct);
+        if (Number.isFinite(value)) moves.push(value);
+      }
+    }
+    return moves.length ? Math.max(...moves) : null;
+  }
+
+  function renderMarginTokens(tokens) {
+    const select = document.getElementById("marginToken");
+    if (!select) return;
+    const selected = select.value;
+    select.innerHTML = `<option value="">Choose a token</option>` + tokens.map((token) => `<option value="${escapeHtml(token)}">${escapeHtml(token)}</option>`).join("");
+    if (tokens.includes(selected)) select.value = selected;
+  }
+
+  function prefillMarginStress() {
+    const token = document.getElementById("marginToken")?.value || "";
+    const stress = marginRiskFor(token);
+    const input = document.getElementById("marginStress");
+    const grossInput = document.getElementById("marginGrossEdge");
+    const source = document.getElementById("marginStressSource");
+    if (input && stress !== null) input.value = stress.toFixed(4);
+    const reality = routeBySymbol.get(normaliseSymbol(token)) || {};
+    const gross = Number(reality.opportunities?.funding?.economics?.expected_gross_edge_pct);
+    if (grossInput) grossInput.value = Number.isFinite(gross) ? gross.toFixed(6) : "";
+    if (source) source.textContent = stress === null
+      ? "No route stress is available for this token; enter a conservative manual stress."
+      : `${token} public route evidence: ${stress.toFixed(2)}% adverse 24h stress move. Confirm it is the intended futures leg.`;
+  }
+
+  function updateMarginMode() {
+    const cross = document.getElementById("marginMode")?.value === "cross";
+    document.querySelectorAll("[data-cross-input]").forEach((node) => {
+      node.hidden = !cross;
+      node.querySelector("input")?.toggleAttribute("required", cross && node.querySelector("input")?.name === "account_equity_usd");
+    });
+    document.querySelectorAll("[data-isolated-input]").forEach((node) => {
+      node.hidden = cross;
+      node.querySelector("input")?.toggleAttribute("required", !cross);
+    });
+  }
+
+  async function calculateMargin(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const result = document.getElementById("marginPlanResult");
+    const payload = Object.fromEntries([...new FormData(form).entries()].filter(([_key, value]) => value !== ""));
+    delete payload.token;
+    if (result) result.innerHTML = "<p>Calculating from the entered account inputs…</p>";
+    try {
+      const response = await fetch("/api/margin-plan", {
+        method: "POST",
+        headers: {"Content-Type": "application/json", "X-CSRF-Token": csrf()},
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || `Calculation failed: ${response.status}`);
+      const verdict = labelText(data.verdict || "review");
+      result.innerHTML = `
+        <header><span>Result</span><strong>${escapeHtml(verdict)}</strong></header>
+        <div class="margin-plan-metrics">
+          <span>Available collateral<strong>$${Number(data.available_collateral_usd).toFixed(2)}</strong></span>
+          <span>Initial margin<strong>$${Number(data.initial_margin_usd).toFixed(2)}</strong></span>
+          <span>Stress survival need<strong>$${Number(data.survival_requirement_usd).toFixed(2)}</strong></span>
+          <span>Stress headroom<strong class="${Number(data.stress_headroom_usd) < 0 ? "negative" : ""}">$${Number(data.stress_headroom_usd).toFixed(2)}</strong></span>
+          <span>Effective leverage<strong>${data.effective_leverage === null ? "—" : Number(data.effective_leverage).toFixed(2) + "x"}</strong></span>
+          <span>Loss capacity before maintenance<strong>${Number(data.loss_capacity_before_maintenance_pct).toFixed(2)}%</strong></span>
+          <span>Expected net edge after entered costs<strong>${data.expected_net_edge_pct === null ? "—" : formatSignedPct(data.expected_net_edge_pct, 2)}</strong></span>
+        </div>
+        <p>Stress need = exact maintenance margin + public adverse move + your fees, slippage and adverse-funding inputs. Loss capacity is not an official liquidation price.</p>
+        <ul>${(data.limitations || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+    } catch (error) {
+      if (result) result.innerHTML = `<p class="negative">${escapeHtml(error.message || "Margin calculation unavailable")}</p>`;
+    }
+  }
+
   function renderAll() {
     const tokens = loadTokens();
     renderTokens(tokens);
     renderRoutes(tokens);
     renderAlerts(tokens);
+    renderMarginTokens(tokens);
   }
 
   document.getElementById("watchForm")?.addEventListener("submit", (event) => {
@@ -10671,6 +10795,9 @@ WATCHLIST_SCRIPT = """
     saveTokens([]);
     renderAll();
   });
+  document.getElementById("marginToken")?.addEventListener("change", prefillMarginStress);
+  document.getElementById("marginMode")?.addEventListener("change", updateMarginMode);
+  document.getElementById("marginPlanForm")?.addEventListener("submit", calculateMargin);
   document.addEventListener("click", (event) => {
     const suggestion = event.target.closest("[data-watch-symbol]");
     if (suggestion) addToken(suggestion.getAttribute("data-watch-symbol"));
@@ -10678,6 +10805,7 @@ WATCHLIST_SCRIPT = """
     if (remove) removeToken(remove.getAttribute("data-remove-symbol"));
   });
 
+  updateMarginMode();
   renderAll();
   hydrateAccountWatchlist();
 })();
@@ -13944,6 +14072,24 @@ body.alert-modal-open {{ overflow: hidden; }}
 .source-note-list span {{ padding: 8px; border-radius: 7px; background: var(--terminal-row); border: 1px solid var(--terminal-line); color: var(--terminal-muted); font-size: 12px; font-weight: 800; overflow-wrap: anywhere; }}
 .watch-empty {{ margin: 0; padding: 20px; border-radius: 8px; background: var(--terminal-row); color: var(--terminal-muted); text-align: center; font-size: 15px; font-weight: 800; }}
 .watch-empty.compact {{ padding: 9px; text-align: left; }}
+.margin-plan-form {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }}
+.margin-plan-form label {{ display:grid; align-content:start; gap:6px; min-width:0; color:var(--terminal-muted); font-size:12px; font-weight:800; }}
+.margin-plan-form input,.margin-plan-form select {{ width:100%; min-height:42px; border:1px solid var(--terminal-line); border-radius:6px; padding:0 10px; background:var(--terminal-row); color:var(--terminal-text); font:inherit; }}
+.margin-plan-form label em {{ color:var(--terminal-muted); font-size:10px; font-style:normal; line-height:1.35; }}
+.margin-cost-inputs {{ grid-column:1/-1; padding:10px; border:1px solid var(--terminal-line); border-radius:7px; background:var(--terminal-row); }}
+.margin-cost-inputs summary {{ cursor:pointer; font-weight:900; }}
+.margin-cost-inputs>div {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-top:10px; }}
+.margin-plan-result {{ display:grid; gap:10px; padding:14px; border-radius:8px; border:1px solid var(--terminal-line); background:var(--terminal-row); }}
+.margin-plan-result header {{ display:flex; justify-content:space-between; gap:12px; }}
+.margin-plan-result header span {{ color:var(--terminal-muted); font-weight:900; text-transform:uppercase; }}
+.margin-plan-result p,.margin-plan-result ul {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
+.margin-plan-metrics {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }}
+.margin-plan-metrics span {{ display:grid; gap:4px; padding:9px; border-radius:6px; background:var(--terminal-panel); color:var(--terminal-muted); font-size:11px; }}
+.margin-plan-metrics strong {{ color:var(--terminal-text); font-size:16px; }}
+.margin-plan-result .negative {{ color:var(--danger,#f26d7d); }}
+@media(max-width:900px) {{
+  .margin-plan-form,.margin-plan-metrics,.margin-cost-inputs>div {{ grid-template-columns:1fr; }}
+}}
 .profile-row {{ display: grid; grid-template-columns: 1fr auto 24px; gap: 7px; align-items: center; margin-top: 7px; }}
 .profile-row strong {{ color: var(--terminal-text); }}
 .watchlist-line {{ padding: 12px; border-radius: 6px; background: var(--terminal-row); color: var(--terminal-text); font-size: 15px; font-weight: 800; }}

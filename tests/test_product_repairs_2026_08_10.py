@@ -155,7 +155,9 @@ def test_watchlist_uses_live_then_retained_then_chart_context(monkeypatch) -> No
 
     assert by_symbol["GUA"]["status"] == "live routes"
     assert by_symbol["GUA"]["research_route"]["route_line"] == "Mexc Spot → Aster Futures"
-    assert by_symbol["GUA"]["research_score"]["reasons"][0].startswith("Net carry +1.200%")
+    assert by_symbol["GUA"]["research_score"]["reasons"][0].startswith(
+        "Multi-horizon expected funding +0.882%"
+    )
     assert by_symbol["GUA"]["opportunities"]["funding"]["route"]["route_line"] == "Mexc Spot → Aster Futures"
     assert by_symbol["GUA"]["opportunities"]["spread"]["route"]["route_line"] == "Mexc Spot → Gate Futures"
     assert "DEX DEX" not in by_symbol["ESPORTS"]["routes"][0]["route_line"]

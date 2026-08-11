@@ -406,6 +406,7 @@ class OkxDexQuoteSource:
             chain_id=chain_id,
             token_address=contract,
             gas_estimate_usd=network_fee_usd,
+            quote_notional_usd=float(context.target_notional_usd),
             route_plan=(str(router),) if router else (),
         )
 
@@ -1015,6 +1016,7 @@ class ZeroxQuoteSource:
             chain_id=self.chain_id,
             slippage_bps=self.slippage_bps,
             price_impact_pct=as_float(buy.get("priceImpactPct")),
+            quote_notional_usd=float(context.target_notional_usd),
             route_plan=_zerox_route_plan(buy),
         )
 
@@ -1141,6 +1143,7 @@ class JupiterQuoteSource:
             chain_id=101,
             slippage_bps=self.slippage_bps,
             price_impact_pct=as_float(buy.get("priceImpactPct")),
+            quote_notional_usd=float(context.target_notional_usd),
             route_plan=_jupiter_route_plan(buy),
         )
 
@@ -1666,6 +1669,7 @@ def _quote_route_note(quote: MarketQuote) -> dict[str, Any]:
         "gas_estimate_usd": quote.gas_estimate_usd,
         "slippage_bps": quote.slippage_bps,
         "price_impact_pct": quote.price_impact_pct,
+        "quote_notional_usd": quote.quote_notional_usd,
         "route_plan": list(quote.route_plan),
         # Carried so the snapshot can answer whether depth_unverified is
         # accurate. A walked ladder whose $50 probe fills at the first level
@@ -1746,14 +1750,22 @@ def _dex_candidate_pair(
         known_identities = {identity for identity in identities if identity}
         identity = next(iter(known_identities)) if len(known_identities) == 1 else None
         inferred_identity = cex_quote.identity_source == "okx_unique_symbol_inference"
+        gas_notional = as_float(dex_quote.quote_notional_usd)
+        gas_estimate = as_float(dex_quote.gas_estimate_usd)
+        gas_cost_pct = (
+            gas_estimate / gas_notional * 100.0
+            if gas_estimate is not None and gas_notional is not None and gas_notional > 0
+            else None
+        )
         blockers = [
             *dex_quote.blockers,
             *cex_quote.blockers,
             *pair_identity_blockers(dex_quote.token, identities),
             "route_feasibility_unproven",
             "executor_attestation_missing",
-            "gas_estimate_missing",
         ]
+        if gas_cost_pct is None:
+            blockers.append("gas_estimate_missing")
         if not cex_quote.identity_key:
             blockers.append("cex_identity_unverified")
         if inferred_identity and max(abs(executable), abs(depth)) >= HIGH_DISLOCATION_IDENTITY_THRESHOLD_PCT:
@@ -1773,7 +1785,9 @@ def _dex_candidate_pair(
                 depth_weighted_spread_pct=depth,
                 funding_spread_apr_pct=funding.get("net_apr_pct"),
                 funding_daily_pct=funding.get("net_daily_pct"),
-                gas_adjusted_spread_pct=None,
+                gas_adjusted_spread_pct=(
+                    executable - gas_cost_pct if gas_cost_pct is not None else None
+                ),
                 identity_key=identity,
                 blockers=tuple(blockers),
                 notes=_quote_pair_notes(long_quote, short_quote, funding=funding),
@@ -1835,6 +1849,7 @@ def _quote_from_book(
         ),
         # A real ladder was walked here, whatever the VWAP came out as.
         quote_source="orderbook",
+        quote_notional_usd=target_notional_usd,
         quote_ts_us=now_us(),
         source_name=source_name,
         symbol=symbol,
