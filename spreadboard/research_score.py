@@ -815,12 +815,18 @@ def _convergence_evidence(
     timestamps = [int(row["quote_ts_us"]) for row in rows]
     outcomes: list[float] = []
     half_lives: list[float] = []
+    last_anchor_ts = 0
     for index, row in enumerate(rows[:-1]):
+        if timestamps[index] < last_anchor_ts + 6 * 3_600_000_000:
+            continue
         opening = _history_basis(row)
         # Tiny/negative openings are not comparable entries for the displayed
         # long-cheap / short-rich route direction.
         if opening is None or opening < 0.02:
             continue
+        if current_basis is not None and current_basis > 0:
+            if not max(0.02, current_basis * 0.25) <= opening <= current_basis * 4.0:
+                continue
         target = timestamps[index] + horizon_hours * 3_600_000_000
         candidate = bisect_left(timestamps, target, lo=index + 1)
         choices = [item for item in (candidate - 1, candidate) if index < item < len(rows)]
@@ -834,6 +840,7 @@ def _convergence_evidence(
         if closing is None:
             continue
         outcomes.append(_clamp((opening - closing) / opening, -2.0, 2.0))
+        last_anchor_ts = timestamps[index]
         half_target = opening * 0.5
         for later in range(index + 1, min(len(rows), end_index + 1)):
             later_basis = _history_basis(rows[later])

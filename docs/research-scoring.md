@@ -23,8 +23,10 @@ confidence.
 ### Spread opportunity (0-100)
 
 - Current executable long-cheap / short-rich entry basis.
-- Frequency and median size of 24-hour convergence across comparable historical
-  positive entries, plus observed time to halve where available.
+- Frequency and median size of 24-hour convergence across six-hour-spaced,
+  comparable-magnitude historical positive entries, plus observed time to halve
+  where available. Spacing prevents overlapping hourly windows from pretending
+  to be independent evidence.
 - Expected 24-hour funding contribution.
 - Matched liquidity, quote freshness, exact symbols, identity/integrity and
   collateral stress.

@@ -10598,8 +10598,8 @@ WATCHLIST_SCRIPT = """
             <span>Entry spread<strong>${formatPct(spreadRoute.open_spread_pct ?? spread.entry_spread_pct)}</strong></span>
             <span>Spread opportunity<strong>${escapeHtml(scoreLabel(spread))}</strong></span>
           </div>
-          <p class="watch-score-explain"><strong>${escapeHtml(funding.label || "Waiting for funding evidence")}</strong> · Confidence ${escapeHtml(funding.confidence ?? 0)}%. ${escapeHtml(componentLine(funding) || "A live or retained route is required.")}</p>
-          <p class="watch-score-explain"><strong>${escapeHtml(spread.label || "Waiting for convergence evidence")}</strong> · Confidence ${escapeHtml(spread.confidence ?? 0)}%. ${escapeHtml(componentLine(spread) || "Executable basis and route history are required.")}</p>
+          <p class="watch-score-explain"><strong>${escapeHtml(funding.label || "Waiting for funding evidence")}</strong> · Evidence confidence ${escapeHtml(funding.confidence ?? 0)}%. ${escapeHtml(componentLine(funding) || "A live or retained route is required.")}</p>
+          <p class="watch-score-explain"><strong>${escapeHtml(spread.label || "Waiting for convergence evidence")}</strong> · Evidence confidence ${escapeHtml(spread.confidence ?? 0)}%. ${escapeHtml(componentLine(spread) || "Executable basis and route history are required.")}</p>
           <p class="watch-score-explain">${escapeHtml(research.planning_buffer_label || "Collateral reserve unavailable.")} ${escapeHtml(riskLine)}</p>
           <p class="watch-score-explain">${escapeHtml(research.disclaimer || "")}</p>
           <button class="watch-remove" type="button" data-remove-symbol="${escapeHtml(token)}" aria-label="Remove ${escapeHtml(token)}">Remove</button>

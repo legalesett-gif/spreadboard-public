@@ -225,6 +225,7 @@ def test_funding_and_spread_scores_are_separate_with_explicit_cross_effects() ->
         > adverse_basis["funding_opportunity"]["score"]
     )
     assert positive_funding["spread_opportunity"]["convergence"]["convergence_probability"] == 1.0
+    assert 8 <= positive_funding["spread_opportunity"]["convergence"]["samples"] <= 11
     assert positive_funding["route_economics"]["expected_convergence_capture_pct"] > 0
     assert adverse_basis["route_economics"]["expected_convergence_capture_pct"] < 0
 
