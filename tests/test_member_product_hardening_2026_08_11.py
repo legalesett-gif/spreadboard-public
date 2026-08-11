@@ -298,3 +298,47 @@ def test_watchlist_and_intel_hide_internal_source_cards_and_follow_dark_theme() 
     assert ".intel-section, .change-digest, .side-card, .hot-card, .reality-card, .feed-card { background: var(--terminal-panel)" in html
     assert ".change-counts article { display: grid;" in html
     assert "background: var(--terminal-row); border: 1px solid var(--terminal-line)" in html
+
+
+def test_fresh_bot_attention_joins_the_warmed_member_market(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        server.intel,
+        "build_intel",
+        lambda **_kwargs: {
+            "source_freshness": {
+                "telegram_events": {"status": "fresh"},
+                "board": {"status": "fresh"},
+            },
+            "hot_symbols": [{"symbol": "GUA", "event_count": 1}],
+            "change_digest": {},
+        },
+    )
+    monkeypatch.setattr(
+        server.telegram_queries,
+        "client_visible_payload",
+        lambda: {
+            "groups": [
+                {
+                    "token": "GUA",
+                    "best_route": {
+                        "route_key": "GUA|A|Spot|B|Futures",
+                        "route_kind": "FUTURES-SPOT",
+                        "long_venue": "A",
+                        "long_market_type": "Spot",
+                        "short_venue": "B",
+                        "short_market_type": "Futures",
+                        "executable_spread_pct": 0.4,
+                        "funding_24h_pct": 0.6,
+                        "freshness": "fresh",
+                    },
+                    "routes": [],
+                }
+            ]
+        },
+    )
+    result = server.api_intel(
+        tmp_path / "missing.json", {"refresh": ["1"], "window_hours": ["5.321"]}
+    )
+    assert result["hot_symbols"][0]["best_board"]["route_line"] == "A Spot → B Futures"
+    assert result["action_queue"][0]["symbol"] == "GUA"
+    assert result["action_queue"][0]["funding_24h_pct"] == 0.6

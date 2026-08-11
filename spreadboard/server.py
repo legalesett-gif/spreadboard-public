@@ -2041,7 +2041,12 @@ def api_intel(board_path: Path, query: dict[str, list[str]] | None = None) -> di
     else:
         key = None
         now = time.monotonic()
-    data = intel.build_intel(board_path=board_path, **params)
+    intel_board_path = (
+        api_spreads.DEFAULT_API_DISCOVERY_PATH
+        if api_spreads.DEFAULT_API_DISCOVERY_PATH.exists()
+        else board_path
+    )
+    data = intel.build_intel(board_path=intel_board_path, **params)
     data["source_freshness"] = _sanitized_source_freshness(data.get("source_freshness"))
     attention = data["source_freshness"].get("telegram_events") or {}
     if attention.get("status") != "fresh":
@@ -2067,6 +2072,8 @@ def api_intel(board_path: Path, query: dict[str, list[str]] | None = None) -> di
             "source_gaps": [],
             "highlights": [],
         }
+    else:
+        data = _join_bot_intel_to_live_market(data)
     digest = data.get("change_digest") if isinstance(data.get("change_digest"), dict) else {}
     if digest:
         gaps = [
@@ -2083,6 +2090,51 @@ def api_intel(board_path: Path, query: dict[str, list[str]] | None = None) -> di
         with _INTEL_CACHE_LOCK:
             _INTEL_CACHE[key] = (now, data)
     return data
+
+
+def _join_bot_intel_to_live_market(data: dict[str, Any]) -> dict[str, Any]:
+    """Join anonymous bot attention to the already-warmed member snapshot."""
+    market = telegram_queries.client_visible_payload()
+    groups = {
+        str(group.get("token") or ""): group
+        for group in market.get("groups") or []
+        if isinstance(group, dict)
+    }
+    hot = []
+    reality = []
+    for item in data.get("hot_symbols") or []:
+        if not isinstance(item, dict) or not item.get("symbol"):
+            continue
+        symbol = str(item.get("symbol") or "")
+        group = groups.get(symbol)
+        best = _public_intel_best_route(group)
+        hot.append({**item, "best_board": best})
+        reality.append(_public_intel_route_reality(symbol, group))
+    action_queue = []
+    for item in hot[:8]:
+        best = item.get("best_board") or {}
+        action_queue.append(
+            {
+                "symbol": item.get("symbol"),
+                "status": "inspect_pair" if best else "watch",
+                "href": best.get("pair_url") or f"/token/{item.get('symbol')}",
+                "board_href": "/arbitrage?kind=FUTURES",
+                "route_line": best.get("route_line") or "Subscriber attention; no live route match",
+                "reason": "Anonymous bot lookup joined to the current member market snapshot",
+                "spread_pct": best.get("open_spread_pct"),
+                "funding_24h_pct": best.get("funding_24h_pct"),
+                "freshness": best.get("freshness") or "attention_only",
+                "next_action": "inspect_pair" if best else "watch",
+                "badges": ["bot attention"],
+                "blockers": [] if best else ["No current client-visible route"],
+            }
+        )
+    result = dict(data)
+    result["hot_symbols"] = hot
+    result["route_reality"] = reality
+    result["action_queue"] = action_queue
+    result["profile_shell"] = intel.build_profile_shell(hot, reality)
+    return result
 
 
 def _sanitized_source_freshness(value: Any) -> dict[str, Any]:
