@@ -74,6 +74,47 @@ credentials and no customer action can reach the trading executors.
   application replicas, or measured customer traffic requires it. Do not add a
   distributed database merely because the member count reaches 100.
 
+## Exact research-bot Intel bridge
+
+The private conversation with `@SpreadArbitrageBot` cannot be read by the
+subscription bot's Bot API. `scripts/sync_exact_bot_intel.py` therefore uses an
+operator-owned Telegram user session on the Mac and sends a sanitized, bounded
+seven-day file over SSH. Production receives only token, view/category, a
+five-minute time bucket and a fixed source label. It never receives a Telegram
+name, username, user/chat/message ID, email address or raw message text, and the
+bridge makes no AI or paid API call.
+
+Bootstrap the correct Telegram account once in an interactive terminal:
+
+```bash
+cd "$SPREADBOARD_RELEASE_DIR"
+UV_CACHE_DIR=/tmp/uv-cache uv run --with telethon python \
+  scripts/sync_exact_bot_intel.py \
+  --session-path "$SPREADBOARD_EXACT_BOT_SESSION" \
+  --output-path "$SPREADBOARD_EXACT_BOT_EVENTS" \
+  --ssh-host "$SPREADBOARD_INTEL_SSH_HOST" \
+  --ssh-key "$SPREADBOARD_INTEL_SSH_KEY"
+```
+
+The first run may ask for Telegram's login code and two-factor password. Never
+paste either into a document, chat, source file or environment file. Run the
+same command every two minutes with launchd after the one-time session is
+authorized. The server-side file is written atomically with mode `0600`, and a
+restart/backfill simply rebuilds the last seven days without storing message
+IDs or raw history.
+
+## Funding-history coverage
+
+- Live/portfolio/watchlist/radar legs remain first priority.
+- A new or expanded futures catalog runs bounded catch-up passes every ten
+  minutes until every current leg has been attempted at least once; the service
+  then returns to the three-hour settlement-history maintenance cadence.
+- A missing 1d/7d/30d value is never replaced with zero or an estimate. A
+  window appears only when the venue's actual settlement rows cover at least
+  80% of that window.
+- `venue_funding_history.json` records catalog attempted/pending counts,
+  coverage percentage and latest-cycle counts for operator verification.
+
 ## Required external services before public onboarding
 
 1. Transactional SMTP provider with verified sender, SPF, DKIM, and DMARC.

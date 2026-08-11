@@ -887,10 +887,20 @@ def _refresh_funding_windows() -> None:
         _log(f"funding windows skipped: {type(exc).__name__}: {exc}")
 
 
-#: Settled history moves once per funding interval, so sweeping it every warm
-#: pass would be waste. Hours, not minutes.
+#: Once every catalog leg has been attempted, settled history moves slowly and
+#: a three-hour maintenance cadence is sufficient. A new/expanded catalog uses
+#: a bounded ten-minute catch-up cadence instead; otherwise a first full pass
+#: over thousands of markets can take a day and leave legitimate 1d/7d/30d
+#: research cells blank merely because their legs have never been queried.
 VENUE_HISTORY_INTERVAL_SECONDS = max(
     900.0, float(os.environ.get("SPREADBOARD_VENUE_HISTORY_SECONDS", "10800"))
+)
+VENUE_HISTORY_CATCH_UP_SECONDS = max(
+    300.0,
+    min(
+        VENUE_HISTORY_INTERVAL_SECONDS,
+        float(os.environ.get("SPREADBOARD_VENUE_HISTORY_CATCH_UP_SECONDS", "600")),
+    ),
 )
 _LAST_VENUE_HISTORY_AT = 0.0
 
@@ -899,14 +909,30 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
     """Pull each venue's settled funding for the legs the board is showing."""
     global _LAST_VENUE_HISTORY_AT
 
-    now = time.monotonic()
-    if now - _LAST_VENUE_HISTORY_AT < VENUE_HISTORY_INTERVAL_SECONDS:
-        return
-    _LAST_VENUE_HISTORY_AT = now
-
     from spreadboard import accounts, chart_catalog, funding_radar, server, venue_funding_history
 
     try:
+        catalog = chart_catalog.load()
+        catalog_legs = [
+            (str(item.get("venue")), str(item.get("symbol")))
+            for item in catalog.get("markets") or []
+            if isinstance(item, dict)
+            and item.get("market_type") == "Futures"
+            and item.get("venue")
+            and item.get("symbol")
+        ]
+        catalog_legs = list(dict.fromkeys(catalog_legs))
+        before = venue_funding_history.coverage_summary(catalog_legs)
+        interval = (
+            VENUE_HISTORY_INTERVAL_SECONDS
+            if before["catch_up_complete"]
+            else VENUE_HISTORY_CATCH_UP_SECONDS
+        )
+        now = time.monotonic()
+        if now - _LAST_VENUE_HISTORY_AT < interval:
+            return
+        _LAST_VENUE_HISTORY_AT = now
+
         priority_legs: list[tuple[str, str]] = []
         for query in WARM_QUERIES:
             if not query.get("funding_only"):
@@ -924,16 +950,7 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
         priority_legs.extend(
             accounts.all_open_position_futures_legs(db_path=accounts.DEFAULT_DB_PATH)
         )
-        catalog = chart_catalog.load()
         tracked = set(accounts.all_watchlist_symbols(db_path=accounts.DEFAULT_DB_PATH))
-        catalog_legs = [
-            (str(item.get("venue")), str(item.get("symbol")))
-            for item in catalog.get("markets") or []
-            if isinstance(item, dict)
-            and item.get("market_type") == "Futures"
-            and item.get("venue")
-            and item.get("symbol")
-        ]
         priority_legs.extend(
             (str(item.get("venue")), str(item.get("symbol")))
             for item in catalog.get("markets") or []
@@ -961,8 +978,12 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
         # history while these routes are still known live.
         if leaders:
             funding_radar.refresh(leaders)
+        after = venue_funding_history.coverage_summary(catalog_legs)
         _log(
-            f"venue funding history: {len(windows)} cached of {len(set(catalog_legs))} catalog legs "
+            f"venue funding history: {len(windows)} legs with windows; "
+            f"attempted={after['attempted_leg_count']}/{after['catalog_leg_count']} "
+            f"pending={after['pending_leg_count']} coverage={after['coverage_pct']}% "
+            f"mode={'maintenance' if after['catch_up_complete'] else 'catch_up'} "
             f"in {time.monotonic() - started:.1f}s"
         )
     except Exception as exc:  # noqa: BLE001 - best effort beside everything else.

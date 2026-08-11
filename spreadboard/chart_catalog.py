@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 from typing import Any
 
 from spreadboard.fast_quotes import NATIVE_FUTURES_VENUES, NATIVE_SPOT_VENUES, VENUE_IDS
@@ -22,6 +23,8 @@ RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_PATH = RUNTIME_DIR / "chart_market_catalog.json"
 STABLE_QUOTES = {"USD", "USDC", "USDT"}
 DEX_WATCHLIST_PATH = ROOT / "data" / "api_discovery_watchlist.json"
+_LOAD_CACHE: dict[str, Any] = {"key": None, "payload": None}
+_LOAD_LOCK = threading.Lock()
 
 
 def refresh(path: Path | str = DEFAULT_PATH, *, workers: int = 4) -> dict[str, Any]:
@@ -97,48 +100,63 @@ def _load_job_subprocess(venue: str, market_type: str) -> list[dict[str, Any]]:
 
 
 def load(path: Path | str = DEFAULT_PATH) -> dict[str, Any]:
-    try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        payload = {"ok": False, "generated_at": None, "count": 0, "token_count": 0, "markets": [], "health": {}}
-    if not isinstance(payload, dict):
-        payload = {"ok": False, "markets": []}
-    # DEX identities are a small, local allowlist and must not wait for the
-    # slower multi-venue CEX catalogue job. Merging on read makes a deployed
-    # identity immediately usable even when the persisted catalogue predates
-    # the code release.
-    dex_markets = dex_market_entries()
-    markets = [item for item in payload.get("markets") or [] if isinstance(item, dict)]
-    known = {
-        (
+    catalog_path = Path(path)
+
+    def stamp(candidate: Path) -> int | None:
+        try:
+            return candidate.stat().st_mtime_ns
+        except OSError:
+            return None
+
+    cache_key = (str(catalog_path.resolve()), stamp(catalog_path), stamp(DEX_WATCHLIST_PATH))
+    with _LOAD_LOCK:
+        if _LOAD_CACHE["key"] == cache_key and isinstance(_LOAD_CACHE["payload"], dict):
+            return _LOAD_CACHE["payload"]
+        try:
+            payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {"ok": False, "generated_at": None, "count": 0, "token_count": 0, "markets": [], "health": {}}
+        if not isinstance(payload, dict):
+            payload = {"ok": False, "markets": []}
+        # DEX identities are a small, local allowlist and must not wait for the
+        # slower multi-venue CEX catalogue job. Merging on read makes a deployed
+        # identity immediately usable even when the persisted catalogue predates
+        # the code release. Both file stamps are part of the cache key, so this
+        # remains immediate without reparsing 22,000 markets on every keystroke.
+        dex_markets = dex_market_entries()
+        markets = [item for item in payload.get("markets") or [] if isinstance(item, dict)]
+        known = {
+            (
+                str(item.get("token") or ""), str(item.get("venue") or ""),
+                str(item.get("market_type") or ""), str(item.get("symbol") or ""),
+                str(item.get("dex_chain") or ""), str(item.get("dex_contract") or "").casefold(),
+            )
+            for item in markets
+        }
+        for item in dex_markets:
+            key = (
+                item["token"], item["venue"], item["market_type"], item["symbol"],
+                item["dex_chain"], item["dex_contract"].casefold(),
+            )
+            if key not in known:
+                markets.append(item)
+                known.add(key)
+        markets.sort(key=lambda item: (
             str(item.get("token") or ""), str(item.get("venue") or ""),
             str(item.get("market_type") or ""), str(item.get("symbol") or ""),
-            str(item.get("dex_chain") or ""), str(item.get("dex_contract") or "").casefold(),
-        )
-        for item in markets
-    }
-    for item in dex_markets:
-        key = (
-            item["token"], item["venue"], item["market_type"], item["symbol"],
-            item["dex_chain"], item["dex_contract"].casefold(),
-        )
-        if key not in known:
-            markets.append(item)
-            known.add(key)
-    markets.sort(key=lambda item: (
-        str(item.get("token") or ""), str(item.get("venue") or ""),
-        str(item.get("market_type") or ""), str(item.get("symbol") or ""),
-    ))
-    health = dict(payload.get("health") or {})
-    health["OKX DEX|Spot"] = {"status": "ok", "markets": len(dex_markets)}
-    return {
-        **payload,
-        "ok": bool(markets),
-        "count": len(markets),
-        "token_count": len({item.get("token") for item in markets if item.get("token")}),
-        "markets": markets,
-        "health": health,
-    }
+        ))
+        health = dict(payload.get("health") or {})
+        health["OKX DEX|Spot"] = {"status": "ok", "markets": len(dex_markets)}
+        result = {
+            **payload,
+            "ok": bool(markets),
+            "count": len(markets),
+            "token_count": len({item.get("token") for item in markets if item.get("token")}),
+            "markets": markets,
+            "health": health,
+        }
+        _LOAD_CACHE.update({"key": cache_key, "payload": result})
+        return result
 
 
 def custom_route_key(

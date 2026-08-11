@@ -209,10 +209,21 @@ def build(
             }
         if (venue, symbol) not in priorities:
             background_attempted += 1
+    catalog_keys = {f"{venue}|{symbol}" for venue, symbol in ordered}
+    catalog_attempted = len(catalog_keys.intersection(leg_status))
     payload = {
-        "schema": "spreadboard.venue_funding_history.v2",
+        "schema": "spreadboard.venue_funding_history.v3",
         "updated_at": refreshed_at,
         "next_cursor": (start + background_attempted) % max(1, len(ordered)),
+        "catalog_leg_count": len(catalog_keys),
+        "catalog_attempted_leg_count": catalog_attempted,
+        "catalog_pending_leg_count": max(0, len(catalog_keys) - catalog_attempted),
+        "catalog_coverage_pct": round(
+            (catalog_attempted / len(catalog_keys) * 100.0) if catalog_keys else 100.0,
+            2,
+        ),
+        "latest_cycle_attempted": attempted,
+        "latest_cycle_background_attempted": background_attempted,
         "leg_updated_at": leg_updated_at,
         "leg_status": leg_status,
         "legs": windows,
@@ -222,6 +233,34 @@ def build(
     temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
     temporary.replace(path)
     return windows
+
+
+def coverage_summary(
+    legs: list[tuple[str, str]], *, cache_path: Path | str = DEFAULT_CACHE_PATH
+) -> dict[str, int | float | bool]:
+    """How much of the current catalog has received at least one honest attempt.
+
+    A classified leg counts as attempted even when the venue returned no rows.
+    That distinction prevents an unsupported or short-history market from
+    keeping the catch-up worker in a permanent tight loop, while a never-seen
+    catalog leg remains pending until it has genuinely been queried.
+    """
+    keys = {f"{venue}|{symbol}" for venue, symbol in legs if venue and symbol}
+    try:
+        payload = json.loads(Path(cache_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    statuses = payload.get("leg_status") or {}
+    attempted = len(keys.intersection(statuses))
+    total = len(keys)
+    pending = max(0, total - attempted)
+    return {
+        "catalog_leg_count": total,
+        "attempted_leg_count": attempted,
+        "pending_leg_count": pending,
+        "coverage_pct": round((attempted / total * 100.0) if total else 100.0, 2),
+        "catch_up_complete": pending == 0,
+    }
 
 
 _CACHE: dict[str, Any] = {"stamp": None, "legs": {}, "leg_status": {}, "leg_updated_at": {}}

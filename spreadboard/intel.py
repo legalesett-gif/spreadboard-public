@@ -21,6 +21,7 @@ from spreadboard import board
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "runtime"))) / "community"
 DEFAULT_EVENTS_PATH = DATA_DIR / "telegram_events.jsonl"
+DEFAULT_EXTERNAL_BOT_EVENTS_PATH = DATA_DIR / "external_bot_events.jsonl"
 DEFAULT_BRIEF_DIR = DATA_DIR / "hourly_topic_briefs"
 DEFAULT_PREFLIGHT_CANDIDATES_PATH = DATA_DIR / "preflight_candidates.jsonl"
 DEFAULT_STRATEGY_QUEUE_PATH = DATA_DIR / "strategy_review_queue.jsonl"
@@ -145,6 +146,7 @@ def build_intel(
     limit: int = DEFAULT_LIMIT,
     now: float | None = None,
     events_path: Path | str = DEFAULT_EVENTS_PATH,
+    external_bot_events_path: Path | str = DEFAULT_EXTERNAL_BOT_EVENTS_PATH,
     brief_dir: Path | str = DEFAULT_BRIEF_DIR,
     preflight_candidates_path: Path | str = DEFAULT_PREFLIGHT_CANDIDATES_PATH,
     strategy_queue_path: Path | str = DEFAULT_STRATEGY_QUEUE_PATH,
@@ -157,7 +159,10 @@ def build_intel(
     now = time.time() if now is None else now
     limit = max(1, min(int(limit or DEFAULT_LIMIT), 50))
     window_hours = max(0.25, min(float(window_hours or DEFAULT_WINDOW_HOURS), 168.0))
-    rows = read_jsonl_tail(Path(events_path), max_rows=5_000)
+    rows = [
+        *read_jsonl_tail(Path(events_path), max_rows=5_000),
+        *read_jsonl_tail(Path(external_bot_events_path), max_rows=5_000),
+    ]
     events = []
     for row in rows:
         event = _normal_event(row, now=now)
@@ -182,6 +187,7 @@ def build_intel(
         board_path=board_path,
         now=now,
         events_path=events_path,
+        external_bot_events_path=external_bot_events_path,
         brief_dir=brief_dir,
         preflight_candidates_path=preflight_candidates_path,
         strategy_queue_path=strategy_queue_path,
@@ -318,6 +324,7 @@ def build_source_freshness(
     board_path: Path | str = board.DEFAULT_BOARD_PATH,
     now: float | None = None,
     events_path: Path | str = DEFAULT_EVENTS_PATH,
+    external_bot_events_path: Path | str = DEFAULT_EXTERNAL_BOT_EVENTS_PATH,
     brief_dir: Path | str = DEFAULT_BRIEF_DIR,
     preflight_candidates_path: Path | str = DEFAULT_PREFLIGHT_CANDIDATES_PATH,
     strategy_queue_path: Path | str = DEFAULT_STRATEGY_QUEUE_PATH,
@@ -335,8 +342,20 @@ def build_source_freshness(
         "website_digest": Path(digest_path),
     }
     freshness = {name: _file_freshness(path, now=now) for name, path in source_files.items()}
-    latest_event = _latest_timestamp(read_jsonl_tail(Path(events_path), max_rows=500))
+    latest_event = _latest_timestamp(
+        [
+            *read_jsonl_tail(Path(events_path), max_rows=500),
+            *read_jsonl_tail(Path(external_bot_events_path), max_rows=500),
+        ]
+    )
     if latest_event:
+        external_freshness = _file_freshness(Path(external_bot_events_path), now=now)
+        if external_freshness.get("exists") and (
+            not freshness["telegram_events"].get("exists")
+            or float(external_freshness.get("age_min") or 0)
+            < float(freshness["telegram_events"].get("age_min") or float("inf"))
+        ):
+            freshness["telegram_events"] = external_freshness
         freshness["telegram_events"]["latest_at_us"] = latest_event
         freshness["telegram_events"]["age_min"] = _age_min(now, latest_event)
         freshness["telegram_events"]["status"] = _freshness_status(freshness["telegram_events"]["age_min"], stale_min=30)

@@ -49,7 +49,7 @@ def test_partial_funding_refresh_merges_instead_of_erasing_previous_legs(
 
     assert "Bybit|OLD/USDT:USDT" in result
     assert "Gate|NEW/USDT:USDT" in result
-    assert payload["schema"] == "spreadboard.venue_funding_history.v2"
+    assert payload["schema"] == "spreadboard.venue_funding_history.v3"
     assert payload["leg_updated_at"]["Gate|NEW/USDT:USDT"]
 
 

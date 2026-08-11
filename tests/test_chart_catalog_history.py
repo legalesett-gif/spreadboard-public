@@ -2,10 +2,29 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 
 import pytest
 
 from spreadboard import chart_catalog, historical_spreads, market_history, server
+
+
+def test_catalog_load_is_cached_until_the_atomic_artifact_changes(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps({"markets": [{"token": "ONE", "venue": "A", "market_type": "Spot", "symbol": "ONE/USDT"}]}))
+    monkeypatch.setattr(chart_catalog, "dex_market_entries", lambda: [])
+    chart_catalog._LOAD_CACHE.update({"key": None, "payload": None})
+
+    first = chart_catalog.load(path)
+    second = chart_catalog.load(path)
+    assert second is first
+
+    path.write_text(json.dumps({"markets": [{"token": "TWO", "venue": "A", "market_type": "Spot", "symbol": "TWO/USDT"}]}))
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    refreshed = chart_catalog.load(path)
+    assert refreshed is not first
+    assert refreshed["markets"][0]["token"] == "TWO"
 
 
 def test_custom_chart_route_round_trip() -> None:
@@ -62,6 +81,25 @@ def test_identity_verified_dex_can_be_the_long_custom_chart_leg() -> None:
     assert row["dex_chain"] == "56"
     assert row["dex_contract"] == "0xf39e4b21c84e737df08e2c3b32541d856f508e48"
     assert row["notes"]["identity"]["long"]["token_address"] == row["dex_contract"]
+
+
+def test_gua_dex_identity_remains_available_when_the_live_rate_cools() -> None:
+    dex = next(
+        item
+        for item in chart_catalog.dex_market_entries()
+        if item["token"] == "GUA" and item["venue"] == "OKX DEX 56"
+    )
+
+    assert dex["dex_contract"] == "0xa5c8e1513b6a08334b479fe4d71f1253259469be"
+    key = chart_catalog.custom_route_key(
+        "GUA",
+        dex,
+        {"venue": "Aster", "market_type": "Futures", "symbol": "GUA/USDT:USDT"},
+    )
+    row = chart_catalog.route_from_key(key)
+    assert row is not None
+    assert row["long_venue"] == "OKX DEX 56"
+    assert row["route_kind"] == "DEX-FUTURES"
 
 
 def test_custom_dex_leg_rejects_a_ticker_with_the_wrong_contract() -> None:

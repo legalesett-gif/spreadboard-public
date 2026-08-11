@@ -146,3 +146,33 @@ def test_bitmart_native_history_is_parsed(monkeypatch) -> None:
 
 def test_a_venue_without_a_native_endpoint_returns_nothing() -> None:
     assert vfh._native_leg_history("Binance", "BTC/USDT:USDT") == []
+
+
+def test_coverage_distinguishes_unattempted_from_an_honest_empty_result(tmp_path) -> None:
+    path = tmp_path / "funding.json"
+    path.write_text(
+        '{"leg_status":{"A|ONE":{"status":"ok"},'
+        '"B|TWO":{"status":"no_history_rows"}}}'
+    )
+
+    summary = vfh.coverage_summary(
+        [("A", "ONE"), ("B", "TWO"), ("C", "THREE")], cache_path=path
+    )
+
+    assert summary == {
+        "catalog_leg_count": 3,
+        "attempted_leg_count": 2,
+        "pending_leg_count": 1,
+        "coverage_pct": 66.67,
+        "catch_up_complete": False,
+    }
+
+
+def test_empty_catalog_is_already_caught_up(tmp_path) -> None:
+    assert vfh.coverage_summary([], cache_path=tmp_path / "missing.json") == {
+        "catalog_leg_count": 0,
+        "attempted_leg_count": 0,
+        "pending_leg_count": 0,
+        "coverage_pct": 100.0,
+        "catch_up_complete": True,
+    }
