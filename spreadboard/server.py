@@ -51,6 +51,7 @@ from spreadboard import (  # noqa: E402
     venue_funding_history,
     web_push,
     portfolio,
+    research_score,
     subscription_lifecycle,
     telegram_bot,
     telegram_queries,
@@ -919,10 +920,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/telegram/unlink":
                 self._send_json({"ok": True, "unlinked": accounts.unlink_telegram_chat(user.id, db_path=self.server.accounts_path)})
             elif parsed.path == "/api/notification-preferences":
-                preferences = accounts.save_notification_preferences(
-                    user.id, payload, db_path=self.server.accounts_path
+                result = save_pushover_preferences(
+                    user.id,
+                    payload,
+                    accounts_path=self.server.accounts_path,
                 )
-                self._send_json({"ok": True, "preferences": preferences})
+                self._send_json({"ok": True, **result})
             elif parsed.path == "/api/web-push/subscribe":
                 if not web_push.status()["configured"]:
                     raise ValueError("web_push_not_configured")
@@ -2040,6 +2043,14 @@ def api_intel(board_path: Path, query: dict[str, list[str]] | None = None) -> di
         now = time.monotonic()
     data = intel.build_intel(board_path=board_path, **params)
     data["source_freshness"] = _sanitized_source_freshness(data.get("source_freshness"))
+    digest = data.get("change_digest") if isinstance(data.get("change_digest"), dict) else {}
+    if digest:
+        gaps = [
+            item for item in digest.get("source_gaps") or []
+            if str(item.get("source") or "") in {"telegram_events", "board", "topic_brief"}
+        ]
+        digest["source_gaps"] = gaps
+        digest["source_gap_count"] = len(gaps)
     if _public_mode():
         data = _public_intel_payload(data, board_path)
     if key is not None:
@@ -2051,14 +2062,19 @@ def api_intel(board_path: Path, query: dict[str, list[str]] | None = None) -> di
 def _sanitized_source_freshness(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
+    allowed_sources = {"telegram_events", "board", "topic_brief"}
+    allowed_fields = {
+        "exists", "age_min", "status", "latest_at_us", "fresh_count",
+        "stale_count", "title",
+    }
     return {
         str(name): {
             key: item
             for key, item in state.items()
-            if key not in {"path", "size_bytes"}
+            if key in allowed_fields
         }
         for name, state in value.items()
-        if isinstance(state, dict)
+        if name in allowed_sources and isinstance(state, dict)
     }
 
 
@@ -2325,7 +2341,7 @@ def api_watchlist_suggestions(board_path: Path, query: dict[str, list[str]] | No
             for item in data.get("hot_symbols") or []
             if isinstance(item, dict)
         ][:12]
-    route_reality = _watchlist_market_context(board_path, symbols[:100])
+    route_reality = _watchlist_market_context(board_path, symbols[:10])
     profile_shell = dict(data.get("profile_shell") or {})
     profile_shell["watchlist"] = saved
     return {
@@ -2404,6 +2420,16 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
     for symbol in symbols:
         live = live_by_token.get(symbol, [])
         retained = funding_radar.routes_for(symbol)
+        score_route = live[0] if live else retained[0] if retained else None
+        score_windows = {
+            label: funding_radar.window_value(score_route, label) if score_route else None
+            for label in ("1d", "7d", "30d")
+        }
+        score = research_score.evaluate(
+            score_route,
+            windows=score_windows,
+            historical=not bool(live) and bool(retained),
+        )
         chosen = [route_card(row, historical=False) for row in live[:3]]
         if len(chosen) < 3:
             existing = {item.get("route_line") for item in chosen}
@@ -2427,6 +2453,8 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
             "status": status,
             "routes": chosen,
             "best_board": chosen[0] if chosen else None,
+            "research_score": score,
+            "funding_windows": score_windows,
             "chart_url": f"/charts?token={quote(symbol)}",
             "token_url": f"/token/{quote(symbol)}",
             "top_blockers": [] if chosen else ["No executable route is live at this instant"],
@@ -2446,6 +2474,15 @@ def api_position_suggestions(board_path: Path, query: dict[str, list[str]] | Non
     limit = max(1, min(50, int(_query_float(query, "limit", 20) or 20)))
     catalogue = chart_catalog.load()
     catalog_markets = [item for item in catalogue.get("markets") or [] if isinstance(item, dict)]
+    if not requested:
+        return {
+            "ok": bool(catalog_markets),
+            "query": "",
+            "tokens": sorted({str(item.get("token") or "").upper() for item in catalog_markets if item.get("token")})[:limit],
+            "routes": [],
+            "legs": [],
+            "catalog_generated_at": catalogue.get("generated_at"),
+        }
     market = telegram_queries.client_visible_payload()
     if not market:
         market = api_spreads.load_spreads(
@@ -5183,9 +5220,9 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
     )
     community_fresh = community_source.get("status") == "fresh"
     source_notice = (
-        '<aside class="intel-source-notice live"><strong>Community source is current</strong><p>Structured token activity is joined to the current client-visible market snapshot. Read the route status before acting.</p></aside>'
+        '<aside class="intel-source-notice live"><strong>Subscriber attention is current</strong><p>Anonymous exact-token lookups sent to the SpreadBoard bot are joined to current routes and retained funding evidence. No chat ID, username, name, email, or message text is stored.</p></aside>'
         if community_fresh
-        else '<aside class="intel-source-notice stale"><strong>Community connection is not live yet</strong><p>This page may contain a stale or limited bridge sample. Current routes, Funding, Charts and Watchlist remain usable; Telegram ingestion will not be enabled until the owner approves the privacy and retention design.</p></aside>'
+        else '<aside class="intel-source-notice stale"><strong>Waiting for the first subscriber bot lookup</strong><p>Use an exact token such as $GUA in the linked SpreadBoard bot. Intel records only the anonymous token and selected view; current routes, Funding, Charts and Watchlist remain authoritative.</p></aside>'
     )
     body = f"""
     <section class="intel-page" data-refresh="180">
@@ -5193,7 +5230,7 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
         <div>
           <span class="page-kicker">Community Intel</span>
           <h1>What deserves attention now</h1>
-          <p>An attention layer that joins community token activity to board routes, retained funding leaders and charts. It never proves a trade is executable.</p>
+          <p>A six-hour attention layer joining anonymous bot token lookups to live routes, retained funding leaders and charts. Deterministic analysis keeps paid AI usage at zero and never proves a trade is executable.</p>
         </div>
         <div class="intel-actions">
           <a class="secondary" href="/arbitrage?kind=FUTURES">Arbitrage</a>
@@ -5455,18 +5492,24 @@ def render_funding_windows(route: dict[str, Any] | None, route_key: Any) -> str:
     # thirty days where our samples hold about eighty-six hours, and each entry
     # is a payment that really happened. Our samples remain the fallback for a
     # leg whose venue publishes no history.
+    coverage = venue_funding_history.route_history_status(route or {})
+    coverage_title = (
+        "All settlement windows are available."
+        if coverage.get("status") == "complete"
+        else "Settlement history is still collecting for one or both exact venue symbols. Token listing age does not guarantee that a venue exposes historical funding through its public API."
+    )
     cells = []
     for label in ("1d", "7d", "30d"):
         value = funding_radar.window_value(route or {}, label)
         if value is None:
-            cells.append(f'<span class="funding-window unknown"><em>{label}</em><strong>—</strong></span>')
+            cells.append(f'<span class="funding-window unknown" title="{h(coverage_title)}"><em>{label}</em><strong>—</strong></span>')
         else:
             tone = "positive" if value > 0 else "negative" if value < 0 else "flat"
             cells.append(
                 f'<span class="funding-window {tone}"><em>{label}</em>'
                 f"<strong>{fmt_signed_pct(value, digits=2)}</strong></span>"
             )
-    return f'<div class="funding-window-strip" title="Carry actually realised over each window">{"".join(cells)}</div>'
+    return f'<div class="funding-window-strip" title="{h(coverage_title)}">{"".join(cells)}</div>'
 
 
 def _historical_funding_groups(
@@ -5633,6 +5676,7 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
         )}
       </nav>
       {('<p class="funding-radar-note"><strong>Historical radar:</strong> cooled rows remain discoverable for 30 days. Their rate and basis are the last live observation, not a current entry quote.</p>' if selected_window != 'now' else '')}
+      <p class="funding-radar-note"><strong>Blank history is explicit:</strong> 1d, 7d or 30d appears only after the exact venue symbols provide enough settled events. A token can be older than seven days while a venue API exposes less history; member Watchlist and Portfolio legs are now prioritised by the collector.</p>
       <section class="terminal-tape funding-tape" aria-label="Funding summary">
         {render_market_metric('Assets', displayed_assets, 'radar tokens' if selected_window != 'now' else 'unique tokens')}
         {render_market_metric('Funding pairs', summary.get('matching_rows'), 'live venue routes')}
@@ -7745,6 +7789,56 @@ def api_portfolio(
     )
 
 
+def save_pushover_preferences(
+    user_id: int,
+    payload: dict[str, Any],
+    *,
+    accounts_path: Path | str = accounts.DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Validate recipient ownership and device reachability before saving.
+
+    Pushover accepts a message request separately from delivering it to an
+    active device.  A stale device label made the page say "saved" and "sent"
+    while the phone remained silent.  Validation is a no-message provider call;
+    an unknown device is safely cleared so Pushover targets every active device.
+    """
+    candidate = dict(payload)
+    enabled = bool(candidate.get("pushover_enabled"))
+    if not enabled:
+        return {
+            "preferences": accounts.save_notification_preferences(
+                user_id, candidate, db_path=accounts_path
+            ),
+            "delivery_ready": False,
+            "active_device_count": 0,
+        }
+    app_token = os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
+    if not app_token:
+        raise ValueError("pushover_app_not_configured")
+    existing = accounts.notification_credentials(user_id, db_path=accounts_path) or {}
+    user_key = str(candidate.get("pushover_user_key") or existing.get("user_key") or "").strip()
+    if not user_key:
+        raise ValueError("pushover_user_key_required")
+    validation = alerts.validate_pushover_user(app_token=app_token, user_key=user_key)
+    if not validation.get("ok"):
+        raise ValueError(str(validation.get("error") or "pushover_user_not_valid"))
+    devices = [str(item) for item in validation.get("devices") or []]
+    requested_device = str(candidate.get("pushover_device") or "").strip()
+    warning = None
+    if requested_device and requested_device not in devices:
+        candidate["pushover_device"] = ""
+        warning = "pushover_device_cleared"
+    preferences = accounts.save_notification_preferences(
+        user_id, candidate, db_path=accounts_path
+    )
+    return {
+        "preferences": preferences,
+        "delivery_ready": True,
+        "active_device_count": len(devices),
+        "warning": warning,
+    }
+
+
 def render_login_page(query: dict[str, list[str]]) -> str:
     next_path = _query_first(query, "next") or "/"
     if not next_path.startswith("/") or next_path.startswith("//"):
@@ -8928,18 +9022,23 @@ def render_account_kpi(label: str, value: Any, note: str) -> str:
 
 def render_position_card(item: dict[str, Any]) -> str:
     market_live = item.get("market_status") == "live"
+    funding = item.get("current_funding") if isinstance(item.get("current_funding"), dict) else {}
+    long_funding = funding.get("long") if isinstance(funding.get("long"), dict) else {}
+    short_funding = funding.get("short") if isinstance(funding.get("short"), dict) else {}
+    market_label = "Live books" if market_live else "Partial market data" if item.get("market_status") == "partial" else "Market unavailable"
     return f"""
     <article class="position-card" data-position-id="{h(item.get('id'))}">
-      <header><div><span class="position-token">{h(item.get('token'))}</span><strong>{h(item.get('long_venue'))} → {h(item.get('short_venue'))}</strong><em>{h(item.get('long_market_type'))} / {h(item.get('short_market_type'))}</em></div><div class="position-status {'live' if market_live else 'unavailable'}"><span>{h(item.get('status'))}</span><strong>{'Live books' if market_live else 'Market unavailable'}</strong></div></header>
+      <header><div><span class="position-token">{h(item.get('token'))}</span><strong>{h(item.get('long_venue'))} → {h(item.get('short_venue'))}</strong><em>{h(item.get('long_market_type'))} / {h(item.get('short_market_type'))}</em></div><div class="position-status {'live' if market_live else 'unavailable'}"><span>{h(item.get('status'))}</span><strong>{market_label}</strong></div></header>
       <div class="position-metrics">
         <span>Total PnL<strong class="{spread_class(item.get('total_pnl_usd'))}">{fmt_signed_money(item.get('total_pnl_usd'))}</strong></span>
         <span>Price PnL<strong>{fmt_signed_money(item.get('price_pnl_usd'))}</strong></span>
         <span>Funding<strong>{fmt_signed_money(item.get('funding_income_usd'))}</strong></span>
+        <span>Net funding / 24h<strong>{fmt_signed_pct(item.get('current_net_funding_24h_pct'), digits=4)}</strong></span>
         <span>Return<strong>{fmt_signed_pct(item.get('return_pct'), digits=2)}</strong></span>
         <span>Exit spread<strong>{fmt_signed_pct(item.get('current_exit_spread_pct'), digits=3)}</strong></span>
         <span>Open spread<strong>{fmt_signed_pct(item.get('current_open_spread_pct'), digits=3)}</strong></span>
       </div>
-      <div class="position-legs"><div><span>Long</span><strong>{h(item.get('long_venue'))} · {h(item.get('long_quantity'))}</strong><em>{fmt_price(item.get('long_entry_price'))} → {fmt_price(item.get('long_mark_price'))}</em></div><div><span>Short</span><strong>{h(item.get('short_venue'))} · {h(item.get('short_quantity'))}</strong><em>{fmt_price(item.get('short_entry_price'))} → {fmt_price(item.get('short_mark_price'))}</em></div></div>
+      <div class="position-legs"><div><span>Long</span><strong>{h(item.get('long_venue'))} · {h(item.get('long_quantity'))}</strong><em>{fmt_price(item.get('long_entry_price'))} → {fmt_price(item.get('long_mark_price'))}</em><em>Funding {fmt_signed_pct(long_funding.get('rate_pct'), digits=4)} / {h(long_funding.get('interval_hours') or '—')}h</em></div><div><span>Short</span><strong>{h(item.get('short_venue'))} · {h(item.get('short_quantity'))}</strong><em>{fmt_price(item.get('short_entry_price'))} → {fmt_price(item.get('short_mark_price'))}</em><em>Funding {fmt_signed_pct(short_funding.get('rate_pct'), digits=4)} / {h(short_funding.get('interval_hours') or '—')}h</em></div></div>
       <footer><span>Opened {h(item.get('opened_at'))}</span><div>{render_position_rules(item.get('alert_rules') or [])}<button type="button" data-position-action="funding">Add funding</button><button type="button" data-position-action="alert">Add alert</button>{'<button type="button" data-position-action="close">Close position</button>' if item.get('status') == 'open' else ''}<a href="/charts?route_key={h(board.route_key_url(str(item.get('route_key') or '')))}">Chart</a></div></footer>
     </article>"""
 
@@ -9064,8 +9163,9 @@ def render_account_script() -> str:
   root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;actionDialog.querySelector('[data-action-title]').textContent={funding:'Record settled funding',alert:'Create alert rule',close:'Close position'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=fields[actionType];actionDialog.showModal();});
   actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={funding:'funding',alert:'alerts',close:'close'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   root.querySelector('[data-account-settings]')?.addEventListener('submit',async event=>{event.preventDefault();await request('/api/account-settings',Object.fromEntries(new FormData(event.currentTarget)));location.reload();});
-  root.querySelector('[data-pushover-settings]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,status=form.querySelector('[data-pushover-status]');const payload=Object.fromEntries(new FormData(form));payload.pushover_enabled=form.elements.pushover_enabled.checked;try{await request('/api/notification-preferences',payload);form.elements.pushover_user_key.value='';status.textContent='Pushover settings saved securely.';}catch(error){status.textContent=error.message;}});
-  root.querySelector('[data-pushover-test]')?.addEventListener('click',async event=>{const status=root.querySelector('[data-pushover-status]');event.currentTarget.disabled=true;try{const result=await request('/api/alert-test',{});status.textContent=result.ok?'Test sent to Pushover.':(result.error||'Test failed.');}catch(error){status.textContent=error.message;}finally{event.currentTarget.disabled=false;}});
+  const pushoverMessage=code=>({pushover_app_not_configured:'Pushover delivery is not configured on the server.',pushover_user_key_required:'Enter your 30-character Pushover User Key.',invalid_pushover_user_key:'The Pushover User Key must be exactly 30 letters or numbers.',invalid_pushover_device:'The device name may contain only letters, numbers, hyphens or underscores.',pushover_user_not_valid:'Pushover could not validate this User Key or any active device.',pushover_validation_unavailable:'Pushover validation is temporarily unavailable. Nothing was changed.',pushover_device_not_active:'That saved device is not active in Pushover. Save again with Device blank.',pushover_delivery_rejected:'Pushover rejected the test notification.'}[code]||code||'Pushover request failed.');
+  root.querySelector('[data-pushover-settings]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,status=form.querySelector('[data-pushover-status]'),button=form.querySelector('[type="submit"]');const payload=Object.fromEntries(new FormData(form));payload.pushover_enabled=form.elements.pushover_enabled.checked;button.disabled=true;status.textContent='Validating with Pushover…';try{const result=await request('/api/notification-preferences',payload);form.elements.pushover_user_key.value='';if(result.preferences)form.elements.pushover_device.value=result.preferences.pushover_device||'';status.textContent=result.warning==='pushover_device_cleared'?`Settings saved. The inactive device label was cleared; Pushover will use ${result.active_device_count||'your'} active device.`:`Settings validated and saved for ${result.active_device_count||'your'} active device${Number(result.active_device_count)===1?'':'s'}.`;}catch(error){status.textContent=pushoverMessage(error.message);}finally{button.disabled=false;}});
+  root.querySelector('[data-pushover-test]')?.addEventListener('click',async event=>{const status=root.querySelector('[data-pushover-status]');event.currentTarget.disabled=true;status.textContent='Validating device and sending one test…';try{const result=await request('/api/alert-test',{});status.textContent=result.ok?`Accepted by Pushover for ${result.active_device_count||'your'} active device${Number(result.active_device_count)===1?'':'s'}.` : pushoverMessage(result.error);}catch(error){status.textContent=pushoverMessage(error.message);}finally{event.currentTarget.disabled=false;}});
   const webPush=root.querySelector('[data-web-push]'),webPushStatus=webPush?.querySelector('[data-web-push-status]');
   const vapidBytes=value=>{const padding='='.repeat((4-value.length%4)%4),base64=(value+padding).replace(/-/g,'+').replace(/_/g,'/'),raw=atob(base64);return Uint8Array.from([...raw].map(char=>char.charCodeAt(0)));};
   async function pushRegistration(){if(!('serviceWorker' in navigator)||!('PushManager' in window))throw new Error('This browser does not support Web Push.');return navigator.serviceWorker.register('/service-worker.js',{scope:'/'});}
@@ -10124,7 +10224,7 @@ WATCHLIST_SCRIPT = """
       if (!response.ok) return;
       const payload = await response.json();
       const serverTokens = Array.isArray(payload.tokens) ? payload.tokens.map(normaliseSymbol).filter(Boolean) : [];
-      const merged = [...new Set([...serverTokens, ...loadTokens()])].slice(0, 100);
+      const merged = [...new Set([...serverTokens, ...loadTokens()])].slice(0, 10);
       localStorage.setItem(storageKey, JSON.stringify(merged));
       if (merged.length !== serverTokens.length || merged.some((token, index) => token !== serverTokens[index])) syncTokens(merged);
       await refreshMarketContext(merged);
@@ -10136,8 +10236,13 @@ WATCHLIST_SCRIPT = """
     const clean = normaliseSymbol(symbol);
     if (!clean) return;
     const tokens = loadTokens();
+    if (!tokens.includes(clean) && tokens.length >= 10) {
+      const state = document.getElementById("watchState");
+      if (state) state.textContent = "Watchlist limit reached: remove one of the 10 tokens first.";
+      return;
+    }
     if (!tokens.includes(clean)) tokens.unshift(clean);
-    saveTokens(tokens.slice(0, 40));
+    saveTokens(tokens.slice(0, 10));
     renderAll();
   }
 
@@ -10190,6 +10295,10 @@ WATCHLIST_SCRIPT = """
       const hot = hotSymbols.find((item) => normaliseSymbol(item.symbol) === token) || {};
       const reality = routeBySymbol.get(token) || {};
       const best = reality.best_board || hot.best_board || {};
+      const research = reality.research_score || {};
+      const components = research.components || {};
+      const scoreLabel = Number.isFinite(Number(research.score)) ? `${Number(research.score).toFixed(1)} / 100` : "Insufficient data";
+      const componentLine = Object.entries(components).map(([name,item]) => `${labelText(name)} ${Number(item.value||0).toFixed(0)}/${Number(item.max||0).toFixed(0)}`).join(" · ");
       return `
         <article class="watch-token-card">
           <div><strong>${escapeHtml(token)}</strong><span>${escapeHtml(labelText(reality.status || 'watching'))}</span></div>
@@ -10197,8 +10306,10 @@ WATCHLIST_SCRIPT = """
           <div class="watch-token-metrics">
             <span>Open<strong>${formatPct(best.open_spread_pct)}</strong></span>
             <span>Funding 24h<strong>${formatSignedPct(best.funding_24h_pct ?? best.funding_apr_pct, 2)}</strong></span>
-            <span>Score<strong>${escapeHtml(hot.score ?? "—")}</strong></span>
+            <span>Research score<strong>${escapeHtml(scoreLabel)}</strong></span>
           </div>
+          <p class="watch-score-explain"><strong>${escapeHtml(research.label || "Waiting for route evidence")}</strong> · Confidence ${escapeHtml(research.confidence ?? 0)}%. ${escapeHtml(componentLine || "A live or retained route is required.")}</p>
+          <p class="watch-score-explain">${escapeHtml(research.planning_buffer_label || "Model stress reserve unavailable.")} ${escapeHtml(research.disclaimer || "")}</p>
           <button class="watch-remove" type="button" data-remove-symbol="${escapeHtml(token)}" aria-label="Remove ${escapeHtml(token)}">Remove</button>
         </article>
       `;
@@ -10354,13 +10465,8 @@ def render_stale_toggle(query: dict[str, list[str]], include_stale: bool) -> str
 
 def render_intel_source_grid(source: dict[str, Any]) -> str:
     order = [
-        ("telegram_events", "Telegram"),
-        ("board", "Board"),
-        ("topic_brief", "Brief"),
-        ("preflight_candidates", "Preflight"),
-        ("strategy_prompts", "Prompts"),
-        ("private_preflight", "Private"),
-        ("website_digest", "Website"),
+        ("telegram_events", "Bot attention"),
+        ("board", "Market routes"),
     ]
     cards = []
     for key, label in order:
@@ -10372,6 +10478,10 @@ def render_intel_source_grid(source: dict[str, Any]) -> str:
             f'<em>{fmt_age(item.get("age_min"))}</em>'
             f'</article>'
         )
+    cards.append(
+        '<article class="source-card fresh"><span>Research engine</span>'
+        '<strong>Deterministic</strong><em>0 paid AI calls</em></article>'
+    )
     return f'<section class="intel-source-grid">{"".join(cards)}</section>'
 
 
@@ -13500,6 +13610,7 @@ body.alert-modal-open {{ overflow: hidden; }}
 .watch-token-card strong {{ font-size: 24px; overflow-wrap: anywhere; }}
 .watch-token-card span {{ color: var(--terminal-muted); font-size: 14px; font-weight: 800; }}
 .watch-token-card p {{ margin: 0; color: var(--terminal-muted); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }}
+.watch-token-card .watch-score-explain {{ padding: 9px 10px; border-left: 3px solid var(--terminal-accent); border-radius: 4px; background: var(--terminal-panel); font-size: 13px; }}
 .watch-token-metrics {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }}
 .watch-token-metrics span {{ display: block; padding: 10px; border-radius: 6px; background: var(--terminal-panel); color: var(--terminal-muted); font-size: 13px; font-weight: 700; }}
 .watch-token-metrics strong {{ display: block; color: var(--terminal-text); font-size: 17px; font-variant-numeric: tabular-nums; }}

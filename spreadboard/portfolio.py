@@ -7,8 +7,7 @@ from pathlib import Path
 import threading
 from typing import Any
 
-from spreadboard import accounts, api_spreads
-from spreadboard.fast_quotes import FastQuoteRefresher
+from spreadboard import accounts, api_spreads, bulk_quotes, live_book_cache
 
 
 def portfolio_snapshot(
@@ -26,7 +25,12 @@ def portfolio_snapshot(
         limit=None,
     )
     rows = [row for row in market.get("rows") or [] if isinstance(row, dict)]
-    hydrated = [_hydrate_position(item, rows) for item in positions]
+    books = _live_books()
+    funding_legs = bulk_quotes.load_funding()
+    hydrated = [
+        _hydrate_position(item, rows, books=books, funding_legs=funding_legs)
+        for item in positions
+    ]
     if evaluate_alerts:
         for item in hydrated:
             _evaluate_position_alerts(user.id, item, accounts_path=accounts_path)
@@ -42,10 +46,17 @@ def portfolio_snapshot(
     }
 
 
-def _hydrate_position(position: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _hydrate_position(
+    position: dict[str, Any],
+    rows: list[dict[str, Any]],
+    *,
+    books: dict[str, Any] | None = None,
+    funding_legs: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     current = _matching_route(position, rows)
     if current is None and position.get("status") == "open":
-        current = _quote_position(position)
+        current = _quote_position(position, books=books or {})
+    funding = _position_funding(position, current, funding_legs or {})
     long_mark = _number(position.get("long_exit_price")) if position.get("status") == "closed" else _number((current or {}).get("long_bid"))
     short_mark = _number(position.get("short_exit_price")) if position.get("status") == "closed" else _number((current or {}).get("short_ask"))
     long_entry = _number(position.get("long_entry_price")) or 0.0
@@ -65,8 +76,16 @@ def _hydrate_position(position: dict[str, Any], rows: list[dict[str, Any]]) -> d
     result = dict(position)
     result.update(
         {
-            "market_status": "live" if current else "unavailable",
+            "market_status": (
+                "live"
+                if long_mark is not None and short_mark is not None
+                else "partial"
+                if current
+                else "unavailable"
+            ),
             "current_route": current,
+            "current_funding": funding,
+            "current_net_funding_24h_pct": funding.get("net_projected_24h_pct"),
             "long_mark_price": long_mark,
             "short_mark_price": short_mark,
             "long_price_pnl_usd": long_pnl,
@@ -106,8 +125,11 @@ def _matching_route(position: dict[str, Any], rows: list[dict[str, Any]]) -> dic
     )
 
 
-def _quote_position(position: dict[str, Any]) -> dict[str, Any] | None:
-    row = {
+def _quote_position(
+    position: dict[str, Any], *, books: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Mark a manual route from the resident cache, never a page-time API call."""
+    row: dict[str, Any] = {
         "route_key": position.get("route_key"),
         "token": position.get("token"),
         "route_kind": _route_kind(position),
@@ -117,33 +139,95 @@ def _quote_position(position: dict[str, Any]) -> dict[str, Any] | None:
         "short_venue": position.get("short_venue"),
         "short_market_type": position.get("short_market_type"),
         "short_market_symbol": position.get("short_symbol"),
-        "notes": {
-            "route_inputs": {
-                "long": {"symbol": position.get("long_symbol")},
-                "short": {"symbol": position.get("short_symbol")},
-            }
-        },
     }
-    refresher = FastQuoteRefresher()
+    found = False
+    for side in ("long", "short"):
+        venue = str(position.get(f"{side}_venue") or "")
+        market_type = str(position.get(f"{side}_market_type") or "")
+        symbol = str(position.get(f"{side}_symbol") or "")
+        candidates = [market_type]
+        if market_type.casefold() == "dex":
+            candidates.append("Spot")
+        book = next(
+            (
+                books.get(live_book_cache.cache_key(venue, candidate, symbol))
+                for candidate in candidates
+                if books.get(live_book_cache.cache_key(venue, candidate, symbol)) is not None
+            ),
+            None,
+        )
+        if book is None:
+            continue
+        bids = list(getattr(book, "bids", None) or [])
+        asks = list(getattr(book, "asks", None) or [])
+        if bids:
+            row[f"{side}_bid"] = _number(bids[0][0])
+        if asks:
+            row[f"{side}_ask"] = _number(asks[0][0])
+        row[f"{side}_quote_ts_us"] = getattr(book, "quote_ts_us", None)
+        found = True
+    return row if found else None
+
+
+def _live_books() -> dict[str, Any]:
     try:
-        result = refresher.quote_route(row, target_notional_usd=50.0)
-    finally:
-        refresher.close()
-    quoted = result.get("row") if result.get("status") == "ok" else None
-    if not isinstance(quoted, dict):
-        return None
-    route_inputs = ((quoted.get("notes") or {}).get("route_inputs") or {})
-    long_leg = route_inputs.get("long") or {}
-    short_leg = route_inputs.get("short") or {}
-    quoted.update(
-        {
-            "long_bid": long_leg.get("bid"),
-            "long_ask": long_leg.get("ask"),
-            "short_bid": short_leg.get("bid"),
-            "short_ask": short_leg.get("ask"),
+        store = live_book_cache.LiveBookStore()
+        try:
+            return store.load_all(max_age_seconds=api_spreads.LIVE_BOOK_MAX_AGE_SECONDS)
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - a missing cache makes marks unavailable, not the account.
+        return {}
+
+
+def _position_funding(
+    position: dict[str, Any],
+    current: dict[str, Any] | None,
+    funding_legs: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Current public rates for the exact recorded legs, independent of route rank."""
+    legs: dict[str, dict[str, Any]] = {}
+    daily: dict[str, float] = {}
+    for side in ("long", "short"):
+        market_type = str(position.get(f"{side}_market_type") or "")
+        venue = str(position.get(f"{side}_venue") or "")
+        symbol = str(position.get(f"{side}_symbol") or "")
+        if market_type.casefold() != "futures":
+            legs[side] = {
+                "status": "not_applicable",
+                "rate_pct": None,
+                "interval_hours": None,
+                "projected_24h_pct": 0.0,
+            }
+            daily[side] = 0.0
+            continue
+        entry = funding_legs.get(f"{venue}|{symbol}") or {}
+        rate = _number(entry.get("rate_pct"))
+        interval = _number(entry.get("interval_hours"))
+        if rate is None and current:
+            rate = _number(
+                current.get(f"{side}_current_funding_pct")
+                if current.get(f"{side}_current_funding_pct") is not None
+                else current.get(f"{side}_funding_pct")
+            )
+            interval = interval or _number(current.get(f"{side}_funding_interval_hours"))
+        projected = rate * (24.0 / interval) if rate is not None and interval and interval > 0 else None
+        legs[side] = {
+            "status": "live" if projected is not None else "unavailable",
+            "rate_pct": rate,
+            "interval_hours": interval,
+            "projected_24h_pct": projected,
+            "next_funding_ts_us": entry.get("next_funding_ts_us"),
         }
-    )
-    return quoted
+        if projected is not None:
+            daily[side] = projected
+    net = daily.get("short", 0.0) - daily.get("long", 0.0) if len(daily) == 2 else None
+    return {
+        "long": legs.get("long") or {},
+        "short": legs.get("short") or {},
+        "net_projected_24h_pct": net,
+        "status": "live" if net is not None else "partial" if daily else "unavailable",
+    }
 
 
 def _portfolio_totals(positions: list[dict[str, Any]], monthly_capital: float | None) -> dict[str, Any]:

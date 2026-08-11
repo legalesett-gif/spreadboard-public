@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import threading
 import time
 from collections import Counter, defaultdict, deque
 from pathlib import Path
@@ -17,7 +19,7 @@ from typing import Any
 from spreadboard import board
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT / "runtime/community"
+DATA_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "runtime"))) / "community"
 DEFAULT_EVENTS_PATH = DATA_DIR / "telegram_events.jsonl"
 DEFAULT_BRIEF_DIR = DATA_DIR / "hourly_topic_briefs"
 DEFAULT_PREFLIGHT_CANDIDATES_PATH = DATA_DIR / "preflight_candidates.jsonl"
@@ -33,11 +35,14 @@ DEFAULT_SOURCE_FILES = {
     "private_preflight": DEFAULT_PRIVATE_PREFLIGHT_PATH,
     "website_digest": DEFAULT_DIGEST_PATH,
 }
-DEFAULT_WINDOW_HOURS = 12.0
+DEFAULT_WINDOW_HOURS = 6.0
 DEFAULT_LIMIT = 12
 ALERT_EVENT_FRESH_MAX_AGE_MIN = 60.0
 INTEL_ALLOWED_TOPIC_IDS = frozenset({None, 14})
 MAX_TEXT = 220
+MAX_ATTENTION_BYTES = 5 * 1024 * 1024
+MAX_ATTENTION_ROWS = 10_000
+_ATTENTION_LOCK = threading.Lock()
 SCOREBOARD_PATTERN = re.compile(r"\b([A-Z][A-Z0-9_-]{1,23})\s+([+-]?\d+(?:\.\d+)?)\b")
 SECRET_TEXT_PATTERNS = (
     re.compile(r"(?i)\b(api[_-]?key|secret|password|private[_-]?key|token)\s*[:=]\s*([^\s,;]+)"),
@@ -70,6 +75,64 @@ QUESTION_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Convergence / exit", ("conver", "exit", "close", "закр", "выход", "уровня", "сход")),
     ("Liquidation / PnL", ("liq", "liquid", "pnl", "profit", "loss", "ликв", "приб", "убыт")),
 )
+
+
+def record_token_attention(
+    symbol: str,
+    kind: str,
+    *,
+    source: str,
+    events_path: Path | str = DEFAULT_EVENTS_PATH,
+    now: float | None = None,
+) -> bool:
+    """Persist an anonymous exact-token bot query for aggregate Intel.
+
+    No Telegram chat/user/message identifier, username, display name, raw text,
+    email, or command body is accepted or stored.  The bounded record is enough
+    to rank token attention and join it to current public routes.
+    """
+    clean_symbol = _clean_symbol(symbol)
+    clean_kind = str(kind or "spread").strip().lower()
+    if not clean_symbol or clean_kind not in {"spread", "funding", "rails"}:
+        return False
+    moment = time.time() if now is None else float(now)
+    payload = {
+        "schema": "spreadboard.anonymous_bot_attention.v1",
+        "source": "SpreadBoard bot" if source == "private_bot" else "SpreadBoard subscriber forum",
+        "source_role": "subscriber_aggregate",
+        "received_at_us": int(moment * 1_000_000),
+        "parsed": {
+            "symbol": clean_symbol,
+            "kind": clean_kind.upper(),
+            "event": "chat_signal",
+            "first_line": f"${clean_symbol} {clean_kind}",
+            "topic_id": None,
+        },
+        "privacy": "anonymous_token_and_view_only",
+    }
+    path = Path(events_path)
+    with _ATTENTION_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+        try:
+            oversized = path.stat().st_size > MAX_ATTENTION_BYTES
+        except OSError:
+            oversized = False
+        if oversized:
+            lines = _tail_lines(path, max_rows=MAX_ATTENTION_ROWS)
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            try:
+                temporary.chmod(0o600)
+            except OSError:
+                pass
+            temporary.replace(path)
+    return True
 
 
 def build_intel(

@@ -157,6 +157,7 @@ def _client(exchange_id: str) -> Any:
 def build(
     legs: list[tuple[str, str]],
     *,
+    priority_legs: list[tuple[str, str]] | None = None,
     cache_path: Path | str = DEFAULT_CACHE_PATH,
     budget_seconds: float = 240.0,
 ) -> dict[str, dict[str, float | None]]:
@@ -174,25 +175,46 @@ def build(
         previous = {}
     windows: dict[str, dict[str, float | None]] = dict(previous.get("legs") or {})
     leg_updated_at: dict[str, str] = dict(previous.get("leg_updated_at") or {})
+    leg_status: dict[str, dict[str, Any]] = dict(previous.get("leg_status") or {})
     ordered = list(dict.fromkeys(legs))
     start = int(previous.get("next_cursor") or 0) % max(1, len(ordered))
-    rotated = ordered[start:] + ordered[:start]
+    priorities = list(dict.fromkeys(priority_legs or []))
+    rotated = priorities + [item for item in ordered[start:] + ordered[:start] if item not in priorities]
     attempted = 0
+    background_attempted = 0
     refreshed_at = datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat()
     for venue, symbol in rotated:
         if time.monotonic() >= deadline:
             break
         attempted += 1
         entries = leg_history(venue, symbol)
+        key = f"{venue}|{symbol}"
         if entries:
-            key = f"{venue}|{symbol}"
             windows[key] = realised_windows(entries)
             leg_updated_at[key] = refreshed_at
+            leg_status[key] = {
+                "status": "ok",
+                "updated_at": refreshed_at,
+                "settlement_count": len(entries),
+                "available_windows": sum(
+                    value is not None for value in windows[key].values()
+                ),
+            }
+        else:
+            leg_status[key] = {
+                "status": "no_history_rows",
+                "updated_at": refreshed_at,
+                "settlement_count": 0,
+                "available_windows": 0,
+            }
+        if (venue, symbol) not in priorities:
+            background_attempted += 1
     payload = {
         "schema": "spreadboard.venue_funding_history.v2",
         "updated_at": refreshed_at,
-        "next_cursor": (start + attempted) % max(1, len(ordered)),
+        "next_cursor": (start + background_attempted) % max(1, len(ordered)),
         "leg_updated_at": leg_updated_at,
+        "leg_status": leg_status,
         "legs": windows,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -202,7 +224,7 @@ def build(
     return windows
 
 
-_CACHE: dict[str, Any] = {"stamp": None, "legs": {}}
+_CACHE: dict[str, Any] = {"stamp": None, "legs": {}, "leg_status": {}, "leg_updated_at": {}}
 
 
 def load(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, dict[str, float | None]]:
@@ -218,8 +240,40 @@ def load(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, dict[str, 
         except (OSError, json.JSONDecodeError):
             return {}
         _CACHE["legs"] = payload.get("legs") or {}
+        _CACHE["leg_status"] = payload.get("leg_status") or {}
+        _CACHE["leg_updated_at"] = payload.get("leg_updated_at") or {}
         _CACHE["stamp"] = stamp
     return _CACHE["legs"]
+
+
+def route_history_status(route: dict[str, Any]) -> dict[str, Any]:
+    """Explain blank windows without confusing token age with API coverage."""
+    load()
+    sides: dict[str, Any] = {}
+    for side in ("long", "short"):
+        venue = str(route.get(f"{side}_venue") or "")
+        symbol = str(route.get(f"{side}_market_symbol") or route.get(f"{side}_symbol") or "")
+        if str(route.get(f"{side}_market_type") or "").casefold() != "futures":
+            sides[side] = {"status": "not_applicable", "available_windows": 3}
+            continue
+        key = f"{venue}|{symbol}"
+        status = dict(_CACHE["leg_status"].get(key) or {})
+        values = _CACHE["legs"].get(key) or {}
+        status.update(
+            {
+                "status": status.get("status") or ("collecting" if key not in _CACHE["legs"] else "partial"),
+                "available_windows": sum(values.get(label) is not None for label in ("1d", "7d", "30d")),
+                "updated_at": _CACHE["leg_updated_at"].get(key) or status.get("updated_at"),
+            }
+        )
+        sides[side] = status
+    windows = route_windows(route)
+    return {
+        "status": "complete" if all(windows.get(label) is not None for label in ("1d", "7d", "30d")) else "partial",
+        "available_windows": sum(windows.get(label) is not None for label in ("1d", "7d", "30d")),
+        "sides": sides,
+        "note": "Venue settlement-history coverage is collected independently of how long the token has been listed.",
+    }
 
 
 def route_windows(route: dict[str, Any]) -> dict[str, float | None]:

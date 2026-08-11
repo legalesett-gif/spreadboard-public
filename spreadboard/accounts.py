@@ -1099,6 +1099,37 @@ def notification_preferences(user_id: int, *, db_path: Path | str = DEFAULT_DB_P
         connection.close()
 
 
+def notification_credentials(
+    user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> dict[str, Any] | None:
+    """Internal decrypted delivery configuration, never an API response.
+
+    ``notification_delivery`` deliberately ignores disabled rows.  Saving a
+    changed device or re-enabling an existing key still needs to validate the
+    already encrypted key before mutating the row, so this narrower helper
+    returns it regardless of the enabled flag.  Callers must never serialize
+    the result.
+    """
+    from spreadboard import field_crypto
+
+    connection = _connect(db_path)
+    try:
+        row = connection.execute(
+            "SELECT * FROM notification_preferences WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+        if row is None or not row["pushover_user_key_encrypted"]:
+            return None
+        return {
+            "user_key": field_crypto.decrypt(str(row["pushover_user_key_encrypted"])),
+            "device": str(row["pushover_device"] or ""),
+            "sound": str(row["pushover_sound"] or "pushover"),
+            "enabled": bool(row["pushover_enabled"]),
+        }
+    finally:
+        connection.close()
+
+
 def save_notification_preferences(
     user_id: int,
     payload: dict[str, Any],
@@ -1108,9 +1139,11 @@ def save_notification_preferences(
     from spreadboard import field_crypto
 
     key = str(payload.get("pushover_user_key") or "").strip()
-    if key and (len(key) < 20 or len(key) > 80 or not key.isalnum()):
+    if key and (len(key) != 30 or not key.isalnum()):
         raise ValueError("invalid_pushover_user_key")
-    device = str(payload.get("pushover_device") or "").strip()[:64]
+    device = str(payload.get("pushover_device") or "").strip()
+    if len(device) > 25 or any(not (char.isalnum() or char in "-_") for char in device):
+        raise ValueError("invalid_pushover_device")
     sound = str(payload.get("pushover_sound") or "pushover").strip()
     allowed_sounds = {"default", "pushover", "siren", "magic", "cashregister", "vibrate"}
     if sound not in allowed_sounds:
@@ -2448,7 +2481,7 @@ def replace_watchlist(
 ) -> list[str]:
     if not isinstance(symbols, list):
         raise ValueError("watchlist_requires_tokens")
-    clean = list(dict.fromkeys(filter(None, (_watch_symbol(item) for item in symbols))))[:100]
+    clean = list(dict.fromkeys(filter(None, (_watch_symbol(item) for item in symbols))))[:10]
     connection = _connect(db_path)
     try:
         connection.execute("DELETE FROM watchlist_tokens WHERE user_id = ?", (int(user_id),))
@@ -2475,6 +2508,45 @@ def list_watchlist(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> li
         ]
     finally:
         connection.close()
+
+
+def all_watchlist_symbols(*, db_path: Path | str = DEFAULT_DB_PATH) -> list[str]:
+    """Distinct member-tracked symbols for public-history prioritisation."""
+    connection = _connect(db_path)
+    try:
+        return [
+            str(row["symbol"])
+            for row in connection.execute(
+                "SELECT DISTINCT symbol FROM watchlist_tokens ORDER BY symbol"
+            ).fetchall()
+        ]
+    finally:
+        connection.close()
+
+
+def all_open_position_futures_legs(
+    *, db_path: Path | str = DEFAULT_DB_PATH
+) -> list[tuple[str, str]]:
+    """Exact public futures markets in open journals, without user or PII data."""
+    connection = _connect(db_path)
+    try:
+        rows = connection.execute(
+            """SELECT long_venue, long_market_type, long_symbol,
+                      short_venue, short_market_type, short_symbol
+               FROM positions WHERE status = 'open'"""
+        ).fetchall()
+    finally:
+        connection.close()
+    legs: list[tuple[str, str]] = []
+    for row in rows:
+        for side in ("long", "short"):
+            if str(row[f"{side}_market_type"] or "").casefold() != "futures":
+                continue
+            venue = str(row[f"{side}_venue"] or "").strip()
+            symbol = str(row[f"{side}_symbol"] or "").strip()
+            if venue and symbol:
+                legs.append((venue, symbol))
+    return list(dict.fromkeys(legs))
 
 
 def save_web_push_subscription(

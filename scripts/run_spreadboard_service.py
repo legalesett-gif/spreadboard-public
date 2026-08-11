@@ -904,10 +904,10 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
         return
     _LAST_VENUE_HISTORY_AT = now
 
-    from spreadboard import funding_radar, server, venue_funding_history
+    from spreadboard import accounts, chart_catalog, funding_radar, server, venue_funding_history
 
     try:
-        legs: list[tuple[str, str]] = []
+        priority_legs: list[tuple[str, str]] = []
         for query in WARM_QUERIES:
             if not query.get("funding_only"):
                 continue
@@ -920,17 +920,49 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
                         venue = route.get(f"{side}_venue")
                         symbol = route.get(f"{side}_market_symbol")
                         if venue and symbol:
-                            legs.append((str(venue), str(symbol)))
-        if not legs:
+                            priority_legs.append((str(venue), str(symbol)))
+        priority_legs.extend(
+            accounts.all_open_position_futures_legs(db_path=accounts.DEFAULT_DB_PATH)
+        )
+        catalog = chart_catalog.load()
+        tracked = set(accounts.all_watchlist_symbols(db_path=accounts.DEFAULT_DB_PATH))
+        catalog_legs = [
+            (str(item.get("venue")), str(item.get("symbol")))
+            for item in catalog.get("markets") or []
+            if isinstance(item, dict)
+            and item.get("market_type") == "Futures"
+            and item.get("venue")
+            and item.get("symbol")
+        ]
+        priority_legs.extend(
+            (str(item.get("venue")), str(item.get("symbol")))
+            for item in catalog.get("markets") or []
+            if isinstance(item, dict)
+            and str(item.get("token") or "").upper() in tracked
+            and item.get("market_type") == "Futures"
+            and item.get("venue")
+            and item.get("symbol")
+        )
+        for retained in funding_radar.routes_for():
+            for side in ("long", "short"):
+                if retained.get(f"{side}_market_type") == "Futures":
+                    venue = retained.get(f"{side}_venue")
+                    symbol = retained.get(f"{side}_market_symbol")
+                    if venue and symbol:
+                        priority_legs.append((str(venue), str(symbol)))
+        priority_legs = list(dict.fromkeys(priority_legs))[:120]
+        if not catalog_legs and not priority_legs:
             return
         started = time.monotonic()
-        windows = venue_funding_history.build(legs)
+        windows = venue_funding_history.build(
+            list(dict.fromkeys(catalog_legs)), priority_legs=priority_legs
+        )
         # Replace the just-captured settlement snapshots with the fresher venue
         # history while these routes are still known live.
         if leaders:
             funding_radar.refresh(leaders)
         _log(
-            f"venue funding history: {len(windows)} of {len(set(legs))} legs "
+            f"venue funding history: {len(windows)} cached of {len(set(catalog_legs))} catalog legs "
             f"in {time.monotonic() - started:.1f}s"
         )
     except Exception as exc:  # noqa: BLE001 - best effort beside everything else.

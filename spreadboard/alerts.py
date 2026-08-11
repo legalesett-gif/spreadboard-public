@@ -15,6 +15,7 @@ from spreadboard import accounts, api_spreads, board
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
+PUSHOVER_VALIDATE_URL = "https://api.pushover.net/1/users/validate.json"
 DEFAULT_CONFIG: dict[str, Any] = {
     "telegram_channel_url": "",
     "pushover_app_token": "",
@@ -107,6 +108,56 @@ def send_pushover_message(
         return {"ok": False, "status": exc.code, "response": _json_or_text(text)}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "status": None, "error": str(exc)}
+
+
+def validate_pushover_user(
+    *, app_token: str, user_key: str, timeout: float = 10.0
+) -> dict[str, Any]:
+    """Validate a Pushover recipient without sending a notification.
+
+    The raw response may contain a request identifier and the user key must
+    never be reflected.  Only active device names and platform labels are kept
+    for server-side matching; the account API returns counts, not names.
+    """
+    body = urllib.parse.urlencode({"token": app_token, "user": user_key}).encode("utf-8")
+    request = urllib.request.Request(
+        PUSHOVER_VALIDATE_URL,
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            parsed = _json_or_text(response.read().decode("utf-8", errors="replace"))
+            if not isinstance(parsed, dict):
+                return {"ok": False, "status": response.status, "error": "pushover_validation_invalid_response"}
+            return {
+                "ok": response.status == 200 and parsed.get("status") == 1,
+                "status": response.status,
+                "devices": [str(item) for item in parsed.get("devices") or [] if item],
+                "licenses": [str(item) for item in parsed.get("licenses") or [] if item],
+                "errors": [str(item)[:160] for item in parsed.get("errors") or []],
+            }
+    except urllib.error.HTTPError as exc:
+        parsed = _json_or_text(exc.read().decode("utf-8", errors="replace"))
+        errors = parsed.get("errors") if isinstance(parsed, dict) else []
+        return {
+            "ok": False,
+            "status": exc.code,
+            "error": "pushover_user_not_valid",
+            "devices": [],
+            "licenses": [],
+            "errors": [str(item)[:160] for item in errors or []],
+        }
+    except Exception:  # noqa: BLE001 - never expose network internals to a member.
+        return {
+            "ok": False,
+            "status": None,
+            "error": "pushover_validation_unavailable",
+            "devices": [],
+            "licenses": [],
+            "errors": [],
+        }
 
 
 def send_test_alerts(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -328,6 +379,26 @@ def send_user_test_alert(user_id: int, *, accounts_path: Path | str = accounts.D
     delivery = accounts.notification_delivery(user_id, db_path=accounts_path)
     if not delivery:
         return {"ok": False, "error": "pushover_user_not_configured"}
+    validation = validate_pushover_user(
+        app_token=app_token,
+        user_key=delivery["user_key"],
+    )
+    if not validation.get("ok"):
+        return {
+            "ok": False,
+            "status": validation.get("status"),
+            "error": validation.get("error") or "pushover_user_not_valid",
+            "active_device_count": 0,
+        }
+    device = str(delivery.get("device") or "")
+    devices = validation.get("devices") or []
+    if device and device not in devices:
+        return {
+            "ok": False,
+            "status": validation.get("status"),
+            "error": "pushover_device_not_active",
+            "active_device_count": len(devices),
+        }
     result = send_pushover_message(
         app_token=app_token,
         user_key=delivery["user_key"],
@@ -336,7 +407,21 @@ def send_user_test_alert(user_id: int, *, accounts_path: Path | str = accounts.D
         device=delivery.get("device"),
         sound=delivery.get("sound"),
     )
-    return {"ok": bool(result.get("ok")), "status": result.get("status"), "error": result.get("error")}
+    provider_errors = []
+    response = result.get("response")
+    if isinstance(response, dict):
+        provider_errors = [str(item)[:160] for item in response.get("errors") or []]
+    return {
+        "ok": bool(result.get("ok")),
+        "status": result.get("status"),
+        "error": (
+            result.get("error")
+            or ("pushover_delivery_rejected" if not result.get("ok") else None)
+        ),
+        "provider_errors": provider_errors,
+        "active_device_count": len(devices),
+        "accepted_by_pushover": bool(result.get("ok")),
+    }
 
 
 def token_metrics(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:

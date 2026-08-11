@@ -154,6 +154,7 @@ def _handle_group_query(
             f"I answered ${query.symbol} {query.kind} less than a minute ago. Tap the previous result or try again shortly.",
             thread_id=thread_id,
         )
+    _record_token_attention(query, source="subscriber_forum")
     try:
         body = telegram_queries.render(
             query, board_path=board_path, public_url=public_url
@@ -191,6 +192,7 @@ def _handle_callback(cb: dict[str, Any], *, db_path: Any, board_path: Any) -> di
         query = telegram_queries.Query(kind=parts[1], symbol=parts[2])
     else:
         return None
+    _record_token_attention(query, source="subscriber_forum")
     public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip()
     try:
         body = telegram_queries.render(query, board_path=board_path, public_url=public_url)
@@ -326,6 +328,7 @@ def handle_update(
                 chat_id,
                 f"I answered ${query.symbol} {query.kind} less than a minute ago. Tap the previous result or try again shortly.",
             )
+        _record_token_attention(query, source="private_bot")
         try:
             body = telegram_queries.render(
                 query,
@@ -404,6 +407,16 @@ def handle_update(
         "Commands: /top, /spread, /funding, /transfer, /subscribe, "
         "/mysubscription, /access",
     )
+
+
+def _record_token_attention(query: telegram_queries.Query, *, source: str) -> None:
+    """Best-effort aggregate signal; never interfere with a bot reply."""
+    try:
+        from spreadboard import intel
+
+        intel.record_token_attention(query.symbol, query.kind, source=source)
+    except Exception:  # noqa: BLE001 - analytics must never break Telegram.
+        pass
 
 
 def render_public_digest(*, board_path: Any, limit: int = 5) -> str:
