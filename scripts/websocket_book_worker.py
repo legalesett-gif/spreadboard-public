@@ -36,6 +36,34 @@ WRITE_INTERVAL_SECONDS = max(0.1, float(os.environ.get("SPREADBOARD_WS_WRITE_SEC
 LegKey = tuple[str, str, str]
 
 
+def _install_ccxt_client_reset_compat(client_class: type[Any] | None = None) -> bool:
+    """Restore the reset hook still called by some CCXT Pro adapters.
+
+    CCXT 4.5.71's BingX and HTX pong handlers call ``Client.reset(error)``,
+    while the bundled base websocket client no longer defines that method.
+    A connection close then creates an unhandled future with an AttributeError
+    instead of rejecting the pending subscriptions. Keep the compatibility
+    local to this public-book worker and use the base client's supported
+    ``reject`` operation; no exchange or account behavior is changed.
+    """
+
+    if client_class is None:
+        from ccxt.async_support.base.ws.client import Client
+
+        client_class = Client
+    if hasattr(client_class, "reset"):
+        return False
+
+    def reset(self: Any, error: Exception) -> Any:
+        return self.reject(error)
+
+    setattr(client_class, "reset", reset)
+    return True
+
+
+_install_ccxt_client_reset_compat()
+
+
 class BookWorker:
     def __init__(self) -> None:
         self.stop = asyncio.Event()

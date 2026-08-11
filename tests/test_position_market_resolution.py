@@ -8,7 +8,10 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from spreadboard import accounts, fast_quotes, portfolio, position_markets, server
-from scripts.websocket_book_worker import _desired_legs
+from scripts.websocket_book_worker import (
+    _desired_legs,
+    _install_ccxt_client_reset_compat,
+)
 
 
 def _catalogue() -> dict:
@@ -348,3 +351,21 @@ def test_two_dex_legs_keep_their_own_chain_and_contract_identity() -> None:
 
     assert fast_quotes._dex_chain_contract(row, side="long") == ("56", "0xlong")
     assert fast_quotes._dex_chain_contract(row, side="short") == ("501", "short-mint")
+
+
+def test_ccxt_websocket_reset_compat_rejects_pending_futures_once() -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.rejected: Exception | None = None
+
+        def reject(self, error: Exception) -> Exception:
+            self.rejected = error
+            return error
+
+    error = ConnectionError("closing transport")
+
+    assert _install_ccxt_client_reset_compat(FakeClient) is True
+    client = FakeClient()
+    assert client.reset(error) is error
+    assert client.rejected is error
+    assert _install_ccxt_client_reset_compat(FakeClient) is False
