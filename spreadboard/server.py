@@ -2478,11 +2478,16 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
         route_key = str(row.get("route_key") or "")
         long_label = leg_market_label(row.get("long_venue"), row.get("long_market_type"))
         short_label = leg_market_label(row.get("short_venue"), row.get("short_market_type"))
+
+        def leg_line(venue: Any, label: str) -> str:
+            venue_text = str(venue or "?")
+            return venue_text if label.casefold() in venue_text.casefold() else f"{venue_text} {label}"
+
         return {
             "kind": route_kind_display(row.get("route_kind")),
             "route_line": (
-                f"{row.get('long_venue') or '?'} {long_label} → "
-                f"{row.get('short_venue') or '?'} {short_label}"
+                f"{leg_line(row.get('long_venue'), long_label)} → "
+                f"{leg_line(row.get('short_venue'), short_label)}"
             ),
             "pair_url": (
                 f"/charts?route_key={board.route_key_url(route_key)}"
