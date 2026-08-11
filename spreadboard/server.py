@@ -2504,13 +2504,49 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
     for symbol in symbols:
         live = live_by_token.get(symbol, [])
         retained = funding_radar.routes_for(symbol)
-        score_route = live[0] if live else retained[0] if retained else None
+        live_keys = {str(row.get("route_key") or "") for row in live}
+        score_candidates: dict[str, dict[str, Any]] = {}
+        for row in retained:
+            score_candidates[str(row.get("route_key") or id(row))] = row
+        for row in live:
+            key = str(row.get("route_key") or id(row))
+            # Keep retained funding windows while preferring the current quote
+            # and execution fields when the same route is live again.
+            score_candidates[key] = {**score_candidates.get(key, {}), **row}
+
+        def funding_research_rank(row: dict[str, Any]) -> tuple[float, int]:
+            values = [
+                value
+                for value in (
+                    _float_or_none(row.get("funding_24h_pct")),
+                    _float_or_none(row.get("funding_projected_24h_pct")),
+                    _float_or_none(funding_radar.window_value(row, "1d")),
+                    (_float_or_none(funding_radar.window_value(row, "7d")) or 0.0) / 7.0,
+                    (_float_or_none(funding_radar.window_value(row, "30d")) or 0.0) / 30.0,
+                )
+                if value is not None
+            ]
+            has_futures = int(
+                "futures"
+                in {
+                    str(row.get("long_market_type") or "").casefold(),
+                    str(row.get("short_market_type") or "").casefold(),
+                }
+            )
+            return (max(values, default=float("-inf")), has_futures)
+
+        score_route = (
+            max(score_candidates.values(), key=funding_research_rank)
+            if score_candidates
+            else None
+        )
+        score_route_key = str((score_route or {}).get("route_key") or "")
+        score_is_historical = bool(score_route) and score_route_key not in live_keys
         score_windows = {
             label: funding_radar.window_value(score_route, label) if score_route else None
             for label in ("1d", "7d", "30d")
         }
         score_history = []
-        score_route_key = str((score_route or {}).get("route_key") or "")
         if score_route_key:
             try:
                 score_history = market_history.load_history(
@@ -2527,7 +2563,7 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
             score_route,
             windows=score_windows,
             history=score_history,
-            historical=not bool(live) and bool(retained),
+            historical=score_is_historical,
         )
         chosen = [route_card(row, historical=False) for row in live[:3]]
         if len(chosen) < 3:
@@ -2552,6 +2588,11 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
             "status": status,
             "routes": chosen,
             "best_board": chosen[0] if chosen else None,
+            "research_route": (
+                route_card(score_route, historical=score_is_historical)
+                if score_route
+                else None
+            ),
             "research_score": score,
             "funding_windows": score_windows,
             "chart_url": f"/charts?token={quote(symbol)}",
@@ -10467,7 +10508,7 @@ WATCHLIST_SCRIPT = """
     target.innerHTML = tokens.map((token) => {
       const hot = hotSymbols.find((item) => normaliseSymbol(item.symbol) === token) || {};
       const reality = routeBySymbol.get(token) || {};
-      const best = reality.best_board || hot.best_board || {};
+      const best = reality.research_route || reality.best_board || hot.best_board || {};
       const research = reality.research_score || {};
       const components = research.components || {};
       const risk = research.risk_estimate || {};
