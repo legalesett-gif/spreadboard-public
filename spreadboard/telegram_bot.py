@@ -63,6 +63,8 @@ def status(*, db_path: Any = accounts.DEFAULT_DB_PATH) -> dict[str, Any]:
         "query_snapshot_age_seconds": query_snapshot["age_seconds"],
         "query_snapshot_token_count": query_snapshot["token_count"],
         "query_snapshot_route_count": query_snapshot["route_count"],
+        "funding_snapshot_token_count": query_snapshot["funding_token_count"],
+        "funding_snapshot_route_count": query_snapshot["funding_route_count"],
     }
 
 

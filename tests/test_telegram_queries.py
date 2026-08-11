@@ -323,6 +323,9 @@ def test_explicit_funding_view_uses_the_current_funding_snapshot(board_file):
     assert "GUA · funding · 1 routes" in body
     assert "+0.044%" in body and "+16.1%" in body
     assert "Current basis on the top funding pair: -0.11%" in body
+    status = telegram_queries.payload_status()
+    assert status["funding_token_count"] == 1
+    assert status["funding_route_count"] == 1
 
 
 def test_radar_command_lists_retained_leaders(board_file, monkeypatch):
