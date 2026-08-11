@@ -144,8 +144,9 @@ def test_a_member_cannot_poll_someone_elses_invoice(client):
     second_cookie, _ = register(client, "second@example.test")
     client.request("GET", f"/api/billing/crypto/invoice/{invoice_id}", headers={"Cookie": second_cookie})
     response = client.getresponse()
-    assert response.status >= 400
-    response.read()
+    assert response.status == 400
+    payload = json.loads(response.read())
+    assert payload == {"ok": False, "error": "invoice_not_found"}
 
 
 def test_consent_is_required_before_an_invoice_is_issued(client):

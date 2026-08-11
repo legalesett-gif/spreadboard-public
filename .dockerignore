@@ -23,6 +23,7 @@ data/*
 !data/spreadboard_market_history.seed
 vault
 graphify-out
+.playwright-cli
 node_modules
 dist
 build

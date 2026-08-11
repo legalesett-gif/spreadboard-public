@@ -159,10 +159,11 @@ def build_intel(
     now = time.time() if now is None else now
     limit = max(1, min(int(limit or DEFAULT_LIMIT), 50))
     window_hours = max(0.25, min(float(window_hours or DEFAULT_WINDOW_HOURS), 168.0))
-    rows = [
-        *read_jsonl_tail(Path(events_path), max_rows=5_000),
-        *read_jsonl_tail(Path(external_bot_events_path), max_rows=5_000),
-    ]
+    # Intel is deliberately sourced from the operator's exact private
+    # @SpreadArbitrageBot conversation. The subscription bot and group forum
+    # have different access/lifecycle responsibilities and must not silently
+    # become the attention source merely because their local event file exists.
+    rows = read_jsonl_tail(Path(external_bot_events_path), max_rows=5_000)
     events = []
     for row in rows:
         event = _normal_event(row, now=now)
@@ -334,7 +335,10 @@ def build_source_freshness(
 ) -> dict[str, Any]:
     now = time.time() if now is None else now
     source_files = {
-        "telegram_events": Path(events_path),
+        # Keep the public key stable for the UI/API, but make its evidence the
+        # exact private-bot bridge only. Subscription/group activity is not an
+        # acceptable fallback for this product signal.
+        "telegram_events": Path(external_bot_events_path),
         "preflight_candidates": Path(preflight_candidates_path),
         "strategy_review_queue": Path(strategy_queue_path),
         "strategy_prompts": Path(strategy_prompts_path),
@@ -343,19 +347,9 @@ def build_source_freshness(
     }
     freshness = {name: _file_freshness(path, now=now) for name, path in source_files.items()}
     latest_event = _latest_timestamp(
-        [
-            *read_jsonl_tail(Path(events_path), max_rows=500),
-            *read_jsonl_tail(Path(external_bot_events_path), max_rows=500),
-        ]
+        read_jsonl_tail(Path(external_bot_events_path), max_rows=500)
     )
     if latest_event:
-        external_freshness = _file_freshness(Path(external_bot_events_path), now=now)
-        if external_freshness.get("exists") and (
-            not freshness["telegram_events"].get("exists")
-            or float(external_freshness.get("age_min") or 0)
-            < float(freshness["telegram_events"].get("age_min") or float("inf"))
-        ):
-            freshness["telegram_events"] = external_freshness
         freshness["telegram_events"]["latest_at_us"] = latest_event
         freshness["telegram_events"]["age_min"] = _age_min(now, latest_event)
         freshness["telegram_events"]["status"] = _freshness_status(freshness["telegram_events"]["age_min"], stale_min=30)

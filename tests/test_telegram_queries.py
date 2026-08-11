@@ -274,6 +274,57 @@ def test_cooled_token_falls_back_to_the_historical_funding_radar(board_file, mon
     assert "not a current entry quote" in body
 
 
+def test_cooled_spread_token_keeps_current_funding_and_basis_visible(board_file, monkeypatch):
+    """A current low rate must not erase a token which led earlier today."""
+    telegram_queries.replace_payload({"groups": []})
+    live = route(
+        "GUA", "FUTURES", "Binance", "Aster", -0.11,
+        0.044, 16.1, 82_000, guarded=True,
+    )
+    telegram_queries.replace_funding_payloads([
+        {"groups": [{"token": "GUA", "routes": [live]}]},
+        # The same row can occur in more than one funding farm payload; it is
+        # installed once, not repeated in the chat response.
+        {"groups": [{"token": "GUA", "routes": [live]}]},
+    ])
+    monkeypatch.setattr(
+        telegram_queries.funding_radar,
+        "routes_for",
+        lambda _symbol: [{
+            **live,
+            "radar_last_seen_age_min": 30,
+            "radar_windows": {"1d": 1.1, "7d": 2.4, "30d": 5.9},
+        }],
+    )
+
+    body = telegram_queries.render(
+        telegram_queries.Query("spread", "GUA"),
+        board_path=board_file,
+        public_url="https://spreadarbitrage.ink",
+    )
+
+    assert "current funding monitor · 1 routes" in body
+    assert "+0.044%" in body and "-0.11%" in body
+    assert "cooled out of the spread Now ranking" in body
+    assert "Funding radar" in body and "+5.90%" in body
+    assert "identity is unresolved" in body and "Research data, not advice" in body
+
+
+def test_explicit_funding_view_uses_the_current_funding_snapshot(board_file):
+    telegram_queries.replace_payload({"groups": []})
+    telegram_queries.replace_funding_payloads([{"groups": [{"token": "GUA", "routes": [
+        route("GUA", "FUTURES", "Binance", "Aster", -0.11, 0.044, 16.1, 82_000)
+    ]}]}])
+
+    body = telegram_queries.render(
+        telegram_queries.Query("funding", "GUA"), board_path=board_file
+    )
+
+    assert "GUA · funding · 1 routes" in body
+    assert "+0.044%" in body and "+16.1%" in body
+    assert "Current basis on the top funding pair: -0.11%" in body
+
+
 def test_radar_command_lists_retained_leaders(board_file, monkeypatch):
     monkeypatch.setattr(
         telegram_queries.funding_radar,

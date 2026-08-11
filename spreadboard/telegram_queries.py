@@ -278,6 +278,8 @@ def _render_radar(*, public_url: str = "") -> str:
 #: nothing at all, which is exactly what "the $ is not working" looked like.
 WARM_QUERY: dict[str, Any] = {}
 _WARM_QUERY_UPDATED_AT = 0.0
+FUNDING_QUERY: dict[str, Any] = {}
+_FUNDING_QUERY_UPDATED_AT = 0.0
 _WARM_QUERY_LOCK = threading.Lock()
 
 
@@ -326,6 +328,51 @@ def replace_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def replace_funding_payloads(payloads: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Install the exact live funding rows used by the website's three tabs.
+
+    The ordinary member snapshot intentionally follows the spread board's Now
+    filters. A token can therefore cool out of that list while remaining a
+    current, book-verified funding pair on /funding. Keeping this second small
+    immutable snapshot lets ``$TOKEN funding`` and a cooled ``$TOKEN`` lookup
+    show the current rate/basis without weakening the spread-board filters or
+    doing exchange work inside Telegram's webhook deadline.
+    """
+    groups: dict[str, dict[str, Any]] = {}
+    seen: dict[str, set[tuple[Any, ...]]] = {}
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            raise TypeError("telegram_funding_payload_must_be_a_mapping")
+        if not isinstance(payload.get("groups"), list):
+            raise TypeError("telegram_funding_payload_groups_must_be_a_list")
+        for original in payload.get("groups") or []:
+            if not isinstance(original, dict):
+                continue
+            token = _normalise(str(original.get("token") or ""))
+            if not token:
+                continue
+            group = groups.setdefault(token, {**original, "token": token, "routes": []})
+            route_keys = seen.setdefault(token, set())
+            for route in original.get("routes") or []:
+                if not isinstance(route, dict):
+                    continue
+                identity = (
+                    route.get("route_key"), route.get("long_venue"),
+                    route.get("long_market_symbol"), route.get("short_venue"),
+                    route.get("short_market_symbol"),
+                )
+                if identity in route_keys:
+                    continue
+                route_keys.add(identity)
+                group["routes"].append(route)
+    installed = {"groups": list(groups.values())}
+    global FUNDING_QUERY, _FUNDING_QUERY_UPDATED_AT
+    with _WARM_QUERY_LOCK:
+        FUNDING_QUERY = installed
+        _FUNDING_QUERY_UPDATED_AT = time.time()
+    return installed
+
+
 def _warm_payload(_board_path: Path | str) -> dict[str, Any]:
     """Return the last complete Telegram snapshot without doing heavy work."""
     with _WARM_QUERY_LOCK:
@@ -351,20 +398,27 @@ def payload_status(*, now: float | None = None) -> dict[str, Any]:
         groups = WARM_QUERY.get("groups") or []
         token_count = len(groups)
         route_count = sum(len(group.get("routes") or []) for group in groups)
+        funding_groups = FUNDING_QUERY.get("groups") or []
+        funding_token_count = len(funding_groups)
+        funding_route_count = sum(len(group.get("routes") or []) for group in funding_groups)
     return {
         "ready": ready,
         "age_seconds": max(0.0, moment - updated_at) if ready and updated_at else None,
         "token_count": token_count,
         "route_count": route_count,
+        "funding_token_count": funding_token_count,
+        "funding_route_count": funding_route_count,
     }
 
 
 def reset_payload() -> None:
     """Test/support hook; production refreshes by replacing, never mutating."""
-    global WARM_QUERY, _WARM_QUERY_UPDATED_AT
+    global WARM_QUERY, _WARM_QUERY_UPDATED_AT, FUNDING_QUERY, _FUNDING_QUERY_UPDATED_AT
     with _WARM_QUERY_LOCK:
         WARM_QUERY = {}
         _WARM_QUERY_UPDATED_AT = 0.0
+        FUNDING_QUERY = {}
+        _FUNDING_QUERY_UPDATED_AT = 0.0
 
 
 #: A bare "$" is a request for suggestions, not a token.
@@ -444,6 +498,58 @@ def _rows_for(symbol: str, board_path: Path | str) -> list[dict[str, Any]]:
     return rows
 
 
+def _funding_rows_for(symbol: str) -> list[dict[str, Any]]:
+    """Current funding-tab rows, already filtered and warmed by the service."""
+    with _WARM_QUERY_LOCK:
+        groups = FUNDING_QUERY.get("groups") or []
+    rows: list[dict[str, Any]] = []
+    for group in groups:
+        if str(group.get("token") or "").upper() == symbol:
+            rows.extend(route for route in group.get("routes") or [] if isinstance(route, dict))
+    return rows
+
+
+def _current_funding_monitor(
+    symbol: str,
+    rows: list[dict[str, Any]],
+    radar_rows: list[dict[str, Any]],
+    *,
+    public_url: str = "",
+) -> str:
+    rows = sorted(
+        rows,
+        key=lambda row: -abs(float(row.get("funding_daily_pct") or row.get("funding_spread_pct") or 0)),
+    )
+    body = _table(
+        ("ROUTE", "NET/DAY", "BASIS"), (22, 9, 8),
+        [
+            (
+                _route(row),
+                _pct(row.get("funding_daily_pct") or row.get("funding_spread_pct"), 3),
+                _pct(row.get("executable_spread_pct"), 2),
+            )
+            for row in rows[:MAX_ROWS]
+        ],
+    )
+    radar = f"\n\n{_radar_summary(radar_rows)}" if radar_rows else ""
+    warning = (
+        "\n<i>? means token identity is unresolved on that route. Research data, not advice.</i>"
+        if any(row.get("mirage_guarded") for row in rows)
+        else "\n<i>Re-check live books, rails and carry before acting. Research data, not advice.</i>"
+    )
+    link = ""
+    if public_url:
+        link = (
+            f'\n\n<a href="{escape(public_url.rstrip("/"))}/funding?'
+            f'q={escape(symbol)}">Open current and historical funding on SpreadBoard</a>'
+        )
+    return (
+        f"<b>{escape(symbol)} · current funding monitor · {len(rows)} routes</b>\n"
+        "This token cooled out of the spread Now ranking; these are the current funding-tab pairs, not a relaxed spread signal.\n"
+        f"<pre>{escape(body)}</pre>{radar}{warning}{link}"
+    )
+
+
 def _table(header: tuple[str, ...], widths: tuple[int, ...], lines: list[tuple[str, ...]]) -> str:
     out = [" ".join(h.ljust(w) for h, w in zip(header, widths)).rstrip()]
     for line in lines:
@@ -508,8 +614,15 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
     # caller and the symbol can never carry markup into an HTML-parsed message.
     symbol = _normalise(query.symbol)
     rows = _rows_for(symbol, board_path)
+    funding_rows = _funding_rows_for(symbol)
+    if query.kind == "funding" and funding_rows:
+        rows = funding_rows
     radar_rows = _radar_rows(symbol) if query.kind in {"spread", "funding"} else []
     if not rows:
+        if funding_rows and query.kind == "spread":
+            return _current_funding_monitor(
+                symbol, funding_rows, radar_rows, public_url=public_url
+            )
         if radar_rows:
             summary = _radar_summary(radar_rows)
             link = ""
@@ -546,6 +659,10 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
             [(_route(r), _pct(r.get("funding_daily_pct") or r.get("funding_spread_pct"), 3), _pct(r.get("funding_apr_pct"), 1)) for r in rows[:MAX_ROWS]],
         )
         title = f"{symbol} · funding · {len(rows)} routes"
+        basis_context = (
+            f"\n<i>Current basis on the top funding pair: "
+            f"{_pct(rows[0].get('executable_spread_pct'), 2)}.</i>"
+        )
     elif query.kind == "transfer":
         venues: dict[str, tuple[Any, Any]] = {}
         for r in rows:
@@ -569,16 +686,26 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
             [(_route(r), _pct(r.get("executable_spread_pct")), _usd(r.get("depth_usd"))) for r in rows[:MAX_ROWS]],
         )
         title = f"{symbol} · spread · {len(rows)} routes"
+        basis_context = ""
+
+    if query.kind == "transfer":
+        basis_context = ""
 
     total = len(venues) if query.kind == "transfer" else len(rows)
     extra = f"\n<i>Showing top {MAX_ROWS} of {total}.</i>" if total > MAX_ROWS else ""
     link = ""
     if public_url:
-        link = f'\n\n<a href="{escape(public_url.rstrip("/"))}/markets?q={escape(symbol)}&amp;view=table">Open full detail on SpreadBoard</a>'
+        destination = (
+            f"/funding?q={escape(symbol)}"
+            if query.kind == "funding"
+            else f"/markets?q={escape(symbol)}&amp;view=table"
+        )
+        link = f'\n\n<a href="{escape(public_url.rstrip("/"))}{destination}">Open full detail on SpreadBoard</a>'
     radar = f"\n\n{_radar_summary(radar_rows)}" if radar_rows else ""
     return (
         f"<b>{escape(title)}</b>\n<pre>{escape(body)}</pre>"
         f"{extra}"
+        f"{basis_context}"
         "\n<i>? = token identity unverified on that route. Research data, not advice.</i>"
         f"{radar}"
         f"{link}"

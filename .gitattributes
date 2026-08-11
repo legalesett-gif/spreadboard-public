@@ -1,0 +1,5 @@
+# Generated local analysis and browser artifacts must never enter a production
+# source release.  They can contain absolute workstation paths and test-page
+# captures even though the application does not serve them.
+graphify-out export-ignore
+.playwright-cli export-ignore

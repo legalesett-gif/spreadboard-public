@@ -52,6 +52,61 @@ async function signIn(page) {
   return true;
 }
 
+async function exerciseMemberState(page, name) {
+  if (name === "charts") {
+    const token = page.locator("[data-chart-token]");
+    await token.fill("GUA");
+    await token.dispatchEvent("input");
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll("[data-chart-long] option")]
+        .some(option => option.textContent.includes("OKX DEX 56")), null, { timeout: 30_000 });
+    const chosen = await page.evaluate(() => {
+      const long = document.querySelector("[data-chart-long]");
+      const short = document.querySelector("[data-chart-short]");
+      const dex = [...long.options].find(option => option.textContent.includes("OKX DEX 56"));
+      const future = [...short.options].find(option => option.textContent.includes("Futures"));
+      if (!dex || !future) return { token: "GUA", dexLongAvailable: Boolean(dex), futureShortAvailable: Boolean(future) };
+      long.value = dex.value;
+      long.dispatchEvent(new Event("change", { bubbles: true }));
+      short.value = future.value;
+      short.dispatchEvent(new Event("change", { bubbles: true }));
+      return {
+        token: "GUA",
+        dexLongAvailable: true,
+        futureShortAvailable: true,
+        routeReady: !document.querySelector("[data-chart-create]").disabled,
+      };
+    });
+    await page.waitForTimeout(250);
+    return chosen;
+  }
+  if (name === "account") {
+    await page.locator("[data-position-new]").click();
+    const token = page.locator("[data-position-form] input[name=token]");
+    await token.fill("GUA");
+    await token.dispatchEvent("input");
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll("[data-position-long-leg] option")]
+        .some(option => option.textContent.includes("OKX DEX 56")), null, { timeout: 30_000 });
+    const chosen = await page.evaluate(() => {
+      const select = document.querySelector("[data-position-long-leg]");
+      const dex = [...select.options].find(option => option.textContent.includes("OKX DEX 56"));
+      if (dex) {
+        select.value = dex.value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return {
+        token: "GUA",
+        dexLongAvailable: Boolean(dex),
+        individualMarketCount: Math.max(0, select.options.length - 1),
+      };
+    });
+    await page.waitForTimeout(250);
+    return chosen;
+  }
+  return null;
+}
+
 async function main() {
   fs.mkdirSync(outputDir, { recursive: true });
   const browser = await chromium.launch({
@@ -87,9 +142,11 @@ async function main() {
         const started = Date.now();
         let response = null;
         let navigationError = null;
+        let interactiveState = null;
         try {
           response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90_000 });
           await page.waitForTimeout(mode === "reference" ? 2_500 : 700);
+          if (mode !== "reference") interactiveState = await exerciseMemberState(page, name);
         } catch (error) {
           navigationError = `${error.name}:${error.message}`;
         }
@@ -114,6 +171,7 @@ async function main() {
           elapsedMs: Date.now() - started,
           navigationError,
           browserErrors: [...errors],
+          interactiveState,
           screenshot,
           ...audit,
         });

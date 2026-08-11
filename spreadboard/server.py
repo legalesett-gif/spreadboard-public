@@ -695,6 +695,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             return
         except PermissionError as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+        except ValueError as exc:
+            # User-owned GET resources deliberately collapse unknown and
+            # someone-else's identifiers into the same client error. A denied
+            # invoice used to fall through as HTTP 500, which disclosed no
+            # data but misreported an expected access denial as a server fault.
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
         except Exception as exc:  # noqa: BLE001
             try:
                 self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
@@ -5298,9 +5304,9 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
     )
     community_fresh = community_source.get("status") == "fresh"
     source_notice = (
-        '<aside class="intel-source-notice live"><strong>Subscriber attention is current</strong><p>Anonymous exact-token lookups sent to the SpreadBoard bot are joined to current routes and retained funding evidence. No chat ID, username, name, email, or message text is stored.</p></aside>'
+        '<aside class="intel-source-notice live"><strong>Private research-bot attention is current</strong><p>Anonymous exact-token lookups sent to the private @SpreadArbitrageBot chat are joined to current routes and retained funding evidence. No chat ID, username, name, email, or message text is stored.</p></aside>'
         if community_fresh
-        else '<aside class="intel-source-notice stale"><strong>Waiting for the first subscriber bot lookup</strong><p>Use an exact token such as $GUA in the linked SpreadBoard bot. Intel records only the anonymous token and selected view; current routes, Funding, Charts and Watchlist remain authoritative.</p></aside>'
+        else '<aside class="intel-source-notice stale"><strong>Waiting for the private research-bot bridge</strong><p>Use an exact token such as $GUA in the private @SpreadArbitrageBot chat. Intel records only the anonymous token and selected view; current routes, Funding, Charts and Watchlist remain authoritative.</p></aside>'
     )
     if not community_fresh:
         body = f"""
@@ -5320,10 +5326,10 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
           {render_intel_source_grid(source)}
           <section class="intel-section intel-empty-state">
             <span class="page-kicker">Ready when members ask</span>
-            <h2>Intel activates from the next bot lookup</h2>
-            <p>Send an exact token such as <strong>$GUA funding</strong> to the SpreadBoard bot. The token is matched to current routes, retained funding windows and charts without storing the sender or message text.</p>
+            <h2>Intel activates from the next @SpreadArbitrageBot lookup</h2>
+            <p>Send an exact token such as <strong>$GUA funding</strong> in the private @SpreadArbitrageBot chat. The token is matched to current routes, retained funding windows and charts without storing the sender or message text.</p>
             <div class="intel-actions">
-              <a class="primary" href="/account#telegram">Open Telegram setup</a>
+              <a class="primary" href="https://t.me/SpreadArbitrageBot" target="_blank" rel="noopener">Open @SpreadArbitrageBot</a>
               <a class="secondary" href="/funding">Browse Funding</a>
             </div>
           </section>

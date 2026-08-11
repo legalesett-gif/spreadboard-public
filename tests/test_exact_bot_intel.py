@@ -43,8 +43,12 @@ def test_exact_bot_bridge_keeps_only_anonymous_token_attention() -> None:
 
 def test_external_exact_bot_events_feed_the_same_intel_surface(tmp_path, monkeypatch) -> None:
     external = tmp_path / "external.jsonl"
+    subscription = tmp_path / "subscription-bot.jsonl"
     external.write_text(
         json.dumps(bridge.attention_event("VANRY", "funding", at=1_786_446_000)) + "\n"
+    )
+    subscription.write_text(
+        json.dumps(bridge.attention_event("SIREN", "funding", at=1_786_446_000)) + "\n"
     )
     monkeypatch.setattr(
         intel.board,
@@ -60,7 +64,7 @@ def test_external_exact_bot_events_feed_the_same_intel_surface(tmp_path, monkeyp
     )
     payload = intel.build_intel(
         board_path=tmp_path / "missing-board.json",
-        events_path=tmp_path / "missing-primary.jsonl",
+        events_path=subscription,
         external_bot_events_path=external,
         brief_dir=tmp_path / "briefs",
         preflight_candidates_path=tmp_path / "preflight.jsonl",
@@ -71,4 +75,5 @@ def test_external_exact_bot_events_feed_the_same_intel_surface(tmp_path, monkeyp
         now=1_786_446_300,
     )
     assert payload["hot_symbols"][0]["symbol"] == "VANRY"
+    assert all(item["symbol"] != "SIREN" for item in payload["hot_symbols"])
     assert payload["source_freshness"]["telegram_events"]["status"] == "fresh"

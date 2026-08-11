@@ -466,6 +466,11 @@ def _warm_telegram_payload_at_startup(board_path: Path) -> None:
             {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
         )
         telegram_queries.replace_payload(payload)
+        telegram_queries.replace_funding_payloads([
+            server.api_market_spreads(board_path, dict(query))
+            for query in WARM_QUERIES
+            if query.get("funding_only")
+        ])
         _log(
             "telegram startup payload ready "
             f"in {time.monotonic() - started:.1f}s"
@@ -603,6 +608,12 @@ WARM_QUERIES: tuple[dict[str, list[str]], ...] = (
     # 16.7s against 0.11s for the tabs whose key actually matched.
     {"funding_only": ["1"], "kind": ["FUTURES-SPOT-PAIR"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
     {"funding_only": ["1"], "kind": ["DEX-FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
+    # Telegram needs the whole current funding universe, not only the 25 rows
+    # currently leading each page tab. Otherwise a retained radar token could
+    # still lose its current low rate after it cooled below rank 25. One
+    # all-lane 500-row snapshot covers the live catalog without a per-message
+    # rebuild or any relaxed filtering.
+    {"funding_only": ["1"], "sort": ["funding"], "direction": ["desc"], "limit": ["500"]},
 )
 
 
@@ -816,6 +827,11 @@ def _warm_board_cache(*, force: bool = False) -> None:
             {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
         )
         telegram_queries.replace_payload(payload)
+        telegram_queries.replace_funding_payloads([
+            server.api_market_spreads(_board_path(), dict(query))
+            for query in WARM_QUERIES
+            if query.get("funding_only")
+        ])
     except Exception as exc:  # noqa: BLE001 - warming is best effort.
         _log(f"telegram payload warm skipped: {type(exc).__name__}: {exc}")
     _yield_to_requests()
@@ -988,8 +1004,6 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
         )
     except Exception as exc:  # noqa: BLE001 - best effort beside everything else.
         _log(f"venue funding history skipped: {type(exc).__name__}: {exc}")
-    except Exception as exc:  # noqa: BLE001 - a missing history file is not fatal.
-        _log(f"funding windows skipped: {type(exc).__name__}: {exc}")
 
 
 #: How much of a worker's output the parent keeps. Enough to diagnose a

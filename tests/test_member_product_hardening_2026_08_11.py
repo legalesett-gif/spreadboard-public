@@ -208,7 +208,8 @@ def test_member_intel_uses_one_activation_state_until_bot_attention_is_fresh(mon
         },
     )
     html = server.render_intel_page(Path("/missing.json"), {}, {})
-    assert "Intel activates from the next bot lookup" in html
+    assert "Intel activates from the next @SpreadArbitrageBot lookup" in html
+    assert "https://t.me/SpreadArbitrageBot" in html
     assert "Latest Brief" not in html
     assert "What's Hot" not in html
     assert "Recent Feed" not in html
