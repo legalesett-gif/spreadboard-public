@@ -111,11 +111,15 @@ history.
 - A new or expanded futures catalog runs bounded catch-up passes every ten
   minutes until every current leg has been attempted at least once; the service
   then returns to the three-hour settlement-history maintenance cadence.
+  Source-check coverage and successful classification are reported separately:
+  a temporary provider failure counts as checked but never as verified history,
+  remains labelled retryable, and cannot erase previously verified windows.
 - A missing 1d/7d/30d value is never replaced with zero or an estimate. A
   window appears only when the venue's actual settlement rows cover at least
   80% of that window.
-- `venue_funding_history.json` records catalog attempted/pending counts,
-  coverage percentage and latest-cycle counts for operator verification.
+- `venue_funding_history.json` records source-checked, successfully classified,
+  pending and retryable counts, plus verified-coverage and latest-cycle counts
+  for operator verification.
 
 ## Required external services before public onboarding
 

@@ -240,6 +240,20 @@ def _status_is_classified(status: dict[str, Any] | None) -> bool:
     return str((status or {}).get("status") or "") in CLASSIFIED_STATUSES
 
 
+def _status_was_attempted(status: dict[str, Any] | None) -> bool:
+    """Whether v4 has made at least one real provider attempt for this leg.
+
+    A retryable provider failure is not a successful classification, but it is
+    still an attempt. Keeping those concepts separate lets the initial catalog
+    sweep finish without pretending a timeout is an honest empty history.
+    """
+    return bool(status) and bool(
+        status.get("last_attempt_at")
+        or status.get("last_attempt_status")
+        or status.get("status")
+    )
+
+
 def build(
     legs: list[tuple[str, str]],
     *,
@@ -339,6 +353,9 @@ def build(
             background_attempted += 1
     catalog_keys = {f"{venue}|{symbol}" for venue, symbol in ordered}
     catalog_attempted = sum(
+        _status_was_attempted(leg_status.get(key)) for key in catalog_keys
+    )
+    catalog_classified = sum(
         _status_is_classified(leg_status.get(key)) for key in catalog_keys
     )
     payload = {
@@ -347,8 +364,13 @@ def build(
         "next_cursor": (start + background_attempted) % max(1, len(ordered)),
         "catalog_leg_count": len(catalog_keys),
         "catalog_attempted_leg_count": catalog_attempted,
+        "catalog_classified_leg_count": catalog_classified,
         "catalog_pending_leg_count": max(0, len(catalog_keys) - catalog_attempted),
         "catalog_coverage_pct": round(
+            (catalog_classified / len(catalog_keys) * 100.0) if catalog_keys else 100.0,
+            2,
+        ),
+        "catalog_source_check_pct": round(
             (catalog_attempted / len(catalog_keys) * 100.0) if catalog_keys else 100.0,
             2,
         ),
@@ -386,7 +408,8 @@ def coverage_summary(
         if payload.get("schema") == SCHEMA
         else {}
     )
-    attempted = sum(_status_is_classified(statuses.get(key)) for key in keys)
+    attempted = sum(_status_was_attempted(statuses.get(key)) for key in keys)
+    classified = sum(_status_is_classified(statuses.get(key)) for key in keys)
     retryable = sum(
         str((statuses.get(key) or {}).get("last_attempt_status") or (statuses.get(key) or {}).get("status") or "")
         in RETRYABLE_STATUSES
@@ -397,9 +420,11 @@ def coverage_summary(
     return {
         "catalog_leg_count": total,
         "attempted_leg_count": attempted,
+        "classified_leg_count": classified,
         "pending_leg_count": pending,
         "retryable_error_leg_count": retryable,
-        "coverage_pct": round((attempted / total * 100.0) if total else 100.0, 2),
+        "coverage_pct": round((classified / total * 100.0) if total else 100.0, 2),
+        "source_check_pct": round((attempted / total * 100.0) if total else 100.0, 2),
         "catch_up_complete": pending == 0,
     }
 

@@ -182,14 +182,16 @@ def test_coverage_distinguishes_unattempted_from_an_honest_empty_result(tmp_path
     assert summary == {
         "catalog_leg_count": 3,
         "attempted_leg_count": 2,
+        "classified_leg_count": 2,
         "pending_leg_count": 1,
         "retryable_error_leg_count": 0,
         "coverage_pct": 66.67,
+        "source_check_pct": 66.67,
         "catch_up_complete": False,
     }
 
 
-def test_retryable_provider_failure_is_pending_not_completed(tmp_path) -> None:
+def test_retryable_provider_failure_is_checked_but_not_classified(tmp_path) -> None:
     path = tmp_path / "funding.json"
     path.write_text(
         '{"schema":"spreadboard.venue_funding_history.v4",'
@@ -199,10 +201,13 @@ def test_retryable_provider_failure_is_pending_not_completed(tmp_path) -> None:
 
     summary = vfh.coverage_summary([("A", "ONE")], cache_path=path)
 
-    assert summary["attempted_leg_count"] == 0
-    assert summary["pending_leg_count"] == 1
+    assert summary["attempted_leg_count"] == 1
+    assert summary["classified_leg_count"] == 0
+    assert summary["pending_leg_count"] == 0
     assert summary["retryable_error_leg_count"] == 1
-    assert not summary["catch_up_complete"]
+    assert summary["coverage_pct"] == 0.0
+    assert summary["source_check_pct"] == 100.0
+    assert summary["catch_up_complete"]
 
 
 def test_legacy_v3_empty_statuses_are_reclassified(tmp_path) -> None:
@@ -222,9 +227,11 @@ def test_empty_catalog_is_already_caught_up(tmp_path) -> None:
     assert vfh.coverage_summary([], cache_path=tmp_path / "missing.json") == {
         "catalog_leg_count": 0,
         "attempted_leg_count": 0,
+        "classified_leg_count": 0,
         "pending_leg_count": 0,
         "retryable_error_leg_count": 0,
         "coverage_pct": 100.0,
+        "source_check_pct": 100.0,
         "catch_up_complete": True,
     }
 
@@ -299,6 +306,7 @@ def test_retryable_refresh_retains_v4_classification_and_cached_windows(
     assert payload["leg_status"]["A|ONE"]["status"] == "ok_cached"
     assert payload["leg_status"]["A|ONE"]["last_attempt_status"] == "api_error"
     assert payload["catalog_attempted_leg_count"] == 1
+    assert payload["catalog_classified_leg_count"] == 1
     assert payload["catalog_pending_leg_count"] == 0
 
 
@@ -327,5 +335,6 @@ def test_retryable_refresh_does_not_verify_legacy_cached_windows(
 
     assert result["A|ONE"] == {"1d": 1.0, "7d": 2.0, "30d": 3.0}
     assert payload["leg_status"]["A|ONE"]["status"] == "unclassified_cached"
-    assert payload["catalog_attempted_leg_count"] == 0
-    assert payload["catalog_pending_leg_count"] == 1
+    assert payload["catalog_attempted_leg_count"] == 1
+    assert payload["catalog_classified_leg_count"] == 0
+    assert payload["catalog_pending_leg_count"] == 0
