@@ -6754,8 +6754,8 @@ def render_selected_chart(
       <footer class="selected-chart-foot">
         <div class="selected-chart-alerts">
           <a href="/pair/{h(route_key)}">Open full pair details</a>
-          {render_alert_draft_button(row, alert_type="token_spread", compact=True)}
-          {render_alert_draft_button(row, alert_type="funding", compact=True)}
+          {render_alert_draft_button(row, alert_type="token_spread")}
+          {render_alert_draft_button(row, alert_type="funding")}
         </div>
         <span data-chart-observation-count>{h(len(history))} observations · {coverage_note}</span>
       </footer>

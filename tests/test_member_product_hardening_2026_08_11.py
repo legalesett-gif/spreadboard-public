@@ -278,9 +278,11 @@ def test_selected_chart_exposes_live_spread_and_funding_alerts() -> None:
         [],
         "1h",
     )
-    assert html.count('class="route-alert-btn js-alert-draft compact"') == 2
+    assert html.count('class="route-alert-btn js-alert-draft"') == 2
     assert 'data-alert-type="token_spread"' in html
     assert 'data-alert-type="funding"' in html
+    assert "Spread alert" in html
+    assert "Funding alert" in html
 
 
 def test_watchlist_is_hard_limited_to_ten_per_member(tmp_path) -> None:
