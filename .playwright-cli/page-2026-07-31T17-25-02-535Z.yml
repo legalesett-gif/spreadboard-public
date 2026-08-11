@@ -17,9 +17,9 @@
         - link "Portfolio" [ref=f1e13] [cursor=pointer]:
           - /url: /account
       - generic [ref=f1e14]:
-        - link "Sviatoslav active" [ref=f1e15] [cursor=pointer]:
+        - link "QA Member active" [ref=f1e15] [cursor=pointer]:
           - /url: /account
-          - generic [ref=f1e16]: Sviatoslav
+          - generic [ref=f1e16]: QA Member
           - emphasis [ref=f1e17]: active
         - button "Sign out" [ref=f1e18] [cursor=pointer]: ↪
         - button "Toggle light and dark mode" [ref=f1e19] [cursor=pointer]:
@@ -29,7 +29,7 @@
       - generic [ref=f1e25]:
         - generic [ref=f1e26]:
           - text: Private workspace
-          - heading "Sviatoslav" [level=1] [ref=f1e27]
+          - heading "QA Member" [level=1] [ref=f1e27]
           - paragraph [ref=f1e28]: Track multi-exchange positions, price PnL, funding income, returns, and exit conditions in one place.
         - generic [ref=f1e29]:
           - generic [ref=f1e30]: Membership

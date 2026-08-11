@@ -88,11 +88,11 @@ Bootstrap the correct Telegram account once in an interactive terminal, then
 install the five-minute LaunchAgent only after that first sync succeeds:
 
 ```bash
-cd "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean"
+cd "$HOME/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean"
 UV_CACHE_DIR=/tmp/uv-cache uv run --with telethon python \
   scripts/sync_exact_bot_intel.py \
   --ssh-host root@178.128.126.204 \
-  --ssh-key "/Users/sviatoslav/.ssh/spreadboard_digitalocean" && \
+  --ssh-key "$HOME/.ssh/spreadboard_digitalocean" && \
 UV_CACHE_DIR=/tmp/uv-cache uv run python \
   scripts/install_exact_bot_intel_launchd.py
 ```
