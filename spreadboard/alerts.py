@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-from spreadboard import accounts, api_spreads, board
+from spreadboard import accounts, api_spreads, board, chart_catalog
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
@@ -52,7 +55,9 @@ def load_config(path: Path | str = CONFIG_PATH) -> dict[str, Any]:
 
 def config_flags(cfg: dict[str, Any]) -> dict[str, Any]:
     users = _pushover_users(cfg)
-    website_session_path = cfg.get("website_storage_state_path") or cfg.get("premium_storage_state_path")
+    website_session_path = cfg.get("website_storage_state_path") or cfg.get(
+        "premium_storage_state_path"
+    )
     return {
         "alerts_enabled": bool(cfg.get("alerts_enabled")),
         "alert_min_spread_pct": _float_or_default(cfg.get("alert_min_spread_pct"), 8.0),
@@ -130,7 +135,11 @@ def validate_pushover_user(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             parsed = _json_or_text(response.read().decode("utf-8", errors="replace"))
             if not isinstance(parsed, dict):
-                return {"ok": False, "status": response.status, "error": "pushover_validation_invalid_response"}
+                return {
+                    "ok": False,
+                    "status": response.status,
+                    "error": "pushover_validation_invalid_response",
+                }
             return {
                 "ok": response.status == 200 and parsed.get("status") == 1,
                 "status": response.status,
@@ -174,7 +183,9 @@ def send_test_alerts(cfg: dict[str, Any]) -> dict[str, Any]:
             title="SpreadBoard test alert",
             message="This is a test alert from your local SpreadBoard app.",
         )
-        results.append({"name": name, "ok": bool(result.get("ok")), "detail": _public_detail(result)})
+        results.append(
+            {"name": name, "ok": bool(result.get("ok")), "detail": _public_detail(result)}
+        )
     return {"ok": all(item["ok"] for item in results) if results else False, "results": results}
 
 
@@ -275,7 +286,11 @@ class UserMarketAlertWorker:
         self.accounts_path = Path(accounts_path)
         self.poll_seconds = max(5.0, float(poll_seconds))
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="spreadboard-market-alerts", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="spreadboard-market-alerts", daemon=True
+        )
+        self._custom_quote_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._custom_quote_cursor = 0
 
     @property
     def running(self) -> bool:
@@ -315,10 +330,22 @@ class UserMarketAlertWorker:
             limit=None,
         )
         board_rows = [
-            row for row in market.get("rows") or []
+            row
+            for row in market.get("rows") or []
             if isinstance(row, dict) and row.get("route_key")
         ]
         rows = {str(row["route_key"]): row for row in board_rows}
+        rules_by_user = {
+            user_id: accounts.list_market_alert_rules(user_id, db_path=self.accounts_path)
+            for user_id in user_ids
+        }
+        custom_keys = {
+            str(rule.get("route_key") or "")
+            for rules in rules_by_user.values()
+            for rule in rules
+            if rule.get("enabled") and str(rule.get("route_key") or "").startswith("CUSTOM:")
+        }
+        rows.update(self._custom_alert_rows(custom_keys, board_rows))
         tokens = token_metrics(board_rows)
         evaluated = triggered = delivered = 0
         app_token = os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
@@ -328,7 +355,7 @@ class UserMarketAlertWorker:
             if user is None or not user.subscription_active:
                 continue
             delivery = accounts.notification_delivery(user_id, db_path=self.accounts_path)
-            for rule in accounts.list_market_alert_rules(user_id, db_path=self.accounts_path):
+            for rule in rules_by_user.get(user_id, []):
                 if not rule.get("enabled"):
                     continue
                 metric = str(rule.get("metric") or "")
@@ -364,15 +391,67 @@ class UserMarketAlertWorker:
                         user_key=delivery["user_key"],
                         title=notification["title"],
                         message=notification["body"],
-                        url=f"{public_url}/pair/{urllib.parse.quote(str(rule['route_key']), safe='')}" if public_url else None,
+                        url=f"{public_url}/pair/{urllib.parse.quote(str(rule['route_key']), safe='')}"
+                        if public_url
+                        else None,
                         device=delivery.get("device"),
                         sound=delivery.get("sound"),
                     )
                     delivered += int(bool(result.get("ok")))
         return {"evaluated": evaluated, "triggered": triggered, "delivered": delivered}
 
+    def _custom_alert_rows(
+        self,
+        route_keys: set[str],
+        board_rows: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """Resolve custom-chart alerts from a canonical row or bounded quote.
 
-def send_user_test_alert(user_id: int, *, accounts_path: Path | str = accounts.DEFAULT_DB_PATH) -> dict[str, Any]:
+        Most custom charts select a route that is already on the board.  That
+        match is free and stays at the scanner cadence.  Only genuinely custom
+        combinations need an exact quote; those are deduplicated across users,
+        cached, and bounded per poll so a DEX provider cannot stall every alert.
+        """
+        now = time.monotonic()
+        ttl = max(10.0, float(os.environ.get("SPREADBOARD_CUSTOM_ALERT_QUOTE_SECONDS", "30")))
+        output: dict[str, dict[str, Any]] = {}
+        unresolved = []
+        for route_key in sorted(route_keys):
+            route = chart_catalog.route_from_key(route_key)
+            if route is None:
+                continue
+            matched = _matching_board_route(route, board_rows)
+            if matched is not None:
+                output[route_key] = {**matched, "route_key": route_key}
+                self._custom_quote_cache[route_key] = (now, output[route_key])
+                continue
+            cached = self._custom_quote_cache.get(route_key)
+            if cached and now - cached[0] <= ttl:
+                output[route_key] = cached[1]
+            else:
+                unresolved.append((route_key, route))
+
+        limit = max(1, min(8, int(os.environ.get("SPREADBOARD_CUSTOM_ALERT_QUOTE_LIMIT", "4"))))
+        if unresolved:
+            offset = self._custom_quote_cursor % len(unresolved)
+            unresolved = unresolved[offset:] + unresolved[:offset]
+            self._custom_quote_cursor += limit
+        for route_key, route in unresolved[:limit]:
+            quoted = _quote_custom_alert_route(route)
+            if quoted is not None:
+                quoted = {**quoted, "route_key": route_key}
+                output[route_key] = quoted
+                self._custom_quote_cache[route_key] = (now, quoted)
+                continue
+            cached = self._custom_quote_cache.get(route_key)
+            if cached and now - cached[0] <= ttl * 4:
+                output[route_key] = cached[1]
+        return output
+
+
+def send_user_test_alert(
+    user_id: int, *, accounts_path: Path | str = accounts.DEFAULT_DB_PATH
+) -> dict[str, Any]:
     app_token = os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
     if not app_token:
         return {"ok": False, "error": "pushover_app_not_configured"}
@@ -415,8 +494,7 @@ def send_user_test_alert(user_id: int, *, accounts_path: Path | str = accounts.D
         "ok": bool(result.get("ok")),
         "status": result.get("status"),
         "error": (
-            result.get("error")
-            or ("pushover_delivery_rejected" if not result.get("ok") else None)
+            result.get("error") or ("pushover_delivery_rejected" if not result.get("ok") else None)
         ),
         "provider_errors": provider_errors,
         "active_device_count": len(devices),
@@ -458,9 +536,7 @@ def token_metrics(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
         ordered = sorted(values)
         middle = len(ordered) // 2
         median = (
-            ordered[middle]
-            if len(ordered) % 2
-            else (ordered[middle - 1] + ordered[middle]) / 2
+            ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
         )
         metrics.setdefault(token, {})["token_price"] = median
     for token, carry in funding.items():
@@ -496,11 +572,7 @@ def _alert_body(
     """What the member reads. It must say the number and what it crossed."""
     label, is_pct = _METRIC_LABELS.get(metric, ("value", True))
     shown = f"{value:+.4f}%" if is_pct else f"{value:,.6g}"
-    limit = (
-        f"{float(rule['threshold']):+.4f}%"
-        if is_pct
-        else f"{float(rule['threshold']):,.6g}"
-    )
+    limit = f"{float(rule['threshold']):+.4f}%" if is_pct else f"{float(rule['threshold']):,.6g}"
     direction = "at or above" if rule["operator"] == "gte" else "at or below"
     where = ""
     if row is not None:
@@ -519,7 +591,13 @@ def _rule_value(row: dict[str, Any] | None, metric: str) -> float | None:
     # value comes first because that is the number the threshold was set
     # against; the older names stay as fallbacks for rules stored before.
     keys = (
-        ("funding_24h_pct", "funding_net_24h_pct", "net_funding_24h_pct")
+        (
+            "funding_24h_pct",
+            "funding_projected_24h_pct",
+            "funding_daily_pct",
+            "funding_net_24h_pct",
+            "net_funding_24h_pct",
+        )
         if metric == "funding_24h_pct"
         else (
             "displayed_open_spread_pct",
@@ -538,6 +616,85 @@ def _rule_value(row: dict[str, Any] | None, metric: str) -> float | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _matching_board_route(
+    selected: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Find the canonical equivalent of a route built in Custom charts."""
+    scalar_fields = (
+        "token",
+        "long_venue",
+        "long_market_type",
+        "short_venue",
+        "short_market_type",
+    )
+    for candidate in candidates:
+        if any(
+            str(candidate.get(field) or "").casefold() != str(selected.get(field) or "").casefold()
+            for field in scalar_fields
+        ):
+            continue
+        if any(
+            _route_symbol(candidate, side).casefold() != _route_symbol(selected, side).casefold()
+            for side in ("long", "short")
+        ):
+            continue
+        return candidate
+    return None
+
+
+def _route_symbol(row: dict[str, Any], side: str) -> str:
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+    leg = inputs.get(side) if isinstance(inputs.get(side), dict) else {}
+    return str(
+        row.get(f"{side}_market_symbol") or row.get(f"{side}_symbol") or leg.get("symbol") or ""
+    )
+
+
+def _quote_custom_alert_route(route: dict[str, Any]) -> dict[str, Any] | None:
+    """Take one public exact quote for an alert-only custom chart route."""
+    from spreadboard.fast_quotes import FastQuoteRefresher, supports_native_order_book
+
+    native = all(
+        supports_native_order_book(
+            str(route.get(f"{side}_venue") or ""),
+            str(route.get(f"{side}_market_type") or ""),
+        )
+        for side in ("long", "short")
+    )
+    if native:
+        refresher = FastQuoteRefresher()
+        try:
+            result = refresher.quote_route(route, target_notional_usd=50.0)
+        except Exception:  # noqa: BLE001 - one route must not stop every user's alerts.
+            return None
+        finally:
+            refresher.close()
+    else:
+        command = [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "scripts" / "route_quote_worker.py"),
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=Path(__file__).resolve().parents[1],
+                input=json.dumps(route, separators=(",", ":"), default=str),
+                capture_output=True,
+                text=True,
+                timeout=float(os.environ.get("SPREADBOARD_CHART_SAMPLE_TIMEOUT_SECONDS", "22")),
+                check=False,
+            )
+            result = json.loads((completed.stdout or "").strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError, OSError, subprocess.SubprocessError):
+            return None
+        if completed.returncode != 0:
+            return None
+    row = result.get("row") if isinstance(result, dict) else None
+    return row if result.get("status") == "ok" and isinstance(row, dict) else None
 
 
 def _public_detail(result: dict[str, Any]) -> dict[str, Any]:

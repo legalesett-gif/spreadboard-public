@@ -18,9 +18,9 @@ def _user(email: str, role: str = "member") -> accounts.User:
     )
 
 
-def test_member_ledger_is_an_exact_email_permission_not_generic_admin() -> None:
+def test_only_alex_can_operate_the_member_ledger() -> None:
     assert _user("alex@spreadarbitrage.ink", "admin").can_manage_members
-    assert _user("anatolij@spreadarbitrage.ink").can_manage_members
+    assert not _user("anatolij@spreadarbitrage.ink").can_manage_members
     assert not _user("admin@spreadboard.local", "admin").can_manage_members
     assert not _user("subscriber@example.com").can_manage_members
 

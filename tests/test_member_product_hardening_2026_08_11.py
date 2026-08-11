@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -138,6 +139,8 @@ def test_watchlist_score_is_explainable_and_model_free() -> None:
             "depth_usd": 25_000,
             "executable_spread_pct": -0.2,
             "freshness": "fresh",
+            "long_market_type": "Spot",
+            "short_market_type": "Futures",
             "long_market_symbol": "X/USDT",
             "short_market_symbol": "X/USDT:USDT",
             "blockers": [],
@@ -145,10 +148,139 @@ def test_watchlist_score_is_explainable_and_model_free() -> None:
         windows={"1d": 0.3, "7d": 1.4, "30d": 4.5},
     )
     assert 0 <= result["score"] <= 100
-    assert result["confidence"] == 100
-    assert set(result["components"]) == {"carry", "persistence", "liquidity", "execution", "integrity"}
-    assert result["method"] == "deterministic_public_market_evidence"
+    assert result["confidence"] == 75
+    assert set(result["components"]) == {
+        "carry",
+        "persistence",
+        "liquidity",
+        "execution",
+        "integrity",
+        "risk",
+    }
+    assert result["method"] == "deterministic_public_market_evidence_v2"
+    assert "Rule-based collateral reserve" in result["planning_buffer_label"]
+    assert "Model stress reserve" not in result["planning_buffer_label"]
     assert "not personalized" in result["disclaimer"]
+
+
+def test_watchlist_collateral_reserve_uses_volatility_and_tail_risk() -> None:
+    route = {
+        "route_kind": "SPOT-FUTURES",
+        "long_market_type": "Spot",
+        "short_market_type": "Futures",
+        "funding_24h_pct": 0.4,
+        "depth_usd": 25_000,
+        "executable_spread_pct": 0.2,
+        "freshness": "fresh",
+        "long_market_symbol": "X/USDT",
+        "short_market_symbol": "X/USDT:USDT",
+        "blockers": [],
+    }
+
+    def history(amplitude: float) -> list[dict]:
+        rows = []
+        for hour in range(24 * 10):
+            common = 100 * (1 + 0.0002 * hour)
+            short = common * (1 + amplitude * math.sin(hour * 1.7))
+            rows.append(
+                {
+                    "quote_ts_us": 1_800_000_000_000_000 + hour * 3_600_000_000,
+                    "long_price": common,
+                    "short_price": short,
+                    "executable_spread_pct": (short / common - 1) * 100,
+                    "funding_daily_pct": 0.4,
+                    "sample_source": "live_chart_exact_route",
+                }
+            )
+        return rows
+
+    calm = research_score.evaluate(
+        route,
+        windows={"1d": 0.4, "7d": 2.8, "30d": 12},
+        history=history(0.001),
+    )
+    volatile = research_score.evaluate(
+        route,
+        windows={"1d": 0.4, "7d": 2.8, "30d": 12},
+        history=history(0.12),
+    )
+    assert calm["risk_estimate"]["data_quality"]["grade"] == "strong"
+    assert volatile["planning_buffer_pct"] > calm["planning_buffer_pct"]
+    assert volatile["components"]["risk"]["value"] < calm["components"]["risk"]["value"]
+    assert volatile["risk_estimate"]["futures_legs"]["short"]["parametric_99_pct"] > 0
+
+
+def test_spot_only_route_does_not_invent_a_futures_margin_number() -> None:
+    result = research_score.evaluate(
+        {
+            "route_kind": "SPOT",
+            "long_market_type": "Spot",
+            "short_market_type": "Spot",
+            "funding_24h_pct": 0.0,
+            "depth_usd": 5_000,
+            "executable_spread_pct": 1.0,
+            "freshness": "fresh",
+            "long_market_symbol": "X/USDT",
+            "short_market_symbol": "X/USDT",
+            "blockers": [],
+        }
+    )
+    assert result["planning_buffer_pct"] is None
+    assert result["risk_estimate"]["status"] == "not_applicable"
+
+
+def test_collateral_stress_uses_intraday_peak_not_only_24h_endpoint() -> None:
+    route = {
+        "route_kind": "SPOT-FUTURES",
+        "long_market_type": "Spot",
+        "short_market_type": "Futures",
+        "depth_usd": 25_000,
+        "executable_spread_pct": 0.1,
+        "long_market_symbol": "X/USDT",
+        "short_market_symbol": "X/USDT:USDT",
+    }
+    history = []
+    for hour in range(24 * 10 + 1):
+        within_day = hour % 24
+        # Every window ends back at 100, but the short futures leg spikes 30%
+        # intraday. Endpoint-only returns would incorrectly report no stress.
+        short_price = 130.0 if within_day == 12 else 100.0
+        history.append(
+            {
+                "quote_ts_us": 1_800_000_000_000_000 + hour * 3_600_000_000,
+                "long_price": 100.0,
+                "short_price": short_price,
+                "executable_spread_pct": short_price - 100.0,
+                "sample_source": "live_chart_exact_route",
+            }
+        )
+
+    result = research_score.assess_route_risk(route, history=history)
+
+    assert result["futures_legs"]["short"]["adverse_24h_p95_pct"] == pytest.approx(30.0)
+
+
+def test_selected_chart_exposes_live_spread_and_funding_alerts() -> None:
+    route_key = "X|FUTURES|A|Futures|B|Futures"
+    html = server.render_selected_chart(
+        {
+            "route_key": route_key,
+            "token": "X",
+            "route_kind": "FUTURES",
+            "long_venue": "A",
+            "long_market_type": "Futures",
+            "short_venue": "B",
+            "short_market_type": "Futures",
+            "displayed_open_spread_pct": 1.2,
+            "funding_24h_pct": 0.3,
+        },
+        {"legs": {}},
+        [],
+        "1h",
+    )
+    assert html.count('class="route-alert-btn js-alert-draft compact"') == 2
+    assert 'data-alert-type="token_spread"' in html
+    assert 'data-alert-type="funding"' in html
 
 
 def test_watchlist_is_hard_limited_to_ten_per_member(tmp_path) -> None:
@@ -170,7 +302,15 @@ def test_bot_attention_event_contains_no_identity_or_raw_message(tmp_path) -> No
     event = json.loads(path.read_text())
     serialized = json.dumps(event).casefold()
     assert event["parsed"]["symbol"] == "GUA"
-    for forbidden in ("chat_id", "user_id", "message_id", "username", "email", "display_name", '"text"'):
+    for forbidden in (
+        "chat_id",
+        "user_id",
+        "message_id",
+        "username",
+        "email",
+        "display_name",
+        '"text"',
+    ):
         assert forbidden not in serialized
 
 
@@ -222,9 +362,8 @@ def test_priority_funding_legs_are_attempted_before_rotating_catalog(tmp_path, m
         "leg_history_outcome",
         lambda venue, symbol: {
             "status": "ok",
-            "entries": attempted.append((venue, symbol)) or [
-                {"timestamp": 1_700_000_000_000, "fundingRate": 0.001}
-            ],
+            "entries": attempted.append((venue, symbol))
+            or [{"timestamp": 1_700_000_000_000, "fundingRate": 0.001}],
         },
     )
     monkeypatch.setattr(venue_funding_history.time, "time", lambda: 1_700_000_000)
@@ -325,7 +464,10 @@ def test_missing_bot_attention_cannot_render_legacy_community_rows(tmp_path, mon
 def test_watchlist_and_intel_hide_internal_source_cards_and_follow_dark_theme() -> None:
     assert 'if (card.key === "source_freshness") continue;' in server.WATCHLIST_SCRIPT
     html = server.shell("Intel", "intel", '<section class="intel-page"></section>')
-    assert ".intel-section, .change-digest, .side-card, .hot-card, .reality-card, .feed-card { background: var(--terminal-panel)" in html
+    assert (
+        ".intel-section, .change-digest, .side-card, .hot-card, .reality-card, .feed-card { background: var(--terminal-panel)"
+        in html
+    )
     assert ".change-counts article { display: grid;" in html
     assert "background: var(--terminal-row); border: 1px solid var(--terminal-line)" in html
 

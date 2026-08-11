@@ -2509,9 +2509,24 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
             label: funding_radar.window_value(score_route, label) if score_route else None
             for label in ("1d", "7d", "30d")
         }
+        score_history = []
+        score_route_key = str((score_route or {}).get("route_key") or "")
+        if score_route_key:
+            try:
+                score_history = market_history.load_history(
+                    route_key=score_route_key,
+                    since_us=int((time.time() - 30 * 24 * 3600) * 1_000_000),
+                    bucket_seconds=3600,
+                    max_points=750,
+                )
+            except (OSError, sqlite3.Error):
+                # A busy history database must lower confidence, never take the
+                # member's Watchlist down or silently substitute a guess.
+                score_history = []
         score = research_score.evaluate(
             score_route,
             windows=score_windows,
+            history=score_history,
             historical=not bool(live) and bool(retained),
         )
         chosen = [route_card(row, historical=False) for row in live[:3]]
@@ -6696,7 +6711,11 @@ def render_selected_chart(
         </div>
       </div>
       <footer class="selected-chart-foot">
-        <a href="/pair/{h(route_key)}">Open full pair details</a>
+        <div class="selected-chart-alerts">
+          <a href="/pair/{h(route_key)}">Open full pair details</a>
+          {render_alert_draft_button(row, alert_type="token_spread", compact=True)}
+          {render_alert_draft_button(row, alert_type="funding", compact=True)}
+        </div>
         <span data-chart-observation-count>{h(len(history))} observations · {coverage_note}</span>
       </footer>
     </section>
@@ -8251,11 +8270,12 @@ def render_methodology_page() -> str:
     body = """
     <section class="research-page">
       <header class="research-hero"><div><span class="page-kicker">Methodology</span><h1>Every number should answer “could I actually trade it?”</h1><p>SpreadBoard separates market discovery from execution evidence. Unknown inputs stay unknown instead of being replaced by optimistic defaults.</p></div><aside><strong>Read-only</strong><span>Public market APIs</span><a href="/proof">See verified audits →</a></aside></header>
-      <nav class="research-jump"><a href="#prices">Prices</a><a href="#funding">Funding</a><a href="#identity">Identity</a><a href="#rails">Rails</a><a href="#labels">Evidence labels</a></nav>
+      <nav class="research-jump"><a href="#prices">Prices</a><a href="#funding">Funding</a><a href="#risk">Risk reserve</a><a href="#identity">Identity</a><a href="#rails">Rails</a><a href="#labels">Evidence labels</a></nav>
       <section class="research-grid" id="prices"><article><span>01 · Prices</span><h2>Matched-size VWAP</h2><p>The buy leg is walked through asks and the sell leg through bids for the same economic size. Contract multipliers and available depth are applied before the spread is shown.</p><code>(sell VWAP − buy VWAP) ÷ midpoint × 100</code></article><article><span>What it prevents</span><h2>Top-book mirages</h2><p>A tiny best quote cannot make an entire position executable. When depth is unavailable, the row says so and the calculator does not invent it.</p></article></section>
       <section class="research-grid" id="funding"><article><span>02 · Funding</span><h2>Settled funding first</h2><p>Current rate, projected 24-hour carry, and settled venue payments are separate fields. Persistence uses completed 1d, 7d, and 30d windows when those windows have enough coverage.</p></article><article><span>Direction</span><h2>Who pays whom</h2><p>Funding is normalized to the displayed long/short direction. Positive means the shown hedge receives; negative means it pays.</p></article></section>
-      <section class="research-grid" id="identity"><article><span>03 · Identity</span><h2>Identity before price</h2><p>Matching tickers are not enough. Market base/quote metadata and shared contracts or mints are used where available. Implausible ratios, leveraged products, and ambiguous DEX identities are held out.</p></article><article><span>Policy</span><h2>Unknown stays unknown</h2><p>A route without enough identity evidence is research context, never silently upgraded into an executable claim.</p></article></section>
-      <section class="research-grid" id="rails"><article><span>04 · Rails</span><h2>Directional transfer proof</h2><p>Spot transfer routes require withdrawal from the buy venue and deposit to the sell venue on a compatible network. Generic green deposit/withdraw badges are not sufficient.</p></article><article><span>DEX</span><h2>Exact chain and contract</h2><p>DEX quotes are tied to a chain and contract. Quote failure, unsupported assets, and suspected honeypots remain visible source conditions.</p></article></section>
+      <section class="research-grid" id="risk"><article><span>03 · Risk reserve</span><h2>Empirical adverse-tail stress</h2><p>The Watchlist estimates a collateral reserve for each futures leg from hourly prices: rolling maximum adverse 24-hour excursions, full-history and recent realized volatility, 99% parametric shocks, basis widening, and leg correlation. The larger supported shock is used rather than an average.</p></article><article><span>Conservative add-ons</span><h2>Risk is more than volatility</h2><p>Maintenance and operating room, shallow or unknown liquidity, sparse or gapped history, unresolved identity, DEX execution, spot-borrow exposure, stale radar routes, and weak hedge correlation add to the reserve. A rolling coverage check is shown when enough outcomes exist.</p><p>This is a transparent research stress estimate, not an AI prediction or a venue liquidation calculation. Exact maintenance tiers, account equity, fees and other positions remain account-specific.</p></article></section>
+      <section class="research-grid" id="identity"><article><span>04 · Identity</span><h2>Identity before price</h2><p>Matching tickers are not enough. Market base/quote metadata and shared contracts or mints are used where available. Implausible ratios, leveraged products, and ambiguous DEX identities are held out.</p></article><article><span>Policy</span><h2>Unknown stays unknown</h2><p>A route without enough identity evidence is research context, never silently upgraded into an executable claim.</p></article></section>
+      <section class="research-grid" id="rails"><article><span>05 · Rails</span><h2>Directional transfer proof</h2><p>Spot transfer routes require withdrawal from the buy venue and deposit to the sell venue on a compatible network. Generic green deposit/withdraw badges are not sufficient.</p></article><article><span>DEX</span><h2>Exact chain and contract</h2><p>DEX quotes are tied to a chain and contract. Quote failure, unsupported assets, and suspected honeypots remain visible source conditions.</p></article></section>
       <section class="evidence-labels" id="labels"><div><span>Live</span><p>Current public API or streaming book inside the freshness window.</p></div><div><span>Settled</span><p>A completed venue funding payment, not a projection.</p></div><div><span>Modeled</span><p>A scenario using explicitly displayed assumptions.</p></div><div><span>Unresolved</span><p>Evidence is missing; no positive assumption was inserted.</p></div></section>
       <footer class="research-footer"><a class="pricing-button primary" href="/markets?view=table">Inspect live routes</a><a class="pricing-button" href="/proof">Audits and worked examples</a></footer>
     </section>
@@ -10450,8 +10470,18 @@ WATCHLIST_SCRIPT = """
       const best = reality.best_board || hot.best_board || {};
       const research = reality.research_score || {};
       const components = research.components || {};
+      const risk = research.risk_estimate || {};
+      const basisRisk = risk.route_basis || {};
+      const riskQuality = risk.data_quality || {};
       const scoreLabel = Number.isFinite(Number(research.score)) ? `${Number(research.score).toFixed(1)} / 100` : "Insufficient data";
       const componentLine = Object.entries(components).map(([name,item]) => `${labelText(name)} ${Number(item.value||0).toFixed(0)}/${Number(item.max||0).toFixed(0)}`).join(" · ");
+      const basisP95 = Number(basisRisk.adverse_24h_p95_pct_points);
+      const correlation = Number(risk.leg_return_correlation);
+      const riskLine = [
+        Number.isFinite(basisP95) ? `24h basis P95 +${basisP95.toFixed(2)}pp` : null,
+        Number.isFinite(correlation) ? `leg correlation ${correlation.toFixed(2)}` : null,
+        riskQuality.samples ? `${riskQuality.samples} hourly samples / ${labelText(riskQuality.grade || "limited")}` : "limited route history"
+      ].filter(Boolean).join(" · ");
       return `
         <article class="watch-token-card">
           <div><strong>${escapeHtml(token)}</strong><span>${escapeHtml(labelText(reality.status || 'watching'))}</span></div>
@@ -10462,7 +10492,8 @@ WATCHLIST_SCRIPT = """
             <span>Research score<strong>${escapeHtml(scoreLabel)}</strong></span>
           </div>
           <p class="watch-score-explain"><strong>${escapeHtml(research.label || "Waiting for route evidence")}</strong> · Confidence ${escapeHtml(research.confidence ?? 0)}%. ${escapeHtml(componentLine || "A live or retained route is required.")}</p>
-          <p class="watch-score-explain">${escapeHtml(research.planning_buffer_label || "Model stress reserve unavailable.")} ${escapeHtml(research.disclaimer || "")}</p>
+          <p class="watch-score-explain">${escapeHtml(research.planning_buffer_label || "Collateral reserve unavailable.")} ${escapeHtml(riskLine)}</p>
+          <p class="watch-score-explain">${escapeHtml(research.disclaimer || "")}</p>
           <button class="watch-remove" type="button" data-remove-symbol="${escapeHtml(token)}" aria-label="Remove ${escapeHtml(token)}">Remove</button>
         </article>
       `;
