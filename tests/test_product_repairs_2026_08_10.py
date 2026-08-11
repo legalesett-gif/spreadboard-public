@@ -90,6 +90,13 @@ def test_position_cancel_never_depends_on_required_field_validation() -> None:
     assert "dialog?.close('cancel')" in script
 
 
+def test_position_suggestions_ignore_stale_out_of_order_responses() -> None:
+    script = server.render_account_script()
+    assert "suggestionVersion=0" in script
+    assert "requestVersion=++suggestionVersion" in script
+    assert script.count("if(requestVersion!==suggestionVersion)return") == 2
+
+
 def test_position_suggestions_include_chart_catalogue_dex_long_pairs(monkeypatch) -> None:
     monkeypatch.setattr(server.telegram_queries, "client_visible_payload", lambda: {})
     monkeypatch.setattr(server.api_spreads, "load_spreads", lambda **_k: {"rows": []})

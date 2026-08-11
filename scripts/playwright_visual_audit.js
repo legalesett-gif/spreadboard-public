@@ -9,6 +9,12 @@ const { chromium } = require("playwright");
 const mode = process.argv[2] || "production";
 const outputDir = process.argv[3] || `output/playwright/${mode}-visual-audit`;
 const productionBase = String(process.env.SPREADBOARD_AUDIT_BASE_URL || "https://spreadarbitrage.ink").replace(/\/$/, "");
+const requestedPages = new Set(
+  String(process.env.SPREADBOARD_AUDIT_PAGES || "")
+    .split(",")
+    .map(value => value.trim())
+    .filter(Boolean),
+);
 
 const referencePages = [
   ["uainvest-scanner", "https://uainvest.com.ua/arbitrage"],
@@ -90,15 +96,23 @@ async function exerciseMemberState(page, name) {
         .some(option => option.textContent.includes("OKX DEX 56")), null, { timeout: 30_000 });
     const chosen = await page.evaluate(() => {
       const select = document.querySelector("[data-position-long-leg]");
+      const dialog = document.querySelector("[data-position-dialog]");
       const dex = [...select.options].find(option => option.textContent.includes("OKX DEX 56"));
       if (dex) {
         select.value = dex.value;
         select.dispatchEvent(new Event("change", { bubbles: true }));
       }
+      const modalScrollable = dialog.scrollHeight > dialog.clientHeight;
+      dialog.scrollTop = dialog.scrollHeight;
+      const submit = dialog.querySelector('button[type="submit"]');
+      const dialogRect = dialog.getBoundingClientRect();
+      const submitRect = submit.getBoundingClientRect();
       return {
         token: "GUA",
         dexLongAvailable: Boolean(dex),
         individualMarketCount: Math.max(0, select.options.length - 1),
+        modalScrollable,
+        saveButtonReachable: submitRect.top >= dialogRect.top && submitRect.bottom <= dialogRect.bottom,
       };
     });
     await page.waitForTimeout(250);
@@ -129,8 +143,16 @@ async function main() {
         if (message.type() === "error") errors.push(`console:${message.text()}`);
       });
       const pages = mode === "reference"
-        ? referencePages
-        : [...publicPages, ["__sign_in__", ""], ...memberPages];
+        ? referencePages.filter(([name]) => !requestedPages.size || requestedPages.has(name))
+        : [
+            ...publicPages.filter(([name]) => !requestedPages.size || requestedPages.has(name)),
+            ...(
+              !requestedPages.size || memberPages.some(([name]) => requestedPages.has(name))
+                ? [["__sign_in__", ""]]
+                : []
+            ),
+            ...memberPages.filter(([name]) => !requestedPages.size || requestedPages.has(name)),
+          ];
       let signedIn = false;
       for (const [name, url] of pages) {
         if (name === "__sign_in__") {
