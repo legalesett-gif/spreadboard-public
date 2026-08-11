@@ -14074,6 +14074,7 @@ body.alert-modal-open {{ overflow: hidden; }}
 .watch-empty.compact {{ padding: 9px; text-align: left; }}
 .margin-plan-form {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }}
 .margin-plan-form label {{ display:grid; align-content:start; gap:6px; min-width:0; color:var(--terminal-muted); font-size:12px; font-weight:800; }}
+.margin-plan-form [hidden] {{ display:none !important; }}
 .margin-plan-form input,.margin-plan-form select {{ width:100%; min-height:42px; border:1px solid var(--terminal-line); border-radius:6px; padding:0 10px; background:var(--terminal-row); color:var(--terminal-text); font:inherit; }}
 .margin-plan-form label em {{ color:var(--terminal-muted); font-size:10px; font-style:normal; line-height:1.35; }}
 .margin-cost-inputs {{ grid-column:1/-1; padding:10px; border:1px solid var(--terminal-line); border-radius:7px; background:var(--terminal-row); }}
