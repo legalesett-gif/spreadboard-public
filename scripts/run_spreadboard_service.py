@@ -999,6 +999,7 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
             f"venue funding history: {len(windows)} legs with windows; "
             f"attempted={after['attempted_leg_count']}/{after['catalog_leg_count']} "
             f"pending={after['pending_leg_count']} coverage={after['coverage_pct']}% "
+            f"retryable={after['retryable_error_leg_count']} "
             f"mode={'maintenance' if after['catch_up_complete'] else 'catch_up'} "
             f"in {time.monotonic() - started:.1f}s"
         )

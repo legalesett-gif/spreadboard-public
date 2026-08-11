@@ -40,7 +40,11 @@ def test_partial_funding_refresh_merges_instead_of_erasing_previous_legs(
         for index in range(91)
     ]
     monkeypatch.setattr(venue_funding_history.time, "time", lambda: now / 1000)
-    monkeypatch.setattr(venue_funding_history, "leg_history", lambda *_a, **_k: entries)
+    monkeypatch.setattr(
+        venue_funding_history,
+        "leg_history_outcome",
+        lambda *_a, **_k: {"status": "ok", "entries": entries},
+    )
 
     result = venue_funding_history.build(
         [("Gate", "NEW/USDT:USDT")], cache_path=cache, budget_seconds=5,
@@ -49,7 +53,7 @@ def test_partial_funding_refresh_merges_instead_of_erasing_previous_legs(
 
     assert "Bybit|OLD/USDT:USDT" in result
     assert "Gate|NEW/USDT:USDT" in result
-    assert payload["schema"] == "spreadboard.venue_funding_history.v3"
+    assert payload["schema"] == "spreadboard.venue_funding_history.v4"
     assert payload["leg_updated_at"]["Gate|NEW/USDT:USDT"]
 
 

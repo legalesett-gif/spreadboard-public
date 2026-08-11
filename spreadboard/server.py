@@ -3594,6 +3594,7 @@ def api_health(
         "market_updated_at": canonical.get("updated_at"),
         "market_row_count": canonical.get("row_count"),
         "source_health": source_health,
+        "funding_history": funding_history_health(),
         "position_alerts": {
             "running": bool(position_alert_worker and position_alert_worker.running),
             "poll_seconds": getattr(position_alert_worker, "poll_seconds", None),
@@ -3615,6 +3616,43 @@ def api_health(
             **subscription_lifecycle.status(),
         },
     }
+
+
+def funding_history_health() -> dict[str, Any]:
+    """Secret-free collector coverage for operators and funding-page members."""
+    catalog = chart_catalog.load()
+    legs = list(
+        dict.fromkeys(
+            (
+                str(item.get("venue")),
+                str(item.get("symbol")),
+            )
+            for item in catalog.get("markets") or []
+            if isinstance(item, dict)
+            and item.get("market_type") == "Futures"
+            and item.get("venue")
+            and item.get("symbol")
+        )
+    )
+    summary = venue_funding_history.coverage_summary(legs)
+    windows = venue_funding_history.load()
+    keys = {f"{venue}|{symbol}" for venue, symbol in legs}
+    summary["window_leg_counts"] = {
+        label: sum(
+            (windows.get(key) or {}).get(label) is not None for key in keys
+        )
+        for label in ("1d", "7d", "30d")
+    }
+    retryable = int(summary.get("retryable_error_leg_count") or 0)
+    pending = int(summary.get("pending_leg_count") or 0)
+    summary["status"] = (
+        "operational"
+        if pending == 0 and retryable == 0
+        else "retrying"
+        if retryable
+        else "catching_up"
+    )
+    return summary
 
 
 def api_public_status(
@@ -5608,7 +5646,7 @@ def render_funding_windows(route: dict[str, Any] | None, route_key: Any) -> str:
     coverage_title = (
         "All settlement windows are available."
         if coverage.get("status") == "complete"
-        else "Settlement history is still collecting for one or both exact venue symbols. Token listing age does not guarantee that a venue exposes historical funding through its public API."
+        else str(coverage.get("note") or "Settlement history is still collecting for one or both exact venue symbols.")
     )
     cells = []
     for label in ("1d", "7d", "30d"):
@@ -5756,6 +5794,7 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
     )
     displayed_largest_label = "Largest 24h" if selected_window in {"now", "1d"} else f"Largest {selected_window}"
     api_health_data = (market_data.get("source_health") or {}).get("canonical_api") or {}
+    history_health = funding_history_health()
     tabs = [
         ("futures-futures", "Futures-Futures"),
         ("futures-spot", "Futures-Spot"),
@@ -5789,6 +5828,7 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
       </nav>
       {('<p class="funding-radar-note"><strong>Historical radar:</strong> cooled rows remain discoverable for 30 days. Their rate and basis are the last live observation, not a current entry quote.</p>' if selected_window != 'now' else '')}
       <p class="funding-radar-note"><strong>Blank history is explicit:</strong> 1d, 7d or 30d appears only after the exact venue symbols provide enough settled events. A token can be older than seven days while a venue API exposes less history; member Watchlist and Portfolio legs are now prioritised by the collector.</p>
+      <p class="funding-radar-note" data-history-coverage><strong>Settlement archive coverage:</strong> {h(history_health.get('attempted_leg_count'))}/{h(history_health.get('catalog_leg_count'))} exact futures legs classified; {h(history_health.get('pending_leg_count'))} queued; {h(history_health.get('retryable_error_leg_count'))} awaiting a provider retry. Previously verified windows remain visible during temporary provider failures.</p>
       <section class="terminal-tape funding-tape" aria-label="Funding summary">
         {render_market_metric('Assets', displayed_assets, 'radar tokens' if selected_window != 'now' else 'unique tokens')}
         {render_market_metric('Funding pairs', summary.get('matching_rows'), 'live venue routes')}

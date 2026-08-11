@@ -148,10 +148,30 @@ def test_a_venue_without_a_native_endpoint_returns_nothing() -> None:
     assert vfh._native_leg_history("Binance", "BTC/USDT:USDT") == []
 
 
+def test_bitmart_http_success_with_provider_error_remains_retryable(monkeypatch) -> None:
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"code":30012,"message":"service unavailable"}'
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_a, **_k: _Response())
+
+    outcome = vfh._native_leg_history_outcome("BitMart", "BTC/USDT:USDT")
+
+    assert outcome["status"] == "api_error"
+    assert outcome["error_type"] == "BitMartResponseError"
+
+
 def test_coverage_distinguishes_unattempted_from_an_honest_empty_result(tmp_path) -> None:
     path = tmp_path / "funding.json"
     path.write_text(
-        '{"leg_status":{"A|ONE":{"status":"ok"},'
+        '{"schema":"spreadboard.venue_funding_history.v4",'
+        '"leg_status":{"A|ONE":{"status":"ok"},'
         '"B|TWO":{"status":"no_history_rows"}}}'
     )
 
@@ -163,9 +183,39 @@ def test_coverage_distinguishes_unattempted_from_an_honest_empty_result(tmp_path
         "catalog_leg_count": 3,
         "attempted_leg_count": 2,
         "pending_leg_count": 1,
+        "retryable_error_leg_count": 0,
         "coverage_pct": 66.67,
         "catch_up_complete": False,
     }
+
+
+def test_retryable_provider_failure_is_pending_not_completed(tmp_path) -> None:
+    path = tmp_path / "funding.json"
+    path.write_text(
+        '{"schema":"spreadboard.venue_funding_history.v4",'
+        '"leg_status":{"A|ONE":{"status":"client_unavailable",'
+        '"last_attempt_status":"client_unavailable"}}}'
+    )
+
+    summary = vfh.coverage_summary([("A", "ONE")], cache_path=path)
+
+    assert summary["attempted_leg_count"] == 0
+    assert summary["pending_leg_count"] == 1
+    assert summary["retryable_error_leg_count"] == 1
+    assert not summary["catch_up_complete"]
+
+
+def test_legacy_v3_empty_statuses_are_reclassified(tmp_path) -> None:
+    path = tmp_path / "funding.json"
+    path.write_text(
+        '{"schema":"spreadboard.venue_funding_history.v3",'
+        '"leg_status":{"A|ONE":{"status":"no_history_rows"}}}'
+    )
+
+    summary = vfh.coverage_summary([("A", "ONE")], cache_path=path)
+
+    assert summary["attempted_leg_count"] == 0
+    assert summary["pending_leg_count"] == 1
 
 
 def test_empty_catalog_is_already_caught_up(tmp_path) -> None:
@@ -173,6 +223,109 @@ def test_empty_catalog_is_already_caught_up(tmp_path) -> None:
         "catalog_leg_count": 0,
         "attempted_leg_count": 0,
         "pending_leg_count": 0,
+        "retryable_error_leg_count": 0,
         "coverage_pct": 100.0,
         "catch_up_complete": True,
     }
+
+
+def test_leg_history_outcome_distinguishes_source_failures() -> None:
+    class Unsupported:
+        has = {"fetchFundingRateHistory": False}
+        symbols = ["ONE"]
+
+    class MissingSymbol:
+        has = {"fetchFundingRateHistory": True}
+        symbols = []
+
+    class Broken:
+        has = {"fetchFundingRateHistory": True}
+        symbols = ["ONE"]
+
+        def fetch_funding_rate_history(self, *_args, **_kwargs):
+            raise TimeoutError("provider timeout")
+
+    assert vfh.leg_history_outcome(
+        "Binance", "ONE", client_factory=lambda _exchange: Unsupported()
+    )["status"] == "unsupported_history_api"
+    assert vfh.leg_history_outcome(
+        "Binance", "ONE", client_factory=lambda _exchange: MissingSymbol()
+    )["status"] == "symbol_not_indexed"
+    broken = vfh.leg_history_outcome(
+        "Binance", "ONE", client_factory=lambda _exchange: Broken()
+    )
+    assert broken["status"] == "api_error"
+    assert broken["error_type"] == "TimeoutError"
+
+
+def test_failed_cached_client_is_retried_after_backoff(monkeypatch) -> None:
+    exchange_id = "retry-test"
+    vfh._CLIENTS.pop(exchange_id, None)
+    vfh._CLIENT_ERRORS.pop(exchange_id, None)
+    vfh._CLIENT_FAILURE_AT[exchange_id] = 100.0
+    monotonic = iter((120.0, 161.0, 161.0))
+    monkeypatch.setattr(vfh.time, "monotonic", lambda: next(monotonic))
+
+    assert vfh._client(exchange_id) is None
+    # After the one-minute backoff the adapter is attempted again. This test
+    # exchange has no adapter, so it remains unavailable rather than cached
+    # forever as a permanent failure.
+    assert vfh._client(exchange_id) is None
+    assert vfh._CLIENT_FAILURE_AT[exchange_id] == 161.0
+
+
+def test_retryable_refresh_retains_v4_classification_and_cached_windows(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "funding.json"
+    path.write_text(
+        '{"schema":"spreadboard.venue_funding_history.v4",'
+        '"legs":{"A|ONE":{"1d":1.0,"7d":2.0,"30d":3.0}},'
+        '"leg_updated_at":{"A|ONE":"earlier"},'
+        '"leg_status":{"A|ONE":{"status":"ok"}}}'
+    )
+    monkeypatch.setattr(
+        vfh,
+        "leg_history_outcome",
+        lambda *_args, **_kwargs: {
+            "status": "api_error", "entries": [], "error_type": "TimeoutError"
+        },
+    )
+
+    result = vfh.build([("A", "ONE")], cache_path=path, budget_seconds=5)
+    payload = __import__("json").loads(path.read_text())
+
+    assert result["A|ONE"] == {"1d": 1.0, "7d": 2.0, "30d": 3.0}
+    assert payload["leg_status"]["A|ONE"]["status"] == "ok_cached"
+    assert payload["leg_status"]["A|ONE"]["last_attempt_status"] == "api_error"
+    assert payload["catalog_attempted_leg_count"] == 1
+    assert payload["catalog_pending_leg_count"] == 0
+
+
+def test_retryable_refresh_does_not_verify_legacy_cached_windows(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "funding.json"
+    path.write_text(
+        '{"schema":"spreadboard.venue_funding_history.v3",'
+        '"legs":{"A|ONE":{"1d":1.0,"7d":2.0,"30d":3.0}},'
+        '"leg_updated_at":{"A|ONE":"earlier"},'
+        '"leg_status":{"A|ONE":{"status":"ok"}}}'
+    )
+    monkeypatch.setattr(
+        vfh,
+        "leg_history_outcome",
+        lambda *_args, **_kwargs: {
+            "status": "client_unavailable",
+            "entries": [],
+            "error_type": "TimeoutError",
+        },
+    )
+
+    result = vfh.build([("A", "ONE")], cache_path=path, budget_seconds=5)
+    payload = __import__("json").loads(path.read_text())
+
+    assert result["A|ONE"] == {"1d": 1.0, "7d": 2.0, "30d": 3.0}
+    assert payload["leg_status"]["A|ONE"]["status"] == "unclassified_cached"
+    assert payload["catalog_attempted_leg_count"] == 0
+    assert payload["catalog_pending_leg_count"] == 1

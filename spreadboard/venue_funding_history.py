@@ -24,6 +24,22 @@ from spreadboard.fast_quotes import VENUE_IDS
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", "data"))
 DEFAULT_CACHE_PATH = RUNTIME_DIR / "venue_funding_history.json"
+SCHEMA = "spreadboard.venue_funding_history.v4"
+
+# Only these outcomes prove that a leg was genuinely classified. Provider and
+# client failures remain retryable; counting them as complete is how a brief
+# outage previously made a 9,604-leg catalogue look 100% covered.
+CLASSIFIED_STATUSES = frozenset(
+    {
+        "ok",
+        "ok_cached",
+        "no_history_rows",
+        "unsupported_history_api",
+        "symbol_not_indexed",
+        "unsupported_venue",
+    }
+)
+RETRYABLE_STATUSES = frozenset({"api_error", "client_unavailable"})
 
 WINDOW_DAYS: tuple[int, ...] = (1, 7, 30)
 #: A window needs the venue to have published far enough back to be meaningful.
@@ -72,11 +88,11 @@ NATIVE_HISTORY = {
 }
 
 
-def _native_leg_history(venue: str, symbol: str) -> list[dict[str, Any]]:
-    """Settled funding from a venue's own endpoint, shaped like CCXT's."""
+def _native_leg_history_outcome(venue: str, symbol: str) -> dict[str, Any]:
+    """Settled funding from a native endpoint with an explicit outcome."""
     template = NATIVE_HISTORY.get(venue)
     if not template:
-        return []
+        return {"status": "unsupported_venue", "entries": []}
     native_symbol = symbol.split(":")[0].replace("/", "")
     try:
         from urllib.request import Request, urlopen
@@ -87,8 +103,18 @@ def _native_leg_history(venue: str, symbol: str) -> list[dict[str, Any]]:
         )
         with urlopen(request, timeout=15) as response:
             payload = json.loads(response.read())
-    except Exception:  # noqa: BLE001 - one venue must not stop the sweep.
-        return []
+    except Exception as exc:  # noqa: BLE001 - one venue must not stop the sweep.
+        return {
+            "status": "api_error",
+            "entries": [],
+            "error_type": type(exc).__name__,
+        }
+    if str(payload.get("code") or "1000") != "1000":
+        return {
+            "status": "api_error",
+            "entries": [],
+            "error_type": "BitMartResponseError",
+        }
     rows = (payload.get("data") or {}).get("list") or []
     entries: list[dict[str, Any]] = []
     for row in rows:
@@ -101,7 +127,15 @@ def _native_leg_history(venue: str, symbol: str) -> list[dict[str, Any]]:
             )
         except (KeyError, TypeError, ValueError):
             continue
-    return entries
+    return {
+        "status": "ok" if entries else "no_history_rows",
+        "entries": entries,
+    }
+
+
+def _native_leg_history(venue: str, symbol: str) -> list[dict[str, Any]]:
+    """Compatibility wrapper returning only native settlement rows."""
+    return list(_native_leg_history_outcome(venue, symbol)["entries"])
 
 
 def leg_history(
@@ -111,25 +145,62 @@ def leg_history(
     client_factory: Any = None,
     days: int = 30,
 ) -> list[dict[str, Any]]:
-    """One venue's settled funding for one symbol, best effort."""
+    """Compatibility wrapper returning one venue's settled funding rows."""
+    return list(
+        leg_history_outcome(
+            venue,
+            symbol,
+            client_factory=client_factory,
+            days=days,
+        )["entries"]
+    )
+
+
+def leg_history_outcome(
+    venue: str,
+    symbol: str,
+    *,
+    client_factory: Any = None,
+    days: int = 30,
+) -> dict[str, Any]:
+    """Return rows plus a truthful, retry-aware source classification."""
     if venue in NATIVE_HISTORY:
-        return _native_leg_history(venue, symbol)
+        return _native_leg_history_outcome(venue, symbol)
     exchange_id = VENUE_IDS.get(venue)
-    if not exchange_id or not symbol:
-        return []
+    if not exchange_id:
+        return {"status": "unsupported_venue", "entries": []}
+    if not symbol:
+        return {"status": "symbol_not_indexed", "entries": []}
     try:
         client = (client_factory or _client)(exchange_id)
-        if client is None or not getattr(client, "has", {}).get("fetchFundingRateHistory"):
-            return []
+        if client is None:
+            return {
+                "status": "client_unavailable",
+                "entries": [],
+                "error_type": _CLIENT_ERRORS.get(exchange_id, "ClientUnavailable"),
+            }
+        if not getattr(client, "has", {}).get("fetchFundingRateHistory"):
+            return {"status": "unsupported_history_api", "entries": []}
         if symbol not in getattr(client, "symbols", []) or []:
-            return []
+            return {"status": "symbol_not_indexed", "entries": []}
         since = int((time.time() - days * 86_400) * 1000)
-        return client.fetch_funding_rate_history(symbol, since=since, limit=1000) or []
-    except Exception:  # noqa: BLE001 - one unreachable venue must not stop the sweep.
-        return []
+        entries = client.fetch_funding_rate_history(symbol, since=since, limit=1000) or []
+        return {
+            "status": "ok" if entries else "no_history_rows",
+            "entries": entries,
+        }
+    except Exception as exc:  # noqa: BLE001 - one unreachable venue must not stop the sweep.
+        return {
+            "status": "api_error",
+            "entries": [],
+            "error_type": type(exc).__name__,
+        }
 
 
 _CLIENTS: dict[str, Any] = {}
+_CLIENT_ERRORS: dict[str, str] = {}
+_CLIENT_FAILURE_AT: dict[str, float] = {}
+CLIENT_RETRY_SECONDS = 60.0
 #: CCXT renamed some adapters; VENUE_IDS still carries the older names.
 _ALIASES = {"gateio": ("gate", "gateio"), "coinbaseexchange": ("coinbaseexchange", "coinbase")}
 
@@ -137,6 +208,9 @@ _ALIASES = {"gateio": ("gate", "gateio"), "coinbaseexchange": ("coinbaseexchange
 def _client(exchange_id: str) -> Any:
     if exchange_id in _CLIENTS:
         return _CLIENTS[exchange_id]
+    failed_at = _CLIENT_FAILURE_AT.get(exchange_id)
+    if failed_at is not None and time.monotonic() - failed_at < CLIENT_RETRY_SECONDS:
+        return None
     import ccxt
 
     client = None
@@ -148,10 +222,22 @@ def _client(exchange_id: str) -> Any:
             client = klass({"enableRateLimit": True, "timeout": 20000})
             client.load_markets()
             break
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            _CLIENT_ERRORS[exchange_id] = type(exc).__name__
             client = None
-    _CLIENTS[exchange_id] = client
+    if client is None and exchange_id not in _CLIENT_ERRORS:
+        _CLIENT_ERRORS[exchange_id] = "AdapterUnavailable"
+    if client is None:
+        _CLIENT_FAILURE_AT[exchange_id] = time.monotonic()
+    else:
+        _CLIENTS[exchange_id] = client
+        _CLIENT_ERRORS.pop(exchange_id, None)
+        _CLIENT_FAILURE_AT.pop(exchange_id, None)
     return client
+
+
+def _status_is_classified(status: dict[str, Any] | None) -> bool:
+    return str((status or {}).get("status") or "") in CLASSIFIED_STATUSES
 
 
 def build(
@@ -175,19 +261,29 @@ def build(
         previous = {}
     windows: dict[str, dict[str, float | None]] = dict(previous.get("legs") or {})
     leg_updated_at: dict[str, str] = dict(previous.get("leg_updated_at") or {})
-    leg_status: dict[str, dict[str, Any]] = dict(previous.get("leg_status") or {})
+    # v3 treated every empty result, including client/API failures, as a genuine
+    # empty history. Keep its valid settled windows but reclassify every source
+    # under v4 before declaring catalogue coverage complete.
+    leg_status: dict[str, dict[str, Any]] = (
+        dict(previous.get("leg_status") or {})
+        if previous.get("schema") == SCHEMA
+        else {}
+    )
     ordered = list(dict.fromkeys(legs))
     start = int(previous.get("next_cursor") or 0) % max(1, len(ordered))
     priorities = list(dict.fromkeys(priority_legs or []))
     rotated = priorities + [item for item in ordered[start:] + ordered[:start] if item not in priorities]
     attempted = 0
     background_attempted = 0
+    retryable_errors = 0
     refreshed_at = datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat()
     for venue, symbol in rotated:
         if time.monotonic() >= deadline:
             break
         attempted += 1
-        entries = leg_history(venue, symbol)
+        outcome = leg_history_outcome(venue, symbol)
+        entries = list(outcome.get("entries") or [])
+        outcome_status = str(outcome.get("status") or "api_error")
         key = f"{venue}|{symbol}"
         if entries:
             windows[key] = realised_windows(entries)
@@ -195,24 +291,58 @@ def build(
             leg_status[key] = {
                 "status": "ok",
                 "updated_at": refreshed_at,
+                "last_attempt_at": refreshed_at,
+                "last_attempt_status": "ok",
                 "settlement_count": len(entries),
                 "available_windows": sum(
                     value is not None for value in windows[key].values()
                 ),
             }
-        else:
+        elif outcome_status in RETRYABLE_STATUSES:
+            retryable_errors += 1
+            cached = windows.get(key) or {}
+            prior_status = leg_status.get(key) or {}
+            was_classified = _status_is_classified(prior_status)
             leg_status[key] = {
-                "status": "no_history_rows",
-                "updated_at": refreshed_at,
+                # A v4 classification remains valid through a temporary outage.
+                # Legacy cached windows have no proven source outcome, so they
+                # remain explicitly unclassified until a provider answers.
+                "status": (
+                    "ok_cached"
+                    if cached and was_classified
+                    else "unclassified_cached"
+                    if cached
+                    else outcome_status
+                ),
+                "updated_at": leg_updated_at.get(key),
+                "last_attempt_at": refreshed_at,
+                "last_attempt_status": outcome_status,
+                "error_type": str(outcome.get("error_type") or "ProviderError")[:80],
                 "settlement_count": 0,
-                "available_windows": 0,
+                "available_windows": sum(
+                    cached.get(label) is not None for label in ("1d", "7d", "30d")
+                ),
+            }
+        else:
+            cached = windows.get(key) or {}
+            leg_status[key] = {
+                "status": "ok_cached" if cached else outcome_status,
+                "updated_at": leg_updated_at.get(key),
+                "last_attempt_at": refreshed_at,
+                "last_attempt_status": outcome_status,
+                "settlement_count": 0,
+                "available_windows": sum(
+                    cached.get(label) is not None for label in ("1d", "7d", "30d")
+                ),
             }
         if (venue, symbol) not in priorities:
             background_attempted += 1
     catalog_keys = {f"{venue}|{symbol}" for venue, symbol in ordered}
-    catalog_attempted = len(catalog_keys.intersection(leg_status))
+    catalog_attempted = sum(
+        _status_is_classified(leg_status.get(key)) for key in catalog_keys
+    )
     payload = {
-        "schema": "spreadboard.venue_funding_history.v3",
+        "schema": SCHEMA,
         "updated_at": refreshed_at,
         "next_cursor": (start + background_attempted) % max(1, len(ordered)),
         "catalog_leg_count": len(catalog_keys),
@@ -224,6 +354,7 @@ def build(
         ),
         "latest_cycle_attempted": attempted,
         "latest_cycle_background_attempted": background_attempted,
+        "latest_cycle_retryable_error_count": retryable_errors,
         "leg_updated_at": leg_updated_at,
         "leg_status": leg_status,
         "legs": windows,
@@ -238,7 +369,7 @@ def build(
 def coverage_summary(
     legs: list[tuple[str, str]], *, cache_path: Path | str = DEFAULT_CACHE_PATH
 ) -> dict[str, int | float | bool]:
-    """How much of the current catalog has received at least one honest attempt.
+    """How much of the current catalog has a successful source classification.
 
     A classified leg counts as attempted even when the venue returned no rows.
     That distinction prevents an unsupported or short-history market from
@@ -250,14 +381,24 @@ def coverage_summary(
         payload = json.loads(Path(cache_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         payload = {}
-    statuses = payload.get("leg_status") or {}
-    attempted = len(keys.intersection(statuses))
+    statuses = (
+        payload.get("leg_status") or {}
+        if payload.get("schema") == SCHEMA
+        else {}
+    )
+    attempted = sum(_status_is_classified(statuses.get(key)) for key in keys)
+    retryable = sum(
+        str((statuses.get(key) or {}).get("last_attempt_status") or (statuses.get(key) or {}).get("status") or "")
+        in RETRYABLE_STATUSES
+        for key in keys
+    )
     total = len(keys)
     pending = max(0, total - attempted)
     return {
         "catalog_leg_count": total,
         "attempted_leg_count": attempted,
         "pending_leg_count": pending,
+        "retryable_error_leg_count": retryable,
         "coverage_pct": round((attempted / total * 100.0) if total else 100.0, 2),
         "catch_up_complete": pending == 0,
     }
@@ -307,11 +448,30 @@ def route_history_status(route: dict[str, Any]) -> dict[str, Any]:
         )
         sides[side] = status
     windows = route_windows(route)
+    outcomes = {
+        str(item.get("last_attempt_status") or item.get("status") or "")
+        for item in sides.values()
+        if item.get("status") != "not_applicable"
+    }
+    if outcomes.intersection(RETRYABLE_STATUSES):
+        note = "A venue history request failed temporarily and remains queued for retry; prior valid windows are retained."
+    elif "unsupported_history_api" in outcomes:
+        note = "One exact venue adapter does not expose settled funding history through its public API."
+    elif "symbol_not_indexed" in outcomes:
+        note = "One exact venue symbol is not currently resolved by the public history adapter."
+    elif "unsupported_venue" in outcomes:
+        note = "One venue has no supported settled-funding history source."
+    elif "no_history_rows" in outcomes:
+        note = "The venue history request succeeded but returned no settled funding rows for one exact symbol."
+    elif any(windows.get(label) is None for label in ("1d", "7d", "30d")):
+        note = "Settled rows exist, but the returned history does not yet cover at least 80% of every displayed window."
+    else:
+        note = "All exact-leg settlement windows are available."
     return {
         "status": "complete" if all(windows.get(label) is not None for label in ("1d", "7d", "30d")) else "partial",
         "available_windows": sum(windows.get(label) is not None for label in ("1d", "7d", "30d")),
         "sides": sides,
-        "note": "Venue settlement-history coverage is collected independently of how long the token has been listed.",
+        "note": note,
     }
 
 

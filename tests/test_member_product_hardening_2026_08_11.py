@@ -219,10 +219,13 @@ def test_priority_funding_legs_are_attempted_before_rotating_catalog(tmp_path, m
     attempted = []
     monkeypatch.setattr(
         venue_funding_history,
-        "leg_history",
-        lambda venue, symbol: attempted.append((venue, symbol)) or [
-            {"timestamp": 1_700_000_000_000, "fundingRate": 0.001}
-        ],
+        "leg_history_outcome",
+        lambda venue, symbol: {
+            "status": "ok",
+            "entries": attempted.append((venue, symbol)) or [
+                {"timestamp": 1_700_000_000_000, "fundingRate": 0.001}
+            ],
+        },
     )
     monkeypatch.setattr(venue_funding_history.time, "time", lambda: 1_700_000_000)
     venue_funding_history.build(
