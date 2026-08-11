@@ -1,7 +1,0 @@
-[    1128ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://checkout.stripe.com/c/pay/cs_test_b1IyHPolJMqJ34wT0kULCv2JTafpCu3BOq0VC9yNYKQ1uLIXbR82tvTKqu#fidnandhYHdWcXxpYCc%2FJ2FgY2RwaXEnKSdicGRmZGhqaWBTZHdsZGtxJz8nZmprcXdqaScpJ2R1bE5gfCc%2FJ3VuWnFgdnFaMDRRfFZEajJHaX1kdENRa2trYUtTRF08SGRxamxpYXZBN19GZnRPXURpd09MRHFoSG9BYnRBa3dhdUBvZGRrf2xqZmF3bXAyQ0JrZzNSM19ffFNrU3dXZEs1NUpvXG9vf19gJyknY3dqaFZgd3Ngdyc%2FcXdwYCknZ2RmbmJ3anBrYUZqaWp3Jz8nJmNjY2NjYycpJ2lkfGpwcVF8dWAnPydocGlxbFpscWBoJyknYGtkZ2lgVWlkZmBtamlhYHd2Jz9xd3BgeCUl:0
-[    1128ms] [WARNING] <link rel=preload> uses an unsupported `as` value @ https://checkout.stripe.com/c/pay/cs_test_b1IyHPolJMqJ34wT0kULCv2JTafpCu3BOq0VC9yNYKQ1uLIXbR82tvTKqu#fidnandhYHdWcXxpYCc%2FJ2FgY2RwaXEnKSdicGRmZGhqaWBTZHdsZGtxJz8nZmprcXdqaScpJ2R1bE5gfCc%2FJ3VuWnFgdnFaMDRRfFZEajJHaX1kdENRa2trYUtTRF08SGRxamxpYXZBN19GZnRPXURpd09MRHFoSG9BYnRBa3dhdUBvZGRrf2xqZmF3bXAyQ0JrZzNSM19ffFNrU3dXZEs1NUpvXG9vf19gJyknY3dqaFZgd3Ngdyc%2FcXdwYCknZ2RmbmJ3anBrYUZqaWp3Jz8nJmNjY2NjYycpJ2lkfGpwcVF8dWAnPydocGlxbFpscWBoJyknYGtkZ2lgVWlkZmBtamlhYHd2Jz9xd3BgeCUl:0
-[   10619ms] [WARNING] [Stripe.js] The following payment method types are not activated:
-
-- link
-
-They will be displayed in test mode, but hidden in live mode. Please activate the payment method types in your dashboard (https://dashboard.stripe.com/settings/payment_methods) and ensure your account is enabled for any preview features that you are trying to use. @ https://js.stripe.com/v3/fingerprinted/js/controller-968d56e34e907fdf94e4776892dbc762.js:0

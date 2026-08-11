@@ -1,5 +1,6 @@
 .venv/
 .playwright-cli/
+graphify-out/
 __pycache__/
 *.pyc
 runtime/
