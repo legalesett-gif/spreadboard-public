@@ -84,24 +84,26 @@ five-minute time bucket and a fixed source label. It never receives a Telegram
 name, username, user/chat/message ID, email address or raw message text, and the
 bridge makes no AI or paid API call.
 
-Bootstrap the correct Telegram account once in an interactive terminal:
+Bootstrap the correct Telegram account once in an interactive terminal, then
+install the five-minute LaunchAgent only after that first sync succeeds:
 
 ```bash
-cd "$SPREADBOARD_RELEASE_DIR"
+cd "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean"
 UV_CACHE_DIR=/tmp/uv-cache uv run --with telethon python \
   scripts/sync_exact_bot_intel.py \
-  --session-path "$SPREADBOARD_EXACT_BOT_SESSION" \
-  --output-path "$SPREADBOARD_EXACT_BOT_EVENTS" \
-  --ssh-host "$SPREADBOARD_INTEL_SSH_HOST" \
-  --ssh-key "$SPREADBOARD_INTEL_SSH_KEY"
+  --ssh-host root@178.128.126.204 \
+  --ssh-key "/Users/sviatoslav/.ssh/spreadboard_digitalocean" && \
+UV_CACHE_DIR=/tmp/uv-cache uv run python \
+  scripts/install_exact_bot_intel_launchd.py
 ```
 
 The first run may ask for Telegram's login code and two-factor password. Never
 paste either into a document, chat, source file or environment file. Run the
-same command every two minutes with launchd after the one-time session is
-authorized. The server-side file is written atomically with mode `0600`, and a
-restart/backfill simply rebuilds the last seven days without storing message
-IDs or raw history.
+installer only after the one-time session is authorized; it refuses to install
+without that session. The resulting user LaunchAgent runs every five minutes.
+The server-side file is written atomically with mode `0600`, and a restart or
+backfill simply rebuilds the last seven days without storing message IDs or raw
+history.
 
 ## Funding-history coverage
 
