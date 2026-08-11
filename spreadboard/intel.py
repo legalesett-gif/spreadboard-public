@@ -348,16 +348,31 @@ def build_source_freshness(
         "status": brief.get("status"),
         "title": brief.get("title"),
     }
-    board_snapshot = board.load_board(board_path, limit=0, now=now)
-    freshness["board"] = {
-        "path": board_snapshot.source_path,
-        "exists": Path(board_snapshot.source_path).exists(),
-        "age_min": board_snapshot.age_min,
-        "fresh_count": board_snapshot.fresh_count,
-        "stale_count": board_snapshot.stale_count,
-        "status": "error" if board_snapshot.error else _freshness_status(board_snapshot.age_min, stale_min=120),
-        "error": board_snapshot.error,
-    }
+    # Production's canonical source is the discovery JSON, not necessarily a
+    # legacy board JSONL.  ``load_board(limit=0)`` can correctly decline to
+    # parse that format while the website is serving it normally, which made
+    # Intel claim "Market routes missing" beside a fresh live scanner.  File
+    # freshness is the right source-health evidence here; route correctness is
+    # still handled by the normal client-visible market pipeline.
+    direct_board = _file_freshness(Path(board_path), now=now)
+    if direct_board.get("exists"):
+        freshness["board"] = {
+            **direct_board,
+            "fresh_count": None,
+            "stale_count": None,
+            "status": _freshness_status(direct_board.get("age_min"), stale_min=120),
+        }
+    else:
+        board_snapshot = board.load_board(board_path, limit=0, now=now)
+        freshness["board"] = {
+            "path": board_snapshot.source_path,
+            "exists": Path(board_snapshot.source_path).exists(),
+            "age_min": board_snapshot.age_min,
+            "fresh_count": board_snapshot.fresh_count,
+            "stale_count": board_snapshot.stale_count,
+            "status": "error" if board_snapshot.error else _freshness_status(board_snapshot.age_min, stale_min=120),
+            "error": board_snapshot.error,
+        }
     return freshness
 
 

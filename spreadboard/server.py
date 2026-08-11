@@ -2043,6 +2043,30 @@ def api_intel(board_path: Path, query: dict[str, list[str]] | None = None) -> di
         now = time.monotonic()
     data = intel.build_intel(board_path=board_path, **params)
     data["source_freshness"] = _sanitized_source_freshness(data.get("source_freshness"))
+    attention = data["source_freshness"].get("telegram_events") or {}
+    if attention.get("status") != "fresh":
+        # Community Intel must be based on the current subscription bot, never
+        # a stale legacy listener, old topic brief, or browser-era fixture.
+        # Preserve the account shell but suppress every community-derived row
+        # until a real anonymous token lookup arrives through the webhook.
+        data["hot_symbols"] = []
+        data["action_queue"] = []
+        data["route_reality"] = []
+        data["recent_events"] = {}
+        data["question_patterns"] = []
+        data["latest_brief"] = {}
+        data["alert_preview"] = {"cards": [], "would_trigger_count": 0}
+        data["change_digest"] = {
+            "status": "quiet",
+            "window_min": 60,
+            "recent_event_count": 0,
+            "new_symbol_count": 0,
+            "source_gap_count": 0,
+            "counts": {},
+            "new_symbols": [],
+            "source_gaps": [],
+            "highlights": [],
+        }
     digest = data.get("change_digest") if isinstance(data.get("change_digest"), dict) else {}
     if digest:
         gaps = [
@@ -2062,7 +2086,7 @@ def api_intel(board_path: Path, query: dict[str, list[str]] | None = None) -> di
 def _sanitized_source_freshness(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
-    allowed_sources = {"telegram_events", "board", "topic_brief"}
+    allowed_sources = {"telegram_events", "board"}
     allowed_fields = {
         "exists", "age_min", "status", "latest_at_us", "fresh_count",
         "stale_count", "title",
@@ -9728,11 +9752,12 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
     route_count = sum(1 for item in data.get("route_reality") or [] if item.get("routes"))
     trigger_count = (data.get("alert_preview") or {}).get("would_trigger_count") or 0
     source = data.get("source_freshness") or {}
-    stale_sources = [
-        name
-        for name, item in source.items()
-        if isinstance(item, dict) and item.get("status") in {"stale", "missing", "error"}
-    ]
+    attention = source.get("telegram_events") if isinstance(source.get("telegram_events"), dict) else {}
+    source_note = (
+        "Anonymous bot attention is current."
+        if attention.get("status") == "fresh"
+        else "Bot attention will appear after the first subscriber token lookup."
+    )
     body = f"""
     <section class="watchlist-page" data-refresh="120">
       <div class="intel-hero compact-hero">
@@ -9770,7 +9795,7 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
             <div class="watch-route-list" id="watchRoutes"></div>
           </section>
           <section class="watch-panel">
-            <div class="panel-head flat"><div><h2>Alert Context</h2><p>Read-only examples from spread, funding, freshness, route-change, and community-call previews.</p></div></div>
+            <div class="panel-head flat"><div><h2>Alert Context</h2><p>Read-only spread and funding examples matched only to your pinned tokens.</p></div></div>
             <div class="watch-alert-list" id="watchAlerts"></div>
           </section>
         </main>
@@ -9788,9 +9813,9 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
             </div>
           </section>
           <section class="watch-panel">
-            <div class="panel-head flat"><div><h2>Source Notes</h2><p>Unavailable or stale sources are shown explicitly.</p></div></div>
+            <div class="panel-head flat"><div><h2>Source Notes</h2><p>Only subscriber-facing source status is shown here.</p></div></div>
             <div class="source-note-list">
-              {''.join(f'<span>{h(name.replace("_", " "))}</span>' for name in stale_sources[:8]) or '<span>All tracked intel sources look usable.</span>'}
+              <span>{h(source_note)}</span>
             </div>
           </section>
         </aside>
@@ -10344,7 +10369,8 @@ WATCHLIST_SCRIPT = """
     const rows = [];
     for (const card of alertCards) {
       const examples = Array.isArray(card.examples) ? card.examples : [];
-      const matching = examples.filter((example) => card.key === "source_freshness" || tokens.includes(alertExampleSymbol(example)));
+      if (card.key === "source_freshness") continue;
+      const matching = examples.filter((example) => tokens.includes(alertExampleSymbol(example)));
       for (const example of matching.slice(0, 4)) {
         const symbol = alertExampleSymbol(example) || example.source || card.title || "Source";
         const value = example.open_spread_pct ?? example.funding_apr_pct ?? example.funding_delta_pct;
@@ -10514,7 +10540,7 @@ def render_change_digest(digest: dict[str, Any]) -> str:
       <div class="panel-head flat">
         <div>
           <h2>What Changed</h2>
-          <p>Last-hour Telegram/source changes, so returning users can see what moved before opening the full feed.</p>
+          <p>Last-hour anonymous bot attention joined to public market changes.</p>
         </div>
         <span>{label_text(digest.get('status') or 'quiet')}</span>
       </div>
@@ -10600,7 +10626,7 @@ def render_action_queue(rows: list[dict[str, Any]]) -> str:
       <div class="panel-head flat">
         <div>
           <h2>Action Queue</h2>
-          <p>Joined from Telegram heat, board routes, preflight context, D/W and funding clues. Read-only: this only tells you what to inspect next.</p>
+          <p>Joined from anonymous bot attention, public routes, transfer rails and funding evidence. Read-only: this only tells you what to inspect next.</p>
         </div>
       </div>
       <div class="action-queue">{''.join(rendered) or '<p class="empty">No actionable local intelligence in this window.</p>'}</div>
@@ -13358,22 +13384,22 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .intel-source-notice strong {{ display:block;margin-bottom:4px; }} .intel-source-notice p {{ margin:0;color:var(--terminal-muted);line-height:1.5; }}
 .intel-actions {{ display: flex; gap: 10px; flex-wrap: wrap; }}
 .intel-source-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px; }}
-.source-card {{ min-height: 78px; display: grid; gap: 5px; padding: 12px; border: 1px solid #d0d0d0; border-radius: 8px; background: #f7f7f7; }}
-.source-card span, .source-card em {{ color: #666; font-size: 12px; font-style: normal; }}
+.source-card {{ min-height: 78px; display: grid; gap: 5px; padding: 12px; border: 1px solid var(--terminal-line); border-radius: 8px; background: var(--terminal-panel); }}
+.source-card span, .source-card em {{ color: var(--terminal-muted); font-size: 12px; font-style: normal; }}
 .source-card strong {{ font-size: 16px; }}
 .source-card.stale strong, .source-card.missing strong, .source-card.error strong {{ color: #bf3149; }}
 .source-card.fresh strong {{ color: #007e61; }}
 .intel-layout {{ display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }}
 .intel-main, .intel-side {{ display: grid; gap: 16px; }}
-.intel-section, .change-digest, .side-card, .hot-card, .reality-card, .feed-card {{ background: #f7f7f7; border: 1px solid #d0d0d0; border-radius: 10px; box-shadow: var(--shadow); }}
+.intel-section, .change-digest, .side-card, .hot-card, .reality-card, .feed-card {{ background: var(--terminal-panel); border: 1px solid var(--terminal-line); border-radius: 10px; box-shadow: var(--shadow); }}
 .intel-section {{ padding: 14px; }}
 .change-digest {{ display: grid; gap: 10px; padding: 14px; }}
 .change-digest .panel-head span {{ align-self: flex-start; padding: 5px 8px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-ink); font-size: 12px; font-weight: 900; text-transform: uppercase; }}
 .change-counts {{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }}
-.change-counts article {{ display: grid; gap: 4px; min-height: 70px; align-content: center; padding: 9px; border-radius: 7px; background: white; border: 1px solid #d5dfdc; min-width: 0; }}
-.change-counts span {{ color: #666; font-size: 11px; font-weight: 900; text-transform: uppercase; }}
-.change-counts strong {{ color: var(--dark); font-size: 20px; overflow-wrap: anywhere; }}
-.change-counts em {{ color: #52635e; font-size: 12px; font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.change-counts article {{ display: grid; gap: 4px; min-height: 70px; align-content: center; padding: 9px; border-radius: 7px; background: var(--terminal-row); border: 1px solid var(--terminal-line); min-width: 0; }}
+.change-counts span {{ color: var(--terminal-muted); font-size: 11px; font-weight: 900; text-transform: uppercase; }}
+.change-counts strong {{ color: var(--terminal-text); font-size: 20px; overflow-wrap: anywhere; }}
+.change-counts em {{ color: var(--terminal-muted); font-size: 12px; font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 .change-highlights {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }}
 .change-highlight {{ display: grid; gap: 4px; min-height: 76px; padding: 10px; border-radius: 7px; background: var(--row); border: 1px solid transparent; min-width: 0; }}
 .change-highlight:hover {{ background: var(--row-hover); border-color: var(--line); }}
@@ -13382,44 +13408,44 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .change-highlight em {{ color: #52635e; font-size: 12px; font-style: normal; overflow-wrap: anywhere; }}
 .action-queue-section {{ padding-bottom: 10px; }}
 .action-queue {{ display: grid; gap: 8px; }}
-.action-row {{ display: grid; grid-template-columns: 34px minmax(92px, .45fr) minmax(250px, 1.1fr) minmax(210px, .8fr) minmax(220px, .9fr); gap: 10px; align-items: stretch; min-height: 90px; padding: 9px; border: 1px solid #d7dedb; border-radius: 8px; background: white; }}
-.action-row.inspect_now {{ border-color: rgba(0,184,132,.35); background: #f4fffb; }}
-.action-row.setup_needed, .action-row.identity_needed {{ border-color: rgba(111,140,255,.35); background: #f6f7ff; }}
-.action-row.stale_route {{ border-color: rgba(242,109,125,.28); background: #fff8f9; }}
+.action-row {{ display: grid; grid-template-columns: 34px minmax(92px, .45fr) minmax(250px, 1.1fr) minmax(210px, .8fr) minmax(220px, .9fr); gap: 10px; align-items: stretch; min-height: 90px; padding: 9px; border: 1px solid var(--terminal-line); border-radius: 8px; background: var(--terminal-row); }}
+.action-row.inspect_now {{ border-color: var(--terminal-accent); }}
+.action-row.setup_needed, .action-row.identity_needed {{ border-color: var(--brand-secondary); }}
+.action-row.stale_route {{ border-color: var(--red); }}
 .action-rank {{ display: grid; place-items: center; border-radius: 7px; background: var(--dark); color: white; font-size: 15px; font-weight: 900; }}
 .action-symbol, .action-route, .action-metrics, .action-next {{ display: grid; align-content: center; gap: 6px; min-width: 0; }}
-.action-symbol a {{ color: var(--dark); font-size: 22px; font-weight: 900; overflow-wrap: anywhere; }}
+.action-symbol a {{ color: var(--terminal-text); font-size: 22px; font-weight: 900; overflow-wrap: anywhere; }}
 .action-symbol span {{ width: fit-content; padding: 4px 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-ink); font-size: 11px; font-weight: 900; text-transform: uppercase; }}
-.action-route strong {{ color: var(--dark); font-size: 14px; overflow-wrap: anywhere; }}
-.action-route em, .action-next em {{ color: #52635e; font-size: 12px; font-style: normal; overflow-wrap: anywhere; }}
+.action-route strong {{ color: var(--terminal-text); font-size: 14px; overflow-wrap: anywhere; }}
+.action-route em, .action-next em {{ color: var(--terminal-muted); font-size: 12px; font-style: normal; overflow-wrap: anywhere; }}
 .tag-row.tight span {{ padding: 3px 6px; font-size: 10px; }}
 .action-metrics {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
-.action-metrics span {{ display: grid; gap: 4px; align-content: center; min-height: 54px; padding: 7px; border-radius: 7px; background: var(--row); color: #666; font-size: 11px; font-weight: 800; text-transform: uppercase; }}
-.action-metrics strong {{ color: var(--dark); font-size: 14px; text-transform: none; overflow-wrap: anywhere; }}
-.action-next strong {{ color: var(--dark); font-size: 13px; line-height: 1.25; overflow-wrap: anywhere; }}
+.action-metrics span {{ display: grid; gap: 4px; align-content: center; min-height: 54px; padding: 7px; border-radius: 7px; background: var(--terminal-panel-2); color: var(--terminal-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }}
+.action-metrics strong {{ color: var(--terminal-text); font-size: 14px; text-transform: none; overflow-wrap: anywhere; }}
+.action-next strong {{ color: var(--terminal-text); font-size: 13px; line-height: 1.25; overflow-wrap: anywhere; }}
 .action-links {{ display: flex; gap: 7px; flex-wrap: wrap; }}
 .action-links a {{ min-height: 27px; display: inline-flex; align-items: center; padding: 0 8px; border-radius: 6px; background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 900; }}
-.action-links a + a {{ background: #e5e5e5; color: var(--dark); }}
+.action-links a + a {{ background: var(--terminal-panel-2); color: var(--terminal-text); }}
 .hot-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }}
 .hot-card {{ display: grid; gap: 10px; padding: 12px; box-shadow: none; }}
 .hot-head, .reality-head, .side-head {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; }}
 .hot-head strong {{ font-size: 22px; overflow-wrap: anywhere; }}
-.hot-head span, .reality-head span, .side-head span {{ padding: 4px 7px; border-radius: 5px; background: var(--row); color: #52635e; font-size: 11px; font-weight: 800; }}
+.hot-head span, .reality-head span, .side-head span {{ padding: 4px 7px; border-radius: 5px; background: var(--terminal-panel-2); color: var(--terminal-muted); font-size: 11px; font-weight: 800; }}
 .hot-score {{ display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }}
 .hot-score b {{ font-size: 24px; }}
-.hot-score em {{ color: #666; font-style: normal; font-weight: 800; }}
-.hot-card p {{ min-height: 36px; margin: 0; color: #52635e; font-size: 13px; }}
+.hot-score em {{ color: var(--terminal-muted); font-style: normal; font-weight: 800; }}
+.hot-card p {{ min-height: 36px; margin: 0; color: var(--terminal-muted); font-size: 13px; }}
 .tag-row {{ display: flex; gap: 6px; flex-wrap: wrap; }}
 .tag-row span {{ padding: 4px 6px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-ink); font-size: 11px; font-weight: 800; }}
 .mini-kv, .reality-meta {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }}
-.mini-kv span, .reality-meta span, .profile-row {{ padding: 7px; border-radius: 6px; background: white; color: #666; font-size: 12px; }}
-.mini-kv strong, .reality-meta strong {{ display: block; color: var(--dark); overflow-wrap: anywhere; }}
+.mini-kv span, .reality-meta span, .profile-row {{ padding: 7px; border-radius: 6px; background: var(--terminal-panel-2); color: var(--terminal-muted); font-size: 12px; }}
+.mini-kv strong, .reality-meta strong {{ display: block; color: var(--terminal-text); overflow-wrap: anywhere; }}
 .reality-stack {{ display: grid; gap: 10px; }}
 .reality-card {{ padding: 12px; box-shadow: none; }}
 .reality-head a {{ font-size: 20px; font-weight: 900; }}
 .reality-routes {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 10px 0; }}
-.reality-route {{ display: grid; gap: 4px; padding: 9px; border-radius: 7px; background: var(--row); }}
-.reality-route span, .reality-route em {{ color: #666; font-size: 11px; font-style: normal; }}
+.reality-route {{ display: grid; gap: 4px; padding: 9px; border-radius: 7px; background: var(--terminal-panel-2); }}
+.reality-route span, .reality-route em {{ color: var(--terminal-muted); font-size: 11px; font-style: normal; }}
 .reality-route strong {{ font-size: 18px; }}
 .plain-list.compact {{ margin-top: 10px; }}
 .side-card {{ padding: 14px; }}
@@ -13427,17 +13453,17 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .side-head {{ margin-bottom: 9px; }}
 .side-head .stale, .side-head .missing, .side-head .error {{ color: #bf3149; }}
 .side-head .fresh {{ color: #007e61; }}
-.brief-body {{ max-height: 210px; overflow: hidden; color: #52635e; font-size: 13px; }}
+.brief-body {{ max-height: 210px; overflow: hidden; color: var(--terminal-muted); font-size: 13px; }}
 .brief-body p {{ margin: 0 0 7px; }}
 .question-list {{ display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }}
-.question-list li {{ display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding-bottom: 8px; border-bottom: 1px solid #dedede; }}
-.question-list em {{ grid-column: 1 / -1; color: #666; font-size: 12px; font-style: normal; }}
+.question-list li {{ display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding-bottom: 8px; border-bottom: 1px solid var(--terminal-line); }}
+.question-list em {{ grid-column: 1 / -1; color: var(--terminal-muted); font-size: 12px; font-style: normal; }}
 .alert-preview-list {{ display: grid; gap: 7px; }}
-.alert-preview-row {{ display: flex; justify-content: space-between; gap: 10px; padding: 8px; border-radius: 6px; background: white; font-size: 12px; }}
+.alert-preview-row {{ display: flex; justify-content: space-between; gap: 10px; padding: 8px; border-radius: 6px; background: var(--terminal-panel-2); font-size: 12px; }}
 .alert-preview-row.would_trigger strong {{ color: #007e61; }}
-.alert-preview-row.review_only {{ background: #fff7e4; }}
+.alert-preview-row.review_only {{ background: var(--terminal-warning-soft); }}
 .alert-preview-row.review_only strong {{ color: #9f6200; }}
-.alert-preview-row.quiet strong {{ color: #777; }}
+.alert-preview-row.quiet strong {{ color: var(--terminal-muted); }}
 .alerts-page {{ display: grid; gap: 16px; }}
 .alert-status-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }}
 .alert-rule-grid {{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }}
@@ -13643,18 +13669,18 @@ body.alert-modal-open {{ overflow: hidden; }}
 .watch-profile-row strong {{ font-size: 15px; }}
 .watch-profile-row em {{ color: var(--dark); font-style: normal; font-weight: 900; text-align: right; }}
 .source-note-list {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
-.source-note-list span {{ padding: 8px; border-radius: 7px; background: white; border: 1px solid #dedede; color: #52635e; font-size: 12px; font-weight: 800; overflow-wrap: anywhere; }}
+.source-note-list span {{ padding: 8px; border-radius: 7px; background: var(--terminal-row); border: 1px solid var(--terminal-line); color: var(--terminal-muted); font-size: 12px; font-weight: 800; overflow-wrap: anywhere; }}
 .watch-empty {{ margin: 0; padding: 20px; border-radius: 8px; background: var(--terminal-row); color: var(--terminal-muted); text-align: center; font-size: 15px; font-weight: 800; }}
 .watch-empty.compact {{ padding: 9px; text-align: left; }}
 .profile-row {{ display: grid; grid-template-columns: 1fr auto 24px; gap: 7px; align-items: center; margin-top: 7px; }}
-.profile-row strong {{ color: var(--dark); }}
+.profile-row strong {{ color: var(--terminal-text); }}
 .watchlist-line {{ padding: 12px; border-radius: 6px; background: var(--terminal-row); color: var(--terminal-text); font-size: 15px; font-weight: 800; }}
 .feed-columns {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }}
 .feed-card {{ padding: 12px; box-shadow: none; }}
-.feed-row {{ display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; padding: 8px 0; border-bottom: 1px solid #dedede; font-size: 12px; }}
+.feed-row {{ display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; padding: 8px 0; border-bottom: 1px solid var(--terminal-line); font-size: 12px; }}
 .feed-row span {{ font-size: 16px; font-weight: 900; }}
 .feed-row em {{ color: #007e61; font-style: normal; font-weight: 900; }}
-.feed-row small {{ color: #666; }}
+.feed-row small {{ color: var(--terminal-muted); }}
 .signals-page, .funding-page {{ display: grid; gap: 16px; }}
 .signal-board {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }}
 .signal-lane, .funding-card {{ background: #f7f7f7; border: 1px solid #d0d0d0; border-radius: 10px; box-shadow: var(--shadow); padding: 12px; }}

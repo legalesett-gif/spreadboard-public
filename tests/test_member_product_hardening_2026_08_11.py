@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -235,3 +236,60 @@ def test_position_mutations_cannot_cross_user_boundary(tmp_path) -> None:
         )
     assert accounts.list_positions(attacker["id"], db_path=db_path) == []
     assert accounts.list_positions(owner["id"], db_path=db_path)[0]["status"] == "open"
+
+
+def test_canonical_discovery_file_is_reported_as_a_fresh_market_source(tmp_path) -> None:
+    board_path = tmp_path / "api_discovery_latest.json"
+    board_path.write_text("{}")
+    now = os.stat(board_path).st_mtime + 30
+    source = intel.build_source_freshness(
+        board_path=board_path,
+        now=now,
+        events_path=tmp_path / "events.jsonl",
+        brief_dir=tmp_path / "briefs",
+        preflight_candidates_path=tmp_path / "preflight.jsonl",
+        strategy_queue_path=tmp_path / "queue.jsonl",
+        strategy_prompts_path=tmp_path / "prompts.jsonl",
+        private_preflight_path=tmp_path / "private.jsonl",
+        digest_path=tmp_path / "digest.json",
+    )
+    assert source["board"]["exists"] is True
+    assert source["board"]["status"] == "fresh"
+
+
+def test_missing_bot_attention_cannot_render_legacy_community_rows(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        server.intel,
+        "build_intel",
+        lambda **_kwargs: {
+            "source_freshness": {
+                "telegram_events": {"status": "missing"},
+                "board": {"status": "fresh"},
+            },
+            "hot_symbols": [{"symbol": "LEGACY"}],
+            "action_queue": [{"symbol": "LEGACY"}],
+            "route_reality": [{"symbol": "LEGACY"}],
+            "recent_events": {"alerts": [{"symbol": "LEGACY"}]},
+            "question_patterns": [{"category": "legacy"}],
+            "latest_brief": {"title": "legacy"},
+            "alert_preview": {"cards": [{"key": "source_freshness"}]},
+            "change_digest": {"recent_event_count": 9},
+        },
+    )
+    result = server.api_intel(
+        tmp_path / "canonical.json",
+        {"window_hours": ["5.123"], "limit": ["7"]},
+    )
+    assert result["hot_symbols"] == []
+    assert result["action_queue"] == []
+    assert result["route_reality"] == []
+    assert result["recent_events"] == {}
+    assert result["latest_brief"] == {}
+
+
+def test_watchlist_and_intel_hide_internal_source_cards_and_follow_dark_theme() -> None:
+    assert 'if (card.key === "source_freshness") continue;' in server.WATCHLIST_SCRIPT
+    html = server.shell("Intel", "intel", '<section class="intel-page"></section>')
+    assert ".intel-section, .change-digest, .side-card, .hot-card, .reality-card, .feed-card { background: var(--terminal-panel)" in html
+    assert ".change-counts article { display: grid;" in html
+    assert "background: var(--terminal-row); border: 1px solid var(--terminal-line)" in html
