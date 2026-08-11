@@ -258,6 +258,7 @@ def test_canonical_discovery_file_is_reported_as_a_fresh_market_source(tmp_path)
 
 
 def test_missing_bot_attention_cannot_render_legacy_community_rows(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SPREADBOARD_PUBLIC_MODE", "1")
     monkeypatch.setattr(
         server.intel,
         "build_intel",

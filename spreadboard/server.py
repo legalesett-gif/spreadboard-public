@@ -2075,8 +2075,10 @@ def api_intel(board_path: Path, query: dict[str, list[str]] | None = None) -> di
         ]
         digest["source_gaps"] = gaps
         digest["source_gap_count"] = len(gaps)
-    if _public_mode():
-        data = _public_intel_payload(data, board_path)
+    # The local webhook feed is already privacy-safe: it contains only token,
+    # selected view and timestamp.  Do not replace it in production with the
+    # former remote anonymous bridge, which can reintroduce stale symbols that
+    # were never queried through the subscription bot.
     if key is not None:
         with _INTEL_CACHE_LOCK:
             _INTEL_CACHE[key] = (now, data)
