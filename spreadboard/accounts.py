@@ -2549,6 +2549,43 @@ def all_open_position_futures_legs(
     return list(dict.fromkeys(legs))
 
 
+def all_open_position_market_legs(
+    *, db_path: Path | str = DEFAULT_DB_PATH
+) -> list[tuple[str, str, str]]:
+    """Distinct exact CEX legs in open journals, newest positions first.
+
+    This intentionally returns no user/account fields.  The WebSocket worker
+    only needs public market coordinates to keep saved positions marked after
+    they leave the ranked opportunity board.
+    """
+
+    connection = _connect(db_path)
+    try:
+        rows = connection.execute(
+            """SELECT long_venue, long_market_type, long_symbol,
+                      short_venue, short_market_type, short_symbol
+               FROM positions
+               WHERE status = 'open'
+               ORDER BY opened_at DESC, id DESC"""
+        ).fetchall()
+    finally:
+        connection.close()
+    legs: list[tuple[str, str, str]] = []
+    for row in rows:
+        for side in ("long", "short"):
+            venue = str(row[f"{side}_venue"] or "").strip()
+            market_type = str(row[f"{side}_market_type"] or "").strip()
+            symbol = str(row[f"{side}_symbol"] or "").strip()
+            if (
+                venue
+                and symbol
+                and market_type in {"Spot", "Futures"}
+                and "dex" not in venue.casefold()
+            ):
+                legs.append((venue, market_type, symbol))
+    return list(dict.fromkeys(legs))
+
+
 def save_web_push_subscription(
     user_id: int,
     payload: dict[str, Any],

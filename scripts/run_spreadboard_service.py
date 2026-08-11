@@ -480,6 +480,8 @@ def _warm_telegram_payload_at_startup(board_path: Path) -> None:
 
 
 def main() -> int:
+    from spreadboard import server as server_module
+
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8200"))
     interval = float(os.environ.get("SPREADBOARD_REFRESH_SECONDS", "300"))
@@ -498,6 +500,7 @@ def main() -> int:
         board_path=board_path,
         accounts_path=server.accounts_path,
         poll_seconds=float(os.environ.get("SPREADBOARD_POSITION_ALERT_SECONDS", "30")),
+        quote_scheduler=server_module._schedule_chart_route_refresh,
     )
     server.position_alert_worker = position_alert_worker
     membership_worker = telegram_bot.MembershipWorker(

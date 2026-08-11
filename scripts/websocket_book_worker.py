@@ -22,11 +22,13 @@ for import_path in (ROOT / "src", ROOT):
 import ccxt.pro as ccxtpro  # noqa: E402
 
 from spreadboard.fast_quotes import VENUE_IDS  # noqa: E402
+from spreadboard import accounts  # noqa: E402
 from spreadboard.live_book_cache import LiveBookStore  # noqa: E402
 
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 SNAPSHOT_PATH = RUNTIME_DIR / "api_discovery_latest.json"
+ACCOUNTS_PATH = RUNTIME_DIR / "spreadboard_accounts.sqlite3"
 MAX_SUBSCRIPTIONS = max(20, int(os.environ.get("SPREADBOARD_WS_BOOKS", "160")))
 RECONCILE_SECONDS = max(3.0, float(os.environ.get("SPREADBOARD_WS_RECONCILE_SECONDS", "10")))
 WRITE_INTERVAL_SECONDS = max(0.1, float(os.environ.get("SPREADBOARD_WS_WRITE_SECONDS", "0.25")))
@@ -41,7 +43,7 @@ class BookWorker:
         self.clients: dict[tuple[str, str], Any] = {}
         self.tasks: dict[LegKey, asyncio.Task[None]] = {}
         self._desired: set[LegKey] = set()
-        self._desired_stamp: int | None = None
+        self._desired_signature: tuple[int | None, int | None, int | None] | None = None
         self._market_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._markets_ready: set[tuple[str, str]] = set()
         #: Legs a venue refuses to serve without credentials. Kept out of the
@@ -71,13 +73,25 @@ class BookWorker:
         spent all its time doing that instead of streaming. The feed went silent
         for thirteen minutes while the file kept being re-read.
         """
-        try:
-            stamp = SNAPSHOT_PATH.stat().st_mtime_ns
-        except OSError:
-            return self._desired
-        if stamp != self._desired_stamp:
-            self._desired = _desired_legs(SNAPSHOT_PATH, limit=MAX_SUBSCRIPTIONS)
-            self._desired_stamp = stamp
+        def stamp(path: Path) -> int | None:
+            try:
+                return path.stat().st_mtime_ns
+            except OSError:
+                return None
+
+        accounts_wal = ACCOUNTS_PATH.with_name(f"{ACCOUNTS_PATH.name}-wal")
+        signature = (
+            stamp(SNAPSHOT_PATH),
+            stamp(ACCOUNTS_PATH),
+            stamp(accounts_wal),
+        )
+        if signature != self._desired_signature:
+            self._desired = _desired_legs(
+                SNAPSHOT_PATH,
+                limit=MAX_SUBSCRIPTIONS,
+                accounts_path=ACCOUNTS_PATH,
+            )
+            self._desired_signature = signature
             gc.collect()
         return self._desired
 
@@ -283,8 +297,37 @@ def _board_legs(path: Path, *, limit: int) -> list[LegKey]:
     return legs
 
 
-def _desired_legs(path: Path, *, limit: int) -> set[LegKey]:
-    legs = _board_legs(path, limit=limit)
+def _desired_legs(
+    path: Path,
+    *,
+    limit: int,
+    accounts_path: Path | None = None,
+) -> set[LegKey]:
+    # A saved, open position is already real user exposure.  Its exact public
+    # books take priority over opportunity rows that merely happen to rank on
+    # this scan.  DEX legs are intentionally absent: they use the verified
+    # exact-route HTTP sampler instead of a CEX websocket adapter.
+    legs: list[LegKey] = []
+    if accounts_path is not None:
+        try:
+            canonical_venues = {venue.casefold(): venue for venue in VENUE_IDS}
+            for raw_venue, market_type, symbol in accounts.all_open_position_market_legs(
+                db_path=accounts_path
+            ):
+                venue = canonical_venues.get(raw_venue.casefold())
+                key = (venue, market_type, symbol) if venue else None
+                if key is not None and key not in legs:
+                    legs.append(key)
+                    if len(legs) >= limit:
+                        return set(legs)
+        except Exception:  # noqa: BLE001 - board subscriptions remain available.
+            pass
+
+    for key in _board_legs(path, limit=limit):
+        if key not in legs:
+            legs.append(key)
+            if len(legs) >= limit:
+                return set(legs)
     if len(legs) >= limit:
         return set(legs)
 

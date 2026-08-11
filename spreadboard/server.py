@@ -3116,7 +3116,15 @@ def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | 
     points = int(_query_float(query, "max_points", 240) or 240)
     hours = max(1 / 60, min(_query_float(query, "hours", 24) or 24, 24 * 30))
     bucket_seconds = max(0, min(int(_query_float(query, "bucket_seconds", 0) or 0), 3600))
+    now_us = int(time.time() * 1_000_000)
+    requested_since = _query_float(query, "since_us")
     since_us = int((time.time() - hours * 3600) * 1_000_000)
+    if requested_since is not None:
+        since_us = max(
+            now_us - 30 * 24 * 3_600_000_000,
+            min(int(requested_since), now_us - 1_000_000),
+        )
+        hours = max(1 / 60, min((now_us - since_us) / 3_600_000_000, 24 * 30))
     current = _find_canonical_route(route_key, board_path)
     history_route_key = _chart_history_route_key(current) if current is not None else route_key
     wants_live = current is not None and _query_bool(query, "live")
@@ -6522,10 +6530,16 @@ def render_charts_page(
     if requested_token not in catalog_tokens:
         requested_token = ""
     builder_token = str((selected_row or {}).get("token") or requested_token)
+    position_opened_at = _query_first(query, "opened_at") or ""
+    position_since_us = _position_opened_us(position_opened_at)
     window = (_query_first(query, "window") or "1h").casefold()
-    if window not in CHART_WINDOWS:
+    if window == "position" and position_since_us is not None:
+        window_config = position_chart_window_config(position_since_us)
+    elif window in CHART_WINDOWS:
+        window_config = chart_window_config(window)
+    else:
         window = "1h"
-    window_config = chart_window_config(window)
+        window_config = chart_window_config(window)
     history_payload = (
         api_history(
             selected_route,
@@ -6534,6 +6548,11 @@ def render_charts_page(
                 "max_points": [str(window_config["max_points"])],
                 "hours": [str(window_config["hours"])],
                 "bucket_seconds": [str(window_config["bucket_seconds"])],
+                **(
+                    {"since_us": [str(position_since_us)]}
+                    if window == "position" and position_since_us is not None
+                    else {}
+                ),
             },
         )
         if selected_row is not None
@@ -6550,7 +6569,11 @@ def render_charts_page(
     if selected_row is not None:
         _schedule_chart_route_refresh(selected_row)
     history = history_payload.get("rows") or []
-    history = filter_chart_history(history, window)
+    history = filter_chart_history(
+        history,
+        window,
+        since_us=position_since_us if window == "position" else None,
+    )
     body = f"""
     <section class="charts-page">
       <header class="terminal-heading chart-heading">
@@ -6567,7 +6590,7 @@ def render_charts_page(
       </header>
       {render_saved_charts_panel(user, selected_route, accounts_path)}
       {render_chart_builder(markets, selected_row, catalogue, selected_token=builder_token)}
-      {render_selected_chart(selected_row, detail, history, window, history_payload.get('meta') or {}) if selected_row and detail else render_chart_blank_state()}
+      {render_selected_chart(selected_row, detail, history, window, history_payload.get('meta') or {}, window_config=window_config, position_opened_at=position_opened_at, position_since_us=position_since_us) if selected_row and detail else render_chart_blank_state()}
       {render_funding_history_dialog(detail) if detail else ''}
     </section>
     {render_chart_builder_script([item for item in markets if item.get('token') == builder_token], selected_row)}
@@ -6748,6 +6771,7 @@ CHART_WINDOWS: dict[str, dict[str, float | int | str]] = {
     "1d": {"label": "1D", "hours": 24, "bucket_seconds": 60, "max_points": 1800},
     "3d": {"label": "3D", "hours": 72, "bucket_seconds": 216, "max_points": 1200},
     "7d": {"label": "7D", "hours": 168, "bucket_seconds": 504, "max_points": 1200},
+    "30d": {"label": "30D", "hours": 720, "bucket_seconds": 1800, "max_points": 1800},
 }
 
 
@@ -6755,9 +6779,42 @@ def chart_window_config(window: str) -> dict[str, float | int | str]:
     return CHART_WINDOWS.get(str(window).casefold(), CHART_WINDOWS["1h"])
 
 
-def filter_chart_history(history: list[dict[str, Any]], window: str) -> list[dict[str, Any]]:
+def _position_opened_us(value: Any) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    timestamp = int(moment.timestamp() * 1_000_000)
+    now_us = int(time.time() * 1_000_000)
+    if timestamp > now_us:
+        return None
+    return max(now_us - 30 * 24 * 3_600_000_000, timestamp)
+
+
+def position_chart_window_config(since_us: int) -> dict[str, float | int | str]:
+    elapsed_seconds = max(60.0, time.time() - int(since_us) / 1_000_000.0)
+    hours = min(720.0, elapsed_seconds / 3600.0)
+    return {
+        "label": "Since entry",
+        "hours": hours,
+        "bucket_seconds": max(1, min(1800, int(elapsed_seconds / 1200) or 1)),
+        "max_points": 1800,
+    }
+
+
+def filter_chart_history(
+    history: list[dict[str, Any]],
+    window: str,
+    *,
+    since_us: int | None = None,
+) -> list[dict[str, Any]]:
     hours = float(chart_window_config(window)["hours"])
-    cutoff_us = int((time.time() - hours * 3600) * 1_000_000)
+    cutoff_us = since_us if since_us is not None else int((time.time() - hours * 3600) * 1_000_000)
     return [
         row
         for row in history
@@ -6771,12 +6828,18 @@ def render_selected_chart(
     history: list[dict[str, Any]],
     window: str,
     history_meta: dict[str, Any] | None = None,
+    *,
+    window_config: dict[str, float | int | str] | None = None,
+    position_opened_at: str = "",
+    position_since_us: int | None = None,
 ) -> str:
     legs = detail.get("legs") or {}
     long_leg = legs.get("long") or {}
     short_leg = legs.get("short") or {}
     route_key = board.route_key_url(str(row.get("route_key") or ""))
     windows = [(value, str(config["label"])) for value, config in CHART_WINDOWS.items()]
+    if position_since_us is not None:
+        windows.insert(0, ("position", "Since entry"))
     history_meta = history_meta or {}
     relative_value = ((row.get("notes") or {}).get("relative_value") or {}) if isinstance(row.get("notes"), dict) else {}
     normalization_note = (
@@ -6796,14 +6859,24 @@ def render_selected_chart(
     else:
         source_note = " · exact book samples only"
     coverage_note = f"{float(history_meta.get('coverage_pct') or 0):.0f}% window coverage{source_note}"
+    window_links = "".join(
+        f'<a class="{"active" if value == window else ""}" href="/charts?{h(urlencode({"route_key": str(row.get("route_key") or ""), "window": value, **({"opened_at": position_opened_at} if position_opened_at else {})}))}">{label}</a>'
+        for value, label in windows
+    )
+    position_note = (
+        f'<span class="chart-position-opened">Position opened {h(position_opened_at)}</span>'
+        if position_since_us is not None
+        else ""
+    )
     return f"""
     <section class="selected-chart">
       <header class="selected-chart-head">
         <div><span>Spread chart</span><strong>{h(row.get('token'))}</strong><em>{h(row.get('long_venue'))} {h(leg_market_label(row.get('long_venue'), row.get('long_market_type')))} → {h(row.get('short_venue'))} {h(leg_market_label(row.get('short_venue'), row.get('short_market_type')))}{h(normalization_note)}</em></div>
         <nav class="chart-window-tabs" aria-label="Chart window">
-          {''.join(f'<a class="{"active" if value == window else ""}" href="/charts?route_key={h(route_key)}&window={value}">{label}</a>' for value, label in windows)}
+          {window_links}
         </nav>
       </header>
+      {position_note}
       <div class="selected-chart-layout">
         <aside class="chart-leg-stats">
           {render_chart_leg_stats('Long', long_leg)}
@@ -6817,7 +6890,7 @@ def render_selected_chart(
               <button type="button" data-funding-open>Funding history</button>
               <em data-chart-live-state>Connecting to exact route...</em>
             </div>
-            {render_live_spread_chart(str(row.get('route_key') or ''), history, window)}
+            {render_live_spread_chart(str(row.get('route_key') or ''), history, window, window_config=window_config, position_since_us=position_since_us)}
           </section>
         </div>
       </div>
@@ -6871,8 +6944,11 @@ def render_live_spread_chart(
     route_key: str,
     history: list[dict[str, Any]],
     window: str,
+    *,
+    window_config: dict[str, float | int | str] | None = None,
+    position_since_us: int | None = None,
 ) -> str:
-    window_config = chart_window_config(window)
+    window_config = window_config or chart_window_config(window)
     hours = float(window_config["hours"])
     bucket_seconds = int(window_config["bucket_seconds"])
     max_points = int(window_config["max_points"])
@@ -6909,6 +6985,8 @@ def render_live_spread_chart(
       const hours = {hours};
       const bucketSeconds = {bucket_seconds};
       const maxPoints = {max_points};
+      const sinceUs = {int(position_since_us or 0)};
+      const positionOpenedSeconds = sinceUs ? Math.floor(sinceUs / 1000000) : null;
       const canvas = root.querySelector('[data-live-chart-canvas]');
       const tooltip = root.querySelector('[data-live-chart-tooltip]');
       const state = document.querySelector('[data-chart-live-state]');
@@ -6921,6 +6999,7 @@ def render_live_spread_chart(
       let refreshing = false;
       let chart = null;
       let convergenceLine = null;
+      let positionMarker = null;
       let backfillTries = 0;
       let backfillTimer = null;
       let resizeObserver = null;
@@ -7192,6 +7271,23 @@ def render_live_spread_chart(
         chartSeries.exit.setData(seriesData(rows, 'exit', gapSeconds));
         chartSeries.longFunding.setData(seriesData(rows, 'longFunding', gapSeconds));
         chartSeries.shortFunding.setData(seriesData(rows, 'shortFunding', gapSeconds));
+        if (positionOpenedSeconds && rows.length) {{
+          const markerRow = rows.find(row => Math.floor(row.ts / 1000) >= positionOpenedSeconds) || rows[rows.length - 1];
+          const markers = [{{
+            time: Math.floor(markerRow.ts / 1000),
+            position: 'aboveBar',
+            color: palette().convergence,
+            shape: 'arrowDown',
+            text: 'Entry',
+          }}];
+          if (!positionMarker && LightweightCharts.createSeriesMarkers) {{
+            positionMarker = LightweightCharts.createSeriesMarkers(chartSeries.entry, markers);
+          }} else if (positionMarker?.setMarkers) {{
+            positionMarker.setMarkers(markers);
+          }} else if (chartSeries.entry.setMarkers) {{
+            chartSeries.entry.setMarkers(markers);
+          }}
+        }}
         if (!chart.__fitted) {{
           chart.timeScale().fitContent();
           chart.__fitted = true;
@@ -7211,7 +7307,8 @@ def render_live_spread_chart(
         controller = new AbortController();
         state.textContent = 'Sampling exact public order books...';
         try {{
-          const response = await fetch(`/api/history/${{encodeURIComponent(routeKey)}}?live=1&wait=0&hours=${{hours}}&bucket_seconds=${{bucketSeconds}}&max_points=${{maxPoints}}`, {{
+          const sinceQuery = sinceUs ? `&since_us=${{sinceUs}}` : '';
+          const response = await fetch(`/api/history/${{encodeURIComponent(routeKey)}}?live=1&wait=0&hours=${{hours}}&bucket_seconds=${{bucketSeconds}}&max_points=${{maxPoints}}${{sinceQuery}}`, {{
             cache: 'no-store',
             signal: controller.signal,
           }});
@@ -8064,11 +8161,25 @@ def api_portfolio(
     board_path: Path,
     accounts_path: Path | str,
 ) -> dict[str, Any]:
-    return portfolio.portfolio_snapshot(
+    payload = portfolio.portfolio_snapshot(
         user,
         board_path=board_path,
         accounts_path=accounts_path,
     )
+    # Exact position quotes share the same bounded, deduplicated sampler and
+    # history as Charts.  Scheduling is non-blocking: the first render can say
+    # "markets listed · refreshing" and a follow-up request consumes the fresh
+    # resident sample instead of holding the account page on an exchange call.
+    for item in payload.get("positions") or []:
+        route = item.get("canonical_route")
+        if (
+            item.get("status") != "open"
+            or not item.get("quote_refresh_needed")
+            or not isinstance(route, dict)
+        ):
+            continue
+        item["position_quote_refresh"] = _schedule_chart_route_refresh(route)
+    return payload
 
 
 def save_pushover_preferences(
@@ -9295,6 +9406,7 @@ def render_account_page(
     </section>
     <script type="application/json" id="account-session">{json_script_data({'csrf_token': user.csrf_token})}</script>
     {render_account_script()}
+    {render_portfolio_market_refresh_script(positions)}
     {render_billing_script()}
     """
     return shell("My portfolio - SpreadBoard", "profile", body)
@@ -9305,14 +9417,39 @@ def render_account_kpi(label: str, value: Any, note: str) -> str:
 
 
 def render_position_card(item: dict[str, Any]) -> str:
-    market_live = item.get("market_status") == "live"
+    quote_status = str(item.get("quote_status") or item.get("market_status") or "unavailable")
+    market_live = quote_status == "live"
     funding = item.get("current_funding") if isinstance(item.get("current_funding"), dict) else {}
     long_funding = funding.get("long") if isinstance(funding.get("long"), dict) else {}
     short_funding = funding.get("short") if isinstance(funding.get("short"), dict) else {}
-    market_label = "Live books" if market_live else "Partial market data" if item.get("market_status") == "partial" else "Market unavailable"
+    if quote_status == "closed":
+        market_label = "Closed · stored exits"
+        status_class = "closed"
+    elif market_live:
+        market_label = "Live exact prices"
+        status_class = "live"
+    elif quote_status == "partial":
+        market_label = "One leg live · refreshing"
+        status_class = "refreshing"
+    elif item.get("market_listing_status") == "listed":
+        market_label = "Markets listed · refreshing"
+        status_class = "refreshing"
+    elif item.get("market_listing_status") == "partial":
+        market_label = "One saved market not listed"
+        status_class = "unavailable"
+    else:
+        market_label = "Saved markets not in catalogue"
+        status_class = "unavailable"
+    chart_query = urlencode(
+        {
+            "route_key": str(item.get("chart_route_key") or item.get("route_key") or ""),
+            "window": "position",
+            "opened_at": str(item.get("opened_at") or ""),
+        }
+    )
     return f"""
-    <article class="position-card" data-position-id="{h(item.get('id'))}">
-      <header><div><span class="position-token">{h(item.get('token'))}</span><strong>{h(item.get('long_venue'))} → {h(item.get('short_venue'))}</strong><em>{h(item.get('long_market_type'))} / {h(item.get('short_market_type'))}</em></div><div class="position-status {'live' if market_live else 'unavailable'}"><span>{h(item.get('status'))}</span><strong>{market_label}</strong></div></header>
+    <article class="position-card" data-position-id="{h(item.get('id'))}" data-market-status="{h(quote_status)}">
+      <header><div><span class="position-token">{h(item.get('token'))}</span><strong>{h(item.get('long_venue'))} → {h(item.get('short_venue'))}</strong><em>{h(item.get('long_market_type'))} / {h(item.get('short_market_type'))}</em></div><div class="position-status {status_class}"><span>{h(item.get('status'))}</span><strong>{market_label}</strong></div></header>
       <div class="position-metrics">
         <span>Total PnL<strong class="{spread_class(item.get('total_pnl_usd'))}">{fmt_signed_money(item.get('total_pnl_usd'))}</strong></span>
         <span>Price PnL<strong>{fmt_signed_money(item.get('price_pnl_usd'))}</strong></span>
@@ -9323,8 +9460,42 @@ def render_position_card(item: dict[str, Any]) -> str:
         <span>Open spread<strong>{fmt_signed_pct(item.get('current_open_spread_pct'), digits=3)}</strong></span>
       </div>
       <div class="position-legs"><div><span>Long</span><strong>{h(item.get('long_venue'))} · {h(item.get('long_quantity'))}</strong><em>{fmt_price(item.get('long_entry_price'))} → {fmt_price(item.get('long_mark_price'))}</em><em>Funding {fmt_signed_pct(long_funding.get('rate_pct'), digits=4)} / {h(long_funding.get('interval_hours') or '—')}h</em></div><div><span>Short</span><strong>{h(item.get('short_venue'))} · {h(item.get('short_quantity'))}</strong><em>{fmt_price(item.get('short_entry_price'))} → {fmt_price(item.get('short_mark_price'))}</em><em>Funding {fmt_signed_pct(short_funding.get('rate_pct'), digits=4)} / {h(short_funding.get('interval_hours') or '—')}h</em></div></div>
-      <footer><span>Opened {h(item.get('opened_at'))}</span><div>{render_position_rules(item.get('alert_rules') or [])}<button type="button" data-position-action="funding">Add funding</button><button type="button" data-position-action="alert">Add alert</button>{'<button type="button" data-position-action="close">Close position</button>' if item.get('status') == 'open' else ''}<a href="/charts?route_key={h(board.route_key_url(str(item.get('route_key') or '')))}">Chart</a></div></footer>
+      <footer><span>Opened {h(item.get('opened_at'))}</span><div>{render_position_rules(item.get('alert_rules') or [])}<button type="button" data-position-action="funding">Add funding</button><button type="button" data-position-action="alert">Add alert</button>{'<button type="button" data-position-action="close">Close position</button>' if item.get('status') == 'open' else ''}<a href="/charts?{h(chart_query)}">Chart since entry</a></div></footer>
     </article>"""
+
+
+def render_portfolio_market_refresh_script(positions: list[dict[str, Any]]) -> str:
+    target_ids = [
+        int(item["id"])
+        for item in positions
+        if item.get("status") == "open"
+        and item.get("market_listing_status") == "listed"
+        and item.get("quote_status") != "live"
+        and item.get("id") is not None
+    ]
+    if not target_ids:
+        return ""
+    return f"""
+    <script>
+    (() => {{
+      const targetIds = new Set({json_script_data(target_ids)}.map(Number));
+      let attempts = 0;
+      async function refreshListedMarkets() {{
+        attempts += 1;
+        try {{
+          const response = await fetch('/api/portfolio', {{cache: 'no-store'}});
+          const payload = await response.json();
+          const targets = (payload.positions || []).filter(item => targetIds.has(Number(item.id)));
+          if (targets.some(item => ['live', 'partial'].includes(item.quote_status))) {{
+            location.reload();
+            return;
+          }}
+        }} catch (_error) {{ /* retain the truthful listed/refreshing state */ }}
+        if (attempts < 8) window.setTimeout(refreshListedMarkets, 3000);
+      }}
+      window.setTimeout(refreshListedMarkets, 1800);
+    }})();
+    </script>"""
 
 
 def render_position_rules(rules: list[dict[str, Any]]) -> str:
@@ -14483,6 +14654,8 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   .chart-token-field, .chart-leg-picker, .chart-create-button {{ grid-column: 1; }}
   .chart-swap {{ justify-self: center; margin: 0; transform: rotate(90deg); }}
   .chart-builder-title, .selected-chart-head, .selected-chart-foot {{ align-items: flex-start; flex-direction: column; }}
+  .chart-window-tabs {{ width: 100%; flex-wrap: wrap; padding-bottom: 4px; }}
+  .chart-window-tabs a {{ flex: 0 0 auto; }}
   .selected-chart-layout {{ grid-template-columns: 1fr; min-height: 0; }}
   .chart-leg-stats {{ display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); border-right: 0; border-bottom: 1px solid var(--terminal-line); }}
   .chart-leg-stats article {{ min-height: 0; border-top: 0; border-left: 1px solid var(--terminal-line); }}
@@ -14760,16 +14933,17 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 .account-panel-head {{ display:flex; align-items:center; justify-content:space-between; gap:20px; margin:16px 0; }} .account-panel-head h2 {{ margin:0 0 5px; }} .account-panel-head p {{ margin:0; color:var(--terminal-muted); }}
 .position-list,.notification-list {{ display:grid; gap:10px; }} .position-card,.account-empty-panel,.account-settings,.notification-list article,.member-row {{ border:1px solid var(--terminal-line); background:var(--terminal-panel); padding:16px; }}
 .position-card header,.position-card footer,.position-legs {{ display:flex; justify-content:space-between; align-items:center; gap:14px; }} .position-card header>div:first-child {{ display:grid; grid-template-columns:auto auto; gap:3px 12px; align-items:baseline; }} .position-card header em {{ grid-column:2; color:var(--terminal-muted); font-style:normal; font-size:12px; }}
-.position-token {{ font-size:24px; font-weight:900; grid-row:1/3; }} .position-status {{ text-align:right; display:grid; }} .position-status span {{ text-transform:uppercase; font-size:10px; color:var(--terminal-muted); }} .position-status.live strong {{ color:var(--green); }}
+.position-token {{ font-size:24px; font-weight:900; grid-row:1/3; }} .position-status {{ text-align:right; display:grid; }} .position-status span {{ text-transform:uppercase; font-size:10px; color:var(--terminal-muted); }} .position-status.live strong {{ color:var(--green); }} .position-status.refreshing strong {{ color:var(--terminal-warning); }} .position-status.closed strong {{ color:var(--terminal-muted); }}
 .position-metrics {{ display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); border-block:1px solid var(--terminal-line); margin:14px -16px; }} .position-metrics span {{ padding:11px 16px; display:grid; gap:4px; color:var(--terminal-muted); font-size:11px; border-right:1px solid var(--terminal-line); }} .position-metrics strong {{ color:var(--terminal-text); font-size:16px; }}
 .position-legs>div {{ flex:1; display:grid; grid-template-columns:auto 1fr auto; gap:10px; }} .position-legs span,.position-legs em {{ color:var(--terminal-muted); font-style:normal; }} .position-card footer {{ margin-top:14px; color:var(--terminal-muted); font-size:12px; }} .position-card footer div {{ display:flex; flex-wrap:wrap; gap:7px; align-items:center; }} .position-card footer button,.position-card footer a {{ border:1px solid var(--terminal-line); background:transparent; color:var(--terminal-text); padding:7px 10px; text-decoration:none; font:inherit; font-weight:700; cursor:pointer; }}
+.chart-position-opened {{ display:block; margin:-8px 0 12px; color:var(--terminal-warning); font-size:12px; font-weight:800; }}
 .account-dialog {{ width:min(760px,calc(100% - 28px)); max-height:90vh; overflow:auto; border:1px solid var(--terminal-line); background:var(--terminal-panel); color:var(--terminal-text); padding:0; }} .account-dialog::backdrop {{ background:rgba(0,0,0,.68); }} .account-dialog form>header,.account-dialog form>footer {{ padding:15px 18px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--terminal-line); }} .account-dialog form>footer {{ border:0; border-top:1px solid var(--terminal-line); justify-content:flex-end; }} .account-dialog h2 {{ margin:2px 0 0; }} .account-dialog header span {{ color:var(--terminal-muted); font-size:11px; text-transform:uppercase; }} .account-dialog button {{ border:1px solid var(--terminal-line); background:transparent; color:var(--terminal-text); padding:8px 13px; cursor:pointer; }} .account-dialog button.primary {{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }}
 .position-form-grid,.account-dialog [data-action-fields],.account-settings form,.member-create-form {{ padding:18px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px; }} .position-form-grid label,.account-dialog [data-action-fields] label,.account-settings label,.member-create-form label {{ display:grid; gap:6px; color:var(--terminal-muted); font-size:11px; text-transform:uppercase; }} .position-form-grid input,.position-form-grid select,.position-form-grid textarea,.account-dialog [data-action-fields] input,.account-dialog [data-action-fields] select,.account-settings input,.member-create-form input {{ min-height:40px; width:100%; border:1px solid var(--terminal-line); background:var(--terminal-row); color:var(--terminal-text); padding:8px; font:inherit; }} .position-form-grid .wide {{ grid-column:1/-1; }}
 .notification-list article {{ display:grid; grid-template-columns:180px 220px 1fr; gap:14px; }} .notification-list p {{ margin:0; color:var(--terminal-muted); }} .member-row {{ display:grid; grid-template-columns:1fr auto auto; gap:20px; margin-top:8px; }} .member-row div {{ display:grid; }} .member-row span,.member-row em {{ color:var(--terminal-muted); font-style:normal; }}
 .account-chip {{ display:grid; color:var(--terminal-shell-text); text-decoration:none; text-align:right; line-height:1.1; }} .account-chip em {{ color:var(--accent); font-size:10px; font-style:normal; text-transform:uppercase; }} .logout-button {{ width:38px; height:38px; border:1px solid rgba(255,255,255,.25); background:transparent; color:var(--terminal-shell-text); font-size:19px; cursor:pointer; }}
 @media(max-width:900px) {{ .account-kpis {{ grid-template-columns:repeat(2,1fr); }} .position-metrics {{ grid-template-columns:repeat(3,1fr); }} .position-legs {{ align-items:stretch; flex-direction:column; }} .account-chip,.logout-button {{ display:none; }} }}
 @media(max-width:900px) {{ .partner-policy-grid {{ grid-template-columns:1fr; }} .partner-create-form,.partner-payout-form {{ grid-template-columns:1fr 1fr; }} .partner-admin-row {{ grid-template-columns:1fr; }} .partner-row-actions {{ justify-items:start; }} }}
-@media(max-width:600px) {{ .account-heading {{ flex-direction:column; }} .account-membership {{ width:100%; }} .account-kpis {{ grid-template-columns:1fr 1fr; }} .position-metrics {{ grid-template-columns:1fr 1fr; }} .position-card header,.position-card footer {{ align-items:flex-start; flex-direction:column; }} .position-form-grid,.account-dialog [data-action-fields],.account-settings form,.member-create-form {{ grid-template-columns:1fr; }} .position-form-grid .wide {{ grid-column:auto; }} .notification-list article,.member-row {{ grid-template-columns:1fr; }} .member-row > * {{ min-width:0;overflow-wrap:anywhere; }} }}
+@media(max-width:600px) {{ .account-heading {{ flex-direction:column; }} .account-membership {{ width:100%; }} .account-kpis {{ grid-template-columns:1fr 1fr; }} .position-metrics {{ grid-template-columns:1fr 1fr; }} .position-card header,.position-card footer {{ align-items:flex-start; flex-direction:column; }} .position-legs>div {{ grid-template-columns:72px minmax(0,1fr); align-items:start; }} .position-legs>div>span {{ grid-column:1; grid-row:1; }} .position-legs>div>strong {{ grid-column:2; grid-row:1; overflow-wrap:anywhere; }} .position-legs>div>em {{ grid-column:2; }} .position-form-grid,.account-dialog [data-action-fields],.account-settings form,.member-create-form {{ grid-template-columns:1fr; }} .position-form-grid .wide {{ grid-column:auto; }} .notification-list article,.member-row {{ grid-template-columns:1fr; }} .member-row > * {{ min-width:0;overflow-wrap:anywhere; }} }}
 @media(max-width:600px) {{ .partner-create-form,.partner-payout-form {{ grid-template-columns:1fr; }} .partner-link-card {{ align-items:stretch; flex-direction:column; }} }}
 </style>
 </head>

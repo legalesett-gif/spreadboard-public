@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import threading
+import time
 from typing import Any
 
-from spreadboard import accounts, api_spreads, bulk_quotes, live_book_cache
+from spreadboard import (
+    accounts,
+    api_spreads,
+    bulk_quotes,
+    chart_catalog,
+    live_book_cache,
+    market_history,
+    position_markets,
+)
 
 
 def portfolio_snapshot(
@@ -27,8 +37,17 @@ def portfolio_snapshot(
     rows = [row for row in market.get("rows") or [] if isinstance(row, dict)]
     books = _live_books()
     funding_legs = bulk_quotes.load_funding()
+    catalogue = chart_catalog.load()
+    market_index = position_markets.catalogue_market_index(catalogue)
     hydrated = [
-        _hydrate_position(item, rows, books=books, funding_legs=funding_legs)
+        _hydrate_position(
+            item,
+            rows,
+            books=books,
+            funding_legs=funding_legs,
+            catalogue=catalogue,
+            market_index=market_index,
+        )
         for item in positions
     ]
     if evaluate_alerts:
@@ -52,10 +71,23 @@ def _hydrate_position(
     *,
     books: dict[str, Any] | None = None,
     funding_legs: dict[str, dict[str, Any]] | None = None,
+    catalogue: dict[str, Any] | None = None,
+    market_index: dict[tuple[str, str, str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    current = _matching_route(position, rows)
-    if current is None and position.get("status") == "open":
-        current = _quote_position(position, books=books or {})
+    market = position_markets.resolve_position_route(
+        position,
+        rows,
+        catalogue=catalogue,
+        market_index=market_index,
+    )
+    current = market.get("current_row")
+    if position.get("status") == "open":
+        current = _merge_position_quotes(
+            market.get("canonical_route") or current or _position_route_shell(position),
+            current,
+            _quote_position(position, books=books or {}),
+            _history_quote(str(market.get("history_route_key") or "")),
+        )
     funding = _position_funding(position, current, funding_legs or {})
     long_mark = _number(position.get("long_exit_price")) if position.get("status") == "closed" else _number((current or {}).get("long_bid"))
     short_mark = _number(position.get("short_exit_price")) if position.get("status") == "closed" else _number((current or {}).get("short_ask"))
@@ -73,6 +105,19 @@ def _hydrate_position(
     short_bid = _number((current or {}).get("short_bid"))
     open_spread = _spread(long_ask, short_bid)
     exit_spread = _spread(_number((current or {}).get("short_ask")), _number((current or {}).get("long_bid")))
+    listing_status = str(market.get("listing_status") or "unlisted")
+    if current and (long_mark is not None or short_mark is not None) and listing_status == "unlisted":
+        listing_status = "listed"
+    if position.get("status") == "closed":
+        quote_status = "closed"
+    elif long_mark is not None and short_mark is not None:
+        quote_status = "live"
+    elif long_mark is not None or short_mark is not None:
+        quote_status = "partial"
+    elif listing_status == "listed":
+        quote_status = "refreshing"
+    else:
+        quote_status = "unavailable"
     result = dict(position)
     result.update(
         {
@@ -80,9 +125,24 @@ def _hydrate_position(
                 "live"
                 if long_mark is not None and short_mark is not None
                 else "partial"
-                if current
+                if long_mark is not None or short_mark is not None
                 else "unavailable"
             ),
+            "market_listing_status": listing_status,
+            "quote_status": quote_status,
+            "quote_source": (current or {}).get("position_quote_source"),
+            "quote_ts_us": (current or {}).get("quote_ts_us"),
+            "quote_age_seconds": _quote_age_seconds(current),
+            "quote_refresh_needed": bool(
+                position.get("status") == "open"
+                and market.get("canonical_route")
+                and quote_status != "live"
+            ),
+            "canonical_route": market.get("canonical_route"),
+            "chart_route_key": market.get("chart_route_key")
+            or (current or {}).get("route_key")
+            or position.get("route_key"),
+            "chart_history_route_key": market.get("history_route_key"),
             "current_route": current,
             "current_funding": funding,
             "current_net_funding_24h_pct": funding.get("net_projected_24h_pct"),
@@ -107,22 +167,7 @@ def _hydrate_position(
 
 
 def _matching_route(position: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    route_key = str(position.get("route_key") or "")
-    exact = next((row for row in rows if str(row.get("route_key") or "") == route_key), None)
-    if exact:
-        return exact
-    return next(
-        (
-            row
-            for row in rows
-            if str(row.get("token") or "").upper() == str(position.get("token") or "").upper()
-            and str(row.get("long_venue") or "") == str(position.get("long_venue") or "")
-            and str(row.get("long_market_type") or "") == str(position.get("long_market_type") or "")
-            and str(row.get("short_venue") or "") == str(position.get("short_venue") or "")
-            and str(row.get("short_market_type") or "") == str(position.get("short_market_type") or "")
-        ),
-        None,
-    )
+    return position_markets.resolve_position_route(position, rows).get("current_row")
 
 
 def _quote_position(
@@ -145,9 +190,8 @@ def _quote_position(
         venue = str(position.get(f"{side}_venue") or "")
         market_type = str(position.get(f"{side}_market_type") or "")
         symbol = str(position.get(f"{side}_symbol") or "")
-        candidates = [market_type]
-        if market_type.casefold() == "dex":
-            candidates.append("Spot")
+        canonical_type = position_markets.normalize_market_type(venue, market_type)
+        candidates = list(dict.fromkeys((market_type, canonical_type)))
         book = next(
             (
                 books.get(live_book_cache.cache_key(venue, candidate, symbol))
@@ -166,7 +210,155 @@ def _quote_position(
             row[f"{side}_ask"] = _number(asks[0][0])
         row[f"{side}_quote_ts_us"] = getattr(book, "quote_ts_us", None)
         found = True
+    if found:
+        timestamps = [
+            int(value)
+            for side in ("long", "short")
+            if (value := row.get(f"{side}_quote_ts_us")) is not None
+        ]
+        row["quote_ts_us"] = min(timestamps) if timestamps else None
+        row["position_quote_source"] = "resident_websocket_book"
     return row if found else None
+
+
+def _history_quote(route_key: str) -> dict[str, Any] | None:
+    if not route_key:
+        return None
+    max_age = max(
+        30.0,
+        float(os.environ.get("SPREADBOARD_POSITION_MARK_MAX_AGE_SECONDS", "90")),
+    )
+    try:
+        rows = market_history.load_history(
+            route_key=route_key,
+            max_points=1,
+            since_us=int((time.time() - max_age) * 1_000_000),
+        )
+    except Exception:  # noqa: BLE001 - a missing history cache is non-fatal.
+        return None
+    if not rows:
+        return None
+    item = rows[-1]
+    return {
+        "route_key": route_key,
+        "token": item.get("token"),
+        "route_kind": item.get("route_kind"),
+        "long_venue": item.get("long_venue"),
+        "long_market_type": item.get("long_market_type"),
+        "short_venue": item.get("short_venue"),
+        "short_market_type": item.get("short_market_type"),
+        "long_bid": item.get("long_bid_price"),
+        "long_ask": item.get("long_ask_price"),
+        "short_bid": item.get("short_bid_price"),
+        "short_ask": item.get("short_ask_price"),
+        "long_quote_ts_us": item.get("quote_ts_us"),
+        "short_quote_ts_us": item.get("quote_ts_us"),
+        "quote_ts_us": item.get("quote_ts_us"),
+        "position_quote_source": str(item.get("sample_source") or "exact_route_history"),
+    }
+
+
+def _merge_position_quotes(
+    structural: dict[str, Any],
+    *candidates: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Take the freshest exact quote independently for each saved leg."""
+
+    current = next((item for item in candidates if isinstance(item, dict)), {})
+    result = {**current, **structural}
+    current_notes = current.get("notes") if isinstance(current.get("notes"), dict) else {}
+    structural_notes = (
+        structural.get("notes") if isinstance(structural.get("notes"), dict) else {}
+    )
+    if current_notes or structural_notes:
+        notes = {**current_notes, **structural_notes}
+        current_inputs = (
+            current_notes.get("route_inputs")
+            if isinstance(current_notes.get("route_inputs"), dict)
+            else {}
+        )
+        structural_inputs = (
+            structural_notes.get("route_inputs")
+            if isinstance(structural_notes.get("route_inputs"), dict)
+            else {}
+        )
+        notes["route_inputs"] = {
+            side: {
+                **(
+                    current_inputs.get(side)
+                    if isinstance(current_inputs.get(side), dict)
+                    else {}
+                ),
+                **(
+                    structural_inputs.get(side)
+                    if isinstance(structural_inputs.get(side), dict)
+                    else {}
+                ),
+            }
+            for side in ("long", "short")
+        }
+        result["notes"] = notes
+    sources: list[str] = []
+    timestamps: list[int] = []
+    for side in ("long", "short"):
+        chosen = None
+        chosen_ts = -1
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            if _number(candidate.get(f"{side}_bid")) is None and _number(
+                candidate.get(f"{side}_ask")
+            ) is None:
+                continue
+            timestamp = int(
+                _number(candidate.get(f"{side}_quote_ts_us"))
+                or _number(candidate.get("quote_ts_us"))
+                or 0
+            )
+            if chosen is None or timestamp >= chosen_ts:
+                chosen = candidate
+                chosen_ts = timestamp
+        if chosen is None:
+            continue
+        for field in ("bid", "ask"):
+            value = _number(chosen.get(f"{side}_{field}"))
+            if value is not None:
+                result[f"{side}_{field}"] = value
+        result[f"{side}_quote_ts_us"] = chosen_ts or None
+        if chosen_ts:
+            timestamps.append(chosen_ts)
+        source = str(chosen.get("position_quote_source") or "canonical_public_row")
+        sources.append(source)
+    if timestamps:
+        result["quote_ts_us"] = min(timestamps)
+    if sources:
+        result["position_quote_source"] = "+".join(dict.fromkeys(sources))
+    return result
+
+
+def _position_route_shell(position: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "route_key": position_markets.normalized_route_key(position),
+        "token": position.get("token"),
+        "route_kind": _route_kind(position),
+        "long_venue": position.get("long_venue"),
+        "long_market_type": position_markets.normalize_market_type(
+            position.get("long_venue"), position.get("long_market_type")
+        ),
+        "long_market_symbol": position.get("long_symbol"),
+        "short_venue": position.get("short_venue"),
+        "short_market_type": position_markets.normalize_market_type(
+            position.get("short_venue"), position.get("short_market_type")
+        ),
+        "short_market_symbol": position.get("short_symbol"),
+    }
+
+
+def _quote_age_seconds(current: dict[str, Any] | None) -> float | None:
+    timestamp = _number((current or {}).get("quote_ts_us"))
+    if timestamp is None:
+        return None
+    return max(0.0, time.time() - timestamp / 1_000_000.0)
 
 
 def _live_books() -> dict[str, Any]:
@@ -296,10 +488,12 @@ class PositionAlertWorker:
         board_path: Path,
         accounts_path: Path | str = accounts.DEFAULT_DB_PATH,
         poll_seconds: float = 30.0,
+        quote_scheduler: Any = None,
     ) -> None:
         self.board_path = board_path
         self.accounts_path = Path(accounts_path)
         self.poll_seconds = max(10.0, float(poll_seconds))
+        self.quote_scheduler = quote_scheduler
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._run, name="spreadboard-position-alerts", daemon=True
@@ -337,6 +531,10 @@ class PositionAlertWorker:
             limit=None,
         )
         rows = [row for row in market.get("rows") or [] if isinstance(row, dict)]
+        books = _live_books()
+        funding_legs = bulk_quotes.load_funding()
+        catalogue = chart_catalog.load()
+        market_index = position_markets.catalogue_market_index(catalogue)
         user_count = position_count = notification_count = 0
         for user_id in accounts.list_alert_user_ids(db_path=self.accounts_path):
             user = accounts.get_user_object(user_id, db_path=self.accounts_path)
@@ -349,7 +547,20 @@ class PositionAlertWorker:
                 ):
                     continue
                 position_count += 1
-                hydrated = _hydrate_position(raw, rows)
+                hydrated = _hydrate_position(
+                    raw,
+                    rows,
+                    books=books,
+                    funding_legs=funding_legs,
+                    catalogue=catalogue,
+                    market_index=market_index,
+                )
+                if (
+                    hydrated.get("quote_refresh_needed")
+                    and callable(self.quote_scheduler)
+                    and isinstance(hydrated.get("canonical_route"), dict)
+                ):
+                    self.quote_scheduler(hydrated["canonical_route"])
                 notification_count += _evaluate_position_alerts(
                     user_id, hydrated, accounts_path=self.accounts_path
                 )

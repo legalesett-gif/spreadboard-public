@@ -726,7 +726,7 @@ class FastQuoteRefresher:
             leg.get("symbol") or row.get(f"{side}_market_symbol") or row.get(f"{side}_symbol") or ""
         )
         if "okx dex" in venue.casefold():
-            chain, contract = _dex_chain_contract(row)
+            chain, contract = _dex_chain_contract(row, side=side)
             key = (venue, market_type, f"{chain}:{contract}")
         else:
             key = (venue, market_type, symbol)
@@ -984,7 +984,7 @@ def _route_leg_key(
         leg.get("symbol") or row.get(f"{side}_market_symbol") or row.get(f"{side}_symbol") or ""
     )
     if "okx dex" in venue.casefold():
-        chain, contract = _dex_chain_contract(row)
+        chain, contract = _dex_chain_contract(row, side=side)
         symbol = f"{chain}:{contract}" if chain and contract else ""
     return (venue, market_type, symbol) if venue and market_type and symbol else None
 
@@ -1715,7 +1715,7 @@ def _okx_dex_leg_quote(
     *,
     target_notional_usd: float,
 ) -> dict[str, Any] | None:
-    chain, contract = _dex_chain_contract(row)
+    chain, contract = _dex_chain_contract(row, side=side)
     if not chain or not contract:
         return None
     try:
@@ -1756,22 +1756,31 @@ def _okx_dex_leg_quote(
         return None
 
 
-def _dex_chain_contract(row: dict[str, Any]) -> tuple[str, str]:
-    chain = str(row.get("dex_chain") or "").strip()
-    contract = str(row.get("dex_contract") or "").strip()
-    if chain and contract:
-        return chain, contract
+def _dex_chain_contract(
+    row: dict[str, Any],
+    *,
+    side: str | None = None,
+) -> tuple[str, str]:
     notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
     identities = notes.get("identity") if isinstance(notes.get("identity"), dict) else {}
-    for side in ("long", "short"):
-        venue = str(row.get(f"{side}_venue") or "")
-        identity = identities.get(side) if isinstance(identities.get(side), dict) else {}
+    sides = (side,) if side in {"long", "short"} else ("long", "short")
+    for candidate_side in sides:
+        venue = str(row.get(f"{candidate_side}_venue") or "")
+        identity = (
+            identities.get(candidate_side)
+            if isinstance(identities.get(candidate_side), dict)
+            else {}
+        )
         if "okx dex" not in venue.casefold():
             continue
         nested_chain = str(identity.get("chain_id") or "").strip()
         nested_contract = str(identity.get("token_address") or "").strip()
         if nested_chain and nested_contract:
             return nested_chain, nested_contract
+    chain = str(row.get("dex_chain") or "").strip()
+    contract = str(row.get("dex_contract") or "").strip()
+    if chain and contract:
+        return chain, contract
     return "", ""
 
 
