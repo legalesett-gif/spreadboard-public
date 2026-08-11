@@ -2535,36 +2535,70 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
             )
             return (max(values, default=float("-inf")), has_futures)
 
-        score_route = (
+        funding_route = (
             max(score_candidates.values(), key=funding_research_rank)
             if score_candidates
             else None
         )
-        score_route_key = str((score_route or {}).get("route_key") or "")
-        score_is_historical = bool(score_route) and score_route_key not in live_keys
+        spread_route = (
+            max(
+                score_candidates.values(),
+                key=lambda row: (
+                    _float_or_none(row.get("depth_weighted_spread_pct"))
+                    if _float_or_none(row.get("depth_weighted_spread_pct")) is not None
+                    else _float_or_none(row.get("executable_spread_pct"))
+                    if _float_or_none(row.get("executable_spread_pct")) is not None
+                    else float("-inf"),
+                    int(str(row.get("route_key") or "") in live_keys),
+                ),
+            )
+            if score_candidates
+            else None
+        )
+        evaluation_cache: dict[str, dict[str, Any]] = {}
+
+        def evaluate_candidate(candidate: dict[str, Any] | None) -> dict[str, Any]:
+            candidate_key = str((candidate or {}).get("route_key") or "")
+            cache_key = candidate_key or str(id(candidate))
+            if cache_key in evaluation_cache:
+                return evaluation_cache[cache_key]
+            candidate_historical = bool(candidate) and candidate_key not in live_keys
+            candidate_windows = {
+                label: funding_radar.window_value(candidate, label) if candidate else None
+                for label in ("1d", "7d", "30d")
+            }
+            candidate_history = []
+            if candidate_key:
+                try:
+                    candidate_history = market_history.load_history(
+                        route_key=candidate_key,
+                        since_us=int((time.time() - 30 * 24 * 3600) * 1_000_000),
+                        bucket_seconds=3600,
+                        max_points=750,
+                    )
+                except (OSError, sqlite3.Error):
+                    # A busy history database must lower confidence, never take
+                    # the Watchlist down or silently substitute a guess.
+                    candidate_history = []
+            result = research_score.evaluate(
+                candidate,
+                windows=candidate_windows,
+                history=candidate_history,
+                historical=candidate_historical,
+            )
+            evaluation_cache[cache_key] = result
+            return result
+
+        funding_evaluation = evaluate_candidate(funding_route)
+        spread_evaluation = evaluate_candidate(spread_route)
+        funding_route_key = str((funding_route or {}).get("route_key") or "")
+        spread_route_key = str((spread_route or {}).get("route_key") or "")
+        funding_is_historical = bool(funding_route) and funding_route_key not in live_keys
+        spread_is_historical = bool(spread_route) and spread_route_key not in live_keys
         score_windows = {
-            label: funding_radar.window_value(score_route, label) if score_route else None
+            label: funding_radar.window_value(funding_route, label) if funding_route else None
             for label in ("1d", "7d", "30d")
         }
-        score_history = []
-        if score_route_key:
-            try:
-                score_history = market_history.load_history(
-                    route_key=score_route_key,
-                    since_us=int((time.time() - 30 * 24 * 3600) * 1_000_000),
-                    bucket_seconds=3600,
-                    max_points=750,
-                )
-            except (OSError, sqlite3.Error):
-                # A busy history database must lower confidence, never take the
-                # member's Watchlist down or silently substitute a guess.
-                score_history = []
-        score = research_score.evaluate(
-            score_route,
-            windows=score_windows,
-            history=score_history,
-            historical=score_is_historical,
-        )
         chosen = [route_card(row, historical=False) for row in live[:3]]
         if len(chosen) < 3:
             existing = {item.get("route_line") for item in chosen}
@@ -2589,11 +2623,33 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
             "routes": chosen,
             "best_board": chosen[0] if chosen else None,
             "research_route": (
-                route_card(score_route, historical=score_is_historical)
-                if score_route
+                route_card(funding_route, historical=funding_is_historical)
+                if funding_route
                 else None
             ),
-            "research_score": score,
+            "research_score": funding_evaluation,
+            "opportunities": {
+                "funding": {
+                    **(funding_evaluation.get("funding_opportunity") or {}),
+                    "route": (
+                        route_card(funding_route, historical=funding_is_historical)
+                        if funding_route
+                        else None
+                    ),
+                    "economics": funding_evaluation.get("route_economics") or {},
+                    "risk_estimate": funding_evaluation.get("risk_estimate") or {},
+                },
+                "spread": {
+                    **(spread_evaluation.get("spread_opportunity") or {}),
+                    "route": (
+                        route_card(spread_route, historical=spread_is_historical)
+                        if spread_route
+                        else None
+                    ),
+                    "economics": spread_evaluation.get("route_economics") or {},
+                    "risk_estimate": spread_evaluation.get("risk_estimate") or {},
+                },
+            },
             "funding_windows": score_windows,
             "chart_url": f"/charts?token={quote(symbol)}",
             "token_url": f"/token/{quote(symbol)}",
@@ -10508,14 +10564,17 @@ WATCHLIST_SCRIPT = """
     target.innerHTML = tokens.map((token) => {
       const hot = hotSymbols.find((item) => normaliseSymbol(item.symbol) === token) || {};
       const reality = routeBySymbol.get(token) || {};
-      const best = reality.research_route || reality.best_board || hot.best_board || {};
       const research = reality.research_score || {};
-      const components = research.components || {};
-      const risk = research.risk_estimate || {};
+      const opportunities = reality.opportunities || {};
+      const funding = opportunities.funding || research.funding_opportunity || {};
+      const spread = opportunities.spread || research.spread_opportunity || {};
+      const fundingRoute = funding.route || reality.research_route || reality.best_board || hot.best_board || {};
+      const spreadRoute = spread.route || reality.best_board || reality.research_route || hot.best_board || {};
+      const risk = funding.risk_estimate || research.risk_estimate || {};
       const basisRisk = risk.route_basis || {};
       const riskQuality = risk.data_quality || {};
-      const scoreLabel = Number.isFinite(Number(research.score)) ? `${Number(research.score).toFixed(1)} / 100` : "Insufficient data";
-      const componentLine = Object.entries(components).map(([name,item]) => `${labelText(name)} ${Number(item.value||0).toFixed(0)}/${Number(item.max||0).toFixed(0)}`).join(" · ");
+      const scoreLabel = item => Number.isFinite(Number(item.score)) ? `${Number(item.score).toFixed(1)} / 100` : "Insufficient data";
+      const componentLine = item => Object.entries(item.components || {}).map(([name,value]) => `${labelText(name)} ${Number(value.value||0).toFixed(0)}/${Number(value.max||0).toFixed(0)}`).join(" · ");
       const basisP95 = Number(basisRisk.adverse_24h_p95_pct_points);
       const correlation = Number(risk.leg_return_correlation);
       const riskLine = [
@@ -10526,13 +10585,16 @@ WATCHLIST_SCRIPT = """
       return `
         <article class="watch-token-card">
           <div><strong>${escapeHtml(token)}</strong><span>${escapeHtml(labelText(reality.status || 'watching'))}</span></div>
-          <p>${escapeHtml(best.route_line || "No live route now; chart coverage remains on the radar.")}</p>
+          <p><strong>Funding route:</strong> ${escapeHtml(fundingRoute.route_line || "No funding route evidence")}</p>
+          <p><strong>Spread route:</strong> ${escapeHtml(spreadRoute.route_line || "No spread route evidence")}</p>
           <div class="watch-token-metrics">
-            <span>Open<strong>${formatPct(best.open_spread_pct)}</strong></span>
-            <span>Funding 24h<strong>${formatSignedPct(best.funding_24h_pct ?? best.funding_apr_pct, 2)}</strong></span>
-            <span>Research score<strong>${escapeHtml(scoreLabel)}</strong></span>
+            <span>Funding 24h<strong>${formatSignedPct(fundingRoute.funding_24h_pct ?? funding.current_24h_pct, 2)}</strong></span>
+            <span>Funding opportunity<strong>${escapeHtml(scoreLabel(funding))}</strong></span>
+            <span>Entry spread<strong>${formatPct(spreadRoute.open_spread_pct ?? spread.entry_spread_pct)}</strong></span>
+            <span>Spread opportunity<strong>${escapeHtml(scoreLabel(spread))}</strong></span>
           </div>
-          <p class="watch-score-explain"><strong>${escapeHtml(research.label || "Waiting for route evidence")}</strong> · Confidence ${escapeHtml(research.confidence ?? 0)}%. ${escapeHtml(componentLine || "A live or retained route is required.")}</p>
+          <p class="watch-score-explain"><strong>${escapeHtml(funding.label || "Waiting for funding evidence")}</strong> · Confidence ${escapeHtml(funding.confidence ?? 0)}%. ${escapeHtml(componentLine(funding) || "A live or retained route is required.")}</p>
+          <p class="watch-score-explain"><strong>${escapeHtml(spread.label || "Waiting for convergence evidence")}</strong> · Confidence ${escapeHtml(spread.confidence ?? 0)}%. ${escapeHtml(componentLine(spread) || "Executable basis and route history are required.")}</p>
           <p class="watch-score-explain">${escapeHtml(research.planning_buffer_label || "Collateral reserve unavailable.")} ${escapeHtml(riskLine)}</p>
           <p class="watch-score-explain">${escapeHtml(research.disclaimer || "")}</p>
           <button class="watch-remove" type="button" data-remove-symbol="${escapeHtml(token)}" aria-label="Remove ${escapeHtml(token)}">Remove</button>
@@ -13842,7 +13904,7 @@ body.alert-modal-open {{ overflow: hidden; }}
 .watch-token-card span {{ color: var(--terminal-muted); font-size: 14px; font-weight: 800; }}
 .watch-token-card p {{ margin: 0; color: var(--terminal-muted); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }}
 .watch-token-card .watch-score-explain {{ padding: 9px 10px; border-left: 3px solid var(--terminal-accent); border-radius: 4px; background: var(--terminal-panel); font-size: 13px; }}
-.watch-token-metrics {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }}
+.watch-token-metrics {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }}
 .watch-token-metrics span {{ display: block; padding: 10px; border-radius: 6px; background: var(--terminal-panel); color: var(--terminal-muted); font-size: 13px; font-weight: 700; }}
 .watch-token-metrics strong {{ display: block; color: var(--terminal-text); font-size: 17px; font-variant-numeric: tabular-nums; }}
 .watch-remove {{ justify-self: start; min-height: 40px; padding: 0 14px; border: 1px solid var(--terminal-line); border-radius: 6px; background: var(--terminal-panel); color: var(--terminal-text); font-size: 14px; font-weight: 900; cursor: pointer; }}

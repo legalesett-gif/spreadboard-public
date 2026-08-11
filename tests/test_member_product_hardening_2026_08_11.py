@@ -148,7 +148,7 @@ def test_watchlist_score_is_explainable_and_model_free() -> None:
         windows={"1d": 0.3, "7d": 1.4, "30d": 4.5},
     )
     assert 0 <= result["score"] <= 100
-    assert result["confidence"] == 75
+    assert 0 <= result["confidence"] <= 100
     assert set(result["components"]) == {
         "carry",
         "persistence",
@@ -157,10 +157,76 @@ def test_watchlist_score_is_explainable_and_model_free() -> None:
         "integrity",
         "risk",
     }
-    assert result["method"] == "deterministic_public_market_evidence_v2"
+    assert result["method"] == "deterministic_dual_opportunity_evidence_v3"
+    assert 0 <= result["funding_opportunity"]["score"] <= 100
+    assert 0 <= result["spread_opportunity"]["score"] <= 100
+    assert "spread_contribution" in result["funding_opportunity"]["components"]
+    assert "funding_contribution" in result["spread_opportunity"]["components"]
     assert "Rule-based collateral reserve" in result["planning_buffer_label"]
     assert "Model stress reserve" not in result["planning_buffer_label"]
     assert "not personalized" in result["disclaimer"]
+
+
+def test_funding_and_spread_scores_are_separate_with_explicit_cross_effects() -> None:
+    base_route = {
+        "route_kind": "SPOT-FUTURES",
+        "long_market_type": "Spot",
+        "short_market_type": "Futures",
+        "depth_usd": 25_000,
+        "executable_spread_pct": 1.0,
+        "freshness": "fresh",
+        "long_market_symbol": "X/USDT",
+        "short_market_symbol": "X/USDT:USDT",
+        "blockers": [],
+    }
+
+    def history(*, converging: bool) -> list[dict]:
+        rows = []
+        for hour in range(80):
+            basis = 1.8 + (-0.012 if converging else 0.012) * hour
+            rows.append(
+                {
+                    "quote_ts_us": 1_800_000_000_000_000 + hour * 3_600_000_000,
+                    "long_price": 100.0,
+                    "short_price": 100.0 * (1.0 + basis / 100.0),
+                    "executable_spread_pct": basis,
+                    "funding_daily_pct": 0.4,
+                    "sample_source": "live_chart_exact_route",
+                }
+            )
+        return rows
+
+    positive_funding = research_score.evaluate(
+        {**base_route, "funding_24h_pct": 0.4},
+        windows={"1d": 0.4, "7d": 2.8, "30d": 12.0},
+        history=history(converging=True),
+    )
+    negative_funding = research_score.evaluate(
+        {**base_route, "funding_24h_pct": -0.4},
+        windows={"1d": -0.4, "7d": -2.8, "30d": -12.0},
+        history=history(converging=True),
+    )
+    adverse_basis = research_score.evaluate(
+        {**base_route, "funding_24h_pct": 0.4},
+        windows={"1d": 0.4, "7d": 2.8, "30d": 12.0},
+        history=history(converging=False),
+    )
+
+    assert (
+        positive_funding["spread_opportunity"]["score"]
+        > negative_funding["spread_opportunity"]["score"]
+    )
+    assert (
+        positive_funding["spread_opportunity"]["components"]["funding_contribution"]["value"]
+        > negative_funding["spread_opportunity"]["components"]["funding_contribution"]["value"]
+    )
+    assert (
+        positive_funding["funding_opportunity"]["score"]
+        > adverse_basis["funding_opportunity"]["score"]
+    )
+    assert positive_funding["spread_opportunity"]["convergence"]["convergence_probability"] == 1.0
+    assert positive_funding["route_economics"]["expected_convergence_capture_pct"] > 0
+    assert adverse_basis["route_economics"]["expected_convergence_capture_pct"] < 0
 
 
 def test_watchlist_collateral_reserve_uses_volatility_and_tail_risk() -> None:

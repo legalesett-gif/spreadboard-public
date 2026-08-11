@@ -18,9 +18,9 @@ def _user(email: str, role: str = "member") -> accounts.User:
     )
 
 
-def test_only_alex_can_operate_the_member_ledger() -> None:
+def test_alex_and_anatolij_can_operate_the_member_ledger() -> None:
     assert _user("alex@spreadarbitrage.ink", "admin").can_manage_members
-    assert not _user("anatolij@spreadarbitrage.ink").can_manage_members
+    assert _user("anatolij@spreadarbitrage.ink", "admin").can_manage_members
     assert not _user("admin@spreadboard.local", "admin").can_manage_members
     assert not _user("subscriber@example.com").can_manage_members
 
@@ -156,6 +156,8 @@ def test_watchlist_uses_live_then_retained_then_chart_context(monkeypatch) -> No
     assert by_symbol["GUA"]["status"] == "live routes"
     assert by_symbol["GUA"]["research_route"]["route_line"] == "Mexc Spot → Aster Futures"
     assert by_symbol["GUA"]["research_score"]["reasons"][0].startswith("Net carry +1.200%")
+    assert by_symbol["GUA"]["opportunities"]["funding"]["route"]["route_line"] == "Mexc Spot → Aster Futures"
+    assert by_symbol["GUA"]["opportunities"]["spread"]["route"]["route_line"] == "Mexc Spot → Gate Futures"
     assert by_symbol["ESPORTS"]["status"] == "cooled funding radar"
     assert by_symbol["ESPORTS"]["routes"][0]["pair_url"].startswith("/charts?")
     assert by_symbol["CHARTONLY"]["status"] == "chart markets available"

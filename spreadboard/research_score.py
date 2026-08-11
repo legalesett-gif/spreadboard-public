@@ -1,8 +1,9 @@
-"""Deterministic route quality and collateral-stress research.
+"""Deterministic funding, spread-entry and collateral-stress research.
 
-The score is deliberately not an AI prediction.  It separates opportunity
-quality, evidence confidence and an empirical collateral stress estimate so a
-large funding number cannot hide sparse history or liquidation risk.
+The scores are deliberately not AI predictions.  Funding carry and basis
+convergence are different opportunities, so each has its own score and
+confidence.  Their economic interaction is explicit: expected funding affects
+the spread score and evidence-backed convergence affects the funding score.
 """
 
 from __future__ import annotations
@@ -21,18 +22,29 @@ def evaluate(
     history: list[dict[str, Any]] | None = None,
     historical: bool = False,
 ) -> dict[str, Any]:
-    """Score route evidence and estimate a conservative futures reserve."""
+    """Score two route theses and estimate a conservative futures reserve."""
     if not isinstance(route, dict) or not route:
+        unavailable_funding = _unavailable_opportunity("funding")
+        unavailable_spread = _unavailable_opportunity("spread")
         return {
             "score": None,
             "confidence": 0,
             "label": "Insufficient data",
             "components": {},
+            "funding_opportunity": unavailable_funding,
+            "spread_opportunity": unavailable_spread,
+            "route_economics": {
+                "holding_horizon_hours": 24,
+                "expected_funding_pct": None,
+                "expected_convergence_capture_pct": None,
+                "expected_gross_edge_pct": None,
+                "known_costs_pct": None,
+            },
             "planning_buffer_pct": None,
             "planning_buffer_label": "Collateral reserve unavailable",
             "risk_estimate": _unavailable_risk("no_route"),
             "reasons": ["No live or retained route is available for this token."],
-            "method": "deterministic_public_market_evidence_v2",
+            "method": "deterministic_dual_opportunity_evidence_v3",
         }
 
     windows = windows or {}
@@ -125,7 +137,108 @@ def evaluate(
             _risk_score(risk), 20, str(risk.get("summary") or "Risk evidence unavailable")
         ),
     }
-    score = round(sum(item["value"] for item in components.values()), 1)
+    risk_points = _risk_score(risk)
+
+    convergence = _convergence_evidence(history or [], current_basis=executable)
+    expected_convergence = _number(convergence.get("expected_capture_pct"))
+    expected_funding = daily
+    expected_gross = (
+        (expected_convergence or 0.0) + (expected_funding or 0.0)
+        if expected_convergence is not None or expected_funding is not None
+        else None
+    )
+    known_costs = _first_number(
+        route.get("estimated_round_trip_cost_pct"),
+        route.get("known_round_trip_cost_pct"),
+    )
+
+    stability_points = _funding_stability_score(funding_stability, maximum=15.0)
+    spread_cross = 5.0 + _clamp((expected_convergence or 0.0) * 5.0, -5.0, 5.0)
+    funding_cross = 7.5 + _clamp((daily or 0.0) * 15.0, -7.5, 7.5)
+    convergence_points = _convergence_score(convergence, maximum=25.0)
+    entry_edge = _clamp(max(0.0, executable or 0.0) / 1.5 * 25.0, 0.0, 25.0)
+
+    funding_components = {
+        "current_rate": _component(
+            _clamp(max(0.0, daily or 0.0) * 50.0, 0.0, 25.0),
+            25,
+            "Settled 24h carry where available; current-rate projection otherwise",
+        ),
+        "persistence": _component(
+            persistence / 15.0 * 20.0,
+            20,
+            ", ".join(persistence_detail),
+        ),
+        "stability": _component(
+            stability_points,
+            15,
+            _funding_stability_detail(funding_stability),
+        ),
+        "spread_contribution": _component(
+            spread_cross,
+            10,
+            _spread_cross_detail(convergence),
+        ),
+        "liquidity": _component(liquidity / 15.0 * 10.0, 10, liquidity_basis),
+        "execution": _component(
+            execution / 15.0 * 5.0,
+            5,
+            "Fresh quote, executable basis and exact symbols",
+        ),
+        "integrity": _component(
+            integrity / 15.0 * 5.0,
+            5,
+            "Identity, transfer warnings and blockers",
+        ),
+        "risk": _component(
+            risk_points / 20.0 * 10.0,
+            10,
+            str(risk.get("summary") or "Risk evidence unavailable"),
+        ),
+    }
+    spread_components = {
+        "entry_edge": _component(
+            entry_edge,
+            25,
+            (
+                f"Executable opening basis {executable:+.3f}% before fees"
+                if executable is not None
+                else "Executable opening basis unavailable"
+            ),
+        ),
+        "convergence_history": _component(
+            convergence_points,
+            25,
+            _convergence_detail(convergence),
+        ),
+        "funding_contribution": _component(
+            funding_cross,
+            15,
+            (
+                f"Expected 24h funding contribution {daily:+.3f}%"
+                if daily is not None
+                else "Funding contribution unavailable; treated as neutral"
+            ),
+        ),
+        "liquidity": _component(liquidity / 15.0 * 10.0, 10, liquidity_basis),
+        "execution": _component(
+            execution / 15.0 * 10.0,
+            10,
+            "Fresh quote, executable basis and exact symbols",
+        ),
+        "integrity": _component(
+            integrity / 15.0 * 5.0,
+            5,
+            "Identity, transfer warnings and blockers",
+        ),
+        "risk": _component(
+            risk_points / 20.0 * 15.0,
+            15,
+            str(risk.get("summary") or "Risk evidence unavailable"),
+        ),
+    }
+    funding_score = round(sum(item["value"] for item in funding_components.values()), 1)
+    spread_score = round(sum(item["value"] for item in spread_components.values()), 1)
 
     evidence = 10.0 if daily is not None else 0.0
     evidence += sum(
@@ -137,6 +250,31 @@ def evaluate(
     evidence += float((risk.get("data_quality") or {}).get("confidence_points") or 0.0)
     evidence += 5.0 if settled_daily is not None else 0.0
     confidence = int(round(_clamp(evidence, 0.0, 100.0)))
+    funding_confidence = _funding_confidence(
+        daily=daily,
+        settled_daily=settled_daily,
+        windows=windows,
+        funding_stability=funding_stability,
+        depth=depth,
+        min_volume=min_volume,
+        unresolved_identity=unresolved_identity,
+        executable=executable,
+        exact_symbols=bool(route.get("long_market_symbol") and route.get("short_market_symbol")),
+    )
+    spread_confidence = _spread_confidence(
+        executable=executable,
+        convergence=convergence,
+        risk=risk,
+        depth=depth,
+        min_volume=min_volume,
+        unresolved_identity=unresolved_identity,
+        historical=historical,
+        exact_symbols=bool(route.get("long_market_symbol") and route.get("short_market_symbol")),
+    )
+    # Kept only for backwards-compatible API consumers.  Product surfaces use
+    # the two thesis-specific scores below and never label this as one model score.
+    score = round((funding_score + spread_score) / 2.0, 1)
+    confidence = int(round((funding_confidence + spread_confidence) / 2.0))
 
     reserve = _number(risk.get("recommended_collateral_pct"))
     leverage = _number(risk.get("research_leverage_ceiling"))
@@ -153,6 +291,12 @@ def evaluate(
         reasons.append(f"Net carry {daily:+.3f}% per 24h ({source}).")
     if risk.get("summary"):
         reasons.append(str(risk["summary"]))
+    if executable is not None:
+        reasons.append(
+            f"Executable entry basis {executable:+.3f}%; "
+            + _convergence_detail(convergence).rstrip(".")
+            + "."
+        )
     if _number(windows.get("7d")) is None:
         reasons.append("Seven-day settled funding history is not complete yet.")
     if unresolved_identity:
@@ -165,16 +309,47 @@ def evaluate(
     return {
         "score": score,
         "confidence": confidence,
-        "label": _label(score, confidence),
+        "label": "Two-factor route review",
         "components": components,
+        "funding_opportunity": {
+            "score": funding_score,
+            "confidence": funding_confidence,
+            "label": _opportunity_label("funding", funding_score, funding_confidence),
+            "components": funding_components,
+            "current_24h_pct": daily,
+            "spread_contribution_pct": expected_convergence,
+        },
+        "spread_opportunity": {
+            "score": spread_score,
+            "confidence": spread_confidence,
+            "label": _opportunity_label("spread", spread_score, spread_confidence),
+            "components": spread_components,
+            "entry_spread_pct": executable,
+            "funding_contribution_24h_pct": daily,
+            "convergence": convergence,
+        },
+        "route_economics": {
+            "holding_horizon_hours": 24,
+            "expected_funding_pct": expected_funding,
+            "expected_convergence_capture_pct": expected_convergence,
+            "expected_gross_edge_pct": expected_gross,
+            "known_costs_pct": known_costs,
+            "expected_net_edge_pct": (
+                expected_gross - known_costs
+                if expected_gross is not None and known_costs is not None
+                else None
+            ),
+            "cost_status": "known" if known_costs is not None else "account_fee_and_exit_costs_required",
+        },
         "planning_buffer_pct": reserve,
         "planning_buffer_label": reserve_label,
         "risk_estimate": risk,
         "reasons": reasons[:5],
-        "method": "deterministic_public_market_evidence_v2",
+        "method": "deterministic_dual_opportunity_evidence_v3",
         "disclaimer": (
-            "Research stress estimate, not personalized advice, a price forecast or a liquidation calculation. "
-            "Exact leverage, maintenance tiers, fees, account equity and other positions remain venue/account specific."
+            "Rule-based research evidence, not personalized advice, an AI prediction or a liquidation calculation. "
+            "Gross edge excludes unknown account fees, borrow, gas and exit slippage. Exact leverage, maintenance "
+            "tiers, account equity and other positions remain venue/account specific."
         ),
     }
 
@@ -230,6 +405,10 @@ def assess_route_risk(
         if (value := _first_number(row.get("funding_daily_pct"), row.get("funding_24h_pct")))
         is not None
     ]
+    sign_reversals = sum(
+        (previous > 0 >= current) or (previous <= 0 < current)
+        for previous, current in zip(funding_values, funding_values[1:])
+    )
     funding_stability = {
         "samples": len(funding_values),
         "positive_ratio": (
@@ -237,8 +416,10 @@ def assess_route_risk(
             if funding_values
             else None
         ),
+        "average_24h_pct": statistics.fmean(funding_values) if funding_values else None,
         "minimum_24h_pct": min(funding_values) if funding_values else None,
         "volatility_pct": statistics.pstdev(funding_values) if len(funding_values) >= 2 else None,
+        "sign_reversals": sign_reversals,
     }
     data_quality = _risk_data_quality(rows, span_hours)
     if not futures_sides:
@@ -605,6 +786,221 @@ def _risk_score(risk: dict[str, Any]) -> float:
     if reserve is None:
         return 4.0
     return 20.0 * _clamp((100.0 - reserve) / 65.0, 0.0, 1.0)
+
+
+def _convergence_evidence(
+    history: list[dict[str, Any]],
+    *,
+    current_basis: float | None,
+    horizon_hours: int = 24,
+) -> dict[str, Any]:
+    """Measure whether a positive opening basis historically compressed.
+
+    A route earns convergence credit only when comparable historical positive
+    bases had a later observation close to the 24-hour horizon.  Captures are
+    normalized by the opening basis so a single large token does not dominate.
+    """
+    rows = _clean_history(history)
+    if len(rows) < 2:
+        return {
+            "status": "insufficient_history",
+            "horizon_hours": horizon_hours,
+            "samples": 0,
+            "convergence_probability": None,
+            "median_capture_ratio": None,
+            "p25_capture_ratio": None,
+            "expected_capture_pct": None,
+            "median_hours_to_half": None,
+        }
+    timestamps = [int(row["quote_ts_us"]) for row in rows]
+    outcomes: list[float] = []
+    half_lives: list[float] = []
+    for index, row in enumerate(rows[:-1]):
+        opening = _history_basis(row)
+        # Tiny/negative openings are not comparable entries for the displayed
+        # long-cheap / short-rich route direction.
+        if opening is None or opening < 0.02:
+            continue
+        target = timestamps[index] + horizon_hours * 3_600_000_000
+        candidate = bisect_left(timestamps, target, lo=index + 1)
+        choices = [item for item in (candidate - 1, candidate) if index < item < len(rows)]
+        if not choices:
+            continue
+        end_index = min(choices, key=lambda item: abs(timestamps[item] - target))
+        elapsed = (timestamps[end_index] - timestamps[index]) / 3_600_000_000.0
+        if not horizon_hours * 0.75 <= elapsed <= horizon_hours * 1.25:
+            continue
+        closing = _history_basis(rows[end_index])
+        if closing is None:
+            continue
+        outcomes.append(_clamp((opening - closing) / opening, -2.0, 2.0))
+        half_target = opening * 0.5
+        for later in range(index + 1, min(len(rows), end_index + 1)):
+            later_basis = _history_basis(rows[later])
+            if later_basis is not None and later_basis <= half_target:
+                half_lives.append(
+                    (timestamps[later] - timestamps[index]) / 3_600_000_000.0
+                )
+                break
+    if not outcomes:
+        return {
+            "status": "no_comparable_positive_entries",
+            "horizon_hours": horizon_hours,
+            "samples": 0,
+            "convergence_probability": None,
+            "median_capture_ratio": None,
+            "p25_capture_ratio": None,
+            "expected_capture_pct": None,
+            "median_hours_to_half": None,
+        }
+    probability = sum(value > 0 for value in outcomes) / len(outcomes)
+    median_ratio = statistics.median(outcomes)
+    p25_ratio = _percentile(outcomes, 0.25)
+    expected_capture = None
+    if current_basis is not None and current_basis > 0 and len(outcomes) >= 3:
+        expected_capture = current_basis * _clamp(median_ratio, -1.0, 1.0)
+    return {
+        "status": "usable" if len(outcomes) >= 8 else "limited",
+        "horizon_hours": horizon_hours,
+        "samples": len(outcomes),
+        "convergence_probability": probability,
+        "median_capture_ratio": median_ratio,
+        "p25_capture_ratio": p25_ratio,
+        "expected_capture_pct": expected_capture,
+        "median_hours_to_half": statistics.median(half_lives) if half_lives else None,
+    }
+
+
+def _convergence_score(evidence: dict[str, Any], *, maximum: float) -> float:
+    samples = int(evidence.get("samples") or 0)
+    probability = _number(evidence.get("convergence_probability"))
+    median_ratio = _number(evidence.get("median_capture_ratio"))
+    if samples < 3 or probability is None or median_ratio is None:
+        return 0.0
+    strength = 0.55 * probability + 0.45 * _clamp(median_ratio, 0.0, 1.0)
+    sample_factor = _clamp(samples / 12.0, 0.25, 1.0)
+    return maximum * strength * sample_factor
+
+
+def _convergence_detail(evidence: dict[str, Any]) -> str:
+    samples = int(evidence.get("samples") or 0)
+    probability = _number(evidence.get("convergence_probability"))
+    median_ratio = _number(evidence.get("median_capture_ratio"))
+    half_life = _number(evidence.get("median_hours_to_half"))
+    if samples < 3 or probability is None or median_ratio is None:
+        return "No reliable 24h convergence sample yet"
+    detail = (
+        f"24h convergence in {probability * 100:.0f}% of {samples} comparable entries; "
+        f"median capture {median_ratio * 100:+.0f}% of opening basis"
+    )
+    if half_life is not None:
+        detail += f"; median half-life {half_life:.0f}h"
+    return detail
+
+
+def _spread_cross_detail(evidence: dict[str, Any]) -> str:
+    capture = _number(evidence.get("expected_capture_pct"))
+    if capture is None:
+        return "No evidence-backed convergence adjustment; neutral contribution"
+    return f"Evidence-backed 24h convergence contribution {capture:+.3f}%"
+
+
+def _funding_stability_score(stability: dict[str, Any], *, maximum: float) -> float:
+    samples = int(stability.get("samples") or 0)
+    positive_ratio = _number(stability.get("positive_ratio"))
+    average = _number(stability.get("average_24h_pct"))
+    volatility = _number(stability.get("volatility_pct"))
+    if samples < 3 or positive_ratio is None:
+        return 0.0
+    scale = max(abs(average or 0.0), 0.05)
+    volatility_quality = 1.0 - _clamp((volatility or 0.0) / (scale * 2.0), 0.0, 1.0)
+    reversal_quality = 1.0 - _clamp(
+        float(stability.get("sign_reversals") or 0) / max(1.0, samples - 1.0),
+        0.0,
+        1.0,
+    )
+    sample_factor = _clamp(samples / 24.0, 0.25, 1.0)
+    return maximum * (0.55 * positive_ratio + 0.30 * volatility_quality + 0.15 * reversal_quality) * sample_factor
+
+
+def _funding_stability_detail(stability: dict[str, Any]) -> str:
+    samples = int(stability.get("samples") or 0)
+    positive_ratio = _number(stability.get("positive_ratio"))
+    volatility = _number(stability.get("volatility_pct"))
+    reversals = int(stability.get("sign_reversals") or 0)
+    if not samples or positive_ratio is None:
+        return "Funding stability history unavailable"
+    detail = f"{positive_ratio * 100:.0f}% positive across {samples} samples; {reversals} sign reversals"
+    if volatility is not None:
+        detail += f"; volatility {volatility:.3f}pp"
+    return detail
+
+
+def _funding_confidence(
+    *,
+    daily: float | None,
+    settled_daily: float | None,
+    windows: dict[str, Any],
+    funding_stability: dict[str, Any],
+    depth: float | None,
+    min_volume: float | None,
+    unresolved_identity: bool,
+    executable: float | None,
+    exact_symbols: bool,
+) -> int:
+    points = 20 if daily is not None else 0
+    points += 5 if settled_daily is not None else 0
+    points += sum(10 for label in ("1d", "7d", "30d") if _number(windows.get(label)) is not None)
+    points += 15 if int(funding_stability.get("samples") or 0) >= 8 else 5 if funding_stability.get("samples") else 0
+    points += 10 if depth is not None or min_volume is not None else 0
+    points += 10 if not unresolved_identity else 0
+    points += 5 if executable is not None else 0
+    points += 5 if exact_symbols else 0
+    return int(round(_clamp(float(points), 0.0, 100.0)))
+
+
+def _spread_confidence(
+    *,
+    executable: float | None,
+    convergence: dict[str, Any],
+    risk: dict[str, Any],
+    depth: float | None,
+    min_volume: float | None,
+    unresolved_identity: bool,
+    historical: bool,
+    exact_symbols: bool,
+) -> int:
+    points = 25 if executable is not None else 0
+    samples = int(convergence.get("samples") or 0)
+    points += 25 if samples >= 12 else 15 if samples >= 3 else 0
+    points += min(20, int((risk.get("data_quality") or {}).get("confidence_points") or 0))
+    points += 10 if depth is not None or min_volume is not None else 0
+    points += 10 if not unresolved_identity else 0
+    points += 5 if exact_symbols else 0
+    points += 5 if not historical else 0
+    return int(round(_clamp(float(points), 0.0, 100.0)))
+
+
+def _opportunity_label(kind: str, score: float, confidence: int) -> str:
+    noun = "funding" if kind == "funding" else "spread"
+    if confidence < 45:
+        return f"Low-confidence {noun} radar"
+    if score >= 75:
+        return f"Strong {noun} candidate"
+    if score >= 55:
+        return f"{noun.title()} candidate for review"
+    if score >= 35:
+        return f"Speculative {noun} setup"
+    return f"Weak current {noun} evidence"
+
+
+def _unavailable_opportunity(kind: str) -> dict[str, Any]:
+    return {
+        "score": None,
+        "confidence": 0,
+        "label": f"Insufficient {kind} data",
+        "components": {},
+    }
 
 
 def _risk_limitations() -> list[str]:

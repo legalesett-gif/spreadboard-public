@@ -33,7 +33,7 @@ def _member_manager_emails() -> set[str]:
     """
     configured = os.environ.get(
         "SPREADBOARD_MEMBER_MANAGER_EMAILS",
-        "alex@spreadarbitrage.ink",
+        "alex@spreadarbitrage.ink,anatolij@spreadarbitrage.ink",
     )
     return {
         item.strip().casefold()
