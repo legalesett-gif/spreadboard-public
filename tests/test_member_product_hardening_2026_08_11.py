@@ -241,7 +241,11 @@ def test_position_mutations_cannot_cross_user_boundary(tmp_path) -> None:
 def test_canonical_discovery_file_is_reported_as_a_fresh_market_source(tmp_path) -> None:
     board_path = tmp_path / "api_discovery_latest.json"
     board_path.write_text("{}")
-    now = os.stat(board_path).st_mtime + 30
+    fast_path = tmp_path / "api_discovery_fast_quotes.json"
+    fast_path.write_text("{}")
+    old = os.stat(board_path).st_mtime - (180 * 60)
+    os.utime(board_path, (old, old))
+    now = os.stat(fast_path).st_mtime + 30
     source = intel.build_source_freshness(
         board_path=board_path,
         now=now,

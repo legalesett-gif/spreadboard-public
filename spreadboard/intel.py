@@ -354,7 +354,20 @@ def build_source_freshness(
     # Intel claim "Market routes missing" beside a fresh live scanner.  File
     # freshness is the right source-health evidence here; route correctness is
     # still handled by the normal client-visible market pipeline.
-    direct_board = _file_freshness(Path(board_path), now=now)
+    canonical_path = Path(board_path)
+    direct_board = _file_freshness(canonical_path, now=now)
+    # The canonical website snapshot is the broad discovery base plus the
+    # continuously published fast-quote overlay.  Report the freshest of those
+    # two files, matching the data path members actually see.
+    if canonical_path.name == "api_discovery_latest.json":
+        fast_quotes = _file_freshness(
+            canonical_path.with_name("api_discovery_fast_quotes.json"), now=now
+        )
+        if fast_quotes.get("exists") and (
+            direct_board.get("age_min") is None
+            or float(fast_quotes.get("age_min") or 0) < float(direct_board.get("age_min") or 0)
+        ):
+            direct_board = fast_quotes
     if direct_board.get("exists"):
         freshness["board"] = {
             **direct_board,
