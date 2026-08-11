@@ -339,13 +339,35 @@ class UserMarketAlertWorker:
             user_id: accounts.list_market_alert_rules(user_id, db_path=self.accounts_path)
             for user_id in user_ids
         }
-        custom_keys = {
+        chart_keys = {
             str(rule.get("route_key") or "")
             for rules in rules_by_user.values()
             for rule in rules
-            if rule.get("enabled") and str(rule.get("route_key") or "").startswith("CUSTOM:")
+            if rule.get("enabled")
+            and accounts.token_from_alert_key(str(rule.get("route_key") or "")) is None
         }
-        rows.update(self._custom_alert_rows(custom_keys, board_rows))
+        # A saved chart can remain useful after its route cools, becomes stale,
+        # or is temporarily held out of the normal verified board.  Preserve a
+        # structural row for those keys, then take a fresh bounded exact quote
+        # instead of silently leaving the rule unevaluated.
+        missing_standard_keys = {
+            key for key in chart_keys if not key.startswith("CUSTOM:") and key not in rows
+        }
+        structural_rows: list[dict[str, Any]] = []
+        if missing_standard_keys:
+            structural = api_spreads.load_spreads(
+                board_path=self.board_path,
+                include_stale=True,
+                include_unverified=True,
+                limit=None,
+            )
+            structural_rows = [
+                row
+                for row in structural.get("rows") or []
+                if isinstance(row, dict)
+                and str(row.get("route_key") or "") in missing_standard_keys
+            ]
+        rows.update(self._custom_alert_rows(chart_keys, board_rows, structural_rows))
         tokens = token_metrics(board_rows)
         evaluated = triggered = delivered = 0
         app_token = os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
@@ -404,23 +426,42 @@ class UserMarketAlertWorker:
         self,
         route_keys: set[str],
         board_rows: list[dict[str, Any]],
+        structural_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        """Resolve custom-chart alerts from a canonical row or bounded quote.
+        """Resolve any chart alert from a live row or bounded exact quote.
 
-        Most custom charts select a route that is already on the board.  That
-        match is free and stays at the scanner cadence.  Only genuinely custom
-        combinations need an exact quote; those are deduplicated across users,
-        cached, and bounded per poll so a DEX provider cannot stall every alert.
+        Most charts select a route that is already on the verified live board.
+        That match is free and stays at the scanner cadence.  Cooled, stale,
+        guarded and genuinely custom combinations retain their structural leg
+        data and receive an exact quote.  Quotes are deduplicated across users,
+        cached, and bounded per poll so a DEX provider cannot stall all alerts.
         """
         now = time.monotonic()
         ttl = max(10.0, float(os.environ.get("SPREADBOARD_CUSTOM_ALERT_QUOTE_SECONDS", "30")))
         output: dict[str, dict[str, Any]] = {}
         unresolved = []
+        structural_by_key = {
+            str(row.get("route_key") or ""): row
+            for row in structural_rows or []
+            if row.get("route_key")
+        }
         for route_key in sorted(route_keys):
-            route = chart_catalog.route_from_key(route_key)
+            custom_route = chart_catalog.route_from_key(route_key)
+            route = custom_route or structural_by_key.get(route_key)
             if route is None:
                 continue
-            matched = _matching_board_route(route, board_rows)
+            matched = (
+                _matching_board_route(route, board_rows)
+                if custom_route is not None
+                else next(
+                    (
+                        row
+                        for row in board_rows
+                        if str(row.get("route_key") or "") == route_key
+                    ),
+                    None,
+                )
+            )
             if matched is not None:
                 output[route_key] = {**matched, "route_key": route_key}
                 self._custom_quote_cache[route_key] = (now, output[route_key])

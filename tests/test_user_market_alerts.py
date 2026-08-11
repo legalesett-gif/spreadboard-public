@@ -209,3 +209,58 @@ def test_custom_chart_alert_quotes_noncanonical_dex_route(tmp_path, monkeypatch)
     assert rows[route_key]["route_key"] == route_key
     assert rows[route_key]["displayed_open_spread_pct"] == 4.2
     assert seen[0]["route_kind"] == "DEX-FUTURES"
+
+
+def test_cooled_standard_chart_alert_gets_exact_quote(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "accounts.sqlite3"
+    accounts.initialize(db_path)
+    user = accounts.create_user(
+        email="cooled-alert@example.test",
+        display_name="Cooled Alert",
+        password="strong-cooled-password",
+        subscription_status="active",
+        db_path=db_path,
+    )
+    route_key = "GUA|Mexc|Spot|Aster|Futures"
+    accounts.add_market_alert_rule(
+        user["id"],
+        {
+            "route_key": route_key,
+            "symbol": "GUA",
+            "type": "token_spread",
+            "direction": "above",
+            "threshold": 999999,
+            "stability_seconds": 0,
+        },
+        db_path=db_path,
+    )
+    structural = {
+        "route_key": route_key,
+        "token": "GUA",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "long_market_symbol": "GUA/USDT",
+        "short_venue": "Aster",
+        "short_market_type": "Futures",
+        "short_market_symbol": "GUA/USDT:USDT",
+    }
+
+    def load_spreads(**kwargs):
+        return {"rows": [structural] if kwargs.get("include_unverified") else []}
+
+    monkeypatch.setattr(alerts.api_spreads, "load_spreads", load_spreads)
+    monkeypatch.setattr(
+        alerts,
+        "_quote_custom_alert_route",
+        lambda route: {**route, "displayed_open_spread_pct": 1.25},
+    )
+
+    result = alerts.UserMarketAlertWorker(
+        board_path=tmp_path / "board.json",
+        accounts_path=db_path,
+        poll_seconds=5,
+    ).check_once()
+
+    assert result == {"evaluated": 1, "triggered": 0, "delivered": 0}
+    rule = accounts.list_market_alert_rules(user["id"], db_path=db_path)[0]
+    assert rule["last_value"] == 1.25
