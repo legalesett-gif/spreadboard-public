@@ -77,3 +77,31 @@ def test_external_exact_bot_events_feed_the_same_intel_surface(tmp_path, monkeyp
     assert payload["hot_symbols"][0]["symbol"] == "VANRY"
     assert all(item["symbol"] != "SIREN" for item in payload["hot_symbols"])
     assert payload["source_freshness"]["telegram_events"]["status"] == "fresh"
+
+
+def test_empty_sync_is_zero_bytes_and_remote_copy_is_container_readable(
+    tmp_path, monkeypatch
+) -> None:
+    output = tmp_path / "external.jsonl"
+    body = bridge._write_atomic(output, [])
+    assert body == b""
+    assert output.read_bytes() == b""
+    assert output.stat().st_mode & 0o777 == 0o600
+
+    captured = {}
+
+    def run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(bridge.subprocess, "run", run)
+    bridge._sync_remote(
+        body,
+        host="root@example.test",
+        key_path=tmp_path / "ssh-key",
+        remote_path="/opt/spreadboard/runtime/community/external_bot_events.jsonl",
+    )
+    remote_command = captured["command"][-1]
+    assert "chmod 0644" in remote_command
+    assert captured["kwargs"]["input"] == b""

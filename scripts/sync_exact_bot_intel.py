@@ -131,7 +131,8 @@ def sanitize_messages(messages: Iterable[Any], *, bot_username: str) -> list[dic
 
 
 def _write_atomic(path: Path, events: list[dict[str, Any]]) -> bytes:
-    body = ("\n".join(json.dumps(event, separators=(",", ":")) for event in events) + "\n").encode()
+    serialized = "\n".join(json.dumps(event, separators=(",", ":")) for event in events)
+    body = (serialized + ("\n" if serialized else "")).encode()
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as handle:
         temporary = Path(handle.name)
@@ -147,7 +148,7 @@ def _sync_remote(body: bytes, *, host: str, key_path: Path, remote_path: str) ->
     temporary = shlex.quote(f"{remote_path}.tmp")
     command = (
         f"umask 077; mkdir -p {remote_dir}; "
-        f"cat > {temporary}; mv {temporary} {target}"
+        f"cat > {temporary}; mv {temporary} {target}; chmod 0644 {target}"
     )
     subprocess.run(
         ["ssh", "-o", "BatchMode=yes", "-i", str(key_path), host, command],
