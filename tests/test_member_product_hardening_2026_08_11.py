@@ -187,6 +187,32 @@ def test_member_intel_hides_internal_missing_pipeline_cards() -> None:
     assert "0 paid AI calls" in html
     assert "Preflight" not in html and "Prompts" not in html
 
+    waiting_html = server.render_intel_source_grid(
+        {
+            "telegram_events": {"status": "missing"},
+            "board": {"status": "fresh", "age_min": 1},
+        }
+    )
+    assert "waiting" in waiting_html
+
+
+def test_member_intel_uses_one_activation_state_until_bot_attention_is_fresh(monkeypatch) -> None:
+    monkeypatch.setattr(
+        server,
+        "api_intel",
+        lambda *_args, **_kwargs: {
+            "source_freshness": {
+                "telegram_events": {"status": "missing"},
+                "board": {"status": "fresh", "age_min": 1},
+            }
+        },
+    )
+    html = server.render_intel_page(Path("/missing.json"), {}, {})
+    assert "Intel activates from the next bot lookup" in html
+    assert "Latest Brief" not in html
+    assert "What's Hot" not in html
+    assert "Recent Feed" not in html
+
 
 def test_priority_funding_legs_are_attempted_before_rotating_catalog(tmp_path, monkeypatch) -> None:
     attempted = []

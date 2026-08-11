@@ -5302,6 +5302,34 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
         if community_fresh
         else '<aside class="intel-source-notice stale"><strong>Waiting for the first subscriber bot lookup</strong><p>Use an exact token such as $GUA in the linked SpreadBoard bot. Intel records only the anonymous token and selected view; current routes, Funding, Charts and Watchlist remain authoritative.</p></aside>'
     )
+    if not community_fresh:
+        body = f"""
+        <section class="intel-page" data-refresh="180">
+          <div class="intel-hero">
+            <div>
+              <span class="page-kicker">Community Intel</span>
+              <h1>What deserves attention now</h1>
+              <p>A six-hour attention layer joining anonymous bot token lookups to live routes, retained funding leaders and charts. Deterministic analysis keeps paid AI usage at zero and never proves a trade is executable.</p>
+            </div>
+            <div class="intel-actions">
+              <a class="secondary" href="/arbitrage?kind=FUTURES">Arbitrage</a>
+              <a class="secondary" href="/charts">Charts</a>
+            </div>
+          </div>
+          {source_notice}
+          {render_intel_source_grid(source)}
+          <section class="intel-section intel-empty-state">
+            <span class="page-kicker">Ready when members ask</span>
+            <h2>Intel activates from the next bot lookup</h2>
+            <p>Send an exact token such as <strong>$GUA funding</strong> to the SpreadBoard bot. The token is matched to current routes, retained funding windows and charts without storing the sender or message text.</p>
+            <div class="intel-actions">
+              <a class="primary" href="/account#telegram">Open Telegram setup</a>
+              <a class="secondary" href="/funding">Browse Funding</a>
+            </div>
+          </section>
+        </section>
+        """
+        return shell("Community Intel - SpreadBoard", "intel", body)
     body = f"""
     <section class="intel-page" data-refresh="180">
       <div class="intel-hero">
@@ -10551,10 +10579,12 @@ def render_intel_source_grid(source: dict[str, Any]) -> str:
     cards = []
     for key, label in order:
         item = source.get(key) if isinstance(source.get(key), dict) else {}
+        raw_status = str(item.get("status") or "missing")
+        display_status = "waiting" if key == "telegram_events" and raw_status in {"missing", "stale"} else raw_status
         cards.append(
-            f'<article class="source-card {h(item.get("status") or "missing")}">'
+            f'<article class="source-card {h(raw_status)}">'
             f'<span>{h(label)}</span>'
-            f'<strong>{h(item.get("status") or "missing")}</strong>'
+            f'<strong>{h(display_status)}</strong>'
             f'<em>{fmt_age(item.get("age_min"))}</em>'
             f'</article>'
         )
@@ -13436,6 +13466,9 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .intel-source-notice.live {{ border-left-color:var(--terminal-accent); }}
 .intel-source-notice.stale {{ border-left-color:var(--terminal-warning); }}
 .intel-source-notice strong {{ display:block;margin-bottom:4px; }} .intel-source-notice p {{ margin:0;color:var(--terminal-muted);line-height:1.5; }}
+.intel-empty-state {{ min-height:210px;display:grid;align-content:center;justify-items:start;gap:10px;padding:26px; }}
+.intel-empty-state h2 {{ margin:0;color:var(--terminal-text);font-size:26px; }}
+.intel-empty-state p {{ max-width:760px;margin:0;color:var(--terminal-muted);line-height:1.55; }}
 .intel-actions {{ display: flex; gap: 10px; flex-wrap: wrap; }}
 .intel-source-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px; }}
 .source-card {{ min-height: 78px; display: grid; gap: 5px; padding: 12px; border: 1px solid var(--terminal-line); border-radius: 8px; background: var(--terminal-panel); }}
