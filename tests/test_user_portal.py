@@ -8,7 +8,12 @@ import threading
 import pytest
 
 from spreadboard import accounts, billing, portfolio
-from spreadboard.server import TERMS_VERSION, SpreadBoardHandler, SpreadBoardServer
+from spreadboard.server import (
+    TERMS_VERSION,
+    SpreadBoardHandler,
+    SpreadBoardServer,
+    render_account_script,
+)
 
 
 def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -316,6 +321,13 @@ def test_portfolio_return_falls_back_to_tracked_position_capital() -> None:
     assert summary["capital_basis"] == "tracked_positions"
     assert summary["monthly_return_pct"] == pytest.approx(5)
     assert summary["open_position_return_pct"] == pytest.approx(5)
+
+
+def test_position_correction_converts_both_local_timestamps_to_utc() -> None:
+    script = render_account_script()
+
+    assert "for(const field of ['opened_at','closed_at'])" in script
+    assert "new Date(payload[field]).toISOString()" in script
 
 
 def test_background_position_alerts_trigger_once_and_rearm(

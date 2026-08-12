@@ -10413,7 +10413,7 @@ def render_account_script() -> str:
   const positionData=JSON.parse(document.getElementById('portfolio-position-data')?.textContent||'{}');
   const request=async(url,body)=>{const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw new Error(data.error||'Request failed');return data;};
   const utcToLocalInput=value=>{if(!value)return '';const date=new Date(value);if(Number.isNaN(date.getTime()))return '';const local=new Date(date.getTime()-date.getTimezoneOffset()*60000);return local.toISOString().slice(0,16);};
-  const payloadFromForm=form=>{const payload=Object.fromEntries(new FormData(form));if(payload.opened_at)payload.opened_at=new Date(payload.opened_at).toISOString();return payload;};
+  const payloadFromForm=form=>{const payload=Object.fromEntries(new FormData(form));for(const field of ['opened_at','closed_at']){if(payload[field])payload[field]=new Date(payload[field]).toISOString();}return payload;};
   const activateAccountTab=button=>{if(!button)return;root.querySelectorAll('[data-account-tab]').forEach(item=>item.classList.toggle('active',item===button));root.querySelectorAll('[data-account-panel]').forEach(panel=>panel.hidden=panel.dataset.accountPanel!==button.dataset.accountTab);if(button.dataset.accountTab==='members')loadMembers();};
   root.querySelectorAll('[data-account-tab]').forEach(button=>button.addEventListener('click',()=>{activateAccountTab(button);history.replaceState(null,'',`#${button.dataset.accountTab}`);}));
   activateAccountTab(root.querySelector(`[data-account-tab="${location.hash.slice(1)}"]`));
