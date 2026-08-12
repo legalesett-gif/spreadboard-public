@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import json
 from datetime import datetime, timezone
 
 from scripts import sync_portfolio_funding
@@ -83,7 +85,8 @@ def test_exact_mark_requires_matching_quantity_and_fresh_fingerprint() -> None:
                         "status": "ok",
                         "quantity": "147464.913865",
                         "price_usd": "0.01514",
-                        "source": "paraswap_exact_sell_quote",
+                        "source": "dexscreener_exact_contract_pool",
+                        "basis": "dex_pool_reference",
                         "quoted_at": generated,
                     }
                 },
@@ -148,7 +151,7 @@ def test_overlapping_same_account_market_is_not_double_counted() -> None:
     assert snapshot["positions"]["9:9"]["status"] == "ambiguous_overlapping_position"
 
 
-def test_sync_keeps_dex_mark_failure_separate_from_exact_funding() -> None:
+def test_sync_keeps_reference_mark_failure_separate_from_exact_funding() -> None:
     row = position(
         token="ESPORTS",
         long_venue="OKX DEX 56",
@@ -173,7 +176,7 @@ def test_sync_keeps_dex_mark_failure_separate_from_exact_funding() -> None:
     item = snapshot["positions"]["9:8"]
     assert item["status"] == "ok"
     assert item["amount_usd"] == "0"
-    assert item["marks"]["long"]["status"] == "quote_error:RuntimeError"
+    assert item["marks"]["long"]["status"] == "mark_error:RuntimeError"
 
 
 def test_sync_does_not_quote_closed_positions() -> None:
@@ -191,17 +194,114 @@ def test_sync_does_not_quote_closed_positions() -> None:
     assert snapshot["positions"]["9:8"]["marks"] == {}
 
 
-def test_quantity_vwap_is_full_size_and_contract_aware() -> None:
-    levels = [["10", "2"], ["11", "3"]]
+def test_dex_reference_uses_exact_contract_and_deepest_pool(monkeypatch) -> None:
+    contract = "0x1111111111111111111111111111111111111111"
+    payload = [
+        {
+            "chainId": "bsc",
+            "baseToken": {"address": contract},
+            "quoteToken": {"address": "0x3333333333333333333333333333333333333333"},
+            "priceUsd": "0.40",
+            "priceNative": "2",
+            "liquidity": {"usd": "100"},
+            "pairAddress": "shallow",
+            "dexId": "one",
+        },
+        {
+            "chainId": "bsc",
+            "baseToken": {"address": contract.upper()},
+            "quoteToken": {"address": "0x3333333333333333333333333333333333333333"},
+            "priceUsd": "0.42",
+            "priceNative": "2",
+            "liquidity": {"usd": "1000"},
+            "pairAddress": "deep",
+            "dexId": "two",
+        },
+        {
+            "chainId": "bsc",
+            "baseToken": {"address": "0x2222222222222222222222222222222222222222"},
+            "quoteToken": {"address": "0x3333333333333333333333333333333333333333"},
+            "priceUsd": "99",
+            "priceNative": "2",
+            "liquidity": {"usd": "999999"},
+            "pairAddress": "wrong-token",
+            "dexId": "three",
+        },
+        {
+            "chainId": "bsc",
+            "baseToken": {"address": "0x4444444444444444444444444444444444444444"},
+            "quoteToken": {"address": contract},
+            "priceUsd": "840",
+            "priceNative": "2000",
+            "liquidity": {"usd": "2000"},
+            "pairAddress": "quote-token-deepest",
+            "dexId": "four",
+        },
+    ]
 
-    assert sync_portfolio_funding.quantity_vwap(
-        levels, sync_portfolio_funding.Decimal("40"), contract_size=sync_portfolio_funding.Decimal("10")
-    ) == sync_portfolio_funding.Decimal("10.5")
-    assert (
-        sync_portfolio_funding.quantity_vwap(
-            levels,
-            sync_portfolio_funding.Decimal("60"),
-            contract_size=sync_portfolio_funding.Decimal("10"),
-        )
-        is None
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    monkeypatch.setattr(
+        sync_portfolio_funding,
+        "urlopen",
+        lambda *_args, **_kwargs: Response(json.dumps(payload).encode()),
     )
+    row = position(
+        long_venue="OKX DEX 56",
+        long_market_type="DEX",
+        long_quantity=999999,
+    )
+    mark = sync_portfolio_funding.fetch_dex_reference_mark(
+        row,
+        "long",
+        {"dex_chain": 56, "dex_contract": contract},
+    )
+
+    assert mark["price_usd"] == "0.42"
+    assert mark["pool_liquidity_usd"] == "2000"
+    assert mark["pair_address"] == "quote-token-deepest"
+    assert mark["basis"] == "dex_pool_reference"
+
+
+def test_cex_reference_prefers_derivative_mark_price() -> None:
+    class Exchange:
+        def market(self, _symbol):
+            return {"quote": "USDT"}
+
+        def fetch_ticker(self, _symbol):
+            return {"bid": 9, "ask": 11, "last": 10}
+
+        def fetch_funding_rate(self, _symbol):
+            return {"markPrice": 10.25, "indexPrice": 10.2}
+
+    row = position(short_quantity=2)
+    mark = sync_portfolio_funding.fetch_cex_reference_mark(
+        Exchange(), row, "short", {}
+    )
+
+    assert mark["price_usd"] == "10.25"
+    assert mark["basis"] == "markPrice"
+    assert mark["source"] == "venue_mark_price"
+
+
+def test_cex_spot_reference_uses_midpoint_not_position_size() -> None:
+    class Exchange:
+        def market(self, _symbol):
+            return {"quote": "USDT"}
+
+        def fetch_ticker(self, _symbol):
+            return {"bid": 9, "ask": 11, "last": 10}
+
+    row = position(long_quantity=999999)
+    mark = sync_portfolio_funding.fetch_cex_reference_mark(
+        Exchange(), row, "long", {}
+    )
+
+    assert mark["price_usd"] == "10"
+    assert mark["basis"] == "bid_ask_midpoint"
+    assert mark["source"] == "local_book_midpoint"

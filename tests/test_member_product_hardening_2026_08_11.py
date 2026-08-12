@@ -132,6 +132,7 @@ def test_manual_position_marks_use_resident_books_without_exchange_calls() -> No
     )
     assert result["long_bid"] == 1.1
     assert result["short_ask"] == 1.4
+    assert result["position_quote_source"] == "resident_book_midpoint"
 
 
 def test_watchlist_score_is_explainable_and_model_free() -> None:

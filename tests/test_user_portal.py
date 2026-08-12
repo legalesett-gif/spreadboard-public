@@ -287,7 +287,7 @@ def test_portfolio_separates_price_funding_and_fees(
             "long_ask": 106,
             "short_bid": 101,
             "short_ask": 102,
-            "position_quote_source": "resident_full_position_vwap",
+            "position_quote_source": "resident_book_midpoint",
         },
     )
     current, _ = accounts.login("member@example.test", "this-is-a-long-password", db_path=db_path)
@@ -295,16 +295,16 @@ def test_portfolio_separates_price_funding_and_fees(
         current, board_path=tmp_path / "board", accounts_path=db_path
     )
     marked = snapshot["positions"][0]
-    assert marked["long_price_pnl_usd"] == 10
-    assert marked["short_price_pnl_usd"] == 16
-    assert marked["price_pnl_usd"] == 26
+    assert marked["long_price_pnl_usd"] == 11
+    assert marked["short_price_pnl_usd"] == 17
+    assert marked["price_pnl_usd"] == 28
     assert marked["funding_income_usd"] == 5
     assert marked["fees_usd"] == 2
-    assert marked["total_pnl_usd"] == 29
-    assert snapshot["summary"]["monthly_return_pct"] == pytest.approx(2.9)
-    assert snapshot["summary"]["open_position_pnl_usd"] == pytest.approx(29)
+    assert marked["total_pnl_usd"] == 31
+    assert snapshot["summary"]["monthly_return_pct"] == pytest.approx(3.1)
+    assert snapshot["summary"]["open_position_pnl_usd"] == pytest.approx(31)
     assert snapshot["summary"]["open_position_funding_usd"] == pytest.approx(5)
-    assert snapshot["summary"]["open_position_return_pct"] == pytest.approx(2.9)
+    assert snapshot["summary"]["open_position_return_pct"] == pytest.approx(3.1)
 
 
 def test_portfolio_return_falls_back_to_tracked_position_capital() -> None:
@@ -380,7 +380,7 @@ def test_background_position_alerts_trigger_once_and_rearm(
         "_quote_position",
         lambda *_args, **_kwargs: {
             **market,
-            "position_quote_source": "resident_full_position_vwap",
+            "position_quote_source": "resident_book_midpoint",
         },
     )
     worker = portfolio.PositionAlertWorker(

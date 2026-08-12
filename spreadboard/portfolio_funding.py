@@ -1,10 +1,10 @@
 """Exact account data imported by an operator-side read-only sync.
 
-Exchange credentials deliberately stay off the public server.  A local worker
-reads the private funding ledger plus exact full-size DEX exit quotes, strips
-them down to per-position totals/marks, and writes one atomic snapshot into the
-production runtime. Portfolio totals use that snapshot only when it still
-matches the saved position inputs.
+Exchange credentials deliberately stay off the public server. A local worker
+reads the private funding ledger plus quantity-independent venue/accounting
+reference prices, strips them down to per-position totals/marks, and writes one
+atomic snapshot into the production runtime. Portfolio totals use that snapshot
+only when it still matches the saved position inputs.
 """
 
 from __future__ import annotations
@@ -20,7 +20,10 @@ from typing import Any
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", "data"))
 DEFAULT_PATH = RUNTIME_DIR / "portfolio_funding.json"
-SCHEMA = "spreadboard.portfolio_funding.v1"
+# v2 changes marks from full-size liquidation quotes to quantity-independent
+# accounting references. Rejecting v1 prevents old exit economics from being
+# silently presented as current mark-to-market PnL after this release.
+SCHEMA = "spreadboard.portfolio_funding.v2"
 DEFAULT_MAX_AGE_SECONDS = 900.0
 
 
@@ -125,7 +128,7 @@ def exact_marks(
     now: float | None = None,
     max_age_seconds: float | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Return full-position exit marks only while the position/snapshot match."""
+    """Return accounting reference marks only while position/snapshot match."""
 
     item = ((snapshot or {}).get("positions") or {}).get(
         f"{int(position.get('user_id') or 0)}:{int(position.get('id') or 0)}"

@@ -177,7 +177,7 @@ def test_reference_history_does_not_mark_a_full_position(monkeypatch) -> None:
     assert result["price_pnl_usd"] is None
 
 
-def test_position_marks_use_full_size_vwap_and_exact_dex_sell() -> None:
+def test_position_marks_use_reference_prices_without_exit_impact() -> None:
     position = {**_dex_position(), "user_id": 9}
     now = datetime.now(tz=timezone.utc)
     now_us = int(now.timestamp() * 1_000_000)
@@ -194,7 +194,8 @@ def test_position_marks_use_full_size_vwap_and_exact_dex_sell() -> None:
                 "marks": {
                     "long": {
                         "status": "ok",
-                        "source": "paraswap_exact_sell_quote",
+                        "source": "dexscreener_exact_contract_pool",
+                        "basis": "dex_pool_reference",
                         "quantity": "1000",
                         "price_usd": "0.0148",
                         "quoted_at": now.isoformat().replace("+00:00", "Z"),
@@ -222,18 +223,22 @@ def test_position_marks_use_full_size_vwap_and_exact_dex_sell() -> None:
 
     assert result["quote_status"] == "live"
     assert result["long_mark_price"] == pytest.approx(0.0148)
-    assert result["short_mark_price"] == pytest.approx(0.01586)
-    assert result["current_exit_spread_pct"] == pytest.approx((0.0148 / 0.01586 - 1) * 100)
+    assert result["short_mark_price"] == pytest.approx(0.01575)
+    assert result["current_marked_spread_pct"] == pytest.approx((0.01575 / 0.0148 - 1) * 100)
+    assert result["current_exit_spread_pct"] == result["current_marked_spread_pct"]
     assert result["funding_income_usd"] == pytest.approx(2.5)
     assert result["total_pnl_usd"] == pytest.approx(result["price_pnl_usd"] + 2.5)
-    assert result["quote_source"] == ("paraswap_exact_sell_quote+resident_full_position_vwap")
+    assert result["quote_source"] == ("dexscreener_exact_contract_pool+resident_book_midpoint")
+    assert result["long_mark_basis"] == "dex_pool_reference"
+    assert result["short_mark_basis"] == "bid_ask_midpoint"
 
 
-def test_quantity_vwap_requires_complete_depth_and_applies_contract_size() -> None:
+def test_reference_book_uses_best_bid_and_ask_without_walking_depth() -> None:
     levels = [[10.0, 2.0], [11.0, 3.0]]
 
-    assert portfolio._quantity_vwap(levels, 40.0, contract_size=10.0) == pytest.approx(10.5)
-    assert portfolio._quantity_vwap(levels, 60.0, contract_size=10.0) is None
+    assert portfolio._best_price(levels) == pytest.approx(10.0)
+    assert portfolio._midpoint(10.0, 11.0) == pytest.approx(10.5)
+    assert portfolio._midpoint(11.0, 10.0) is None
 
 
 def test_position_chart_link_uses_exact_custom_route_and_since_entry() -> None:

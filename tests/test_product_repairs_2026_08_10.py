@@ -120,6 +120,8 @@ def test_portfolio_uses_edit_and_exact_funding_instead_of_manual_funding_button(
         "short_quantity": 13530,
         "short_entry_price": 0.2026,
         "short_mark_price": 0.211,
+        "long_mark_basis": "bid_ask_midpoint",
+        "short_mark_basis": "markPrice",
         "current_funding": {},
         "funding_sync_status": "exact",
         "funding_event_count": 1,
@@ -130,9 +132,12 @@ def test_portfolio_uses_edit_and_exact_funding_instead_of_manual_funding_button(
         "total_pnl_usd": 20.49,
     }
     html = server.render_position_card(item)
-    assert "Movement PnL" in html
+    assert "Mark movement" in html
+    assert "Current marked spread" in html
     assert "Settled funding" in html
-    assert "Fees" in html
+    assert "Actual fees" in html
+    assert "bid/ask midpoint" in html
+    assert "venue mark" in html
     assert "Exact private exchange ledger" in html
     assert "Edit position" in html
     assert "Add funding" not in html

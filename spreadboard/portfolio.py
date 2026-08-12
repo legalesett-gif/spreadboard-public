@@ -100,7 +100,7 @@ def _hydrate_position(
         )
     funding = _position_funding(position, current, funding_legs or {})
     account_marks = portfolio_funding.exact_marks(position, funding_snapshot)
-    movement_quote = _movement_quote(position, position_quote, account_marks)
+    movement_quote = _mark_to_market_quote(position, position_quote, account_marks)
     long_mark = (
         _number(position.get("long_exit_price"))
         if position.get("status") == "closed"
@@ -131,7 +131,7 @@ def _hydrate_position(
     long_ask = _number(movement_quote.get("long_entry"))
     short_bid = _number(movement_quote.get("short_entry"))
     open_spread = _spread(long_ask, short_bid)
-    exit_spread = _spread(short_mark, long_mark)
+    marked_spread = _spread(long_mark, short_mark)
     listing_status = str(market.get("listing_status") or "unlisted")
     if (
         current
@@ -179,6 +179,8 @@ def _hydrate_position(
             "current_net_funding_24h_pct": funding.get("net_projected_24h_pct"),
             "long_mark_price": long_mark,
             "short_mark_price": short_mark,
+            "long_mark_basis": movement_quote.get("long_basis"),
+            "short_mark_basis": movement_quote.get("short_basis"),
             "long_price_pnl_usd": long_pnl,
             "short_price_pnl_usd": short_pnl,
             "price_pnl_usd": price_pnl,
@@ -192,7 +194,11 @@ def _hydrate_position(
             "fees_usd": fees,
             "total_pnl_usd": total_pnl,
             "current_open_spread_pct": open_spread,
-            "current_exit_spread_pct": exit_spread,
+            # Keep the old response key for existing alert rules, but the value
+            # is now the current marked long/short basis -- not a liquidation
+            # estimate. New UI/API consumers should use the explicit key.
+            "current_exit_spread_pct": marked_spread,
+            "current_marked_spread_pct": marked_spread,
             "return_pct": (
                 total_pnl / float(position["capital_usd"]) * 100.0
                 if total_pnl is not None and _number(position.get("capital_usd"))
@@ -213,7 +219,13 @@ def _quote_position(
     books: dict[str, Any],
     resolved_market: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Full-position executable VWAPs from resident books, never top-of-book."""
+    """Fresh bid/ask references for exact saved CEX markets.
+
+    Portfolio accounting is mark-to-market. It must not walk the book for the
+    saved quantity because that turns an unrealised PnL number into a
+    hypothetical market-order liquidation estimate. The caller uses the
+    midpoint only when the operator-side snapshot has no venue mark/fair price.
+    """
     row: dict[str, Any] = {
         "route_key": position.get("route_key"),
         "token": position.get("token"),
@@ -244,21 +256,13 @@ def _quote_position(
             continue
         bids = list(getattr(book, "bids", None) or [])
         asks = list(getattr(book, "asks", None) or [])
-        quantity = _number(position.get(f"{side}_quantity")) or 0.0
-        resolved_leg = (
-            (resolved_market or {}).get(f"{side}_leg")
-            if isinstance((resolved_market or {}).get(f"{side}_leg"), dict)
-            else {}
-        )
-        contract_size = _number(resolved_leg.get("contract_size")) or 1.0
-        bid = _quantity_vwap(bids, quantity, contract_size=contract_size)
-        ask = _quantity_vwap(asks, quantity, contract_size=contract_size)
+        bid = _best_price(bids)
+        ask = _best_price(asks)
         if bid is not None:
             row[f"{side}_bid"] = bid
         if ask is not None:
             row[f"{side}_ask"] = ask
         row[f"{side}_quote_ts_us"] = getattr(book, "quote_ts_us", None)
-        row[f"{side}_quantity_complete"] = bid is not None and ask is not None
         found = found or bid is not None or ask is not None
     if found:
         timestamps = [
@@ -267,48 +271,35 @@ def _quote_position(
             if (value := row.get(f"{side}_quote_ts_us")) is not None
         ]
         row["quote_ts_us"] = min(timestamps) if timestamps else None
-        row["position_quote_source"] = "resident_full_position_vwap"
+        row["position_quote_source"] = "resident_book_midpoint"
     return row if found else None
 
 
-def _quantity_vwap(
-    levels: list[list[float]],
-    quantity: float,
-    *,
-    contract_size: float = 1.0,
-) -> float | None:
-    """VWAP a base-asset quantity; derivative book sizes are contracts."""
+def _best_price(levels: list[list[float]]) -> float | None:
+    """First valid positive price from an already side-sorted book."""
 
-    if quantity <= 0 or contract_size <= 0:
-        return None
-    remaining = quantity
-    value = 0.0
-    filled = 0.0
     for raw in levels:
         if not isinstance(raw, (list, tuple)) or len(raw) < 2:
             continue
         price = _number(raw[0])
-        contracts = _number(raw[1])
-        if price is None or contracts is None or price <= 0 or contracts <= 0:
-            continue
-        available = contracts * contract_size
-        take = min(remaining, available)
-        value += take * price
-        filled += take
-        remaining -= take
-        if remaining <= max(1e-12, quantity * 1e-12):
-            break
-    if remaining > max(1e-9, quantity * 1e-9) or filled <= 0:
-        return None
-    return value / filled
+        size = _number(raw[1])
+        if price is not None and size is not None and price > 0 and size > 0:
+            return price
+    return None
 
 
-def _movement_quote(
+def _mark_to_market_quote(
     position: dict[str, Any],
     position_quote: dict[str, Any] | None,
     account_marks: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """Only full-size executable quotes may mark an open position."""
+    """Quantity-independent accounting marks for an open position.
+
+    Preference order is an exact-contract/venue reference imported by the
+    read-only operator worker, then the midpoint of the exact saved CEX book.
+    DEX legs deliberately have no book fallback: an aggregator swap quote is
+    executable-route evidence, not a neutral accounting mark.
+    """
 
     result: dict[str, Any] = {}
     sources: list[str] = []
@@ -319,6 +310,9 @@ def _movement_quote(
             price = _number(external.get("price_usd"))
             if price is not None:
                 result[f"{side}_exit"] = price
+                result[f"{side}_basis"] = str(
+                    external.get("basis") or external.get("source") or "reference_price"
+                )
                 sources.append(str(external.get("source") or "exact_account_mark"))
                 try:
                     stamp = datetime.fromisoformat(
@@ -334,10 +328,10 @@ def _movement_quote(
             continue
         bid = _number((position_quote or {}).get(f"{side}_bid"))
         ask = _number((position_quote or {}).get(f"{side}_ask"))
-        if side == "long" and bid is not None:
-            result["long_exit"] = bid
-        if side == "short" and ask is not None:
-            result["short_exit"] = ask
+        midpoint = _midpoint(bid, ask)
+        if midpoint is not None:
+            result[f"{side}_exit"] = midpoint
+            result[f"{side}_basis"] = "bid_ask_midpoint"
         if ask is not None:
             result[f"{side}_entry"] = ask
         if bid is not None:
@@ -346,7 +340,7 @@ def _movement_quote(
             sources.append(
                 str(
                     (position_quote or {}).get("position_quote_source")
-                    or "resident_full_position_vwap"
+                    or "resident_book_midpoint"
                 )
             )
             stamp = _number((position_quote or {}).get(f"{side}_quote_ts_us"))
@@ -359,6 +353,12 @@ def _movement_quote(
     if sources:
         result["source"] = "+".join(dict.fromkeys(sources))
     return result
+
+
+def _midpoint(bid: float | None, ask: float | None) -> float | None:
+    if bid is None or ask is None or bid <= 0 or ask <= 0 or ask < bid:
+        return None
+    return (bid + ask) / 2.0
 
 
 def _is_dex_leg(position: dict[str, Any], side: str) -> bool:
@@ -642,6 +642,9 @@ def _evaluate_position_alerts(
     user_id: int, position: dict[str, Any], *, accounts_path: Path | str
 ) -> int:
     created = 0
+    # ``exit_spread_pct`` is the legacy persisted metric name. Its Portfolio
+    # meaning is now current marked spread; saved rules continue to work while
+    # the UI labels the accounting basis accurately.
     values = {
         "exit_spread_pct": position.get("current_exit_spread_pct"),
         "open_spread_pct": position.get("current_open_spread_pct"),

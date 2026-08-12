@@ -261,11 +261,11 @@ PLAYBOOK_DEFS = [
         "category": "Liquidation / PnL",
         "title": "PnL and liquidation framing",
         "why": "Community users often mix mark-to-market PnL, funding, convergence value, leverage, and liquidation risk.",
-        "answer": "Portfolio tracks manual fills, live price PnL, recorded funding cashflows, fees, return on tracked capital, and closed-position results. Keep those private records separate from public board estimates.",
+        "answer": "Portfolio tracks saved fills, current mark-to-market movement, exact settled funding, recorded fees, return on tracked capital, and closed-position results. It does not pretend that a market-order exit has already happened.",
         "checks": [
             "Use Watchlist for browser-local pins and Portfolio for private positions.",
             "Replace suggested entries with the member's actual fills.",
-            "Keep price PnL, funding cashflows, and fees separate.",
+            "Keep mark movement, settled funding, and actual fees separate.",
         ],
         "links": [("Watchlist", "/watchlist"), ("Learn", "/learn")],
     },
@@ -9683,8 +9683,8 @@ def render_guide_page() -> str:
             "portfolio",
             "Portfolio",
             "/account",
-            "Record actual fills and quantities for both legs. Price PnL, settled funding, fees and total PnL stay separate. Optional capital per leg is only the return denominator.",
-            "Public rates cannot prove what your account received. Record actual settled funding as positive when received and negative when paid.",
+            "Record actual fills and quantities for both legs. Current mark movement, exact settled funding, actual fees and total PnL stay separate. Optional capital per leg is only the return denominator.",
+            "Current PnL uses venue marks or live midpoints and exact-contract DEX pool references, not a hypothetical market-order exit. Exchange-ledger funding is imported automatically when connected.",
         ),
         (
             "alerts",
@@ -10105,21 +10105,21 @@ def render_account_page(
     body = f"""
     <section class="account-page" data-account-page>
       <header class="terminal-heading account-heading">
-        <div><span class="page-kicker">Private workspace</span><h1>{h(user.display_name)}</h1><p>Track multi-exchange positions, movement PnL, exact settled funding, fees, returns, and exit conditions in one place.</p></div>
+        <div><span class="page-kicker">Private workspace</span><h1>{h(user.display_name)}</h1><p>Track multi-exchange positions, current mark-to-market PnL, exact settled funding, fees, returns, and spread conditions in one place.</p></div>
         <div class="account-membership"><span>Membership</span><strong>{h(PLAN_CATALOG.get(user.entitlement_tier, PLAN_CATALOG["free"])["name"])}</strong><em>{h(user.subscription_status)} · {h(user.subscription_expires_at or "No expiry")}</em></div>
       </header>
       <section class="account-kpis">
         {render_account_kpi("Open positions", summary.get("open_positions"), "actively marked")}
-        {render_account_kpi("Open-position PnL", fmt_signed_money(summary.get("open_position_pnl_usd")), "movement + settled funding - fees")}
+        {render_account_kpi("Open-position PnL", fmt_signed_money(summary.get("open_position_pnl_usd")), "mark movement + settled funding - fees")}
         {render_account_kpi("Open settled funding", fmt_signed_money(summary.get("open_position_funding_usd")), "private exchange ledger")}
         {render_account_kpi("Open return", fmt_signed_pct(summary.get("open_position_return_pct"), digits=2), "on allocated capital")}
       </section>
       <nav class="account-tabs" aria-label="Account sections"><button class="active" data-account-tab="positions">Positions</button><button data-account-tab="alerts">Alerts <i>{h(len([item for item in notifications if not item.get("read_at")]))}</i></button><button data-account-tab="settings">Settings</button>{'<button data-account-tab="members">Members</button>' if user.can_manage_members else ""}</nav>
       <section data-account-panel="positions">
-        <div class="account-panel-head"><div><h2>Position journal</h2><p>Saved fills can be corrected at any time. Current books mark movement PnL; only exact settled exchange cashflows enter funding PnL.</p></div><button class="sheet-button primary" type="button" data-position-new>Add position</button></div>
+        <div class="account-panel-head"><div><h2>Position journal</h2><p>Saved fills can be corrected at any time. Current reference prices mark movement PnL without assuming a market-order exit; only exact settled exchange cashflows enter funding PnL.</p></div><button class="sheet-button primary" type="button" data-position-new>Add position</button></div>
         <div class="position-list">{"".join(render_position_card(item) for item in positions) or '<div class="account-empty-panel"><strong>No positions yet</strong><p>Add the first spread or funding farm to start tracking it.</p></div>'}</div>
       </section>
-      <section data-account-panel="alerts" hidden><div class="account-panel-head"><div><h2>Notifications</h2><p>Exit-spread, PnL, and funding rules are evaluated continuously, even while you are signed out.</p></div><button class="sheet-button" type="button" data-notifications-read>Mark all read</button></div><div class="notification-list">{"".join(render_account_notification(item) for item in notifications) or '<div class="account-empty-panel"><strong>No notifications</strong><p>Position alerts will appear here when a rule crosses its threshold.</p></div>'}</div></section>
+      <section data-account-panel="alerts" hidden><div class="account-panel-head"><div><h2>Notifications</h2><p>Marked-spread, enterable-spread, PnL, and funding rules are evaluated continuously, even while you are signed out.</p></div><button class="sheet-button" type="button" data-notifications-read>Mark all read</button></div><div class="notification-list">{"".join(render_account_notification(item) for item in notifications) or '<div class="account-empty-panel"><strong>No notifications</strong><p>Position alerts will appear here when a rule crosses its threshold.</p></div>'}</div></section>
       <section data-account-panel="settings" hidden>{render_account_settings(user, accounts_path)}</section>
       {render_member_admin() if user.can_manage_members else ""}
       {render_position_dialog()}
@@ -10149,7 +10149,7 @@ def render_position_card(item: dict[str, Any]) -> str:
         market_label = "Closed · stored exits"
         status_class = "closed"
     elif market_live:
-        market_label = "Live exact prices"
+        market_label = "Live reference prices"
         status_class = "live"
     elif quote_status == "partial":
         market_label = "One leg live · refreshing"
@@ -10177,16 +10177,16 @@ def render_position_card(item: dict[str, Any]) -> str:
       <header><div><span class="position-token">{h(item.get("token"))}</span><strong>{h(item.get("long_venue"))} → {h(item.get("short_venue"))}</strong><em>{h(item.get("long_market_type"))} / {h(item.get("short_market_type"))}</em></div><div class="position-status {status_class}"><span>{h(item.get("status"))}</span><strong>{market_label}</strong></div></header>
       <div class="position-metrics">
         <span>Total PnL<strong class="{spread_class(item.get("total_pnl_usd"))}">{fmt_signed_money(item.get("total_pnl_usd"))}</strong></span>
-        <span>Movement PnL<strong>{fmt_signed_money(item.get("price_pnl_usd"))}</strong></span>
+        <span>Mark movement<strong>{fmt_signed_money(item.get("price_pnl_usd"))}</strong></span>
         <span>Settled funding<strong>{fmt_signed_money(item.get("funding_income_usd"))}</strong></span>
-        <span>Fees<strong>{fmt_signed_money(-float(item.get("fees_usd") or 0.0))}</strong></span>
+        <span>Actual fees<strong>{fmt_signed_money(-float(item.get("fees_usd") or 0.0))}</strong></span>
         <span>Projected funding / 24h<strong>{fmt_signed_pct(item.get("current_net_funding_24h_pct"), digits=4)}</strong></span>
         <span>Return<strong>{fmt_signed_pct(item.get("return_pct"), digits=2)}</strong></span>
-        <span>Exit spread<strong>{fmt_signed_pct(item.get("current_exit_spread_pct"), digits=3)}</strong></span>
+        <span>Current marked spread<strong>{fmt_signed_pct(item.get("current_marked_spread_pct"), digits=3)}</strong></span>
         <span>Entry spread<strong>{fmt_signed_pct(item.get("entry_spread_pct"), digits=3)}</strong></span>
       </div>
       <p class="position-funding-source">{h(movement_note)}<br>{h(funding_note)}</p>
-      <div class="position-legs"><div><span>Long</span><strong>{h(item.get("long_venue"))} · {h(item.get("long_quantity"))}</strong><em>{fmt_price(item.get("long_entry_price"))} → {fmt_price(item.get("long_mark_price"))}</em><em>Funding {fmt_signed_pct(long_funding.get("rate_pct"), digits=4)} / {h(long_funding.get("interval_hours") or "—")}h</em></div><div><span>Short</span><strong>{h(item.get("short_venue"))} · {h(item.get("short_quantity"))}</strong><em>{fmt_price(item.get("short_entry_price"))} → {fmt_price(item.get("short_mark_price"))}</em><em>Funding {fmt_signed_pct(short_funding.get("rate_pct"), digits=4)} / {h(short_funding.get("interval_hours") or "—")}h</em></div></div>
+      <div class="position-legs"><div><span>Long</span><strong>{h(item.get("long_venue"))} · {h(item.get("long_quantity"))}</strong><em>{fmt_price(item.get("long_entry_price"))} → {fmt_price(item.get("long_mark_price"))} · {h(position_mark_basis_label(item.get("long_mark_basis")))}</em><em>Funding {fmt_signed_pct(long_funding.get("rate_pct"), digits=4)} / {h(long_funding.get("interval_hours") or "—")}h</em></div><div><span>Short</span><strong>{h(item.get("short_venue"))} · {h(item.get("short_quantity"))}</strong><em>{fmt_price(item.get("short_entry_price"))} → {fmt_price(item.get("short_mark_price"))} · {h(position_mark_basis_label(item.get("short_mark_basis")))}</em><em>Funding {fmt_signed_pct(short_funding.get("rate_pct"), digits=4)} / {h(short_funding.get("interval_hours") or "—")}h</em></div></div>
       <footer><span>Opened {h(item.get("opened_at"))}</span><div>{render_position_rules(item.get("alert_rules") or [])}<button type="button" data-position-edit>Edit position</button><button type="button" data-position-action="alert">Add alert</button>{'<button type="button" data-position-action="close">Close position</button>' if item.get("status") == "open" else ""}<a href="/charts?{h(chart_query)}">Chart since entry</a></div></footer>
     </article>"""
 
@@ -10239,19 +10239,23 @@ def position_movement_note(item: dict[str, Any]) -> str:
     if item.get("status") == "closed":
         return "Movement uses the stored exit fills."
     if item.get("price_pnl_usd") is None:
-        return (
-            "Movement is withheld until both saved quantities have complete executable exit quotes."
-        )
-    dex = "paraswap_exact_sell_quote" in source
-    detail = (
-        "full-size DEX sell quote + CEX book VWAP"
-        if dex
-        else "full-size CEX book VWAP"
-    )
+        return "Mark movement is withheld until both saved markets have fresh reference prices."
+    uses_dex = "dexscreener_exact_contract_pool" in source
+    detail = "exact-contract DEX pool reference and venue marks/midpoints" if uses_dex else "venue marks or live bid/ask midpoints"
     return (
-        f"Movement uses {detail} for the saved quantities; "
-        "future exit trading fees and gas are not deducted until recorded."
+        f"Mark movement uses {detail}; it does not assume a market-order exit, "
+        "walk book depth, apply DEX swap impact, or deduct hypothetical closing costs."
     )
+
+
+def position_mark_basis_label(value: Any) -> str:
+    return {
+        "markPrice": "venue mark",
+        "fairPrice": "venue fair price",
+        "indexPrice": "venue index",
+        "bid_ask_midpoint": "bid/ask midpoint",
+        "dex_pool_reference": "DEX pool reference",
+    }.get(str(value or ""), "reference price")
 
 
 def render_portfolio_market_refresh_script(positions: list[dict[str, Any]]) -> str:
@@ -10424,7 +10428,7 @@ def render_account_script() -> str:
   root.addEventListener('click',event=>{const button=event.target.closest('[data-position-edit]');if(!button)return;editPosition=button.closest('[data-position-id]')?.dataset.positionId;const item=positionData[editPosition];if(!item||!editForm)return;editForm.reset();for(const [name,value] of Object.entries(item)){const field=editForm.elements[name];if(!field)continue;field.value=['opened_at','closed_at'].includes(name)?utcToLocalInput(value):(value??'');}syncClosedCorrectionFields();editForm.querySelector('[data-form-error]').textContent='';editDialog.showModal();});
   editForm?.addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;try{await request(`/api/positions/${editPosition}/edit`,payloadFromForm(form));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   const actionDialog=root.querySelector('[data-action-dialog]');let actionPosition=null;let actionType='';
-  const fields={alert:'<label><span>Metric</span><select name="metric"><option value="exit_spread_pct">Exit spread %</option><option value="open_spread_pct">Open spread %</option><option value="pnl_usd">Total PnL USD</option><option value="funding_usd">Settled funding USD</option></select></label><label><span>Condition</span><select name="operator"><option value="lte">At or below</option><option value="gte">At or above</option></select></label><label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>',close:'<label><span>Long exit price</span><input name="long_exit_price" type="number" min="0" step="any" required></label><label><span>Short exit price</span><input name="short_exit_price" type="number" min="0" step="any" required></label><label><span>Exit fees, USD</span><input name="exit_fees_usd" type="number" min="0" step="0.01" value="0"></label>'};
+  const fields={alert:'<label><span>Metric</span><select name="metric"><option value="exit_spread_pct">Current marked spread %</option><option value="open_spread_pct">Enterable spread %</option><option value="pnl_usd">Total PnL USD</option><option value="funding_usd">Settled funding USD</option></select></label><label><span>Condition</span><select name="operator"><option value="lte">At or below</option><option value="gte">At or above</option></select></label><label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>',close:'<label><span>Long exit price</span><input name="long_exit_price" type="number" min="0" step="any" required></label><label><span>Short exit price</span><input name="short_exit_price" type="number" min="0" step="any" required></label><label><span>Exit fees, USD</span><input name="exit_fees_usd" type="number" min="0" step="0.01" value="0"></label>'};
   root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;actionDialog.querySelector('[data-action-title]').textContent={alert:'Create alert rule',close:'Close position'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=fields[actionType];actionDialog.showModal();});
   actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={alert:'alerts',close:'close'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   root.querySelector('[data-account-settings]')?.addEventListener('submit',async event=>{event.preventDefault();await request('/api/account-settings',Object.fromEntries(new FormData(event.currentTarget)));location.reload();});

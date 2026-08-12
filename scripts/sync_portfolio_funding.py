@@ -3,8 +3,9 @@
 
 The worker runs on the operator's Mac, reads API credentials from macOS
 Keychain, pulls signed private funding cashflows, and uploads only sanitized
-per-position totals and full-size DEX sell marks. It never creates orders,
-transfers, withdrawals, approvals, signatures, or other venue mutations.
+per-position totals and quantity-independent reference marks. It never creates
+orders, transfers, withdrawals, approvals, signatures, or other venue
+mutations.
 """
 
 from __future__ import annotations
@@ -14,19 +15,17 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import json
-import os
 from pathlib import Path
 import shlex
 import subprocess
 import tempfile
 from typing import Any, Callable
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import ccxt
 
 from spreadarb.public_runtime import keychain
-from spreadboard import portfolio_funding
+from spreadboard import fair_price, portfolio_funding
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,13 +43,7 @@ VENUES = {
     "Kucoin": ("kucoinfutures", "kucoin"),
     "OKX": ("okx", "okx"),
 }
-USDT_BY_CHAIN = {
-    56: {
-        "contract": "0x55d398326f99059ff775485246999027b3197955",
-        "decimals": 18,
-    },
-}
-RPC_BY_CHAIN = {56: "https://bsc-dataseed.binance.org/"}
+DEXSCREENER_CHAIN_NAMES = {56: "bsc"}
 
 
 def dec(value: Any) -> Decimal | None:
@@ -134,37 +127,19 @@ def fetch_private_funding(exchange: Any, symbol: str, since_ms: int) -> list[dic
     return [events[key] for key in sorted(events)]
 
 
-def token_decimals(chain_id: int, contract: str) -> int:
-    """Read ERC-20 decimals without a wallet or signed request."""
+def fetch_dex_reference_mark(
+    position: dict[str, Any], side: str, leg: dict[str, Any]
+) -> dict[str, Any]:
+    """Read the deepest exact-contract pool price without quoting a swap.
 
-    rpc = RPC_BY_CHAIN.get(chain_id)
-    if not rpc:
-        raise RuntimeError(f"unsupported_dex_chain:{chain_id}")
-    body = json.dumps(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "eth_call",
-            "params": [{"to": contract, "data": "0x313ce567"}, "latest"],
-        }
-    ).encode()
-    request = Request(rpc, data=body, headers={"Content-Type": "application/json"})
-    with urlopen(request, timeout=20) as response:  # noqa: S310 - fixed HTTPS RPC.
-        payload = json.load(response)
-    value = int(str(payload.get("result") or "0x0"), 16)
-    if not 0 <= value <= 36:
-        raise RuntimeError("invalid_token_decimals")
-    return value
+    A DEX has no venue-issued mark price. The least misleading current
+    accounting reference is the exact token contract's deepest pool price.
+    It is quantity-independent and contains no route impact, gas or slippage.
+    """
 
-
-def fetch_dex_exit_mark(position: dict[str, Any], side: str, leg: dict[str, Any]) -> dict[str, Any]:
-    """Quote an exact saved DEX long quantity into USDT without execution."""
-
-    if side != "long":
-        raise RuntimeError("dex_short_mark_not_supported")
     chain_id = int(leg.get("dex_chain") or 0)
-    destination = USDT_BY_CHAIN.get(chain_id)
-    if not destination:
+    chain = DEXSCREENER_CHAIN_NAMES.get(chain_id)
+    if not chain:
         raise RuntimeError(f"unsupported_dex_chain:{chain_id}")
     contract = str(leg.get("dex_contract") or "").strip().lower()
     if not contract.startswith("0x") or len(contract) != 42:
@@ -172,98 +147,109 @@ def fetch_dex_exit_mark(position: dict[str, Any], side: str, leg: dict[str, Any]
     quantity = dec(position.get(f"{side}_quantity"))
     if quantity is None or quantity <= 0:
         raise RuntimeError("invalid_dex_quantity")
-    source_decimals = token_decimals(chain_id, contract)
-    source_amount = int(quantity * (Decimal(10) ** source_decimals))
-    query = urlencode(
-        {
-            "srcToken": contract,
-            "destToken": destination["contract"],
-            "amount": str(source_amount),
-            "srcDecimals": str(source_decimals),
-            "destDecimals": str(destination["decimals"]),
-            "side": "SELL",
-            "network": str(chain_id),
-            "version": "6.2",
-        }
-    )
     request = Request(
-        f"https://api.paraswap.io/prices/?{query}",
+        f"https://api.dexscreener.com/token-pairs/v1/{chain}/{contract}",
         headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"},
     )
-    with urlopen(request, timeout=30) as response:  # noqa: S310 - fixed HTTPS API.
-        route = (json.load(response) or {}).get("priceRoute") or {}
-    destination_amount = dec(route.get("destAmount"))
-    if destination_amount is None or destination_amount <= 0:
-        raise RuntimeError("invalid_dex_quote")
-    proceeds = destination_amount / (Decimal(10) ** int(destination["decimals"]))
+    with urlopen(request, timeout=20) as response:  # noqa: S310 - fixed HTTPS API.
+        payload = json.load(response)
+    pairs = []
+    for row in payload if isinstance(payload, list) else []:
+        if not isinstance(row, dict) or str(row.get("chainId") or "").casefold() != chain:
+            continue
+        base = row.get("baseToken") if isinstance(row.get("baseToken"), dict) else {}
+        quote = row.get("quoteToken") if isinstance(row.get("quoteToken"), dict) else {}
+        base_matches = str(base.get("address") or "").casefold() == contract
+        quote_matches = str(quote.get("address") or "").casefold() == contract
+        if not base_matches and not quote_matches:
+            continue
+        base_price_usd = dec(row.get("priceUsd"))
+        base_in_quote = dec(row.get("priceNative"))
+        price = (
+            base_price_usd
+            if base_matches
+            else base_price_usd / base_in_quote
+            if base_price_usd is not None
+            and base_in_quote is not None
+            and base_in_quote > 0
+            else None
+        )
+        liquidity = dec(
+            (row.get("liquidity") or {}).get("usd")
+            if isinstance(row.get("liquidity"), dict)
+            else None
+        )
+        if price is None or price <= 0 or liquidity is None or liquidity <= 0:
+            continue
+        pairs.append((liquidity, price, row))
+    if not pairs:
+        raise RuntimeError("exact_dex_pool_reference_unavailable")
+    liquidity, price, pair = max(pairs, key=lambda item: item[0])
     return {
         "status": "ok",
-        "source": "paraswap_exact_sell_quote",
-        "quote_currency": "USDT",
+        "source": "dexscreener_exact_contract_pool",
+        "basis": "dex_pool_reference",
+        "quote_currency": "USD",
         "quantity": str(quantity),
-        "price_usd": str(proceeds / quantity),
-        "proceeds_usdt": str(proceeds),
-        "gas_cost_usd": str(route.get("gasCostUSD") or ""),
+        "price_usd": str(price),
+        "pool_liquidity_usd": str(liquidity),
+        "pair_address": str(pair.get("pairAddress") or ""),
+        "dex_id": str(pair.get("dexId") or ""),
         "quoted_at": utc_iso(),
         "read_only": True,
     }
 
 
-def quantity_vwap(
-    levels: list[list[float]], quantity: Decimal, *, contract_size: Decimal
-) -> Decimal | None:
-    """VWAP an exact base-asset quantity; derivative book sizes are contracts."""
-
-    if quantity <= 0 or contract_size <= 0:
-        return None
-    remaining = quantity
-    value = Decimal(0)
-    filled = Decimal(0)
-    for raw in levels:
-        if not isinstance(raw, (list, tuple)) or len(raw) < 2:
-            continue
-        price = dec(raw[0])
-        contracts = dec(raw[1])
-        if price is None or contracts is None or price <= 0 or contracts <= 0:
-            continue
-        available = contracts * contract_size
-        take = min(remaining, available)
-        value += take * price
-        filled += take
-        remaining -= take
-        if remaining <= max(Decimal("1e-12"), quantity * Decimal("1e-12")):
-            break
-    if remaining > max(Decimal("1e-9"), quantity * Decimal("1e-9")) or filled <= 0:
-        return None
-    return value / filled
-
-
-def fetch_cex_exit_mark(
+def fetch_cex_reference_mark(
     exchange: Any,
     position: dict[str, Any],
     side: str,
     leg: dict[str, Any],
 ) -> dict[str, Any]:
-    """Fetch a full-position CEX exit VWAP; this cannot mutate the account."""
+    """Fetch a venue mark/fair price or exact-book midpoint."""
 
     symbol = str(position.get(f"{side}_symbol") or "")
     quantity = dec(position.get(f"{side}_quantity"))
     if not symbol or quantity is None or quantity <= 0:
         raise RuntimeError("invalid_cex_position")
     market = exchange.market(symbol)
-    contract_size = (
-        dec(leg.get("contract_size"))
-        or dec(market.get("contractSize"))
-        or Decimal(1)
-    )
-    book = exchange.fetch_order_book(symbol, limit=100)
-    levels = book.get("bids") if side == "long" else book.get("asks")
-    price = quantity_vwap(levels or [], quantity, contract_size=contract_size)
+    ticker = exchange.fetch_ticker(symbol) or {}
+    price: Decimal | None = None
+    basis = ""
+    market_type = str(position.get(f"{side}_market_type") or "").casefold()
+    if market_type == "futures":
+        try:
+            funding = exchange.fetch_funding_rate(symbol) or {}
+        except Exception:  # noqa: BLE001 - ticker/book midpoint remains valid.
+            funding = {}
+        price = dec(funding.get("markPrice"))
+        basis = "markPrice" if price is not None else ""
+        if price is None:
+            venue_fair, fair_basis = fair_price.fair_price_of(ticker)
+            price = dec(venue_fair)
+            basis = str(fair_basis or "")
+    bid = dec(ticker.get("bid"))
+    ask = dec(ticker.get("ask"))
+    if price is None and bid is not None and ask is not None and 0 < bid <= ask:
+        price = (bid + ask) / Decimal(2)
+        basis = "bid_ask_midpoint"
     if price is None:
-        raise RuntimeError("insufficient_cex_depth")
+        book = exchange.fetch_order_book(symbol, limit=5) or {}
+        best_bid = dec((book.get("bids") or [[None]])[0][0])
+        best_ask = dec((book.get("asks") or [[None]])[0][0])
+        if best_bid is not None and best_ask is not None and 0 < best_bid <= best_ask:
+            price = (best_bid + best_ask) / Decimal(2)
+            basis = "bid_ask_midpoint"
+    if price is None or price <= 0:
+        raise RuntimeError("cex_reference_price_unavailable")
     return {
         "status": "ok",
-        "source": "local_full_position_book_vwap",
+        "source": (
+            "venue_mark_price"
+            if basis not in {"bid_ask_midpoint", ""}
+            else "local_book_midpoint"
+        ),
+        "basis": basis or "reference_price",
         "quote_currency": str(market.get("quote") or "USDT"),
         "quantity": str(quantity),
         "price_usd": str(price),
@@ -357,8 +343,8 @@ def build_snapshot(
                     "event_count": len(selected),
                 }
             )
-    # Full-position exit quotes are deliberately last. A slow private-ledger
-    # venue must not make a quote stale before this atomic snapshot is written.
+    # Current reference marks are deliberately last. A slow private-ledger
+    # venue must not make a mark stale before this atomic snapshot is written.
     for position in positions:
         if str(position.get("status") or "").casefold() != "open":
             continue
@@ -376,7 +362,7 @@ def build_snapshot(
                 result[key]["marks"][side] = mark_fetcher(position, side, leg)
             except Exception as exc:  # noqa: BLE001 - funding remains usable.
                 result[key]["marks"][side] = {
-                    "status": f"quote_error:{type(exc).__name__}",
+                    "status": f"mark_error:{type(exc).__name__}",
                     "source": "unavailable",
                     "quantity": str(position.get(f"{side}_quantity") or ""),
                     "quoted_at": utc_iso(),
@@ -517,10 +503,10 @@ def main() -> None:
         market_type = str(position.get(f"{side}_market_type") or "").casefold()
         venue = str(position.get(f"{side}_venue") or "")
         if market_type == "dex" or " dex " in f" {venue.casefold()} ":
-            return fetch_dex_exit_mark(position, side, leg)
+            return fetch_dex_reference_mark(position, side, leg)
         if venue not in exchanges:
             exchanges[venue] = build_exchange(venue)
-        return fetch_cex_exit_mark(exchanges[venue], position, side, leg)
+        return fetch_cex_reference_mark(exchanges[venue], position, side, leg)
 
     snapshot = build_snapshot(positions, fetcher, mark_fetcher=marker)
     body = write_atomic(args.local_output.expanduser().resolve(), snapshot)
