@@ -362,6 +362,7 @@ class FastQuoteRefresher:
                 payload = client.fetch_funding_rates()
         except Exception:  # noqa: BLE001 - one venue must not stop the cycle.
             return self._native_bulk_funding_rates(venue)
+        interval_overrides = self._bulk_funding_interval_overrides(venue)
         items = payload.values() if isinstance(payload, dict) else payload
         rates: dict[str, dict[str, Any]] = {}
         for item in items or []:
@@ -370,6 +371,9 @@ class FastQuoteRefresher:
             interval = item.get("interval")
             if isinstance(interval, str) and interval.casefold().endswith("h"):
                 interval = interval[:-1]
+            if not interval and interval_overrides:
+                market = (getattr(client, "markets", {}) or {}).get(str(item["symbol"])) or {}
+                interval = interval_overrides.get(str(market.get("id") or "").upper())
             fields = _funding_fields(
                 item.get("fundingRate"),
                 # Never leave a fresh rate sitting on a stale interval. WhiteBIT
@@ -383,6 +387,31 @@ class FastQuoteRefresher:
         # A venue that answers with nothing is indistinguishable from one that
         # cannot answer at all, and both leave the legs frozen at scan time.
         return rates or self._native_bulk_funding_rates(venue)
+    @staticmethod
+    def _bulk_funding_interval_overrides(venue: str) -> dict[str, float]:
+        """Return venue-published schedules missing from CCXT's bulk payload.
+
+        Aster's bulk funding response includes the live rate but omits its interval.
+        The separate public ``fundingInfo`` response publishes the exact schedule
+        per contract. Falling back to the market-wide 8h default understated BTW's
+        hourly carry by eight times.
+        """
+
+        if venue != "Aster":
+            return {}
+        try:
+            payload = _json_url("https://fapi.asterdex.com/fapi/v1/fundingInfo")
+        except Exception:  # noqa: BLE001 - the caller retains its explicit fallback.
+            return {}
+        result: dict[str, float] = {}
+        for item in payload if isinstance(payload, list) else []:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol") or "").upper()
+            interval = _optional_number(item.get("fundingIntervalHours"))
+            if symbol and interval is not None and interval > 0:
+                result[symbol] = interval
+        return result
 
     def refresh(
         self,

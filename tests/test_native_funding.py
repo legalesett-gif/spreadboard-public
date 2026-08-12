@@ -144,6 +144,45 @@ def test_a_rate_without_an_interval_never_inherits_a_stale_one(
     assert entry["funding_interval_hours"] == DEFAULT_FUNDING_INTERVAL_HOURS
 
 
+def test_aster_bulk_rate_uses_its_published_hourly_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Aster(_Client):
+        has = {"fetchFundingRates": True}
+
+        def __init__(self) -> None:
+            super().__init__({"BTWUSDT": {"symbol": "BTW/USDT:USDT", "swap": True}})
+            self.markets = {
+                "BTW/USDT:USDT": {
+                    "id": "BTWUSDT",
+                    "symbol": "BTW/USDT:USDT",
+                    "swap": True,
+                }
+            }
+
+        def fetch_funding_rates(self):
+            return {
+                "BTW/USDT:USDT": {
+                    "symbol": "BTW/USDT:USDT",
+                    "fundingRate": 0.00007305,
+                    "nextFundingTimestamp": 1_786_561_200_000,
+                }
+            }
+
+    refresher = FastQuoteRefresher()
+    monkeypatch.setattr(refresher, "_client", lambda *_a, **_k: _Aster())
+    monkeypatch.setattr(
+        fast_quotes,
+        "_json_url",
+        lambda _url: [{"symbol": "BTWUSDT", "fundingIntervalHours": 1}],
+    )
+
+    entry = refresher._bulk_funding_rates("Aster")["BTW/USDT:USDT"]
+
+    assert entry["current_funding_pct"] == pytest.approx(0.007305)
+    assert entry["funding_interval_hours"] == 1.0
+
+
 def test_an_id_shared_by_spot_and_perp_resolves_to_the_perp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
