@@ -202,7 +202,24 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         )
         response = connection.getresponse()
         assert response.status == 201
-        assert json.loads(response.read())["position"]["token"] == "BTC"
+        created_position = json.loads(response.read())["position"]
+        assert created_position["token"] == "BTC"
+
+        connection.request(
+            "POST",
+            f"/api/positions/{created_position['id']}/funding",
+            body=json.dumps({"venue": "Hyperliquid", "amount_usd": 1.25}),
+            headers={
+                "Cookie": cookie,
+                "Content-Type": "application/json",
+                "X-CSRF-Token": login["csrf_token"],
+            },
+        )
+        response = connection.getresponse()
+        assert response.status == 410
+        assert json.loads(response.read())["error"] == (
+            "manual_funding_disabled_use_exact_exchange_ledger"
+        )
     finally:
         connection.close()
         server.shutdown()

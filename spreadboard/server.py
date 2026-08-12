@@ -1078,11 +1078,16 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json({"ok": True, "position": position})
             elif parsed.path.startswith("/api/positions/") and parsed.path.endswith("/funding"):
-                position_id = int(parsed.path.split("/")[3])
-                event = accounts.add_funding_cashflow(
-                    user.id, position_id, payload, db_path=self.server.accounts_path
+                # Settled funding is imported from the exact private exchange
+                # ledger.  Keeping the legacy mutation route alive after the
+                # UI was removed would let a stale client double count it.
+                self._send_json(
+                    {
+                        "ok": False,
+                        "error": "manual_funding_disabled_use_exact_exchange_ledger",
+                    },
+                    status=HTTPStatus.GONE,
                 )
-                self._send_json({"ok": True, "funding_cashflow": event}, status=HTTPStatus.CREATED)
             elif parsed.path.startswith("/api/positions/") and parsed.path.endswith("/alerts"):
                 position_id = int(parsed.path.split("/")[3])
                 rule = accounts.add_alert_rule(
