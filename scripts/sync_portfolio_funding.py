@@ -209,6 +209,69 @@ def fetch_dex_exit_mark(position: dict[str, Any], side: str, leg: dict[str, Any]
     }
 
 
+def quantity_vwap(
+    levels: list[list[float]], quantity: Decimal, *, contract_size: Decimal
+) -> Decimal | None:
+    """VWAP an exact base-asset quantity; derivative book sizes are contracts."""
+
+    if quantity <= 0 or contract_size <= 0:
+        return None
+    remaining = quantity
+    value = Decimal(0)
+    filled = Decimal(0)
+    for raw in levels:
+        if not isinstance(raw, (list, tuple)) or len(raw) < 2:
+            continue
+        price = dec(raw[0])
+        contracts = dec(raw[1])
+        if price is None or contracts is None or price <= 0 or contracts <= 0:
+            continue
+        available = contracts * contract_size
+        take = min(remaining, available)
+        value += take * price
+        filled += take
+        remaining -= take
+        if remaining <= max(Decimal("1e-12"), quantity * Decimal("1e-12")):
+            break
+    if remaining > max(Decimal("1e-9"), quantity * Decimal("1e-9")) or filled <= 0:
+        return None
+    return value / filled
+
+
+def fetch_cex_exit_mark(
+    exchange: Any,
+    position: dict[str, Any],
+    side: str,
+    leg: dict[str, Any],
+) -> dict[str, Any]:
+    """Fetch a full-position CEX exit VWAP; this cannot mutate the account."""
+
+    symbol = str(position.get(f"{side}_symbol") or "")
+    quantity = dec(position.get(f"{side}_quantity"))
+    if not symbol or quantity is None or quantity <= 0:
+        raise RuntimeError("invalid_cex_position")
+    market = exchange.market(symbol)
+    contract_size = (
+        dec(leg.get("contract_size"))
+        or dec(market.get("contractSize"))
+        or Decimal(1)
+    )
+    book = exchange.fetch_order_book(symbol, limit=100)
+    levels = book.get("bids") if side == "long" else book.get("asks")
+    price = quantity_vwap(levels or [], quantity, contract_size=contract_size)
+    if price is None:
+        raise RuntimeError("insufficient_cex_depth")
+    return {
+        "status": "ok",
+        "source": "local_full_position_book_vwap",
+        "quote_currency": str(market.get("quote") or "USDT"),
+        "quantity": str(quantity),
+        "price_usd": str(price),
+        "quoted_at": utc_iso(),
+        "read_only": True,
+    }
+
+
 def build_snapshot(
     positions: list[dict[str, Any]],
     funding_fetcher: Callable[[str, str, int], list[dict[str, Any]]],
@@ -252,14 +315,10 @@ def build_snapshot(
             else {}
         )
         for side in ("long", "short"):
-            market_type = str(position.get(f"{side}_market_type") or "").casefold()
-            venue = str(position.get(f"{side}_venue") or "").casefold()
-            if market_type != "dex" and " dex " not in f" {venue} ":
-                continue
             leg = resolved_legs.get(side) if isinstance(resolved_legs.get(side), dict) else {}
             try:
                 if mark_fetcher is None:
-                    raise RuntimeError("dex_mark_not_configured")
+                    raise RuntimeError("position_mark_not_configured")
                 result[key]["marks"][side] = mark_fetcher(position, side, leg)
             except Exception as exc:  # noqa: BLE001 - funding remains usable.
                 result[key]["marks"][side] = {
@@ -404,7 +463,10 @@ def sync_remote(body: bytes, *, host: str, ssh_key: Path, remote_path: str) -> N
     temporary = shlex.quote(f"{remote_path}.tmp")
     command = (
         f"umask 077; mkdir -p {remote_dir}; cat > {temporary}; "
-        f"mv {temporary} {target}; chmod 0600 {target}"
+        f"mv {temporary} {target}; "
+        f"owner=$(docker exec app-app-1 id -u); "
+        f"group=$(docker exec app-app-1 id -g); "
+        f"chown $owner:$group {target}; chmod 0600 {target}"
     )
     subprocess.run(
         ["ssh", "-o", "BatchMode=yes", "-i", str(ssh_key), host, command],
@@ -440,7 +502,18 @@ def main() -> None:
             exchanges[venue] = build_exchange(venue)
         return fetch_private_funding(exchanges[venue], symbol, since_ms)
 
-    snapshot = build_snapshot(positions, fetcher, mark_fetcher=fetch_dex_exit_mark)
+    def marker(
+        position: dict[str, Any], side: str, leg: dict[str, Any]
+    ) -> dict[str, Any]:
+        market_type = str(position.get(f"{side}_market_type") or "").casefold()
+        venue = str(position.get(f"{side}_venue") or "")
+        if market_type == "dex" or " dex " in f" {venue.casefold()} ":
+            return fetch_dex_exit_mark(position, side, leg)
+        if venue not in exchanges:
+            exchanges[venue] = build_exchange(venue)
+        return fetch_cex_exit_mark(exchanges[venue], position, side, leg)
+
+    snapshot = build_snapshot(positions, fetcher, mark_fetcher=marker)
     body = write_atomic(args.local_output.expanduser().resolve(), snapshot)
     if not args.local_only:
         sync_remote(body, host=args.ssh_host, ssh_key=ssh_key, remote_path=args.remote_path)

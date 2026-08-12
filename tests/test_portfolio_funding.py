@@ -171,3 +171,19 @@ def test_sync_keeps_dex_mark_failure_separate_from_exact_funding() -> None:
     assert item["status"] == "ok"
     assert item["amount_usd"] == "0"
     assert item["marks"]["long"]["status"] == "quote_error:RuntimeError"
+
+
+def test_quantity_vwap_is_full_size_and_contract_aware() -> None:
+    levels = [["10", "2"], ["11", "3"]]
+
+    assert sync_portfolio_funding.quantity_vwap(
+        levels, sync_portfolio_funding.Decimal("40"), contract_size=sync_portfolio_funding.Decimal("10")
+    ) == sync_portfolio_funding.Decimal("10.5")
+    assert (
+        sync_portfolio_funding.quantity_vwap(
+            levels,
+            sync_portfolio_funding.Decimal("60"),
+            contract_size=sync_portfolio_funding.Decimal("10"),
+        )
+        is None
+    )

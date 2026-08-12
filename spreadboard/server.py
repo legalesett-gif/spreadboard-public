@@ -10233,7 +10233,11 @@ def position_movement_note(item: dict[str, Any]) -> str:
             "Movement is withheld until both saved quantities have complete executable exit quotes."
         )
     dex = "paraswap_exact_sell_quote" in source
-    detail = "full-size DEX sell quote + CEX book VWAP" if dex else "full-size CEX book VWAP"
+    detail = (
+        "full-size DEX sell quote + CEX book VWAP"
+        if dex
+        else "full-size CEX book VWAP"
+    )
     return (
         f"Movement uses {detail} for the saved quantities; "
         "future exit trading fees and gas are not deducted until recorded."
