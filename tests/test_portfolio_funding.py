@@ -96,6 +96,9 @@ def test_exact_mark_requires_matching_quantity_and_fresh_fingerprint() -> None:
     assert marks["long"]["price_usd"] == 0.01514
     assert portfolio_funding.exact_marks({**row, "long_quantity": 1000}, snapshot, now=now) == {}
 
+    snapshot["positions"]["9:8"]["marks"]["long"]["quoted_at"] = "2026-08-11T23:40:00Z"
+    assert portfolio_funding.exact_marks(row, snapshot, now=now) == {}
+
 
 def test_private_sync_allocates_signed_events_to_position_window() -> None:
     row = position()
@@ -171,6 +174,21 @@ def test_sync_keeps_dex_mark_failure_separate_from_exact_funding() -> None:
     assert item["status"] == "ok"
     assert item["amount_usd"] == "0"
     assert item["marks"]["long"]["status"] == "quote_error:RuntimeError"
+
+
+def test_sync_does_not_quote_closed_positions() -> None:
+    calls = []
+    row = position(status="closed", closed_at="2026-08-12T00:01:00Z")
+
+    snapshot = sync_portfolio_funding.build_snapshot(
+        [row],
+        lambda *_: [],
+        mark_fetcher=lambda *args: calls.append(args),
+        generated_at="2026-08-12T00:05:00Z",
+    )
+
+    assert calls == []
+    assert snapshot["positions"]["9:8"]["marks"] == {}
 
 
 def test_quantity_vwap_is_full_size_and_contract_aware() -> None:

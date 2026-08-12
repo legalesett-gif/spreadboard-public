@@ -281,7 +281,7 @@ def build_snapshot(
 ) -> dict[str, Any]:
     """Allocate exact ledger rows to non-overlapping saved position windows."""
 
-    generated = generated_at or utc_iso()
+    started = generated_at or utc_iso()
     legs_by_market: dict[tuple[str, str], list[tuple[dict[str, Any], str]]] = defaultdict(list)
     result: dict[str, dict[str, Any]] = {}
     for position in positions:
@@ -295,7 +295,7 @@ def build_snapshot(
             "amount_usd": "0",
             "event_count": 0,
             "latest_event_at": None,
-            "synced_at": generated,
+            "synced_at": started,
             "legs": [],
             "marks": {},
         }
@@ -308,25 +308,6 @@ def build_snapshot(
                 result[key]["status"] = "missing_futures_symbol"
                 continue
             legs_by_market[(venue, symbol)].append((position, side))
-
-        resolved_legs = (
-            position.get("_resolved_legs")
-            if isinstance(position.get("_resolved_legs"), dict)
-            else {}
-        )
-        for side in ("long", "short"):
-            leg = resolved_legs.get(side) if isinstance(resolved_legs.get(side), dict) else {}
-            try:
-                if mark_fetcher is None:
-                    raise RuntimeError("position_mark_not_configured")
-                result[key]["marks"][side] = mark_fetcher(position, side, leg)
-            except Exception as exc:  # noqa: BLE001 - funding remains usable.
-                result[key]["marks"][side] = {
-                    "status": f"quote_error:{type(exc).__name__}",
-                    "source": "unavailable",
-                    "quantity": str(position.get(f"{side}_quantity") or ""),
-                    "quoted_at": generated,
-                }
 
     for (venue, symbol), legs in legs_by_market.items():
         earliest = min(timestamp_ms(position["opened_at"]) for position, _ in legs)
@@ -376,9 +357,37 @@ def build_snapshot(
                     "event_count": len(selected),
                 }
             )
+    # Full-position exit quotes are deliberately last. A slow private-ledger
+    # venue must not make a quote stale before this atomic snapshot is written.
+    for position in positions:
+        if str(position.get("status") or "").casefold() != "open":
+            continue
+        key = f"{int(position['user_id'])}:{int(position['id'])}"
+        resolved_legs = (
+            position.get("_resolved_legs")
+            if isinstance(position.get("_resolved_legs"), dict)
+            else {}
+        )
+        for side in ("long", "short"):
+            leg = resolved_legs.get(side) if isinstance(resolved_legs.get(side), dict) else {}
+            try:
+                if mark_fetcher is None:
+                    raise RuntimeError("position_mark_not_configured")
+                result[key]["marks"][side] = mark_fetcher(position, side, leg)
+            except Exception as exc:  # noqa: BLE001 - funding remains usable.
+                result[key]["marks"][side] = {
+                    "status": f"quote_error:{type(exc).__name__}",
+                    "source": "unavailable",
+                    "quantity": str(position.get(f"{side}_quantity") or ""),
+                    "quoted_at": utc_iso(),
+                }
+    completed = generated_at or utc_iso()
+    for item in result.values():
+        item["synced_at"] = completed
     return {
         "schema": portfolio_funding.SCHEMA,
-        "generated_at": generated,
+        "started_at": started,
+        "generated_at": completed,
         "read_only": True,
         "positions": result,
     }

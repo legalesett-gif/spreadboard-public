@@ -154,6 +154,14 @@ def exact_marks(
         mark = marks.get(side) if isinstance(marks.get(side), dict) else None
         if not mark or str(mark.get("status") or "") != "ok":
             continue
+        mark_age = _age_seconds(
+            str(mark.get("quoted_at") or synced_at),
+            now=now,
+        )
+        if position.get("status") == "open" and (
+            mark_age is None or mark_age > max(60.0, limit)
+        ):
+            continue
         try:
             price = float(mark["price_usd"])
             quantity = float(mark["quantity"])
