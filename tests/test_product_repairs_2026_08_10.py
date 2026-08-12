@@ -143,6 +143,35 @@ def test_portfolio_uses_edit_and_exact_funding_instead_of_manual_funding_button(
     assert "Add funding" not in html
 
 
+def test_closed_position_card_labels_realised_exit_basis() -> None:
+    html = server.render_position_card(
+        {
+            "id": 9,
+            "token": "DONE",
+            "status": "closed",
+            "quote_status": "closed",
+            "market_status": "closed",
+            "long_venue": "A",
+            "long_market_type": "Spot",
+            "long_quantity": 1,
+            "long_entry_price": 10,
+            "long_mark_price": 11,
+            "long_mark_basis": "stored_exit",
+            "short_venue": "B",
+            "short_market_type": "Futures",
+            "short_quantity": 1,
+            "short_entry_price": 12,
+            "short_mark_price": 11,
+            "short_mark_basis": "stored_exit",
+            "current_marked_spread_pct": 0,
+            "alert_rules": [],
+        }
+    )
+
+    assert "Realised exit spread" in html
+    assert "stored exit fill" in html
+
+
 def test_position_suggestions_ignore_stale_out_of_order_responses() -> None:
     script = server.render_account_script()
     assert "suggestionVersion=0" in script

@@ -10172,6 +10172,11 @@ def render_position_card(item: dict[str, Any]) -> str:
     )
     funding_note = position_funding_note(item)
     movement_note = position_movement_note(item)
+    spread_label = (
+        "Realised exit spread"
+        if item.get("status") == "closed"
+        else "Current marked spread"
+    )
     return f"""
     <article class="position-card" data-position-id="{h(item.get("id"))}" data-market-status="{h(quote_status)}">
       <header><div><span class="position-token">{h(item.get("token"))}</span><strong>{h(item.get("long_venue"))} → {h(item.get("short_venue"))}</strong><em>{h(item.get("long_market_type"))} / {h(item.get("short_market_type"))}</em></div><div class="position-status {status_class}"><span>{h(item.get("status"))}</span><strong>{market_label}</strong></div></header>
@@ -10182,7 +10187,7 @@ def render_position_card(item: dict[str, Any]) -> str:
         <span>Actual fees<strong>{fmt_signed_money(-float(item.get("fees_usd") or 0.0))}</strong></span>
         <span>Projected funding / 24h<strong>{fmt_signed_pct(item.get("current_net_funding_24h_pct"), digits=4)}</strong></span>
         <span>Return<strong>{fmt_signed_pct(item.get("return_pct"), digits=2)}</strong></span>
-        <span>Current marked spread<strong>{fmt_signed_pct(item.get("current_marked_spread_pct"), digits=3)}</strong></span>
+        <span>{spread_label}<strong>{fmt_signed_pct(item.get("current_marked_spread_pct"), digits=3)}</strong></span>
         <span>Entry spread<strong>{fmt_signed_pct(item.get("entry_spread_pct"), digits=3)}</strong></span>
       </div>
       <p class="position-funding-source">{h(movement_note)}<br>{h(funding_note)}</p>
@@ -10255,6 +10260,7 @@ def position_mark_basis_label(value: Any) -> str:
         "indexPrice": "venue index",
         "bid_ask_midpoint": "bid/ask midpoint",
         "dex_pool_reference": "DEX pool reference",
+        "stored_exit": "stored exit fill",
     }.get(str(value or ""), "reference price")
 
 

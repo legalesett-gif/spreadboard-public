@@ -179,8 +179,16 @@ def _hydrate_position(
             "current_net_funding_24h_pct": funding.get("net_projected_24h_pct"),
             "long_mark_price": long_mark,
             "short_mark_price": short_mark,
-            "long_mark_basis": movement_quote.get("long_basis"),
-            "short_mark_basis": movement_quote.get("short_basis"),
+            "long_mark_basis": (
+                "stored_exit"
+                if position.get("status") == "closed"
+                else movement_quote.get("long_basis")
+            ),
+            "short_mark_basis": (
+                "stored_exit"
+                if position.get("status") == "closed"
+                else movement_quote.get("short_basis")
+            ),
             "long_price_pnl_usd": long_pnl,
             "short_price_pnl_usd": short_pnl,
             "price_pnl_usd": price_pnl,

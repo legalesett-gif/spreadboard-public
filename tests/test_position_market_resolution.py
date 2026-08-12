@@ -241,6 +241,21 @@ def test_reference_book_uses_best_bid_and_ask_without_walking_depth() -> None:
     assert portfolio._midpoint(11.0, 10.0) is None
 
 
+def test_closed_position_labels_stored_exit_fills() -> None:
+    position = {
+        **_dex_position(),
+        "status": "closed",
+        "closed_at": "2026-08-12T00:05:00Z",
+        "long_exit_price": 0.015,
+        "short_exit_price": 0.016,
+    }
+
+    result = portfolio._hydrate_position(position, [], funding_snapshot={})
+
+    assert result["long_mark_basis"] == "stored_exit"
+    assert result["short_mark_basis"] == "stored_exit"
+
+
 def test_position_chart_link_uses_exact_custom_route_and_since_entry() -> None:
     position = {
         **_dex_position(),
