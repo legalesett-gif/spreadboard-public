@@ -19,7 +19,7 @@ import sqlite3
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import serialization
-from py_vapid import Vapid
+from cryptography.hazmat.primitives.asymmetric import ec
 
 
 ENV_PATH = Path("/opt/spreadboard/secrets/app.env")
@@ -38,10 +38,9 @@ def _parse(path: Path) -> list[tuple[str | None, str]]:
 
 
 def _vapid_pair() -> tuple[str, str]:
-    vapid = Vapid()
-    vapid.generate_keys()
-    private_number = vapid.private_key.private_numbers().private_value.to_bytes(32, "big")
-    public_point = vapid.public_key.public_bytes(
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    private_number = private_key.private_numbers().private_value.to_bytes(32, "big")
+    public_point = private_key.public_key().public_bytes(
         serialization.Encoding.X962,
         serialization.PublicFormat.UncompressedPoint,
     )
