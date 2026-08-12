@@ -10105,9 +10105,9 @@ def render_account_page(
       </header>
       <section class="account-kpis">
         {render_account_kpi("Open positions", summary.get("open_positions"), "actively marked")}
-        {render_account_kpi("Portfolio PnL", fmt_signed_money(summary.get("price_and_funding_pnl_usd")), "movement + settled funding - fees")}
-        {render_account_kpi("Settled funding", fmt_signed_money(summary.get("funding_income_usd")), "private exchange ledger")}
-        {render_account_kpi("Return", fmt_signed_pct(summary.get("monthly_return_pct"), digits=2), "on allocated capital")}
+        {render_account_kpi("Open-position PnL", fmt_signed_money(summary.get("open_position_pnl_usd")), "movement + settled funding - fees")}
+        {render_account_kpi("Open settled funding", fmt_signed_money(summary.get("open_position_funding_usd")), "private exchange ledger")}
+        {render_account_kpi("Open return", fmt_signed_pct(summary.get("open_position_return_pct"), digits=2), "on allocated capital")}
       </section>
       <nav class="account-tabs" aria-label="Account sections"><button class="active" data-account-tab="positions">Positions</button><button data-account-tab="alerts">Alerts <i>{h(len([item for item in notifications if not item.get("read_at")]))}</i></button><button data-account-tab="settings">Settings</button>{'<button data-account-tab="members">Members</button>' if user.can_manage_members else ""}</nav>
       <section data-account-panel="positions">

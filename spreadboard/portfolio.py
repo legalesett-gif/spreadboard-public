@@ -580,6 +580,16 @@ def _portfolio_totals(
     )
     funding_unknown = sum(not bool(item.get("funding_known")) for item in positions)
     funding = funding_total if funding_unknown == 0 else None
+    open_funding_values = [
+        float(item["funding_income_usd"])
+        for item in open_positions
+        if item.get("funding_income_usd") is not None and item.get("funding_known")
+    ]
+    open_funding = (
+        sum(open_funding_values)
+        if len(open_funding_values) == len(open_positions)
+        else None
+    )
     realized_values = [
         float(item["total_pnl_usd"])
         for item in closed_positions
@@ -609,7 +619,9 @@ def _portfolio_totals(
         "price_and_funding_pnl_usd": total,
         "realized_pnl_usd": realized,
         "unrealized_pnl_usd": unrealized,
+        "open_position_pnl_usd": unrealized,
         "funding_income_usd": funding,
+        "open_position_funding_usd": open_funding,
         "funding_unknown_positions": funding_unknown,
         "monthly_capital_usd": capital,
         "capital_basis": "configured_monthly"
@@ -617,6 +629,11 @@ def _portfolio_totals(
         else "tracked_positions",
         "monthly_return_pct": (
             total / capital * 100.0 if total is not None and capital and capital > 0 else None
+        ),
+        "open_position_return_pct": (
+            unrealized / capital * 100.0
+            if unrealized is not None and capital and capital > 0
+            else None
         ),
     }
 

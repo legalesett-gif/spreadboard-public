@@ -285,6 +285,9 @@ def test_portfolio_separates_price_funding_and_fees(
     assert marked["fees_usd"] == 2
     assert marked["total_pnl_usd"] == 29
     assert snapshot["summary"]["monthly_return_pct"] == pytest.approx(2.9)
+    assert snapshot["summary"]["open_position_pnl_usd"] == pytest.approx(29)
+    assert snapshot["summary"]["open_position_funding_usd"] == pytest.approx(5)
+    assert snapshot["summary"]["open_position_return_pct"] == pytest.approx(2.9)
 
 
 def test_portfolio_return_falls_back_to_tracked_position_capital() -> None:
@@ -295,6 +298,7 @@ def test_portfolio_return_falls_back_to_tracked_position_capital() -> None:
     assert summary["monthly_capital_usd"] == 500
     assert summary["capital_basis"] == "tracked_positions"
     assert summary["monthly_return_pct"] == pytest.approx(5)
+    assert summary["open_position_return_pct"] == pytest.approx(5)
 
 
 def test_background_position_alerts_trigger_once_and_rearm(
