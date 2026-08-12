@@ -10178,7 +10178,7 @@ def render_position_card(item: dict[str, Any]) -> str:
         <span>Projected funding / 24h<strong>{fmt_signed_pct(item.get("current_net_funding_24h_pct"), digits=4)}</strong></span>
         <span>Return<strong>{fmt_signed_pct(item.get("return_pct"), digits=2)}</strong></span>
         <span>Exit spread<strong>{fmt_signed_pct(item.get("current_exit_spread_pct"), digits=3)}</strong></span>
-        <span>Open spread<strong>{fmt_signed_pct(item.get("current_open_spread_pct"), digits=3)}</strong></span>
+        <span>Entry spread<strong>{fmt_signed_pct(item.get("entry_spread_pct"), digits=3)}</strong></span>
       </div>
       <p class="position-funding-source">{h(movement_note)}<br>{h(funding_note)}</p>
       <div class="position-legs"><div><span>Long</span><strong>{h(item.get("long_venue"))} · {h(item.get("long_quantity"))}</strong><em>{fmt_price(item.get("long_entry_price"))} → {fmt_price(item.get("long_mark_price"))}</em><em>Funding {fmt_signed_pct(long_funding.get("rate_pct"), digits=4)} / {h(long_funding.get("interval_hours") or "—")}h</em></div><div><span>Short</span><strong>{h(item.get("short_venue"))} · {h(item.get("short_quantity"))}</strong><em>{fmt_price(item.get("short_entry_price"))} → {fmt_price(item.get("short_mark_price"))}</em><em>Funding {fmt_signed_pct(short_funding.get("rate_pct"), digits=4)} / {h(short_funding.get("interval_hours") or "—")}h</em></div></div>
