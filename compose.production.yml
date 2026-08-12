@@ -122,6 +122,12 @@ services:
       SPREADBOARD_DATA_DIR: /app/runtime
       SPREADBOARD_ACCOUNTING_PRIVATE_KEY_FILE: /run/secrets/accounting-private.pem
     command: ["/app/.venv/bin/python", "scripts/accounting_worker.py", "--interval", "300"]
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import json,time; from pathlib import Path; d=json.loads(Path('/app/runtime/accounting_worker_status.json').read_text()); stamp=str(d.get('generated_at') or '').replace('Z','+00:00'); from datetime import datetime; assert time.time()-datetime.fromisoformat(stamp).timestamp()<900"]
+      interval: 60s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
     volumes:
       - /opt/spreadboard/runtime:/app/runtime
       - /opt/spreadboard/secrets/accounting-private.pem:/run/secrets/accounting-private.pem:ro
