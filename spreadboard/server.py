@@ -124,10 +124,21 @@ TERMS_VERSION = "2026-08-10"
 # Exact server-side Research Pro gates.  Navigation is presentation only; these
 # checks are the authority that prevents a Scanner account from opening the
 # intelligence workspace or its fair-price lane by typing a URL directly.
-RESEARCH_PRO_PATHS = frozenset({
-    "/fair", "/intel", "/triage", "/signals", "/community", "/playbook",
-    "/api/intel", "/api/triage", "/api/signals", "/api/community", "/api/playbook",
-})
+RESEARCH_PRO_PATHS = frozenset(
+    {
+        "/fair",
+        "/intel",
+        "/triage",
+        "/signals",
+        "/community",
+        "/playbook",
+        "/api/intel",
+        "/api/triage",
+        "/api/signals",
+        "/api/community",
+        "/api/playbook",
+    }
+)
 
 DISPLAY_LABELS = {
     "available_on_pair_page": "Available on pair page",
@@ -322,7 +333,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             "/service-worker.js",
             "/executor",
         }
-        if parsed.path in public_paths or parsed.path.startswith(("/pair/", "/token/", "/api/", "/assets/")):
+        if parsed.path in public_paths or parsed.path.startswith(
+            ("/pair/", "/token/", "/api/", "/assets/")
+        ):
             self._send_empty(HTTPStatus.OK)
             return
         self.send_error(HTTPStatus.NOT_FOUND, "not found")
@@ -341,11 +354,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/forgot-password":
                 self._send_html(render_forgot_password_page())
             elif parsed.path == "/status":
-                self._send_html(render_status_page(api_public_status(
-                    self.server.board_path,
-                    self.server.config,
-                    self.server.position_alert_worker,
-                )))
+                self._send_html(
+                    render_status_page(
+                        api_public_status(
+                            self.server.board_path,
+                            self.server.config,
+                            self.server.position_alert_worker,
+                        )
+                    )
+                )
             elif parsed.path == "/pricing":
                 self._send_html(render_pricing_page(query))
             elif parsed.path.startswith("/r/"):
@@ -375,9 +392,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/fair":
                 self._send_html(render_fair_price_page())
             elif parsed.path == "/set-password":
-                self._send_html(
-                    render_set_password_page(query, self.server.accounts_path)
-                )
+                self._send_html(render_set_password_page(query, self.server.accounts_path))
             elif parsed.path == "/free":
                 self._send_html(render_free_page(self.server.board_path))
             elif parsed.path == "/terms":
@@ -393,9 +408,13 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/subscription":
                 self._send_html(render_subscription_page(query))
             elif parsed.path == "/account":
-                self._send_html(render_account_page(self.server.board_path, self.server.accounts_path))
+                self._send_html(
+                    render_account_page(self.server.board_path, self.server.accounts_path)
+                )
             elif parsed.path == "/partner":
-                self._send_html(render_partner_page(self._required_user(), self.server.accounts_path))
+                self._send_html(
+                    render_partner_page(self._required_user(), self.server.accounts_path)
+                )
             elif parsed.path.startswith("/api/billing/crypto/qr/"):
                 user = self._required_user()
                 try:
@@ -408,7 +427,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 symbol = str((query.get("token") or [""])[0]).upper()
                 option = next(
                     (
-                        item for item in invoice.get("payment_options") or []
+                        item
+                        for item in invoice.get("payment_options") or []
                         if str(item.get("symbol") or "").upper() == symbol
                     ),
                     None,
@@ -442,10 +462,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 user = self._required_user()
                 if not user.is_admin:
                     raise PermissionError("admin_required")
-                self._send_json({
-                    "ok": True,
-                    "payments": crypto_billing.pending_payments(db_path=self.server.accounts_path),
-                })
+                self._send_json(
+                    {
+                        "ok": True,
+                        "payments": crypto_billing.pending_payments(
+                            db_path=self.server.accounts_path
+                        ),
+                    }
+                )
             elif parsed.path == "/api/session":
                 user = getattr(self, "current_user", None)
                 self._send_json(
@@ -460,87 +484,149 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     status=HTTPStatus.OK if user else HTTPStatus.UNAUTHORIZED,
                 )
             elif parsed.path == "/api/portfolio":
-                self._send_json(api_portfolio(self._required_user(), self.server.board_path, self.server.accounts_path))
+                self._send_json(
+                    api_portfolio(
+                        self._required_user(), self.server.board_path, self.server.accounts_path
+                    )
+                )
             elif parsed.path == "/api/position-suggestions":
                 self._send_json(api_position_suggestions(self.server.board_path, query))
             elif parsed.path == "/api/notification-preferences":
                 user = self._required_user()
-                self._send_json({"ok": True, "preferences": accounts.notification_preferences(user.id, db_path=self.server.accounts_path)})
+                self._send_json(
+                    {
+                        "ok": True,
+                        "preferences": accounts.notification_preferences(
+                            user.id, db_path=self.server.accounts_path
+                        ),
+                    }
+                )
             elif parsed.path == "/api/telegram/status":
                 user = self._required_user()
-                self._send_json({
-                    "ok": True,
-                    **accounts.telegram_link_status(user.id, db_path=self.server.accounts_path),
-                })
+                self._send_json(
+                    {
+                        "ok": True,
+                        **accounts.telegram_link_status(user.id, db_path=self.server.accounts_path),
+                    }
+                )
             elif parsed.path == "/api/web-push/status":
                 user = self._required_user()
-                self._send_json({
-                    "ok": True,
-                    **web_push.status(),
-                    "worker_running": bool(
-                        self.server.web_push_worker
-                        and self.server.web_push_worker.running
-                    ),
-                    "subscription_count": accounts.web_push_subscription_count(
-                        user.id, db_path=self.server.accounts_path
-                    ),
-                })
+                self._send_json(
+                    {
+                        "ok": True,
+                        **web_push.status(),
+                        "worker_running": bool(
+                            self.server.web_push_worker and self.server.web_push_worker.running
+                        ),
+                        "subscription_count": accounts.web_push_subscription_count(
+                            user.id, db_path=self.server.accounts_path
+                        ),
+                    }
+                )
             elif parsed.path == "/api/market-alert-rules":
                 user = self._required_user()
-                self._send_json({"ok": True, "rules": accounts.list_market_alert_rules(user.id, db_path=self.server.accounts_path)})
+                self._send_json(
+                    {
+                        "ok": True,
+                        "rules": accounts.list_market_alert_rules(
+                            user.id, db_path=self.server.accounts_path
+                        ),
+                    }
+                )
             elif parsed.path == "/api/saved-charts":
                 user = self._required_user()
-                self._send_json({
-                    "ok": True,
-                    "charts": accounts.list_saved_charts(user.id, db_path=self.server.accounts_path),
-                })
+                self._send_json(
+                    {
+                        "ok": True,
+                        "charts": accounts.list_saved_charts(
+                            user.id, db_path=self.server.accounts_path
+                        ),
+                    }
+                )
             elif parsed.path == "/api/filter-presets":
                 user = self._required_user()
-                self._send_json({
-                    "ok": True,
-                    "presets": accounts.list_filter_presets(user.id, db_path=self.server.accounts_path),
-                })
+                self._send_json(
+                    {
+                        "ok": True,
+                        "presets": accounts.list_filter_presets(
+                            user.id, db_path=self.server.accounts_path
+                        ),
+                    }
+                )
             elif parsed.path == "/api/watchlist":
                 user = self._required_user()
-                self._send_json({
-                    "ok": True,
-                    "tokens": accounts.list_watchlist(user.id, db_path=self.server.accounts_path),
-                })
+                self._send_json(
+                    {
+                        "ok": True,
+                        "tokens": accounts.list_watchlist(
+                            user.id, db_path=self.server.accounts_path
+                        ),
+                    }
+                )
             elif parsed.path == "/api/account-users":
                 user = self._required_user()
                 if not user.can_manage_members:
-                    self._send_json({"ok": False, "error": "member_manager_required"}, status=HTTPStatus.FORBIDDEN)
+                    self._send_json(
+                        {"ok": False, "error": "member_manager_required"},
+                        status=HTTPStatus.FORBIDDEN,
+                    )
                 else:
-                    self._send_json({"ok": True, "users": accounts.list_users(db_path=self.server.accounts_path)})
+                    self._send_json(
+                        {
+                            "ok": True,
+                            "users": accounts.list_users(db_path=self.server.accounts_path),
+                        }
+                    )
             elif parsed.path == "/api/admin/analytics":
                 user = self._required_user()
                 if not user.can_manage_members:
-                    self._send_json({"ok": False, "error": "member_manager_required"}, status=HTTPStatus.FORBIDDEN)
+                    self._send_json(
+                        {"ok": False, "error": "member_manager_required"},
+                        status=HTTPStatus.FORBIDDEN,
+                    )
                 else:
-                    self._send_json({
-                        "ok": True,
-                        "analytics": accounts.page_view_summary(db_path=self.server.accounts_path),
-                        "subscriptions": subscription_lifecycle.status(
-                            db_path=self.server.accounts_path
-                        ),
-                    })
+                    self._send_json(
+                        {
+                            "ok": True,
+                            "analytics": accounts.page_view_summary(
+                                db_path=self.server.accounts_path
+                            ),
+                            "subscriptions": subscription_lifecycle.status(
+                                db_path=self.server.accounts_path
+                            ),
+                        }
+                    )
             elif parsed.path == "/api/partner/summary":
                 user = self._required_user()
                 summary = affiliates.partner_summary(user.id, db_path=self.server.accounts_path)
                 if summary is None and not user.is_admin:
-                    self._send_json({"ok": False, "error": "partner_account_required"}, status=HTTPStatus.FORBIDDEN)
+                    self._send_json(
+                        {"ok": False, "error": "partner_account_required"},
+                        status=HTTPStatus.FORBIDDEN,
+                    )
                 else:
                     self._send_json({"ok": True, "summary": summary})
             elif parsed.path == "/api/admin/partners":
                 user = self._required_user()
                 if not user.is_admin:
-                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                    self._send_json(
+                        {"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN
+                    )
                 else:
-                    self._send_json({"ok": True, "partners": affiliates.list_partners(db_path=self.server.accounts_path)})
-            elif parsed.path.startswith("/api/admin/partners/") and parsed.path.endswith("/summary"):
+                    self._send_json(
+                        {
+                            "ok": True,
+                            "partners": affiliates.list_partners(db_path=self.server.accounts_path),
+                        }
+                    )
+            elif parsed.path.startswith("/api/admin/partners/") and parsed.path.endswith(
+                "/summary"
+            ):
                 user = self._required_user()
                 if not user.is_admin:
-                    self._send_json({"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN)
+                    self._send_json(
+                        {"ok": False, "error": "admin_required"}, status=HTTPStatus.FORBIDDEN
+                    )
                 else:
                     partner_id = int(parsed.path.split("/")[4])
                     summary = affiliates.partner_summary_for_id(
@@ -551,51 +637,88 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         status=HTTPStatus.OK if summary is not None else HTTPStatus.NOT_FOUND,
                     )
             elif parsed.path == "/":
-                self._send_html(render_markets_page(
-                    self.server.board_path, self.server.config, query,
-                    user=getattr(self, "current_user", None), accounts_path=self.server.accounts_path,
-                ))
+                self._send_html(
+                    render_markets_page(
+                        self.server.board_path,
+                        self.server.config,
+                        query,
+                        user=getattr(self, "current_user", None),
+                        accounts_path=self.server.accounts_path,
+                    )
+                )
             elif parsed.path == "/markets":
-                self._send_html(render_markets_page(
-                    self.server.board_path, self.server.config, query,
-                    user=getattr(self, "current_user", None), accounts_path=self.server.accounts_path,
-                ))
+                self._send_html(
+                    render_markets_page(
+                        self.server.board_path,
+                        self.server.config,
+                        query,
+                        user=getattr(self, "current_user", None),
+                        accounts_path=self.server.accounts_path,
+                    )
+                )
             elif parsed.path == "/intel":
-                self._send_html(render_intel_page(self.server.board_path, self.server.config, query))
+                self._send_html(
+                    render_intel_page(self.server.board_path, self.server.config, query)
+                )
             elif parsed.path == "/triage":
-                self._send_html(render_triage_page(self.server.board_path, self.server.config, query))
+                self._send_html(
+                    render_triage_page(self.server.board_path, self.server.config, query)
+                )
             elif parsed.path == "/arbitrage":
-                self._send_html(render_markets_page(
-                    self.server.board_path, self.server.config, query,
-                    user=getattr(self, "current_user", None), accounts_path=self.server.accounts_path,
-                ))
+                self._send_html(
+                    render_markets_page(
+                        self.server.board_path,
+                        self.server.config,
+                        query,
+                        user=getattr(self, "current_user", None),
+                        accounts_path=self.server.accounts_path,
+                    )
+                )
             elif parsed.path == "/charts":
-                self._send_html(render_charts_page(
-                    self.server.board_path,
-                    self.server.config,
-                    query,
-                    user=getattr(self, "current_user", None),
-                    accounts_path=self.server.accounts_path,
-                ))
+                self._send_html(
+                    render_charts_page(
+                        self.server.board_path,
+                        self.server.config,
+                        query,
+                        user=getattr(self, "current_user", None),
+                        accounts_path=self.server.accounts_path,
+                    )
+                )
             elif parsed.path == "/signals":
-                self._send_html(render_signals_page(self.server.board_path, self.server.config, query))
+                self._send_html(
+                    render_signals_page(self.server.board_path, self.server.config, query)
+                )
             elif parsed.path == "/funding":
-                self._send_html(render_funding_page(self.server.board_path, self.server.config, query))
+                self._send_html(
+                    render_funding_page(self.server.board_path, self.server.config, query)
+                )
             elif parsed.path == "/community":
-                self._send_html(render_community_page(self.server.board_path, self.server.config, query))
+                self._send_html(
+                    render_community_page(self.server.board_path, self.server.config, query)
+                )
             elif parsed.path == "/playbook":
-                self._send_html(render_playbook_page(self.server.board_path, self.server.config, query))
+                self._send_html(
+                    render_playbook_page(self.server.board_path, self.server.config, query)
+                )
             elif parsed.path == "/learn":
                 self._send_html(render_learn_page())
             elif parsed.path == "/profile":
-                self._send_html(render_account_page(self.server.board_path, self.server.accounts_path))
+                self._send_html(
+                    render_account_page(self.server.board_path, self.server.accounts_path)
+                )
             elif parsed.path == "/alerts":
-                self._send_html(render_alerts_page(self.server.board_path, self.server.config, query))
+                self._send_html(
+                    render_alerts_page(self.server.board_path, self.server.config, query)
+                )
             elif parsed.path == "/watchlist":
-                self._send_html(render_watchlist_page(self.server.board_path, self.server.config, query))
+                self._send_html(
+                    render_watchlist_page(self.server.board_path, self.server.config, query)
+                )
             elif parsed.path.startswith("/pair/"):
                 route_key = unquote(parsed.path.removeprefix("/pair/"))
-                self._send_html(render_pair_page(route_key, self.server.board_path, self.server.config))
+                self._send_html(
+                    render_pair_page(route_key, self.server.board_path, self.server.config)
+                )
             elif parsed.path.startswith("/token/"):
                 symbol = _clean_symbol(parsed.path.removeprefix("/token/"))
                 self._send_html(render_token_page(symbol, self.server.board_path))
@@ -607,10 +730,31 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 catalog = chart_catalog.load()
                 token = _clean_symbol(_query_first(query, "token") or "")
                 if token:
-                    selected = [item for item in catalog.get("markets") or [] if item.get("token") == token]
-                    self._send_json({"ok": bool(selected), "token": token, "count": len(selected), "markets": selected, "generated_at": catalog.get("generated_at")})
+                    selected = [
+                        item for item in catalog.get("markets") or [] if item.get("token") == token
+                    ]
+                    self._send_json(
+                        {
+                            "ok": bool(selected),
+                            "token": token,
+                            "count": len(selected),
+                            "markets": selected,
+                            "generated_at": catalog.get("generated_at"),
+                        }
+                    )
                 else:
-                    self._send_json({key: value for key, value in catalog.items() if key != "markets"} | {"tokens": sorted({item.get("token") for item in catalog.get("markets") or [] if item.get("token")})})
+                    self._send_json(
+                        {key: value for key, value in catalog.items() if key != "markets"}
+                        | {
+                            "tokens": sorted(
+                                {
+                                    item.get("token")
+                                    for item in catalog.get("markets") or []
+                                    if item.get("token")
+                                }
+                            )
+                        }
+                    )
             elif parsed.path == "/api/alert-context":
                 self._send_json(api_alert_context(self.server.board_path, query))
             elif parsed.path == "/api/intel":
@@ -658,22 +802,30 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_chart_stream(route_key, query)
             elif parsed.path.startswith("/api/token/"):
                 symbol = _clean_symbol(parsed.path.removeprefix("/api/token/"))
-                self._send_json(api_token(symbol, self.server.board_path, include_live=not _query_bool(query, "local")))
+                self._send_json(
+                    api_token(
+                        symbol, self.server.board_path, include_live=not _query_bool(query, "local")
+                    )
+                )
             elif parsed.path == "/api/health":
-                self._send_json(api_health(
-                    self.server.board_path,
-                    self.server.config,
-                    self.server.alert_watcher,
-                    self.server.position_alert_worker,
-                    self.server.subscription_lifecycle_worker,
-                ))
+                self._send_json(
+                    api_health(
+                        self.server.board_path,
+                        self.server.config,
+                        self.server.alert_watcher,
+                        self.server.position_alert_worker,
+                        self.server.subscription_lifecycle_worker,
+                    )
+                )
             elif parsed.path == "/api/status":
-                self._send_json(api_public_status(
-                    self.server.board_path,
-                    self.server.config,
-                    self.server.position_alert_worker,
-                    self.server.subscription_lifecycle_worker,
-                ))
+                self._send_json(
+                    api_public_status(
+                        self.server.board_path,
+                        self.server.config,
+                        self.server.position_alert_worker,
+                        self.server.subscription_lifecycle_worker,
+                    )
+                )
             elif parsed.path == "/api/executor-boundary":
                 self._send_json({"ok": True, **executor_boundary.status()})
             elif parsed.path == "/assets/lightweight-charts.js":
@@ -811,12 +963,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     invoice_id = int(payload.get("invoice_id") or 0)
                 except (TypeError, ValueError):
                     raise ValueError("invalid_invoice_id") from None
-                self._send_json({
-                    "ok": True,
-                    "result": crypto_billing.settle_manually(
-                        invoice_id, db_path=self.server.accounts_path
-                    ),
-                })
+                self._send_json(
+                    {
+                        "ok": True,
+                        "result": crypto_billing.settle_manually(
+                            invoice_id, db_path=self.server.accounts_path
+                        ),
+                    }
+                )
             elif parsed.path == "/api/admin/partners":
                 if not user.is_admin:
                     raise PermissionError("admin_required")
@@ -840,7 +994,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     display_name=clean_name,
                     db_path=self.server.accounts_path,
                 )
-                base = os.environ.get("SPREADBOARD_PUBLIC_URL", "https://spreadarbitrage.ink").strip().rstrip("/")
+                base = (
+                    os.environ.get("SPREADBOARD_PUBLIC_URL", "https://spreadarbitrage.ink")
+                    .strip()
+                    .rstrip("/")
+                )
                 self._send_json(
                     {
                         "ok": True,
@@ -868,7 +1026,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     db_path=self.server.accounts_path,
                 )
                 self._send_json({"ok": True, "partner": partner})
-            elif parsed.path.startswith("/api/admin/partners/") and parsed.path.endswith("/payouts"):
+            elif parsed.path.startswith("/api/admin/partners/") and parsed.path.endswith(
+                "/payouts"
+            ):
                 if not user.is_admin:
                     raise PermissionError("admin_required")
                 partner_id = int(parsed.path.split("/")[4])
@@ -888,7 +1048,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     db_path=self.server.accounts_path,
                 )
                 self._send_json({"ok": True, "batch": batch})
-            elif parsed.path.startswith("/api/admin/commissions/") and parsed.path.endswith("/void"):
+            elif parsed.path.startswith("/api/admin/commissions/") and parsed.path.endswith(
+                "/void"
+            ):
                 if not user.is_admin:
                     raise PermissionError("admin_required")
                 commission_id = int(parsed.path.split("/")[4])
@@ -899,19 +1061,33 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json({"ok": True, "commission": commission})
             elif parsed.path == "/api/positions":
-                position = accounts.create_position(user.id, payload, db_path=self.server.accounts_path)
+                position = accounts.create_position(
+                    user.id, payload, db_path=self.server.accounts_path
+                )
                 self._send_json({"ok": True, "position": position}, status=HTTPStatus.CREATED)
+            elif parsed.path.startswith("/api/positions/") and parsed.path.endswith("/edit"):
+                position_id = int(parsed.path.split("/")[3])
+                position = accounts.update_position(
+                    user.id, position_id, payload, db_path=self.server.accounts_path
+                )
+                self._send_json({"ok": True, "position": position})
             elif parsed.path.startswith("/api/positions/") and parsed.path.endswith("/close"):
                 position_id = int(parsed.path.split("/")[3])
-                position = accounts.close_position(user.id, position_id, payload, db_path=self.server.accounts_path)
+                position = accounts.close_position(
+                    user.id, position_id, payload, db_path=self.server.accounts_path
+                )
                 self._send_json({"ok": True, "position": position})
             elif parsed.path.startswith("/api/positions/") and parsed.path.endswith("/funding"):
                 position_id = int(parsed.path.split("/")[3])
-                event = accounts.add_funding_cashflow(user.id, position_id, payload, db_path=self.server.accounts_path)
+                event = accounts.add_funding_cashflow(
+                    user.id, position_id, payload, db_path=self.server.accounts_path
+                )
                 self._send_json({"ok": True, "funding_cashflow": event}, status=HTTPStatus.CREATED)
             elif parsed.path.startswith("/api/positions/") and parsed.path.endswith("/alerts"):
                 position_id = int(parsed.path.split("/")[3])
-                rule = accounts.add_alert_rule(user.id, position_id, payload, db_path=self.server.accounts_path)
+                rule = accounts.add_alert_rule(
+                    user.id, position_id, payload, db_path=self.server.accounts_path
+                )
                 self._send_json({"ok": True, "alert_rule": rule}, status=HTTPStatus.CREATED)
             elif parsed.path == "/api/account-settings":
                 updated = accounts.update_account_settings(
@@ -926,10 +1102,21 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 # inputs are calculated, returned, and never written to disk.
                 self._send_json(margin_planner.calculate(payload))
             elif parsed.path == "/api/telegram/link":
-                token = accounts.create_telegram_link_token(user.id, db_path=self.server.accounts_path)
-                self._send_json({"ok": True, "url": telegram_bot.link_url(token), "expires_in_seconds": 600})
+                token = accounts.create_telegram_link_token(
+                    user.id, db_path=self.server.accounts_path
+                )
+                self._send_json(
+                    {"ok": True, "url": telegram_bot.link_url(token), "expires_in_seconds": 600}
+                )
             elif parsed.path == "/api/telegram/unlink":
-                self._send_json({"ok": True, "unlinked": accounts.unlink_telegram_chat(user.id, db_path=self.server.accounts_path)})
+                self._send_json(
+                    {
+                        "ok": True,
+                        "unlinked": accounts.unlink_telegram_chat(
+                            user.id, db_path=self.server.accounts_path
+                        ),
+                    }
+                )
             elif parsed.path == "/api/notification-preferences":
                 result = save_pushover_preferences(
                     user.id,
@@ -946,7 +1133,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     user_agent=self.headers.get("User-Agent", ""),
                     db_path=self.server.accounts_path,
                 )
-                self._send_json({"ok": True, "subscription": subscription}, status=HTTPStatus.CREATED)
+                self._send_json(
+                    {"ok": True, "subscription": subscription}, status=HTTPStatus.CREATED
+                )
             elif parsed.path == "/api/web-push/unsubscribe":
                 removed = accounts.remove_web_push_subscription(
                     user.id,
@@ -1004,7 +1193,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 removed = accounts.delete_filter_preset(
                     user.id, preset_id, db_path=self.server.accounts_path
                 )
-                self._send_json({"ok": removed}, status=HTTPStatus.OK if removed else HTTPStatus.NOT_FOUND)
+                self._send_json(
+                    {"ok": removed}, status=HTTPStatus.OK if removed else HTTPStatus.NOT_FOUND
+                )
             elif parsed.path == "/api/watchlist":
                 tokens = accounts.replace_watchlist(
                     user.id, payload.get("tokens"), db_path=self.server.accounts_path
@@ -1016,7 +1207,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 tail = parsed.path.removeprefix("/api/market-alert-rules/")
                 rule_id, _, action = tail.partition("/")
                 if not rule_id.isdigit():
-                    self._send_json({"ok": False, "error": "unknown_rule"}, status=HTTPStatus.NOT_FOUND)
+                    self._send_json(
+                        {"ok": False, "error": "unknown_rule"}, status=HTTPStatus.NOT_FOUND
+                    )
                 elif action == "delete":
                     removed = accounts.delete_market_alert_rule(
                         user.id, int(rule_id), db_path=self.server.accounts_path
@@ -1038,7 +1231,10 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "updated": count})
             elif parsed.path == "/api/account-users":
                 if not user.can_manage_members:
-                    self._send_json({"ok": False, "error": "member_manager_required"}, status=HTTPStatus.FORBIDDEN)
+                    self._send_json(
+                        {"ok": False, "error": "member_manager_required"},
+                        status=HTTPStatus.FORBIDDEN,
+                    )
                 else:
                     password = str(payload.get("password") or "")
                     if password:
@@ -1046,8 +1242,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                             email=str(payload.get("email") or ""),
                             display_name=str(payload.get("display_name") or ""),
                             password=password,
-                            subscription_status=str(payload.get("subscription_status") or "trialing"),
-                            subscription_tier=str(payload.get("subscription_tier") or "research_pro"),
+                            subscription_status=str(
+                                payload.get("subscription_status") or "trialing"
+                            ),
+                            subscription_tier=str(
+                                payload.get("subscription_tier") or "research_pro"
+                            ),
                             subscription_days=int(payload.get("subscription_days") or 30),
                             db_path=self.server.accounts_path,
                         )
@@ -1057,8 +1257,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                             email=str(payload.get("email") or ""),
                             display_name=str(payload.get("display_name") or ""),
                             role=str(payload.get("role") or "member"),
-                            subscription_status=str(payload.get("subscription_status") or "trialing"),
-                            subscription_tier=str(payload.get("subscription_tier") or "research_pro"),
+                            subscription_status=str(
+                                payload.get("subscription_status") or "trialing"
+                            ),
+                            subscription_tier=str(
+                                payload.get("subscription_tier") or "research_pro"
+                            ),
                             subscription_days=int(payload.get("subscription_days") or 30),
                             db_path=self.server.accounts_path,
                         )
@@ -1073,7 +1277,10 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         )
             elif parsed.path.startswith("/api/account-users/") and parsed.path.endswith("/invite"):
                 if not user.can_manage_members:
-                    self._send_json({"ok": False, "error": "member_manager_required"}, status=HTTPStatus.FORBIDDEN)
+                    self._send_json(
+                        {"ok": False, "error": "member_manager_required"},
+                        status=HTTPStatus.FORBIDDEN,
+                    )
                 else:
                     target_id = int(parsed.path.split("/")[3])
                     token = accounts.create_password_token(
@@ -1083,9 +1290,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     )
                     base = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
                     self._send_json({"ok": True, "url": f"{base}/set-password?token={token}"})
-            elif parsed.path.startswith("/api/account-users/") and parsed.path.endswith("/subscription"):
+            elif parsed.path.startswith("/api/account-users/") and parsed.path.endswith(
+                "/subscription"
+            ):
                 if not user.can_manage_members:
-                    self._send_json({"ok": False, "error": "member_manager_required"}, status=HTTPStatus.FORBIDDEN)
+                    self._send_json(
+                        {"ok": False, "error": "member_manager_required"},
+                        status=HTTPStatus.FORBIDDEN,
+                    )
                 else:
                     target_id = int(parsed.path.split("/")[3])
                     updated = accounts.update_subscription(
@@ -1096,7 +1308,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     )
                     self._send_json({"ok": True, "user": updated})
             elif parsed.path == "/api/alert-test":
-                self._send_json(alerts.send_user_test_alert(user.id, accounts_path=self.server.accounts_path))
+                self._send_json(
+                    alerts.send_user_test_alert(user.id, accounts_path=self.server.accounts_path)
+                )
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "not found")
         except PermissionError as exc:
@@ -1178,7 +1392,36 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         self.current_user = None
         if not accounts.auth_required():
             return True
-        public = path in {"/login", "/register", "/forgot-password", "/pricing", "/telegram", "/methodology", "/proof", "/executor", "/guide", "/terms", "/privacy", "/refunds", "/affiliate-terms", "/free", "/status", "/api/status", "/api/stream/free", "/set-password", "/api/set-password", "/api/request-password-reset", "/api/login", "/api/register", "/api/health", "/api/executor-boundary", "/api/billing/webhook", "/api/telegram/webhook", "/favicon.ico", "/service-worker.js"} or path.startswith(("/assets/", "/r/"))
+        public = path in {
+            "/login",
+            "/register",
+            "/forgot-password",
+            "/pricing",
+            "/telegram",
+            "/methodology",
+            "/proof",
+            "/executor",
+            "/guide",
+            "/terms",
+            "/privacy",
+            "/refunds",
+            "/affiliate-terms",
+            "/free",
+            "/status",
+            "/api/status",
+            "/api/stream/free",
+            "/set-password",
+            "/api/set-password",
+            "/api/request-password-reset",
+            "/api/login",
+            "/api/register",
+            "/api/health",
+            "/api/executor-boundary",
+            "/api/billing/webhook",
+            "/api/telegram/webhook",
+            "/favicon.ico",
+            "/service-worker.js",
+        } or path.startswith(("/assets/", "/r/"))
         token = self._session_token()
         user = accounts.user_for_session(token, self.server.accounts_path) if token else None
         self.current_user = user
@@ -1186,7 +1429,10 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             return True
         if user is None:
             if path.startswith("/api/"):
-                self._send_json({"ok": False, "error": "authentication_required"}, status=HTTPStatus.UNAUTHORIZED)
+                self._send_json(
+                    {"ok": False, "error": "authentication_required"},
+                    status=HTTPStatus.UNAUTHORIZED,
+                )
             elif head_only:
                 self._send_empty(HTTPStatus.UNAUTHORIZED)
             elif path == "/":
@@ -1195,7 +1441,25 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             else:
                 self._redirect("/login?" + urlencode({"next": self.path[:500]}))
             return False
-        subscription_paths = {"/subscription", "/account", "/profile", "/partner", "/api/session", "/api/portfolio", "/api/logout", "/api/account-settings", "/api/notifications/read", "/api/billing/checkout", "/api/billing/portal", "/api/billing/crypto/invoice", "/api/telegram/link", "/api/telegram/unlink", "/api/telegram/status", "/api/partner/summary", "/api/partner/payout-profile"}
+        subscription_paths = {
+            "/subscription",
+            "/account",
+            "/profile",
+            "/partner",
+            "/api/session",
+            "/api/portfolio",
+            "/api/logout",
+            "/api/account-settings",
+            "/api/notifications/read",
+            "/api/billing/checkout",
+            "/api/billing/portal",
+            "/api/billing/crypto/invoice",
+            "/api/telegram/link",
+            "/api/telegram/unlink",
+            "/api/telegram/status",
+            "/api/partner/summary",
+            "/api/partner/payout-profile",
+        }
         # Paying members-to-be have no active subscription yet, so the checkout
         # and invoice-polling routes must stay reachable or nobody can ever buy.
         allowed_without_subscription = (
@@ -1208,9 +1472,16 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             user.can_manage_members
             and path.startswith(("/api/account-users", "/api/admin/analytics"))
         )
-        if not user.subscription_active and not allowed_without_subscription and not privileged_path:
+        if (
+            not user.subscription_active
+            and not allowed_without_subscription
+            and not privileged_path
+        ):
             if path.startswith("/api/"):
-                self._send_json({"ok": False, "error": "subscription_required"}, status=HTTPStatus.PAYMENT_REQUIRED)
+                self._send_json(
+                    {"ok": False, "error": "subscription_required"},
+                    status=HTTPStatus.PAYMENT_REQUIRED,
+                )
             elif head_only:
                 self._send_empty(HTTPStatus.PAYMENT_REQUIRED)
             else:
@@ -1274,9 +1545,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         now = time.monotonic()
         with self._login_attempts_lock:
             recent_ip = [item for item in self._login_attempts.get(key, []) if now - item < 3600]
-            recent_email = [item for item in self._login_attempts.get(email_key, []) if now - item < 3600]
+            recent_email = [
+                item for item in self._login_attempts.get(email_key, []) if now - item < 3600
+            ]
             if len(recent_ip) >= 10 or len(recent_email) >= 3:
-                self._send_json({"ok": True, "message": "If that account exists, a reset link will be sent."}, status=HTTPStatus.ACCEPTED)
+                self._send_json(
+                    {"ok": True, "message": "If that account exists, a reset link will be sent."},
+                    status=HTTPStatus.ACCEPTED,
+                )
                 return
             self._login_attempts[key] = recent_ip + [now]
             self._login_attempts[email_key] = recent_email + [now]
@@ -1287,9 +1563,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 token = accounts.create_password_token(
                     user.id, purpose="reset", db_path=self.server.accounts_path
                 )
-                base = os.environ.get(
-                    "SPREADBOARD_PUBLIC_URL", "https://spreadarbitrage.ink"
-                ).strip().rstrip("/")
+                base = (
+                    os.environ.get("SPREADBOARD_PUBLIC_URL", "https://spreadarbitrage.ink")
+                    .strip()
+                    .rstrip("/")
+                )
                 try:
                     mailer.send_password_reset(
                         recipient=user.email,
@@ -1312,7 +1590,10 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         with self._login_attempts_lock:
             recent = [item for item in self._login_attempts.get(key, []) if now - item < 900]
             if len(recent) >= 10:
-                self._send_json({"ok": False, "error": "too_many_login_attempts"}, status=HTTPStatus.TOO_MANY_REQUESTS)
+                self._send_json(
+                    {"ok": False, "error": "too_many_login_attempts"},
+                    status=HTTPStatus.TOO_MANY_REQUESTS,
+                )
                 return
             self._login_attempts[key] = recent
         try:
@@ -1327,7 +1608,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             with self._login_attempts_lock:
                 self._login_attempts.setdefault(key, []).append(now)
             time.sleep(0.25)
-            self._send_json({"ok": False, "error": "invalid_credentials"}, status=HTTPStatus.UNAUTHORIZED)
+            self._send_json(
+                {"ok": False, "error": "invalid_credentials"}, status=HTTPStatus.UNAUTHORIZED
+            )
             return
         with self._login_attempts_lock:
             self._login_attempts.pop(key, None)
@@ -1336,10 +1619,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "user": user.public_dict(),
                 "csrf_token": user.csrf_token,
-                "next": "/partner" if (
+                "next": "/partner"
+                if (
                     not user.subscription_active
                     and affiliates.partner_for_user(user.id, db_path=self.server.accounts_path)
-                ) else None,
+                )
+                else None,
             },
             session_token=token,
         )
@@ -1351,7 +1636,10 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         with self._login_attempts_lock:
             recent = [item for item in self._login_attempts.get(key, []) if now - item < 3600]
             if len(recent) >= 10:
-                self._send_json({"ok": False, "error": "too_many_registration_attempts"}, status=HTTPStatus.TOO_MANY_REQUESTS)
+                self._send_json(
+                    {"ok": False, "error": "too_many_registration_attempts"},
+                    status=HTTPStatus.TOO_MANY_REQUESTS,
+                )
                 return
             self._login_attempts[key] = recent + [now]
         created = accounts.create_user(
@@ -1368,13 +1656,22 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             db_path=self.server.accounts_path,
         )
         user, token = accounts.login(
-            str(payload.get("email") or ""), str(payload.get("password") or ""),
-            user_agent=self.headers.get("User-Agent", ""), ip_address=key,
+            str(payload.get("email") or ""),
+            str(payload.get("password") or ""),
+            user_agent=self.headers.get("User-Agent", ""),
+            ip_address=key,
             db_path=self.server.accounts_path,
         )
         self._send_json(
-            {"ok": True, "user": user.public_dict(), "csrf_token": user.csrf_token, "next": "/subscription"},
-            status=HTTPStatus.CREATED, session_token=token, clear_referral=True,
+            {
+                "ok": True,
+                "user": user.public_dict(),
+                "csrf_token": user.csrf_token,
+                "next": "/subscription",
+            },
+            status=HTTPStatus.CREATED,
+            session_token=token,
+            clear_referral=True,
         )
 
     def _required_user(self) -> accounts.User:
@@ -1386,7 +1683,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
     def _require_csrf(self) -> None:
         user = self._required_user()
         supplied = self.headers.get("X-CSRF-Token", "")
-        if not supplied or not user.csrf_token or not hmac.compare_digest(supplied, user.csrf_token):
+        if (
+            not supplied
+            or not user.csrf_token
+            or not hmac.compare_digest(supplied, user.csrf_token)
+        ):
             raise ValueError("invalid_csrf_token")
 
     def _session_token(self) -> str:
@@ -1492,14 +1793,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     # Filters and aliases in one pass: anything not listed does
                     # not go out at all, and a teaser route goes out under a
                     # hash so the stream cannot name the asset or its venues.
-                    rows = {
-                        rename[key]: value
-                        for key, value in rows.items()
-                        if key in rename
-                    }
-                changed = {
-                    key: value for key, value in rows.items() if previous.get(key) != value
-                }
+                    rows = {rename[key]: value for key, value in rows.items() if key in rename}
+                changed = {key: value for key, value in rows.items() if previous.get(key) != value}
                 previous = rows
                 if changed:
                     payload = {
@@ -1552,7 +1847,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; "
             "base-uri 'self'; form-action 'self'",
         )
-        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+        self.send_header(
+            "Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()"
+        )
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
@@ -1598,7 +1895,9 @@ def api_board(board_path: Path, query: dict[str, list[str]] | None = None) -> di
     }
 
 
-def _legacy_board_snapshot(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+def _legacy_board_snapshot(
+    board_path: Path, query: dict[str, list[str]] | None = None
+) -> dict[str, Any]:
     """Keep the retired renderer testable without exposing archived rows through the API."""
 
     query = query or {}
@@ -1625,7 +1924,15 @@ def api_market_spreads(
     allow_stale: bool = True,
 ) -> dict[str, Any]:
     query = query or {}
-    limit = max(20, min(500, int(_query_float(query, "limit", api_spreads.DEFAULT_LIMIT) or api_spreads.DEFAULT_LIMIT)))
+    limit = max(
+        20,
+        min(
+            500,
+            int(
+                _query_float(query, "limit", api_spreads.DEFAULT_LIMIT) or api_spreads.DEFAULT_LIMIT
+            ),
+        ),
+    )
     offset = max(0, int(_query_float(query, "offset", 0) or 0))
     cache_key = None if _query_bool(query, "no_cache") else _market_cache_key(board_path, query)
     if cache_key is not None:
@@ -1741,11 +2048,7 @@ def api_market_spreads(
 def _sync_telegram_client_universe(payload: dict[str, Any]) -> dict[str, Any]:
     """Make Telegram use the exact unfiltered all-token generation clients got."""
     filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
-    pagination = (
-        payload.get("pagination")
-        if isinstance(payload.get("pagination"), dict)
-        else {}
-    )
+    pagination = payload.get("pagination") if isinstance(payload.get("pagination"), dict) else {}
     filtered_keys = (
         "q",
         "exchange",
@@ -1800,7 +2103,9 @@ def _rebuild_market_cache(
         pass
 
 
-def api_alert_context(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+def api_alert_context(
+    board_path: Path, query: dict[str, list[str]] | None = None
+) -> dict[str, Any]:
     """Return only the local market rows needed to evaluate browser-local rules."""
 
     query = query or {}
@@ -1833,7 +2138,9 @@ def api_alert_context(board_path: Path, query: dict[str, list[str]] | None = Non
         "mode": "read_only_local_alert_context",
         "rows": rows,
         "requested_route_count": len(route_keys),
-        "matched_route_count": len({row.get("route_key") for row in rows if row.get("route_key") in route_keys}),
+        "matched_route_count": len(
+            {row.get("route_key") for row in rows if row.get("route_key") in route_keys}
+        ),
         "source_health": {
             name: {
                 key: value
@@ -1858,9 +2165,7 @@ def _market_cache_key(board_path: Path, query: dict[str, list[str]]) -> tuple[An
         _file_signature(board_path),
         _file_signature(api_spreads.DEFAULT_API_DISCOVERY_PATH),
         _file_signature(
-            Path(api_spreads.DEFAULT_API_DISCOVERY_PATH).with_name(
-                "api_discovery_fast_quotes.json"
-            )
+            Path(api_spreads.DEFAULT_API_DISCOVERY_PATH).with_name("api_discovery_fast_quotes.json")
         ),
         _file_signature(api_spreads.token_metadata.DEFAULT_CACHE_PATH),
         _file_signature(api_spreads.public_rails.DEFAULT_CACHE_PATH),
@@ -1908,9 +2213,7 @@ def _market_cache_finish(cache_key: tuple[Any, ...], data: dict[str, Any] | None
             _MARKET_CACHE[cache_key] = (time.monotonic(), data)
             _MARKET_STALE_CACHE[_market_stale_key(cache_key)] = (time.monotonic(), data)
             if len(_MARKET_STALE_CACHE) > _MARKET_CACHE_MAX_ENTRIES:
-                oldest = min(
-                    _MARKET_STALE_CACHE, key=lambda key: _MARKET_STALE_CACHE[key][0]
-                )
+                oldest = min(_MARKET_STALE_CACHE, key=lambda key: _MARKET_STALE_CACHE[key][0])
                 _MARKET_STALE_CACHE.pop(oldest, None)
             if len(_MARKET_CACHE) > _MARKET_CACHE_MAX_ENTRIES:
                 oldest = min(_MARKET_CACHE, key=lambda key: _MARKET_CACHE[key][0])
@@ -2088,7 +2391,8 @@ def api_intel(board_path: Path, query: dict[str, list[str]] | None = None) -> di
     digest = data.get("change_digest") if isinstance(data.get("change_digest"), dict) else {}
     if digest:
         gaps = [
-            item for item in digest.get("source_gaps") or []
+            item
+            for item in digest.get("source_gaps") or []
             if str(item.get("source") or "") in {"telegram_events", "board", "topic_brief"}
         ]
         digest["source_gaps"] = gaps
@@ -2153,22 +2457,28 @@ def _sanitized_source_freshness(value: Any) -> dict[str, Any]:
         return {}
     allowed_sources = {"telegram_events", "board"}
     allowed_fields = {
-        "exists", "age_min", "status", "latest_at_us", "fresh_count",
-        "stale_count", "title",
+        "exists",
+        "age_min",
+        "status",
+        "latest_at_us",
+        "fresh_count",
+        "stale_count",
+        "title",
     }
     return {
-        str(name): {
-            key: item
-            for key, item in state.items()
-            if key in allowed_fields
-        }
+        str(name): {key: item for key, item in state.items() if key in allowed_fields}
         for name, state in value.items()
         if name in allowed_sources and isinstance(state, dict)
     }
 
 
 def _public_mode() -> bool:
-    return os.environ.get("SPREADBOARD_PUBLIC_MODE", "").strip().casefold() in {"1", "true", "yes", "on"}
+    return os.environ.get("SPREADBOARD_PUBLIC_MODE", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _public_intel_payload(data: dict[str, Any], board_path: Path) -> dict[str, Any]:
@@ -2200,10 +2510,7 @@ def _public_intel_payload(data: dict[str, Any], board_path: Path) -> dict[str, A
         return result
 
     market = api_spreads.load_spreads(board_path=board_path, limit=None, include_stale=False)
-    groups = {
-        str(group.get("token") or ""): group
-        for group in market.get("groups") or []
-    }
+    groups = {str(group.get("token") or ""): group for group in market.get("groups") or []}
     feed_age = max(
         0.0,
         (time.time() * 1_000_000 - (_float_or_none(feed.get("generated_at_us")) or 0.0))
@@ -2358,7 +2665,8 @@ def _public_intel_route_reality(
 
 def _intel_params(query: dict[str, list[str]]) -> dict[str, Any]:
     return {
-        "window_hours": _query_float(query, "window_hours", intel.DEFAULT_WINDOW_HOURS) or intel.DEFAULT_WINDOW_HOURS,
+        "window_hours": _query_float(query, "window_hours", intel.DEFAULT_WINDOW_HOURS)
+        or intel.DEFAULT_WINDOW_HOURS,
         "kind": _query_first(query, "kind"),
         "symbol": _clean_symbol(_query_first(query, "symbol") or _query_first(query, "q") or ""),
         "topic": _query_first(query, "topic"),
@@ -2398,15 +2706,21 @@ def api_triage(board_path: Path, query: dict[str, list[str]] | None = None) -> d
     }
 
 
-def api_alert_preview(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+def api_alert_preview(
+    board_path: Path, query: dict[str, list[str]] | None = None
+) -> dict[str, Any]:
     return api_intel(board_path, query).get("alert_preview") or {}
 
 
-def api_profile_shell(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+def api_profile_shell(
+    board_path: Path, query: dict[str, list[str]] | None = None
+) -> dict[str, Any]:
     return api_intel(board_path, query).get("profile_shell") or {}
 
 
-def api_watchlist_suggestions(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+def api_watchlist_suggestions(
+    board_path: Path, query: dict[str, list[str]] | None = None
+) -> dict[str, Any]:
     query = query or {}
     data = api_intel(board_path, query)
     user = accounts.current_user()
@@ -2486,7 +2800,9 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
 
         def leg_line(venue: Any, label: str) -> str:
             venue_text = str(venue or "?")
-            return venue_text if label.casefold() in venue_text.casefold() else f"{venue_text} {label}"
+            return (
+                venue_text if label.casefold() in venue_text.casefold() else f"{venue_text} {label}"
+            )
 
         return {
             "kind": route_kind_display(row.get("route_kind")),
@@ -2550,9 +2866,7 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
             return (max(values, default=float("-inf")), has_futures)
 
         funding_route = (
-            max(score_candidates.values(), key=funding_research_rank)
-            if score_candidates
-            else None
+            max(score_candidates.values(), key=funding_research_rank) if score_candidates else None
         )
         spread_route = (
             max(
@@ -2630,55 +2944,65 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
             status = "chart markets available"
         else:
             status = "no current market coverage"
-        next_actions = ["open live pair"] if live else ["open chart", "set alert"] if retained or symbol in catalog_tokens else ["keep watching"]
-        output.append({
-            "symbol": symbol,
-            "status": status,
-            "routes": chosen,
-            "best_board": chosen[0] if chosen else None,
-            "research_route": (
-                route_card(funding_route, historical=funding_is_historical)
-                if funding_route
-                else None
-            ),
-            "research_score": funding_evaluation,
-            "opportunities": {
-                "funding": {
-                    **(funding_evaluation.get("funding_opportunity") or {}),
-                    "route": (
-                        route_card(funding_route, historical=funding_is_historical)
-                        if funding_route
-                        else None
-                    ),
-                    "economics": funding_evaluation.get("route_economics") or {},
-                    "risk_estimate": funding_evaluation.get("risk_estimate") or {},
+        next_actions = (
+            ["open live pair"]
+            if live
+            else ["open chart", "set alert"]
+            if retained or symbol in catalog_tokens
+            else ["keep watching"]
+        )
+        output.append(
+            {
+                "symbol": symbol,
+                "status": status,
+                "routes": chosen,
+                "best_board": chosen[0] if chosen else None,
+                "research_route": (
+                    route_card(funding_route, historical=funding_is_historical)
+                    if funding_route
+                    else None
+                ),
+                "research_score": funding_evaluation,
+                "opportunities": {
+                    "funding": {
+                        **(funding_evaluation.get("funding_opportunity") or {}),
+                        "route": (
+                            route_card(funding_route, historical=funding_is_historical)
+                            if funding_route
+                            else None
+                        ),
+                        "economics": funding_evaluation.get("route_economics") or {},
+                        "risk_estimate": funding_evaluation.get("risk_estimate") or {},
+                    },
+                    "spread": {
+                        **(spread_evaluation.get("spread_opportunity") or {}),
+                        "route": (
+                            route_card(spread_route, historical=spread_is_historical)
+                            if spread_route
+                            else None
+                        ),
+                        "economics": spread_evaluation.get("route_economics") or {},
+                        "risk_estimate": spread_evaluation.get("risk_estimate") or {},
+                    },
                 },
-                "spread": {
-                    **(spread_evaluation.get("spread_opportunity") or {}),
-                    "route": (
-                        route_card(spread_route, historical=spread_is_historical)
-                        if spread_route
-                        else None
-                    ),
-                    "economics": spread_evaluation.get("route_economics") or {},
-                    "risk_estimate": spread_evaluation.get("risk_estimate") or {},
-                },
-            },
-            "funding_windows": score_windows,
-            "chart_url": f"/charts?token={quote(symbol)}",
-            "token_url": f"/token/{quote(symbol)}",
-            "top_blockers": [] if chosen else ["No executable route is live at this instant"],
-            "next_actions": next_actions,
-            "okx_dex_identity": (
-                "available"
-                if any("dex" in str(item.get("route_line") or "").casefold() for item in chosen)
-                else "not present in current matches"
-            ),
-        })
+                "funding_windows": score_windows,
+                "chart_url": f"/charts?token={quote(symbol)}",
+                "token_url": f"/token/{quote(symbol)}",
+                "top_blockers": [] if chosen else ["No executable route is live at this instant"],
+                "next_actions": next_actions,
+                "okx_dex_identity": (
+                    "available"
+                    if any("dex" in str(item.get("route_line") or "").casefold() for item in chosen)
+                    else "not present in current matches"
+                ),
+            }
+        )
     return output
 
 
-def api_position_suggestions(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+def api_position_suggestions(
+    board_path: Path, query: dict[str, list[str]] | None = None
+) -> dict[str, Any]:
     query = query or {}
     requested = _clean_symbol(_query_first(query, "q") or _query_first(query, "token") or "")
     limit = max(1, min(50, int(_query_float(query, "limit", 20) or 20)))
@@ -2688,7 +3012,13 @@ def api_position_suggestions(board_path: Path, query: dict[str, list[str]] | Non
         return {
             "ok": bool(catalog_markets),
             "query": "",
-            "tokens": sorted({str(item.get("token") or "").upper() for item in catalog_markets if item.get("token")})[:limit],
+            "tokens": sorted(
+                {
+                    str(item.get("token") or "").upper()
+                    for item in catalog_markets
+                    if item.get("token")
+                }
+            )[:limit],
             "routes": [],
             "legs": [],
             "catalog_generated_at": catalogue.get("generated_at"),
@@ -2715,13 +3045,12 @@ def api_position_suggestions(board_path: Path, query: dict[str, list[str]] | Non
         {
             str(item.get("token") or "").upper()
             for item in [*catalog_markets, *live_rows]
-            if item.get("token") and (not requested or str(item.get("token") or "").upper().startswith(requested))
+            if item.get("token")
+            and (not requested or str(item.get("token") or "").upper().startswith(requested))
         }
     )[:limit]
     exact_rows = [
-        row
-        for row in live_rows
-        if requested and str(row.get("token") or "").upper() == requested
+        row for row in live_rows if requested and str(row.get("token") or "").upper() == requested
     ]
     routes = []
     for row in exact_rows[:limit]:
@@ -2756,43 +3085,62 @@ def api_position_suggestions(board_path: Path, query: dict[str, list[str]] | Non
         if requested and str(item.get("token") or "").upper() == requested
     ][:200]
     existing_pairs = {
-        (route.get("long_venue"), route.get("long_symbol"), route.get("short_venue"), route.get("short_symbol"))
+        (
+            route.get("long_venue"),
+            route.get("long_symbol"),
+            route.get("short_venue"),
+            route.get("short_symbol"),
+        )
         for route in routes
     }
     combinations = []
     for long_leg in legs:
         for short_leg in legs:
             pair = (
-                long_leg.get("venue"), long_leg.get("symbol"),
-                short_leg.get("venue"), short_leg.get("symbol"),
+                long_leg.get("venue"),
+                long_leg.get("symbol"),
+                short_leg.get("venue"),
+                short_leg.get("symbol"),
             )
             if pair in existing_pairs or pair[:2] == pair[2:]:
                 continue
-            long_type = "DEX" if "dex" in str(long_leg.get("venue") or "").casefold() else long_leg.get("market_type")
-            short_type = "DEX" if "dex" in str(short_leg.get("venue") or "").casefold() else short_leg.get("market_type")
-            combinations.append({
-                "token": requested,
-                "route_key": "",
-                "route_kind": f"{str(long_type or '').upper()}-{str(short_type or '').upper()}",
-                "long_venue": long_leg.get("venue"),
-                "long_market_type": long_type,
-                "long_symbol": long_leg.get("symbol"),
-                "long_entry_price": None,
-                "short_venue": short_leg.get("venue"),
-                "short_market_type": short_type,
-                "short_symbol": short_leg.get("symbol"),
-                "short_entry_price": None,
-                "entry_spread_pct": None,
-                "funding_24h_pct": None,
-                "age_min": None,
-                "source": "chart catalogue",
-            })
-    combinations.sort(key=lambda item: (
-        0 if item.get("short_market_type") == "Futures" else 1,
-        0 if item.get("long_market_type") in {"DEX", "Spot"} else 1,
-        str(item.get("long_venue")),
-        str(item.get("short_venue")),
-    ))
+            long_type = (
+                "DEX"
+                if "dex" in str(long_leg.get("venue") or "").casefold()
+                else long_leg.get("market_type")
+            )
+            short_type = (
+                "DEX"
+                if "dex" in str(short_leg.get("venue") or "").casefold()
+                else short_leg.get("market_type")
+            )
+            combinations.append(
+                {
+                    "token": requested,
+                    "route_key": "",
+                    "route_kind": f"{str(long_type or '').upper()}-{str(short_type or '').upper()}",
+                    "long_venue": long_leg.get("venue"),
+                    "long_market_type": long_type,
+                    "long_symbol": long_leg.get("symbol"),
+                    "long_entry_price": None,
+                    "short_venue": short_leg.get("venue"),
+                    "short_market_type": short_type,
+                    "short_symbol": short_leg.get("symbol"),
+                    "short_entry_price": None,
+                    "entry_spread_pct": None,
+                    "funding_24h_pct": None,
+                    "age_min": None,
+                    "source": "chart catalogue",
+                }
+            )
+    combinations.sort(
+        key=lambda item: (
+            0 if item.get("short_market_type") == "Futures" else 1,
+            0 if item.get("long_market_type") in {"DEX", "Spot"} else 1,
+            str(item.get("long_venue")),
+            str(item.get("short_venue")),
+        )
+    )
     routes.extend(combinations[: max(0, limit - len(routes))])
     return {
         "ok": bool(tokens or routes or legs),
@@ -2818,7 +3166,9 @@ def api_signals(board_path: Path, query: dict[str, list[str]] | None = None) -> 
     }
 
 
-def api_funding_watch(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+def api_funding_watch(
+    board_path: Path, query: dict[str, list[str]] | None = None
+) -> dict[str, Any]:
     data = api_intel(board_path, query)
     return {
         "ok": data.get("ok"),
@@ -2870,7 +3220,13 @@ def api_playbook(board_path: Path, query: dict[str, list[str]] | None = None) ->
                 "examples": examples[:3],
             }
         )
-    cards.sort(key=lambda item: (item["count"], item["category"] in {"Funding farms", "D/W and transfer rails"}), reverse=True)
+    cards.sort(
+        key=lambda item: (
+            item["count"],
+            item["category"] in {"Funding farms", "D/W and transfer rails"},
+        ),
+        reverse=True,
+    )
     cards.sort(key=lambda item: 0 if item["count"] else 1)
     telegram = source.get("telegram_events") or {}
     brief = source.get("topic_brief") or {}
@@ -2938,24 +3294,51 @@ def build_triage_buckets(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]
     setup_needed = [
         item
         for item in reality_rows
-        if item.get("blockers") or str(item.get("status") or "") in {"setup_needed", "watch_only", "telegram_only"}
+        if item.get("blockers")
+        or str(item.get("status") or "") in {"setup_needed", "watch_only", "telegram_only"}
     ]
-    funding = [_triage_funding_item(item) for item in data.get("funding_watch") or [] if isinstance(item, dict)]
-    funding.sort(key=lambda item: abs(_float_or_none(item.get("funding_apr_pct")) or _float_or_none(item.get("funding_delta_pct")) or 0.0), reverse=True)
+    funding = [
+        _triage_funding_item(item)
+        for item in data.get("funding_watch") or []
+        if isinstance(item, dict)
+    ]
+    funding.sort(
+        key=lambda item: abs(
+            _float_or_none(item.get("funding_apr_pct"))
+            or _float_or_none(item.get("funding_delta_pct"))
+            or 0.0
+        ),
+        reverse=True,
+    )
     dex_identity = [
         item
         for item in reality_rows
         if str(item.get("okx_dex_identity") or "").casefold()
-        in {"requires_exact_chain_contract", "exact_chain_contract_required", "unknown", "not_applicable"}
-        or any("chain" in str(blocker).casefold() or "contract" in str(blocker).casefold() for blocker in item.get("blockers") or [])
+        in {
+            "requires_exact_chain_contract",
+            "exact_chain_contract_required",
+            "unknown",
+            "not_applicable",
+        }
+        or any(
+            "chain" in str(blocker).casefold() or "contract" in str(blocker).casefold()
+            for blocker in item.get("blockers") or []
+        )
     ]
     community = [
         _triage_community_item(item)
         for item in data.get("hot_symbols") or []
         if isinstance(item, dict)
-        and ((item.get("community_count") or 0) or (item.get("event_count") or 0) >= 2 or item.get("new_count"))
+        and (
+            (item.get("community_count") or 0)
+            or (item.get("event_count") or 0) >= 2
+            or item.get("new_count")
+        )
     ]
-    community.sort(key=lambda item: (_float_or_none(item.get("score")) or 0.0, item.get("event_count") or 0), reverse=True)
+    community.sort(
+        key=lambda item: (_float_or_none(item.get("score")) or 0.0, item.get("event_count") or 0),
+        reverse=True,
+    )
     source_gaps = [
         _triage_source_item(name, item)
         for name, item in (data.get("source_freshness") or {}).items()
@@ -2988,8 +3371,12 @@ def _triage_route_item(item: dict[str, Any], hot: dict[str, Any] | None = None) 
         "route_line": top.get("route_line") or best.get("route_line") or "No matched board route",
         "kind": top.get("kind") or best.get("kind"),
         "freshness": top.get("freshness") or best.get("freshness"),
-        "open_spread_pct": top.get("open_spread_pct") if top.get("open_spread_pct") is not None else best.get("open_spread_pct"),
-        "funding_apr_pct": top.get("funding_apr_pct") if top.get("funding_apr_pct") is not None else best.get("funding_apr_pct"),
+        "open_spread_pct": top.get("open_spread_pct")
+        if top.get("open_spread_pct") is not None
+        else best.get("open_spread_pct"),
+        "funding_apr_pct": top.get("funding_apr_pct")
+        if top.get("funding_apr_pct") is not None
+        else best.get("funding_apr_pct"),
         "age_min": top.get("age_min") if top.get("age_min") is not None else best.get("age_min"),
         "next_actions": list(item.get("next_actions") or [])[:3],
         "blockers": list(item.get("top_blockers") or [])[:4],
@@ -3003,7 +3390,10 @@ def _triage_decision(item: dict[str, Any], routes: list[dict[str, Any]]) -> str:
     if not routes:
         return "research_from_telegram"
     blockers = item.get("top_blockers") or []
-    if any("exact_chain_contract" in str(blocker) or "contract" in str(blocker).casefold() for blocker in blockers):
+    if any(
+        "exact_chain_contract" in str(blocker) or "contract" in str(blocker).casefold()
+        for blocker in blockers
+    ):
         return "verify_identity"
     if blockers:
         return "inspect_blockers"
@@ -3023,7 +3413,11 @@ def _triage_sort_key(item: dict[str, Any]) -> tuple[float, float, float]:
     funding = abs(_float_or_none(item.get("funding_apr_pct")) or 0.0) / 20.0
     score = (_float_or_none(item.get("score")) or 0.0) / 10.0
     freshness_bonus = 2.0 if _triage_is_fresh_route(item) else 0.0
-    return (spread + funding + score + freshness_bonus, item.get("route_count") or 0, -(item.get("age_min") or 999999))
+    return (
+        spread + funding + score + freshness_bonus,
+        item.get("route_count") or 0,
+        -(item.get("age_min") or 999999),
+    )
 
 
 def _triage_funding_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -3111,7 +3505,9 @@ def _canonical_pair_row(row: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def api_history(route_key: str, board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+def api_history(
+    route_key: str, board_path: Path, query: dict[str, list[str]] | None = None
+) -> dict[str, Any]:
     query = query or {}
     points = int(_query_float(query, "max_points", 240) or 240)
     hours = max(1 / 60, min(_query_float(query, "hours", 24) or 24, 24 * 30))
@@ -3218,8 +3614,14 @@ def _merge_history_rows(
                 continue
             key = timestamp // bucket_us if bucket_us else timestamp
             current = merged.get(key)
-            current_exact = bool(current and current.get("sample_source") != "historical_ohlcv_close_proxy")
-            if current is None or exact or (not current_exact and timestamp >= int(current.get("quote_ts_us") or 0)):
+            current_exact = bool(
+                current and current.get("sample_source") != "historical_ohlcv_close_proxy"
+            )
+            if (
+                current is None
+                or exact
+                or (not current_exact and timestamp >= int(current.get("quote_ts_us") or 0))
+            ):
                 merged[key] = row
 
     add(proxy_rows, exact=False)
@@ -3328,8 +3730,7 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
         retained_signature = _ROUTE_INDEX["signature"]
         retained = (
             _ROUTE_INDEX["rows"].get(route_key)
-            if retained_signature
-            and retained_signature[0] == str(board_path)
+            if retained_signature and retained_signature[0] == str(board_path)
             else None
         )
     if retained is not None:
@@ -3339,17 +3740,10 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
 
 def _chart_leg_symbol(row: dict[str, Any], side: str) -> str:
     notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
-    route_inputs = (
-        notes.get("route_inputs")
-        if isinstance(notes.get("route_inputs"), dict)
-        else {}
-    )
+    route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
     leg = route_inputs.get(side) if isinstance(route_inputs.get(side), dict) else {}
     return str(
-        row.get(f"{side}_market_symbol")
-        or row.get(f"{side}_symbol")
-        or leg.get("symbol")
-        or ""
+        row.get(f"{side}_market_symbol") or row.get(f"{side}_symbol") or leg.get("symbol") or ""
     )
 
 
@@ -3419,7 +3813,7 @@ def _schedule_chart_route_refresh(row: dict[str, Any]) -> dict[str, Any]:
 
     threading.Thread(
         target=run,
-        name=f"chart-route-warm-{hash(route_key) & 0xffff:x}",
+        name=f"chart-route-warm-{hash(route_key) & 0xFFFF:x}",
         daemon=True,
     ).start()
     return (
@@ -3560,9 +3954,7 @@ def _native_chart_route(row: dict[str, Any]) -> bool:
 
 def _history_meta(rows: list[dict[str, Any]]) -> dict[str, Any]:
     timestamps = sorted(
-        int(value)
-        for row in rows
-        if (value := _float_or_none(row.get("quote_ts_us"))) is not None
+        int(value) for row in rows if (value := _float_or_none(row.get("quote_ts_us"))) is not None
     )
     intervals = [
         (later - earlier) / 1_000_000.0
@@ -3593,7 +3985,9 @@ def _history_coverage_meta(
     requested_hours: float,
     proxy: dict[str, Any],
 ) -> dict[str, Any]:
-    timestamps = sorted(int(item.get("quote_ts_us") or 0) for item in rows if item.get("quote_ts_us"))
+    timestamps = sorted(
+        int(item.get("quote_ts_us") or 0) for item in rows if item.get("quote_ts_us")
+    )
     coverage = (timestamps[-1] - timestamps[0]) / 1_000_000 if len(timestamps) > 1 else 0.0
     requested = requested_hours * 3600
     sources = {str(item.get("sample_source") or "unknown") for item in rows}
@@ -3609,8 +4003,12 @@ def _history_coverage_meta(
         # cold would stay empty until the member reloaded the page by hand.
         "historical_proxy_warming": proxy.get("status") == "warming",
         "historical_proxy_status": proxy.get("status"),
-        "exact_point_count": sum(1 for item in rows if item.get("sample_source") != "historical_ohlcv_close_proxy"),
-        "proxy_point_count": sum(1 for item in rows if item.get("sample_source") == "historical_ohlcv_close_proxy"),
+        "exact_point_count": sum(
+            1 for item in rows if item.get("sample_source") != "historical_ohlcv_close_proxy"
+        ),
+        "proxy_point_count": sum(
+            1 for item in rows if item.get("sample_source") == "historical_ohlcv_close_proxy"
+        ),
     }
 
 
@@ -3685,7 +4083,9 @@ def token_community_pulse(symbol: str, board_path: Path) -> dict[str, Any]:
     reality = (payload.get("route_reality") or [{}])[0] if payload.get("route_reality") else {}
     queue = (payload.get("action_queue") or [{}])[0] if payload.get("action_queue") else {}
     source = payload.get("source_freshness") or {}
-    telegram = source.get("telegram_events") if isinstance(source.get("telegram_events"), dict) else {}
+    telegram = (
+        source.get("telegram_events") if isinstance(source.get("telegram_events"), dict) else {}
+    )
     board_source = source.get("board") if isinstance(source.get("board"), dict) else {}
     return {
         "symbol": symbol,
@@ -3738,15 +4138,10 @@ def api_health(
         "telegram_bot": telegram_bot.status(),
         "subscription_lifecycle": {
             "running": bool(
-                subscription_lifecycle_worker
-                and subscription_lifecycle_worker.running
+                subscription_lifecycle_worker and subscription_lifecycle_worker.running
             ),
-            "poll_seconds": getattr(
-                subscription_lifecycle_worker, "poll_seconds", None
-            ),
-            "last_result": getattr(
-                subscription_lifecycle_worker, "last_result", None
-            ),
+            "poll_seconds": getattr(subscription_lifecycle_worker, "poll_seconds", None),
+            "last_result": getattr(subscription_lifecycle_worker, "last_result", None),
             **subscription_lifecycle.status(),
         },
     }
@@ -3772,9 +4167,7 @@ def funding_history_health() -> dict[str, Any]:
     windows = venue_funding_history.load()
     keys = {f"{venue}|{symbol}" for venue, symbol in legs}
     summary["window_leg_counts"] = {
-        label: sum(
-            (windows.get(key) or {}).get(label) is not None for key in keys
-        )
+        label: sum((windows.get(key) or {}).get(label) is not None for key in keys)
         for label in ("1d", "7d", "30d")
     }
     retryable = int(summary.get("retryable_error_leg_count") or 0)
@@ -3802,38 +4195,37 @@ def api_public_status(
     telegram = telegram_bot.status()
     market_ok = bool(sources.get("ok"))
     components = {
-            "website": {"status": "operational"},
-            "market_data": {
-                "status": "operational" if market_ok else "degraded",
-                "updated_at": canonical.get("updated_at"),
-                "age_min": canonical.get("age_min"),
-                "row_count": canonical.get("row_count"),
-            },
-            "crypto_checkout": {
-                "status": "operational" if crypto.get("checkout_ready") else "setup_needed",
-                "chain": crypto.get("chain"),
-                "tokens": crypto.get("tokens"),
-                "confirmations": crypto.get("confirmations"),
-            },
-            "telegram": {
-                "status": "operational" if telegram.get("configured") else "setup_needed",
-                "community": "operational" if telegram.get("community_configured") else "setup_needed",
-            },
-            "background_alerts": {
-                "status": "operational"
-                if position_alert_worker and position_alert_worker.running
-                else "degraded"
-            },
-            "subscription_access": {
-                "status": "operational"
-                if subscription_lifecycle_worker
-                and subscription_lifecycle_worker.running
-                else "degraded"
-            },
-            "email_recovery": {
-                "status": "operational" if mailer.status()["configured"] else "setup_needed"
-            },
-        }
+        "website": {"status": "operational"},
+        "market_data": {
+            "status": "operational" if market_ok else "degraded",
+            "updated_at": canonical.get("updated_at"),
+            "age_min": canonical.get("age_min"),
+            "row_count": canonical.get("row_count"),
+        },
+        "crypto_checkout": {
+            "status": "operational" if crypto.get("checkout_ready") else "setup_needed",
+            "chain": crypto.get("chain"),
+            "tokens": crypto.get("tokens"),
+            "confirmations": crypto.get("confirmations"),
+        },
+        "telegram": {
+            "status": "operational" if telegram.get("configured") else "setup_needed",
+            "community": "operational" if telegram.get("community_configured") else "setup_needed",
+        },
+        "background_alerts": {
+            "status": "operational"
+            if position_alert_worker and position_alert_worker.running
+            else "degraded"
+        },
+        "subscription_access": {
+            "status": "operational"
+            if subscription_lifecycle_worker and subscription_lifecycle_worker.running
+            else "degraded"
+        },
+        "email_recovery": {
+            "status": "operational" if mailer.status()["configured"] else "setup_needed"
+        },
+    }
     return {
         "ok": all(item.get("status") == "operational" for item in components.values()),
         "service": "SpreadBoard",
@@ -3867,8 +4259,17 @@ def render_board_stream_script(
     params = []
     # `farm` and `rank` decide presentation, not which routes are returned, and
     # sending them would fragment the stream's cache key for an identical set.
-    for name in ("kind", "limit", "sort", "direction", "funding_only",
-                 "q", "exchange", "min_spread_pct", "min_abs_funding_24h_pct"):
+    for name in (
+        "kind",
+        "limit",
+        "sort",
+        "direction",
+        "funding_only",
+        "q",
+        "exchange",
+        "min_spread_pct",
+        "min_abs_funding_24h_pct",
+    ):
         value = _query_first(query, name)
         if value:
             params.append(f"{name}={quote(str(value))}")
@@ -3930,9 +4331,7 @@ def render_board_stream_script(
 _LIVE_TICK: dict[tuple[Any, ...], tuple[float, dict[str, tuple[Any, Any]]]] = {}
 _LIVE_TICK_LOCK = threading.Lock()
 #: The book writer flushes every 0.25s, so there is nothing to gain below that.
-LIVE_TICK_SECONDS = max(
-    0.2, float(os.environ.get("SPREADBOARD_LIVE_TICK_SECONDS", "0.5"))
-)
+LIVE_TICK_SECONDS = max(0.2, float(os.environ.get("SPREADBOARD_LIVE_TICK_SECONDS", "0.5")))
 
 
 def _shared_stream_rows(
@@ -3957,9 +4356,7 @@ def _shared_stream_rows(
     return rows
 
 
-def _board_stream_rows(
-    board_path: Path, query: dict[str, list[str]]
-) -> dict[str, tuple[Any, Any]]:
+def _board_stream_rows(board_path: Path, query: dict[str, list[str]]) -> dict[str, tuple[Any, Any]]:
     """Current spread and funding per route, for the lane the member is viewing.
 
     The grouped board is cached because building it is expensive, so prices in it
@@ -4018,9 +4415,9 @@ def render_markets_page(
           <h1>One asset, every live route</h1>
           <p>Executable public order-book prices grouped by token. Expand an asset to compare every venue pair, funding leg, transfer rail, and chart.</p>
         </div>
-        <div class="terminal-live-box {'live' if source_ready else 'unavailable'}">
-          <span>{'Live' if source_ready else 'Reconnecting'}</span>
-          <strong data-live-stamp>{fmt_age(api_health_data.get('age_min'))}</strong>
+        <div class="terminal-live-box {"live" if source_ready else "unavailable"}">
+          <span>{"Live" if source_ready else "Reconnecting"}</span>
+          <strong data-live-stamp>{fmt_age(api_health_data.get("age_min"))}</strong>
           <em>streaming order books · no refresh needed</em>
         </div>
       </header>
@@ -4037,35 +4434,59 @@ def render_markets_page(
     market_results = (
         render_pro_market_table(data.get("rows") or [])
         if pro_view
-        else '<div class="token-group-list">' + (
-            ''.join(render_market_token_group(group) for group in groups)
+        else '<div class="token-group-list">'
+        + (
+            "".join(render_market_token_group(group) for group in groups)
             or render_live_market_empty(api_health_data)
-        ) + '</div>'
+        )
+        + "</div>"
     )
 
     body = f"""
-    <section class="markets-page terminal-page" data-refresh="{refresh_seconds}" data-refresh-silent="1">
+    <section class="markets-page terminal-page" data-refresh="{
+        refresh_seconds
+    }" data-refresh-silent="1">
       {heading}
       <section class="terminal-kpis compact-kpis" aria-label="Market summary">
-        {render_market_metric('Assets', min(int(summary.get('matching_tokens') or 0), api_spreads.DEFAULT_LIMIT), 'top 25, grouped')}
-        {render_market_metric('Venue pairs', summary.get('matching_rows'), 'expandable routes')}
-        {render_market_metric('Funding pairs', summary.get('funding_rows'), 'paired carry')}
-        {render_market_metric('Largest matched edge', fmt_pct(summary.get('max_depth_weighted_spread_pct')), '$50 VWAP')}
+        {
+        render_market_metric(
+            "Assets",
+            min(int(summary.get("matching_tokens") or 0), api_spreads.DEFAULT_LIMIT),
+            "top 25, grouped",
+        )
+    }
+        {render_market_metric("Venue pairs", summary.get("matching_rows"), "expandable routes")}
+        {render_market_metric("Funding pairs", summary.get("funding_rows"), "paired carry")}
+        {
+        render_market_metric(
+            "Largest matched edge",
+            fmt_pct(summary.get("max_depth_weighted_spread_pct")),
+            "$50 VWAP",
+        )
+    }
       </section>
-      {render_market_filter_bar(
-          data,
-          query,
-          presets=accounts.list_filter_presets(user.id, db_path=accounts_path) if user else [],
-          signed_in=user is not None,
-      )}
+      {
+        render_market_filter_bar(
+            data,
+            query,
+            presets=accounts.list_filter_presets(user.id, db_path=accounts_path) if user else [],
+            signed_in=user is not None,
+        )
+    }
       <section class="market-layout terminal-layout grouped-layout">
         <main class="market-main">
           <div class="panel-head flat token-board-title">
             <div>
-              <h2>{'Pro Table' if pro_view else 'Live Assets'}</h2>
-              <p>{'One row per executable venue route with evidence and actions.' if pro_view else f"Top {h(min(int(pagination.get('returned_rows') or 0), api_spreads.DEFAULT_LIMIT))} assets by live open spread. Select a token to reveal every venue route."}</p>
+              <h2>{"Pro Table" if pro_view else "Live Assets"}</h2>
+              <p>{
+        "One row per executable venue route with evidence and actions."
+        if pro_view
+        else f"Top {h(min(int(pagination.get('returned_rows') or 0), api_spreads.DEFAULT_LIMIT))} assets by live open spread. Select a token to reveal every venue route."
+    }</p>
             </div>
-            <div class="market-head-actions"><button class="mini-action" type="button" data-share-market>Copy view link</button><a class="mini-action primary-link" href="/api/spreads?{h(urlencode(_query_with(query, limit=500, offset=0)))}">JSON</a></div>
+            <div class="market-head-actions"><button class="mini-action" type="button" data-share-market>Copy view link</button><a class="mini-action primary-link" href="/api/spreads?{
+        h(urlencode(_query_with(query, limit=500, offset=0)))
+    }">JSON</a></div>
           </div>
           {market_results}
           {render_market_pagination(query, pagination)}
@@ -4073,8 +4494,8 @@ def render_markets_page(
           <script>document.querySelector('[data-share-market]')?.addEventListener('click',async event=>{{try{{await navigator.clipboard.writeText(location.href);event.currentTarget.textContent='Link copied';}}catch(error){{event.currentTarget.textContent='Copy unavailable';}}}});</script>
         </main>
         <aside class="market-side">
-          {render_market_lane('Top Arbitrage Edges', data.get('top_edges') or [], 'edge')}
-          {render_market_lane('Top Funding Pairs', data.get('top_funding') or [], 'funding')}
+          {render_market_lane("Top Arbitrage Edges", data.get("top_edges") or [], "edge")}
+          {render_market_lane("Top Funding Pairs", data.get("top_funding") or [], "funding")}
           <section class="market-side-panel chart-purpose">
             <div class="panel-head flat"><div><h2>Why Charts</h2><p>See whether an edge is persistent, converging, or a single print.</p></div></div>
             <a class="side-chart-link" href="/charts">Open spread history <span aria-hidden="true">→</span></a>
@@ -4172,12 +4593,12 @@ def render_teaser_row(group: dict[str, Any], *, metric: str) -> str:
     )
     sell_leg = f"{route.get('short_venue') or '—'} {leg_market_label(route.get('short_venue'), route.get('short_market_type'))}".strip()
     return f"""
-      <div class="teaser-row" data-route-key="{h(free_teaser_alias(str(route.get('route_key') or '')))}"
+      <div class="teaser-row" data-route-key="{h(free_teaser_alias(str(route.get("route_key") or "")))}"
            role="button" tabindex="0" data-locked>
         <div class="asset-identity">
           <span class="asset-monogram teaser-hidden" aria-hidden="true">&#128274;</span>
           <span><strong class="teaser-blur" aria-label="Token hidden">&#9608;&#9608;&#9608;&#9608;</strong>
-                <em>{h(route_kind_display(route.get('route_kind')))}</em></span>
+                <em>{h(route_kind_display(route.get("route_kind")))}</em></span>
         </div>
         <div class="teaser-route">
           <span>Buy leg</span>
@@ -4188,13 +4609,13 @@ def render_teaser_row(group: dict[str, Any], *, metric: str) -> str:
         </div>
         <div class="group-number">
           <span>Matched spread</span>
-          <strong class="{spread_class(group.get('best_edge_pct'))}" data-live-spread>{fmt_pct(group.get('best_edge_pct'))}</strong>
-          <em>{fmt_pct(route.get('executable_spread_pct'))} top book</em>
+          <strong class="{spread_class(group.get("best_edge_pct"))}" data-live-spread>{fmt_pct(group.get("best_edge_pct"))}</strong>
+          <em>{fmt_pct(route.get("executable_spread_pct"))} top book</em>
         </div>
         <div class="group-number">
           <span>Funding 24h</span>
-          <strong data-live-funding>{fmt_signed_pct(funding, digits=3) if funding is not None else '—'}</strong>
-          <em>{h(str(group.get('route_count') or 0))} routes</em>
+          <strong data-live-funding>{fmt_signed_pct(funding, digits=3) if funding is not None else "—"}</strong>
+          <em>{h(str(group.get("route_count") or 0))} routes</em>
         </div>
         <div class="teaser-cta">Unlock</div>
       </div>
@@ -4203,13 +4624,9 @@ def render_teaser_row(group: dict[str, Any], *, metric: str) -> str:
 
 def _free_teaser(groups: list[dict[str, Any]], hidden: int) -> tuple[str, str]:
     """One number from behind the lock, with no way to act on it."""
-    edges = [
-        _float_or_none(group.get("best_edge_pct"))
-        for group in groups[FREE_TOKEN_LIMIT:]
-    ]
+    edges = [_float_or_none(group.get("best_edge_pct")) for group in groups[FREE_TOKEN_LIMIT:]]
     carries = [
-        _float_or_none(group.get("best_funding_24h_pct"))
-        for group in groups[FREE_TOKEN_LIMIT:]
+        _float_or_none(group.get("best_funding_24h_pct")) for group in groups[FREE_TOKEN_LIMIT:]
     ]
     widest = max((value for value in edges if value is not None), default=None)
     best = max((value for value in carries if value is not None), default=None)
@@ -4234,12 +4651,10 @@ def render_free_page(board_path: Path) -> str:
     widest, best_carry = _free_teaser(edges, hidden)
 
     def section(title: str, blurb: str, groups: list[dict[str, Any]], metric: str) -> str:
-        shown = "".join(
-            render_market_token_group(group) for group in groups[:FREE_TOKEN_LIMIT]
-        )
+        shown = "".join(render_market_token_group(group) for group in groups[:FREE_TOKEN_LIMIT])
         teasers = "".join(
             render_teaser_row(group, metric=metric)
-            for group in groups[FREE_TOKEN_LIMIT:FREE_TOKEN_LIMIT + FREE_TEASER_ROWS]
+            for group in groups[FREE_TOKEN_LIMIT : FREE_TOKEN_LIMIT + FREE_TEASER_ROWS]
         )
         return f"""
         <section class="free-section">
@@ -4310,9 +4725,9 @@ def render_free_page(board_path: Path) -> str:
              open &mdash; only the asset and where to buy it are held back.</p>
         </div>
         <aside class="free-hero-side">
-          <div class="terminal-live-box {'live' if live else 'unavailable'}">
-            <span>{'Live' if live else 'Reconnecting'}</span>
-            <strong data-live-stamp>{fmt_age(health.get('age_min'))}</strong>
+          <div class="terminal-live-box {"live" if live else "unavailable"}">
+            <span>{"Live" if live else "Reconnecting"}</span>
+            <strong data-live-stamp>{fmt_age(health.get("age_min"))}</strong>
             <em>streaming order books</em>
           </div>
           <p class="free-note">Watch a number for a few seconds. If it moves, the feed is live.</p>
@@ -4401,8 +4816,8 @@ def render_fair_price_page() -> str:
           <div class="fair-metric"><em>Last</em><strong>{fmt_price(row.get("last_price"))}</strong></div>
           <div class="fair-metric"><em>Fair</em><strong>{fmt_price(row.get("fair_price"))}</strong></div>
           <div class="fair-metric"><em>Volume 24h</em><strong>{fmt_money(row.get("volume_24h_usd"))}</strong></div>
-          <div class="fair-metric"><em>Gap</em><strong class="{'spread-good' if (row.get('deviation_pct') or 0) > 0 else 'spread-negative'}">{fmt_signed_pct(row.get("deviation_pct"), digits=2)}</strong></div>
-          <div class="fair-side {'long' if row.get('side') == 'Long' else 'short'}">{h(row.get("side"))}</div>
+          <div class="fair-metric"><em>Gap</em><strong class="{"spread-good" if (row.get("deviation_pct") or 0) > 0 else "spread-negative"}">{fmt_signed_pct(row.get("deviation_pct"), digits=2)}</strong></div>
+          <div class="fair-side {"long" if row.get("side") == "Long" else "short"}">{h(row.get("side"))}</div>
         </article>
         """
         for row in rows[:60]
@@ -4440,7 +4855,7 @@ def render_fair_price_page() -> str:
              contract's last trade with the mark, index or oracle reference its own venue uses.
              Last below fair reads Long; last above fair reads Short.</p>
         </div>
-        <div class="terminal-live-box {'live' if rows else 'unavailable'}">
+        <div class="terminal-live-box {"live" if rows else "unavailable"}">
           <span>{len(rows)} flagged</span>
           <strong data-live-stamp>{h(updated or "—")}</strong>
           <em>from the same sweep that prices the board</em>
@@ -4488,8 +4903,8 @@ def render_set_password_page(query: dict[str, list[str]], accounts_path: Path) -
     state = accounts.password_token_status(token, db_path=accounts_path) if token else None
     if state is None:
         inner = (
-            '<h1>This link is not valid</h1>'
-            '<p>It may have been used already, or expired. Ask for a new one.</p>'
+            "<h1>This link is not valid</h1>"
+            "<p>It may have been used already, or expired. Ask for a new one.</p>"
             '<div class="login-note"><a href="/login">Back to sign in</a></div>'
         )
     else:
@@ -4509,7 +4924,10 @@ def render_set_password_page(query: dict[str, list[str]], accounts_path: Path) -
           </form>
           <div class="login-note">At least 12 characters. Signing in anywhere else will be ended.</div>
         """
-    return shell("Set password - SpreadBoard", "login", f"""
+    return shell(
+        "Set password - SpreadBoard",
+        "login",
+        f"""
     <style>
       .set-password-shell {{ width:min(480px,calc(100% - 32px)); margin:76px auto 100px; }}
       .set-password-brand {{ display:flex;align-items:center;gap:11px;margin:0 0 22px;font-size:22px;font-weight:900; }}
@@ -4554,7 +4972,8 @@ def render_set_password_page(query: dict[str, list[str]], accounts_path: Path) -
         }}catch(error){{ box.textContent = error.message; }}
       }});
     }})();
-    </script>""")
+    </script>""",
+    )
 
 
 def render_market_reconnecting(
@@ -4565,7 +4984,9 @@ def render_market_reconnecting(
     params = urlencode(_query_with(query, offset=None))
     retry_href = "/markets" + (f"?{params}" if params else "")
     row_count = health.get("row_count")
-    last_snapshot = f"{int(row_count):,} routes" if isinstance(row_count, (int, float)) else "Not available"
+    last_snapshot = (
+        f"{int(row_count):,} routes" if isinstance(row_count, (int, float)) else "Not available"
+    )
     return f"""
     <section class="market-reconnect" aria-live="polite">
       <div class="market-reconnect-panel">
@@ -4579,7 +5000,7 @@ def render_market_reconnecting(
         <p>The latest API snapshot is no longer current. Previous routes are kept off the live board while a fresh public-market cycle completes.</p>
         <div class="market-reconnect-stats">
           <article><span>Last snapshot</span><strong>{h(last_snapshot)}</strong></article>
-          <article><span>Last update</span><strong>{fmt_age(health.get('age_min'))}</strong></article>
+          <article><span>Last update</span><strong>{fmt_age(health.get("age_min"))}</strong></article>
           <article><span>Automatic check</span><strong>{h(refresh_seconds)} seconds</strong></article>
         </div>
         <div class="market-reconnect-actions">
@@ -4599,7 +5020,7 @@ def render_live_market_empty(health: dict[str, Any]) -> str:
     <article class="live-market-empty">
       <strong>Refreshing public markets</strong>
       <p>No old snapshot is shown while the scanner updates. This page will populate automatically when a fresh API cycle completes.</p>
-      <span>Last update {fmt_age(health.get('age_min'))}</span>
+      <span>Last update {fmt_age(health.get("age_min"))}</span>
     </article>
     """
 
@@ -4620,7 +5041,7 @@ def render_funding_farm_empty(selected_farm: str, health: dict[str, Any]) -> str
     if status in {"ok", "partial"}:
         return (
             '<p class="empty market-empty">OKX DEX quoting ran but no DEX route matched a '
-            'futures leg this cycle.</p>'
+            "futures leg this cycle.</p>"
         )
     if "api_credentials_missing" in blockers or status in {"skipped", "absent"}:
         return """
@@ -4671,41 +5092,41 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         if venue
     )
     return f"""
-    <details class="token-route-group" id="token-{h(group.get('token'))}"
-             data-route-key="{h(best.get('route_key') or '')}">
+    <details class="token-route-group" id="token-{h(group.get("token"))}"
+             data-route-key="{h(best.get("route_key") or "")}">
       <summary class="token-route-summary">
         <div class="asset-identity">
-          <span class="asset-monogram">{h(str(group.get('token') or '?')[:2])}</span>
-          <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best live route chart">{h(group.get('token'))}</a><em>{h(name)}</em>{render_tokenized_guard_badge(best)}</span>
+          <span class="asset-monogram">{h(str(group.get("token") or "?")[:2])}</span>
+          <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best live route chart">{h(group.get("token"))}</a><em>{h(name)}</em>{render_tokenized_guard_badge(best)}</span>
         </div>
         <div class="best-route">
           <span>Best pair</span>
-          <strong>{h(best.get('long_venue'))} <i>→</i> {h(best.get('short_venue'))}</strong>
-          <em>{h(route_kind_display(best.get('route_kind')))}</em>
+          <strong>{h(best.get("long_venue"))} <i>→</i> {h(best.get("short_venue"))}</strong>
+          <em>{h(route_kind_display(best.get("route_kind")))}</em>
         </div>
         <div class="group-number">
           <span>Best matched spread</span>
-          <strong class="{spread_class(group.get('best_edge_pct'))}" data-live-spread>{fmt_pct(group.get('best_edge_pct'))}</strong>
-          <em>matched $50 VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book</em>
+          <strong class="{spread_class(group.get("best_edge_pct"))}" data-live-spread>{fmt_pct(group.get("best_edge_pct"))}</strong>
+          <em>matched $50 VWAP · {fmt_pct(best.get("executable_spread_pct"))} top book</em>
         </div>
         <div class="group-number">
           <span>Best-route funding</span>
-          <strong data-live-funding>{fmt_signed_pct(funding, digits=3) if funding is not None else '—'}</strong>
-          <em>{h(funding_basis)} · {h(funding_economic_label(funding, best))} · {h(funding_pair) if funding_pair else 'not applicable'}</em>
+          <strong data-live-funding>{fmt_signed_pct(funding, digits=3) if funding is not None else "—"}</strong>
+          <em>{h(funding_basis)} · {h(funding_economic_label(funding, best))} · {h(funding_pair) if funding_pair else "not applicable"}</em>
         </div>
         <div class="group-routes">
           <span>Routes</span>
-          <strong>{h(group.get('route_count') or 0)}</strong>
+          <strong>{h(group.get("route_count") or 0)}</strong>
           <em>{h(len(venues))} venues · {h(len(kinds))} types</em>
         </div>
-        <div class="group-age"><strong>{fmt_age(group.get('age_min'))}</strong><span aria-hidden="true">⌄</span></div>
+        <div class="group-age"><strong>{fmt_age(group.get("age_min"))}</strong><span aria-hidden="true">⌄</span></div>
       </summary>
       <div class="token-route-body">
         <div class="expanded-asset-bar">
-          <span>{h(', '.join(venues))}</span>
+          <span>{h(", ".join(venues))}</span>
           <div>
-            <a href="/charts?token={h(group.get('token'))}">Token charts</a>
-            <a href="{h(group.get('href') or '/markets')}">Token overview</a>
+            <a href="/charts?token={h(group.get("token"))}">Token charts</a>
+            <a href="{h(group.get("href") or "/markets")}">Token overview</a>
           </div>
         </div>
         <div class="route-detail-table">
@@ -4713,7 +5134,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
             <span>Buy leg</span><span>Sell leg</span><span>Matched prices</span><span>Edge</span>
             <span>Funding 24h</span><span>D/W rails</span><span></span>
           </div>
-          {''.join(render_market_group_route(route) for route in group.get('routes') or [])}
+          {"".join(render_market_group_route(route) for route in group.get("routes") or [])}
         </div>
       </div>
     </details>
@@ -4723,9 +5144,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
 def render_market_group_route(row: dict[str, Any]) -> str:
     settled_funding = row.get("funding_24h_pct")
     shown_funding = (
-        settled_funding
-        if settled_funding is not None
-        else row.get("funding_projected_24h_pct")
+        settled_funding if settled_funding is not None else row.get("funding_projected_24h_pct")
     )
     funding_basis = (
         "settled 24h"
@@ -4735,44 +5154,46 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         else "history unavailable"
     )
     return f"""
-    <article class="route-detail-row" data-route-key="{h(row.get('route_key') or '')}">
+    <article class="route-detail-row" data-route-key="{h(row.get("route_key") or "")}">
       <div class="route-leg buy">
-        <span>Buy</span>{render_exchange_link(row, 'long')}<em>{h(leg_market_label(row.get('long_venue'), row.get('long_market_type')))}</em>
+        <span>Buy</span>{render_exchange_link(row, "long")}<em>{h(leg_market_label(row.get("long_venue"), row.get("long_market_type")))}</em>
       </div>
       <div class="route-leg sell">
-        <span>Sell</span>{render_exchange_link(row, 'short')}<em>{h(leg_market_label(row.get('short_venue'), row.get('short_market_type')))}</em>
+        <span>Sell</span>{render_exchange_link(row, "short")}<em>{h(leg_market_label(row.get("short_venue"), row.get("short_market_type")))}</em>
       </div>
       <div class="route-prices">
-        <strong>{fmt_price(row.get('long_price'))}</strong><span>→</span><strong>{fmt_price(row.get('short_price'))}</strong>
+        <strong>{fmt_price(row.get("long_price"))}</strong><span>→</span><strong>{fmt_price(row.get("short_price"))}</strong>
       </div>
       <div class="route-edge">
-        <strong class="{spread_class(row.get('depth_weighted_spread_pct'))}" data-live-spread>{fmt_pct(row.get('depth_weighted_spread_pct'))}</strong>
-        <span>{fmt_pct(row.get('executable_spread_pct'))} top book{' · depth not measured' if row.get('depth_unverified') else ''}</span>
+        <strong class="{spread_class(row.get("depth_weighted_spread_pct"))}" data-live-spread>{fmt_pct(row.get("depth_weighted_spread_pct"))}</strong>
+        <span>{fmt_pct(row.get("executable_spread_pct"))} top book{" · depth not measured" if row.get("depth_unverified") else ""}</span>
       </div>
       <div class="route-funding">
-        <strong data-live-funding>{fmt_signed_pct(shown_funding, digits=3) if shown_funding is not None else '—'}</strong>
+        <strong data-live-funding>{fmt_signed_pct(shown_funding, digits=3) if shown_funding is not None else "—"}</strong>
         <b>{h(funding_basis)} · {h(funding_economic_label(shown_funding, row))}</b>
-        <span>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)} / {fmt_signed_pct(row.get('short_funding_pct'), digits=4)}</span>
+        <span>{fmt_signed_pct(row.get("long_funding_pct"), digits=4)} / {fmt_signed_pct(row.get("short_funding_pct"), digits=4)}</span>
         <em>{h(funding_cadence_pair(row))}</em>
       </div>
       <div class="route-rails">{render_market_dw(row)}{render_market_event_badges(row)}{render_tokenized_guard_badge(row)}</div>
       <div class="route-actions">
         {render_net_edge_button(row)}
-        {render_alert_draft_button(row, alert_type='token_spread', compact=True)}
-        <a href="/pair/{h(board.route_key_url(str(row.get('route_key') or '')))}" title="Open route details">Details</a>
-        <a href="/charts?route_key={h(board.route_key_url(str(row.get('route_key') or '')))}" title="Open route chart">Chart</a>
+        {render_alert_draft_button(row, alert_type="token_spread", compact=True)}
+        <a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}" title="Open route details">Details</a>
+        <a href="/charts?route_key={h(board.route_key_url(str(row.get("route_key") or "")))}" title="Open route chart">Chart</a>
       </div>
     </article>
     """
 
 
-def render_market_source_card(title: str, health: dict[str, Any], count: Any, note: str = "") -> str:
+def render_market_source_card(
+    title: str, health: dict[str, Any], count: Any, note: str = ""
+) -> str:
     status = str(health.get("status") or "unknown")
     return f"""
     <article class="market-source-card terminal-kpi {h(status)}">
       <span>{h(title)}</span>
       <strong>{h(count if count is not None else 0)}</strong>
-      <em>{label_text(status)} · {fmt_age(health.get('age_min'))}</em>
+      <em>{label_text(status)} · {fmt_age(health.get("age_min"))}</em>
       <small>{h(note)}</small>
     </article>
     """
@@ -4796,9 +5217,14 @@ def render_market_filter_bar(
     advanced_open = any(
         _query_first(query, key)
         for key in (
-            "quote", "min_volume_24h_usd", "min_market_cap_usd",
-            "max_market_cap_usd", "min_fdv_usd", "max_fdv_usd",
-            "max_listing_age_days", "persistence",
+            "quote",
+            "min_volume_24h_usd",
+            "min_market_cap_usd",
+            "max_market_cap_usd",
+            "min_fdv_usd",
+            "max_fdv_usd",
+            "max_listing_age_days",
+            "persistence",
         )
     )
     summary = data.get("summary") or {}
@@ -4821,52 +5247,52 @@ def render_market_filter_bar(
       <div class="terminal-filter-row route-row">
         <span>Route</span>
         <div class="market-tabs route-tabs" aria-label="Route filters">
-          {''.join(render_market_tab(label, _query_with(query, kind=value or None, offset=None), str(selected_kind).upper() == value, market_kind_count(value, kind_counts, summary, lane_counts)) for value, label in kind_tabs)}
+          {"".join(render_market_tab(label, _query_with(query, kind=value or None, offset=None), str(selected_kind).upper() == value, market_kind_count(value, kind_counts, summary, lane_counts)) for value, label in kind_tabs)}
         </div>
       </div>
       <div class="terminal-filter-row view-row">
         <span>View</span>
         <div class="market-tabs route-tabs" aria-label="Display mode">
-          <a class="market-tab {'active' if selected_view != 'table' else ''}" href="/markets?{h(urlencode(_query_with(query, view=None, offset=None)))}"><span>Grouped assets</span></a>
-          <a class="market-tab {'active' if selected_view == 'table' else ''}" href="/markets?{h(urlencode(_query_with(query, view='table', offset=None)))}"><span>Pro Table</span></a>
+          <a class="market-tab {"active" if selected_view != "table" else ""}" href="/markets?{h(urlencode(_query_with(query, view=None, offset=None)))}"><span>Grouped assets</span></a>
+          <a class="market-tab {"active" if selected_view == "table" else ""}" href="/markets?{h(urlencode(_query_with(query, view="table", offset=None)))}"><span>Pro Table</span></a>
         </div>
       </div>
       <div class="terminal-filter-row asset-row">
         <span>Asset</span>
         <div class="market-tabs route-tabs" aria-label="Asset-class filters">
-          {''.join(render_market_tab(label, _query_with(query, asset_class=value or None, offset=None), selected_asset_class == value, sum(int(item or 0) for item in asset_counts.values()) if not value else asset_counts.get(value, 0)) for value, label in (('', 'All assets'), ('crypto', 'Crypto'), ('tokenized', 'Tokenized assets')))}
+          {"".join(render_market_tab(label, _query_with(query, asset_class=value or None, offset=None), selected_asset_class == value, sum(int(item or 0) for item in asset_counts.values()) if not value else asset_counts.get(value, 0)) for value, label in (("", "All assets"), ("crypto", "Crypto"), ("tokenized", "Tokenized assets")))}
         </div>
       </div>
       <form class="market-filter-form" method="get" action="/markets">
-        <label><span>Token</span><input name="q" value="{h(_query_first(query, 'q') or '')}" placeholder="SIREN, VANRY, GUA"></label>
+        <label><span>Token</span><input name="q" value="{h(_query_first(query, "q") or "")}" placeholder="SIREN, VANRY, GUA"></label>
         <label><span>Exchanges</span><select name="exchange">
           <option value="">All exchanges</option>
-          {''.join(f'<option value="{h(item)}" {"selected" if item == exchange else ""}>{h(item)}</option>' for item in exchange_options)}
+          {"".join(f'<option value="{h(item)}" {"selected" if item == exchange else ""}>{h(item)}</option>' for item in exchange_options)}
         </select></label>
-        <label><span>Min edge %</span><input name="min_spread_pct" value="{h(_query_first(query, 'min_spread_pct') or '')}" placeholder="0.50"></label>
-        <label><span>Min 24h %</span><input name="min_abs_funding_24h_pct" value="{h(_query_first(query, 'min_abs_funding_24h_pct') or '')}" placeholder="0.10"></label>
+        <label><span>Min edge %</span><input name="min_spread_pct" value="{h(_query_first(query, "min_spread_pct") or "")}" placeholder="0.50"></label>
+        <label><span>Min 24h %</span><input name="min_abs_funding_24h_pct" value="{h(_query_first(query, "min_abs_funding_24h_pct") or "")}" placeholder="0.10"></label>
         <label><span>Sort</span><select name="sort">
-          {''.join(f'<option value="{value}" {"selected" if value == selected_sort else ""}>{label}</option>' for value, label in [('edge', 'Spread'), ('funding', 'Funding 24h'), ('funding_abs', 'Funding magnitude'), ('depth', '24h volume'), ('age', 'Age'), ('token', 'Token')])}
+          {"".join(f'<option value="{value}" {"selected" if value == selected_sort else ""}>{label}</option>' for value, label in [("edge", "Spread"), ("funding", "Funding 24h"), ("funding_abs", "Funding magnitude"), ("depth", "24h volume"), ("age", "Age"), ("token", "Token")])}
         </select></label>
         <label><span>Direction</span><select name="direction">
-          <option value="desc" {'selected' if selected_direction == 'desc' else ''}>High to low</option>
-          <option value="asc" {'selected' if selected_direction == 'asc' else ''}>Low to high</option>
+          <option value="desc" {"selected" if selected_direction == "desc" else ""}>High to low</option>
+          <option value="asc" {"selected" if selected_direction == "asc" else ""}>Low to high</option>
         </select></label>
-        <details class="advanced-market-filters" {'open' if advanced_open else ''}>
+        <details class="advanced-market-filters" {"open" if advanced_open else ""}>
           <summary>Advanced discovery filters <span>quote · liquidity · valuation · scanner age · settled carry</span></summary>
           <div>
             <label><span>Quote currency</span><select name="quote">
               <option value="">Any quote</option>
-              {''.join(f'<option value="{value}" {"selected" if value == selected_quote else ""}>{value}</option>' for value in ('USD','USDT','USDC','USD1','FDUSD','EUR','BTC','ETH'))}
+              {"".join(f'<option value="{value}" {"selected" if value == selected_quote else ""}>{value}</option>' for value in ("USD", "USDT", "USDC", "USD1", "FDUSD", "EUR", "BTC", "ETH"))}
             </select></label>
-            <label><span>Min thinner-leg 24h volume, USD</span><input name="min_volume_24h_usd" type="number" min="0" step="1000" value="{h(_query_first(query, 'min_volume_24h_usd') or '')}" placeholder="1000000"></label>
-            <label><span>Min market cap, USD</span><input name="min_market_cap_usd" type="number" min="0" step="100000" value="{h(_query_first(query, 'min_market_cap_usd') or '')}" placeholder="10000000"></label>
-            <label><span>Max market cap, USD</span><input name="max_market_cap_usd" type="number" min="0" step="100000" value="{h(_query_first(query, 'max_market_cap_usd') or '')}" placeholder="500000000"></label>
-            <label><span>Min FDV, USD</span><input name="min_fdv_usd" type="number" min="0" step="100000" value="{h(_query_first(query, 'min_fdv_usd') or '')}" placeholder="10000000"></label>
-            <label><span>Max FDV, USD</span><input name="max_fdv_usd" type="number" min="0" step="100000" value="{h(_query_first(query, 'max_fdv_usd') or '')}" placeholder="1000000000"></label>
-            <label><span>Max scanner age, days</span><input name="max_listing_age_days" type="number" min="0" step="1" value="{h(_query_first(query, 'max_listing_age_days') or '')}" placeholder="30"></label>
+            <label><span>Min thinner-leg 24h volume, USD</span><input name="min_volume_24h_usd" type="number" min="0" step="1000" value="{h(_query_first(query, "min_volume_24h_usd") or "")}" placeholder="1000000"></label>
+            <label><span>Min market cap, USD</span><input name="min_market_cap_usd" type="number" min="0" step="100000" value="{h(_query_first(query, "min_market_cap_usd") or "")}" placeholder="10000000"></label>
+            <label><span>Max market cap, USD</span><input name="max_market_cap_usd" type="number" min="0" step="100000" value="{h(_query_first(query, "max_market_cap_usd") or "")}" placeholder="500000000"></label>
+            <label><span>Min FDV, USD</span><input name="min_fdv_usd" type="number" min="0" step="100000" value="{h(_query_first(query, "min_fdv_usd") or "")}" placeholder="10000000"></label>
+            <label><span>Max FDV, USD</span><input name="max_fdv_usd" type="number" min="0" step="100000" value="{h(_query_first(query, "max_fdv_usd") or "")}" placeholder="1000000000"></label>
+            <label><span>Max scanner age, days</span><input name="max_listing_age_days" type="number" min="0" step="1" value="{h(_query_first(query, "max_listing_age_days") or "")}" placeholder="30"></label>
             <label><span>Settled funding persistence</span><select name="persistence">
-              {''.join(f'<option value="{value}" {"selected" if value == selected_persistence else ""}>{label}</option>' for value, label in (('', 'Any history'), ('persistent', 'Persistent positive'), ('mixed', 'Mixed history'), ('reversing', 'Non-positive'), ('insufficient', 'History pending')))}
+              {"".join(f'<option value="{value}" {"selected" if value == selected_persistence else ""}>{label}</option>' for value, label in (("", "Any history"), ("persistent", "Persistent positive"), ("mixed", "Mixed history"), ("reversing", "Non-positive"), ("insufficient", "History pending")))}
             </select></label>
           </div>
           <p>Scanner age starts when SpreadBoard first resolves the asset; it is not presented as an exchange's official listing date. Unknown metadata is excluded only while its filter is active.</p>
@@ -4874,8 +5300,8 @@ def render_market_filter_bar(
         <input type="hidden" name="limit" value="25">
         <input type="hidden" name="kind" value="{h(selected_kind)}">
         <input type="hidden" name="asset_class" value="{h(selected_asset_class)}">
-        <input type="hidden" name="view" value="{h(selected_view if selected_view == 'table' else '')}">
-        <label class="market-check"><input type="checkbox" name="funding_only" value="1" {'checked' if _query_bool(query, 'funding_only') else ''}> Funding</label>
+        <input type="hidden" name="view" value="{h(selected_view if selected_view == "table" else "")}">
+        <label class="market-check"><input type="checkbox" name="funding_only" value="1" {"checked" if _query_bool(query, "funding_only") else ""}> Funding</label>
         <button class="sheet-button primary" type="submit">Apply</button>
         <a class="sheet-button" href="/markets">Reset</a>
       </form>
@@ -4888,11 +5314,14 @@ def render_market_filter_bar(
 def render_filter_preset_panel(presets: list[dict[str, Any]], *, signed_in: bool) -> str:
     if not signed_in:
         return '<div class="filter-preset-guest"><a href="/login">Sign in to save filter presets</a></div>'
-    chips = "".join(
-        f'<span class="filter-preset-chip"><a href="/markets?{h(urlencode(item.get("query") or {}))}">{h(item.get("name"))}</a>'
-        f'<button type="button" data-preset-delete="{h(item.get("id"))}" aria-label="Delete {h(item.get("name"))}">×</button></span>'
-        for item in presets
-    ) or '<em data-preset-empty>No saved presets yet</em>'
+    chips = (
+        "".join(
+            f'<span class="filter-preset-chip"><a href="/markets?{h(urlencode(item.get("query") or {}))}">{h(item.get("name"))}</a>'
+            f'<button type="button" data-preset-delete="{h(item.get("id"))}" aria-label="Delete {h(item.get("name"))}">×</button></span>'
+            for item in presets
+        )
+        or "<em data-preset-empty>No saved presets yet</em>"
+    )
     return f"""
       <div class="filter-preset-row" data-filter-presets>
         <span>Presets</span><div class="filter-preset-list">{chips}</div>
@@ -4939,16 +5368,16 @@ FILTER_PRESET_SCRIPT = r"""
 def render_pro_market_table(rows: list[dict[str, Any]]) -> str:
     body = "".join(
         f"""
-        <tr data-route-key="{h(row.get('route_key') or '')}">
-          <td data-label="Asset"><a class="pro-token" href="/token/{h(row.get('token'))}">{h(row.get('token'))}</a><small>{h(row.get('kind') or '')}</small></td>
+        <tr data-route-key="{h(row.get("route_key") or "")}">
+          <td data-label="Asset"><a class="pro-token" href="/token/{h(row.get("token"))}">{h(row.get("token"))}</a><small>{h(row.get("kind") or "")}</small></td>
           <td data-label="Market evidence">{render_route_market_metadata(row)}</td>
-          <td data-label="Buy"><strong>{h(row.get('long_venue'))}</strong><small>{h(leg_market_label(row.get('long_venue'), row.get('long_market_type')))} · {fmt_price(row.get('long_price'))}</small></td>
-          <td data-label="Sell"><strong>{h(row.get('short_venue'))}</strong><small>{h(leg_market_label(row.get('short_venue'), row.get('short_market_type')))} · {fmt_price(row.get('short_price'))}</small></td>
-          <td data-label="Matched edge"><strong class="{spread_class(row.get('depth_weighted_spread_pct'))}">{fmt_pct(row.get('depth_weighted_spread_pct'))}</strong><small>{fmt_pct(row.get('executable_spread_pct'))} top book</small></td>
+          <td data-label="Buy"><strong>{h(row.get("long_venue"))}</strong><small>{h(leg_market_label(row.get("long_venue"), row.get("long_market_type")))} · {fmt_price(row.get("long_price"))}</small></td>
+          <td data-label="Sell"><strong>{h(row.get("short_venue"))}</strong><small>{h(leg_market_label(row.get("short_venue"), row.get("short_market_type")))} · {fmt_price(row.get("short_price"))}</small></td>
+          <td data-label="Matched edge"><strong class="{spread_class(row.get("depth_weighted_spread_pct"))}">{fmt_pct(row.get("depth_weighted_spread_pct"))}</strong><small>{fmt_pct(row.get("executable_spread_pct"))} top book</small></td>
           <td data-label="Funding 24h"><strong>{fmt_signed_pct(funding_24h_value(row), digits=3)}</strong><small>{h(funding_cadence_pair(row))}</small>{render_persistence_badge(row)}</td>
-          <td data-label="Depth"><strong>{fmt_money(row.get('depth_usd'))}</strong><small>{'matched' if not row.get('depth_unverified') else 'unverified'}</small></td>
+          <td data-label="Depth"><strong>{fmt_money(row.get("depth_usd"))}</strong><small>{"matched" if not row.get("depth_unverified") else "unverified"}</small></td>
           <td data-label="Rail">{render_market_dw(row)}</td>
-          <td data-label="Actions" class="pro-actions">{render_net_edge_button(row)}{render_alert_draft_button(row, alert_type='token_spread', compact=True)}<a href="/pair/{h(board.route_key_url(str(row.get('route_key') or '')))}">Details</a><a href="/charts?route_key={h(board.route_key_url(str(row.get('route_key') or '')))}">Chart</a></td>
+          <td data-label="Actions" class="pro-actions">{render_net_edge_button(row)}{render_alert_draft_button(row, alert_type="token_spread", compact=True)}<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a><a href="/charts?route_key={h(board.route_key_url(str(row.get("route_key") or "")))}">Chart</a></td>
         </tr>
         """
         for row in rows
@@ -4974,7 +5403,7 @@ def render_route_market_metadata(row: dict[str, Any]) -> str:
     fdv = fmt_money(row.get("fdv_usd"))
     age = _float_or_none(row.get("listing_age_days"))
     age_label = f"{age:.0f}d scanner age" if age is not None else "age unknown"
-    return f'<strong>{h(quotes)}</strong><small>Cap {h(cap)} · FDV {h(fdv)}</small><small>{h(age_label)}</small>{render_market_event_badges(row)}{render_tokenized_guard_badge(row)}'
+    return f"<strong>{h(quotes)}</strong><small>Cap {h(cap)} · FDV {h(fdv)}</small><small>{h(age_label)}</small>{render_market_event_badges(row)}{render_tokenized_guard_badge(row)}"
 
 
 def render_tokenized_guard_badge(row: dict[str, Any]) -> str:
@@ -4999,7 +5428,11 @@ def render_market_event_badges(row: dict[str, Any]) -> str:
         if event.get("source_url"):
             content = f'<a href="{h(event["source_url"])}" target="_blank" rel="noopener noreferrer">{content}</a>'
         badges.append(content)
-    return '<span class="market-event-list" aria-label="Active market events">' + "".join(badges) + "</span>"
+    return (
+        '<span class="market-event-list" aria-label="Active market events">'
+        + "".join(badges)
+        + "</span>"
+    )
 
 
 def funding_persistence(row: dict[str, Any]) -> dict[str, Any]:
@@ -5121,9 +5554,9 @@ def market_kind_count(
     if not value:
         return min(int(summary.get("matching_tokens") or 0), api_spreads.DEFAULT_LIMIT)
     if value == "FUTURES-SPOT-PAIR":
-        count = (lane_counts or {}).get("FUTURES-SPOT", 0) + (
-            lane_counts or {}
-        ).get("SPOT-FUTURES", 0)
+        count = (lane_counts or {}).get("FUTURES-SPOT", 0) + (lane_counts or {}).get(
+            "SPOT-FUTURES", 0
+        )
     else:
         count = counts.get(value, 0)
     return min(int(count or 0), api_spreads.DEFAULT_LIMIT)
@@ -5182,29 +5615,29 @@ def render_market_row(row: dict[str, Any]) -> str:
     if headline is None:
         headline = row.get("executable_spread_pct")
     return f"""
-    <article class="market-terminal-grid market-row terminal-grid {h(row.get('freshness'))} {h(row.get('source_group'))}">
+    <article class="market-terminal-grid market-row terminal-grid {h(row.get("freshness"))} {h(row.get("source_group"))}">
       <div class="market-token-cell">
         <div class="market-token-head">
-          <a class="market-row-link" href="{h(row.get('href') or '/markets')}"><strong>{h(row.get('token'))}</strong>{render_source_count_chip(row)}</a>
+          <a class="market-row-link" href="{h(row.get("href") or "/markets")}"><strong>{h(row.get("token"))}</strong>{render_source_count_chip(row)}</a>
           {render_mirage_badge(row)}
-          {render_alert_draft_button(row, alert_type='token_spread', compact=True)}
+          {render_alert_draft_button(row, alert_type="token_spread", compact=True)}
         </div>
-        <span>{h(source)} · {h(route_kind_display(row.get('route_kind')))}</span>
+        <span>{h(source)} · {h(route_kind_display(row.get("route_kind")))}</span>
       </div>
       <div class="market-route-cell">
-        {render_market_leg_line(row, 'long')}
-        {render_market_leg_line(row, 'short')}
+        {render_market_leg_line(row, "long")}
+        {render_market_leg_line(row, "short")}
       </div>
       <div class="market-number-cell"><strong>{fmt_pct(headline)}</strong><span>open</span></div>
-      <div class="market-number-cell"><strong>{fmt_signed_pct(row.get('executable_spread_pct'))}</strong><span>{fmt_signed_pct(row.get('depth_weighted_spread_pct'))} vwap</span></div>
+      <div class="market-number-cell"><strong>{fmt_signed_pct(row.get("executable_spread_pct"))}</strong><span>{fmt_signed_pct(row.get("depth_weighted_spread_pct"))} vwap</span></div>
       <div class="market-funding-cell">{render_market_funding(row)}</div>
-      <div class="market-number-cell"><strong>{fmt_money(row.get('depth_usd'))}</strong><span>24h vol, thinner leg</span></div>
-      <div class="market-age-cell"><strong>{fmt_age(row.get('age_min'))}</strong><span>{label_text(row.get('freshness'))}</span></div>
+      <div class="market-number-cell"><strong>{fmt_money(row.get("depth_usd"))}</strong><span>24h vol, thinner leg</span></div>
+      <div class="market-age-cell"><strong>{fmt_age(row.get("age_min"))}</strong><span>{label_text(row.get("freshness"))}</span></div>
       <div class="market-dw-cell">{render_market_dw(row)}</div>
       <div class="market-blocker-cell">
-        <span class="market-status {h(row.get('status'))}">{label_text(row.get('status'))}</span>
-        <strong>{h(row.get('next_action'))}</strong>
-        <em>{label_list(blockers[:3]) or 'No blocker details'}</em>
+        <span class="market-status {h(row.get("status"))}">{label_text(row.get("status"))}</span>
+        <strong>{h(row.get("next_action"))}</strong>
+        <em>{label_list(blockers[:3]) or "No blocker details"}</em>
       </div>
     </article>
     """
@@ -5265,7 +5698,7 @@ def render_market_leg_line(row: dict[str, Any], side: str) -> str:
     arrow = "↑" if is_long else "↓"
     label = "Long" if is_long else "Short"
     return f"""
-    <span class="terminal-leg {'long' if is_long else 'short'}">
+    <span class="terminal-leg {"long" if is_long else "short"}">
       <b>{h(arrow)}</b>
       <strong>{h(venue)}</strong>
       <em>{h(market_type_compact(market_type))}</em>
@@ -5331,10 +5764,7 @@ def funding_24h_value(row: dict[str, Any]) -> float | None:
 
 
 def funding_economic_label(value: Any, row: dict[str, Any]) -> str:
-    if not any(
-        leg_pays_funding(row, side)
-        for side in ("long", "short")
-    ):
+    if not any(leg_pays_funding(row, side) for side in ("long", "short")):
         return "no futures funding"
     amount = _float_or_none(value)
     if amount is None:
@@ -5353,9 +5783,13 @@ def render_market_dw(row: dict[str, Any]) -> str:
         return '<span class="rail-na">No transfer</span>'
     parts = []
     if long_spot:
-        parts.append(f'<span title="Withdrawal from buy venue">Buy W: {h(rail_text(row.get("long_withdraw_enabled")))}</span>')
+        parts.append(
+            f'<span title="Withdrawal from buy venue">Buy W: {h(rail_text(row.get("long_withdraw_enabled")))}</span>'
+        )
     if short_spot:
-        parts.append(f'<span title="Deposit to sell venue">Sell D: {h(rail_text(row.get("short_deposit_enabled")))}</span>')
+        parts.append(
+            f'<span title="Deposit to sell venue">Sell D: {h(rail_text(row.get("short_deposit_enabled")))}</span>'
+        )
     return "".join(parts)
 
 
@@ -5379,9 +5813,9 @@ def rail_text(value: Any) -> str:
 def render_market_lane(title: str, rows: list[dict[str, Any]], kind: str) -> str:
     return f"""
     <section class="market-side-panel">
-      <div class="panel-head flat"><div><h2>{h(title)}</h2><p>{'Unique assets ranked by matched $50 VWAP edge' if kind == 'edge' else 'Unique assets ranked by paired carry'}</p></div></div>
+      <div class="panel-head flat"><div><h2>{h(title)}</h2><p>{"Unique assets ranked by matched $50 VWAP edge" if kind == "edge" else "Unique assets ranked by paired carry"}</p></div></div>
       <div class="market-mini-list">
-        {''.join(render_market_mini(row, kind) for row in rows[:8]) or '<p class="watch-empty">No rows in this lane.</p>'}
+        {"".join(render_market_mini(row, kind) for row in rows[:8]) or '<p class="watch-empty">No rows in this lane.</p>'}
       </div>
     </section>
     """
@@ -5401,9 +5835,9 @@ def render_market_mini(row: dict[str, Any], kind: str) -> str:
         suffix = ""
         digits = 0
     return f"""
-    <a class="market-mini-row" href="/markets#token-{h(row.get('token'))}">
-      <strong>{h(row.get('token'))}</strong>
-      <span>{h(row.get('token_name') or 'Metadata pending')}<small>{h(best.get('long_venue'))} → {h(best.get('short_venue'))}</small></span>
+    <a class="market-mini-row" href="/markets#token-{h(row.get("token"))}">
+      <strong>{h(row.get("token"))}</strong>
+      <span>{h(row.get("token_name") or "Metadata pending")}<small>{h(best.get("long_venue"))} → {h(best.get("short_venue"))}</small></span>
       <em>{fmt_signed_pct(primary, digits=digits)}{suffix}</em>
     </a>
     """
@@ -5418,14 +5852,16 @@ def render_market_pagination(query: dict[str, list[str]], pagination: dict[str, 
         return ""
     start = offset + 1
     end = offset + returned
-    previous_href = "/markets?" + urlencode(_query_with(query, offset=max(0, offset - limit) or None))
+    previous_href = "/markets?" + urlencode(
+        _query_with(query, offset=max(0, offset - limit) or None)
+    )
     next_href = "/markets?" + urlencode(_query_with(query, offset=offset + limit))
     return f"""
     <nav class="market-pagination" aria-label="Spread matrix pages">
       <span>{h(start)}-{h(end)} of {h(matching)} assets</span>
       <div>
-        {'<a href="' + h(previous_href) + '">Previous</a>' if pagination.get('has_previous') else '<span class="disabled">Previous</span>'}
-        {'<a href="' + h(next_href) + '">Next</a>' if pagination.get('has_more') else '<span class="disabled">Next</span>'}
+        {'<a href="' + h(previous_href) + '">Previous</a>' if pagination.get("has_previous") else '<span class="disabled">Previous</span>'}
+        {'<a href="' + h(next_href) + '">Next</a>' if pagination.get("has_more") else '<span class="disabled">Next</span>'}
       </div>
     </nav>
     """
@@ -5444,13 +5880,13 @@ def render_market_exchange_box(
       <div class="market-coverage-group">
         <span>Probed now</span>
         <div class="market-exchange-cloud">
-          {''.join(f'<a href="/markets?{h(urlencode(_query_with(query, exchange=item, offset=None)))}"><strong>{h(item)}</strong><em>{h(exchange_counts.get(item, 0))}</em></a>' for item in active) or '<span>No active exchange list available.</span>'}
+          {"".join(f'<a href="/markets?{h(urlencode(_query_with(query, exchange=item, offset=None)))}"><strong>{h(item)}</strong><em>{h(exchange_counts.get(item, 0))}</em></a>' for item in active) or "<span>No active exchange list available.</span>"}
         </div>
       </div>
       <div class="market-coverage-group unavailable">
         <span>Not probed</span>
         <div class="market-exchange-cloud">
-          {''.join(f'<span>{h(item)}</span>' for item in unavailable) or '<span>None reported</span>'}
+          {"".join(f"<span>{h(item)}</span>" for item in unavailable) or "<span>None reported</span>"}
         </div>
       </div>
     </section>
@@ -5469,7 +5905,8 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
     alert_preview = data.get("alert_preview") or {}
     community_source = next(
         (
-            item for name, item in source.items()
+            item
+            for name, item in source.items()
             if "telegram" in str(name).casefold() and isinstance(item, dict)
         ),
         {},
@@ -5529,16 +5966,16 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
         <main class="intel-main">
           <section class="intel-section">
             <div class="panel-head flat"><div><h2>What's Hot</h2><p>Ranked only when the community source is current; source age and route status remain visible.</p></div></div>
-            <div class="hot-grid">{''.join(render_hot_symbol(item) for item in hot[:12]) or '<p class="empty">No recent Telegram symbols matched this window.</p>'}</div>
+            <div class="hot-grid">{"".join(render_hot_symbol(item) for item in hot[:12]) or '<p class="empty">No recent Telegram symbols matched this window.</p>'}</div>
           </section>
           <section class="intel-section">
             <div class="panel-head flat"><div><h2>Route Reality</h2><p>For the hottest tokens, this shows whether the board has a route, what blocks it, and where to drill in.</p></div></div>
-            <div class="reality-stack">{''.join(render_reality_card(item) for item in data.get('route_reality') or []) or '<p class="empty">No route reality rows available.</p>'}</div>
+            <div class="reality-stack">{"".join(render_reality_card(item) for item in data.get("route_reality") or []) or '<p class="empty">No route reality rows available.</p>'}</div>
           </section>
         </main>
         <aside class="intel-side">
           {render_latest_brief(brief)}
-          {render_questions(data.get('question_patterns') or [])}
+          {render_questions(data.get("question_patterns") or [])}
           {render_alert_preview(alert_preview)}
           {render_profile_shell(profile)}
         </aside>
@@ -5546,10 +5983,10 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
       <section class="intel-section">
         <div class="panel-head flat"><div><h2>Recent Feed</h2><p>Sanitised structured activity from the connected source. When the source is stale or disconnected, this section is historical context only.</p></div></div>
         <div class="feed-columns">
-          {render_event_column('Alerts', recent.get('alerts') or [])}
-          {render_event_column('Closes', recent.get('closes') or [])}
-          {render_event_column('Momentum', recent.get('momentum') or [])}
-          {render_event_column('Funding', recent.get('funding') or [])}
+          {render_event_column("Alerts", recent.get("alerts") or [])}
+          {render_event_column("Closes", recent.get("closes") or [])}
+          {render_event_column("Momentum", recent.get("momentum") or [])}
+          {render_event_column("Funding", recent.get("funding") or [])}
         </div>
       </section>
     </section>
@@ -5557,7 +5994,9 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
     return shell("Community Intel - SpreadBoard", "intel", body)
 
 
-def render_triage_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
+def render_triage_page(
+    board_path: Path, config: dict[str, Any], query: dict[str, list[str]]
+) -> str:
     del config
     data = api_triage(board_path, query)
     summary = data.get("summary") or {}
@@ -5576,24 +6015,24 @@ def render_triage_page(board_path: Path, config: dict[str, Any], query: dict[str
         </div>
       </div>
       <section class="triage-summary-grid">
-        {render_triage_summary_card('Look Now', summary.get('look_now'), 'fresh routes')}
-        {render_triage_summary_card('Data Review', summary.get('setup_needed'), 'incomplete fields')}
-        {render_triage_summary_card('Funding', summary.get('funding_carry'), 'carry rows')}
-        {render_triage_summary_card('Identity', summary.get('dex_identity'), 'DEX checks')}
-        {render_triage_summary_card('Stale', summary.get('stale_routes'), 'route matches')}
-        {render_triage_summary_card('Sources', summary.get('source_gaps'), 'stale/missing')}
+        {render_triage_summary_card("Look Now", summary.get("look_now"), "fresh routes")}
+        {render_triage_summary_card("Data Review", summary.get("setup_needed"), "incomplete fields")}
+        {render_triage_summary_card("Funding", summary.get("funding_carry"), "carry rows")}
+        {render_triage_summary_card("Identity", summary.get("dex_identity"), "DEX checks")}
+        {render_triage_summary_card("Stale", summary.get("stale_routes"), "route matches")}
+        {render_triage_summary_card("Sources", summary.get("source_gaps"), "stale/missing")}
       </section>
       <section class="triage-layout">
         <main class="triage-main">
-          {render_triage_lane('Look Now', 'Fresh matched rows worth opening first.', buckets.get('look_now') or [], 'route')}
-          {render_triage_lane('Data Review', 'Routes with incomplete public fields such as venue symbols, identity, or transfer rails.', buckets.get('setup_needed') or [], 'route')}
-          {render_triage_lane('Funding Carry', 'Funding outliers and funding pings that may matter more than the headline spread.', buckets.get('funding_carry') or [], 'funding')}
+          {render_triage_lane("Look Now", "Fresh matched rows worth opening first.", buckets.get("look_now") or [], "route")}
+          {render_triage_lane("Data Review", "Routes with incomplete public fields such as venue symbols, identity, or transfer rails.", buckets.get("setup_needed") or [], "route")}
+          {render_triage_lane("Funding Carry", "Funding outliers and funding pings that may matter more than the headline spread.", buckets.get("funding_carry") or [], "funding")}
         </main>
         <aside class="triage-side">
-          {render_triage_lane('DEX Identity Work', 'Tokens that need exact chain and contract proof before any DEX row should be trusted.', buckets.get('dex_identity') or [], 'route')}
-          {render_triage_lane('Community Spikes', 'Symbols getting repeated alerts, closes, calls, or funding discussion.', buckets.get('community_spike') or [], 'community')}
-          {render_triage_lane('Stale Route Matches', 'Matched board rows that are too old for Look Now; use them as research context only.', buckets.get('stale_routes') or [], 'route')}
-          {render_triage_lane('Source Gaps', 'Stale or missing local sources that should explain weak/empty views.', buckets.get('source_gaps') or [], 'source')}
+          {render_triage_lane("DEX Identity Work", "Tokens that need exact chain and contract proof before any DEX row should be trusted.", buckets.get("dex_identity") or [], "route")}
+          {render_triage_lane("Community Spikes", "Symbols getting repeated alerts, closes, calls, or funding discussion.", buckets.get("community_spike") or [], "community")}
+          {render_triage_lane("Stale Route Matches", "Matched board rows that are too old for Look Now; use them as research context only.", buckets.get("stale_routes") or [], "route")}
+          {render_triage_lane("Source Gaps", "Stale or missing local sources that should explain weak/empty views.", buckets.get("source_gaps") or [], "source")}
         </aside>
       </section>
     </section>
@@ -5609,7 +6048,7 @@ def render_triage_lane(title: str, note: str, rows: list[dict[str, Any]], kind: 
     return f"""
     <section class="triage-lane">
       <div class="panel-head flat"><div><h2>{h(title)}</h2><p>{h(note)}</p></div><span>{h(len(rows))}</span></div>
-      <div class="triage-card-list">{''.join(render_triage_card(row, kind) for row in rows[:8]) or '<p class="watch-empty">No rows in this bucket right now.</p>'}</div>
+      <div class="triage-card-list">{"".join(render_triage_card(row, kind) for row in rows[:8]) or '<p class="watch-empty">No rows in this bucket right now.</p>'}</div>
     </section>
     """
 
@@ -5629,46 +6068,54 @@ def render_triage_route_card(row: dict[str, Any]) -> str:
     blockers = row.get("blockers") or []
     actions = row.get("next_actions") or []
     freshness = "fresh" if _triage_is_fresh_route(row) else "stale"
-    decision = "stale_route" if freshness == "stale" and row.get("route_count") else (row.get("decision") or row.get("status"))
+    decision = (
+        "stale_route"
+        if freshness == "stale" and row.get("route_count")
+        else (row.get("decision") or row.get("status"))
+    )
     return f"""
     <article class="triage-card {h(freshness)}">
       <div class="triage-card-head">
-        <a href="{h(href)}">{h(row.get('symbol'))}</a>
+        <a href="{h(href)}">{h(row.get("symbol"))}</a>
         <span>{label_text(decision)}</span>
       </div>
-      <p>{h(row.get('route_line'))}</p>
+      <p>{h(row.get("route_line"))}</p>
       <div class="triage-freshness {h(freshness)}">
-        <span>{label_text(row.get('freshness') or freshness)} source</span>
-        <strong>{fmt_age(row.get('age_min'))}</strong>
+        <span>{label_text(row.get("freshness") or freshness)} source</span>
+        <strong>{fmt_age(row.get("age_min"))}</strong>
       </div>
       <div class="triage-metrics">
-        <span>Open<strong>{fmt_pct(row.get('open_spread_pct'))}</strong></span>
-        <span>F APR<strong>{fmt_signed_pct(row.get('funding_apr_pct'), digits=0)}</strong></span>
-        <span>Age<strong>{fmt_age(row.get('age_min'))}</strong></span>
-        <span>Signals<strong>{h(row.get('event_count') or 0)}</strong></span>
+        <span>Open<strong>{fmt_pct(row.get("open_spread_pct"))}</strong></span>
+        <span>F APR<strong>{fmt_signed_pct(row.get("funding_apr_pct"), digits=0)}</strong></span>
+        <span>Age<strong>{fmt_age(row.get("age_min"))}</strong></span>
+        <span>Signals<strong>{h(row.get("event_count") or 0)}</strong></span>
       </div>
       <div class="triage-tags">
-        {''.join(f'<span>{label_text(item)}</span>' for item in actions[:2])}
-        {''.join(f'<span>{label_text(item)}</span>' for item in blockers[:3]) or '<span>No blocker details</span>'}
+        {"".join(f"<span>{label_text(item)}</span>" for item in actions[:2])}
+        {"".join(f"<span>{label_text(item)}</span>" for item in blockers[:3]) or "<span>No blocker details</span>"}
       </div>
     </article>
     """
 
 
 def render_triage_funding_card(row: dict[str, Any]) -> str:
-    value = row.get("funding_apr_pct") if row.get("funding_apr_pct") is not None else row.get("funding_delta_pct")
+    value = (
+        row.get("funding_apr_pct")
+        if row.get("funding_apr_pct") is not None
+        else row.get("funding_delta_pct")
+    )
     return f"""
     <article class="triage-card funding">
       <div class="triage-card-head">
-        <a href="/token/{h(row.get('symbol'))}">{h(row.get('symbol'))}</a>
-        <span>{label_text(row.get('decision'))}</span>
+        <a href="/token/{h(row.get("symbol"))}">{h(row.get("symbol"))}</a>
+        <span>{label_text(row.get("decision"))}</span>
       </div>
-      <p>{h(row.get('source'))} {h(row.get('kind'))}</p>
+      <p>{h(row.get("source"))} {h(row.get("kind"))}</p>
       <div class="triage-metrics">
         <span>Funding<strong>{fmt_signed_pct(value)}</strong></span>
-        <span>Open<strong>{fmt_pct(row.get('open_spread_pct'))}</strong></span>
-        <span>Next<strong>{h(row.get('minutes_to_funding') if row.get('minutes_to_funding') is not None else '?')} min</strong></span>
-        <span>Age<strong>{fmt_age(row.get('age_min'))}</strong></span>
+        <span>Open<strong>{fmt_pct(row.get("open_spread_pct"))}</strong></span>
+        <span>Next<strong>{h(row.get("minutes_to_funding") if row.get("minutes_to_funding") is not None else "?")} min</strong></span>
+        <span>Age<strong>{fmt_age(row.get("age_min"))}</strong></span>
       </div>
     </article>
     """
@@ -5679,15 +6126,15 @@ def render_triage_community_card(row: dict[str, Any]) -> str:
     return f"""
     <article class="triage-card community">
       <div class="triage-card-head">
-        <a href="{h(href)}">{h(row.get('symbol'))}</a>
-        <span>{label_text(row.get('decision'))}</span>
+        <a href="{h(href)}">{h(row.get("symbol"))}</a>
+        <span>{label_text(row.get("decision"))}</span>
       </div>
-      <p>{h(row.get('route_line'))}</p>
+      <p>{h(row.get("route_line"))}</p>
       <div class="triage-metrics">
-        <span>Msgs<strong>{h(row.get('event_count') or 0)}</strong></span>
-        <span>New<strong>{h(row.get('new_count') or 0)}</strong></span>
-        <span>Funding<strong>{h(row.get('funding_count') or 0)}</strong></span>
-        <span>Open<strong>{fmt_pct(row.get('open_spread_pct'))}</strong></span>
+        <span>Msgs<strong>{h(row.get("event_count") or 0)}</strong></span>
+        <span>New<strong>{h(row.get("new_count") or 0)}</strong></span>
+        <span>Funding<strong>{h(row.get("funding_count") or 0)}</strong></span>
+        <span>Open<strong>{fmt_pct(row.get("open_spread_pct"))}</strong></span>
       </div>
     </article>
     """
@@ -5697,19 +6144,21 @@ def render_triage_source_card(row: dict[str, Any]) -> str:
     return f"""
     <article class="triage-card source">
       <div class="triage-card-head">
-        <strong>{h(str(row.get('source') or '').replace('_', ' '))}</strong>
-        <span>{label_text(row.get('status'))}</span>
+        <strong>{h(str(row.get("source") or "").replace("_", " "))}</strong>
+        <span>{label_text(row.get("status"))}</span>
       </div>
-      <p>{h(row.get('title') or row.get('path') or 'No local source detail')}</p>
+      <p>{h(row.get("title") or row.get("path") or "No local source detail")}</p>
       <div class="triage-metrics">
-        <span>Age<strong>{fmt_age(row.get('age_min'))}</strong></span>
-        <span>Next<strong>{label_text(row.get('decision'))}</strong></span>
+        <span>Age<strong>{fmt_age(row.get("age_min"))}</strong></span>
+        <span>Next<strong>{label_text(row.get("decision"))}</strong></span>
       </div>
     </article>
     """
 
 
-def render_signals_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
+def render_signals_page(
+    board_path: Path, config: dict[str, Any], query: dict[str, list[str]]
+) -> str:
     data = api_signals(board_path, query)
     recent = data.get("recent_events") or {}
     community = data.get("community") or {}
@@ -5727,26 +6176,26 @@ def render_signals_page(board_path: Path, config: dict[str, Any], query: dict[st
           <a class="secondary" href="/signals?window_hours=48">48h</a>
         </div>
       </div>
-      {render_intel_source_grid(data.get('source_freshness') or {})}
+      {render_intel_source_grid(data.get("source_freshness") or {})}
       <section class="signal-board">
-        {render_signal_lane('New Alerts', recent.get('alerts') or [])}
-        {render_signal_lane('Funding Pings', recent.get('funding') or [])}
-        {render_signal_lane('Closes', recent.get('closes') or [])}
-        {render_signal_lane('Momentum', recent.get('momentum') or [])}
+        {render_signal_lane("New Alerts", recent.get("alerts") or [])}
+        {render_signal_lane("Funding Pings", recent.get("funding") or [])}
+        {render_signal_lane("Closes", recent.get("closes") or [])}
+        {render_signal_lane("Momentum", recent.get("momentum") or [])}
       </section>
       <section class="signal-split">
         <div class="intel-section">
           <div class="panel-head flat"><div><h2>Community Calls</h2><p>Potential setup posts and discussion markers from local Telegram topics.</p></div></div>
-          <div class="signal-list">{''.join(render_signal_event({**item, 'bucket': 'call'}) for item in community.get('calls') or []) or '<p class="empty">No community calls in this window.</p>'}</div>
+          <div class="signal-list">{"".join(render_signal_event({**item, "bucket": "call"}) for item in community.get("calls") or []) or '<p class="empty">No community calls in this window.</p>'}</div>
         </div>
         <div class="intel-section">
           <div class="panel-head flat"><div><h2>Results</h2><p>Result-topic rows for later backfill into route lessons and PnL stories.</p></div></div>
-          <div class="signal-list">{''.join(render_signal_event({**item, 'bucket': 'result'}) for item in community.get('results') or []) or '<p class="empty">No results rows in this window.</p>'}</div>
+          <div class="signal-list">{"".join(render_signal_event({**item, "bucket": "result"}) for item in community.get("results") or []) or '<p class="empty">No results rows in this window.</p>'}</div>
         </div>
       </section>
       <section class="intel-section">
         <div class="panel-head flat"><div><h2>Question Pulse</h2><p>Recurring things people ask about, useful for future alert/profile features.</p></div></div>
-        {render_questions(data.get('question_patterns') or [])}
+        {render_questions(data.get("question_patterns") or [])}
       </section>
     </section>
     """
@@ -5780,13 +6229,18 @@ def render_funding_windows(route: dict[str, Any] | None, route_key: Any) -> str:
     coverage_title = (
         "All settlement windows are available."
         if coverage.get("status") == "complete"
-        else str(coverage.get("note") or "Settlement history is still collecting for one or both exact venue symbols.")
+        else str(
+            coverage.get("note")
+            or "Settlement history is still collecting for one or both exact venue symbols."
+        )
     )
     cells = []
     for label in ("1d", "7d", "30d"):
         value = funding_radar.window_value(route or {}, label)
         if value is None:
-            cells.append(f'<span class="funding-window unknown" title="{h(coverage_title)}"><em>{label}</em><strong>—</strong></span>')
+            cells.append(
+                f'<span class="funding-window unknown" title="{h(coverage_title)}"><em>{label}</em><strong>—</strong></span>'
+            )
         else:
             tone = "positive" if value > 0 else "negative" if value < 0 else "flat"
             cells.append(
@@ -5842,9 +6296,7 @@ def _historical_funding_groups(
                 "token_name": route.get("token_name") or "Metadata pending",
                 "href": route.get("href") or f"/markets?q={quote(token)}&view=table",
                 "venues": sorted(
-                    value
-                    for value in (route.get("long_venue"), route.get("short_venue"))
-                    if value
+                    value for value in (route.get("long_venue"), route.get("short_venue")) if value
                 ),
                 "route_kinds": [route.get("route_kind")],
                 "routes": [],
@@ -5855,10 +6307,7 @@ def _historical_funding_groups(
     ranked: list[dict[str, Any]] = []
     for group in groups.values():
         routes = group.get("routes") or []
-        candidates = [
-            (funding_radar.window_value(route, window), route)
-            for route in routes
-        ]
+        candidates = [(funding_radar.window_value(route, window), route) for route in routes]
         candidates = [(value, route) for value, route in candidates if value is not None]
         if not candidates:
             continue
@@ -5871,11 +6320,15 @@ def _historical_funding_groups(
             route for route in routes if all(route is not item[1] for item in candidates)
         ]
         ranked.append(group)
-    ranked.sort(key=lambda group: float(group.get("best_funding_window_pct") or float("-inf")), reverse=True)
+    ranked.sort(
+        key=lambda group: float(group.get("best_funding_window_pct") or float("-inf")), reverse=True
+    )
     return ranked[: max(1, min(100, int(limit)))]
 
 
-def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
+def render_funding_page(
+    board_path: Path, config: dict[str, Any], query: dict[str, list[str]]
+) -> str:
     del config
     selected_farm = (_query_first(query, "farm") or "futures-futures").casefold()
     farm_kinds = {
@@ -5920,13 +6373,19 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
     )
     displayed_largest = (
         max(
-            (float(group.get("best_funding_window_pct")) for group in funding_groups if group.get("best_funding_window_pct") is not None),
+            (
+                float(group.get("best_funding_window_pct"))
+                for group in funding_groups
+                if group.get("best_funding_window_pct") is not None
+            ),
             default=None,
         )
         if selected_window != "now"
         else summary.get("max_abs_funding_24h_pct")
     )
-    displayed_largest_label = "Largest 24h" if selected_window in {"now", "1d"} else f"Largest {selected_window}"
+    displayed_largest_label = (
+        "Largest 24h" if selected_window in {"now", "1d"} else f"Largest {selected_window}"
+    )
     api_health_data = (market_data.get("source_health") or {}).get("canonical_api") or {}
     history_health = funding_history_health()
     tabs = [
@@ -5944,30 +6403,67 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
           <p>Funding is ranked as a hedge pair, never as a floating single contract. Now stays strictly live; 24h, 7d, and 30d retain cooled leaders as a clearly labelled research radar.</p>
         </div>
         <div class="terminal-live-box">
-          <span>{'Live' if market_data.get('ok') else 'Updating'}</span>
-          <strong>{fmt_age(api_health_data.get('age_min'))}</strong>
+          <span>{"Live" if market_data.get("ok") else "Updating"}</span>
+          <strong>{fmt_age(api_health_data.get("age_min"))}</strong>
           <em>public funding APIs</em>
         </div>
       </div>
       <nav class="funding-farm-tabs" aria-label="Funding farm type">
-        {''.join(f'<a class="{"active" if value == selected_farm else ""}" href="/funding?farm={h(value)}">{h(label)}</a>' for value, label in tabs)}
+        {
+        "".join(
+            f'<a class="{"active" if value == selected_farm else ""}" href="/funding?farm={h(value)}">{h(label)}</a>'
+            for value, label in tabs
+        )
+    }
       </nav>
       <nav class="funding-window-tabs" aria-label="Rank by">
         <span>Rank by</span>
-        {''.join(
+        {
+        "".join(
             f'<a class="{"active" if value == selected_window else ""}" '
             f'href="/funding?farm={h(selected_farm)}&amp;rank={h(value)}">{h(label)}</a>'
             for value, label in FUNDING_RANK_TABS
-        )}
+        )
+    }
       </nav>
-      {('<p class="funding-radar-note"><strong>Historical radar:</strong> cooled rows remain discoverable for 30 days. Their rate and basis are the last live observation, not a current entry quote.</p>' if selected_window != 'now' else '')}
+      {
+        (
+            '<p class="funding-radar-note"><strong>Historical radar:</strong> cooled rows remain discoverable for 30 days. Their rate and basis are the last live observation, not a current entry quote.</p>'
+            if selected_window != "now"
+            else ""
+        )
+    }
       <p class="funding-radar-note"><strong>Blank history is explicit:</strong> 1d, 7d or 30d appears only after the exact venue symbols provide enough settled events. A token can be older than seven days while a venue API exposes less history; member Watchlist and Portfolio legs are now prioritised by the collector.</p>
-      <p class="funding-radar-note" data-history-coverage><strong>Settlement archive coverage:</strong> {h(history_health.get('attempted_leg_count'))}/{h(history_health.get('catalog_leg_count'))} exact futures legs source-checked; {h(history_health.get('classified_leg_count'))} successfully classified; {h(history_health.get('pending_leg_count'))} not yet checked; {h(history_health.get('retryable_error_leg_count'))} awaiting a provider retry. Previously verified windows remain visible during temporary provider failures.</p>
+      <p class="funding-radar-note" data-history-coverage><strong>Settlement archive coverage:</strong> {
+        h(history_health.get("attempted_leg_count"))
+    }/{h(history_health.get("catalog_leg_count"))} exact futures legs source-checked; {
+        h(history_health.get("classified_leg_count"))
+    } successfully classified; {h(history_health.get("pending_leg_count"))} not yet checked; {
+        h(history_health.get("retryable_error_leg_count"))
+    } awaiting a provider retry. Previously verified windows remain visible during temporary provider failures.</p>
       <section class="terminal-tape funding-tape" aria-label="Funding summary">
-        {render_market_metric('Assets', displayed_assets, 'radar tokens' if selected_window != 'now' else 'unique tokens')}
-        {render_market_metric('Funding pairs', summary.get('matching_rows'), 'live venue routes')}
-        {render_market_metric(displayed_largest_label, fmt_signed_pct(displayed_largest, digits=3), 'settled paired carry' if selected_window != 'now' else 'absolute paired carry')}
-        {render_market_metric('Largest matched basis', fmt_pct(summary.get('max_depth_weighted_spread_pct')), '$50 VWAP')}
+        {
+        render_market_metric(
+            "Assets",
+            displayed_assets,
+            "radar tokens" if selected_window != "now" else "unique tokens",
+        )
+    }
+        {render_market_metric("Funding pairs", summary.get("matching_rows"), "live venue routes")}
+        {
+        render_market_metric(
+            displayed_largest_label,
+            fmt_signed_pct(displayed_largest, digits=3),
+            "settled paired carry" if selected_window != "now" else "absolute paired carry",
+        )
+    }
+        {
+        render_market_metric(
+            "Largest matched basis",
+            fmt_pct(summary.get("max_depth_weighted_spread_pct")),
+            "$50 VWAP",
+        )
+    }
       </section>
       <section class="funding-terminal-panel">
         <div class="panel-head flat terminal-table-title">
@@ -5975,10 +6471,15 @@ def render_funding_page(board_path: Path, config: dict[str, Any], query: dict[st
             <h2>{h(dict(tabs).get(selected_farm))} Farms</h2>
             <p>Positive net values mean the displayed long-short pair receives funding under the exchange sign convention.</p>
           </div>
-          <a class="mini-action primary-link" href="/api/spreads?{h(urlencode(_query_with(funding_query, limit=500, offset=0)))}">JSON</a>
+          <a class="mini-action primary-link" href="/api/spreads?{
+        h(urlencode(_query_with(funding_query, limit=500, offset=0)))
+    }">JSON</a>
         </div>
         <div class="funding-group-list">
-          {''.join(render_funding_token_group(group) for group in funding_groups) or render_funding_farm_empty(selected_farm, api_health_data)}
+          {
+        "".join(render_funding_token_group(group) for group in funding_groups)
+        or render_funding_farm_empty(selected_farm, api_health_data)
+    }
         </div>
       </section>
     </section>
@@ -5999,8 +6500,7 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
     funding_basis = (
         "last live observation"
         if historical
-        else
-        "settled 24h"
+        else "settled 24h"
         if best.get("funding_24h_pct") is not None
         else "24h at current rate"
         if funding_24h is not None
@@ -6018,22 +6518,22 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
         else '<span class="funding-live-badge">Live now</span>'
     )
     return f"""
-    <details class="funding-token-group {'historical-radar' if historical else ''}" data-route-key="{h(best.get('route_key') or '')}">
+    <details class="funding-token-group {"historical-radar" if historical else ""}" data-route-key="{h(best.get("route_key") or "")}">
       <summary>
         <div class="asset-identity">
-          <span class="asset-monogram">{h(str(group.get('token') or '?')[:2])}</span>
-          <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best funding-pair chart">{h(group.get('token'))}</a><em>{h(name)}</em>{status_badge}</span>
+          <span class="asset-monogram">{h(str(group.get("token") or "?")[:2])}</span>
+          <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best funding-pair chart">{h(group.get("token"))}</a><em>{h(name)}</em>{status_badge}</span>
         </div>
-        <div><span>Best farm</span><strong>{h(best.get('long_venue'))} → {h(best.get('short_venue'))}</strong></div>
+        <div><span>Best farm</span><strong>{h(best.get("long_venue"))} → {h(best.get("short_venue"))}</strong></div>
         <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
         <div><span>Payouts</span><strong>{h(funding_cadence_pair(best))}</strong></div>
-        <div><span>{'Last basis' if historical else 'Entry basis'}</span><strong data-live-spread>{fmt_pct(best.get('executable_spread_pct'))}</strong></div>
-        <div class="funding-realised"><span>Realised</span>{render_funding_windows(best, best.get('route_key'))}</div>
-        <div><span>Pairs</span><strong>{h(group.get('route_count') or 0)}</strong></div>
+        <div><span>{"Last basis" if historical else "Entry basis"}</span><strong data-live-spread>{fmt_pct(best.get("executable_spread_pct"))}</strong></div>
+        <div class="funding-realised"><span>Realised</span>{render_funding_windows(best, best.get("route_key"))}</div>
+        <div><span>Pairs</span><strong>{h(group.get("route_count") or 0)}</strong></div>
         <span class="funding-chevron" aria-hidden="true">⌄</span>
       </summary>
       <div class="funding-pair-list">
-        {''.join(render_funding_pair(route) for route in group.get('routes') or [])}
+        {"".join(render_funding_pair(route) for route in group.get("routes") or [])}
       </div>
     </details>
     """
@@ -6051,33 +6551,32 @@ def render_funding_pair(row: dict[str, Any]) -> str:
     funding_basis = (
         "last live observation"
         if historical
-        else
-        "settled"
+        else "settled"
         if row.get("funding_24h_pct") is not None
         else "at current rate"
         if funding_24h is not None
         else "history unavailable"
     )
     long_funding = (
-        f'<em>{fmt_signed_pct(row.get("long_funding_pct"), digits=4)} · '
-        f'{h(funding_interval_label(row.get("long_funding_interval_hours"), row.get("long_funding_interval_assumed")))}</em>'
+        f"<em>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)} · "
+        f"{h(funding_interval_label(row.get('long_funding_interval_hours'), row.get('long_funding_interval_assumed')))}</em>"
         if leg_pays_funding(row, "long")
         else ""
     )
     short_funding = (
-        f'<em>{fmt_signed_pct(row.get("short_funding_pct"), digits=4)} · '
-        f'{h(funding_interval_label(row.get("short_funding_interval_hours"), row.get("short_funding_interval_assumed")))}</em>'
+        f"<em>{fmt_signed_pct(row.get('short_funding_pct'), digits=4)} · "
+        f"{h(funding_interval_label(row.get('short_funding_interval_hours'), row.get('short_funding_interval_assumed')))}</em>"
         if leg_pays_funding(row, "short")
         else ""
     )
     return f"""
-    <article class="funding-pair-row {'historical-radar' if historical else ''}" data-route-key="{h(row.get('route_key') or '')}">
-      <div><span>Long</span>{render_exchange_link(row, 'long', include_market_type=True)}{long_funding}</div>
-      <div><span>Short</span>{render_exchange_link(row, 'short', include_market_type=True)}{short_funding}</div>
+    <article class="funding-pair-row {"historical-radar" if historical else ""}" data-route-key="{h(row.get("route_key") or "")}">
+      <div><span>Long</span>{render_exchange_link(row, "long", include_market_type=True)}{long_funding}</div>
+      <div><span>Short</span>{render_exchange_link(row, "short", include_market_type=True)}{short_funding}</div>
       <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)} · {h(funding_cadence_pair(row))}</em></div>
-      <div><span>Basis / VWAP</span><strong data-live-spread>{fmt_pct(row.get('executable_spread_pct'))}</strong><em>{fmt_pct(row.get('depth_weighted_spread_pct'))}</em></div>
-      <div><span>{'Last seen' if historical else 'Updated'}</span><strong>{fmt_age(row.get('radar_last_seen_age_min') if historical else row.get('age_min'))}</strong></div>
-      <div class="route-actions">{'' if historical else render_alert_draft_button(row, alert_type='funding', compact=True)}{'' if historical else f'<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a>'}<a href="/charts?route_key={h(board.route_key_url(str(row.get('route_key') or '')))}">Chart</a></div>
+      <div><span>Basis / VWAP</span><strong data-live-spread>{fmt_pct(row.get("executable_spread_pct"))}</strong><em>{fmt_pct(row.get("depth_weighted_spread_pct"))}</em></div>
+      <div><span>{"Last seen" if historical else "Updated"}</span><strong>{fmt_age(row.get("radar_last_seen_age_min") if historical else row.get("age_min"))}</strong></div>
+      <div class="route-actions">{"" if historical else render_alert_draft_button(row, alert_type="funding", compact=True)}{"" if historical else f'<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a>'}<a href="/charts?route_key={h(board.route_key_url(str(row.get("route_key") or "")))}">Chart</a></div>
     </article>
     """
 
@@ -6094,22 +6593,22 @@ def render_funding_route_row(row: dict[str, Any]) -> str:
         else row.get("funding_projected_24h_pct")
     )
     return f"""
-    <article class="funding-terminal-grid funding-route-row {direction_class} {h(row.get('freshness'))}">
+    <article class="funding-terminal-grid funding-route-row {direction_class} {h(row.get("freshness"))}">
       <div class="funding-token-cell">
         <div class="funding-token-head">
-          <a href="{h(row.get('href') or '/markets')}"><strong>{h(row.get('token'))}</strong></a>
-          {render_alert_draft_button(row, alert_type='funding', compact=True)}
+          <a href="{h(row.get("href") or "/markets")}"><strong>{h(row.get("token"))}</strong></a>
+          {render_alert_draft_button(row, alert_type="funding", compact=True)}
         </div>
-        <span>{h(route_kind_display(row.get('route_kind')))} · {h(row.get('long_venue'))} -> {h(row.get('short_venue'))}</span>
+        <span>{h(route_kind_display(row.get("route_kind")))} · {h(row.get("long_venue"))} -> {h(row.get("short_venue"))}</span>
       </div>
-      <div>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)}</div>
-      <div>{fmt_signed_pct(row.get('short_funding_pct'), digits=4)}</div>
-      <div><b>{fmt_signed_pct(row.get('funding_daily_pct'), digits=3)}</b></div>
+      <div>{fmt_signed_pct(row.get("long_funding_pct"), digits=4)}</div>
+      <div>{fmt_signed_pct(row.get("short_funding_pct"), digits=4)}</div>
+      <div><b>{fmt_signed_pct(row.get("funding_daily_pct"), digits=3)}</b></div>
       <div><strong>{fmt_signed_pct(funding_24h, digits=3)}</strong></div>
       <div>{fmt_pct(headline)}</div>
-      <div>{fmt_money(row.get('depth_usd'))}</div>
-      <div>{fmt_age(row.get('age_min'))}</div>
-      <div><span class="market-status {h(row.get('status'))}">{label_text(row.get('status'))}</span></div>
+      <div>{fmt_money(row.get("depth_usd"))}</div>
+      <div>{fmt_age(row.get("age_min"))}</div>
+      <div><span class="market-status {h(row.get("status"))}">{label_text(row.get("status"))}</span></div>
     </article>
     """
 
@@ -6156,7 +6655,9 @@ def render_alert_draft_button(
     )
 
 
-def render_community_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
+def render_community_page(
+    board_path: Path, config: dict[str, Any], query: dict[str, list[str]]
+) -> str:
     data = api_community(board_path, query)
     insights = data.get("community_insights") or {}
     body = f"""
@@ -6173,20 +6674,20 @@ def render_community_page(board_path: Path, config: dict[str, Any], query: dict[
           <a class="secondary" href="/playbook">Playbook</a>
         </div>
       </div>
-      {render_intel_source_grid(data.get('source_freshness') or {})}
+      {render_intel_source_grid(data.get("source_freshness") or {})}
       <section class="community-layout">
         <main class="community-main">
-          {render_community_scoreboard(insights.get('scoreboard') or {})}
-          {render_community_call_ledger(insights.get('call_ledger') or [])}
-          {render_community_discussion(insights.get('discussion') or [])}
+          {render_community_scoreboard(insights.get("scoreboard") or {})}
+          {render_community_call_ledger(insights.get("call_ledger") or [])}
+          {render_community_discussion(insights.get("discussion") or [])}
           <section class="community-events">
-            {render_community_event_group('Community Calls', insights.get('calls') or [], 'call')}
-            {render_community_event_group('Results', insights.get('results') or [], 'result')}
+            {render_community_event_group("Community Calls", insights.get("calls") or [], "call")}
+            {render_community_event_group("Results", insights.get("results") or [], "result")}
           </section>
         </main>
         <aside class="community-side">
           {render_community_brief(insights)}
-          {render_questions(insights.get('question_patterns') or data.get('question_patterns') or [])}
+          {render_questions(insights.get("question_patterns") or data.get("question_patterns") or [])}
         </aside>
       </section>
     </section>
@@ -6194,7 +6695,9 @@ def render_community_page(board_path: Path, config: dict[str, Any], query: dict[
     return shell("Community - SpreadBoard", "community", body)
 
 
-def render_playbook_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
+def render_playbook_page(
+    board_path: Path, config: dict[str, Any], query: dict[str, list[str]]
+) -> str:
     data = api_playbook(board_path, query)
     source_note = data.get("source_note") or {}
     body = f"""
@@ -6212,23 +6715,23 @@ def render_playbook_page(board_path: Path, config: dict[str, Any], query: dict[s
         </div>
       </div>
       <section class="playbook-status">
-        <article class="source-card {h(source_note.get('telegram_status') or 'missing')}">
+        <article class="source-card {h(source_note.get("telegram_status") or "missing")}">
           <span>Telegram events</span>
-          <strong>{label_text(source_note.get('telegram_status') or 'missing')}</strong>
-          <em>{fmt_age(source_note.get('telegram_age_min'))}</em>
+          <strong>{label_text(source_note.get("telegram_status") or "missing")}</strong>
+          <em>{fmt_age(source_note.get("telegram_age_min"))}</em>
         </article>
-        <article class="source-card {h(source_note.get('brief_status') or 'missing')}">
+        <article class="source-card {h(source_note.get("brief_status") or "missing")}">
           <span>Topic brief</span>
-          <strong>{label_text(source_note.get('brief_status') or 'missing')}</strong>
-          <em>{fmt_age(source_note.get('brief_age_min'))}</em>
+          <strong>{label_text(source_note.get("brief_status") or "missing")}</strong>
+          <em>{fmt_age(source_note.get("brief_age_min"))}</em>
         </article>
         <article class="playbook-note">
           <span>How to read this page</span>
-          <strong>{h(source_note.get('message'))}</strong>
+          <strong>{h(source_note.get("message"))}</strong>
         </article>
       </section>
       <section class="playbook-grid">
-        {''.join(render_playbook_card(card) for card in data.get('cards') or [])}
+        {"".join(render_playbook_card(card) for card in data.get("cards") or [])}
       </section>
       <section class="playbook-guard">
         <div>
@@ -6236,7 +6739,7 @@ def render_playbook_page(board_path: Path, config: dict[str, Any], query: dict[s
           <h2>What this page will not do</h2>
           <p>It is a community answer surface and checklist. It never sends Pushover, places orders, calls private balance APIs, signs transactions, or starts executor paths.</p>
         </div>
-        <div class="playbook-guard-list">{''.join(f'<span>{h(item)}</span>' for item in data.get('read_only_guards') or [])}</div>
+        <div class="playbook-guard-list">{"".join(f"<span>{h(item)}</span>" for item in data.get("read_only_guards") or [])}</div>
       </section>
     </section>
     """
@@ -6248,20 +6751,20 @@ def render_playbook_card(card: dict[str, Any]) -> str:
     links = card.get("links") or []
     checks = card.get("checks") or []
     return f"""
-    <article class="playbook-card {h(card.get('status') or 'ready')}">
+    <article class="playbook-card {h(card.get("status") or "ready")}">
       <div class="playbook-card-head">
         <div>
-          <span>{h(card.get('category'))}</span>
-          <h2>{h(card.get('title'))}</h2>
+          <span>{h(card.get("category"))}</span>
+          <h2>{h(card.get("title"))}</h2>
         </div>
-        <strong>{h(card.get('count') or 0)}</strong>
+        <strong>{h(card.get("count") or 0)}</strong>
       </div>
-      <p>{h(card.get('why'))}</p>
-      <div class="playbook-answer">{h(card.get('answer'))}</div>
-      <ol class="playbook-steps">{''.join(f'<li>{h(item)}</li>' for item in checks[:4])}</ol>
-      <div class="playbook-links">{''.join(f'<a href="{h(href)}">{h(label)}</a>' for label, href in links[:3])}</div>
+      <p>{h(card.get("why"))}</p>
+      <div class="playbook-answer">{h(card.get("answer"))}</div>
+      <ol class="playbook-steps">{"".join(f"<li>{h(item)}</li>" for item in checks[:4])}</ol>
+      <div class="playbook-links">{"".join(f'<a href="{h(href)}">{h(label)}</a>' for label, href in links[:3])}</div>
       <div class="playbook-examples">
-        {''.join(render_playbook_example(item) for item in examples[:2]) or '<span>No fresh matching questions in the selected window.</span>'}
+        {"".join(render_playbook_example(item) for item in examples[:2]) or "<span>No fresh matching questions in the selected window.</span>"}
       </div>
     </article>
     """
@@ -6269,10 +6772,10 @@ def render_playbook_card(card: dict[str, Any]) -> str:
 
 def render_playbook_example(item: dict[str, Any]) -> str:
     return (
-        '<span>'
-        f'<strong>{h(item.get("symbol") or "Example")}</strong>'
-        f'{h(item.get("text_excerpt") or item.get("first_line") or "No excerpt available.")}'
-        '</span>'
+        "<span>"
+        f"<strong>{h(item.get('symbol') or 'Example')}</strong>"
+        f"{h(item.get('text_excerpt') or item.get('first_line') or 'No excerpt available.')}"
+        "</span>"
     )
 
 
@@ -6285,12 +6788,14 @@ def render_board_page(board_path: Path, config: dict[str, Any], query: dict[str,
     rows_html = "".join(render_board_row(row) for row in rows)
     mobile_rows_html = "".join(render_board_mobile_card(row) for row in rows)
     empty_state_html = render_board_empty_state(selected_kind, snapshot_data, health)
-    mobile_empty_state_html = render_board_empty_state(selected_kind, snapshot_data, health, mobile=True)
+    mobile_empty_state_html = render_board_empty_state(
+        selected_kind, snapshot_data, health, mobile=True
+    )
     body = f"""
     <section class="arbitrage-page">
       <div class="arb-toolbar">
         <div class="tab-selector" aria-label="Route type">
-          {''.join(render_kind_tab(item, selected_kind, query, health) for item in board.ROUTE_KINDS)}
+          {"".join(render_kind_tab(item, selected_kind, query, health) for item in board.ROUTE_KINDS)}
         </div>
         <div class="quick-tools">
           <details class="filter-menu">
@@ -6305,8 +6810,8 @@ def render_board_page(board_path: Path, config: dict[str, Any], query: dict[str,
       </div>
 
       <div class="board-meta">
-        <span>{h(snapshot_data.get('fresh_count'))} fresh</span>
-        <span>{h(snapshot_data.get('stale_count'))} stale</span>
+        <span>{h(snapshot_data.get("fresh_count"))} fresh</span>
+        <span>{h(snapshot_data.get("stale_count"))} stale</span>
         <span>{h(render_age_text(snapshot_data.get("age_min"), snapshot_data.get("error")))}</span>
         {render_stale_toggle(query, include_stale)}
       </div>
@@ -6368,23 +6873,23 @@ def render_pair_page(route_key: str, board_path: Path, config: dict[str, Any]) -
           {render_pair_checklist(row, detail)}
           {render_route_timeline(row, history)}
           <div class="metric-tape">
-            {metric_card('Executable', fmt_pct(row.get('spread_pct')), 'VWAP')}
-            {metric_card('Open', fmt_pct(row.get('displayed_open_spread_pct')), 'headline')}
-            {metric_card('F Spread', fmt_signed_pct(row.get('funding_spread_pct')), 'funding')}
-            {metric_card('Funding 24h', fmt_signed_pct((detail.get('funding') or {}).get('net_24h_pct'), digits=3), 'settled / projected')}
-            {metric_card('Age', fmt_age(row.get('age_min')), 'row')}
+            {metric_card("Executable", fmt_pct(row.get("spread_pct")), "VWAP")}
+            {metric_card("Open", fmt_pct(row.get("displayed_open_spread_pct")), "headline")}
+            {metric_card("F Spread", fmt_signed_pct(row.get("funding_spread_pct")), "funding")}
+            {metric_card("Funding 24h", fmt_signed_pct((detail.get("funding") or {}).get("net_24h_pct"), digits=3), "settled / projected")}
+            {metric_card("Age", fmt_age(row.get("age_min")), "row")}
           </div>
           <div class="detail-grid">
             {render_volatility_card(detail)}
             {render_funding_card(detail)}
-            {render_okx_dex_card(detail.get('okx_dex_quote'))}
-            {render_route_health_card(detail.get('route_health'))}
+            {render_okx_dex_card(detail.get("okx_dex_quote"))}
+            {render_route_health_card(detail.get("route_health"))}
           </div>
           {render_pair_telegram_context(pair_intel)}
         </main>
         <aside class="pair-side">
-          {render_leg_card('Buy leg', legs.get('long') or {})}
-          {render_leg_card('Sell leg', legs.get('short') or {})}
+          {render_leg_card("Buy leg", legs.get("long") or {})}
+          {render_leg_card("Sell leg", legs.get("short") or {})}
           {render_pair_health_summary(detail)}
         </aside>
       </section>
@@ -6417,19 +6922,19 @@ def render_pair_tokenized_guard(row: dict[str, Any]) -> str:
     source = h(guard.get("source_url") or "No verified registry source")
     if guard.get("source_url"):
         source = f'<a href="{h(guard["source_url"])}" target="_blank" rel="noopener noreferrer">Registry source ↗</a>'
-    reasons = "".join(f'<li>{h(str(reason).replace("_", " "))}</li>' for reason in guard.get("reasons") or [])
+    reasons = "".join(
+        f"<li>{h(str(reason).replace('_', ' '))}</li>" for reason in guard.get("reasons") or []
+    )
     return f"""
-    <section class="tokenized-evidence {h(guard.get('status') or 'blocked')}">
-      <header><div><span class="page-kicker">Tokenized-asset lane</span><h2>{'Registry verified' if guard.get('status') == 'verified' else 'Research only · evidence incomplete'}</h2></div><strong>{h(guard.get('underlying_symbol') or 'Underlying unresolved')}</strong></header>
-      <dl><div><dt>Instrument</dt><dd>{h(guard.get('instrument_type') or 'unresolved')}</dd></div><div><dt>Oracle / reference</dt><dd>{h(guard.get('oracle_source') or 'unresolved')}</dd></div><div><dt>Trading hours</dt><dd>{h(guard.get('trading_hours') or 'unresolved')}</dd></div><div><dt>Corporate actions</dt><dd>{h(guard.get('corporate_action_policy') or 'unresolved')}</dd></div></dl>
-      {f'<ul>{reasons}</ul>' if reasons else ''}<p>{source} · SpreadBoard never treats a matching equity ticker as proof of the same instrument, shareholder rights, redemption, or 24/7 price continuity.</p>
+    <section class="tokenized-evidence {h(guard.get("status") or "blocked")}">
+      <header><div><span class="page-kicker">Tokenized-asset lane</span><h2>{"Registry verified" if guard.get("status") == "verified" else "Research only · evidence incomplete"}</h2></div><strong>{h(guard.get("underlying_symbol") or "Underlying unresolved")}</strong></header>
+      <dl><div><dt>Instrument</dt><dd>{h(guard.get("instrument_type") or "unresolved")}</dd></div><div><dt>Oracle / reference</dt><dd>{h(guard.get("oracle_source") or "unresolved")}</dd></div><div><dt>Trading hours</dt><dd>{h(guard.get("trading_hours") or "unresolved")}</dd></div><div><dt>Corporate actions</dt><dd>{h(guard.get("corporate_action_policy") or "unresolved")}</dd></div></dl>
+      {f"<ul>{reasons}</ul>" if reasons else ""}<p>{source} · SpreadBoard never treats a matching equity ticker as proof of the same instrument, shareholder rights, redemption, or 24/7 price continuity.</p>
     </section>
     """
 
 
-def render_saved_charts_panel(
-    user: Any, selected_route: str, accounts_path: Any
-) -> str:
+def render_saved_charts_panel(user: Any, selected_route: str, accounts_path: Any) -> str:
     """A member's own pinned pairs, and the control to pin the one on screen.
 
     Any route can be pinned, including one whose spread is negative: a pair that
@@ -6445,18 +6950,21 @@ def render_saved_charts_panel(
     except Exception:  # noqa: BLE001 - the page must render without the list.
         charts = []
     saved_keys = {str(item.get("route_key")) for item in charts}
-    rows = "".join(
-        f"""
+    rows = (
+        "".join(
+            f"""
         <li>
-          <a href="/charts?route_key={h(quote(str(item.get('route_key') or ''), safe=''))}">
-            <strong>{h(item.get('label') or str(item.get('route_key') or '').split('|')[0])}</strong>
-            <em>{h(' → '.join(str(item.get('route_key') or '').split('|')[1:5:2]))}</em>
-            {f"<span class='saved-ratio'>ratio {h(item.get('ratio'))}:1</span>" if float(item.get('ratio') or 1) != 1 else ''}
+          <a href="/charts?route_key={h(quote(str(item.get("route_key") or ""), safe=""))}">
+            <strong>{h(item.get("label") or str(item.get("route_key") or "").split("|")[0])}</strong>
+            <em>{h(" → ".join(str(item.get("route_key") or "").split("|")[1:5:2]))}</em>
+            {f"<span class='saved-ratio'>ratio {h(item.get('ratio'))}:1</span>" if float(item.get("ratio") or 1) != 1 else ""}
           </a>
-          <button type="button" class="saved-chart-remove" data-route="{h(item.get('route_key'))}">Remove</button>
+          <button type="button" class="saved-chart-remove" data-route="{h(item.get("route_key"))}">Remove</button>
         </li>"""
-        for item in charts
-    ) or "<li class='saved-empty'>No pinned charts yet. Open a route and choose Pin this chart.</li>"
+            for item in charts
+        )
+        or "<li class='saved-empty'>No pinned charts yet. Open a route and choose Pin this chart.</li>"
+    )
     pin = ""
     if selected_route:
         already = selected_route in saved_keys
@@ -6465,7 +6973,7 @@ def render_saved_charts_panel(
           <input id="savedChartLabel" placeholder="Name this chart" maxlength="120">
           <input id="savedChartRatio" placeholder="Ratio (e.g. 10 for SKHY:SKHX)" inputmode="decimal">
           <button type="button" id="savedChartPin" data-route="{h(selected_route)}">
-            {'Update pin' if already else 'Pin this chart'}
+            {"Update pin" if already else "Pin this chart"}
           </button>
         </div>"""
     return f"""
@@ -6523,9 +7031,7 @@ def render_charts_page(
     catalog_tokens = {str(item or "").upper() for item in (catalogue.get("tokens") or [])}
     if not catalog_tokens:
         catalog_tokens = {
-            str(item.get("token") or "").upper()
-            for item in markets
-            if item.get("token")
+            str(item.get("token") or "").upper() for item in markets if item.get("token")
         }
     if requested_token not in catalog_tokens:
         requested_token = ""
@@ -6582,19 +7088,19 @@ def render_charts_page(
           <h1>Build a spread chart</h1>
           <p>Select a token and the exact long and short venue. Nothing is plotted until a route is chosen.</p>
         </div>
-        <div class="terminal-live-box {'live' if market_health.get('ok') else 'unavailable'}">
-          <span>{'Live' if market_health.get('ok') else 'Updating'}</span>
-          <strong>{fmt_age((market_health.get('canonical_api') or {}).get('age_min'))}</strong>
+        <div class="terminal-live-box {"live" if market_health.get("ok") else "unavailable"}">
+          <span>{"Live" if market_health.get("ok") else "Updating"}</span>
+          <strong>{fmt_age((market_health.get("canonical_api") or {}).get("age_min"))}</strong>
           <em>canonical public APIs</em>
         </div>
       </header>
       {render_saved_charts_panel(user, selected_route, accounts_path)}
       {render_chart_builder(markets, selected_row, catalogue, selected_token=builder_token)}
-      {render_selected_chart(selected_row, detail, history, window, history_payload.get('meta') or {}, window_config=window_config, position_opened_at=position_opened_at, position_since_us=position_since_us) if selected_row and detail else render_chart_blank_state()}
-      {render_funding_history_dialog(detail) if detail else ''}
+      {render_selected_chart(selected_row, detail, history, window, history_payload.get("meta") or {}, window_config=window_config, position_opened_at=position_opened_at, position_since_us=position_since_us) if selected_row and detail else render_chart_blank_state()}
+      {render_funding_history_dialog(detail) if detail else ""}
     </section>
-    {render_chart_builder_script([item for item in markets if item.get('token') == builder_token], selected_row)}
-    {render_funding_history_script() if detail else ''}
+    {render_chart_builder_script([item for item in markets if item.get("token") == builder_token], selected_row)}
+    {render_funding_history_script() if detail else ""}
     """
     return shell("Charts - SpreadBoard", "charts", body)
 
@@ -6612,7 +7118,7 @@ def render_chart_builder(
     <section class="chart-builder">
       <div class="chart-builder-title">
         <div><span class="chart-builder-icon" aria-hidden="true">+</span><strong>Custom chart</strong><em>Choose any active stablecoin market in the public venue catalogue.</em></div>
-        <div class="chart-builder-tools"><a href="/charts?route_key={h(skhx_route)}&window=1h" title="Open the normalized Hyperliquid relative-value chart">SKHX / SK Hynix · 10:1</a><span class="chart-builder-state" data-chart-state>{h(catalogue.get('token_count') or 0)} tokens · {h(catalogue.get('count') or 0)} markets</span></div>
+        <div class="chart-builder-tools"><a href="/charts?route_key={h(skhx_route)}&window=1h" title="Open the normalized Hyperliquid relative-value chart">SKHX / SK Hynix · 10:1</a><span class="chart-builder-state" data-chart-state>{h(catalogue.get("token_count") or 0)} tokens · {h(catalogue.get("count") or 0)} markets</span></div>
       </div>
       <form class="chart-builder-form" action="/charts" method="get" data-chart-builder>
         <label class="chart-token-field"><span>Token</span><input data-chart-token list="chart-token-list" value="{h(selected_token)}" placeholder="Type a symbol, e.g. COTI" autocomplete="off" spellcheck="false"><datalist id="chart-token-list"></datalist></label>
@@ -6639,10 +7145,18 @@ def render_chart_builder_script(
     selected_row: dict[str, Any] | None,
 ) -> str:
     route_data = [
-        {key: row.get(key) for key in (
-            "token", "venue", "market_type", "symbol", "quote",
-            "dex_chain", "dex_contract",
-        )}
+        {
+            key: row.get(key)
+            for key in (
+                "token",
+                "venue",
+                "market_type",
+                "symbol",
+                "quote",
+                "dex_chain",
+                "dex_contract",
+            )
+        }
         for row in markets
     ]
     selected_long = (
@@ -6815,11 +7329,7 @@ def filter_chart_history(
 ) -> list[dict[str, Any]]:
     hours = float(chart_window_config(window)["hours"])
     cutoff_us = since_us if since_us is not None else int((time.time() - hours * 3600) * 1_000_000)
-    return [
-        row
-        for row in history
-        if (_float_or_none(row.get("quote_ts_us")) or 0) >= cutoff_us
-    ]
+    return [row for row in history if (_float_or_none(row.get("quote_ts_us")) or 0) >= cutoff_us]
 
 
 def render_selected_chart(
@@ -6841,7 +7351,11 @@ def render_selected_chart(
     if position_since_us is not None:
         windows.insert(0, ("position", "Since entry"))
     history_meta = history_meta or {}
-    relative_value = ((row.get("notes") or {}).get("relative_value") or {}) if isinstance(row.get("notes"), dict) else {}
+    relative_value = (
+        ((row.get("notes") or {}).get("relative_value") or {})
+        if isinstance(row.get("notes"), dict)
+        else {}
+    )
     normalization_note = (
         f" · normalized {float(relative_value.get('long_multiplier') or 1):g}:{float(relative_value.get('short_multiplier') or 1):g}"
         if relative_value
@@ -6851,14 +7365,18 @@ def render_selected_chart(
     if history_meta.get("historical_proxy"):
         source_note = f" · older points use {h(history_meta.get('historical_proxy_timeframe'))} close-price proxy"
     elif proxy_status == "not_applicable":
-        source_note = " · no candle history exists for a DEX leg, so this chart builds live as you watch"
+        source_note = (
+            " · no candle history exists for a DEX leg, so this chart builds live as you watch"
+        )
     elif proxy_status == "warming":
         source_note = " · loading window history"
     elif proxy_status == "unavailable":
         source_note = " · this venue publishes no candles, so only exact book samples are shown"
     else:
         source_note = " · exact book samples only"
-    coverage_note = f"{float(history_meta.get('coverage_pct') or 0):.0f}% window coverage{source_note}"
+    coverage_note = (
+        f"{float(history_meta.get('coverage_pct') or 0):.0f}% window coverage{source_note}"
+    )
     window_links = "".join(
         f'<a class="{"active" if value == window else ""}" href="/charts?{h(urlencode({"route_key": str(row.get("route_key") or ""), "window": value, **({"opened_at": position_opened_at} if position_opened_at else {})}))}">{label}</a>'
         for value, label in windows
@@ -6871,7 +7389,7 @@ def render_selected_chart(
     return f"""
     <section class="selected-chart">
       <header class="selected-chart-head">
-        <div><span>Spread chart</span><strong>{h(row.get('token'))}</strong><em>{h(row.get('long_venue'))} {h(leg_market_label(row.get('long_venue'), row.get('long_market_type')))} → {h(row.get('short_venue'))} {h(leg_market_label(row.get('short_venue'), row.get('short_market_type')))}{h(normalization_note)}</em></div>
+        <div><span>Spread chart</span><strong>{h(row.get("token"))}</strong><em>{h(row.get("long_venue"))} {h(leg_market_label(row.get("long_venue"), row.get("long_market_type")))} → {h(row.get("short_venue"))} {h(leg_market_label(row.get("short_venue"), row.get("short_market_type")))}{h(normalization_note)}</em></div>
         <nav class="chart-window-tabs" aria-label="Chart window">
           {window_links}
         </nav>
@@ -6879,18 +7397,18 @@ def render_selected_chart(
       {position_note}
       <div class="selected-chart-layout">
         <aside class="chart-leg-stats">
-          {render_chart_leg_stats('Long', long_leg)}
-          {render_chart_leg_stats('Short', short_leg)}
+          {render_chart_leg_stats("Long", long_leg)}
+          {render_chart_leg_stats("Short", short_leg)}
         </aside>
         <div class="chart-plot-stack">
           <section class="chart-plot-panel">
             <div class="chart-plot-title">
               <span>Spread progression</span>
-              <strong data-chart-headline>Open {fmt_pct(row.get('displayed_open_spread_pct'))}</strong>
+              <strong data-chart-headline>Open {fmt_pct(row.get("displayed_open_spread_pct"))}</strong>
               <button type="button" data-funding-open>Funding history</button>
               <em data-chart-live-state>Connecting to exact route...</em>
             </div>
-            {render_live_spread_chart(str(row.get('route_key') or ''), history, window, window_config=window_config, position_since_us=position_since_us)}
+            {render_live_spread_chart(str(row.get("route_key") or ""), history, window, window_config=window_config, position_since_us=position_since_us)}
           </section>
         </div>
       </div>
@@ -6913,16 +7431,20 @@ def render_chart_leg_stats(label: str, leg: dict[str, Any]) -> str:
     )
     settled = leg.get("funding_24h_pct")
     funding_24h = settled if settled is not None else leg.get("projected_funding_24h_pct")
-    funding_rows = f"""
-      <div><span>Live funding</span><strong data-live-funding="{h(leg.get('side'))}">{fmt_signed_pct(leg.get('current_funding_pct'), digits=4)}</strong></div>
-      <div><span>{'Settled 24h' if settled is not None else '24h at current'}</span><strong>{fmt_signed_pct(funding_24h, digits=4)}</strong></div>
-      <div><span>Payout</span><strong data-live-cadence="{h(leg.get('side'))}">{h(funding_interval_label(leg.get('funding_interval_hours'), leg.get('funding_interval_assumed')))}</strong></div>
-      <div><span>Next</span><strong data-live-next="{h(leg.get('side'))}">{h(fmt_next_funding(leg.get('next_funding_ts_us')))}</strong></div>
-    """ if has_funding else ""
+    funding_rows = (
+        f"""
+      <div><span>Live funding</span><strong data-live-funding="{h(leg.get("side"))}">{fmt_signed_pct(leg.get("current_funding_pct"), digits=4)}</strong></div>
+      <div><span>{"Settled 24h" if settled is not None else "24h at current"}</span><strong>{fmt_signed_pct(funding_24h, digits=4)}</strong></div>
+      <div><span>Payout</span><strong data-live-cadence="{h(leg.get("side"))}">{h(funding_interval_label(leg.get("funding_interval_hours"), leg.get("funding_interval_assumed")))}</strong></div>
+      <div><span>Next</span><strong data-live-next="{h(leg.get("side"))}">{h(fmt_next_funding(leg.get("next_funding_ts_us")))}</strong></div>
+    """
+        if has_funding
+        else ""
+    )
     return f"""
     <article>
-      <header><span>{h(label)}</span>{render_venue_link(leg.get('venue'), leg.get('market_type'), leg.get('exchange_url'))}<em>{h(leg.get('market_type'))}</em></header>
-      <div><span>Volume 24h</span><strong>{fmt_money(leg.get('volume_24h_usd'))}</strong></div>
+      <header><span>{h(label)}</span>{render_venue_link(leg.get("venue"), leg.get("market_type"), leg.get("exchange_url"))}<em>{h(leg.get("market_type"))}</em></header>
+      <div><span>Volume 24h</span><strong>{fmt_money(leg.get("volume_24h_usd"))}</strong></div>
       {funding_rows}
     </article>
     """
@@ -7526,13 +8048,15 @@ def render_dual_chart_svg(
         lines.append(
             f'<polyline class="{h(class_name)}" points="{" ".join(coordinates)}"></polyline>'
         )
-        legend.append(f'<span class="{h(class_name)}">{h(name)} <strong>{fmt_signed_pct(points[-1][1], digits=3)}</strong></span>')
+        legend.append(
+            f'<span class="{h(class_name)}">{h(name)} <strong>{fmt_signed_pct(points[-1][1], digits=3)}</strong></span>'
+        )
     return f"""
     <div class="dual-chart-wrap">
-      <div class="dual-chart-legend">{''.join(legend)}</div>
-      <svg class="dual-chart {'compact' if compact else ''}" viewBox="0 0 {width:.0f} {height:.0f}" role="img" aria-label="{h(label)}">
-        <g class="dual-chart-grid">{''.join(grid)}</g>
-        <g class="dual-chart-lines">{''.join(lines)}</g>
+      <div class="dual-chart-legend">{"".join(legend)}</div>
+      <svg class="dual-chart {"compact" if compact else ""}" viewBox="0 0 {width:.0f} {height:.0f}" role="img" aria-label="{h(label)}">
+        <g class="dual-chart-grid">{"".join(grid)}</g>
+        <g class="dual-chart-lines">{"".join(lines)}</g>
       </svg>
     </div>
     """
@@ -7543,7 +8067,9 @@ def render_chart_kind_tabs(query: dict[str, list[str]], selected_kind: str) -> s
     for item in board.ROUTE_KINDS:
         href = "/charts?" + urlencode(_query_with(query, kind=item.kind))
         active = " active" if selected_kind == item.kind else ""
-        tabs.append(f'<a class="tab-button{active}" href="{h(href)}">{h(route_tab_label(item))}</a>')
+        tabs.append(
+            f'<a class="tab-button{active}" href="{h(href)}">{h(route_tab_label(item))}</a>'
+        )
     return "".join(tabs)
 
 
@@ -7579,9 +8105,20 @@ def render_board_empty_state(
     kind_href = f"/arbitrage?kind={h(selected_kind or 'FUTURES')}"
     metrics = [
         ("Status", label_text(status)),
-        ("Fresh", str((tab or {}).get("fresh_row_count") if tab else snapshot_data.get("fresh_count") or 0)),
-        ("Total", str((tab or {}).get("row_count") if tab else len(snapshot_data.get("rows") or []))),
-        ("Newest", fmt_age((tab or {}).get("newest_age_min") if tab else snapshot_data.get("age_min"))),
+        (
+            "Fresh",
+            str(
+                (tab or {}).get("fresh_row_count") if tab else snapshot_data.get("fresh_count") or 0
+            ),
+        ),
+        (
+            "Total",
+            str((tab or {}).get("row_count") if tab else len(snapshot_data.get("rows") or [])),
+        ),
+        (
+            "Newest",
+            fmt_age((tab or {}).get("newest_age_min") if tab else snapshot_data.get("age_min")),
+        ),
     ]
     return f"""
     <article class="{classes}">
@@ -7594,7 +8131,7 @@ def render_board_empty_state(
         <b>{label_text(status)}</b>
       </div>
       <div class="route-empty-metrics">
-        {''.join(f'<span>{h(name)}<strong>{h(value)}</strong></span>' for name, value in metrics)}
+        {"".join(f"<span>{h(name)}<strong>{h(value)}</strong></span>" for name, value in metrics)}
       </div>
       <div class="route-empty-actions">
         <a href="/">Live assets</a>
@@ -7616,19 +8153,51 @@ def source_tab_for_kind(health: dict[str, Any], selected_kind: str) -> dict[str,
     return None
 
 
-def render_chart_summary(rows: list[dict[str, Any]], history_map: dict[str, list[dict[str, Any]]]) -> str:
+def render_chart_summary(
+    rows: list[dict[str, Any]], history_map: dict[str, list[dict[str, Any]]]
+) -> str:
     if not rows:
         return '<article class="chart-summary-card"><span>Routes</span><strong>0</strong><em>No fresh rows</em></article>'
-    biggest = max(rows, key=lambda item: abs(_float_or_none(item.get("executable_spread_pct") or item.get("displayed_open_spread_pct") or item.get("spread_pct")) or 0.0))
+    biggest = max(
+        rows,
+        key=lambda item: abs(
+            _float_or_none(
+                item.get("executable_spread_pct")
+                or item.get("displayed_open_spread_pct")
+                or item.get("spread_pct")
+            )
+            or 0.0
+        ),
+    )
     funding = max(rows, key=lambda item: abs(_float_or_none(item.get("funding_apr_pct")) or 0.0))
-    moved = max(rows, key=lambda item: abs(history_delta(history_map.get(str(item.get("route_key") or ""), []), "executable_spread_pct") or 0.0))
+    moved = max(
+        rows,
+        key=lambda item: abs(
+            history_delta(
+                history_map.get(str(item.get("route_key") or ""), []), "executable_spread_pct"
+            )
+            or 0.0
+        ),
+    )
     sample_count = sum(len(points) for points in history_map.values())
     cards = [
         ("Live routes", str(len(rows)), "current API view"),
         ("History points", str(sample_count), "retained for 30 days"),
-        ("Largest spread", f"{h(biggest.get('token') or biggest.get('symbol'))} {fmt_pct(biggest.get('executable_spread_pct') or biggest.get('displayed_open_spread_pct') or biggest.get('spread_pct'))}", h(route_kind_display(biggest.get("route_kind") or biggest.get("kind")))),
-        ("Largest move", f"{h(moved.get('token') or moved.get('symbol'))} {fmt_signed_pct(history_delta(history_map.get(str(moved.get('route_key') or ''), []), 'executable_spread_pct'))}", "captured history"),
-        ("Funding APR", f"{h(funding.get('token') or funding.get('symbol'))} {fmt_signed_pct(funding.get('funding_apr_pct'), digits=0)}", "paired annualized"),
+        (
+            "Largest spread",
+            f"{h(biggest.get('token') or biggest.get('symbol'))} {fmt_pct(biggest.get('executable_spread_pct') or biggest.get('displayed_open_spread_pct') or biggest.get('spread_pct'))}",
+            h(route_kind_display(biggest.get("route_kind") or biggest.get("kind"))),
+        ),
+        (
+            "Largest move",
+            f"{h(moved.get('token') or moved.get('symbol'))} {fmt_signed_pct(history_delta(history_map.get(str(moved.get('route_key') or ''), []), 'executable_spread_pct'))}",
+            "captured history",
+        ),
+        (
+            "Funding APR",
+            f"{h(funding.get('token') or funding.get('symbol'))} {fmt_signed_pct(funding.get('funding_apr_pct'), digits=0)}",
+            "paired annualized",
+        ),
     ]
     return "".join(
         f'<article class="chart-summary-card"><span>{h(title)}</span><strong>{value}</strong><em>{note}</em></article>'
@@ -7654,20 +8223,20 @@ def render_chart_route_card(row: dict[str, Any], history: list[dict[str, Any]]) 
     return f"""
     <article class="chart-route-card">
       <div class="chart-card-head">
-        <a href="/markets#token-{h(row.get('token') or row.get('symbol'))}"><strong>{h(row.get('token') or row.get('symbol'))}</strong><span>{h(route_kind_display(row.get('route_kind') or row.get('kind')))}</span></a>
+        <a href="/markets#token-{h(row.get("token") or row.get("symbol"))}"><strong>{h(row.get("token") or row.get("symbol"))}</strong><span>{h(route_kind_display(row.get("route_kind") or row.get("kind")))}</span></a>
         <b class="{spread_class(open_spread)}">{fmt_pct(open_spread)}</b>
       </div>
-      <p>{h(row.get('long_venue'))} {h(leg_market_label(row.get('long_venue'), row.get('long_market_type')))} → {h(row.get('short_venue'))} {h(leg_market_label(row.get('short_venue'), row.get('short_market_type')))}</p>
-      {render_sparkline(history, 'executable_spread_pct', label='executable spread')}
+      <p>{h(row.get("long_venue"))} {h(leg_market_label(row.get("long_venue"), row.get("long_market_type")))} → {h(row.get("short_venue"))} {h(leg_market_label(row.get("short_venue"), row.get("short_market_type")))}</p>
+      {render_sparkline(history, "executable_spread_pct", label="executable spread")}
       <div class="chart-card-metrics">
         <span>Move<strong>{fmt_signed_pct(delta)}</strong></span>
-        <span>F APR<strong>{fmt_signed_pct(row.get('funding_apr_pct'), digits=0)}</strong></span>
-        <span>24h volume<strong>{fmt_money(row.get('depth_usd'))}</strong></span>
+        <span>F APR<strong>{fmt_signed_pct(row.get("funding_apr_pct"), digits=0)}</strong></span>
+        <span>24h volume<strong>{fmt_money(row.get("depth_usd"))}</strong></span>
         <span>Samples<strong>{h(sample_count)}</strong></span>
       </div>
       <div class="chart-card-actions">
-        <a class="mini-action primary-link" href="/markets#token-{h(row.get('token') or row.get('symbol'))}">All routes</a>
-        {render_alert_draft_button(row, alert_type='token_spread', compact=True)}
+        <a class="mini-action primary-link" href="/markets#token-{h(row.get("token") or row.get("symbol"))}">All routes</a>
+        {render_alert_draft_button(row, alert_type="token_spread", compact=True)}
         {external}
       </div>
     </article>
@@ -7759,7 +8328,7 @@ def render_sparkline(
     return (
         f'<svg class="sparkline {direction}{size}" viewBox="0 0 {width:.0f} {height:.0f}" role="img" aria-label="{h(label)}">'
         f"<title>{h(label)}: {fmt_signed_pct(last)}</title>"
-        f"{baseline}<polyline points=\"{' '.join(points)}\"></polyline>"
+        f'{baseline}<polyline points="{" ".join(points)}"></polyline>'
         f'<circle cx="{points[-1].split(",")[0]}" cy="{points[-1].split(",")[1]}" r="3.5"></circle>'
         "</svg>"
     )
@@ -7792,7 +8361,7 @@ def render_token_page(symbol: str, board_path: Path) -> str:
       </div>
     </section>
       <section class="token-canonical-routes">
-        {render_market_token_group(group) if group else render_live_market_empty((market_data.get('source_health') or {}).get('canonical_api') or {})}
+        {render_market_token_group(group) if group else render_live_market_empty((market_data.get("source_health") or {}).get("canonical_api") or {})}
       </section>
 	    {render_token_market_enrichment(symbol, data)}
       {render_token_community_pulse(community)}
@@ -7811,7 +8380,7 @@ def render_token_market_enrichment(symbol: str, data: dict[str, Any]) -> str:
     row_html = (
         '<tr class="market-loading-row"><td colspan="7" class="empty">Public markets load when this panel is visible. Local Telegram and board context are already available above.</td></tr>'
         if is_deferred
-        else ''.join(render_exchange_row(row) for row in exchange_rows)
+        else "".join(render_exchange_row(row) for row in exchange_rows)
         or '<tr><td colspan="7" class="empty">No public markets found or public APIs did not answer.</td></tr>'
     )
     spreads_html = (
@@ -7825,14 +8394,14 @@ def render_token_market_enrichment(symbol: str, data: dict[str, Any]) -> str:
         else render_dex_line(dex) + render_hint(data.get("convergence_hint"))
     )
     return f"""
-    <section class="panel token-market-enrichment {'queued' if is_deferred else 'ready'}" id="tokenMarketEnrichment" data-token-api="/api/token/{h(symbol)}">
+    <section class="panel token-market-enrichment {"queued" if is_deferred else "ready"}" id="tokenMarketEnrichment" data-token-api="/api/token/{h(symbol)}">
       <div class="panel-head">
         <div>
           <h2>Exchange Prices</h2>
           <p>Funding means a periodic payment on perpetual futures. Positive funding here means shorts get paid.</p>
         </div>
         <div class="token-market-actions">
-          <span class="status-pill {'stale' if is_deferred else 'fresh'}" id="tokenMarketStatus">{h(status_label)}</span>
+          <span class="status-pill {"stale" if is_deferred else "fresh"}" id="tokenMarketStatus">{h(status_label)}</span>
           <button class="mini-action secondary" id="tokenMarketLoad" type="button">Load now</button>
         </div>
       </div>
@@ -8044,32 +8613,32 @@ def render_token_community_pulse(pulse: dict[str, Any]) -> str:
           <h2>Community Pulse</h2>
           <p>Filtered local Telegram context for this token, joined to board and preflight reality.</p>
         </div>
-        <a class="mini-action primary-link" href="{h(pulse.get('signals_url') or '/signals')}">Signal tape</a>
+        <a class="mini-action primary-link" href="{h(pulse.get("signals_url") or "/signals")}">Signal tape</a>
       </div>
       <div class="token-pulse-grid">
         <article>
           <span>Intel verdict</span>
-          <strong>{label_text(pulse.get('status') or 'no_local_signal')}</strong>
-          <em>{label_text(pulse.get('next_action') or 'watch')}</em>
+          <strong>{label_text(pulse.get("status") or "no_local_signal")}</strong>
+          <em>{label_text(pulse.get("next_action") or "watch")}</em>
         </article>
         <article>
           <span>Community heat</span>
-          <strong>{h(round(_float_or_none(pulse.get('score')) or 0, 1))}</strong>
-          <em>{h(pulse.get('event_count') or 0)} events</em>
+          <strong>{h(round(_float_or_none(pulse.get("score")) or 0, 1))}</strong>
+          <em>{h(pulse.get("event_count") or 0)} events</em>
         </article>
         <article>
           <span>Route status</span>
-          <strong>{label_text(pulse.get('route_status') or 'telegram_only')}</strong>
-          <em>{label_list(blockers[:2]) or 'No blocker details'}</em>
+          <strong>{label_text(pulse.get("route_status") or "telegram_only")}</strong>
+          <em>{label_list(blockers[:2]) or "No blocker details"}</em>
         </article>
         <article>
           <span>Sources</span>
-          <strong>{label_text(pulse.get('telegram_status') or 'missing')} / {label_text(pulse.get('board_status') or 'missing')}</strong>
-          <em>Telegram {fmt_age(pulse.get('telegram_age_min'))} - board {fmt_age(pulse.get('board_age_min'))}</em>
+          <strong>{label_text(pulse.get("telegram_status") or "missing")} / {label_text(pulse.get("board_status") or "missing")}</strong>
+          <em>Telegram {fmt_age(pulse.get("telegram_age_min"))} - board {fmt_age(pulse.get("board_age_min"))}</em>
         </article>
       </div>
       {render_signal_lifecycle(lifecycle)}
-      <div class="signal-list">{''.join(render_signal_event(item) for item in events[:8]) or '<p class="empty">No recent Telegram events for this token in the selected window.</p>'}</div>
+      <div class="signal-list">{"".join(render_signal_event(item) for item in events[:8]) or '<p class="empty">No recent Telegram events for this token in the selected window.</p>'}</div>
     </section>
     """
 
@@ -8115,37 +8684,37 @@ def render_sources_page(board_path: Path, config: dict[str, Any]) -> str:
         </div>
       </div>
       <section class="source-summary-grid">
-        {render_source_summary_card('Market API', canonical.get('age_min'), label_text(canonical.get('status') or 'unavailable'))}
-        {render_source_summary_card('Assets', None, f"{h(market.get('asset_count') or 0)} grouped tokens")}
-        {render_source_summary_card('Routes', None, f"{h(market.get('route_count') or 0)} live venue pairs")}
-        {render_source_summary_card('Reconciliation', reconciliation.get('website_age_min'), label_text(reconciliation.get('status') or 'unavailable'))}
-        {render_source_summary_card('Telegram events', (community.get('telegram_events') or {}).get('age_min'), label_text((community.get('telegram_events') or {}).get('status') or 'missing'))}
+        {render_source_summary_card("Market API", canonical.get("age_min"), label_text(canonical.get("status") or "unavailable"))}
+        {render_source_summary_card("Assets", None, f"{h(market.get('asset_count') or 0)} grouped tokens")}
+        {render_source_summary_card("Routes", None, f"{h(market.get('route_count') or 0)} live venue pairs")}
+        {render_source_summary_card("Reconciliation", reconciliation.get("website_age_min"), label_text(reconciliation.get("status") or "unavailable"))}
+        {render_source_summary_card("Telegram events", (community.get("telegram_events") or {}).get("age_min"), label_text((community.get("telegram_events") or {}).get("status") or "missing"))}
       </section>
       <section class="sources-layout">
         <main class="sources-main">
           <section class="intel-section">
             <div class="panel-head flat"><div><h2>Canonical Market Feed</h2><p>Current background refresh state for the public-API snapshot used by Arbitrage, Funding, and Charts.</p></div></div>
             <div class="source-files-grid">
-              {render_source_artifact_card('public market snapshot', {'status': canonical.get('status'), 'age_min': canonical.get('age_min'), 'path': canonical.get('path')})}
-              {render_source_artifact_card('token names', {'status': 'fresh', 'age_min': None, 'path': api_spreads.token_metadata.DEFAULT_CACHE_PATH})}
-              {render_source_artifact_card('transfer rails', {'status': 'fresh', 'age_min': None, 'path': api_spreads.public_rails.DEFAULT_CACHE_PATH})}
-              {render_source_artifact_card('spread history', {'status': 'fresh', 'age_min': None, 'path': market_history.DEFAULT_DB_PATH})}
+              {render_source_artifact_card("public market snapshot", {"status": canonical.get("status"), "age_min": canonical.get("age_min"), "path": canonical.get("path")})}
+              {render_source_artifact_card("token names", {"status": "fresh", "age_min": None, "path": api_spreads.token_metadata.DEFAULT_CACHE_PATH})}
+              {render_source_artifact_card("transfer rails", {"status": "fresh", "age_min": None, "path": api_spreads.public_rails.DEFAULT_CACHE_PATH})}
+              {render_source_artifact_card("spread history", {"status": "fresh", "age_min": None, "path": market_history.DEFAULT_DB_PATH})}
             </div>
           </section>
           <section class="intel-section">
             <div class="panel-head flat"><div><h2>Community Inputs</h2><p>Optional local context used by Intel, not by canonical market prices.</p></div></div>
-            <div class="source-files-grid">{''.join(render_source_artifact_card(key, item) for key, item in community.items() if isinstance(item, dict))}</div>
+            <div class="source-files-grid">{"".join(render_source_artifact_card(key, item) for key, item in community.items() if isinstance(item, dict))}</div>
           </section>
         </main>
         <aside class="sources-side">
           <section class="side-card">
             <div class="side-head"><h2>Runtime Mode</h2><span>read-only</span></div>
             <div class="source-config-grid">
-              {render_source_mode_row('Alerts', 'preview_only_no_send')}
-              {render_source_mode_row('Watcher', 'disabled')}
-              {render_source_mode_row('Pushover', 'configured' if flags.get('pushover_configured') else 'not configured')}
-              {render_source_mode_row('Recipients', flags.get('pushover_user_count'))}
-              {render_source_mode_row('OKX DEX quotes', 'enabled' if flags.get('okx_dex_quotes_enabled') else 'disabled')}
+              {render_source_mode_row("Alerts", "preview_only_no_send")}
+              {render_source_mode_row("Watcher", "disabled")}
+              {render_source_mode_row("Pushover", "configured" if flags.get("pushover_configured") else "not configured")}
+              {render_source_mode_row("Recipients", flags.get("pushover_user_count"))}
+              {render_source_mode_row("OKX DEX quotes", "enabled" if flags.get("okx_dex_quotes_enabled") else "disabled")}
             </div>
             <p class="plain">No orders, swaps, approvals, transfers, borrows, repayments, withdrawals, signatures, broadcasts, private balance reads, or Pushover sends are exposed here.</p>
           </section>
@@ -8221,9 +8790,7 @@ def save_pushover_preferences(
     if requested_device and requested_device not in devices:
         candidate["pushover_device"] = ""
         warning = "pushover_device_cleared"
-    preferences = accounts.save_notification_preferences(
-        user_id, candidate, db_path=accounts_path
-    )
+    preferences = accounts.save_notification_preferences(user_id, candidate, db_path=accounts_path)
     return {
         "preferences": preferences,
         "delivery_ready": True,
@@ -8320,7 +8887,7 @@ def render_status_page(payload: dict[str, Any]) -> str:
             detail = f"Private forum: {h(item.get('community') or 'unknown')}"
         cards.append(
             f'<article class="status-card {h(status)}"><span>{h(label)}</span>'
-            f'<strong>{h(label_text(status))}</strong><p>{detail or "Live service check"}</p></article>'
+            f"<strong>{h(label_text(status))}</strong><p>{detail or 'Live service check'}</p></article>"
         )
     body = f"""
     <style>
@@ -8332,7 +8899,7 @@ def render_status_page(payload: dict[str, Any]) -> str:
       .status-card.operational {{ border-top:3px solid var(--green) }} .status-card.degraded,.status-card.setup_needed {{ border-top:3px solid var(--red) }}
       @media(max-width:760px) {{ .status-grid {{ grid-template-columns:1fr }} }}
     </style>
-    <section class="public-status"><header class="terminal-heading"><div><span class="page-kicker">Live service status</span><h1>{'All monitored systems operational' if payload.get('ok') else 'Core service live · setup items remain'}</h1><p>This page reports current market-data, payment, alert, recovery and Telegram readiness without exposing account or infrastructure details.</p></div><div class="terminal-live-box {'live' if payload.get('ok') else 'unavailable'}"><span>Checked now</span><strong>{h(checked_at)}</strong><em>UTC</em></div></header><div class="status-grid">{''.join(cards)}</div></section>
+    <section class="public-status"><header class="terminal-heading"><div><span class="page-kicker">Live service status</span><h1>{"All monitored systems operational" if payload.get("ok") else "Core service live · setup items remain"}</h1><p>This page reports current market-data, payment, alert, recovery and Telegram readiness without exposing account or infrastructure details.</p></div><div class="terminal-live-box {"live" if payload.get("ok") else "unavailable"}"><span>Checked now</span><strong>{h(checked_at)}</strong><em>UTC</em></div></header><div class="status-grid">{"".join(cards)}</div></section>
     """
     return shell("Status - SpreadBoard", "status", body)
 
@@ -8415,23 +8982,22 @@ def membership_terms(tier: str = "research_pro") -> list[dict[str, Any]]:
         total = periods[days] / 100.0
         per_month = total / months
         saving = 0 if base_monthly <= 0 else round((1 - (per_month * 100) / base_monthly) * 100)
-        terms.append({
-            "days": days,
-            "months": months,
-            "label": "1 month" if months == 1 else f"{months} months",
-            "total": total,
-            "per_month": per_month,
-            "saving_pct": max(0, saving),
-        })
+        terms.append(
+            {
+                "days": days,
+                "months": months,
+                "label": "1 month" if months == 1 else f"{months} months",
+                "total": total,
+                "per_month": per_month,
+                "saving_pct": max(0, saving),
+            }
+        )
     return terms
 
 
 def render_membership_ticks(tier: str = "research_pro") -> str:
     features = (PLAN_CATALOG.get(tier) or PLAN_CATALOG["research_pro"])["features"]
-    return "".join(
-        f'<li><span aria-hidden="true">\u2713</span>{h(item)}</li>'
-        for item in features
-    )
+    return "".join(f'<li><span aria-hidden="true">\u2713</span>{h(item)}</li>' for item in features)
 
 
 def render_membership_terms(*, tier: str = "research_pro", selected_days: int | None = None) -> str:
@@ -8447,13 +9013,11 @@ def render_membership_terms(*, tier: str = "research_pro", selected_days: int | 
         if selected_days is not None and term["days"] == selected_days:
             classes.append("current")
         saving = (
-            f'<em class="term-saving">-{term["saving_pct"]}%</em>'
-            if term["saving_pct"]
-            else ""
+            f'<em class="term-saving">-{term["saving_pct"]}%</em>' if term["saving_pct"] else ""
         )
         cards.append(
             f'<div class="{" ".join(classes)}">{saving}'
-            f'<strong>{h(term["label"])}</strong>'
+            f"<strong>{h(term['label'])}</strong>"
             f'<span class="term-rate">${term["per_month"]:,.2f}<em>/mo</em></span>'
             f'<span class="term-total">${term["total"]:,.0f} billed once</span></div>'
         )
@@ -8463,7 +9027,7 @@ def render_membership_terms(*, tier: str = "research_pro", selected_days: int | 
 def render_membership_reasons() -> str:
     return "".join(
         f'<div class="reason"><span aria-hidden="true">{mark}</span>'
-        f'<strong>{h(title)}</strong><p>{h(line)}</p></div>'
+        f"<strong>{h(title)}</strong><p>{h(line)}</p></div>"
         for mark, title, line in MEMBERSHIP_REASONS
     )
 
@@ -8534,7 +9098,7 @@ def render_executor_boundary_page() -> str:
     <section class="research-page executor-boundary-page">
       <header class="research-hero"><div><span class="page-kicker">Trust boundary</span><h1>Research here. Execution somewhere else.</h1><p>SpreadBoard intentionally cannot place orders. A future executor must be a separately secured product that repeats every preflight from fresh evidence.</p></div><aside><strong>0</strong><span>order capabilities in this deployment</span><a href="/api/executor-boundary">Machine-readable attestation →</a></aside></header>
       <section class="executor-boundary-grid"><article class="forbidden"><span>SpreadBoard</span><h2>Never loaded here</h2><ul>{forbidden}</ul></article><article><span>Separate executor</span><h2>Required before live use</h2><ul>{required}</ul></article></section>
-      <section class="audit-process"><h2>Current verdict: {h(str(boundary['verdict']).replace('_', ' '))}</h2><p>No handoff endpoint is exposed. Configuring a different HTTPS origin reserves a product boundary; it does not make that product safe or authorize a trade.</p></section>
+      <section class="audit-process"><h2>Current verdict: {h(str(boundary["verdict"]).replace("_", " "))}</h2><p>No handoff endpoint is exposed. Configuring a different HTTPS origin reserves a product boundary; it does not make that product safe or authorize a trade.</p></section>
       <footer class="research-footer"><a class="pricing-button primary" href="/markets?view=table">Return to research</a><a class="pricing-button" href="/methodology">Read methodology</a></footer>
     </section>
     """
@@ -8578,7 +9142,7 @@ def render_telegram_landing_page(board_path: Path) -> str:
       </section>
       <section class="telegram-preview"><div><span>Sample digest</span><h2>What /top returns now</h2></div><pre>{h(preview_text)}</pre><p>The private subscriber forum is a Research Pro entitlement and is already connected. Scanner members retain website scanners and personal alerts but are not admitted to this group. A separate public broadcast channel remains optional.</p></section>
       <section class="telegram-command-grid">
-        <article><code>/top</code><span>Fresh public route preview</span></article><article><code>$SIREN</code><span>Exact-token lookup in the subscriber group</span></article><article><code>/token SIREN</code><span>The same exact-token lookup as a slash command</span></article><article><code>@{h(username or 'spreadarbitragesubscription_bot')} SIREN</code><span>Tag the bot, then type any token</span></article><article><code>/funding SIREN</code><span>Paired funding view</span></article><article><code>/transfer SIREN</code><span>Deposit and withdrawal state</span></article>
+        <article><code>/top</code><span>Fresh public route preview</span></article><article><code>$SIREN</code><span>Exact-token lookup in the subscriber group</span></article><article><code>/token SIREN</code><span>The same exact-token lookup as a slash command</span></article><article><code>@{h(username or "spreadarbitragesubscription_bot")} SIREN</code><span>Tag the bot, then type any token</span></article><article><code>/funding SIREN</code><span>Paired funding view</span></article><article><code>/transfer SIREN</code><span>Deposit and withdrawal state</span></article>
       </section>
     </section>
     """
@@ -8591,8 +9155,8 @@ def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
     current = _user_entitlement_tier(user) if user else "free"
     referral_banner = (
         '<aside class="referral-offer" role="status"><strong>Your channel discount is saved.</strong>'
-        '<span>Get 20% off the first 30-day membership value at crypto checkout. '
-        'For 90- or 365-day access, the discount is still one 30-day discount, not a recurring discount.</span></aside>'
+        "<span>Get 20% off the first 30-day membership value at crypto checkout. "
+        "For 90- or 365-day access, the discount is still one 30-day discount, not a recurring discount.</span></aside>"
         if _query_first(query, "referred") == "1"
         else ""
     )
@@ -8608,8 +9172,8 @@ def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
             action = '<a class="pricing-button primary" href="/register">Create account</a>'
         cards.append(
             f'<article class="pricing-tier {"featured" if tier == "research_pro" else ""}">'
-            f'<span>{"Current plan" if current == tier else ("Complete workspace" if tier == "research_pro" else "")}</span>'
-            f'<h2>{h(plan["name"])}</h2><p>{h(plan["tagline"])}</p>'
+            f"<span>{'Current plan' if current == tier else ('Complete workspace' if tier == 'research_pro' else '')}</span>"
+            f"<h2>{h(plan['name'])}</h2><p>{h(plan['tagline'])}</p>"
             f'<div class="pricing-price"><strong>${int(plan["monthly"]):,}</strong><em>{" / 30 days" if plan["monthly"] else " forever"}</em></div>'
             f'<ul class="tick-list">{render_membership_ticks(tier)}</ul>{action}</article>'
         )
@@ -8648,12 +9212,13 @@ def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
       <header class="pricing-intro"><span class="page-kicker">Membership</span><h1>Every spread, live.</h1><p>Start with proof, then pay once in USDC or USDT on Arbitrum for the access period you choose. No card, no automatic renewal. Scanner unlocks live discovery; Research Pro adds the full evidence and intelligence workspace.</p></header>
       <section class="pricing-tiers">{"".join(cards)}</section>
       <section class="pricing-block"><h2>What you get &mdash; and how to start</h2><div class="pricing-steps"><article><b>01</b><h3>Create your account</h3><p>Compare the free proof pages first, then sign in to choose Scanner or Research Pro.</p></article><article><b>02</b><h3>Pay the exact crypto invoice</h3><p>Select USDC or USDT on Arbitrum, scan the token-specific QR, and send the exact amount shown.</p></article><article><b>03</b><h3>Open your exact tier</h3><p>The invoice activates only the tier printed on it. Research Pro also unlocks the private Telegram forum.</p></article></div></section>
-      <section class="pricing-block"><h2>Research Pro prepaid terms</h2>{render_membership_terms(tier='research_pro')}<p class="pricing-note">Each amount is billed once in crypto. Access lapses unless you create and pay a new invoice.</p></section>
+      <section class="pricing-block"><h2>Research Pro prepaid terms</h2>{render_membership_terms(tier="research_pro")}<p class="pricing-note">Each amount is billed once in crypto. Access lapses unless you create and pay a new invoice.</p></section>
       <section class="pricing-block"><h2>Why membership</h2><div class="reason-grid">{render_membership_reasons()}</div></section>
       <p class="pricing-note">Public market data, not investment advice. Every route carries execution risk. See the <a href="/terms">Terms</a> and <a href="/refunds">Refund Policy</a>.</p>
     </section>
     """
     return shell("Membership - SpreadBoard", "pricing", body)
+
 
 def render_crypto_checkout_panel() -> str:
     """Prepaid crypto checkout: pick a period, pay the exact amount, get access."""
@@ -8679,7 +9244,7 @@ def render_crypto_checkout_panel() -> str:
     return f"""
     <section class="account-empty-panel crypto-checkout" data-crypto-checkout>
       <strong>Pay with crypto</strong>
-      <p class="crypto-lede">Prepaid access on <b>{h(state.get('chain'))}</b> in <b>{h(tokens)}</b>.
+      <p class="crypto-lede">Prepaid access on <b>{h(state.get("chain"))}</b> in <b>{h(tokens)}</b>.
       There is no auto-renewal &mdash; access simply lapses at the end of the period. Same-tier
       renewals extend access; tier changes are available after the current prepaid term ends.</p>
       <div class="crypto-periods">{periods}</div>
@@ -8696,7 +9261,7 @@ def render_crypto_checkout_panel() -> str:
           <code data-crypto-contract></code>
           <button class="sheet-button ghost" type="button" data-copy="contract">Copy</button></div>
         <div class="crypto-qr"><img data-crypto-qr alt="" width="196" height="196"><a class="sheet-button" data-crypto-wallet-link>Open in wallet</a></div>
-        <p class="crypto-warn">Send only <b data-crypto-selected-token>{h(tokens)}</b> on <b>{h(state.get('chain'))}</b>.
+        <p class="crypto-warn">Send only <b data-crypto-selected-token>{h(tokens)}</b> on <b>{h(state.get("chain"))}</b>.
         Funds sent on another chain or in another token cannot be credited.
         The amount shown is unique to your order &mdash; send it exactly.</p>
         <p class="crypto-status" data-crypto-status>Waiting for payment&hellip;</p>
@@ -8869,7 +9434,9 @@ def render_subscription_page(query: dict[str, list[str]] | None = None) -> str:
     active = bool(user and user.subscription_active)
     billing_managed = bool(user and user.billing_customer_id)
     requested_tier = _query_first(query, "tier") or (
-        _user_entitlement_tier(user) if user and _user_entitlement_tier(user) != "free" else "research_pro"
+        _user_entitlement_tier(user)
+        if user and _user_entitlement_tier(user) != "free"
+        else "research_pro"
     )
     if requested_tier not in {"scanner", "research_pro"}:
         requested_tier = "research_pro"
@@ -8917,19 +9484,19 @@ def render_subscription_page(query: dict[str, list[str]] | None = None) -> str:
       <header class="terminal-heading">
         <div>
           <span class="page-kicker">Membership</span>
-          <h1>{'Your membership' if active else 'Activate membership'}</h1>
-          <p>{(('Renews automatically. Cancel any time.' if billing_managed else 'Access is managed directly.') if active else 'Your account is signed in; market access is not active yet.') if user else 'Sign in or create an account to activate market access.'}</p>
+          <h1>{"Your membership" if active else "Activate membership"}</h1>
+          <p>{(("Renews automatically. Cancel any time." if billing_managed else "Access is managed directly.") if active else "Your account is signed in; market access is not active yet.") if user else "Sign in or create an account to activate market access."}</p>
         </div>
       </header>
 
       <section class="sub-plan">
-        <span class="sub-badge">{'Current plan' if active and _user_entitlement_tier(user) == requested_tier else 'Choose plan'}</span>
+        <span class="sub-badge">{"Current plan" if active and _user_entitlement_tier(user) == requested_tier else "Choose plan"}</span>
         <div class="sub-tier-choices">{plan_choices}</div>
         <div class="sub-facts">
-          <div><span>Selected tier</span><strong>{h(selected_plan['name'])}</strong></div>
-          <div><span>Monthly price (30 days)</span><strong>${selected_plan['monthly']:,.2f}</strong></div>
+          <div><span>Selected tier</span><strong>{h(selected_plan["name"])}</strong></div>
+          <div><span>Monthly price (30 days)</span><strong>${selected_plan["monthly"]:,.2f}</strong></div>
           <div><span>Billing cycle</span><strong>Prepaid crypto</strong></div>
-          <div><span>{('Next payment' if billing_managed else 'Access until') if active else 'Status'}</span><strong>{h(renews if active else (user.subscription_status if user else 'inactive'))}</strong></div>
+          <div><span>{("Next payment" if billing_managed else "Access until") if active else "Status"}</span><strong>{h(renews if active else (user.subscription_status if user else "inactive"))}</strong></div>
         </div>
         <ul class="tick-list">{render_membership_ticks(requested_tier)}</ul>
         <label class="subscription-consent"><input type="checkbox" data-subscription-consent>
@@ -8942,14 +9509,14 @@ def render_subscription_page(query: dict[str, list[str]] | None = None) -> str:
       </section>
 
       <section class="sub-plan">
-        <span class="sub-badge">{h(selected_plan['name'])} longer terms</span>
+        <span class="sub-badge">{h(selected_plan["name"])} longer terms</span>
         {render_membership_terms(tier=requested_tier)}
         <p class="pricing-note">Longer terms are prepaid in one payment.</p>
       </section>
 
       {render_crypto_checkout_panel()}
     </section>
-    <script type="application/json" id="account-session">{json_script_data({'csrf_token': user.csrf_token if user else None})}</script>
+    <script type="application/json" id="account-session">{json_script_data({"csrf_token": user.csrf_token if user else None})}</script>
     {render_billing_script()}
     {render_crypto_checkout_script()}
     """
@@ -9046,33 +9613,90 @@ def render_guide_page() -> str:
         steps = "".join(f"<li>{step}</li>" for step in lane["how"])
         risks = "".join(f"<li>{item}</li>" for item in lane["watch"])
         lanes += f"""
-        <article class="guide-lane" id="{lane['id']}">
-          <h2>{h(lane['title'])}</h2>
-          <p class="guide-lede">{lane['one_line']}</p>
+        <article class="guide-lane" id="{lane["id"]}">
+          <h2>{h(lane["title"])}</h2>
+          <p class="guide-lede">{lane["one_line"]}</p>
           <h3>How you do it</h3>
           <ol class="guide-steps">{steps}</ol>
           <h3>Where the money comes from</h3>
-          <p>{lane['earn']}</p>
+          <p>{lane["earn"]}</p>
           <h3>What can go wrong</h3>
           <ul class="guide-risks">{risks}</ul>
         </article>
         """
     product_sections = [
-        ("membership", "Membership", "/pricing", "Choose Scanner for the market tools and personal alerts; choose Research Pro when you also need the private Telegram forum. Crypto access is prepaid and does not renew itself.", "After payment, confirm the tier and expiry under Account. Never send funds to an address copied from chat."),
-        ("arbitrage", "Arbitrage", "/arbitrage", "Start here for price gaps. Pick the route type, compare the matched-size spread, inspect both books, fees, rails and token identity, then open the exact pair page.", "A large headline is a lead, not a fill. The $50 matched VWAP is evidence for that size only."),
-        ("funding", "Funding", "/funding", "Use Now for current carry and 1d, 7d or 30d for opportunities worth keeping on your radar. Cooled leaders remain labelled as historical instead of disappearing.", "Only Futures legs pay or receive funding. Spot and DEX legs contribute zero; check cadence and realised windows before extrapolating."),
-        ("fair", "Fair price", "/fair", "Use this to find a futures contract trading away from its own exchange mark or index. Below fair is a possible long mean-reversion setup; above fair is a possible short setup.", "It is not cross-exchange arbitrage and the mark is not guaranteed truth. Confirm the index, liquidity, funding and liquidation risk."),
-        ("charts", "Charts", "/charts", "Choose any indexed token and exact long and short markets, including a DEX long against a futures short. Use several windows to see whether the gap usually converges or can stay wide.", "Pin exact pairs you monitor. A chart shows observed quotes, not executable size or your personal fills."),
-        ("intel", "Intel", "/intel", "Use Intel as an attention layer: it groups token mentions and joins them to current routes, retained funding leaders and charts. Always read the source age and route status.", "Community attention is not an entry signal. If the source is stale or disconnected, the page must say so and market pages remain authoritative."),
-        ("watchlist", "Watchlist", "/watchlist", "Pin tokens you may trade later. Live routes appear first; cooled funding leaders and chart-only markets remain visible so a quiet current rate does not erase the idea.", "Use alerts for a threshold and Watchlist for research memory. Saved tokens sync to your account."),
-        ("portfolio", "Portfolio", "/account", "Record actual fills and quantities for both legs. Price PnL, settled funding, fees and total PnL stay separate. Optional capital per leg is only the return denominator.", "Public rates cannot prove what your account received. Record actual settled funding as positive when received and negative when paid."),
-        ("alerts", "Alerts and Telegram", "/alerts", "Create exact route spread, route funding or token-price rules. Enable Browser Push for this browser or add your Pushover user key for the Pushover app. Link Telegram from Account settings.", "After opening the Telegram link, tap Start and return to Account; the website confirms the link. Telegram results are research snapshots, not trade instructions."),
+        (
+            "membership",
+            "Membership",
+            "/pricing",
+            "Choose Scanner for the market tools and personal alerts; choose Research Pro when you also need the private Telegram forum. Crypto access is prepaid and does not renew itself.",
+            "After payment, confirm the tier and expiry under Account. Never send funds to an address copied from chat.",
+        ),
+        (
+            "arbitrage",
+            "Arbitrage",
+            "/arbitrage",
+            "Start here for price gaps. Pick the route type, compare the matched-size spread, inspect both books, fees, rails and token identity, then open the exact pair page.",
+            "A large headline is a lead, not a fill. The $50 matched VWAP is evidence for that size only.",
+        ),
+        (
+            "funding",
+            "Funding",
+            "/funding",
+            "Use Now for current carry and 1d, 7d or 30d for opportunities worth keeping on your radar. Cooled leaders remain labelled as historical instead of disappearing.",
+            "Only Futures legs pay or receive funding. Spot and DEX legs contribute zero; check cadence and realised windows before extrapolating.",
+        ),
+        (
+            "fair",
+            "Fair price",
+            "/fair",
+            "Use this to find a futures contract trading away from its own exchange mark or index. Below fair is a possible long mean-reversion setup; above fair is a possible short setup.",
+            "It is not cross-exchange arbitrage and the mark is not guaranteed truth. Confirm the index, liquidity, funding and liquidation risk.",
+        ),
+        (
+            "charts",
+            "Charts",
+            "/charts",
+            "Choose any indexed token and exact long and short markets, including a DEX long against a futures short. Use several windows to see whether the gap usually converges or can stay wide.",
+            "Pin exact pairs you monitor. A chart shows observed quotes, not executable size or your personal fills.",
+        ),
+        (
+            "intel",
+            "Intel",
+            "/intel",
+            "Use Intel as an attention layer: it groups token mentions and joins them to current routes, retained funding leaders and charts. Always read the source age and route status.",
+            "Community attention is not an entry signal. If the source is stale or disconnected, the page must say so and market pages remain authoritative.",
+        ),
+        (
+            "watchlist",
+            "Watchlist",
+            "/watchlist",
+            "Pin tokens you may trade later. Live routes appear first; cooled funding leaders and chart-only markets remain visible so a quiet current rate does not erase the idea.",
+            "Use alerts for a threshold and Watchlist for research memory. Saved tokens sync to your account.",
+        ),
+        (
+            "portfolio",
+            "Portfolio",
+            "/account",
+            "Record actual fills and quantities for both legs. Price PnL, settled funding, fees and total PnL stay separate. Optional capital per leg is only the return denominator.",
+            "Public rates cannot prove what your account received. Record actual settled funding as positive when received and negative when paid.",
+        ),
+        (
+            "alerts",
+            "Alerts and Telegram",
+            "/alerts",
+            "Create exact route spread, route funding or token-price rules. Enable Browser Push for this browser or add your Pushover user key for the Pushover app. Link Telegram from Account settings.",
+            "After opening the Telegram link, tap Start and return to Account; the website confirms the link. Telegram results are research snapshots, not trade instructions.",
+        ),
     ]
     functions = "".join(
         f'<article class="guide-function" id="{section_id}"><div><span>{index:02d}</span><h2>{h(title)}</h2></div><p>{h(use)}</p><p><strong>Important:</strong> {h(caution)}</p><a href="{h(href)}">Open {h(title)}</a></article>'
         for index, (section_id, title, href, use, caution) in enumerate(product_sections, start=1)
     )
-    return shell("How to use SpreadBoard - SpreadBoard", "guide", f"""
+    return shell(
+        "How to use SpreadBoard - SpreadBoard",
+        "guide",
+        f"""
     <section class="guide-page">
       <header class="terminal-heading">
         <div><span class="page-kicker">Product guide</span>
@@ -9081,7 +9705,7 @@ def render_guide_page() -> str:
       </header>
 
       <nav class="guide-jump" aria-label="Guide sections">
-        {''.join(f'<a href="#{h(section_id)}">{h(title)}</a>' for section_id, title, _href, _use, _caution in product_sections)}
+        {"".join(f'<a href="#{h(section_id)}">{h(title)}</a>' for section_id, title, _href, _use, _caution in product_sections)}
       </nav>
       <section class="guide-functions">{functions}</section>
 
@@ -9168,7 +9792,8 @@ def render_guide_page() -> str:
     .guide-risks{{padding-left:1.1rem}}
     @media(max-width:720px){{.guide-functions{{grid-template-columns:1fr}}}}
     </style>
-    """)
+    """,
+    )
 
 
 def render_legal_page(page: str) -> str:
@@ -9182,53 +9807,140 @@ def render_legal_page(page: str) -> str:
             "Terms of Service",
             "These terms govern access to SpreadBoard, a read-only market-information service.",
             [
-                ("Service", "SpreadBoard presents public-market data, calculated spreads, funding information, charts, alerts, and research tools. It does not execute trades, hold client assets, provide custody, or provide personalised investment advice."),
-                ("Market risk", "Prices, liquidity, funding, transfer status, and availability can change without notice. Displayed values may be delayed, incomplete, or unavailable. You remain responsible for checking any decision directly with the relevant venue."),
-                ("Membership", "Crypto membership is prepaid for the access period and tier shown before checkout and does not renew automatically. The exact invoice amount activates only that invoice's tier. Different-tier purchases become available after an active prepaid term ends. Access is personal and may not be resold, shared, scraped, or used to disrupt the service."),
-                ("Referral offers", "A qualifying affiliate referral gives a new member 20% off the first 30-day membership value only. If the first invoice prepays 90 or 365 days, the same single 30-day discount applies. The offer is attached at registration, cannot be combined, transferred, or exchanged for cash, and does not discount later renewals."),
-                ("Acceptable use", "Do not attempt to bypass access controls, overload data providers, reverse engineer credentials, or use the service for unlawful activity. We may suspend access needed to protect users, providers, or the service."),
-                ("Availability", "We aim to run continuously but do not guarantee uninterrupted access or that every venue, token, route, chart, or alert will always be available."),
-                ("Liability", "Nothing excludes liability that cannot lawfully be excluded. To the extent permitted by law, SpreadBoard is not liable for trading losses, missed opportunities, exchange failures, or decisions based on market information."),
-                ("Contact", f"Questions can be sent to {support} or through {support_url}. Version {TERMS_VERSION}."),
+                (
+                    "Service",
+                    "SpreadBoard presents public-market data, calculated spreads, funding information, charts, alerts, and research tools. It does not execute trades, hold client assets, provide custody, or provide personalised investment advice.",
+                ),
+                (
+                    "Market risk",
+                    "Prices, liquidity, funding, transfer status, and availability can change without notice. Displayed values may be delayed, incomplete, or unavailable. You remain responsible for checking any decision directly with the relevant venue.",
+                ),
+                (
+                    "Membership",
+                    "Crypto membership is prepaid for the access period and tier shown before checkout and does not renew automatically. The exact invoice amount activates only that invoice's tier. Different-tier purchases become available after an active prepaid term ends. Access is personal and may not be resold, shared, scraped, or used to disrupt the service.",
+                ),
+                (
+                    "Referral offers",
+                    "A qualifying affiliate referral gives a new member 20% off the first 30-day membership value only. If the first invoice prepays 90 or 365 days, the same single 30-day discount applies. The offer is attached at registration, cannot be combined, transferred, or exchanged for cash, and does not discount later renewals.",
+                ),
+                (
+                    "Acceptable use",
+                    "Do not attempt to bypass access controls, overload data providers, reverse engineer credentials, or use the service for unlawful activity. We may suspend access needed to protect users, providers, or the service.",
+                ),
+                (
+                    "Availability",
+                    "We aim to run continuously but do not guarantee uninterrupted access or that every venue, token, route, chart, or alert will always be available.",
+                ),
+                (
+                    "Liability",
+                    "Nothing excludes liability that cannot lawfully be excluded. To the extent permitted by law, SpreadBoard is not liable for trading losses, missed opportunities, exchange failures, or decisions based on market information.",
+                ),
+                (
+                    "Contact",
+                    f"Questions can be sent to {support} or through {support_url}. Version {TERMS_VERSION}.",
+                ),
             ],
         ),
         "privacy": (
             "Privacy Notice",
             "What SpreadBoard stores and why.",
             [
-                ("Account data", "We store your name, email address, password hash, subscription state, linked Telegram identifier, settings, alerts, and journal entries to operate your account."),
-                ("Payments", "Crypto checkout is watch-only. SpreadBoard stores the invoice amount, selected access period, receiving address, token and chain details, status, and matching public transaction hash. It never stores a wallet private key or seed phrase."),
-                ("Notifications", "Pushover user keys are encrypted at rest. Telegram and Pushover identifiers are used only to deliver the features you enable."),
-                ("Technical data", "We may retain security and operational records such as session identifiers, IP address, browser information, consent records, and service logs. Product analytics store only daily aggregate page-path counts, without IP addresses, cookies, referrers, or user agents."),
-                ("Affiliate attribution", "When you open a partner link, a first-party referral cookie stores an opaque token for up to 90 days. If you register while it is valid, we keep the partner, click, registration, invoice tier, settled amount, commission, and payout status needed to administer the offer and prevent fraud. Partners see aggregate visits and registrations plus invoice-level tier, amount, commission, and status; they do not receive your email address or wallet credentials."),
-                ("Sharing and retention", "Data is shared only with providers needed to run the service, such as blockchain RPC, Telegram, Pushover, hosting, and market-data providers. We keep it only as long as needed for service, security, accounting, and legal obligations."),
-                ("Your choices", f"You may request access, correction, deletion, or account closure through {support_url} or by contacting {support}. Some records may need to be retained for legal or fraud-prevention purposes."),
+                (
+                    "Account data",
+                    "We store your name, email address, password hash, subscription state, linked Telegram identifier, settings, alerts, and journal entries to operate your account.",
+                ),
+                (
+                    "Payments",
+                    "Crypto checkout is watch-only. SpreadBoard stores the invoice amount, selected access period, receiving address, token and chain details, status, and matching public transaction hash. It never stores a wallet private key or seed phrase.",
+                ),
+                (
+                    "Notifications",
+                    "Pushover user keys are encrypted at rest. Telegram and Pushover identifiers are used only to deliver the features you enable.",
+                ),
+                (
+                    "Technical data",
+                    "We may retain security and operational records such as session identifiers, IP address, browser information, consent records, and service logs. Product analytics store only daily aggregate page-path counts, without IP addresses, cookies, referrers, or user agents.",
+                ),
+                (
+                    "Affiliate attribution",
+                    "When you open a partner link, a first-party referral cookie stores an opaque token for up to 90 days. If you register while it is valid, we keep the partner, click, registration, invoice tier, settled amount, commission, and payout status needed to administer the offer and prevent fraud. Partners see aggregate visits and registrations plus invoice-level tier, amount, commission, and status; they do not receive your email address or wallet credentials.",
+                ),
+                (
+                    "Sharing and retention",
+                    "Data is shared only with providers needed to run the service, such as blockchain RPC, Telegram, Pushover, hosting, and market-data providers. We keep it only as long as needed for service, security, accounting, and legal obligations.",
+                ),
+                (
+                    "Your choices",
+                    f"You may request access, correction, deletion, or account closure through {support_url} or by contacting {support}. Some records may need to be retained for legal or fraud-prevention purposes.",
+                ),
             ],
         ),
         "refunds": (
             "Cancellation and Refund Policy",
             "How prepaid crypto access, cancellation rights, and service problems are handled.",
             [
-                ("No automatic renewal", "Crypto access is a one-time prepaid purchase. There is no recurring charge to cancel; access normally continues until the end of the paid period and lapses unless you pay a new invoice."),
-                ("Immediate access", "At checkout you are asked to request immediate digital access and acknowledge that beginning supply may affect the statutory 14-day cancellation right. This does not remove rights that cannot legally be waived."),
-                ("Service faults", "If paid access is materially unavailable or not supplied as described, contact us promptly. We will investigate and provide the remedy required by applicable consumer law, which may include restoration, a credit, or a refund."),
-                ("Duplicate or incorrect payments", "Only the exact amount shown on an open invoice is matched automatically. Underpayments, overpayments, duplicate payments, expired-invoice payments, and unmatched transfers are parked for owner review rather than assigned to a member or tier by guesswork. Report them with the account email and public transaction hash. Never send a wallet seed phrase, private key, or exchange password."),
-                ("How to request", f"Contact {support} or {support_url}. Include the account email, payment date, public transaction hash, and reason. Refunds, when due, are handled to a verified destination using the original payment asset where practical."),
+                (
+                    "No automatic renewal",
+                    "Crypto access is a one-time prepaid purchase. There is no recurring charge to cancel; access normally continues until the end of the paid period and lapses unless you pay a new invoice.",
+                ),
+                (
+                    "Immediate access",
+                    "At checkout you are asked to request immediate digital access and acknowledge that beginning supply may affect the statutory 14-day cancellation right. This does not remove rights that cannot legally be waived.",
+                ),
+                (
+                    "Service faults",
+                    "If paid access is materially unavailable or not supplied as described, contact us promptly. We will investigate and provide the remedy required by applicable consumer law, which may include restoration, a credit, or a refund.",
+                ),
+                (
+                    "Duplicate or incorrect payments",
+                    "Only the exact amount shown on an open invoice is matched automatically. Underpayments, overpayments, duplicate payments, expired-invoice payments, and unmatched transfers are parked for owner review rather than assigned to a member or tier by guesswork. Report them with the account email and public transaction hash. Never send a wallet seed phrase, private key, or exchange password.",
+                ),
+                (
+                    "How to request",
+                    f"Contact {support} or {support_url}. Include the account email, payment date, public transaction hash, and reason. Refunds, when due, are handled to a verified destination using the original payment asset where practical.",
+                ),
             ],
         ),
         "affiliate": (
             "Affiliate Program Terms",
             "The operating rules for SpreadBoard influencer links and weekly manual payouts.",
             [
-                ("Appointment and link", "Each approved channel receives one named cabinet and one unique referral link. The link is personal to that partner and must not be transferred, impersonated, used for self-referrals, or placed through misleading, automated, spam, paid-search brand bidding, cookie stuffing, or duplicate-account activity."),
-                ("Attribution", "A valid first-party referral cookie lasts up to 90 days. The first qualifying referral is fixed when the new user registers and then persists for later manual crypto renewals. A registration or payment that cannot be linked by the system is not assigned retrospectively without reliable evidence."),
-                ("Subscriber discount", "The referred member receives 20% off the first 30-day membership value. On a longer first term, only one 30-day portion is discounted. Later renewals are charged at the then-current full price unless a separate written offer applies."),
-                ("Commission", "The partner earns 50% of subscription plan revenue actually settled for each attributed invoice, after the subscriber discount and excluding the small invoice-identification amount. Commission is created only after confirmed settlement and is shown in the partner ledger."),
-                ("Hold and payout", "Commission remains on hold for seven days, then enters the next weekly manual payout batch. Payouts are always USDT on Arbitrum, and the partner must maintain a valid address for that network. Each batch freezes the amount, network, and destination, and is marked paid with a transaction hash or other transfer reference."),
-                ("Reversals and records", "We may void unpaid commission connected to refunds, charge reversals, duplicate or fraudulent accounts, self-referrals, prohibited promotion, or calculation error, with a recorded reason. Paid batches and their transaction references remain in the ledger for accounting and dispute review."),
-                ("Marketing disclosure", "Partners must make the commercial relationship clear and conspicuous. For YouTube, say and show near the start of the promotion, and repeat immediately before the link in the description: ‘AD — paid affiliate promotion. I receive a commission if you subscribe through this link.’ A platform disclosure tool may be used as well, but does not replace this disclosure. Promotions must be truthful, distinguish market research from investment advice, and must not promise profits or guaranteed returns."),
-                ("Tax and termination", "Partners are responsible for their own tax, legal, and reporting obligations and for accurate payout details. Either side may stop future promotion. Pausing or closing a link prevents new attribution; renewals from users already attributed continue to earn commission, subject to these terms, fraud review, and applicable law."),
-                ("Contact and version", f"Questions or payout disputes can be sent to {support} or {support_url}. Version {TERMS_VERSION}."),
+                (
+                    "Appointment and link",
+                    "Each approved channel receives one named cabinet and one unique referral link. The link is personal to that partner and must not be transferred, impersonated, used for self-referrals, or placed through misleading, automated, spam, paid-search brand bidding, cookie stuffing, or duplicate-account activity.",
+                ),
+                (
+                    "Attribution",
+                    "A valid first-party referral cookie lasts up to 90 days. The first qualifying referral is fixed when the new user registers and then persists for later manual crypto renewals. A registration or payment that cannot be linked by the system is not assigned retrospectively without reliable evidence.",
+                ),
+                (
+                    "Subscriber discount",
+                    "The referred member receives 20% off the first 30-day membership value. On a longer first term, only one 30-day portion is discounted. Later renewals are charged at the then-current full price unless a separate written offer applies.",
+                ),
+                (
+                    "Commission",
+                    "The partner earns 50% of subscription plan revenue actually settled for each attributed invoice, after the subscriber discount and excluding the small invoice-identification amount. Commission is created only after confirmed settlement and is shown in the partner ledger.",
+                ),
+                (
+                    "Hold and payout",
+                    "Commission remains on hold for seven days, then enters the next weekly manual payout batch. Payouts are always USDT on Arbitrum, and the partner must maintain a valid address for that network. Each batch freezes the amount, network, and destination, and is marked paid with a transaction hash or other transfer reference.",
+                ),
+                (
+                    "Reversals and records",
+                    "We may void unpaid commission connected to refunds, charge reversals, duplicate or fraudulent accounts, self-referrals, prohibited promotion, or calculation error, with a recorded reason. Paid batches and their transaction references remain in the ledger for accounting and dispute review.",
+                ),
+                (
+                    "Marketing disclosure",
+                    "Partners must make the commercial relationship clear and conspicuous. For YouTube, say and show near the start of the promotion, and repeat immediately before the link in the description: ‘AD — paid affiliate promotion. I receive a commission if you subscribe through this link.’ A platform disclosure tool may be used as well, but does not replace this disclosure. Promotions must be truthful, distinguish market research from investment advice, and must not promise profits or guaranteed returns.",
+                ),
+                (
+                    "Tax and termination",
+                    "Partners are responsible for their own tax, legal, and reporting obligations and for accurate payout details. Either side may stop future promotion. Pausing or closing a link prevents new attribution; renewals from users already attributed continue to earn commission, subject to these terms, fraud review, and applicable law.",
+                ),
+                (
+                    "Contact and version",
+                    f"Questions or payout disputes can be sent to {support} or {support_url}. Version {TERMS_VERSION}.",
+                ),
             ],
         ),
     }
@@ -9236,7 +9948,7 @@ def render_legal_page(page: str) -> str:
     body = f"""
     <section class="legal-page">
       <header><span class="page-kicker">SpreadBoard</span><h1>{h(title)}</h1><p>{h(intro)}</p></header>
-      <main>{''.join(f'<section><h2>{h(heading)}</h2><p>{h(copy)}</p></section>' for heading, copy in sections)}</main>
+      <main>{"".join(f"<section><h2>{h(heading)}</h2><p>{h(copy)}</p></section>" for heading, copy in sections)}</main>
       <nav><a href="/pricing">Membership</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/refunds">Refunds</a><a href="/affiliate-terms">Affiliate terms</a></nav>
     </section>
     """
@@ -9281,7 +9993,7 @@ def render_partner_page(
           <section class="partner-panel"><div class="account-panel-head"><div><h2>Partners and weekly payouts</h2><p>A draft freezes the eligible commissions in one batch. Mark it paid only after the crypto transfer is sent.</p></div></div><div class="partner-admin-list" data-partner-list><p>Loading partners…</p></div></section>
           <p role="alert" data-partner-error></p>
         </section>
-        <script type="application/json" id="partner-session">{json_script_data({'csrf_token': user.csrf_token})}</script>
+        <script type="application/json" id="partner-session">{json_script_data({"csrf_token": user.csrf_token})}</script>
         {render_partner_admin_script()}
         """
         return shell("Affiliate operations - SpreadBoard", "partner", body)
@@ -9299,46 +10011,46 @@ def render_partner_page(
         if status == "pending" and str(item.get("available_at") or "") <= now_iso:
             status = "payable"
         commission_rows.append(
-            f'<tr><td>#{h(item.get("invoice_id"))}</td><td>{h(PLAN_CATALOG.get(str(item.get("subscription_tier")), {}).get("name") or item.get("subscription_tier"))}</td>'
-            f'<td>{h(item.get("period_days"))} days</td><td>{_fmt_cents(item.get("commission_base_cents"))}</td>'
+            f"<tr><td>#{h(item.get('invoice_id'))}</td><td>{h(PLAN_CATALOG.get(str(item.get('subscription_tier')), {}).get('name') or item.get('subscription_tier'))}</td>"
+            f"<td>{h(item.get('period_days'))} days</td><td>{_fmt_cents(item.get('commission_base_cents'))}</td>"
             f'<td><strong>{_fmt_cents(item.get("commission_cents"))}</strong></td><td><span class="partner-status {h(status)}">{h(status)}</span></td>'
-            f'<td>{h(item.get("earned_at"))}</td></tr>'
+            f"<td>{h(item.get('earned_at'))}</td></tr>"
         )
     payout_rows = [
-        f'<tr><td>#{h(item.get("id"))}</td><td>{_fmt_cents(item.get("amount_cents"))}</td><td>{h(item.get("payout_asset") or "USDT")} on {h(item.get("payout_network") or "Arbitrum")}</td><td>{h(item.get("status"))}</td><td>{h(item.get("created_at"))}</td><td>{h(item.get("payment_reference") or "—")}</td></tr>'
+        f"<tr><td>#{h(item.get('id'))}</td><td>{_fmt_cents(item.get('amount_cents'))}</td><td>{h(item.get('payout_asset') or 'USDT')} on {h(item.get('payout_network') or 'Arbitrum')}</td><td>{h(item.get('status'))}</td><td>{h(item.get('created_at'))}</td><td>{h(item.get('payment_reference') or '—')}</td></tr>"
         for item in summary.get("payouts") or []
     ]
     body = f"""
     <section class="partner-page">
       <header class="terminal-heading partner-heading">
-        <div><span class="page-kicker">Influencer cabinet</span><h1>{h(partner.get('display_name'))}</h1><p>Your link, referred membership revenue, earned commission, and weekly payout history.</p></div>
-        <div class="terminal-live-box live"><span>Commission</span><strong>{int(partner.get('commission_bps') or 0) / 100:.0f}%</strong><em>of settled subscription revenue</em></div>
+        <div><span class="page-kicker">Influencer cabinet</span><h1>{h(partner.get("display_name"))}</h1><p>Your link, referred membership revenue, earned commission, and weekly payout history.</p></div>
+        <div class="terminal-live-box live"><span>Commission</span><strong>{int(partner.get("commission_bps") or 0) / 100:.0f}%</strong><em>of settled subscription revenue</em></div>
       </header>
-      <section class="partner-link-card"><div><span>Your referral link</span><strong>{h(partner.get('referral_url'))}</strong><p>New users receive 20% off their first 30-day membership value. Your attribution continues on later manual renewals.</p></div><button class="sheet-button primary" type="button" data-copy-partner-link data-link="{h(partner.get('referral_url'))}">Copy link</button></section>
+      <section class="partner-link-card"><div><span>Your referral link</span><strong>{h(partner.get("referral_url"))}</strong><p>New users receive 20% off their first 30-day membership value. Your attribution continues on later manual renewals.</p></div><button class="sheet-button primary" type="button" data-copy-partner-link data-link="{h(partner.get("referral_url"))}">Copy link</button></section>
       <section class="account-kpis partner-kpis">
-        {render_account_kpi('Link visits', metrics.get('clicks'), 'qualifying clicks')}
-        {render_account_kpi('Registrations', metrics.get('registrations'), 'accounts attributed')}
-        {render_account_kpi('Paying customers', metrics.get('customers'), 'at least one settlement')}
-        {render_account_kpi('Payable now', _fmt_cents(metrics.get('payable')), 'after seven-day hold')}
+        {render_account_kpi("Link visits", metrics.get("clicks"), "qualifying clicks")}
+        {render_account_kpi("Registrations", metrics.get("registrations"), "accounts attributed")}
+        {render_account_kpi("Paying customers", metrics.get("customers"), "at least one settlement")}
+        {render_account_kpi("Payable now", _fmt_cents(metrics.get("payable")), "after seven-day hold")}
       </section>
       <section class="partner-policy-grid">
-        <article><span>On hold</span><strong>{_fmt_cents(metrics.get('on_hold'))}</strong><p>Settled, still inside the seven-day review window.</p></article>
-        <article><span>In payout batch</span><strong>{_fmt_cents(metrics.get('batched'))}</strong><p>Frozen into a weekly batch awaiting transfer.</p></article>
-        <article><span>Paid to date</span><strong>{_fmt_cents(metrics.get('paid'))}</strong><p>Recorded transfers with an operator reference.</p></article>
+        <article><span>On hold</span><strong>{_fmt_cents(metrics.get("on_hold"))}</strong><p>Settled, still inside the seven-day review window.</p></article>
+        <article><span>In payout batch</span><strong>{_fmt_cents(metrics.get("batched"))}</strong><p>Frozen into a weekly batch awaiting transfer.</p></article>
+        <article><span>Paid to date</span><strong>{_fmt_cents(metrics.get("paid"))}</strong><p>Recorded transfers with an operator reference.</p></article>
       </section>
       <section class="partner-panel"><div class="account-panel-head"><div><h2>Payout destination</h2><p>Weekly payouts are always sent in USDT on Arbitrum. Check the address carefully; every payout batch freezes a snapshot of these details.</p></div></div>
         <form class="partner-payout-form" data-partner-payout-profile>
           <label><span>Asset</span><input name="asset" value="USDT" readonly></label>
           <label><span>Network</span><input name="network" value="Arbitrum" readonly></label>
-          <label><span>Wallet address</span><input name="destination" value="{h(partner.get('payout_destination') or '')}" placeholder="0x…" pattern="0x[a-fA-F0-9]{{40}}" required></label>
+          <label><span>Wallet address</span><input name="destination" value="{h(partner.get("payout_destination") or "")}" placeholder="0x…" pattern="0x[a-fA-F0-9]{{40}}" required></label>
           <button class="sheet-button primary" type="submit">Save payout details</button><output role="status"></output>
         </form>
       </section>
-      <section class="partner-panel"><div class="account-panel-head"><div><h2>Commission ledger</h2><p>One immutable earning per settled crypto invoice. Invoice-identification cents are not commissionable revenue.</p></div></div><div class="partner-table-wrap"><table class="partner-table"><thead><tr><th>Invoice</th><th>Tier</th><th>Term</th><th>Net revenue</th><th>Your 50%</th><th>Status</th><th>Earned</th></tr></thead><tbody>{''.join(commission_rows) or '<tr><td colspan="7">No paid referred subscriptions yet.</td></tr>'}</tbody></table></div></section>
-      <section class="partner-panel"><div class="account-panel-head"><div><h2>Payout history</h2><p>Payouts are processed weekly after the hold period.</p></div></div><div class="partner-table-wrap"><table class="partner-table"><thead><tr><th>Batch</th><th>Amount</th><th>Method</th><th>Status</th><th>Created</th><th>Reference</th></tr></thead><tbody>{''.join(payout_rows) or '<tr><td colspan="6">No payout batches yet.</td></tr>'}</tbody></table></div></section>
+      <section class="partner-panel"><div class="account-panel-head"><div><h2>Commission ledger</h2><p>One immutable earning per settled crypto invoice. Invoice-identification cents are not commissionable revenue.</p></div></div><div class="partner-table-wrap"><table class="partner-table"><thead><tr><th>Invoice</th><th>Tier</th><th>Term</th><th>Net revenue</th><th>Your 50%</th><th>Status</th><th>Earned</th></tr></thead><tbody>{"".join(commission_rows) or '<tr><td colspan="7">No paid referred subscriptions yet.</td></tr>'}</tbody></table></div></section>
+      <section class="partner-panel"><div class="account-panel-head"><div><h2>Payout history</h2><p>Payouts are processed weekly after the hold period.</p></div></div><div class="partner-table-wrap"><table class="partner-table"><thead><tr><th>Batch</th><th>Amount</th><th>Method</th><th>Status</th><th>Created</th><th>Reference</th></tr></thead><tbody>{"".join(payout_rows) or '<tr><td colspan="6">No payout batches yet.</td></tr>'}</tbody></table></div></section>
       <section class="partner-panel partner-terms"><h2>Program rules</h2><p>Attribution is fixed when the referred person registers. Commission is 50% of subscription revenue actually collected after the first-month discount, for every settled renewal attributed to you. Refunds, reversals, fraud, self-referrals, duplicate accounts, or misleading promotions may be voided before payout. For YouTube, say and show near the start, and repeat immediately before the link in the description: “AD — paid affiliate promotion. I receive a commission if you subscribe through this link.” You must not promise returns. See the <a href="/affiliate-terms">Affiliate Terms</a>.</p></section>
     </section>
-    <script type="application/json" id="partner-session">{json_script_data({'csrf_token': user.csrf_token})}</script>
+    <script type="application/json" id="partner-session">{json_script_data({"csrf_token": user.csrf_token})}</script>
     <script>
     document.querySelector('[data-copy-partner-link]')?.addEventListener('click',async event=>{{try{{await navigator.clipboard.writeText(event.currentTarget.dataset.link);event.currentTarget.textContent='Copied';}}catch(_error){{event.currentTarget.textContent='Copy failed';}}}});
     document.querySelector('[data-partner-payout-profile]')?.addEventListener('submit',async event=>{{
@@ -9375,7 +10087,11 @@ def render_account_page(
     user = accounts.current_user()
     if user is None:
         return render_login_page({})
-    if not user.is_admin and affiliates.partner_for_user(user.id, db_path=accounts_path) is not None and not user.subscription_active:
+    if (
+        not user.is_admin
+        and affiliates.partner_for_user(user.id, db_path=accounts_path) is not None
+        and not user.subscription_active
+    ):
         return render_partner_page(user, accounts_path)
     data = api_portfolio(user, board_path, accounts_path)
     summary = data.get("summary") or {}
@@ -9384,27 +10100,29 @@ def render_account_page(
     body = f"""
     <section class="account-page" data-account-page>
       <header class="terminal-heading account-heading">
-        <div><span class="page-kicker">Private workspace</span><h1>{h(user.display_name)}</h1><p>Track multi-exchange positions, price PnL, funding income, returns, and exit conditions in one place.</p></div>
-        <div class="account-membership"><span>Membership</span><strong>{h(PLAN_CATALOG.get(user.entitlement_tier, PLAN_CATALOG['free'])['name'])}</strong><em>{h(user.subscription_status)} · {h(user.subscription_expires_at or 'No expiry')}</em></div>
+        <div><span class="page-kicker">Private workspace</span><h1>{h(user.display_name)}</h1><p>Track multi-exchange positions, movement PnL, exact settled funding, fees, returns, and exit conditions in one place.</p></div>
+        <div class="account-membership"><span>Membership</span><strong>{h(PLAN_CATALOG.get(user.entitlement_tier, PLAN_CATALOG["free"])["name"])}</strong><em>{h(user.subscription_status)} · {h(user.subscription_expires_at or "No expiry")}</em></div>
       </header>
       <section class="account-kpis">
-        {render_account_kpi('Open positions', summary.get('open_positions'), 'actively marked')}
-        {render_account_kpi('Portfolio PnL', fmt_signed_money(summary.get('price_and_funding_pnl_usd')), 'price + funding - fees')}
-        {render_account_kpi('Funding income', fmt_signed_money(summary.get('funding_income_usd')), 'recorded cashflows')}
-        {render_account_kpi('Return', fmt_signed_pct(summary.get('monthly_return_pct'), digits=2), 'on allocated capital')}
+        {render_account_kpi("Open positions", summary.get("open_positions"), "actively marked")}
+        {render_account_kpi("Portfolio PnL", fmt_signed_money(summary.get("price_and_funding_pnl_usd")), "movement + settled funding - fees")}
+        {render_account_kpi("Settled funding", fmt_signed_money(summary.get("funding_income_usd")), "private exchange ledger")}
+        {render_account_kpi("Return", fmt_signed_pct(summary.get("monthly_return_pct"), digits=2), "on allocated capital")}
       </section>
-      <nav class="account-tabs" aria-label="Account sections"><button class="active" data-account-tab="positions">Positions</button><button data-account-tab="alerts">Alerts <i>{h(len([item for item in notifications if not item.get('read_at')]))}</i></button><button data-account-tab="settings">Settings</button>{'<button data-account-tab="members">Members</button>' if user.can_manage_members else ''}</nav>
+      <nav class="account-tabs" aria-label="Account sections"><button class="active" data-account-tab="positions">Positions</button><button data-account-tab="alerts">Alerts <i>{h(len([item for item in notifications if not item.get("read_at")]))}</i></button><button data-account-tab="settings">Settings</button>{'<button data-account-tab="members">Members</button>' if user.can_manage_members else ""}</nav>
       <section data-account-panel="positions">
-        <div class="account-panel-head"><div><h2>Position journal</h2><p>Manual records are marked with current public books whenever the exact route is available.</p></div><button class="sheet-button primary" type="button" data-position-new>Add position</button></div>
-        <div class="position-list">{''.join(render_position_card(item) for item in positions) or '<div class="account-empty-panel"><strong>No positions yet</strong><p>Add the first spread or funding farm to start tracking it.</p></div>'}</div>
+        <div class="account-panel-head"><div><h2>Position journal</h2><p>Saved fills can be corrected at any time. Current books mark movement PnL; only exact settled exchange cashflows enter funding PnL.</p></div><button class="sheet-button primary" type="button" data-position-new>Add position</button></div>
+        <div class="position-list">{"".join(render_position_card(item) for item in positions) or '<div class="account-empty-panel"><strong>No positions yet</strong><p>Add the first spread or funding farm to start tracking it.</p></div>'}</div>
       </section>
-      <section data-account-panel="alerts" hidden><div class="account-panel-head"><div><h2>Notifications</h2><p>Exit-spread, PnL, and funding rules are evaluated continuously, even while you are signed out.</p></div><button class="sheet-button" type="button" data-notifications-read>Mark all read</button></div><div class="notification-list">{''.join(render_account_notification(item) for item in notifications) or '<div class="account-empty-panel"><strong>No notifications</strong><p>Position alerts will appear here when a rule crosses its threshold.</p></div>'}</div></section>
+      <section data-account-panel="alerts" hidden><div class="account-panel-head"><div><h2>Notifications</h2><p>Exit-spread, PnL, and funding rules are evaluated continuously, even while you are signed out.</p></div><button class="sheet-button" type="button" data-notifications-read>Mark all read</button></div><div class="notification-list">{"".join(render_account_notification(item) for item in notifications) or '<div class="account-empty-panel"><strong>No notifications</strong><p>Position alerts will appear here when a rule crosses its threshold.</p></div>'}</div></section>
       <section data-account-panel="settings" hidden>{render_account_settings(user, accounts_path)}</section>
-      {render_member_admin() if user.can_manage_members else ''}
+      {render_member_admin() if user.can_manage_members else ""}
       {render_position_dialog()}
+      {render_position_edit_dialog()}
       {render_position_action_dialog()}
     </section>
-    <script type="application/json" id="account-session">{json_script_data({'csrf_token': user.csrf_token})}</script>
+    <script type="application/json" id="account-session">{json_script_data({"csrf_token": user.csrf_token})}</script>
+    <script type="application/json" id="portfolio-position-data">{json_script_data({str(item["id"]): editable_position_data(item) for item in positions})}</script>
     {render_account_script()}
     {render_portfolio_market_refresh_script(positions)}
     {render_billing_script()}
@@ -9413,7 +10131,7 @@ def render_account_page(
 
 
 def render_account_kpi(label: str, value: Any, note: str) -> str:
-    return f'<article><span>{h(label)}</span><strong>{h(value if value is not None else "—")}</strong><em>{h(note)}</em></article>'
+    return f"<article><span>{h(label)}</span><strong>{h(value if value is not None else '—')}</strong><em>{h(note)}</em></article>"
 
 
 def render_position_card(item: dict[str, Any]) -> str:
@@ -9447,21 +10165,79 @@ def render_position_card(item: dict[str, Any]) -> str:
             "opened_at": str(item.get("opened_at") or ""),
         }
     )
+    funding_note = position_funding_note(item)
+    movement_note = position_movement_note(item)
     return f"""
-    <article class="position-card" data-position-id="{h(item.get('id'))}" data-market-status="{h(quote_status)}">
-      <header><div><span class="position-token">{h(item.get('token'))}</span><strong>{h(item.get('long_venue'))} → {h(item.get('short_venue'))}</strong><em>{h(item.get('long_market_type'))} / {h(item.get('short_market_type'))}</em></div><div class="position-status {status_class}"><span>{h(item.get('status'))}</span><strong>{market_label}</strong></div></header>
+    <article class="position-card" data-position-id="{h(item.get("id"))}" data-market-status="{h(quote_status)}">
+      <header><div><span class="position-token">{h(item.get("token"))}</span><strong>{h(item.get("long_venue"))} → {h(item.get("short_venue"))}</strong><em>{h(item.get("long_market_type"))} / {h(item.get("short_market_type"))}</em></div><div class="position-status {status_class}"><span>{h(item.get("status"))}</span><strong>{market_label}</strong></div></header>
       <div class="position-metrics">
-        <span>Total PnL<strong class="{spread_class(item.get('total_pnl_usd'))}">{fmt_signed_money(item.get('total_pnl_usd'))}</strong></span>
-        <span>Price PnL<strong>{fmt_signed_money(item.get('price_pnl_usd'))}</strong></span>
-        <span>Funding<strong>{fmt_signed_money(item.get('funding_income_usd'))}</strong></span>
-        <span>Net funding / 24h<strong>{fmt_signed_pct(item.get('current_net_funding_24h_pct'), digits=4)}</strong></span>
-        <span>Return<strong>{fmt_signed_pct(item.get('return_pct'), digits=2)}</strong></span>
-        <span>Exit spread<strong>{fmt_signed_pct(item.get('current_exit_spread_pct'), digits=3)}</strong></span>
-        <span>Open spread<strong>{fmt_signed_pct(item.get('current_open_spread_pct'), digits=3)}</strong></span>
+        <span>Total PnL<strong class="{spread_class(item.get("total_pnl_usd"))}">{fmt_signed_money(item.get("total_pnl_usd"))}</strong></span>
+        <span>Movement PnL<strong>{fmt_signed_money(item.get("price_pnl_usd"))}</strong></span>
+        <span>Settled funding<strong>{fmt_signed_money(item.get("funding_income_usd"))}</strong></span>
+        <span>Fees<strong>{fmt_signed_money(-float(item.get("fees_usd") or 0.0))}</strong></span>
+        <span>Projected funding / 24h<strong>{fmt_signed_pct(item.get("current_net_funding_24h_pct"), digits=4)}</strong></span>
+        <span>Return<strong>{fmt_signed_pct(item.get("return_pct"), digits=2)}</strong></span>
+        <span>Exit spread<strong>{fmt_signed_pct(item.get("current_exit_spread_pct"), digits=3)}</strong></span>
+        <span>Open spread<strong>{fmt_signed_pct(item.get("current_open_spread_pct"), digits=3)}</strong></span>
       </div>
-      <div class="position-legs"><div><span>Long</span><strong>{h(item.get('long_venue'))} · {h(item.get('long_quantity'))}</strong><em>{fmt_price(item.get('long_entry_price'))} → {fmt_price(item.get('long_mark_price'))}</em><em>Funding {fmt_signed_pct(long_funding.get('rate_pct'), digits=4)} / {h(long_funding.get('interval_hours') or '—')}h</em></div><div><span>Short</span><strong>{h(item.get('short_venue'))} · {h(item.get('short_quantity'))}</strong><em>{fmt_price(item.get('short_entry_price'))} → {fmt_price(item.get('short_mark_price'))}</em><em>Funding {fmt_signed_pct(short_funding.get('rate_pct'), digits=4)} / {h(short_funding.get('interval_hours') or '—')}h</em></div></div>
-      <footer><span>Opened {h(item.get('opened_at'))}</span><div>{render_position_rules(item.get('alert_rules') or [])}<button type="button" data-position-action="funding">Add funding</button><button type="button" data-position-action="alert">Add alert</button>{'<button type="button" data-position-action="close">Close position</button>' if item.get('status') == 'open' else ''}<a href="/charts?{h(chart_query)}">Chart since entry</a></div></footer>
+      <p class="position-funding-source">{h(movement_note)}<br>{h(funding_note)}</p>
+      <div class="position-legs"><div><span>Long</span><strong>{h(item.get("long_venue"))} · {h(item.get("long_quantity"))}</strong><em>{fmt_price(item.get("long_entry_price"))} → {fmt_price(item.get("long_mark_price"))}</em><em>Funding {fmt_signed_pct(long_funding.get("rate_pct"), digits=4)} / {h(long_funding.get("interval_hours") or "—")}h</em></div><div><span>Short</span><strong>{h(item.get("short_venue"))} · {h(item.get("short_quantity"))}</strong><em>{fmt_price(item.get("short_entry_price"))} → {fmt_price(item.get("short_mark_price"))}</em><em>Funding {fmt_signed_pct(short_funding.get("rate_pct"), digits=4)} / {h(short_funding.get("interval_hours") or "—")}h</em></div></div>
+      <footer><span>Opened {h(item.get("opened_at"))}</span><div>{render_position_rules(item.get("alert_rules") or [])}<button type="button" data-position-edit>Edit position</button><button type="button" data-position-action="alert">Add alert</button>{'<button type="button" data-position-action="close">Close position</button>' if item.get("status") == "open" else ""}<a href="/charts?{h(chart_query)}">Chart since entry</a></div></footer>
     </article>"""
+
+
+def editable_position_data(item: dict[str, Any]) -> dict[str, Any]:
+    fields = (
+        "token",
+        "capital_usd",
+        "long_venue",
+        "long_market_type",
+        "long_symbol",
+        "long_quantity",
+        "long_entry_price",
+        "short_venue",
+        "short_market_type",
+        "short_symbol",
+        "short_quantity",
+        "short_entry_price",
+        "entry_fees_usd",
+        "opened_at",
+        "notes",
+    )
+    return {field: item.get(field) for field in fields}
+
+
+def position_funding_note(item: dict[str, Any]) -> str:
+    status = str(item.get("funding_sync_status") or "")
+    if status == "exact":
+        count = int(item.get("funding_event_count") or 0)
+        synced = str(item.get("funding_synced_at") or "")
+        return f"Exact private exchange ledger · {count} settlement{'s' if count != 1 else ''} · synced {synced}"
+    if status == "not_applicable":
+        return "No futures leg: settled funding is not applicable."
+    if status == "legacy_manual":
+        return "Legacy manually recorded funding is included; connect an exchange ledger for automatic updates."
+    if status == "position_changed":
+        return "Position inputs changed; total PnL is withheld until the funding ledger refreshes."
+    if status == "stale":
+        return "Funding ledger is stale; total PnL is withheld rather than treating old funding as current."
+    return "Funding ledger is not connected; total PnL is withheld rather than assuming funding is zero."
+
+
+def position_movement_note(item: dict[str, Any]) -> str:
+    source = str(item.get("quote_source") or "")
+    if item.get("status") == "closed":
+        return "Movement uses the stored exit fills."
+    if item.get("price_pnl_usd") is None:
+        return (
+            "Movement is withheld until both saved quantities have complete executable exit quotes."
+        )
+    dex = "paraswap_exact_sell_quote" in source
+    detail = "full-size DEX sell quote + CEX book VWAP" if dex else "full-size CEX book VWAP"
+    return (
+        f"Movement uses {detail} for the saved quantities; "
+        "future exit trading fees and gas are not deducted until recorded."
+    )
 
 
 def render_portfolio_market_refresh_script(positions: list[dict[str, Any]]) -> str:
@@ -9504,19 +10280,25 @@ def render_position_rules(rules: list[dict[str, Any]]) -> str:
 
 
 def render_account_notification(item: dict[str, Any]) -> str:
-    return f'<article><span>{h(item.get("created_at"))}</span><strong>{h(item.get("title"))}</strong><p>{h(item.get("body"))}</p></article>'
+    return f"<article><span>{h(item.get('created_at'))}</span><strong>{h(item.get('title'))}</strong><p>{h(item.get('body'))}</p></article>"
 
 
-def render_account_settings(user: accounts.User, accounts_path: Path | str = accounts.DEFAULT_DB_PATH) -> str:
+def render_account_settings(
+    user: accounts.User, accounts_path: Path | str = accounts.DEFAULT_DB_PATH
+) -> str:
     state = billing.status()
     if user.billing_customer_id:
         billing_action = '<button class="sheet-button" type="button" data-billing-action="portal">Manage billing</button>'
     elif state["checkout_ready"] and not user.is_admin:
         billing_action = f'<a class="sheet-button" href="/subscription">Subscribe · {h(billing.status()["plan_label"])}</a>'
     else:
-        billing_action = '<span>Online billing is not active for this account.</span>'
+        billing_action = "<span>Online billing is not active for this account.</span>"
     if user.billing_customer_id:
-        cancel_note = "Cancellation scheduled at period end." if user.subscription_cancel_at_period_end else "Renews monthly while active."
+        cancel_note = (
+            "Cancellation scheduled at period end."
+            if user.subscription_cancel_at_period_end
+            else "Renews monthly while active."
+        )
     elif user.subscription_active:
         cancel_note = f"Managed access through {fmt_renewal_date(user.subscription_expires_at)}."
     else:
@@ -9530,14 +10312,16 @@ def render_account_settings(user: accounts.User, accounts_path: Path | str = acc
         telegram_action = '<button class="sheet-button primary" type="button" data-telegram-action="link">Connect Telegram bot</button>'
         telegram_note = "The one-time link expires after 10 minutes."
     else:
-        telegram_action = '<span>Telegram subscription commands are awaiting the dedicated bot credentials.</span>'
+        telegram_action = "<span>Telegram subscription commands are awaiting the dedicated bot credentials.</span>"
         telegram_note = "No Telegram account data is stored until you explicitly link it."
     if not telegram_state.get("community_configured"):
         telegram_access_note = "The community owner still needs to run /setupgroup after granting the bot invite permissions."
     elif user.has_tier("research_pro"):
         telegram_access_note = "Research Pro forum access is active. Use /access in the private bot for a one-use invite."
     elif user.has_tier("scanner"):
-        telegram_access_note = "Scanner includes personal bot alerts. The private forum is reserved for Research Pro."
+        telegram_access_note = (
+            "Scanner includes personal bot alerts. The private forum is reserved for Research Pro."
+        )
     else:
         telegram_access_note = "Activate Scanner for personal bot alerts or Research Pro for alerts plus the private forum."
     push = accounts.notification_preferences(user.id, db_path=accounts_path)
@@ -9548,23 +10332,23 @@ def render_account_settings(user: accounts.User, accounts_path: Path | str = acc
     return f"""
     <section class="account-settings">
       <div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is optional and is used only as the denominator for return statistics; it never changes position PnL.</p></div></div>
-      <form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Total capital allocated to this strategy, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or '')}"><em>Optional portfolio-level denominator. Leave blank to use each position's per-leg allocation.</em></label><button class="sheet-button primary" type="submit">Save settings</button></form>
+      <form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Total capital allocated to this strategy, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or "")}"><em>Optional portfolio-level denominator. Leave blank to use each position's per-leg allocation.</em></label><button class="sheet-button primary" type="submit">Save settings</button></form>
       <div class="account-empty-panel"><strong>Prepaid membership</strong><p>{h(user.subscription_status)} · {h(cancel_note)}</p>{billing_action}<p role="alert" data-billing-error></p></div>
       <div class="account-empty-panel"><strong>Telegram subscriber access</strong><p>{telegram_note}</p>{telegram_action}<a class="sheet-button" data-telegram-fallback hidden rel="noopener">Open Telegram manually</a><p>{h(telegram_access_note)}</p><p role="alert" data-telegram-error></p></div>
       <form data-pushover-settings>
         <label><span>Pushover user key</span><input name="pushover_user_key" type="password" autocomplete="off" placeholder="{h(push_key_note)}"></label>
-        <label><span>Device</span><input name="pushover_device" value="{h(push.get('pushover_device') or '')}" placeholder="Optional"></label>
-        <label><span>Sound</span><select name="pushover_sound">{''.join(f'<option value="{h(sound)}" {"selected" if sound == push.get("pushover_sound") else ""}>{h(sound)}</option>' for sound in ["pushover", "default", "siren", "magic", "cashregister", "vibrate"])}</select></label>
+        <label><span>Device</span><input name="pushover_device" value="{h(push.get("pushover_device") or "")}" placeholder="Optional"></label>
+        <label><span>Sound</span><select name="pushover_sound">{"".join(f'<option value="{h(sound)}" {"selected" if sound == push.get("pushover_sound") else ""}>{h(sound)}</option>' for sound in ["pushover", "default", "siren", "magic", "cashregister", "vibrate"])}</select></label>
         <label><span>Delivery enabled</span><input name="pushover_enabled" type="checkbox" {push_checked}></label>
         <button class="sheet-button primary" type="submit">Save Pushover</button>
         <button class="sheet-button" type="button" data-pushover-test>Send test</button>
         <p role="alert" data-pushover-status>{h(push_key_note)}</p>
       </form>
-      <div class="account-empty-panel web-push-panel" data-web-push data-vapid-key="{h(browser_push.get('public_key') or '')}">
+      <div class="account-empty-panel web-push-panel" data-web-push data-vapid-key="{h(browser_push.get("public_key") or "")}">
         <strong>Browser Push</strong>
-        <p>{'Server delivery is ready.' if browser_push.get('configured') else 'Server delivery awaits VAPID keys.'} This is browser notification delivery, separate from the Pushover app. Permission is requested only after you click Enable; subscriptions are account-owned and removable here.</p>
-        <div><button class="sheet-button primary" type="button" data-web-push-enable {'disabled' if not browser_push.get('configured') else ''}>Enable on this browser</button><button class="sheet-button" type="button" data-web-push-disable>Disable on this browser</button><button class="sheet-button" type="button" data-web-push-test {'disabled' if not browser_push.get('configured') else ''}>Queue test</button></div>
-        <p role="status" data-web-push-status>{h(browser_push_count)} active browser subscription{'s' if browser_push_count != 1 else ''} on this account.</p>
+        <p>{"Server delivery is ready." if browser_push.get("configured") else "Server delivery awaits VAPID keys."} This is browser notification delivery, separate from the Pushover app. Permission is requested only after you click Enable; subscriptions are account-owned and removable here.</p>
+        <div><button class="sheet-button primary" type="button" data-web-push-enable {"disabled" if not browser_push.get("configured") else ""}>Enable on this browser</button><button class="sheet-button" type="button" data-web-push-disable>Disable on this browser</button><button class="sheet-button" type="button" data-web-push-test {"disabled" if not browser_push.get("configured") else ""}>Queue test</button></div>
+        <p role="status" data-web-push-status>{h(browser_push_count)} active browser subscription{"s" if browser_push_count != 1 else ""} on this account.</p>
       </div>
     </section>"""
 
@@ -9589,6 +10373,10 @@ def render_position_dialog() -> str:
     return """<dialog class="account-dialog" data-position-dialog><form method="dialog" data-position-form><header><div><span>Position journal</span><h2>Add position</h2></div><button type="button" data-dialog-cancel aria-label="Close">×</button></header><div class="position-form-grid"><input name="route_key" type="hidden"><input name="entry_spread_pct" type="hidden"><label><span>Token</span><input name="token" list="position-token-options" autocomplete="off" required><datalist id="position-token-options"></datalist></label><label><span>Allocated capital per leg, USD</span><input name="capital_usd" type="number" min="0" step="0.01"><em>Optional return denominator for one leg or its allocated margin. Quantity × fill already determines each leg's notional.</em></label><label class="wide"><span>Suggested route or market pair</span><select data-position-route><option value="">Select a token to see available pairs</option></select><em data-position-suggestion-note>Live board routes come first, followed by chart-catalogue combinations. Always replace quoted prices with your actual fills.</em></label><label class="wide"><span>Long market from full catalogue</span><select data-position-long-leg><option value="">Select a token first</option></select></label><label><span>Long venue</span><input name="long_venue" list="position-long-venues" required><datalist id="position-long-venues"></datalist></label><label><span>Long market</span><select name="long_market_type"><option>Spot</option><option>DEX</option><option>Futures</option></select></label><label><span>Long symbol</span><input name="long_symbol" list="position-long-symbols" placeholder="COTI/USDT"><datalist id="position-long-symbols"></datalist></label><label><span>Long quantity</span><input name="long_quantity" type="number" min="0" step="any" required></label><label><span>Long entry</span><input name="long_entry_price" type="number" min="0" step="any" required></label><label class="wide"><span>Short market from full catalogue</span><select data-position-short-leg><option value="">Select a token first</option></select></label><label><span>Short venue</span><input name="short_venue" list="position-short-venues" required><datalist id="position-short-venues"></datalist></label><label><span>Short market</span><select name="short_market_type"><option>Futures</option><option>Spot</option><option>DEX</option></select></label><label><span>Short symbol</span><input name="short_symbol" list="position-short-symbols" placeholder="COTI/USDT:USDT"><datalist id="position-short-symbols"></datalist></label><label><span>Short quantity</span><input name="short_quantity" type="number" min="0" step="any" required></label><label><span>Short entry</span><input name="short_entry_price" type="number" min="0" step="any" required></label><label><span>Entry fees, USD</span><input name="entry_fees_usd" type="number" min="0" step="0.01" value="0"></label><label><span>Opened at</span><input name="opened_at" type="datetime-local"></label><label class="wide"><span>Notes</span><textarea name="notes" rows="3"></textarea></label></div><footer><button type="button" data-dialog-cancel>Cancel</button><button class="primary" type="submit" value="default">Add position</button></footer><p role="alert" data-form-error></p></form></dialog>"""
 
 
+def render_position_edit_dialog() -> str:
+    return """<dialog class="account-dialog" data-position-edit-dialog><form method="dialog"><header><div><span>Position journal</span><h2>Correct position details</h2></div><button type="button" data-dialog-cancel aria-label="Close">×</button></header><div class="position-form-grid"><label><span>Token</span><input name="token" autocomplete="off" required></label><label><span>Allocated capital per leg, USD</span><input name="capital_usd" type="number" min="0" step="0.01"><em>Optional return denominator. This does not change either live venue.</em></label><label><span>Long venue</span><input name="long_venue" required></label><label><span>Long market</span><select name="long_market_type"><option>Spot</option><option>DEX</option><option>Futures</option></select></label><label><span>Long symbol</span><input name="long_symbol" placeholder="COTI/USDT"></label><label><span>Long quantity</span><input name="long_quantity" type="number" min="0" step="any" required></label><label><span>Long entry</span><input name="long_entry_price" type="number" min="0" step="any" required></label><label><span>Short venue</span><input name="short_venue" required></label><label><span>Short market</span><select name="short_market_type"><option>Futures</option><option>Spot</option><option>DEX</option></select></label><label><span>Short symbol</span><input name="short_symbol" placeholder="COTI/USDT:USDT"></label><label><span>Short quantity</span><input name="short_quantity" type="number" min="0" step="any" required></label><label><span>Short entry</span><input name="short_entry_price" type="number" min="0" step="any" required></label><label><span>Entry fees, USD</span><input name="entry_fees_usd" type="number" min="0" step="any"></label><label><span>Opened at</span><input name="opened_at" type="datetime-local" required><em>Shown in your browser's local time and saved as UTC.</em></label><label class="wide"><span>Notes</span><textarea name="notes" rows="3"></textarea></label></div><footer><button type="button" data-dialog-cancel>Cancel</button><button class="primary" type="submit" value="default">Save corrections</button></footer><p role="alert" data-form-error></p></form></dialog>"""
+
+
 def render_position_action_dialog() -> str:
     return """<dialog class="account-dialog compact" data-action-dialog><form method="dialog" data-action-form><header><div><span>Position</span><h2 data-action-title>Update</h2></div><button type="button" data-dialog-cancel aria-label="Close">×</button></header><div data-action-fields></div><footer><button type="button" data-dialog-cancel>Cancel</button><button class="primary" type="submit" value="default">Save</button></footer><p role="alert" data-form-error></p></form></dialog>"""
 
@@ -9598,7 +10386,10 @@ def render_account_script() -> str:
 (() => {
   const root=document.querySelector('[data-account-page]'); if(!root) return;
   const {csrf_token:csrf}=JSON.parse(document.getElementById('account-session').textContent||'{}');
+  const positionData=JSON.parse(document.getElementById('portfolio-position-data')?.textContent||'{}');
   const request=async(url,body)=>{const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw new Error(data.error||'Request failed');return data;};
+  const utcToLocalInput=value=>{if(!value)return '';const date=new Date(value);if(Number.isNaN(date.getTime()))return '';const local=new Date(date.getTime()-date.getTimezoneOffset()*60000);return local.toISOString().slice(0,16);};
+  const payloadFromForm=form=>{const payload=Object.fromEntries(new FormData(form));if(payload.opened_at)payload.opened_at=new Date(payload.opened_at).toISOString();return payload;};
   const activateAccountTab=button=>{if(!button)return;root.querySelectorAll('[data-account-tab]').forEach(item=>item.classList.toggle('active',item===button));root.querySelectorAll('[data-account-panel]').forEach(panel=>panel.hidden=panel.dataset.accountPanel!==button.dataset.accountTab);if(button.dataset.accountTab==='members')loadMembers();};
   root.querySelectorAll('[data-account-tab]').forEach(button=>button.addEventListener('click',()=>{activateAccountTab(button);history.replaceState(null,'',`#${button.dataset.accountTab}`);}));
   activateAccountTab(root.querySelector(`[data-account-tab="${location.hash.slice(1)}"]`));
@@ -9612,11 +10403,14 @@ def render_account_script() -> str:
   routeSelect?.addEventListener('change',()=>{if(routeSelect.value==='')return;const route=suggestedRoutes[Number(routeSelect.value)];if(!route)return;for(const [name,key] of Object.entries({token:'token',route_key:'route_key',entry_spread_pct:'entry_spread_pct',long_venue:'long_venue',long_market_type:'long_market_type',long_symbol:'long_symbol',long_entry_price:'long_entry_price',short_venue:'short_venue',short_market_type:'short_market_type',short_symbol:'short_symbol',short_entry_price:'short_entry_price'})){positionForm.elements[name].value=route[key]??'';}const age=Number(route.age_min);positionForm.querySelector('[data-position-suggestion-note]').textContent=Number.isFinite(age)?`Suggested from live public books · ${age.toFixed(1)} min old. Replace prices with your actual fills.`:'Pair from the full chart catalogue. Enter your actual fills and quantity; no live entry is assumed.';});
   const applyCatalogLeg=(side,select)=>{if(!select||select.value==='')return;const leg=catalogLegs[Number(select.value)];if(!leg)return;positionForm.elements[`${side}_venue`].value=leg.venue||'';positionForm.elements[`${side}_market_type`].value=String(leg.venue||'').toLowerCase().includes('dex')?'DEX':leg.market_type||'';positionForm.elements[`${side}_symbol`].value=leg.symbol||'';positionForm.elements.route_key.value='';positionForm.elements.entry_spread_pct.value='';};
   longLegSelect?.addEventListener('change',()=>applyCatalogLeg('long',longLegSelect));shortLegSelect?.addEventListener('change',()=>applyCatalogLeg('short',shortLegSelect));
-  positionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const payload=Object.fromEntries(new FormData(form));try{await request('/api/positions',payload);location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
+  positionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;try{await request('/api/positions',payloadFromForm(form));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
+  const editDialog=root.querySelector('[data-position-edit-dialog]'),editForm=editDialog?.querySelector('form');let editPosition=null;
+  root.addEventListener('click',event=>{const button=event.target.closest('[data-position-edit]');if(!button)return;editPosition=button.closest('[data-position-id]')?.dataset.positionId;const item=positionData[editPosition];if(!item||!editForm)return;editForm.reset();for(const [name,value] of Object.entries(item)){const field=editForm.elements[name];if(!field)continue;field.value=name==='opened_at'?utcToLocalInput(value):(value??'');}editForm.querySelector('[data-form-error]').textContent='';editDialog.showModal();});
+  editForm?.addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;try{await request(`/api/positions/${editPosition}/edit`,payloadFromForm(form));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   const actionDialog=root.querySelector('[data-action-dialog]');let actionPosition=null;let actionType='';
-  const fields={funding:'<p>Record only funding that actually settled in your exchange account: positive when received, negative when paid. Public projected rates cannot prove your personal cashflow, so they remain separate from this journal.</p><label><span>Futures venue</span><input name="venue" required></label><label><span>Settled amount, USD</span><input name="amount_usd" type="number" step="any" required></label><label><span>Occurred at</span><input name="occurred_at" type="datetime-local"></label>',alert:'<label><span>Metric</span><select name="metric"><option value="exit_spread_pct">Exit spread %</option><option value="open_spread_pct">Open spread %</option><option value="pnl_usd">Total PnL USD</option><option value="funding_usd">Funding USD</option></select></label><label><span>Condition</span><select name="operator"><option value="lte">At or below</option><option value="gte">At or above</option></select></label><label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>',close:'<label><span>Long exit price</span><input name="long_exit_price" type="number" min="0" step="any" required></label><label><span>Short exit price</span><input name="short_exit_price" type="number" min="0" step="any" required></label><label><span>Exit fees, USD</span><input name="exit_fees_usd" type="number" min="0" step="0.01" value="0"></label>'};
-  root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;actionDialog.querySelector('[data-action-title]').textContent={funding:'Record settled funding',alert:'Create alert rule',close:'Close position'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=fields[actionType];actionDialog.showModal();});
-  actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={funding:'funding',alert:'alerts',close:'close'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
+  const fields={alert:'<label><span>Metric</span><select name="metric"><option value="exit_spread_pct">Exit spread %</option><option value="open_spread_pct">Open spread %</option><option value="pnl_usd">Total PnL USD</option><option value="funding_usd">Settled funding USD</option></select></label><label><span>Condition</span><select name="operator"><option value="lte">At or below</option><option value="gte">At or above</option></select></label><label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>',close:'<label><span>Long exit price</span><input name="long_exit_price" type="number" min="0" step="any" required></label><label><span>Short exit price</span><input name="short_exit_price" type="number" min="0" step="any" required></label><label><span>Exit fees, USD</span><input name="exit_fees_usd" type="number" min="0" step="0.01" value="0"></label>'};
+  root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;actionDialog.querySelector('[data-action-title]').textContent={alert:'Create alert rule',close:'Close position'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=fields[actionType];actionDialog.showModal();});
+  actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={alert:'alerts',close:'close'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   root.querySelector('[data-account-settings]')?.addEventListener('submit',async event=>{event.preventDefault();await request('/api/account-settings',Object.fromEntries(new FormData(event.currentTarget)));location.reload();});
   const pushoverMessage=code=>({pushover_app_not_configured:'Pushover delivery is not configured on the server.',pushover_user_key_required:'Enter your 30-character Pushover User Key.',invalid_pushover_user_key:'The Pushover User Key must be exactly 30 letters or numbers.',invalid_pushover_device:'The device name may contain only letters, numbers, hyphens or underscores.',pushover_user_not_valid:'Pushover could not validate this User Key or any active device.',pushover_validation_unavailable:'Pushover validation is temporarily unavailable. Nothing was changed.',pushover_device_not_active:'That saved device is not active in Pushover. Save again with Device blank.',pushover_delivery_rejected:'Pushover rejected the test notification.'}[code]||code||'Pushover request failed.');
   root.querySelector('[data-pushover-settings]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,status=form.querySelector('[data-pushover-status]'),button=form.querySelector('[type="submit"]');const payload=Object.fromEntries(new FormData(form));payload.pushover_enabled=form.elements.pushover_enabled.checked;button.disabled=true;status.textContent='Validating with Pushover…';try{const result=await request('/api/notification-preferences',payload);form.elements.pushover_user_key.value='';if(result.preferences)form.elements.pushover_device.value=result.preferences.pushover_device||'';status.textContent=result.warning==='pushover_device_cleared'?`Settings saved. The inactive device label was cleared; Pushover will use ${result.active_device_count||'your'} active device.`:`Settings validated and saved for ${result.active_device_count||'your'} active device${Number(result.active_device_count)===1?'':'s'}.`;}catch(error){status.textContent=pushoverMessage(error.message);}finally{button.disabled=false;}});
@@ -9642,7 +10436,7 @@ def render_source_summary_card(title: str, age_min: Any, note: str) -> str:
     return f"""
     <article class="chart-summary-card">
       <span>{h(title)}</span>
-      <strong>{fmt_age(age_min) if age_min is not None else 'local'}</strong>
+      <strong>{fmt_age(age_min) if age_min is not None else "local"}</strong>
       <em>{note}</em>
     </article>
     """
@@ -9656,18 +10450,18 @@ def render_route_source_card(item: dict[str, Any]) -> str:
     <article class="source-status-card {h(status)}">
       <div class="source-status-head">
         <div>
-          <span>{h(item.get('tab') or item.get('kind'))}</span>
-          <strong>{h(item.get('label') or item.get('kind'))}</strong>
+          <span>{h(item.get("tab") or item.get("kind"))}</span>
+          <strong>{h(item.get("label") or item.get("kind"))}</strong>
         </div>
         <b>{label_text(status)}</b>
       </div>
       <div class="source-status-metrics">
-        <span>Fresh<strong>{h(item.get('fresh_row_count') or 0)}</strong></span>
-        <span>Total<strong>{h(item.get('row_count') or 0)}</strong></span>
-        <span>Newest<strong>{fmt_age(item.get('newest_age_min'))}</strong></span>
+        <span>Fresh<strong>{h(item.get("fresh_row_count") or 0)}</strong></span>
+        <span>Total<strong>{h(item.get("row_count") or 0)}</strong></span>
+        <span>Newest<strong>{fmt_age(item.get("newest_age_min"))}</strong></span>
         <span>Source<strong>{h(session)}</strong></span>
       </div>
-      <p>{h(item.get('detail') or 'No local source detail.')}</p>
+      <p>{h(item.get("detail") or "No local source detail.")}</p>
       <a class="mini-action primary-link" href="{h(href)}">Open board</a>
     </article>
     """
@@ -9679,10 +10473,10 @@ def render_source_artifact_card(key: str, item: dict[str, Any]) -> str:
     return f"""
     <article class="source-artifact-card {h(status)}">
       <div>
-        <span>{h(key.replace('_', ' '))}</span>
+        <span>{h(key.replace("_", " "))}</span>
         <strong>{label_text(status)}</strong>
       </div>
-      <em>{fmt_age(item.get('age_min'))}</em>
+      <em>{fmt_age(item.get("age_min"))}</em>
       <p>{h(title)}</p>
     </article>
     """
@@ -9692,7 +10486,9 @@ def render_source_mode_row(label: str, value: Any) -> str:
     return f'<div class="source-mode-row"><span>{h(label)}</span><strong>{label_text(value) if isinstance(value, str) else h(value)}</strong></div>'
 
 
-def render_profile_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
+def render_profile_page(
+    board_path: Path, config: dict[str, Any], query: dict[str, list[str]]
+) -> str:
     section = (_query_first(query, "section") or "general").casefold()
     if section not in {"general", "telegram", "pushover"}:
         section = "general"
@@ -9712,7 +10508,8 @@ def render_profile_page(board_path: Path, config: dict[str, Any], query: dict[st
         content = render_profile_telegram()
     else:
         content = render_profile_pushover(flags)
-    body = f"""
+    body = (
+        f"""
     <section class="profile-page" data-profile-section="{h(section)}">
       <header class="profile-heading">
         <div>
@@ -9729,9 +10526,9 @@ def render_profile_page(board_path: Path, config: dict[str, Any], query: dict[st
       <div class="profile-layout">
         <aside class="profile-nav-panel">
           <span>My profile</span>
-          {render_profile_nav_item('general', 'General information', section)}
-          {render_profile_nav_item('telegram', 'Telegram bot', section)}
-          {render_profile_nav_item('pushover', 'Pushover', section)}
+          {render_profile_nav_item("general", "General information", section)}
+          {render_profile_nav_item("telegram", "Telegram bot", section)}
+          {render_profile_nav_item("pushover", "Pushover", section)}
           <div class="profile-local-note">
             <strong>Local by design</strong>
             <p>Preferences and alert templates stay in this browser. Secrets are never returned by an API.</p>
@@ -9740,7 +10537,9 @@ def render_profile_page(board_path: Path, config: dict[str, Any], query: dict[st
         <main class="profile-main">{content}</main>
       </div>
     </section>
-    """ + PROFILE_SCRIPT
+    """
+        + PROFILE_SCRIPT
+    )
     return shell("Profile - SpreadBoard", "profile", body)
 
 
@@ -9767,7 +10566,7 @@ def render_profile_general(market: dict[str, Any]) -> str:
       <section class="profile-summary-grid">
         <article><span>Profile scope</span><strong>Local operator</strong><em>No sign-in required</em></article>
         <article><span>Route families</span><strong>{h(available_tabs)} / {h(len(board.ROUTE_KINDS))}</strong><em>with local source rows</em></article>
-        <article><span>Parsed routes</span><strong>{h(summary.get('total_rows') or 0)}</strong><em>{h(summary.get('fresh_rows') or 0)} fresh</em></article>
+        <article><span>Parsed routes</span><strong>{h(summary.get("total_rows") or 0)}</strong><em>{h(summary.get("fresh_rows") or 0)} fresh</em></article>
         <article><span>Saved alert rules</span><strong data-profile-rule-count>0</strong><em>browser storage</em></article>
       </section>
       <section class="profile-panel">
@@ -9828,7 +10627,7 @@ def render_profile_telegram() -> str:
         <section class="profile-panel">
           <div class="profile-panel-head"><div><h3>Message filters</h3><p>Route, venue, spread, turnover, and interval preferences matching the scanner surface.</p></div></div>
           <div class="profile-chip-grid route-filter-chips">
-            {''.join(f'<label><input type="checkbox" value="{h(value)}" data-profile-list="telegramRoutes"><span>{h(label)}</span></label>' for value, label in route_types)}
+            {"".join(f'<label><input type="checkbox" value="{h(value)}" data-profile-list="telegramRoutes"><span>{h(label)}</span></label>' for value, label in route_types)}
           </div>
           <div class="profile-field-grid three">
             <label><span>Open spread, %</span><input type="number" step="0.01" min="0" data-profile-field="telegramMinSpread" value="5"></label>
@@ -9836,7 +10635,7 @@ def render_profile_telegram() -> str:
             <label class="profile-switch-field"><span>Different intervals</span><input type="checkbox" data-profile-field="telegramDifferentIntervals"><i></i></label>
           </div>
           <div class="profile-exchange-grid">
-            {''.join(f'<label><input type="checkbox" value="{h(venue)}" data-profile-list="telegramVenues"><span>{h(venue)}</span></label>' for venue in venues)}
+            {"".join(f'<label><input type="checkbox" value="{h(venue)}" data-profile-list="telegramVenues"><span>{h(venue)}</span></label>' for venue in venues)}
           </div>
           <label class="profile-wide-field"><span>Muted tokens or contract addresses</span><textarea data-profile-field="telegramMuted" rows="3" placeholder="One symbol or contract per line"></textarea></label>
           <div class="profile-actions"><button class="sheet-button primary" type="submit">Save filters</button><a class="sheet-button" href="/markets">Open markets</a></div>
@@ -9853,26 +10652,26 @@ def render_profile_pushover(flags: dict[str, Any]) -> str:
     ready = bool(os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip())
     delivery_note = (
         '<p class="profile-note ok">Alerts are delivered to your Pushover account. '
-        'Save your user key below and keep Enabled switched on.</p>'
+        "Save your user key below and keep Enabled switched on.</p>"
         if ready
         else '<p class="profile-note warn"><strong>Delivery is not active yet.</strong> '
-        'Your key is stored safely, but this server has no Pushover application token, '
-        'so nothing can be sent until the operator adds one. You do not need to do anything else.</p>'
+        "Your key is stored safely, but this server has no Pushover application token, "
+        "so nothing can be sent until the operator adds one. You do not need to do anything else.</p>"
     )
     return f"""
     <section class="profile-section">
       <div class="profile-section-title">
         <div><span class="page-kicker">Pushover</span><h2>Pushover notifications</h2><p>Spread, funding and rail-reopen alerts sent to your own phone.</p></div>
-        <span class="profile-state {'ok' if ready else 'warn'}">{'Delivery ready' if ready else 'Delivery inactive'}</span>
+        <span class="profile-state {"ok" if ready else "warn"}">{"Delivery ready" if ready else "Delivery inactive"}</span>
       </div>
       {delivery_note}
       <form class="profile-form" data-profile-form="pushover">
         <section class="profile-panel">
-          <div class="profile-panel-head"><div><h3>Personal configuration</h3><p>Credential values are never exposed or persisted by this page.</p></div><span>{h(flags.get('pushover_user_count') or 0)} server recipients hidden</span></div>
+          <div class="profile-panel-head"><div><h3>Personal configuration</h3><p>Credential values are never exposed or persisted by this page.</p></div><span>{h(flags.get("pushover_user_count") or 0)} server recipients hidden</span></div>
           <div class="profile-field-grid three">
             <label><span>User key</span><input type="password" autocomplete="off" data-secret-field="pushoverKey" placeholder="Enter Pushover user key"></label>
             <label><span>Device</span><input type="text" data-profile-field="pushoverDevice" placeholder="Optional device name"></label>
-            <label><span>Sound</span><select data-profile-field="pushoverSound">{''.join(f'<option value="{h(sound)}">{h(sound)}</option>' for sound in sounds)}</select></label>
+            <label><span>Sound</span><select data-profile-field="pushoverSound">{"".join(f'<option value="{h(sound)}">{h(sound)}</option>' for sound in sounds)}</select></label>
             <label class="profile-switch-field"><span>Enabled</span><input type="checkbox" data-profile-field="pushoverEnabled"><i></i></label>
           </div>
           <div class="profile-actions">
@@ -10013,25 +10812,25 @@ def render_member_alert_card(rule: dict[str, Any], row: dict[str, Any] | None) -
     met = live is not None and ((live >= threshold) if above else (live <= threshold))
     state = "armed" if enabled else "paused"
     return f"""
-    <article class="member-alert-card {h(state)} {'met' if met and enabled else ''}" data-alert-id="{h(rule.get('id'))}">
+    <article class="member-alert-card {h(state)} {"met" if met and enabled else ""}" data-alert-id="{h(rule.get("id"))}">
       <div class="member-alert-head">
-        <span class="member-alert-state">{'Armed' if enabled else 'Paused'}</span>
+        <span class="member-alert-state">{"Armed" if enabled else "Paused"}</span>
         <span class="member-alert-kind">{h(label)}</span>
       </div>
-      <strong class="member-alert-token">{h(rule.get('symbol'))}</strong>
-      <div class="member-alert-route">{h(route_label_from_key(str(rule.get('route_key') or '')))}</div>
-      <div class="member-alert-now">Now <strong>{fmt_signed_pct(live, digits=3) if live is not None else 'no live quote'}</strong></div>
-      <label><span>Fires when {'at or above' if above else 'at or below'}</span>
+      <strong class="member-alert-token">{h(rule.get("symbol"))}</strong>
+      <div class="member-alert-route">{h(route_label_from_key(str(rule.get("route_key") or "")))}</div>
+      <div class="member-alert-now">Now <strong>{fmt_signed_pct(live, digits=3) if live is not None else "no live quote"}</strong></div>
+      <label><span>Fires when {"at or above" if above else "at or below"}</span>
         <input type="number" step="0.0001" name="threshold" value="{h(threshold)}"></label>
       <label><span>Direction</span>
         <select name="direction">
-          <option value="above" {'selected' if above else ''}>at or above</option>
-          <option value="below" {'selected' if not above else ''}>at or below</option>
+          <option value="above" {"selected" if above else ""}>at or above</option>
+          <option value="below" {"selected" if not above else ""}>at or below</option>
         </select></label>
       <label><span>Hold for (seconds)</span>
-        <input type="number" min="0" max="3600" name="stability_seconds" value="{h(rule.get('stability_seconds') or 0)}"></label>
+        <input type="number" min="0" max="3600" name="stability_seconds" value="{h(rule.get("stability_seconds") or 0)}"></label>
       <label class="member-alert-toggle"><span>Enabled</span>
-        <input type="checkbox" name="enabled" {'checked' if enabled else ''}></label>
+        <input type="checkbox" name="enabled" {"checked" if enabled else ""}></label>
       <div class="member-alert-actions">
         <button type="button" data-alert-save>Save</button>
         <button type="button" data-alert-delete>Delete</button>
@@ -10112,7 +10911,9 @@ def render_member_alert_script() -> str:
     </script>"""
 
 
-def render_alerts_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
+def render_alerts_page(
+    board_path: Path, config: dict[str, Any], query: dict[str, list[str]]
+) -> str:
     flags = alerts.config_flags(config)
     del query
     telegram = str(config.get("telegram_channel_url") or "").strip()
@@ -10123,9 +10924,7 @@ def render_alerts_page(board_path: Path, config: dict[str, Any], query: dict[str
     )
     user = accounts.current_user()
     try:
-        preferences = (
-            accounts.notification_preferences(user.id) if user is not None else {}
-        )
+        preferences = accounts.notification_preferences(user.id) if user is not None else {}
     except sqlite3.Error:
         preferences = {}
     pushover_ready = bool(
@@ -10138,9 +10937,7 @@ def render_alerts_page(board_path: Path, config: dict[str, Any], query: dict[str
         if pushover_ready
         else "in-app active; add a Pushover key for phone delivery"
     )
-    live_rule_count = (
-        len(accounts.list_market_alert_rules(user.id)) if user is not None else 0
-    )
+    live_rule_count = len(accounts.list_market_alert_rules(user.id)) if user is not None else 0
     body = f"""
     <section class="alerts-page" data-refresh="180">
       {render_member_alert_rules(board_path)}
@@ -10160,14 +10957,14 @@ def render_alerts_page(board_path: Path, config: dict[str, Any], query: dict[str
         <article class="chart-summary-card"><span>Delivery</span><strong>Live</strong><em>{h(delivery_detail)}</em></article>
         <article class="chart-summary-card"><span>Saved rules</span><strong>{h(live_rule_count)}</strong><em>evaluated continuously</em></article>
         <article class="chart-summary-card"><span>Rule types</span><strong>3</strong><em>route spread · route funding · token price</em></article>
-        <article class="chart-summary-card"><span>Phone delivery</span><strong>{'Ready' if pushover_ready else 'Setup needed'}</strong><em>per-account Pushover settings</em></article>
+        <article class="chart-summary-card"><span>Phone delivery</span><strong>{"Ready" if pushover_ready else "Setup needed"}</strong><em>per-account Pushover settings</em></article>
       </section>
       <section class="community-panel">
         <div class="panel-head flat"><div><h2>Live alert types</h2><p>Create these from the Alert action on a current route. Each crossing is recorded in Portfolio and optionally sent through Pushover.</p></div></div>
         <div class="alert-template-grid">
-          {render_alert_template('Route spread', 'Fires when the exact route open spread holds at or above or below your threshold.', 'Live')}
-          {render_alert_template('Route funding', 'Fires when the exact route 24-hour funding value holds at your threshold.', 'Live')}
-          {render_alert_template('Token price', 'Fires when the selected token price holds at or above or below your threshold.', 'Live')}
+          {render_alert_template("Route spread", "Fires when the exact route open spread holds at or above or below your threshold.", "Live")}
+          {render_alert_template("Route funding", "Fires when the exact route 24-hour funding value holds at your threshold.", "Live")}
+          {render_alert_template("Token price", "Fires when the selected token price holds at or above or below your threshold.", "Live")}
         </div>
       </section>
     </section>
@@ -10175,7 +10972,9 @@ def render_alerts_page(board_path: Path, config: dict[str, Any], query: dict[str
     return shell("Alerts - SpreadBoard", "alerts", body)
 
 
-def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[str, list[str]]) -> str:
+def render_watchlist_page(
+    board_path: Path, config: dict[str, Any], query: dict[str, list[str]]
+) -> str:
     del config
     data = api_watchlist_suggestions(board_path, query)
     profile = data.get("profile_shell") or {}
@@ -10183,13 +10982,16 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
     route_count = sum(1 for item in data.get("route_reality") or [] if item.get("routes"))
     trigger_count = (data.get("alert_preview") or {}).get("would_trigger_count") or 0
     source = data.get("source_freshness") or {}
-    attention = source.get("telegram_events") if isinstance(source.get("telegram_events"), dict) else {}
+    attention = (
+        source.get("telegram_events") if isinstance(source.get("telegram_events"), dict) else {}
+    )
     source_note = (
         "Anonymous bot attention is current."
         if attention.get("status") == "fresh"
         else "Bot attention will appear after the first subscriber token lookup."
     )
-    body = f"""
+    body = (
+        f"""
     <section class="watchlist-page" data-refresh="120">
       <div class="intel-hero compact-hero">
         <div>
@@ -10260,13 +11062,13 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
           <section class="watch-panel">
             <div class="panel-head flat"><div><h2>Suggested Pins</h2><p>Seeded from Community Intel and route matches.</p></div></div>
             <div class="suggestion-grid">
-              {''.join(render_watch_suggestion(symbol) for symbol in suggestions) or '<p class="watch-empty">No hot-symbol suggestions found.</p>'}
+              {"".join(render_watch_suggestion(symbol) for symbol in suggestions) or '<p class="watch-empty">No hot-symbol suggestions found.</p>'}
             </div>
           </section>
           <section class="watch-panel">
             <div class="panel-head flat"><div><h2>Account workspace</h2><p>Positions, personal PnL, notifications, and delivery settings live in Portfolio.</p></div></div>
             <div class="profile-shell-list">
-              {''.join(render_watch_profile_row(item) for item in profile.get('sections') or []) or '<p class="watch-empty">No profile sections available.</p>'}
+              {"".join(render_watch_profile_row(item) for item in profile.get("sections") or []) or '<p class="watch-empty">No profile sections available.</p>'}
             </div>
           </section>
           <section class="watch-panel">
@@ -10279,7 +11081,9 @@ def render_watchlist_page(board_path: Path, config: dict[str, Any], query: dict[
       </section>
     </section>
     <script id="watchlistData" type="application/json">{json_script_data(data)}</script>
-    """ + WATCHLIST_SCRIPT
+    """
+        + WATCHLIST_SCRIPT
+    )
     return shell("Watchlist - SpreadBoard", "watchlist", body)
 
 
@@ -10313,9 +11117,9 @@ def render_watch_suggestion(symbol: str) -> str:
 def render_watch_profile_row(item: dict[str, Any]) -> str:
     return (
         '<div class="watch-profile-row">'
-        f'<span>{h(item.get("label"))}</span>'
-        f'<strong>{label_text(item.get("status"))}</strong>'
-        f'<em>{h(item.get("count") or 0)}</em>'
+        f"<span>{h(item.get('label'))}</span>"
+        f"<strong>{label_text(item.get('status'))}</strong>"
+        f"<em>{h(item.get('count') or 0)}</em>"
         "</div>"
     )
 
@@ -10990,10 +11794,10 @@ def render_source_health(health: dict[str, Any]) -> str:
     <section class="source-line">
       <div class="source-path">
         <span>Source</span>
-        <strong>{h(health.get('source_path'))}</strong>
+        <strong>{h(health.get("source_path"))}</strong>
       </div>
       <div class="health-pills">
-        {''.join(render_health_pill(item) for item in tabs)}
+        {"".join(render_health_pill(item) for item in tabs)}
       </div>
     </section>
     """
@@ -11003,8 +11807,8 @@ def render_health_pill(item: dict[str, Any]) -> str:
     status = str(item.get("status") or "empty")
     return (
         f'<span class="health {h(status)}" title="{h(item.get("detail"))}">'
-        f'<b>{h(item.get("label"))}</b><em>{h(status)}</em>'
-        f'</span>'
+        f"<b>{h(item.get('label'))}</b><em>{h(status)}</em>"
+        f"</span>"
     )
 
 
@@ -11017,11 +11821,15 @@ def render_kind_tab(
     tab_health = next((tab for tab in health.get("tabs") or [] if tab.get("kind") == item.kind), {})
     row_count = tab_health.get("fresh_row_count") or 0
     href = "/arbitrage?" + urlencode(_query_with(query, kind=item.kind, include_stale=None))
-    active = " active" if selected_kind == item.kind or (not selected_kind and item.kind == "FUTURES") else ""
+    active = (
+        " active"
+        if selected_kind == item.kind or (not selected_kind and item.kind == "FUTURES")
+        else ""
+    )
     return (
         f'<a class="tab-button{active}" href="{h(href)}" title="{h(item.label)}: {h(row_count)} fresh">'
-        f'<span>{h(route_tab_label(item))}</span>'
-        f'</a>'
+        f"<span>{h(route_tab_label(item))}</span>"
+        f"</a>"
     )
 
 
@@ -11064,17 +11872,21 @@ def render_intel_source_grid(source: dict[str, Any]) -> str:
     for key, label in order:
         item = source.get(key) if isinstance(source.get(key), dict) else {}
         raw_status = str(item.get("status") or "missing")
-        display_status = "waiting" if key == "telegram_events" and raw_status in {"missing", "stale"} else raw_status
+        display_status = (
+            "waiting"
+            if key == "telegram_events" and raw_status in {"missing", "stale"}
+            else raw_status
+        )
         cards.append(
             f'<article class="source-card {h(raw_status)}">'
-            f'<span>{h(label)}</span>'
-            f'<strong>{h(display_status)}</strong>'
-            f'<em>{fmt_age(item.get("age_min"))}</em>'
-            f'</article>'
+            f"<span>{h(label)}</span>"
+            f"<strong>{h(display_status)}</strong>"
+            f"<em>{fmt_age(item.get('age_min'))}</em>"
+            f"</article>"
         )
     cards.append(
         '<article class="source-card fresh"><span>Research engine</span>'
-        '<strong>Deterministic</strong><em>0 paid AI calls</em></article>'
+        "<strong>Deterministic</strong><em>0 paid AI calls</em></article>"
     )
     return f'<section class="intel-source-grid">{"".join(cards)}</section>'
 
@@ -11085,21 +11897,37 @@ def render_change_digest(digest: dict[str, Any]) -> str:
     source_gaps = digest.get("source_gaps") or []
     highlights = digest.get("highlights") or []
     count_cards = [
-        ("Events", h(digest.get("recent_event_count") or 0), f"last {h(int(_float_or_none(digest.get('window_min')) or 60))} min"),
-        ("New", h(digest.get("new_symbol_count") or 0), label_list(new_symbols[:4]) or "no new symbols"),
+        (
+            "Events",
+            h(digest.get("recent_event_count") or 0),
+            f"last {h(int(_float_or_none(digest.get('window_min')) or 60))} min",
+        ),
+        (
+            "New",
+            h(digest.get("new_symbol_count") or 0),
+            label_list(new_symbols[:4]) or "no new symbols",
+        ),
         ("Alerts", h(counts.get("alerts") or 0), f"{h(counts.get('closes') or 0)} closes"),
         ("Funding", h(counts.get("funding") or 0), f"{h(counts.get('community') or 0)} community"),
-        ("Sources", h(digest.get("source_gap_count") or 0), label_list([item.get("source") for item in source_gaps[:2]]) or "healthy"),
+        (
+            "Sources",
+            h(digest.get("source_gap_count") or 0),
+            label_list([item.get("source") for item in source_gaps[:2]]) or "healthy",
+        ),
     ]
     highlights_html = []
     for item in highlights[:4]:
-        value = item.get("spread_pct") if item.get("spread_pct") is not None else item.get("funding_delta_pct")
+        value = (
+            item.get("spread_pct")
+            if item.get("spread_pct") is not None
+            else item.get("funding_delta_pct")
+        )
         highlights_html.append(
             f"""
-            <a class="change-highlight" href="{h(item.get('href') or '/signals')}">
-              <span>{label_text(item.get('event'))}</span>
-              <strong>{h(item.get('symbol') or '?')}</strong>
-              <em>{fmt_age(item.get('age_min'))} · {h(item.get('kind') or '?')} · {fmt_signed_pct(value)}</em>
+            <a class="change-highlight" href="{h(item.get("href") or "/signals")}">
+              <span>{label_text(item.get("event"))}</span>
+              <strong>{h(item.get("symbol") or "?")}</strong>
+              <em>{fmt_age(item.get("age_min"))} · {h(item.get("kind") or "?")} · {fmt_signed_pct(value)}</em>
             </a>
             """
         )
@@ -11110,13 +11938,13 @@ def render_change_digest(digest: dict[str, Any]) -> str:
           <h2>What Changed</h2>
           <p>Last-hour anonymous bot attention joined to public market changes.</p>
         </div>
-        <span>{label_text(digest.get('status') or 'quiet')}</span>
+        <span>{label_text(digest.get("status") or "quiet")}</span>
       </div>
       <div class="change-counts">
-        {''.join(f'<article><span>{title}</span><strong>{value}</strong><em>{h(note)}</em></article>' for title, value, note in count_cards)}
+        {"".join(f"<article><span>{title}</span><strong>{value}</strong><em>{h(note)}</em></article>" for title, value, note in count_cards)}
       </div>
       <div class="change-highlights">
-        {''.join(highlights_html) or '<p class="empty">No fresh changes in the last hour.</p>'}
+        {"".join(highlights_html) or '<p class="empty">No fresh changes in the last hour.</p>'}
       </div>
     </section>
     """
@@ -11138,18 +11966,18 @@ def render_hot_symbol(item: dict[str, Any]) -> str:
     return f"""
     <article class="hot-card">
       <a class="hot-head" href="{h(href)}">
-        <strong>{h(item.get('symbol'))}</strong>
-        <span>{h(item.get('event_count'))} msgs</span>
+        <strong>{h(item.get("symbol"))}</strong>
+        <span>{h(item.get("event_count"))} msgs</span>
       </a>
       <div class="hot-score">
-        <b>{fmt_pct(best.get('open_spread_pct'))}</b>
-        <em>{fmt_signed_pct(best.get('funding_24h_pct') if best.get('funding_24h_pct') is not None else ((_float_or_none(best.get('funding_apr_pct')) or 0.0) / 365.0), digits=3)} funding 24h</em>
+        <b>{fmt_pct(best.get("open_spread_pct"))}</b>
+        <em>{fmt_signed_pct(best.get("funding_24h_pct") if best.get("funding_24h_pct") is not None else ((_float_or_none(best.get("funding_apr_pct")) or 0.0) / 365.0), digits=3)} funding 24h</em>
       </div>
       <p>{h(route)}</p>
-      <div class="tag-row">{''.join(tags) or '<span>telegram only</span>'}</div>
+      <div class="tag-row">{"".join(tags) or "<span>telegram only</span>"}</div>
       <div class="mini-kv">
-        <span>Liquidity <strong>{fmt_money(item.get('liquidity_usd'))}</strong></span>
-        <span>Volume <strong>{fmt_money(item.get('max_volume_usd'))}</strong></span>
+        <span>Liquidity <strong>{fmt_money(item.get("liquidity_usd"))}</strong></span>
+        <span>Volume <strong>{fmt_money(item.get("max_volume_usd"))}</strong></span>
       </div>
     </article>
     """
@@ -11159,31 +11987,33 @@ def render_action_queue(rows: list[dict[str, Any]]) -> str:
     rendered = []
     for index, item in enumerate(rows[:8], start=1):
         blockers = item.get("blockers") or []
-        badges = "".join(f"<span>{label_text(badge)}</span>" for badge in (item.get("badges") or [])[:5])
+        badges = "".join(
+            f"<span>{label_text(badge)}</span>" for badge in (item.get("badges") or [])[:5]
+        )
         rendered.append(
             f"""
-            <article class="action-row {h(item.get('status') or 'watch')}">
+            <article class="action-row {h(item.get("status") or "watch")}">
               <div class="action-rank">{index}</div>
               <div class="action-symbol">
-                <a href="{h(item.get('href') or item.get('token_href') or '#')}">{h(item.get('symbol'))}</a>
-                <span>{label_text(item.get('status'))}</span>
+                <a href="{h(item.get("href") or item.get("token_href") or "#")}">{h(item.get("symbol"))}</a>
+                <span>{label_text(item.get("status"))}</span>
               </div>
               <div class="action-route">
-                <strong>{h(item.get('route_line'))}</strong>
-                <em>{h(item.get('reason'))}</em>
-                <div class="tag-row tight">{badges or '<span>watch</span>'}</div>
+                <strong>{h(item.get("route_line"))}</strong>
+                <em>{h(item.get("reason"))}</em>
+                <div class="tag-row tight">{badges or "<span>watch</span>"}</div>
               </div>
               <div class="action-metrics">
-                <span>Spread <strong>{fmt_pct(item.get('spread_pct'))}</strong></span>
-                <span>Funding <strong>{fmt_signed_pct(item.get('funding_24h_pct') if item.get('funding_24h_pct') is not None else ((_float_or_none(item.get('funding_apr_pct')) or 0.0) / 365.0), digits=3)} / 24h</strong></span>
-                <span>Fresh <strong>{label_text(item.get('freshness'))}</strong></span>
+                <span>Spread <strong>{fmt_pct(item.get("spread_pct"))}</strong></span>
+                <span>Funding <strong>{fmt_signed_pct(item.get("funding_24h_pct") if item.get("funding_24h_pct") is not None else ((_float_or_none(item.get("funding_apr_pct")) or 0.0) / 365.0), digits=3)} / 24h</strong></span>
+                <span>Fresh <strong>{label_text(item.get("freshness"))}</strong></span>
               </div>
               <div class="action-next">
-                <strong>{label_text(item.get('next_action'))}</strong>
-                <em>{label_list(blockers[:2]) or 'No blockers found'}</em>
+                <strong>{label_text(item.get("next_action"))}</strong>
+                <em>{label_list(blockers[:2]) or "No blockers found"}</em>
                 <div class="action-links">
-                  <a href="{h(item.get('href') or item.get('token_href') or '#')}">Open</a>
-                  <a href="{h(item.get('board_href') or '/arbitrage?kind=FUTURES')}">Board</a>
+                  <a href="{h(item.get("href") or item.get("token_href") or "#")}">Open</a>
+                  <a href="{h(item.get("board_href") or "/arbitrage?kind=FUTURES")}">Board</a>
                 </div>
               </div>
             </article>
@@ -11197,7 +12027,7 @@ def render_action_queue(rows: list[dict[str, Any]]) -> str:
           <p>Joined from anonymous bot attention, public routes, transfer rails and funding evidence. Read-only: this only tells you what to inspect next.</p>
         </div>
       </div>
-      <div class="action-queue">{''.join(rendered) or '<p class="empty">No actionable local intelligence in this window.</p>'}</div>
+      <div class="action-queue">{"".join(rendered) or '<p class="empty">No actionable local intelligence in this window.</p>'}</div>
     </section>
     """
 
@@ -11209,10 +12039,10 @@ def render_reality_card(item: dict[str, Any]) -> str:
     for route in routes[:3]:
         route_rows.append(
             f'<a class="reality-route" href="{h(route.get("pair_url"))}">'
-            f'<span>{h(route.get("kind"))}</span>'
-            f'<strong>{fmt_pct(route.get("open_spread_pct"))}</strong>'
-            f'<em>{h(route.get("freshness"))}</em>'
-            f'</a>'
+            f"<span>{h(route.get('kind'))}</span>"
+            f"<strong>{fmt_pct(route.get('open_spread_pct'))}</strong>"
+            f"<em>{h(route.get('freshness'))}</em>"
+            f"</a>"
         )
     blockers = item.get("top_blockers") or []
     actions = item.get("next_actions") or []
@@ -11220,16 +12050,16 @@ def render_reality_card(item: dict[str, Any]) -> str:
     return f"""
     <article class="reality-card">
       <div class="reality-head">
-        <a href="{h(top_route.get('pair_url') or fallback_href)}">{h(item.get('symbol'))}</a>
-        <span>{label_text(item.get('status'))}</span>
+        <a href="{h(top_route.get("pair_url") or fallback_href)}">{h(item.get("symbol"))}</a>
+        <span>{label_text(item.get("status"))}</span>
       </div>
-      <div class="reality-routes">{''.join(route_rows) or '<p class="muted">Telegram-only signal. No current board route matched this symbol.</p>'}</div>
+      <div class="reality-routes">{"".join(route_rows) or '<p class="muted">Telegram-only signal. No current board route matched this symbol.</p>'}</div>
       <div class="reality-meta">
-        <span>Next <strong>{label_list(actions[:2]) or 'Watch'}</strong></span>
-        <span>Vol <strong>{label_text(item.get('volatility'))}</strong></span>
-        <span>OKX DEX <strong>{label_text(item.get('okx_dex_identity'))}</strong></span>
+        <span>Next <strong>{label_list(actions[:2]) or "Watch"}</strong></span>
+        <span>Vol <strong>{label_text(item.get("volatility"))}</strong></span>
+        <span>OKX DEX <strong>{label_text(item.get("okx_dex_identity"))}</strong></span>
       </div>
-      <ul class="plain-list compact">{''.join(f'<li>{label_text(blocker)}</li>' for blocker in blockers[:4]) or '<li>No blocker details found.</li>'}</ul>
+      <ul class="plain-list compact">{"".join(f"<li>{label_text(blocker)}</li>" for blocker in blockers[:4]) or "<li>No blocker details found.</li>"}</ul>
     </article>
     """
 
@@ -11237,9 +12067,9 @@ def render_reality_card(item: dict[str, Any]) -> str:
 def render_latest_brief(brief: dict[str, Any]) -> str:
     return f"""
     <article class="side-card">
-      <div class="side-head"><h2>Latest Brief</h2><span class="{h(brief.get('status') or 'missing')}">{h(brief.get('status') or 'missing')}</span></div>
-      <p class="small">{h(brief.get('title'))} · {fmt_age(brief.get('age_min'))}</p>
-      <div class="brief-body">{brief_excerpt(brief.get('body'))}</div>
+      <div class="side-head"><h2>Latest Brief</h2><span class="{h(brief.get("status") or "missing")}">{h(brief.get("status") or "missing")}</span></div>
+      <p class="small">{h(brief.get("title"))} · {fmt_age(brief.get("age_min"))}</p>
+      <div class="brief-body">{brief_excerpt(brief.get("body"))}</div>
     </article>
     """
 
@@ -11249,13 +12079,13 @@ def render_questions(patterns: list[dict[str, Any]]) -> str:
     for item in patterns[:7]:
         example = (item.get("examples") or [{}])[0]
         rows.append(
-            f'<li><strong>{h(item.get("category"))}</strong><span>{h(item.get("count"))}</span>'
-            f'<em>{h(example.get("text_excerpt") or example.get("first_line"))}</em></li>'
+            f"<li><strong>{h(item.get('category'))}</strong><span>{h(item.get('count'))}</span>"
+            f"<em>{h(example.get('text_excerpt') or example.get('first_line'))}</em></li>"
         )
     return f"""
     <article class="side-card">
       <div class="side-head"><h2>People Are Asking</h2><span>{h(len(patterns))}</span></div>
-      <ul class="question-list">{''.join(rows) or '<li><strong>No question clusters</strong><span>0</span><em>Nothing matched in this window.</em></li>'}</ul>
+      <ul class="question-list">{"".join(rows) or "<li><strong>No question clusters</strong><span>0</span><em>Nothing matched in this window.</em></li>"}</ul>
     </article>
     """
 
@@ -11273,15 +12103,15 @@ def render_alert_preview(preview: dict[str, Any]) -> str:
         )
         cards.append(
             f'<div class="alert-preview-row {h(status)}">'
-            f'<span>{h(card.get("title"))}</span>'
-            f'<strong>{h(status_label)}</strong>'
-            f'</div>'
+            f"<span>{h(card.get('title'))}</span>"
+            f"<strong>{h(status_label)}</strong>"
+            f"</div>"
         )
     return f"""
     <article class="side-card">
-      <div class="side-head"><h2>Alert Preview</h2><span>{h(preview.get('would_trigger_count') or 0)}</span></div>
+      <div class="side-head"><h2>Alert Preview</h2><span>{h(preview.get("would_trigger_count") or 0)}</span></div>
       <p class="small">Preview only. No Pushover message is sent from this panel.</p>
-      <div class="alert-preview-list">{''.join(cards)}</div>
+      <div class="alert-preview-list">{"".join(cards)}</div>
     </article>
     """
 
@@ -11297,20 +12127,20 @@ def render_alert_rule_card(card: dict[str, Any]) -> str:
         else "quiet now"
     )
     review_note = (
-        f'<span>{h(card.get("review_count") or 0)} stale examples kept for review</span>'
+        f"<span>{h(card.get('review_count') or 0)} stale examples kept for review</span>"
         if status == "review_only" or card.get("review_count")
         else ""
     )
     return f"""
     <article class="alert-rule-card {h(status)}">
       <div class="alert-rule-head">
-        <span>{label_text(card.get('key'))}</span>
-        <strong>{h(card.get('title'))}</strong>
+        <span>{label_text(card.get("key"))}</span>
+        <strong>{h(card.get("title"))}</strong>
         <em>{h(status_text)}</em>
       </div>
       <div class="alert-review-note">{review_note}</div>
       <div class="alert-example-list">
-        {''.join(render_alert_example(item) for item in examples[:4]) or '<p class="muted">No matching examples in the current local window.</p>'}
+        {"".join(render_alert_example(item) for item in examples[:4]) or '<p class="muted">No matching examples in the current local window.</p>'}
       </div>
     </article>
     """
@@ -11319,7 +12149,9 @@ def render_alert_rule_card(card: dict[str, Any]) -> str:
 def render_alert_example(item: Any) -> str:
     if not isinstance(item, dict):
         return f'<div class="alert-example"><span>Example</span><strong>{h(item)}</strong></div>'
-    symbol = item.get("symbol") or item.get("source") or item.get("key") or item.get("title") or "Source"
+    symbol = (
+        item.get("symbol") or item.get("source") or item.get("key") or item.get("title") or "Source"
+    )
     freshness = str(item.get("freshness") or item.get("status") or "").casefold()
     value = (
         item.get("open_spread_pct")
@@ -11338,13 +12170,15 @@ def render_alert_example(item: Any) -> str:
         or ""
     )
     age = fmt_age(item.get("age_min")) if item.get("age_min") is not None else ""
-    meta = " · ".join(part for part in [label_text(note), label_text(freshness) if freshness else "", age] if part)
+    meta = " · ".join(
+        part for part in [label_text(note), label_text(freshness) if freshness else "", age] if part
+    )
     return (
         f'<div class="alert-example {h(freshness)}">'
-        f'<span>{h(symbol)}</span>'
-        f'<strong>{fmt_signed_pct(value) if value is not None else label_text(note)}</strong>'
-        f'<em>{h(meta) if value is not None else h(label_text(freshness) or age)}</em>'
-        '</div>'
+        f"<span>{h(symbol)}</span>"
+        f"<strong>{fmt_signed_pct(value) if value is not None else label_text(note)}</strong>"
+        f"<em>{h(meta) if value is not None else h(label_text(freshness) or age)}</em>"
+        "</div>"
     )
 
 
@@ -11370,7 +12204,7 @@ def render_profile_shell(profile: dict[str, Any]) -> str:
       <div class="side-head"><h2>Account snapshot</h2><span>Active</span></div>
       <p class="small">Watchlist pins stay in this browser; private positions, PnL, alerts, and delivery settings are available in Portfolio.</p>
       <p class="watchlist-line">{h(watchlist)}</p>
-      {''.join(sections)}
+      {"".join(sections)}
     </article>
     """
 
@@ -11380,17 +12214,21 @@ def render_event_column(title: str, rows: list[dict[str, Any]]) -> str:
     for row in rows[:8]:
         symbol = row.get("symbol") or "?"
         href = f"/token/{h(symbol)}"
-        value = row.get("spread_pct") if row.get("spread_pct") is not None else row.get("funding_delta_pct")
+        value = (
+            row.get("spread_pct")
+            if row.get("spread_pct") is not None
+            else row.get("funding_delta_pct")
+        )
         items.append(
             f'<a class="feed-row" href="{h(href)}">'
-            f'<span>{h(symbol)}</span><strong>{h(row.get("kind") or row.get("event"))}</strong>'
-            f'<em>{fmt_signed_pct(value)}</em><small>{fmt_age(row.get("age_min"))}</small>'
-            f'</a>'
+            f"<span>{h(symbol)}</span><strong>{h(row.get('kind') or row.get('event'))}</strong>"
+            f"<em>{fmt_signed_pct(value)}</em><small>{fmt_age(row.get('age_min'))}</small>"
+            f"</a>"
         )
     return f"""
     <article class="feed-card">
       <h3>{h(title)}</h3>
-      {''.join(items) or '<p class="muted">No rows in this window.</p>'}
+      {"".join(items) or '<p class="muted">No rows in this window.</p>'}
     </article>
     """
 
@@ -11399,13 +12237,17 @@ def render_signal_lane(title: str, rows: list[dict[str, Any]]) -> str:
     return f"""
     <section class="signal-lane">
       <div class="side-head"><h2>{h(title)}</h2><span>{h(len(rows))}</span></div>
-      <div class="signal-list">{''.join(render_signal_event({**item, 'bucket': title}) for item in rows) or '<p class="empty">No rows in this window.</p>'}</div>
+      <div class="signal-list">{"".join(render_signal_event({**item, "bucket": title}) for item in rows) or '<p class="empty">No rows in this window.</p>'}</div>
     </section>
     """
 
 
 def render_funding_watch_card(item: dict[str, Any]) -> str:
-    funding_value = item.get("funding_apr_pct") if item.get("funding_apr_pct") is not None else item.get("funding_delta_pct")
+    funding_value = (
+        item.get("funding_apr_pct")
+        if item.get("funding_apr_pct") is not None
+        else item.get("funding_delta_pct")
+    )
     label = "APR" if item.get("funding_apr_pct") is not None else "delta"
     note = (
         f"Funding soon: {h(item.get('minutes_to_funding'))} min"
@@ -11415,15 +12257,15 @@ def render_funding_watch_card(item: dict[str, Any]) -> str:
     return f"""
     <article class="funding-card">
       <div class="hot-head">
-        <strong>{h(item.get('symbol'))}</strong>
-        <span>{h(item.get('source'))}</span>
+        <strong>{h(item.get("symbol"))}</strong>
+        <span>{h(item.get("source"))}</span>
       </div>
       <div class="funding-value {spread_class(funding_value)}">{fmt_signed_pct(funding_value)}</div>
       <div class="mini-kv">
         <span>{h(label)}<strong>{fmt_signed_pct(funding_value)}</strong></span>
-        <span>Open<strong>{fmt_pct(item.get('open_spread_pct'))}</strong></span>
-        <span>Route<strong>{h(item.get('kind'))}</strong></span>
-        <span>Age<strong>{fmt_age(item.get('age_min'))}</strong></span>
+        <span>Open<strong>{fmt_pct(item.get("open_spread_pct"))}</strong></span>
+        <span>Route<strong>{h(item.get("kind"))}</strong></span>
+        <span>Age<strong>{fmt_age(item.get("age_min"))}</strong></span>
       </div>
       <p class="plain">{note}</p>
     </article>
@@ -11437,16 +12279,16 @@ def render_community_scoreboard(scoreboard: dict[str, Any]) -> str:
     <section class="community-panel scoreboard-panel">
       <div class="panel-head flat">
         <div><h2>Community Scoreboard</h2><p>Reported winners and distrust rows parsed from the latest local topic brief.</p></div>
-        <span class="status-pill {h(scoreboard.get('status') or 'missing')}">{label_text(scoreboard.get('status') or 'missing')}</span>
+        <span class="status-pill {h(scoreboard.get("status") or "missing")}">{label_text(scoreboard.get("status") or "missing")}</span>
       </div>
       <div class="scoreboard-grid">
         <article class="score-lane positive">
           <h3>Top Reported Wins</h3>
-          <div class="score-list">{''.join(render_score_row(item) for item in positive[:8]) or '<p class="muted">No positive scoreboard rows found.</p>'}</div>
+          <div class="score-list">{"".join(render_score_row(item) for item in positive[:8]) or '<p class="muted">No positive scoreboard rows found.</p>'}</div>
         </article>
         <article class="score-lane negative">
           <h3>Distrust / Net Negative</h3>
-          <div class="score-list">{''.join(render_score_row(item) for item in negative[:8]) or '<p class="muted">No negative scoreboard rows found.</p>'}</div>
+          <div class="score-list">{"".join(render_score_row(item) for item in negative[:8]) or '<p class="muted">No negative scoreboard rows found.</p>'}</div>
         </article>
       </div>
     </section>
@@ -11458,9 +12300,9 @@ def render_score_row(item: dict[str, Any]) -> str:
     cls = "positive" if (value or 0) >= 0 else "negative"
     return (
         f'<div class="score-row {cls}">'
-        f'<strong>{h(item.get("symbol"))}</strong>'
-        f'<span>{fmt_signed_number(value)}</span>'
-        f'<em>{label_text(item.get("sentiment"))}</em>'
+        f"<strong>{h(item.get('symbol'))}</strong>"
+        f"<span>{fmt_signed_number(value)}</span>"
+        f"<em>{label_text(item.get('sentiment'))}</em>"
         "</div>"
     )
 
@@ -11472,19 +12314,19 @@ def render_community_discussion(rows: list[dict[str, Any]]) -> str:
         cards.append(
             f'<article class="discussion-card">'
             f'<a class="hot-head" href="{h(href)}"><strong>{h(item.get("symbol"))}</strong><span>{h(item.get("message_count"))} msgs</span></a>'
-            f'<p>{h(item.get("reason"))}</p>'
+            f"<p>{h(item.get('reason'))}</p>"
             f'<div class="mini-kv">'
-            f'<span>Calls<strong>{h(item.get("call_count") or 0)}</strong></span>'
-            f'<span>Results<strong>{h(item.get("result_count") or 0)}</strong></span>'
-            f'<span>Route<strong>{label_text(item.get("route_status"))}</strong></span>'
-            f'<span>Next<strong>{label_text(item.get("next_action"))}</strong></span>'
-            f'</div>'
-            f'</article>'
+            f"<span>Calls<strong>{h(item.get('call_count') or 0)}</strong></span>"
+            f"<span>Results<strong>{h(item.get('result_count') or 0)}</strong></span>"
+            f"<span>Route<strong>{label_text(item.get('route_status'))}</strong></span>"
+            f"<span>Next<strong>{label_text(item.get('next_action'))}</strong></span>"
+            f"</div>"
+            f"</article>"
         )
     return f"""
     <section class="community-panel">
       <div class="panel-head flat"><div><h2>Active Discussion</h2><p>Why a token is being talked about, with route status and next useful action.</p></div></div>
-      <div class="discussion-grid">{''.join(cards) or '<p class="empty">No active discussion rows in this window.</p>'}</div>
+      <div class="discussion-grid">{"".join(cards) or '<p class="empty">No active discussion rows in this window.</p>'}</div>
     </section>
     """
 
@@ -11492,10 +12334,18 @@ def render_community_discussion(rows: list[dict[str, Any]]) -> str:
 def render_community_call_ledger(rows: list[dict[str, Any]]) -> str:
     rendered = []
     for item in rows[:10]:
-        badges = "".join(f"<span>{label_text(badge)}</span>" for badge in (item.get("badges") or [])[:5])
+        badges = "".join(
+            f"<span>{label_text(badge)}</span>" for badge in (item.get("badges") or [])[:5]
+        )
         latest_call = item.get("latest_call") if isinstance(item.get("latest_call"), dict) else {}
-        latest_result = item.get("latest_result") if isinstance(item.get("latest_result"), dict) else {}
-        result_text = latest_result.get("first_line") or latest_result.get("text_excerpt") or "No result row yet"
+        latest_result = (
+            item.get("latest_result") if isinstance(item.get("latest_result"), dict) else {}
+        )
+        result_text = (
+            latest_result.get("first_line")
+            or latest_result.get("text_excerpt")
+            or "No result row yet"
+        )
         call_text = latest_call.get("first_line") or latest_call.get("text_excerpt")
         if not call_text:
             call_text = (
@@ -11505,28 +12355,28 @@ def render_community_call_ledger(rows: list[dict[str, Any]]) -> str:
             )
         rendered.append(
             f"""
-            <article class="call-ledger-row {h(item.get('status') or 'watch')}">
+            <article class="call-ledger-row {h(item.get("status") or "watch")}">
               <div class="call-ledger-symbol">
-                <a href="{h(item.get('href') or '#')}">{h(item.get('symbol'))}</a>
-                <span>{label_text(item.get('status'))}</span>
+                <a href="{h(item.get("href") or "#")}">{h(item.get("symbol"))}</a>
+                <span>{label_text(item.get("status"))}</span>
               </div>
               <div class="call-ledger-story">
                 <strong>{h(call_text)}</strong>
                 <em>{h(result_text)}</em>
-                <div class="tag-row tight">{badges or '<span>watch</span>'}</div>
+                <div class="tag-row tight">{badges or "<span>watch</span>"}</div>
               </div>
               <div class="call-ledger-route">
-                <span>Route <strong>{label_text(item.get('route_status'))}</strong></span>
-                <span>Spread <strong>{fmt_pct(item.get('spread_pct'))}</strong></span>
-                <span>Funding <strong>{fmt_signed_pct(item.get('funding_apr_pct'), digits=0)} APR</strong></span>
-                <span>Fresh <strong>{label_text(item.get('freshness'))}</strong></span>
+                <span>Route <strong>{label_text(item.get("route_status"))}</strong></span>
+                <span>Spread <strong>{fmt_pct(item.get("spread_pct"))}</strong></span>
+                <span>Funding <strong>{fmt_signed_pct(item.get("funding_apr_pct"), digits=0)} APR</strong></span>
+                <span>Fresh <strong>{label_text(item.get("freshness"))}</strong></span>
               </div>
               <div class="call-ledger-next">
-                <strong>{label_text(item.get('next_action'))}</strong>
-                <em>{h(item.get('call_count') or 0)} calls · {h(item.get('result_count') or 0)} results · {h(item.get('close_count') or 0)} closes</em>
+                <strong>{label_text(item.get("next_action"))}</strong>
+                <em>{h(item.get("call_count") or 0)} calls · {h(item.get("result_count") or 0)} results · {h(item.get("close_count") or 0)} closes</em>
                 <div class="action-links">
-                  <a href="{h(item.get('href') or '#')}">Open</a>
-                  <a href="{h(item.get('signals_href') or '/signals')}">Signals</a>
+                  <a href="{h(item.get("href") or "#")}">Open</a>
+                  <a href="{h(item.get("signals_href") or "/signals")}">Signals</a>
                 </div>
               </div>
             </article>
@@ -11541,7 +12391,7 @@ def render_community_call_ledger(rows: list[dict[str, Any]]) -> str:
         </div>
         <span>{h(len(rows))}</span>
       </div>
-      <div class="call-ledger-list">{''.join(rendered) or '<p class="empty">No call lifecycle rows in this window.</p>'}</div>
+      <div class="call-ledger-list">{"".join(rendered) or '<p class="empty">No call lifecycle rows in this window.</p>'}</div>
     </section>
     """
 
@@ -11550,7 +12400,7 @@ def render_community_event_group(title: str, rows: list[dict[str, Any]], bucket:
     return f"""
     <section class="community-panel">
       <div class="panel-head flat"><div><h2>{h(title)}</h2><p>{h(len(rows))} local rows in the selected window.</p></div></div>
-      <div class="signal-list">{''.join(render_signal_event({**item, 'bucket': bucket}) for item in rows[:12]) or '<p class="empty">No rows in this window.</p>'}</div>
+      <div class="signal-list">{"".join(render_signal_event({**item, "bucket": bucket}) for item in rows[:12]) or '<p class="empty">No rows in this window.</p>'}</div>
     </section>
     """
 
@@ -11559,8 +12409,8 @@ def render_community_brief(insights: dict[str, Any]) -> str:
     lines = insights.get("brief_excerpt") or []
     return f"""
     <article class="side-card">
-      <div class="side-head"><h2>Brief Excerpt</h2><span>{label_text((insights.get('scoreboard') or {}).get('status') or 'missing')}</span></div>
-      <div class="brief-body">{''.join(f'<p>{h(line)}</p>' for line in lines) or '<p class="muted">No brief excerpt available.</p>'}</div>
+      <div class="side-head"><h2>Brief Excerpt</h2><span>{label_text((insights.get("scoreboard") or {}).get("status") or "missing")}</span></div>
+      <div class="brief-body">{"".join(f"<p>{h(line)}</p>" for line in lines) or '<p class="muted">No brief excerpt available.</p>'}</div>
     </article>
     """
 
@@ -11579,34 +12429,38 @@ def render_board_row(row: dict[str, Any]) -> str:
     <a class="arb-grid-futures-main arb-result-row" href="{h(pair_url)}">
       <div class="token-column">
         <div class="token-topline">
-          <strong title="{h(row.get('symbol'))}">{h(row.get('symbol'))}</strong>
+          <strong title="{h(row.get("symbol"))}">{h(row.get("symbol"))}</strong>
           <span>{compact_spread_badge(row)}</span>
         </div>
         <div class="token-actions" aria-hidden="true"><i></i><i></i><i></i></div>
       </div>
       <div class="market-column">{render_leg_compact(row, "long")}{render_leg_compact(row, "short")}</div>
       <div class="funding-column">{render_funding_lines(row)}</div>
-      <div class="metric-column">{fmt_metric(row.get('daily_pct'))}</div>
-      <div class="metric-column">{fmt_metric(row.get('seven_day_pct'))}</div>
-      <div class="metric-column">{fmt_metric(row.get('thirty_day_pct'))}</div>
-      <div class="dw-status">{render_dw(row)}<span class="age-line">{fmt_age(row.get('age_min'))}</span></div>
-      <div><span class="value-chip {signed_chip_class(row.get('depth_weighted_spread_pct'))}">{fmt_signed_pct(row.get('depth_weighted_spread_pct'))}</span></div>
+      <div class="metric-column">{fmt_metric(row.get("daily_pct"))}</div>
+      <div class="metric-column">{fmt_metric(row.get("seven_day_pct"))}</div>
+      <div class="metric-column">{fmt_metric(row.get("thirty_day_pct"))}</div>
+      <div class="dw-status">{render_dw(row)}<span class="age-line">{fmt_age(row.get("age_min"))}</span></div>
+      <div><span class="value-chip {signed_chip_class(row.get("depth_weighted_spread_pct"))}">{fmt_signed_pct(row.get("depth_weighted_spread_pct"))}</span></div>
       <div><span class="value-chip neutral">{fmt_signed_pct(funding_24h_value(row), digits=3)}</span></div>
-      <div><span class="value-chip {spread_class(row.get('displayed_open_spread_pct') or row.get('spread_pct'))}">{fmt_pct(row.get('displayed_open_spread_pct') or row.get('spread_pct'))}</span></div>
+      <div><span class="value-chip {spread_class(row.get("displayed_open_spread_pct") or row.get("spread_pct"))}">{fmt_pct(row.get("displayed_open_spread_pct") or row.get("spread_pct"))}</span></div>
     </a>
     """
 
 
 def render_board_mobile_card(row: dict[str, Any]) -> str:
     pair_url = row.get("pair_url")
-    open_spread = row.get("displayed_open_spread_pct") if row.get("displayed_open_spread_pct") is not None else row.get("spread_pct")
+    open_spread = (
+        row.get("displayed_open_spread_pct")
+        if row.get("displayed_open_spread_pct") is not None
+        else row.get("spread_pct")
+    )
     route_kind = row.get("kind_label") or row.get("kind")
     return f"""
     <a class="mobile-board-card" href="{h(pair_url)}">
       <div class="mobile-board-head">
         <div>
           <span>{h(route_kind)}</span>
-          <strong title="{h(row.get('symbol'))}">{h(row.get('symbol'))}</strong>
+          <strong title="{h(row.get("symbol"))}">{h(row.get("symbol"))}</strong>
         </div>
         <b class="{spread_class(open_spread)}">{fmt_pct(open_spread)}</b>
       </div>
@@ -11615,13 +12469,13 @@ def render_board_mobile_card(row: dict[str, Any]) -> str:
         {render_mobile_leg(row, "short", "Sell")}
       </div>
       <div class="mobile-metric-grid">
-        <span>Executable<strong>{fmt_pct(row.get('spread_pct'))}</strong></span>
-        <span>F spread<strong>{fmt_signed_pct(row.get('funding_spread_pct'))}</strong></span>
+        <span>Executable<strong>{fmt_pct(row.get("spread_pct"))}</strong></span>
+        <span>F spread<strong>{fmt_signed_pct(row.get("funding_spread_pct"))}</strong></span>
         <span>Funding 24h<strong>{fmt_signed_pct(funding_24h_value(row), digits=3)}</strong></span>
-        <span>24h volume<strong>{fmt_money(row.get('depth_usd'))}</strong></span>
+        <span>24h volume<strong>{fmt_money(row.get("depth_usd"))}</strong></span>
       </div>
       <div class="mobile-board-footer">
-        <span>{fmt_age(row.get('age_min'))} old</span>
+        <span>{fmt_age(row.get("age_min"))} old</span>
         <span>D/W {mobile_dw_summary(row)}</span>
         <em>Open pair</em>
       </div>
@@ -11664,8 +12518,8 @@ def compact_spread_badge(row: dict[str, Any]) -> str:
 
 def render_funding_lines(row: dict[str, Any]) -> str:
     return (
-        f'<span>{fmt_signed_pct(row.get("long_funding_pct"), digits=2)} <em>8 h</em></span>'
-        f'<span>{fmt_signed_pct(row.get("short_funding_pct"), digits=2)} <em>8 h</em></span>'
+        f"<span>{fmt_signed_pct(row.get('long_funding_pct'), digits=2)} <em>8 h</em></span>"
+        f"<span>{fmt_signed_pct(row.get('short_funding_pct'), digits=2)} <em>8 h</em></span>"
     )
 
 
@@ -11703,10 +12557,10 @@ def render_leg_compact(row: dict[str, Any], side: str) -> str:
         f'<div class="market-leg {h(side_class)}">'
         f'<span class="direction-dot" aria-hidden="true"></span>'
         f'<span class="venue-dot" aria-hidden="true"></span>'
-        f'{render_exchange_link(row, side)}'
-        f'<em>{fmt_money(row.get(f"{side}_depth_usd"))}</em>'
-        f'<b>{fmt_price(row.get(f"{side}_price"))}</b>'
-        f'</div>'
+        f"{render_exchange_link(row, side)}"
+        f"<em>{fmt_money(row.get(f'{side}_depth_usd'))}</em>"
+        f"<b>{fmt_price(row.get(f'{side}_price'))}</b>"
+        f"</div>"
     )
 
 
@@ -11722,11 +12576,7 @@ def render_exchange_link(
     # "Spot" -- and printing it raw made every DEX farm read as a Futures-Spot
     # one. The route key keeps the raw value; only what a member reads changes.
     shown_type = leg_market_label(venue, market_type)
-    label = (
-        f"{venue or '?'} · {shown_type or '?'}"
-        if include_market_type
-        else str(venue or "?")
-    )
+    label = f"{venue or '?'} · {shown_type or '?'}" if include_market_type else str(venue or "?")
     return render_venue_link(
         label,
         market_type,
@@ -11747,28 +12597,28 @@ def render_venue_link(
     return (
         f'<a class="exchange-market-link" href="{h(url)}" target="_blank" '
         f'rel="noopener noreferrer" title="{h(title)}">'
-        f"<strong>{h(label)}</strong><span aria-hidden=\"true\">&#8599;</span></a>"
+        f'<strong>{h(label)}</strong><span aria-hidden="true">&#8599;</span></a>'
     )
 
 
 def render_dw(row: dict[str, Any]) -> str:
     return (
         '<span class="dw-row">'
-        f'{dw_dot(row.get("long_deposit_enabled"))}{dw_dot(row.get("long_withdraw_enabled"))}'
-        '</span>'
+        f"{dw_dot(row.get('long_deposit_enabled'))}{dw_dot(row.get('long_withdraw_enabled'))}"
+        "</span>"
         '<span class="dw-row">'
-        f'{dw_dot(row.get("short_deposit_enabled"))}{dw_dot(row.get("short_withdraw_enabled"))}'
-        '</span>'
+        f"{dw_dot(row.get('short_deposit_enabled'))}{dw_dot(row.get('short_withdraw_enabled'))}"
+        "</span>"
     )
 
 
 def render_route_card(row: dict[str, Any]) -> str:
     return (
         f'<a class="route-card" href="{h(row.get("pair_url"))}">'
-        f'<strong>{h(row.get("kind_label"))}</strong>'
-        f'<span>{h(row.get("route_line"))}</span>'
-        f'<b>{fmt_pct(row.get("spread_pct"))}</b>'
-        f'</a>'
+        f"<strong>{h(row.get('kind_label'))}</strong>"
+        f"<span>{h(row.get('route_line'))}</span>"
+        f"<b>{fmt_pct(row.get('spread_pct'))}</b>"
+        f"</a>"
     )
 
 
@@ -11783,21 +12633,25 @@ def render_pair_route_diagram(row: dict[str, Any], legs: dict[str, Any]) -> str:
     <div class="pair-diagram" aria-label="Route legs">
       <div class="pair-leg-pill buy">
         <span>Buy</span>
-        {render_venue_link(long_leg.get('venue') or row.get('long_venue'), long_leg.get('market_type') or row.get('long_market_type'), long_leg.get('exchange_url') or row.get('long_exchange_url'))}
-        <em>{h(long_leg.get('market_type') or row.get('long_market_type'))} {fmt_price(long_leg.get('price') or row.get('long_price'))}</em>
+        {render_venue_link(long_leg.get("venue") or row.get("long_venue"), long_leg.get("market_type") or row.get("long_market_type"), long_leg.get("exchange_url") or row.get("long_exchange_url"))}
+        <em>{h(long_leg.get("market_type") or row.get("long_market_type"))} {fmt_price(long_leg.get("price") or row.get("long_price"))}</em>
       </div>
       <div class="pair-connector"><span></span><b>spread</b><span></span></div>
       <div class="pair-leg-pill sell">
         <span>Sell</span>
-        {render_venue_link(short_leg.get('venue') or row.get('short_venue'), short_leg.get('market_type') or row.get('short_market_type'), short_leg.get('exchange_url') or row.get('short_exchange_url'))}
-        <em>{h(short_leg.get('market_type') or row.get('short_market_type'))} {fmt_price(short_leg.get('price') or row.get('short_price'))}</em>
+        {render_venue_link(short_leg.get("venue") or row.get("short_venue"), short_leg.get("market_type") or row.get("short_market_type"), short_leg.get("exchange_url") or row.get("short_exchange_url"))}
+        <em>{h(short_leg.get("market_type") or row.get("short_market_type"))} {fmt_price(short_leg.get("price") or row.get("short_price"))}</em>
       </div>
     </div>
     """
 
 
 def render_pair_spread_badge(row: dict[str, Any], detail: dict[str, Any]) -> str:
-    open_spread = row.get("displayed_open_spread_pct") if row.get("displayed_open_spread_pct") is not None else row.get("spread_pct")
+    open_spread = (
+        row.get("displayed_open_spread_pct")
+        if row.get("displayed_open_spread_pct") is not None
+        else row.get("spread_pct")
+    )
     health = detail.get("route_health") or {}
     verdict = str(health.get("verdict") or "watch_only")
     return f"""
@@ -11806,7 +12660,7 @@ def render_pair_spread_badge(row: dict[str, Any], detail: dict[str, Any]) -> str
       <strong class="{spread_class(open_spread)}">{fmt_pct(open_spread)}</strong>
       <div class="score-meta">
         <em>{label_text(verdict)}</em>
-        <em>{fmt_age(row.get('age_min'))} old</em>
+        <em>{fmt_age(row.get("age_min"))} old</em>
       </div>
     </aside>
     """
@@ -11825,10 +12679,18 @@ def render_pair_cockpit(
     blockers = health.get("blockers") or []
     okx_quote = detail.get("okx_dex_quote") or {}
     events = pair_signal_events(pair_intel.get("recent_events") or {})
-    open_spread = row.get("displayed_open_spread_pct") if row.get("displayed_open_spread_pct") is not None else row.get("spread_pct")
+    open_spread = (
+        row.get("displayed_open_spread_pct")
+        if row.get("displayed_open_spread_pct") is not None
+        else row.get("spread_pct")
+    )
     executable = row.get("spread_pct")
     width = spread_width(open_spread if open_spread is not None else executable)
-    direction = "positive" if (_float_or_none(open_spread) or _float_or_none(executable) or 0) >= 0 else "negative"
+    direction = (
+        "positive"
+        if (_float_or_none(open_spread) or _float_or_none(executable) or 0) >= 0
+        else "negative"
+    )
     age = _float_or_none(row.get("age_min"))
     is_canonical = bool(row.get("canonical_api"))
     fresh_ok = (age or 999999) <= board.DEFAULT_FRESH_MAX_AGE_MIN
@@ -11839,26 +12701,64 @@ def render_pair_cockpit(
         row.get("long_market_type"),
         row.get("short_market_type"),
     }
-    dw_ok = any(row.get(key) is not None for key in ("long_deposit_enabled", "long_withdraw_enabled", "short_deposit_enabled", "short_withdraw_enabled"))
+    dw_ok = any(
+        row.get(key) is not None
+        for key in (
+            "long_deposit_enabled",
+            "long_withdraw_enabled",
+            "short_deposit_enabled",
+            "short_withdraw_enabled",
+        )
+    )
     dex_status = str(okx_quote.get("status") or "not_applicable")
-    dex_state = "ok" if dex_status in {"not_applicable", "available", "disabled"} or "blocked" not in dex_status else "missing"
+    dex_state = (
+        "ok"
+        if dex_status in {"not_applicable", "available", "disabled"} or "blocked" not in dex_status
+        else "missing"
+    )
     verdict = label_text(health.get("verdict") or "watch_only")
-    next_action = label_text(health.get("next_action") or ("monitor_route" if is_canonical else "watch"))
+    next_action = label_text(
+        health.get("next_action") or ("monitor_route" if is_canonical else "watch")
+    )
     delta = history_delta(history, "open_spread_pct")
     spread_range = history_range(history, "open_spread_pct")
     trend = pair_spread_trend(open_spread, delta)
     gates = [
-        ("Fresh API" if is_canonical else "Fresh row", "ok" if fresh_ok else "missing", "fresh" if fresh_ok else f"{fmt_age(row.get('age_min'))} old"),
-        ("Venue symbols", "ok" if venue_ok else "missing", "resolved" if venue_ok else "unresolved"),
+        (
+            "Fresh API" if is_canonical else "Fresh row",
+            "ok" if fresh_ok else "missing",
+            "fresh" if fresh_ok else f"{fmt_age(row.get('age_min'))} old",
+        ),
+        (
+            "Venue symbols",
+            "ok" if venue_ok else "missing",
+            "resolved" if venue_ok else "unresolved",
+        ),
         (
             "D/W rails",
             "ok" if (not dw_applicable or dw_ok) else "missing",
-            "not applicable" if not dw_applicable else mobile_dw_summary(row) if dw_ok else "not reported",
+            "not applicable"
+            if not dw_applicable
+            else mobile_dw_summary(row)
+            if dw_ok
+            else "not reported",
         ),
-        ("Funding", "ok" if funding_ok else "warn", f"{fmt_signed_pct(funding_24h, digits=3)} / 24h" if funding_ok else "not enough data"),
-        ("Community", "ok" if events else "warn", f"{len(events)} recent events" if events else "optional; no recent events"),
+        (
+            "Funding",
+            "ok" if funding_ok else "warn",
+            f"{fmt_signed_pct(funding_24h, digits=3)} / 24h" if funding_ok else "not enough data",
+        ),
+        (
+            "Community",
+            "ok" if events else "warn",
+            f"{len(events)} recent events" if events else "optional; no recent events",
+        ),
         ("OKX DEX", dex_state, label_text(dex_status)),
-        ("Route monitor" if is_canonical else "Next action", "ok" if not blockers else "missing", next_action),
+        (
+            "Route monitor" if is_canonical else "Next action",
+            "ok" if not blockers else "missing",
+            next_action,
+        ),
     ]
     ticket_heading = (
         "Compare basis, carry, and route history."
@@ -11870,15 +12770,15 @@ def render_pair_cockpit(
       <div class="pair-cockpit-head">
         <div class="detail-title">
           <a class="back" href="/arbitrage?kind=FUTURES">Arbitrage</a>
-          <span class="page-kicker">Route Cockpit · {h(row.get('kind_label'))}</span>
-          <h1>{h(row.get('symbol'))}</h1>
-          <div class="route-subline">{h(row.get('route_line'))}</div>
+          <span class="page-kicker">Route Cockpit · {h(row.get("kind_label"))}</span>
+          <h1>{h(row.get("symbol"))}</h1>
+          <div class="route-subline">{h(row.get("route_line"))}</div>
         </div>
         <div class="detail-actions">
           <span class="trade-lock">Read-only</span>
-          {render_alert_draft_button(row, alert_type='token_spread')}
-          {render_alert_draft_button(row, alert_type='funding')}
-          <a class="control-btn ghost" href="/token/{h(row.get('symbol'))}">Token overview</a>
+          {render_alert_draft_button(row, alert_type="token_spread")}
+          {render_alert_draft_button(row, alert_type="funding")}
+          <a class="control-btn ghost" href="/token/{h(row.get("symbol"))}">Token overview</a>
           {render_chart_link(row)}
         </div>
       </div>
@@ -11895,26 +12795,26 @@ def render_pair_cockpit(
           <div class="ticket-legs">
             <article class="ticket-leg buy">
               <span>Buy leg</span>
-              {render_venue_link(long_leg.get('venue') or row.get('long_venue'), long_leg.get('market_type') or row.get('long_market_type'), long_leg.get('exchange_url') or row.get('long_exchange_url'))}
-              <em>{h(long_leg.get('market_type') or row.get('long_market_type'))}</em>
-              <b>{fmt_price(long_leg.get('price') or row.get('long_price'))}</b>
-              <small>{fmt_money(long_leg.get('depth_usd') or row.get('long_depth_usd'))} visible depth</small>
+              {render_venue_link(long_leg.get("venue") or row.get("long_venue"), long_leg.get("market_type") or row.get("long_market_type"), long_leg.get("exchange_url") or row.get("long_exchange_url"))}
+              <em>{h(long_leg.get("market_type") or row.get("long_market_type"))}</em>
+              <b>{fmt_price(long_leg.get("price") or row.get("long_price"))}</b>
+              <small>{fmt_money(long_leg.get("depth_usd") or row.get("long_depth_usd"))} visible depth</small>
             </article>
             <div class="ticket-bridge">
               <span></span>
               <b>spread</b>
-              <em>{fmt_signed_pct(row.get('funding_spread_pct'), digits=4)} carry</em>
+              <em>{fmt_signed_pct(row.get("funding_spread_pct"), digits=4)} carry</em>
             </div>
             <article class="ticket-leg sell">
               <span>Sell leg</span>
-              {render_venue_link(short_leg.get('venue') or row.get('short_venue'), short_leg.get('market_type') or row.get('short_market_type'), short_leg.get('exchange_url') or row.get('short_exchange_url'))}
-              <em>{h(short_leg.get('market_type') or row.get('short_market_type'))}</em>
-              <b>{fmt_price(short_leg.get('price') or row.get('short_price'))}</b>
-              <small>{fmt_money(short_leg.get('depth_usd') or row.get('short_depth_usd'))} visible depth</small>
+              {render_venue_link(short_leg.get("venue") or row.get("short_venue"), short_leg.get("market_type") or row.get("short_market_type"), short_leg.get("exchange_url") or row.get("short_exchange_url"))}
+              <em>{h(short_leg.get("market_type") or row.get("short_market_type"))}</em>
+              <b>{fmt_price(short_leg.get("price") or row.get("short_price"))}</b>
+              <small>{fmt_money(short_leg.get("depth_usd") or row.get("short_depth_usd"))} visible depth</small>
             </article>
           </div>
           <div class="spread-track" aria-hidden="true"><span></span></div>
-          <div class="pair-proof-rail">{''.join(render_cockpit_gate(*gate) for gate in gates)}</div>
+          <div class="pair-proof-rail">{"".join(render_cockpit_gate(*gate) for gate in gates)}</div>
         </div>
 
         <aside class="pair-edge-panel">
@@ -11927,12 +12827,12 @@ def render_pair_cockpit(
               <strong>{label_text(trend)}</strong>
               <em>{fmt_pct(open_spread)} now · {fmt_signed_pct(delta)} move · {fmt_pct(spread_range)} range</em>
             </div>
-            {render_sparkline(history, 'open_spread_pct', label='pair open spread trend')}
+            {render_sparkline(history, "open_spread_pct", label="pair open spread trend")}
           </div>
           <div class="edge-metrics">
             <span>Executable<strong>{fmt_pct(executable)}</strong></span>
             <span>Funding 24h<strong>{fmt_signed_pct(funding_24h, digits=3)}</strong></span>
-            <span>Age<strong>{fmt_age(row.get('age_min'))}</strong></span>
+            <span>Age<strong>{fmt_age(row.get("age_min"))}</strong></span>
             <span>Samples<strong>{h(len(history))}</strong></span>
           </div>
         </aside>
@@ -11945,7 +12845,7 @@ def render_pair_cockpit(
           <a href="#funding">Funding</a>
           <a href="#community">Community</a>
         </nav>
-        <p>{'Fresh public exchange API data with read-only charts, funding, and route context.' if is_canonical else 'Local research context with no execution controls.'}</p>
+        <p>{"Fresh public exchange API data with read-only charts, funding, and route context." if is_canonical else "Local research context with no execution controls."}</p>
       </div>
     </section>
     """
@@ -11973,7 +12873,7 @@ def render_pair_snapshot_banner(row: dict[str, Any]) -> str:
       </div>
       <nav aria-label="Stale route actions">
         <a href="/arbitrage?kind={h(route_kind)}">Current board</a>
-        <a href="/intel?symbol={h(symbol)}">Intel for {h(symbol) if symbol else 'symbol'}</a>
+        <a href="/intel?symbol={h(symbol)}">Intel for {h(symbol) if symbol else "symbol"}</a>
       </nav>
     </section>
     """
@@ -12006,7 +12906,9 @@ def render_pair_intel_strip(row: dict[str, Any], pair_intel: dict[str, Any]) -> 
         reason = queue.get("reason") if queue else "No recent local queue row for this symbol."
         next_action = queue.get("next_action") if queue else "Review the route checklist."
         blockers = queue.get("blockers") if queue else []
-        badges = queue.get("badges") if queue else [row.get("kind_label") or row.get("kind") or "route"]
+        badges = (
+            queue.get("badges") if queue else [row.get("kind_label") or row.get("kind") or "route"]
+        )
         blocker_note = label_list(blockers[:2]) or "No queue blockers found"
         context_note = "read-only local context"
     return f"""
@@ -12024,17 +12926,17 @@ def render_pair_intel_strip(row: dict[str, Any], pair_intel: dict[str, Any]) -> 
       <article>
         <span>Community heat</span>
         <strong>{h(len(events))} events</strong>
-        <em>{h(round(_float_or_none(hot.get('score')) or 0, 1))} score</em>
+        <em>{h(round(_float_or_none(hot.get("score")) or 0, 1))} score</em>
       </article>
       <article>
         <span>Badges</span>
-        <strong>{label_list(badges) or 'Route'}</strong>
+        <strong>{label_list(badges) or "Route"}</strong>
         <em>{context_note}</em>
       </article>
       <nav class="pair-intel-links" aria-label="Pair intel links">
         <a href="/intel?symbol={h(symbol)}">Intel</a>
         <a href="/playbook">Playbook</a>
-        <a href="/arbitrage?kind={h(row.get('kind') or 'FUTURES')}">Board</a>
+        <a href="/arbitrage?kind={h(row.get("kind") or "FUTURES")}">Board</a>
       </nav>
     </section>
     """
@@ -12044,10 +12946,10 @@ def render_cockpit_gate(label: str, state: str, note: str) -> str:
     text = "OK" if state == "ok" else "Check" if state == "warn" else "Missing"
     return (
         f'<article class="cockpit-gate {h(state)}">'
-        f'<span>{h(label)}</span>'
-        f'<strong>{h(text)}</strong>'
-        f'<em>{note}</em>'
-        '</article>'
+        f"<span>{h(label)}</span>"
+        f"<strong>{h(text)}</strong>"
+        f"<em>{note}</em>"
+        "</article>"
     )
 
 
@@ -12065,13 +12967,13 @@ def render_pair_decision_strip(
     <section class="pair-decision-strip" aria-label="Route decision">
       <article>
         <span>Route decision</span>
-        <strong>{label_text(health.get('verdict') or 'watch_only')}</strong>
-        <em>{label_text(health.get('next_action') or 'watch')}</em>
+        <strong>{label_text(health.get("verdict") or "watch_only")}</strong>
+        <em>{label_text(health.get("next_action") or "watch")}</em>
       </article>
       <article>
         <span>Freshness</span>
-        <strong>{fmt_age(row.get('age_min'))}</strong>
-        <em>{'fresh row' if (_float_or_none(row.get('age_min')) or 999999) <= board.DEFAULT_FRESH_MAX_AGE_MIN else 'source stale'}</em>
+        <strong>{fmt_age(row.get("age_min"))}</strong>
+        <em>{"fresh row" if (_float_or_none(row.get("age_min")) or 999999) <= board.DEFAULT_FRESH_MAX_AGE_MIN else "source stale"}</em>
       </article>
       <article>
         <span>Community</span>
@@ -12085,7 +12987,7 @@ def render_pair_decision_strip(
       </article>
       <article>
         <span>OKX DEX</span>
-        <strong>{label_text(okx_quote.get('status') or 'not_applicable')}</strong>
+        <strong>{label_text(okx_quote.get("status") or "not_applicable")}</strong>
         <em>quote only</em>
       </article>
     </section>
@@ -12113,14 +13015,14 @@ def render_spread_lens(row: dict[str, Any], detail: dict[str, Any]) -> str:
       <div class="spread-equation">
         <article class="equation-leg buy">
           <span>Buy</span>
-          {render_exchange_link(row, 'long')}
-          <em>{h(leg_market_label(row.get('long_venue'), row.get('long_market_type')))} {fmt_price(long_price)}</em>
+          {render_exchange_link(row, "long")}
+          <em>{h(leg_market_label(row.get("long_venue"), row.get("long_market_type")))} {fmt_price(long_price)}</em>
         </article>
         <div class="equation-operator">to</div>
         <article class="equation-leg sell">
           <span>Sell</span>
-          {render_exchange_link(row, 'short')}
-          <em>{h(leg_market_label(row.get('short_venue'), row.get('short_market_type')))} {fmt_price(short_price)}</em>
+          {render_exchange_link(row, "short")}
+          <em>{h(leg_market_label(row.get("short_venue"), row.get("short_market_type")))} {fmt_price(short_price)}</em>
         </article>
         <div class="equation-operator">=</div>
         <article class="equation-result">
@@ -12132,9 +13034,9 @@ def render_spread_lens(row: dict[str, Any], detail: dict[str, Any]) -> str:
       <div class="spread-track" aria-hidden="true"><span></span></div>
       <div class="spread-breakdown">
         <span><b>{fmt_pct(executable)}</b><em>Executable VWAP</em></span>
-        <span><b>{fmt_signed_pct(row.get('funding_spread_pct'), digits=4)}</b><em>Funding spread</em></span>
+        <span><b>{fmt_signed_pct(row.get("funding_spread_pct"), digits=4)}</b><em>Funding spread</em></span>
         <span><b>{fmt_signed_pct(funding, digits=3)}</b><em>Funding 24h</em></span>
-        <span><b>{fmt_money(row.get('depth_usd'))}</b><em>Visible depth</em></span>
+        <span><b>{fmt_money(row.get("depth_usd"))}</b><em>Visible depth</em></span>
       </div>
     </section>
     """
@@ -12156,15 +13058,41 @@ def render_pair_checklist(row: dict[str, Any], detail: dict[str, Any]) -> str:
         row.get("long_market_type"),
         row.get("short_market_type"),
     }
-    dw_ok = any(row.get(key) is not None for key in ("long_deposit_enabled", "long_withdraw_enabled", "short_deposit_enabled", "short_withdraw_enabled"))
+    dw_ok = any(
+        row.get(key) is not None
+        for key in (
+            "long_deposit_enabled",
+            "long_withdraw_enabled",
+            "short_deposit_enabled",
+            "short_withdraw_enabled",
+        )
+    )
     dex_status = str(okx_quote.get("status") or "not_applicable")
-    dex_ok = dex_status in {"not_applicable", "available", "disabled"} or "blocked" not in dex_status
+    dex_ok = (
+        dex_status in {"not_applicable", "available", "disabled"} or "blocked" not in dex_status
+    )
     private_ok = not health.get("blockers")
     checks = [
-        pair_check_item("Fresh row", fresh_ok, fmt_age(row.get("age_min")) if fresh_ok else f"{fmt_age(row.get('age_min'))} old"),
-        pair_check_item("Public quote", quote_ok, fmt_pct(row.get("spread_pct")) if quote_ok else "quote missing"),
-        pair_check_item("Venue symbols", venue_ok, "both legs resolved" if venue_ok else "venue symbol unresolved"),
-        pair_check_item("Funding", funding_ok, f"{fmt_signed_pct(funding_24h, digits=3)} / 24h" if funding_ok else "funding missing"),
+        pair_check_item(
+            "Fresh row",
+            fresh_ok,
+            fmt_age(row.get("age_min")) if fresh_ok else f"{fmt_age(row.get('age_min'))} old",
+        ),
+        pair_check_item(
+            "Public quote",
+            quote_ok,
+            fmt_pct(row.get("spread_pct")) if quote_ok else "quote missing",
+        ),
+        pair_check_item(
+            "Venue symbols",
+            venue_ok,
+            "both legs resolved" if venue_ok else "venue symbol unresolved",
+        ),
+        pair_check_item(
+            "Funding",
+            funding_ok,
+            f"{fmt_signed_pct(funding_24h, digits=3)} / 24h" if funding_ok else "funding missing",
+        ),
         pair_check_item(
             "D/W signal",
             not dw_applicable or dw_ok,
@@ -12190,10 +13118,10 @@ def render_pair_checklist(row: dict[str, Any], detail: dict[str, Any]) -> str:
       <div class="panel-head flat">
         <div>
           <h2>Route Checklist</h2>
-          <p>{'Current public API fields for this exact venue pair.' if is_canonical else 'Read-only checks for the available local route context.'}</p>
+          <p>{"Current public API fields for this exact venue pair." if is_canonical else "Read-only checks for the available local route context."}</p>
         </div>
       </div>
-      <div class="checklist-grid">{''.join(checks)}</div>
+      <div class="checklist-grid">{"".join(checks)}</div>
     </section>
     """
 
@@ -12203,15 +13131,19 @@ def pair_check_item(label: str, ok: bool, note: str) -> str:
     text = "OK" if ok else "Missing"
     return (
         f'<article class="check-item {state}">'
-        f'<span>{h(label)}</span>'
-        f'<strong>{h(text)}</strong>'
-        f'<em>{note}</em>'
-        '</article>'
+        f"<span>{h(label)}</span>"
+        f"<strong>{h(text)}</strong>"
+        f"<em>{note}</em>"
+        "</article>"
     )
 
 
 def render_route_timeline(row: dict[str, Any], history: list[dict[str, Any]]) -> str:
-    open_spread = row.get("displayed_open_spread_pct") if row.get("displayed_open_spread_pct") is not None else row.get("spread_pct")
+    open_spread = (
+        row.get("displayed_open_spread_pct")
+        if row.get("displayed_open_spread_pct") is not None
+        else row.get("spread_pct")
+    )
     spread_key = "executable_spread_pct" if row.get("canonical_api") else "open_spread_pct"
     delta = history_delta(history, spread_key)
     spread_range = history_range(history, spread_key)
@@ -12219,25 +13151,25 @@ def render_route_timeline(row: dict[str, Any], history: list[dict[str, Any]]) ->
     <section id="timeline" class="route-timeline">
       <div class="timeline-head">
         <div>
-          <span class="page-kicker">{'API Timeline' if row.get('canonical_api') else 'Local Timeline'}</span>
+          <span class="page-kicker">{"API Timeline" if row.get("canonical_api") else "Local Timeline"}</span>
           <h2>{fmt_pct(open_spread)} now, {fmt_signed_pct(delta)} move</h2>
-          <p>{'Spread and funding observations captured from the canonical public API scanner for this exact route.' if row.get('canonical_api') else 'Historical observations captured for this exact route.'}</p>
+          <p>{"Spread and funding observations captured from the canonical public API scanner for this exact route." if row.get("canonical_api") else "Historical observations captured for this exact route."}</p>
         </div>
         <div class="timeline-stats">
           <span>Samples<strong>{h(len(history))}</strong></span>
           <span>Range<strong>{fmt_pct(spread_range)}</strong></span>
-          <span>Age<strong>{fmt_age(row.get('age_min'))}</strong></span>
+          <span>Age<strong>{fmt_age(row.get("age_min"))}</strong></span>
         </div>
       </div>
-      {render_sparkline(history, spread_key, label='open spread', large=True)}
+      {render_sparkline(history, spread_key, label="open spread", large=True)}
       <div class="timeline-dual">
         <div>
           <span>Executable VWAP</span>
-          {render_sparkline(history, 'executable_spread_pct', label='executable spread')}
+          {render_sparkline(history, "executable_spread_pct", label="executable spread")}
         </div>
         <div>
           <span>Funding 24h</span>
-          {render_sparkline(history, 'funding_daily_pct', label='funding 24h')}
+          {render_sparkline(history, "funding_daily_pct", label="funding 24h")}
         </div>
       </div>
     </section>
@@ -12248,7 +13180,9 @@ def render_pair_telegram_context(pair_intel: dict[str, Any]) -> str:
     recent = pair_intel.get("recent_events") or {}
     events = pair_signal_events(recent)
     hot = (pair_intel.get("hot_symbols") or [{}])[0] if pair_intel.get("hot_symbols") else {}
-    reality = (pair_intel.get("route_reality") or [{}])[0] if pair_intel.get("route_reality") else {}
+    reality = (
+        (pair_intel.get("route_reality") or [{}])[0] if pair_intel.get("route_reality") else {}
+    )
     lifecycle = pair_intel.get("signal_lifecycle") or {}
     return f"""
     <section id="community" class="pair-community">
@@ -12257,22 +13191,22 @@ def render_pair_telegram_context(pair_intel: dict[str, Any]) -> str:
           <h2>Telegram Context</h2>
           <p>Latest local group signals for this symbol, joined to board/preflight reality.</p>
         </div>
-        <span class="context-score">{h(round(_float_or_none(hot.get('score')) or 0, 1))} score</span>
+        <span class="context-score">{h(round(_float_or_none(hot.get("score")) or 0, 1))} score</span>
       </div>
       <div class="context-grid">
         <article class="context-card">
           <span>Status</span>
-          <strong>{label_text(reality.get('status') or 'no_local_signal')}</strong>
-          <em>{label_list(reality.get('next_actions') or []) or 'No next action in local rows.'}</em>
+          <strong>{label_text(reality.get("status") or "no_local_signal")}</strong>
+          <em>{label_list(reality.get("next_actions") or []) or "No next action in local rows."}</em>
         </article>
         <article class="context-card">
           <span>Identity</span>
-          <strong>{label_text(reality.get('okx_dex_identity') or 'unknown')}</strong>
-          <em>{label_list(reality.get('top_blockers') or []) or 'No blocker details.'}</em>
+          <strong>{label_text(reality.get("okx_dex_identity") or "unknown")}</strong>
+          <em>{label_list(reality.get("top_blockers") or []) or "No blocker details."}</em>
         </article>
       </div>
       {render_signal_lifecycle(lifecycle)}
-      <div class="signal-list">{''.join(render_signal_event(item) for item in events[:8]) or '<p class="empty">No recent Telegram events for this symbol in the selected window.</p>'}</div>
+      <div class="signal-list">{"".join(render_signal_event(item) for item in events[:8]) or '<p class="empty">No recent Telegram events for this symbol in the selected window.</p>'}</div>
     </section>
     """
 
@@ -12283,10 +13217,10 @@ def render_pair_health_summary(detail: dict[str, Any]) -> str:
     is_canonical = health.get("verdict") == "current_api_data"
     return f"""
     <article class="route-summary-card">
-      <span>{'Data status' if is_canonical else 'Route Decision'}</span>
-      <strong>{label_text(health.get('verdict') or 'watch_only')}</strong>
-      <p>{label_text(health.get('next_action') or ('monitor_route' if is_canonical else 'watch'))}</p>
-      <ul class="plain-list compact">{''.join(f'<li>{label_text(item)}</li>' for item in blockers[:4]) or ('<li>Fresh public route, read-only.</li>' if is_canonical else '<li>No blocker details in this row.</li>')}</ul>
+      <span>{"Data status" if is_canonical else "Route Decision"}</span>
+      <strong>{label_text(health.get("verdict") or "watch_only")}</strong>
+      <p>{label_text(health.get("next_action") or ("monitor_route" if is_canonical else "watch"))}</p>
+      <ul class="plain-list compact">{"".join(f"<li>{label_text(item)}</li>" for item in blockers[:4]) or ("<li>Fresh public route, read-only.</li>" if is_canonical else "<li>No blocker details in this row.</li>")}</ul>
     </article>
     """
 
@@ -12305,21 +13239,21 @@ def render_signal_lifecycle(lifecycle: dict[str, Any]) -> str:
         headline = alert.get("first_line") or close.get("first_line") or item.get("takeaway")
         rendered.append(
             f"""
-            <article class="lifecycle-row {h(item.get('status') or 'quiet')}">
+            <article class="lifecycle-row {h(item.get("status") or "quiet")}">
               <div>
-                <span>{h(item.get('symbol'))} · {h(item.get('kind') or '?')}</span>
-                <strong>{label_text(item.get('status') or 'quiet')}</strong>
+                <span>{h(item.get("symbol"))} · {h(item.get("kind") or "?")}</span>
+                <strong>{label_text(item.get("status") or "quiet")}</strong>
                 <em>{h(headline)}</em>
               </div>
               <div class="lifecycle-metrics">
-                <span>Alert <strong>{fmt_signed_pct(item.get('alert_spread_pct'))}</strong></span>
-                <span>Close <strong>{fmt_signed_pct(item.get('close_spread_pct'))}</strong></span>
-                <span>Move <strong>{fmt_signed_pct(item.get('spread_move_pct'))}</strong></span>
-                <span>Time <strong>{fmt_duration(item.get('minutes_to_close'))}</strong></span>
+                <span>Alert <strong>{fmt_signed_pct(item.get("alert_spread_pct"))}</strong></span>
+                <span>Close <strong>{fmt_signed_pct(item.get("close_spread_pct"))}</strong></span>
+                <span>Move <strong>{fmt_signed_pct(item.get("spread_move_pct"))}</strong></span>
+                <span>Time <strong>{fmt_duration(item.get("minutes_to_close"))}</strong></span>
               </div>
               <div class="action-links">
-                <a href="{h(item.get('href') or '#')}">Open</a>
-                <a href="{h(item.get('signals_href') or '/signals')}">Signals</a>
+                <a href="{h(item.get("href") or "#")}">Open</a>
+                <a href="{h(item.get("signals_href") or "/signals")}">Signals</a>
               </div>
             </article>
             """
@@ -12333,7 +13267,7 @@ def render_signal_lifecycle(lifecycle: dict[str, Any]) -> str:
         </div>
         <span>{summary} · median {median}</span>
       </div>
-      <div class="lifecycle-list">{''.join(rendered) or '<p class="empty">No alert/close lifecycle rows in this local window.</p>'}</div>
+      <div class="lifecycle-list">{"".join(rendered) or '<p class="empty">No alert/close lifecycle rows in this local window.</p>'}</div>
     </section>
     """
 
@@ -12350,17 +13284,21 @@ def pair_signal_events(recent: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def render_signal_event(item: dict[str, Any]) -> str:
-    spread = item.get("spread_pct") if item.get("spread_pct") is not None else item.get("funding_delta_pct")
+    spread = (
+        item.get("spread_pct")
+        if item.get("spread_pct") is not None
+        else item.get("funding_delta_pct")
+    )
     return f"""
     <article class="signal-event">
       <div>
-        <span>{h(item.get('bucket') or item.get('event'))}</span>
-        <strong>{h(item.get('symbol'))}</strong>
-        <p>{h(item.get('first_line') or item.get('text_excerpt'))}</p>
+        <span>{h(item.get("bucket") or item.get("event"))}</span>
+        <strong>{h(item.get("symbol"))}</strong>
+        <p>{h(item.get("first_line") or item.get("text_excerpt"))}</p>
       </div>
       <aside>
         <b>{fmt_signed_pct(spread)}</b>
-        <em>{fmt_age(item.get('age_min'))}</em>
+        <em>{fmt_age(item.get("age_min"))}</em>
       </aside>
     </article>
     """
@@ -12376,28 +13314,32 @@ def render_leg_card(title: str, leg: dict[str, Any]) -> str:
     projected = leg.get("projected_funding_24h_pct")
     funding_24h = settled_24h if settled_24h is not None else projected
     funding_label = "24h settled" if settled_24h is not None else "24h at current"
-    funding_facts = f"""
-        <span>Live funding <strong>{fmt_signed_pct(leg.get('current_funding_pct'), digits=4)}</strong></span>
+    funding_facts = (
+        f"""
+        <span>Live funding <strong>{fmt_signed_pct(leg.get("current_funding_pct"), digits=4)}</strong></span>
         <span>{h(funding_label)} <strong>{fmt_signed_pct(funding_24h, digits=4)}</strong></span>
-        <span>Payout <strong>{h(funding_interval_label(leg.get('funding_interval_hours'), leg.get('funding_interval_assumed')))}</strong></span>
-        <span>Next payout <strong>{h(fmt_next_funding(leg.get('next_funding_ts_us')))}</strong></span>
-    """ if has_funding else ""
+        <span>Payout <strong>{h(funding_interval_label(leg.get("funding_interval_hours"), leg.get("funding_interval_assumed")))}</strong></span>
+        <span>Next payout <strong>{h(fmt_next_funding(leg.get("next_funding_ts_us")))}</strong></span>
+    """
+        if has_funding
+        else ""
+    )
     return f"""
     <article class="leg-card">
       <div class="leg-card-head">
         <span>{h(title)}</span>
-        {render_venue_link(leg.get('venue'), leg.get('market_type'), leg.get('exchange_url'))}
+        {render_venue_link(leg.get("venue"), leg.get("market_type"), leg.get("exchange_url"))}
       </div>
-      <p>{h(leg.get('market_type'))} <span>{h(leg.get('market_symbol'))}</span></p>
+      <p>{h(leg.get("market_type"))} <span>{h(leg.get("market_symbol"))}</span></p>
       <div class="facts">
-        <span>Price <strong>{fmt_price(leg.get('price'))}</strong></span>
-        <span>Depth <strong>{fmt_money(leg.get('depth_usd'))}</strong></span>
-        <span>24h volume <strong>{fmt_money(leg.get('volume_24h_usd'))}</strong></span>
+        <span>Price <strong>{fmt_price(leg.get("price"))}</strong></span>
+        <span>Depth <strong>{fmt_money(leg.get("depth_usd"))}</strong></span>
+        <span>24h volume <strong>{fmt_money(leg.get("volume_24h_usd"))}</strong></span>
         {funding_facts}
-        <span>D/W <strong>{status_char(leg.get('deposit_enabled'))}/{status_char(leg.get('withdraw_enabled'))}</strong></span>
-        <span>24h vol <strong>{fmt_pct(volatility.get('realized_volatility_pct'))}</strong></span>
+        <span>D/W <strong>{status_char(leg.get("deposit_enabled"))}/{status_char(leg.get("withdraw_enabled"))}</strong></span>
+        <span>24h vol <strong>{fmt_pct(volatility.get("realized_volatility_pct"))}</strong></span>
       </div>
-      <p class="plain">{label_text(volatility.get('reason') or volatility.get('status'))}</p>
+      <p class="plain">{label_text(volatility.get("reason") or volatility.get("status"))}</p>
     </article>
     """
 
@@ -12407,9 +13349,9 @@ def render_volatility_card(detail: dict[str, Any]) -> str:
     return f"""
     <article class="data-card">
       <h2>24h Volatility</h2>
-      <div class="kv-row"><span>Route</span><strong>{fmt_pct(route_vol.get('spread_volatility_pct_points'))}</strong></div>
-      <div class="kv-row"><span>Range</span><strong>{fmt_pct(route_vol.get('spread_range_pct_points'))}</strong></div>
-      <p class="plain">{label_text(route_vol.get('reason') or route_vol.get('status'))}</p>
+      <div class="kv-row"><span>Route</span><strong>{fmt_pct(route_vol.get("spread_volatility_pct_points"))}</strong></div>
+      <div class="kv-row"><span>Range</span><strong>{fmt_pct(route_vol.get("spread_range_pct_points"))}</strong></div>
+      <p class="plain">{label_text(route_vol.get("reason") or route_vol.get("status"))}</p>
     </article>
     """
 
@@ -12422,13 +13364,13 @@ def render_funding_card(detail: dict[str, Any]) -> str:
     return f"""
     <article id="funding" class="data-card">
       <h2>Funding</h2>
-      <div class="kv-row"><span>Net 24h</span><strong>{fmt_signed_pct(funding.get('net_24h_pct'), digits=4)}</strong></div>
-      <div class="kv-row"><span>Long 24h</span><strong>{fmt_signed_pct(funding.get('long_24h_pct'), digits=4)}</strong></div>
-      <div class="kv-row"><span>Short 24h</span><strong>{fmt_signed_pct(funding.get('short_24h_pct'), digits=4)}</strong></div>
-      <div class="kv-row"><span>Long payout</span><strong>{h(funding_interval_label(long_leg.get('funding_interval_hours'), long_leg.get('funding_interval_assumed')))}</strong></div>
-      <div class="kv-row"><span>Short payout</span><strong>{h(funding_interval_label(short_leg.get('funding_interval_hours'), short_leg.get('funding_interval_assumed')))}</strong></div>
+      <div class="kv-row"><span>Net 24h</span><strong>{fmt_signed_pct(funding.get("net_24h_pct"), digits=4)}</strong></div>
+      <div class="kv-row"><span>Long 24h</span><strong>{fmt_signed_pct(funding.get("long_24h_pct"), digits=4)}</strong></div>
+      <div class="kv-row"><span>Short 24h</span><strong>{fmt_signed_pct(funding.get("short_24h_pct"), digits=4)}</strong></div>
+      <div class="kv-row"><span>Long payout</span><strong>{h(funding_interval_label(long_leg.get("funding_interval_hours"), long_leg.get("funding_interval_assumed")))}</strong></div>
+      <div class="kv-row"><span>Short payout</span><strong>{h(funding_interval_label(short_leg.get("funding_interval_hours"), short_leg.get("funding_interval_assumed")))}</strong></div>
       <button class="funding-history-open" type="button" data-funding-open>Funding history</button>
-      <p class="plain">{label_text(funding.get('note'))}</p>
+      <p class="plain">{label_text(funding.get("note"))}</p>
     </article>
     """
 
@@ -12473,10 +13415,10 @@ def render_funding_history_dialog(detail: dict[str, Any]) -> str:
             f"""
             <tr>
               <td>{h(stamp)} UTC</td>
-              <td>{fmt_signed_pct(long_item.get('rate_pct'), digits=4)}</td>
-              <td>{fmt_signed_pct(long_item.get('cumulative_pct'), digits=4)}</td>
-              <td>{fmt_signed_pct(short_item.get('rate_pct'), digits=4)}</td>
-              <td>{fmt_signed_pct(short_item.get('cumulative_pct'), digits=4)}</td>
+              <td>{fmt_signed_pct(long_item.get("rate_pct"), digits=4)}</td>
+              <td>{fmt_signed_pct(long_item.get("cumulative_pct"), digits=4)}</td>
+              <td>{fmt_signed_pct(short_item.get("rate_pct"), digits=4)}</td>
+              <td>{fmt_signed_pct(short_item.get("cumulative_pct"), digits=4)}</td>
             </tr>
             """
         )
@@ -12493,13 +13435,13 @@ def render_funding_history_dialog(detail: dict[str, Any]) -> str:
     return f"""
     <dialog class="funding-history-dialog" data-funding-dialog data-funding-route="{h(route_key)}">
       <div class="funding-history-head">
-        <div><strong>Funding history</strong><span>{h(long_leg.get('market_type'))} / {h(short_leg.get('market_type'))}</span></div>
+        <div><strong>Funding history</strong><span>{h(long_leg.get("market_type"))} / {h(short_leg.get("market_type"))}</span></div>
         <button type="button" data-funding-close aria-label="Close funding history">x</button>
       </div>
       <div class="funding-history-scroll">
         <table>
-          <thead><tr><th>Time</th><th>{h(long_leg.get('venue') or 'Long')}</th><th>Long sum</th><th>{h(short_leg.get('venue') or 'Short')}</th><th>Short sum</th></tr></thead>
-          <tbody data-funding-history-rows>{''.join(rows) or empty}</tbody>
+          <thead><tr><th>Time</th><th>{h(long_leg.get("venue") or "Long")}</th><th>Long sum</th><th>{h(short_leg.get("venue") or "Short")}</th><th>Short sum</th></tr></thead>
+          <tbody data-funding-history-rows>{"".join(rows) or empty}</tbody>
         </table>
       </div>
     </dialog>
@@ -12588,11 +13530,11 @@ def render_okx_dex_card(quote: dict[str, Any] | None) -> str:
     return f"""
     <article class="data-card">
       <h2>OKX DEX</h2>
-      <div class="kv-row"><span>Status</span><strong>{label_text(quote.get('status') or 'unknown')}</strong></div>
-      <div class="kv-row"><span>Buy</span><strong>{fmt_price(quote.get('dex_buy_price_usd'))}</strong></div>
-      <div class="kv-row"><span>Sell</span><strong>{fmt_price(quote.get('dex_sell_price_usd'))}</strong></div>
-      <div class="kv-row"><span>Network fee / gas units</span><strong>${h(quote.get('trade_fee_usd') or '?')} / {h(quote.get('estimate_gas_fee') or '?')}</strong></div>
-      <p class="plain">{label_list(quote.get('blockers') or []) or label_text(quote.get('note')) or 'Read-only quote data only.'}</p>
+      <div class="kv-row"><span>Status</span><strong>{label_text(quote.get("status") or "unknown")}</strong></div>
+      <div class="kv-row"><span>Buy</span><strong>{fmt_price(quote.get("dex_buy_price_usd"))}</strong></div>
+      <div class="kv-row"><span>Sell</span><strong>{fmt_price(quote.get("dex_sell_price_usd"))}</strong></div>
+      <div class="kv-row"><span>Network fee / gas units</span><strong>${h(quote.get("trade_fee_usd") or "?")} / {h(quote.get("estimate_gas_fee") or "?")}</strong></div>
+      <p class="plain">{label_list(quote.get("blockers") or []) or label_text(quote.get("note")) or "Read-only quote data only."}</p>
     </article>
     """
 
@@ -12603,9 +13545,9 @@ def render_route_health_card(health: dict[str, Any] | None) -> str:
     return f"""
     <article id="health" class="data-card">
       <h2>Route Health</h2>
-      <div class="kv-row"><span>Verdict</span><strong>{label_text(health.get('verdict') or 'watch_only')}</strong></div>
-      <div class="kv-row"><span>Next</span><strong>{label_text(health.get('next_action') or 'watch')}</strong></div>
-      <ul class="plain-list">{''.join(f'<li>{label_text(item)}</li>' for item in blockers) or '<li>No blocker details in this row.</li>'}</ul>
+      <div class="kv-row"><span>Verdict</span><strong>{label_text(health.get("verdict") or "watch_only")}</strong></div>
+      <div class="kv-row"><span>Next</span><strong>{label_text(health.get("next_action") or "watch")}</strong></div>
+      <ul class="plain-list">{"".join(f"<li>{label_text(item)}</li>" for item in blockers) or "<li>No blocker details in this row.</li>"}</ul>
     </article>
     """
 
@@ -12620,13 +13562,13 @@ def render_chart_link(row: dict[str, Any]) -> str:
 def render_exchange_row(row: dict[str, Any]) -> str:
     return f"""
     <tr class="token-exchange-row">
-      <td data-label="Exchange"><strong>{h(row.get('venue'))}</strong></td>
-      <td data-label="Perp price">{fmt_price(row.get('perp_price'))}</td>
-      <td data-label="Spot price">{fmt_price(row.get('spot_price'))}</td>
-      <td data-label="Funding">{fmt_signed_pct(row.get('funding_rate_pct'), digits=4)}</td>
-      <td data-label="24h volume">{fmt_money(row.get('volume_usd'))}</td>
-      <td data-label="Deposit"><span class="status">{h(live.mark_status(row.get('deposit')))}</span></td>
-      <td data-label="Withdraw"><span class="status">{h(live.mark_status(row.get('withdraw')))}</span></td>
+      <td data-label="Exchange"><strong>{h(row.get("venue"))}</strong></td>
+      <td data-label="Perp price">{fmt_price(row.get("perp_price"))}</td>
+      <td data-label="Spot price">{fmt_price(row.get("spot_price"))}</td>
+      <td data-label="Funding">{fmt_signed_pct(row.get("funding_rate_pct"), digits=4)}</td>
+      <td data-label="24h volume">{fmt_money(row.get("volume_usd"))}</td>
+      <td data-label="Deposit"><span class="status">{h(live.mark_status(row.get("deposit")))}</span></td>
+      <td data-label="Withdraw"><span class="status">{h(live.mark_status(row.get("withdraw")))}</span></td>
     </tr>
     """
 
@@ -12637,7 +13579,7 @@ def render_spread_list(spreads: list[dict[str, Any]]) -> str:
     items = []
     for spread in spreads:
         transfer = (
-            f" <span class=\"muted\">{h(spread.get('transfer_note'))}</span>"
+            f' <span class="muted">{h(spread.get("transfer_note"))}</span>'
             if spread.get("transfer_note")
             else ""
         )
@@ -12648,7 +13590,7 @@ def render_spread_list(spreads: list[dict[str, Any]]) -> str:
             f"<strong>{fmt_pct(spread['spread_pct'])}</strong>{transfer}"
             "</li>"
         )
-    return f"<ol class=\"spread-list\">{''.join(items)}</ol>"
+    return f'<ol class="spread-list">{"".join(items)}</ol>'
 
 
 def render_dex_line(dex: dict[str, Any] | None) -> str:
@@ -12664,11 +13606,17 @@ def render_dex_line(dex: dict[str, Any] | None) -> str:
 
 
 def render_hint(text: str | None) -> str:
-    return f"<div class=\"callout\"><strong>Why hasn't this converged?</strong><br>{h(text)}</div>" if text else ""
+    return (
+        f'<div class="callout"><strong>Why hasn\'t this converged?</strong><br>{h(text)}</div>'
+        if text
+        else ""
+    )
 
 
 def render_age_banner(age_min: float | None, error: str | None) -> str:
-    danger = error is not None or (age_min is not None and age_min > board.DEFAULT_FRESH_MAX_AGE_MIN)
+    danger = error is not None or (
+        age_min is not None and age_min > board.DEFAULT_FRESH_MAX_AGE_MIN
+    )
     if error:
         text = f"Board data unavailable: {error}"
     elif age_min is None:
@@ -13048,8 +13996,7 @@ def render_mobile_secondary_nav(active: str) -> str:
         for key, href, label in items
     )
     return (
-        '<nav class="mobile-secondary-nav" aria-label="Mobile community navigation">'
-        f"{links}</nav>"
+        f'<nav class="mobile-secondary-nav" aria-label="Mobile community navigation">{links}</nav>'
     )
 
 
@@ -13075,7 +14022,7 @@ def shell(title: str, active: str, body: str) -> str:
         f'<a class="account-chip" href="{"/partner" if partner_cabinet else "/account"}"><span>{h(user.display_name)}</span><em>{"Partner" if partner_cabinet else h(PLAN_CATALOG.get(_user_entitlement_tier(user), PLAN_CATALOG["free"])["name"])}</em></a>'
         f'<button class="logout-button" type="button" data-logout data-csrf="{h(user.csrf_token or "")}" aria-label="Sign out" title="Sign out">&#x21AA;</button>'
         if user
-        else ''
+        else ""
     )
     return f"""<!doctype html>
 <html lang="en">
@@ -14934,7 +15881,8 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 .position-list,.notification-list {{ display:grid; gap:10px; }} .position-card,.account-empty-panel,.account-settings,.notification-list article,.member-row {{ border:1px solid var(--terminal-line); background:var(--terminal-panel); padding:16px; }}
 .position-card header,.position-card footer,.position-legs {{ display:flex; justify-content:space-between; align-items:center; gap:14px; }} .position-card header>div:first-child {{ display:grid; grid-template-columns:auto auto; gap:3px 12px; align-items:baseline; }} .position-card header em {{ grid-column:2; color:var(--terminal-muted); font-style:normal; font-size:12px; }}
 .position-token {{ font-size:24px; font-weight:900; grid-row:1/3; }} .position-status {{ text-align:right; display:grid; }} .position-status span {{ text-transform:uppercase; font-size:10px; color:var(--terminal-muted); }} .position-status.live strong {{ color:var(--green); }} .position-status.refreshing strong {{ color:var(--terminal-warning); }} .position-status.closed strong {{ color:var(--terminal-muted); }}
-.position-metrics {{ display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); border-block:1px solid var(--terminal-line); margin:14px -16px; }} .position-metrics span {{ padding:11px 16px; display:grid; gap:4px; color:var(--terminal-muted); font-size:11px; border-right:1px solid var(--terminal-line); }} .position-metrics strong {{ color:var(--terminal-text); font-size:16px; }}
+.position-metrics {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border-block:1px solid var(--terminal-line); margin:14px -16px 8px; }} .position-metrics span {{ min-width:0; padding:11px 16px; display:grid; gap:4px; color:var(--terminal-muted); font-size:11px; border-right:1px solid var(--terminal-line); border-bottom:1px solid var(--terminal-line); }} .position-metrics strong {{ overflow-wrap:anywhere; color:var(--terminal-text); font-size:16px; }}
+.position-funding-source {{ margin:0 0 12px; color:var(--terminal-muted); font-size:11px; }}
 .position-legs>div {{ flex:1; display:grid; grid-template-columns:auto 1fr auto; gap:10px; }} .position-legs span,.position-legs em {{ color:var(--terminal-muted); font-style:normal; }} .position-card footer {{ margin-top:14px; color:var(--terminal-muted); font-size:12px; }} .position-card footer div {{ display:flex; flex-wrap:wrap; gap:7px; align-items:center; }} .position-card footer button,.position-card footer a {{ border:1px solid var(--terminal-line); background:transparent; color:var(--terminal-text); padding:7px 10px; text-decoration:none; font:inherit; font-weight:700; cursor:pointer; }}
 .chart-position-opened {{ display:block; margin:-8px 0 12px; color:var(--terminal-warning); font-size:12px; font-weight:800; }}
 .account-dialog {{ width:min(760px,calc(100% - 28px)); max-height:90vh; overflow:auto; border:1px solid var(--terminal-line); background:var(--terminal-panel); color:var(--terminal-text); padding:0; }} .account-dialog::backdrop {{ background:rgba(0,0,0,.68); }} .account-dialog form>header,.account-dialog form>footer {{ padding:15px 18px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--terminal-line); }} .account-dialog form>footer {{ border:0; border-top:1px solid var(--terminal-line); justify-content:flex-end; }} .account-dialog h2 {{ margin:2px 0 0; }} .account-dialog header span {{ color:var(--terminal-muted); font-size:11px; text-transform:uppercase; }} .account-dialog button {{ border:1px solid var(--terminal-line); background:transparent; color:var(--terminal-text); padding:8px 13px; cursor:pointer; }} .account-dialog button.primary {{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }}
@@ -14963,7 +15911,7 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   </div>
   <div class="header-strip"></div>
   <nav class="mobile-primary-nav" aria-label="Mobile primary navigation">{render_primary_nav(active, signed_in=user is not None)}</nav>
-  {render_mobile_secondary_nav(active) if user else ''}
+  {render_mobile_secondary_nav(active) if user else ""}
 </header>
 <main>{body}</main>
 {render_theme_script()}
@@ -14977,13 +15925,19 @@ def _decorate_board_row(row: board.BoardRow) -> dict[str, Any]:
     data = row.to_dict()
     data["kind_label"] = row.route_label
     data["kind_class"] = f"kind-{row.kind.lower().replace('-', '_')}"
-    data["route_line"] = f"Buy on {row.long_venue or '?'} {row.long_market_type or '?'}, sell on {row.short_venue or '?'} {row.short_market_type or '?'}"
+    data["route_line"] = (
+        f"Buy on {row.long_venue or '?'} {row.long_market_type or '?'}, sell on {row.short_venue or '?'} {row.short_market_type or '?'}"
+    )
     data["pair_url"] = f"/pair/{board.route_key_url(row.route_key)}"
     return data
 
 
 def _decorate_history_row(row: board.BoardRow) -> dict[str, Any]:
-    open_spread = row.displayed_open_spread_pct if row.displayed_open_spread_pct is not None else row.spread_pct
+    open_spread = (
+        row.displayed_open_spread_pct
+        if row.displayed_open_spread_pct is not None
+        else row.spread_pct
+    )
     return {
         "symbol": row.symbol,
         "kind": row.kind,
@@ -15015,7 +15969,9 @@ def _query_bool(query: dict[str, list[str]], key: str) -> bool:
     return str(_query_first(query, key) or "").casefold() in {"1", "true", "yes", "on"}
 
 
-def _query_float(query: dict[str, list[str]], key: str, default: float | None = None) -> float | None:
+def _query_float(
+    query: dict[str, list[str]], key: str, default: float | None = None
+) -> float | None:
     value = _query_first(query, key)
     if value is None:
         return default
@@ -15046,7 +16002,9 @@ def _query_lists_with(query: dict[str, list[str]], **updates: Any) -> dict[str, 
 
 
 def _clean_symbol(value: str) -> str:
-    return "".join(ch for ch in unquote(value).upper() if ch.isalnum() or ch in {"_", "-"}).strip("-_")[:24]
+    return "".join(ch for ch in unquote(value).upper() if ch.isalnum() or ch in {"_", "-"}).strip(
+        "-_"
+    )[:24]
 
 
 def active_class(active: str, name: str) -> str:
@@ -15202,7 +16160,9 @@ def _float_or_none(value: Any) -> float | None:
 )
 def main(host: str, port: int, board_path: Path) -> None:
     config = alerts.load_config()
-    server = SpreadBoardServer((host, port), SpreadBoardHandler, board_path=board_path, config=config)
+    server = SpreadBoardServer(
+        (host, port), SpreadBoardHandler, board_path=board_path, config=config
+    )
     click.echo(f"SpreadBoard serving on http://{host}:{port}")
     crypto_stop = crypto_watcher.start_background(db_path=server.accounts_path)
     if crypto_stop is None:

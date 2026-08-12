@@ -16,6 +16,7 @@ from spreadboard import (
     chart_catalog,
     live_book_cache,
     market_history,
+    portfolio_funding,
     position_markets,
 )
 
@@ -39,6 +40,7 @@ def portfolio_snapshot(
     funding_legs = bulk_quotes.load_funding()
     catalogue = chart_catalog.load()
     market_index = position_markets.catalogue_market_index(catalogue)
+    funding_snapshot = portfolio_funding.load()
     hydrated = [
         _hydrate_position(
             item,
@@ -47,6 +49,7 @@ def portfolio_snapshot(
             funding_legs=funding_legs,
             catalogue=catalogue,
             market_index=market_index,
+            funding_snapshot=funding_snapshot,
         )
         for item in positions
     ]
@@ -73,6 +76,7 @@ def _hydrate_position(
     funding_legs: dict[str, dict[str, Any]] | None = None,
     catalogue: dict[str, Any] | None = None,
     market_index: dict[tuple[str, str, str, str], dict[str, Any]] | None = None,
+    funding_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     market = position_markets.resolve_position_route(
         position,
@@ -81,16 +85,32 @@ def _hydrate_position(
         market_index=market_index,
     )
     current = market.get("current_row")
+    position_quote = None
     if position.get("status") == "open":
+        position_quote = _quote_position(
+            position,
+            books=books or {},
+            resolved_market=market,
+        )
         current = _merge_position_quotes(
             market.get("canonical_route") or current or _position_route_shell(position),
             current,
-            _quote_position(position, books=books or {}),
+            position_quote,
             _history_quote(str(market.get("history_route_key") or "")),
         )
     funding = _position_funding(position, current, funding_legs or {})
-    long_mark = _number(position.get("long_exit_price")) if position.get("status") == "closed" else _number((current or {}).get("long_bid"))
-    short_mark = _number(position.get("short_exit_price")) if position.get("status") == "closed" else _number((current or {}).get("short_ask"))
+    account_marks = portfolio_funding.exact_marks(position, funding_snapshot)
+    movement_quote = _movement_quote(position, position_quote, account_marks)
+    long_mark = (
+        _number(position.get("long_exit_price"))
+        if position.get("status") == "closed"
+        else _number(movement_quote.get("long_exit"))
+    )
+    short_mark = (
+        _number(position.get("short_exit_price"))
+        if position.get("status") == "closed"
+        else _number(movement_quote.get("short_exit"))
+    )
     long_entry = _number(position.get("long_entry_price")) or 0.0
     short_entry = _number(position.get("short_entry_price")) or 0.0
     long_quantity = _number(position.get("long_quantity")) or 0.0
@@ -98,15 +118,26 @@ def _hydrate_position(
     long_pnl = (long_mark - long_entry) * long_quantity if long_mark is not None else None
     short_pnl = (short_entry - short_mark) * short_quantity if short_mark is not None else None
     price_pnl = long_pnl + short_pnl if long_pnl is not None and short_pnl is not None else None
-    funding_usd = sum(_number(item.get("amount_usd")) or 0.0 for item in position.get("funding_cashflows") or [])
-    fees = (_number(position.get("entry_fees_usd")) or 0.0) + (_number(position.get("exit_fees_usd")) or 0.0)
-    total_pnl = price_pnl + funding_usd - fees if price_pnl is not None else None
-    long_ask = _number((current or {}).get("long_ask"))
-    short_bid = _number((current or {}).get("short_bid"))
+    settled_funding = portfolio_funding.exact_funding(position, funding_snapshot)
+    funding_usd = _number(settled_funding.get("amount_usd"))
+    fees = (_number(position.get("entry_fees_usd")) or 0.0) + (
+        _number(position.get("exit_fees_usd")) or 0.0
+    )
+    total_pnl = (
+        price_pnl + funding_usd - fees
+        if price_pnl is not None and funding_usd is not None and settled_funding.get("known")
+        else None
+    )
+    long_ask = _number(movement_quote.get("long_entry"))
+    short_bid = _number(movement_quote.get("short_entry"))
     open_spread = _spread(long_ask, short_bid)
-    exit_spread = _spread(_number((current or {}).get("short_ask")), _number((current or {}).get("long_bid")))
+    exit_spread = _spread(short_mark, long_mark)
     listing_status = str(market.get("listing_status") or "unlisted")
-    if current and (long_mark is not None or short_mark is not None) and listing_status == "unlisted":
+    if (
+        current
+        and (long_mark is not None or short_mark is not None)
+        and listing_status == "unlisted"
+    ):
         listing_status = "listed"
     if position.get("status") == "closed":
         quote_status = "closed"
@@ -130,9 +161,9 @@ def _hydrate_position(
             ),
             "market_listing_status": listing_status,
             "quote_status": quote_status,
-            "quote_source": (current or {}).get("position_quote_source"),
-            "quote_ts_us": (current or {}).get("quote_ts_us"),
-            "quote_age_seconds": _quote_age_seconds(current),
+            "quote_source": movement_quote.get("source"),
+            "quote_ts_us": movement_quote.get("quote_ts_us"),
+            "quote_age_seconds": _quote_age_seconds(movement_quote),
             "quote_refresh_needed": bool(
                 position.get("status") == "open"
                 and market.get("canonical_route")
@@ -152,6 +183,12 @@ def _hydrate_position(
             "short_price_pnl_usd": short_pnl,
             "price_pnl_usd": price_pnl,
             "funding_income_usd": funding_usd,
+            "funding_known": bool(settled_funding.get("known")),
+            "funding_source": settled_funding.get("source"),
+            "funding_sync_status": settled_funding.get("status"),
+            "funding_event_count": settled_funding.get("event_count"),
+            "funding_synced_at": settled_funding.get("synced_at"),
+            "funding_latest_event_at": settled_funding.get("latest_event_at"),
             "fees_usd": fees,
             "total_pnl_usd": total_pnl,
             "current_open_spread_pct": open_spread,
@@ -171,9 +208,12 @@ def _matching_route(position: dict[str, Any], rows: list[dict[str, Any]]) -> dic
 
 
 def _quote_position(
-    position: dict[str, Any], *, books: dict[str, Any]
+    position: dict[str, Any],
+    *,
+    books: dict[str, Any],
+    resolved_market: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Mark a manual route from the resident cache, never a page-time API call."""
+    """Full-position executable VWAPs from resident books, never top-of-book."""
     row: dict[str, Any] = {
         "route_key": position.get("route_key"),
         "token": position.get("token"),
@@ -204,12 +244,22 @@ def _quote_position(
             continue
         bids = list(getattr(book, "bids", None) or [])
         asks = list(getattr(book, "asks", None) or [])
-        if bids:
-            row[f"{side}_bid"] = _number(bids[0][0])
-        if asks:
-            row[f"{side}_ask"] = _number(asks[0][0])
+        quantity = _number(position.get(f"{side}_quantity")) or 0.0
+        resolved_leg = (
+            (resolved_market or {}).get(f"{side}_leg")
+            if isinstance((resolved_market or {}).get(f"{side}_leg"), dict)
+            else {}
+        )
+        contract_size = _number(resolved_leg.get("contract_size")) or 1.0
+        bid = _quantity_vwap(bids, quantity, contract_size=contract_size)
+        ask = _quantity_vwap(asks, quantity, contract_size=contract_size)
+        if bid is not None:
+            row[f"{side}_bid"] = bid
+        if ask is not None:
+            row[f"{side}_ask"] = ask
         row[f"{side}_quote_ts_us"] = getattr(book, "quote_ts_us", None)
-        found = True
+        row[f"{side}_quantity_complete"] = bid is not None and ask is not None
+        found = found or bid is not None or ask is not None
     if found:
         timestamps = [
             int(value)
@@ -217,8 +267,104 @@ def _quote_position(
             if (value := row.get(f"{side}_quote_ts_us")) is not None
         ]
         row["quote_ts_us"] = min(timestamps) if timestamps else None
-        row["position_quote_source"] = "resident_websocket_book"
+        row["position_quote_source"] = "resident_full_position_vwap"
     return row if found else None
+
+
+def _quantity_vwap(
+    levels: list[list[float]],
+    quantity: float,
+    *,
+    contract_size: float = 1.0,
+) -> float | None:
+    """VWAP a base-asset quantity; derivative book sizes are contracts."""
+
+    if quantity <= 0 or contract_size <= 0:
+        return None
+    remaining = quantity
+    value = 0.0
+    filled = 0.0
+    for raw in levels:
+        if not isinstance(raw, (list, tuple)) or len(raw) < 2:
+            continue
+        price = _number(raw[0])
+        contracts = _number(raw[1])
+        if price is None or contracts is None or price <= 0 or contracts <= 0:
+            continue
+        available = contracts * contract_size
+        take = min(remaining, available)
+        value += take * price
+        filled += take
+        remaining -= take
+        if remaining <= max(1e-12, quantity * 1e-12):
+            break
+    if remaining > max(1e-9, quantity * 1e-9) or filled <= 0:
+        return None
+    return value / filled
+
+
+def _movement_quote(
+    position: dict[str, Any],
+    position_quote: dict[str, Any] | None,
+    account_marks: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Only full-size executable quotes may mark an open position."""
+
+    result: dict[str, Any] = {}
+    sources: list[str] = []
+    timestamps: list[int] = []
+    for side in ("long", "short"):
+        external = account_marks.get(side)
+        if external:
+            price = _number(external.get("price_usd"))
+            if price is not None:
+                result[f"{side}_exit"] = price
+                sources.append(str(external.get("source") or "exact_account_mark"))
+                try:
+                    stamp = datetime.fromisoformat(
+                        str(external.get("quoted_at") or external.get("synced_at") or "").replace(
+                            "Z", "+00:00"
+                        )
+                    )
+                    timestamps.append(int(stamp.timestamp() * 1_000_000))
+                except ValueError:
+                    pass
+            continue
+        if _is_dex_leg(position, side):
+            continue
+        bid = _number((position_quote or {}).get(f"{side}_bid"))
+        ask = _number((position_quote or {}).get(f"{side}_ask"))
+        if side == "long" and bid is not None:
+            result["long_exit"] = bid
+        if side == "short" and ask is not None:
+            result["short_exit"] = ask
+        if ask is not None:
+            result[f"{side}_entry"] = ask
+        if bid is not None:
+            result[f"{side}_entry_bid"] = bid
+        if bid is not None or ask is not None:
+            sources.append(
+                str(
+                    (position_quote or {}).get("position_quote_source")
+                    or "resident_full_position_vwap"
+                )
+            )
+            stamp = _number((position_quote or {}).get(f"{side}_quote_ts_us"))
+            if stamp is not None:
+                timestamps.append(int(stamp))
+    # A new spread sells the short at its bid; keep the naming explicit.
+    result["short_entry"] = result.pop("short_entry_bid", None)
+    if timestamps:
+        result["quote_ts_us"] = min(timestamps)
+    if sources:
+        result["source"] = "+".join(dict.fromkeys(sources))
+    return result
+
+
+def _is_dex_leg(position: dict[str, Any], side: str) -> bool:
+    market_type = str(position.get(f"{side}_market_type") or "").casefold()
+    venue = str(position.get(f"{side}_venue") or "").casefold()
+    return market_type == "dex" or " dex " in f" {venue} "
 
 
 def _history_quote(route_key: str) -> dict[str, Any] | None:
@@ -267,9 +413,7 @@ def _merge_position_quotes(
     current = next((item for item in candidates if isinstance(item, dict)), {})
     result = {**current, **structural}
     current_notes = current.get("notes") if isinstance(current.get("notes"), dict) else {}
-    structural_notes = (
-        structural.get("notes") if isinstance(structural.get("notes"), dict) else {}
-    )
+    structural_notes = structural.get("notes") if isinstance(structural.get("notes"), dict) else {}
     if current_notes or structural_notes:
         notes = {**current_notes, **structural_notes}
         current_inputs = (
@@ -284,11 +428,7 @@ def _merge_position_quotes(
         )
         notes["route_inputs"] = {
             side: {
-                **(
-                    current_inputs.get(side)
-                    if isinstance(current_inputs.get(side), dict)
-                    else {}
-                ),
+                **(current_inputs.get(side) if isinstance(current_inputs.get(side), dict) else {}),
                 **(
                     structural_inputs.get(side)
                     if isinstance(structural_inputs.get(side), dict)
@@ -306,9 +446,10 @@ def _merge_position_quotes(
         for candidate in candidates:
             if not isinstance(candidate, dict):
                 continue
-            if _number(candidate.get(f"{side}_bid")) is None and _number(
-                candidate.get(f"{side}_ask")
-            ) is None:
+            if (
+                _number(candidate.get(f"{side}_bid")) is None
+                and _number(candidate.get(f"{side}_ask")) is None
+            ):
                 continue
             timestamp = int(
                 _number(candidate.get(f"{side}_quote_ts_us"))
@@ -403,7 +544,9 @@ def _position_funding(
                 else current.get(f"{side}_funding_pct")
             )
             interval = interval or _number(current.get(f"{side}_funding_interval_hours"))
-        projected = rate * (24.0 / interval) if rate is not None and interval and interval > 0 else None
+        projected = (
+            rate * (24.0 / interval) if rate is not None and interval and interval > 0 else None
+        )
         legs[side] = {
             "status": "live" if projected is not None else "unavailable",
             "rate_pct": rate,
@@ -422,21 +565,43 @@ def _position_funding(
     }
 
 
-def _portfolio_totals(positions: list[dict[str, Any]], monthly_capital: float | None) -> dict[str, Any]:
+def _portfolio_totals(
+    positions: list[dict[str, Any]], monthly_capital: float | None
+) -> dict[str, Any]:
     open_positions = [item for item in positions if item.get("status") == "open"]
     closed_positions = [item for item in positions if item.get("status") == "closed"]
-    known = [float(item["total_pnl_usd"]) for item in positions if item.get("total_pnl_usd") is not None]
-    funding = sum(float(item.get("funding_income_usd") or 0.0) for item in positions)
-    realized = sum(float(item.get("total_pnl_usd") or 0.0) for item in closed_positions)
-    unrealized = sum(float(item.get("total_pnl_usd") or 0.0) for item in open_positions if item.get("total_pnl_usd") is not None)
-    total = sum(known)
+    known = [
+        float(item["total_pnl_usd"]) for item in positions if item.get("total_pnl_usd") is not None
+    ]
+    funding_total = sum(
+        float(item.get("funding_income_usd") or 0.0)
+        for item in positions
+        if item.get("funding_known")
+    )
+    funding_unknown = sum(not bool(item.get("funding_known")) for item in positions)
+    funding = funding_total if funding_unknown == 0 else None
+    realized_values = [
+        float(item["total_pnl_usd"])
+        for item in closed_positions
+        if item.get("total_pnl_usd") is not None
+    ]
+    unrealized_values = [
+        float(item["total_pnl_usd"])
+        for item in open_positions
+        if item.get("total_pnl_usd") is not None
+    ]
+    realized = sum(realized_values) if len(realized_values) == len(closed_positions) else None
+    unrealized = sum(unrealized_values) if len(unrealized_values) == len(open_positions) else None
+    total = sum(known) if len(known) == len(positions) else None
     configured_capital = _number(monthly_capital)
     tracked_capital = sum(
         float(item.get("capital_usd") or 0.0)
         for item in positions
         if _number(item.get("capital_usd")) is not None
     )
-    capital = configured_capital if configured_capital and configured_capital > 0 else tracked_capital
+    capital = (
+        configured_capital if configured_capital and configured_capital > 0 else tracked_capital
+    )
     return {
         "open_positions": len(open_positions),
         "closed_positions": len(closed_positions),
@@ -445,13 +610,20 @@ def _portfolio_totals(positions: list[dict[str, Any]], monthly_capital: float | 
         "realized_pnl_usd": realized,
         "unrealized_pnl_usd": unrealized,
         "funding_income_usd": funding,
+        "funding_unknown_positions": funding_unknown,
         "monthly_capital_usd": capital,
-        "capital_basis": "configured_monthly" if configured_capital and configured_capital > 0 else "tracked_positions",
-        "monthly_return_pct": total / capital * 100.0 if capital and capital > 0 else None,
+        "capital_basis": "configured_monthly"
+        if configured_capital and configured_capital > 0
+        else "tracked_positions",
+        "monthly_return_pct": (
+            total / capital * 100.0 if total is not None and capital and capital > 0 else None
+        ),
     }
 
 
-def _evaluate_position_alerts(user_id: int, position: dict[str, Any], *, accounts_path: Path | str) -> int:
+def _evaluate_position_alerts(
+    user_id: int, position: dict[str, Any], *, accounts_path: Path | str
+) -> int:
     created = 0
     values = {
         "exit_spread_pct": position.get("current_exit_spread_pct"),
@@ -564,11 +736,18 @@ class PositionAlertWorker:
                 notification_count += _evaluate_position_alerts(
                     user_id, hydrated, accounts_path=self.accounts_path
                 )
-        return {"users": user_count, "positions": position_count, "notifications": notification_count}
+        return {
+            "users": user_count,
+            "positions": position_count,
+            "notifications": notification_count,
+        }
 
 
 def _route_kind(position: dict[str, Any]) -> str:
-    types = {str(position.get("long_market_type") or ""), str(position.get("short_market_type") or "")}
+    types = {
+        str(position.get("long_market_type") or ""),
+        str(position.get("short_market_type") or ""),
+    }
     if types == {"Futures"}:
         return "FUTURES"
     if types == {"Spot"}:
@@ -577,7 +756,11 @@ def _route_kind(position: dict[str, Any]) -> str:
 
 
 def _spread(denominator: float | None, numerator: float | None) -> float | None:
-    return (numerator / denominator - 1.0) * 100.0 if denominator and numerator and denominator > 0 else None
+    return (
+        (numerator / denominator - 1.0) * 100.0
+        if denominator and numerator and denominator > 0
+        else None
+    )
 
 
 def _number(value: Any) -> float | None:

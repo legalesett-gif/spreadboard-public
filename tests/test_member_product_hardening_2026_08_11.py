@@ -122,9 +122,11 @@ def test_manual_position_marks_use_resident_books_without_exchange_calls() -> No
             "long_venue": "A",
             "long_market_type": "Spot",
             "long_symbol": "X/USDT",
+            "long_quantity": 10,
             "short_venue": "B",
             "short_market_type": "Futures",
             "short_symbol": "X/USDT:USDT",
+            "short_quantity": 10,
         },
         books=books,
     )

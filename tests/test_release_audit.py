@@ -3418,6 +3418,6 @@ def test_the_column_no_longer_promises_order_book_depth() -> None:
     source = Path("spreadboard/server.py").read_text(encoding="utf-8")
 
     assert "24h vol, thinner leg" in source
-    assert "('depth', '24h volume')" in source
+    assert '("depth", "24h volume")' in source or "('depth', '24h volume')" in source
     # The guide must not claim it is depth.
     assert "roughly how much you can trade before you move the price" not in source

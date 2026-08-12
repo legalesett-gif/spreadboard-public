@@ -32,7 +32,9 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         assert response.status == 401
         response.read()
 
-        connection.request("POST", "/api/billing/webhook", body="{}", headers={"Content-Type": "application/json"})
+        connection.request(
+            "POST", "/api/billing/webhook", body="{}", headers={"Content-Type": "application/json"}
+        )
         response = connection.getresponse()
         assert response.status == 400
         assert json.loads(response.read())["error"] == "billing_webhook_not_configured"
@@ -41,27 +43,47 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         monkeypatch.setenv("SPREADBOARD_TELEGRAM_BOT_USERNAME", "spreadboard_test_bot")
         monkeypatch.setenv("SPREADBOARD_TELEGRAM_WEBHOOK_SECRET", "webhook-secret")
         telegram_update = json.dumps(
-            {"update_id": 1, "message": {"chat": {"id": 99, "type": "private"}, "text": "/mysubscription"}}
+            {
+                "update_id": 1,
+                "message": {"chat": {"id": 99, "type": "private"}, "text": "/mysubscription"},
+            }
         )
         connection.request(
-            "POST", "/api/telegram/webhook", body=telegram_update,
-            headers={"Content-Type": "application/json", "X-Telegram-Bot-Api-Secret-Token": "forged"},
+            "POST",
+            "/api/telegram/webhook",
+            body=telegram_update,
+            headers={
+                "Content-Type": "application/json",
+                "X-Telegram-Bot-Api-Secret-Token": "forged",
+            },
         )
         response = connection.getresponse()
         assert response.status == 400
         assert json.loads(response.read())["error"] == "invalid_telegram_webhook_secret"
 
         connection.request(
-            "POST", "/api/telegram/webhook", body=telegram_update,
-            headers={"Content-Type": "application/json", "X-Telegram-Bot-Api-Secret-Token": "webhook-secret"},
+            "POST",
+            "/api/telegram/webhook",
+            body=telegram_update,
+            headers={
+                "Content-Type": "application/json",
+                "X-Telegram-Bot-Api-Secret-Token": "webhook-secret",
+            },
         )
         response = connection.getresponse()
         assert response.status == 200
         assert "Link this chat" in json.loads(response.read())["text"]
 
         connection.request(
-            "POST", "/api/register",
-            body=json.dumps({"display_name": "New Member", "email": "new@example.test", "password": "new-member-password"}),
+            "POST",
+            "/api/register",
+            body=json.dumps(
+                {
+                    "display_name": "New Member",
+                    "email": "new@example.test",
+                    "password": "new-member-password",
+                }
+            ),
             headers={"Content-Type": "application/json"},
         )
         response = connection.getresponse()
@@ -98,7 +120,9 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         connection.request(
             "POST",
             "/api/login",
-            body=json.dumps({"email": "admin@example.test", "password": "correct-horse-battery-staple"}),
+            body=json.dumps(
+                {"email": "admin@example.test", "password": "correct-horse-battery-staple"}
+            ),
             headers={"Content-Type": "application/json"},
         )
         response = connection.getresponse()
@@ -107,19 +131,34 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         assert "HttpOnly" in cookie and "Secure" in cookie and "SameSite=Lax" in cookie
         login = json.loads(response.read())
 
-        monkeypatch.setattr(billing, "create_checkout_session", lambda user: "https://checkout.stripe.com/test-session")
+        monkeypatch.setattr(
+            billing,
+            "create_checkout_session",
+            lambda user: "https://checkout.stripe.com/test-session",
+        )
         connection.request(
-            "POST", "/api/billing/checkout", body="{}",
-            headers={"Cookie": cookie, "Content-Type": "application/json", "X-CSRF-Token": login["csrf_token"]},
+            "POST",
+            "/api/billing/checkout",
+            body="{}",
+            headers={
+                "Cookie": cookie,
+                "Content-Type": "application/json",
+                "X-CSRF-Token": login["csrf_token"],
+            },
         )
         response = connection.getresponse()
         assert response.status == 400
         assert json.loads(response.read())["error"] == "subscription_consent_required"
 
         connection.request(
-            "POST", "/api/billing/checkout",
+            "POST",
+            "/api/billing/checkout",
             body=json.dumps({"terms_accepted": True, "immediate_access_consent": True}),
-            headers={"Cookie": cookie, "Content-Type": "application/json", "X-CSRF-Token": login["csrf_token"]},
+            headers={
+                "Cookie": cookie,
+                "Content-Type": "application/json",
+                "X-CSRF-Token": login["csrf_token"],
+            },
         )
         response = connection.getresponse()
         assert response.status == 200
@@ -155,7 +194,11 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
             "POST",
             "/api/positions",
             body=json.dumps(payload),
-            headers={"Cookie": cookie, "Content-Type": "application/json", "X-CSRF-Token": login["csrf_token"]},
+            headers={
+                "Cookie": cookie,
+                "Content-Type": "application/json",
+                "X-CSRF-Token": login["csrf_token"],
+            },
         )
         response = connection.getresponse()
         assert response.status == 201
@@ -167,7 +210,9 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         thread.join(timeout=5)
 
 
-def test_portfolio_separates_price_funding_and_fees(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_portfolio_separates_price_funding_and_fees(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     db_path = tmp_path / "accounts.sqlite3"
     accounts.initialize(db_path)
     user = accounts.create_user(
@@ -178,29 +223,60 @@ def test_portfolio_separates_price_funding_and_fees(tmp_path, monkeypatch: pytes
         subscription_days=30,
         db_path=db_path,
     )
-    accounts.update_account_settings(user["id"], display_name="Member", monthly_capital_usd=1000, db_path=db_path)
+    accounts.update_account_settings(
+        user["id"], display_name="Member", monthly_capital_usd=1000, db_path=db_path
+    )
     position = accounts.create_position(
         user["id"],
         {
-            "token": "TEST", "long_venue": "A", "long_market_type": "Spot",
-            "long_quantity": 2, "long_entry_price": 100,
-            "short_venue": "B", "short_market_type": "Futures",
-            "short_quantity": 2, "short_entry_price": 110,
-            "entry_fees_usd": 2, "capital_usd": 400,
+            "token": "TEST",
+            "long_venue": "A",
+            "long_market_type": "Spot",
+            "long_quantity": 2,
+            "long_entry_price": 100,
+            "short_venue": "B",
+            "short_market_type": "Futures",
+            "short_quantity": 2,
+            "short_entry_price": 110,
+            "entry_fees_usd": 2,
+            "capital_usd": 400,
         },
         db_path=db_path,
     )
-    accounts.add_funding_cashflow(user["id"], position["id"], {"venue": "B", "amount_usd": 5}, db_path=db_path)
+    accounts.add_funding_cashflow(
+        user["id"], position["id"], {"venue": "B", "amount_usd": 5}, db_path=db_path
+    )
     monkeypatch.setattr(
         portfolio.api_spreads,
         "load_spreads",
-        lambda **_: {"rows": [{
-            "route_key": position["route_key"], "token": "TEST",
-            "long_bid": 105, "long_ask": 106, "short_bid": 101, "short_ask": 102,
-        }]},
+        lambda **_: {
+            "rows": [
+                {
+                    "route_key": position["route_key"],
+                    "token": "TEST",
+                    "long_bid": 105,
+                    "long_ask": 106,
+                    "short_bid": 101,
+                    "short_ask": 102,
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        portfolio,
+        "_quote_position",
+        lambda *_args, **_kwargs: {
+            "long_bid": 105,
+            "long_ask": 106,
+            "short_bid": 101,
+            "short_ask": 102,
+            "position_quote_source": "resident_full_position_vwap",
+        },
     )
     current, _ = accounts.login("member@example.test", "this-is-a-long-password", db_path=db_path)
-    snapshot = portfolio.portfolio_snapshot(current, board_path=tmp_path / "board", accounts_path=db_path)
+    snapshot = portfolio.portfolio_snapshot(
+        current, board_path=tmp_path / "board", accounts_path=db_path
+    )
     marked = snapshot["positions"][0]
     assert marked["long_price_pnl_usd"] == 10
     assert marked["short_price_pnl_usd"] == 16
@@ -227,34 +303,69 @@ def test_background_position_alerts_trigger_once_and_rearm(
     db_path = tmp_path / "accounts.sqlite3"
     accounts.initialize(db_path)
     user = accounts.create_user(
-        email="alerts@example.test", display_name="Alerts",
-        password="alerts-password-strong", subscription_status="active",
-        subscription_days=30, db_path=db_path,
+        email="alerts@example.test",
+        display_name="Alerts",
+        password="alerts-password-strong",
+        subscription_status="active",
+        subscription_days=30,
+        db_path=db_path,
     )
     position = accounts.create_position(
         user["id"],
         {
-            "token": "TEST", "long_venue": "A", "long_market_type": "Spot",
-            "long_quantity": 1, "long_entry_price": 100,
-            "short_venue": "B", "short_market_type": "Futures",
-            "short_quantity": 1, "short_entry_price": 110,
-        }, db_path=db_path,
+            "token": "TEST",
+            "long_venue": "A",
+            "long_market_type": "Spot",
+            "long_quantity": 1,
+            "long_entry_price": 100,
+            "short_venue": "B",
+            "short_market_type": "Futures",
+            "short_quantity": 1,
+            "short_entry_price": 110,
+        },
+        db_path=db_path,
+    )
+    # A total-PnL alert is intentionally withheld until settled funding is
+    # known; this legacy zero event makes the fixture's funding boundary exact.
+    accounts.add_funding_cashflow(
+        user["id"], position["id"], {"venue": "B", "amount_usd": 0}, db_path=db_path
     )
     accounts.add_alert_rule(
-        user["id"], position["id"],
+        user["id"],
+        position["id"],
         {"metric": "pnl_usd", "operator": "gte", "threshold": 10},
         db_path=db_path,
     )
     market = {"long_bid": 105, "long_ask": 106, "short_bid": 101, "short_ask": 102}
+
     def rows(**_):
-        return {"rows": [{
-            "route_key": position["route_key"], "token": "TEST",
-            "long_venue": "A", "long_market_type": "Spot",
-            "short_venue": "B", "short_market_type": "Futures", **market,
-        }]}
+        return {
+            "rows": [
+                {
+                    "route_key": position["route_key"],
+                    "token": "TEST",
+                    "long_venue": "A",
+                    "long_market_type": "Spot",
+                    "short_venue": "B",
+                    "short_market_type": "Futures",
+                    **market,
+                }
+            ]
+        }
+
     monkeypatch.setattr(portfolio.api_spreads, "load_spreads", rows)
+    monkeypatch.setattr(
+        portfolio,
+        "_quote_position",
+        lambda *_args, **_kwargs: {
+            **market,
+            "position_quote_source": "resident_full_position_vwap",
+        },
+    )
     worker = portfolio.PositionAlertWorker(
-        board_path=tmp_path / "board", accounts_path=db_path, poll_seconds=10,
+        board_path=tmp_path / "board",
+        accounts_path=db_path,
+        poll_seconds=10,
     )
     worker.check_once()
     worker.check_once()

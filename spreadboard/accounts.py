@@ -35,11 +35,7 @@ def _member_manager_emails() -> set[str]:
         "SPREADBOARD_MEMBER_MANAGER_EMAILS",
         "alex@spreadarbitrage.ink,anatolij@spreadarbitrage.ink",
     )
-    return {
-        item.strip().casefold()
-        for item in configured.split(",")
-        if item.strip()
-    }
+    return {item.strip().casefold() for item in configured.split(",") if item.strip()}
 
 
 @dataclass(frozen=True)
@@ -517,33 +513,53 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 ON subscription_lifecycle_events(state, attempts, updated_at);
             """
         )
-        _ensure_columns(connection, "users", {
-            "billing_provider": "TEXT",
-            "billing_customer_id": "TEXT",
-            "billing_subscription_id": "TEXT",
-            "subscription_cancel_at_period_end": "INTEGER NOT NULL DEFAULT 0",
-            "billing_updated_at": "TEXT",
-            "subscription_tier": "TEXT NOT NULL DEFAULT 'research_pro'",
-        })
-        _ensure_columns(connection, "crypto_invoices", {
-            "subscription_tier": "TEXT NOT NULL DEFAULT 'research_pro'",
-            "discount_cents": "INTEGER NOT NULL DEFAULT 0",
-            "affiliate_partner_id": "INTEGER",
-        })
-        _ensure_columns(connection, "affiliate_partners", {
-            "payout_asset": "TEXT NOT NULL DEFAULT 'USDT'",
-            "payout_network": "TEXT NOT NULL DEFAULT 'Arbitrum'",
-            "payout_destination": "TEXT NOT NULL DEFAULT ''",
-            "payout_updated_at": "TEXT",
-        })
-        _ensure_columns(connection, "affiliate_payout_batches", {
-            "payout_asset": "TEXT NOT NULL DEFAULT 'USDT'",
-            "payout_network": "TEXT NOT NULL DEFAULT 'Arbitrum'",
-            "payout_destination": "TEXT NOT NULL DEFAULT ''",
-        })
-        _ensure_columns(connection, "position_alert_rules", {
-            "last_condition_met": "INTEGER NOT NULL DEFAULT 0",
-        })
+        _ensure_columns(
+            connection,
+            "users",
+            {
+                "billing_provider": "TEXT",
+                "billing_customer_id": "TEXT",
+                "billing_subscription_id": "TEXT",
+                "subscription_cancel_at_period_end": "INTEGER NOT NULL DEFAULT 0",
+                "billing_updated_at": "TEXT",
+                "subscription_tier": "TEXT NOT NULL DEFAULT 'research_pro'",
+            },
+        )
+        _ensure_columns(
+            connection,
+            "crypto_invoices",
+            {
+                "subscription_tier": "TEXT NOT NULL DEFAULT 'research_pro'",
+                "discount_cents": "INTEGER NOT NULL DEFAULT 0",
+                "affiliate_partner_id": "INTEGER",
+            },
+        )
+        _ensure_columns(
+            connection,
+            "affiliate_partners",
+            {
+                "payout_asset": "TEXT NOT NULL DEFAULT 'USDT'",
+                "payout_network": "TEXT NOT NULL DEFAULT 'Arbitrum'",
+                "payout_destination": "TEXT NOT NULL DEFAULT ''",
+                "payout_updated_at": "TEXT",
+            },
+        )
+        _ensure_columns(
+            connection,
+            "affiliate_payout_batches",
+            {
+                "payout_asset": "TEXT NOT NULL DEFAULT 'USDT'",
+                "payout_network": "TEXT NOT NULL DEFAULT 'Arbitrum'",
+                "payout_destination": "TEXT NOT NULL DEFAULT ''",
+            },
+        )
+        _ensure_columns(
+            connection,
+            "position_alert_rules",
+            {
+                "last_condition_met": "INTEGER NOT NULL DEFAULT 0",
+            },
+        )
         _widen_market_alert_metrics(connection)
         connection.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS users_billing_customer ON users(billing_customer_id) WHERE billing_customer_id IS NOT NULL"
@@ -590,9 +606,7 @@ def hash_password(password: str) -> str:
     if len(password) < 12:
         raise ValueError("password_must_be_at_least_12_characters")
     salt = secrets.token_bytes(16)
-    derived = hashlib.scrypt(
-        password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32
-    )
+    derived = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32)
     return f"scrypt$16384$8$1${salt.hex()}${derived.hex()}"
 
 
@@ -718,7 +732,11 @@ def create_user(
     clean_name = display_name.strip()
     if not clean_name or len(clean_name) > 100:
         raise ValueError("invalid_display_name")
-    status = subscription_status if subscription_status in {"inactive", "trialing", "active"} else "trialing"
+    status = (
+        subscription_status
+        if subscription_status in {"inactive", "trialing", "active"}
+        else "trialing"
+    )
     tier = str(subscription_tier or ("free" if status == "inactive" else "research_pro"))
     if tier not in {"free", "scanner", "research_pro"}:
         raise ValueError("invalid_subscription_tier")
@@ -734,8 +752,16 @@ def create_user(
                     subscription_expires_at, subscription_tier, created_at, updated_at
                 ) VALUES (?, ?, ?, 'member', ?, ?, ?, ?, ?)
                 """,
-                (normalized_email, clean_name, hash_password(password), status,
-                 _utc_iso(expires), tier, _utc_iso(now), _utc_iso(now)),
+                (
+                    normalized_email,
+                    clean_name,
+                    hash_password(password),
+                    status,
+                    _utc_iso(expires),
+                    tier,
+                    _utc_iso(now),
+                    _utc_iso(now),
+                ),
             )
         except sqlite3.IntegrityError as exc:
             raise ValueError("email_already_registered") from exc
@@ -842,25 +868,29 @@ def record_page_view(
         connection.close()
 
 
-def page_view_summary(
-    *, days: int = 30, db_path: Path | str = DEFAULT_DB_PATH
-) -> dict[str, Any]:
+def page_view_summary(*, days: int = 30, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
     """Return privacy-safe aggregate traffic for the owner dashboard."""
     bounded_days = max(1, min(365, int(days)))
     since = (datetime.now(tz=timezone.utc).date() - timedelta(days=bounded_days - 1)).isoformat()
     connection = _connect(db_path)
     try:
-        daily = [dict(row) for row in connection.execute(
-            """SELECT day, SUM(view_count) AS views
+        daily = [
+            dict(row)
+            for row in connection.execute(
+                """SELECT day, SUM(view_count) AS views
                FROM daily_page_views WHERE day >= ? GROUP BY day ORDER BY day""",
-            (since,),
-        ).fetchall()]
-        paths = [dict(row) for row in connection.execute(
-            """SELECT path, SUM(view_count) AS views
+                (since,),
+            ).fetchall()
+        ]
+        paths = [
+            dict(row)
+            for row in connection.execute(
+                """SELECT path, SUM(view_count) AS views
                FROM daily_page_views WHERE day >= ?
                GROUP BY path ORDER BY views DESC, path LIMIT 25""",
-            (since,),
-        ).fetchall()]
+                (since,),
+            ).fetchall()
+        ]
         return {
             "days": bounded_days,
             "since": since,
@@ -886,7 +916,10 @@ def create_telegram_link_token(
     try:
         if connection.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
             raise ValueError("user_not_found")
-        connection.execute("DELETE FROM telegram_link_tokens WHERE user_id = ? OR expires_at <= ?", (user_id, _utc_iso(now)))
+        connection.execute(
+            "DELETE FROM telegram_link_tokens WHERE user_id = ? OR expires_at <= ?",
+            (user_id, _utc_iso(now)),
+        )
         connection.execute(
             "INSERT INTO telegram_link_tokens (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
             (_token_hash(token), user_id, _utc_iso(now), _utc_iso(expires)),
@@ -913,7 +946,9 @@ def bind_telegram_chat(
         if row is None:
             raise ValueError("invalid_or_expired_telegram_link")
         user_id = int(row["user_id"])
-        owner = connection.execute("SELECT user_id FROM telegram_links WHERE chat_id = ?", (int(chat_id),)).fetchone()
+        owner = connection.execute(
+            "SELECT user_id FROM telegram_links WHERE chat_id = ?", (int(chat_id),)
+        ).fetchone()
         if owner is not None and int(owner["user_id"]) != user_id:
             raise ValueError("telegram_chat_already_linked")
         now = _utc_iso()
@@ -922,7 +957,10 @@ def bind_telegram_chat(
             "ON CONFLICT(user_id) DO UPDATE SET chat_id = excluded.chat_id, updated_at = excluded.updated_at",
             (user_id, int(chat_id), now, now),
         )
-        connection.execute("UPDATE telegram_link_tokens SET used_at = ? WHERE token_hash = ?", (now, row["token_hash"]))
+        connection.execute(
+            "UPDATE telegram_link_tokens SET used_at = ? WHERE token_hash = ?",
+            (now, row["token_hash"]),
+        )
         connection.commit()
     except Exception:
         connection.rollback()
@@ -950,7 +988,9 @@ def user_for_telegram_chat(chat_id: int, *, db_path: Path | str = DEFAULT_DB_PAT
 def telegram_link_status(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
     connection = _connect(db_path)
     try:
-        row = connection.execute("SELECT linked_at, updated_at FROM telegram_links WHERE user_id = ?", (user_id,)).fetchone()
+        row = connection.execute(
+            "SELECT linked_at, updated_at FROM telegram_links WHERE user_id = ?", (user_id,)
+        ).fetchone()
         return {
             "linked": row is not None,
             "linked_at": row["linked_at"] if row is not None else None,
@@ -1053,8 +1093,15 @@ def record_telegram_membership(
                    removed_at = excluded.removed_at,
                    updated_at = excluded.updated_at""",
             (
-                int(user_id), int(telegram_user_id), int(community_chat_id), state,
-                now, str(error or "")[:500] or None, joined_at, removed_at, now,
+                int(user_id),
+                int(telegram_user_id),
+                int(community_chat_id),
+                state,
+                now,
+                str(error or "")[:500] or None,
+                joined_at,
+                removed_at,
+                now,
             ),
         )
         connection.commit()
@@ -1066,23 +1113,30 @@ def record_telegram_membership(
         connection.close()
 
 
-def telegram_membership_candidates(*, db_path: Path | str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+def telegram_membership_candidates(
+    *, db_path: Path | str = DEFAULT_DB_PATH
+) -> list[dict[str, Any]]:
     connection = _connect(db_path)
     try:
-        return [dict(row) for row in connection.execute(
-            """SELECT u.id AS user_id, u.role, u.subscription_status,
+        return [
+            dict(row)
+            for row in connection.execute(
+                """SELECT u.id AS user_id, u.role, u.subscription_status,
                       u.subscription_expires_at, t.chat_id AS telegram_user_id,
                       m.state AS membership_state
                FROM users u
                JOIN telegram_links t ON t.user_id = u.id
                LEFT JOIN telegram_memberships m ON m.user_id = u.id
                ORDER BY u.id"""
-        ).fetchall()]
+            ).fetchall()
+        ]
     finally:
         connection.close()
 
 
-def notification_preferences(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
+def notification_preferences(
+    user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> dict[str, Any]:
     connection = _connect(db_path)
     try:
         row = connection.execute(
@@ -1156,8 +1210,10 @@ def save_notification_preferences(
             "SELECT pushover_user_key_encrypted, created_at FROM notification_preferences WHERE user_id = ?",
             (int(user_id),),
         ).fetchone()
-        encrypted = field_crypto.encrypt(key) if key else (
-            str(existing["pushover_user_key_encrypted"] or "") if existing else ""
+        encrypted = (
+            field_crypto.encrypt(key)
+            if key
+            else (str(existing["pushover_user_key_encrypted"] or "") if existing else "")
         )
         if enabled and not encrypted:
             raise ValueError("pushover_user_key_required")
@@ -1180,7 +1236,9 @@ def save_notification_preferences(
     return notification_preferences(user_id, db_path=db_path)
 
 
-def notification_delivery(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any] | None:
+def notification_delivery(
+    user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> dict[str, Any] | None:
     from spreadboard import field_crypto
 
     connection = _connect(db_path)
@@ -1215,7 +1273,7 @@ def token_from_alert_key(route_key: str) -> str | None:
     text = str(route_key or "")
     if not text.startswith(TOKEN_ALERT_PREFIX):
         return None
-    return text[len(TOKEN_ALERT_PREFIX):].strip().upper() or None
+    return text[len(TOKEN_ALERT_PREFIX) :].strip().upper() or None
 
 
 def add_market_alert_rule(
@@ -1253,8 +1311,16 @@ def add_market_alert_rule(
                    stability_seconds, enabled, created_at, updated_at
                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                int(user_id), route_key, symbol, metric, operator, threshold,
-                stability, int(payload.get("enabled") is not False), now, now,
+                int(user_id),
+                route_key,
+                symbol,
+                metric,
+                operator,
+                threshold,
+                stability,
+                int(payload.get("enabled") is not False),
+                now,
+                now,
             ),
         )
         connection.commit()
@@ -1341,13 +1407,18 @@ def delete_market_alert_rule(
         connection.close()
 
 
-def list_market_alert_rules(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+def list_market_alert_rules(
+    user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> list[dict[str, Any]]:
     connection = _connect(db_path)
     try:
-        return [dict(row) for row in connection.execute(
-            "SELECT * FROM market_alert_rules WHERE user_id = ? ORDER BY updated_at DESC",
-            (int(user_id),),
-        ).fetchall()]
+        return [
+            dict(row)
+            for row in connection.execute(
+                "SELECT * FROM market_alert_rules WHERE user_id = ? ORDER BY updated_at DESC",
+                (int(user_id),),
+            ).fetchall()
+        ]
     finally:
         connection.close()
 
@@ -1355,9 +1426,12 @@ def list_market_alert_rules(user_id: int, *, db_path: Path | str = DEFAULT_DB_PA
 def list_market_alert_user_ids(*, db_path: Path | str = DEFAULT_DB_PATH) -> list[int]:
     connection = _connect(db_path)
     try:
-        return [int(row["user_id"]) for row in connection.execute(
-            "SELECT DISTINCT user_id FROM market_alert_rules WHERE enabled = 1 ORDER BY user_id"
-        ).fetchall()]
+        return [
+            int(row["user_id"])
+            for row in connection.execute(
+                "SELECT DISTINCT user_id FROM market_alert_rules WHERE enabled = 1 ORDER BY user_id"
+            ).fetchall()
+        ]
     finally:
         connection.close()
 
@@ -1405,7 +1479,11 @@ def record_market_alert_evaluation(
         if row is None:
             connection.rollback()
             return None
-        condition = value <= float(row["threshold"]) if row["operator"] == "lte" else value >= float(row["threshold"])
+        condition = (
+            value <= float(row["threshold"])
+            if row["operator"] == "lte"
+            else value >= float(row["threshold"])
+        )
         condition_since = row["condition_since"]
         should_trigger = False
         if condition:
@@ -1427,14 +1505,24 @@ def record_market_alert_evaluation(
                    ) VALUES (?, NULL, NULL, ?, ?, ?)""",
                 (int(user_id), title[:160], body[:1000], now),
             )
-            notification = dict(connection.execute(
-                "SELECT * FROM in_app_notifications WHERE id = ?", (cursor.lastrowid,)
-            ).fetchone())
+            notification = dict(
+                connection.execute(
+                    "SELECT * FROM in_app_notifications WHERE id = ?", (cursor.lastrowid,)
+                ).fetchone()
+            )
         connection.execute(
             """UPDATE market_alert_rules SET condition_since = ?, last_condition_met = ?,
                    last_triggered_at = CASE WHEN ? THEN ? ELSE last_triggered_at END,
                    last_value = ?, updated_at = ? WHERE id = ?""",
-            (condition_since, int(condition and (should_trigger or bool(row["last_condition_met"]))), int(should_trigger), now, value, now, int(rule_id)),
+            (
+                condition_since,
+                int(condition and (should_trigger or bool(row["last_condition_met"]))),
+                int(should_trigger),
+                now,
+                value,
+                now,
+                int(rule_id),
+            ),
         )
         connection.commit()
         return notification
@@ -1448,11 +1536,14 @@ def record_market_alert_evaluation(
 def list_alert_user_ids(*, db_path: Path | str = DEFAULT_DB_PATH) -> list[int]:
     connection = _connect(db_path)
     try:
-        return [int(row["user_id"]) for row in connection.execute(
-            """SELECT DISTINCT p.user_id FROM positions p
+        return [
+            int(row["user_id"])
+            for row in connection.execute(
+                """SELECT DISTINCT p.user_id FROM positions p
                JOIN position_alert_rules r ON r.position_id = p.id AND r.user_id = p.user_id
                WHERE p.status = 'open' AND r.enabled = 1 ORDER BY p.user_id"""
-        ).fetchall()]
+            ).fetchall()
+        ]
     finally:
         connection.close()
 
@@ -1507,7 +1598,7 @@ def apply_billing_event(
 
     event_id = str(event.get("id") or "")[:255]
     event_type = str(event.get("type") or "")[:255]
-    obj = ((event.get("data") or {}).get("object") or {})
+    obj = (event.get("data") or {}).get("object") or {}
     if not event_id or not event_type or not isinstance(obj, dict):
         raise ValueError("invalid_billing_event")
     connection = _connect(db_path)
@@ -1527,7 +1618,8 @@ def apply_billing_event(
         elif event_type.startswith("invoice."):
             raw_subscription = obj.get("subscription") or (
                 (((obj.get("parent") or {}).get("subscription_details") or {}).get("subscription"))
-                if isinstance(obj.get("parent"), dict) else None
+                if isinstance(obj.get("parent"), dict)
+                else None
             )
         subscription_id = _stripe_id(raw_subscription, "sub_")
         user_id = _billing_user_id(connection, obj, customer_id)
@@ -1537,7 +1629,10 @@ def apply_billing_event(
             _assert_customer_owner(connection, user_id, customer_id)
             now = _utc_iso()
             explicit_user = bool(
-                (isinstance(obj.get("metadata"), dict) and obj["metadata"].get("spreadboard_user_id"))
+                (
+                    isinstance(obj.get("metadata"), dict)
+                    and obj["metadata"].get("spreadboard_user_id")
+                )
                 or obj.get("client_reference_id")
             )
             stored = connection.execute(
@@ -1555,7 +1650,11 @@ def apply_billing_event(
                     (customer_id, subscription_id, billing_tier, now, now, user_id),
                 )
                 result = "customer_linked"
-            elif event_type.startswith("customer.subscription.") and mismatched_subscription and not explicit_user:
+            elif (
+                event_type.startswith("customer.subscription.")
+                and mismatched_subscription
+                and not explicit_user
+            ):
                 result = "ignored_subscription_mismatch"
             elif event_type.startswith("customer.subscription."):
                 status = _subscription_status(str(obj.get("status") or ""), event_type)
@@ -1566,10 +1665,22 @@ def apply_billing_event(
                        subscription_expires_at = ?, subscription_tier = COALESCE(?, subscription_tier),
                        subscription_cancel_at_period_end = ?, billing_updated_at = ?, updated_at = ?
                        WHERE id = ?""",
-                    (customer_id, subscription_id, status, expiry, billing_tier, int(bool(obj.get("cancel_at_period_end"))), now, now, user_id),
+                    (
+                        customer_id,
+                        subscription_id,
+                        status,
+                        expiry,
+                        billing_tier,
+                        int(bool(obj.get("cancel_at_period_end"))),
+                        now,
+                        now,
+                        user_id,
+                    ),
                 )
                 result = f"subscription_{status}"
-            elif event_type.startswith("invoice.") and (not subscription_id or mismatched_subscription):
+            elif event_type.startswith("invoice.") and (
+                not subscription_id or mismatched_subscription
+            ):
                 result = "ignored_subscription_mismatch"
             elif event_type == "invoice.payment_failed":
                 connection.execute(
@@ -1730,7 +1841,9 @@ def update_account_settings(
 ) -> dict[str, Any] | None:
     connection = _connect(db_path)
     try:
-        row = connection.execute("SELECT display_name FROM users WHERE id = ?", (user_id,)).fetchone()
+        row = connection.execute(
+            "SELECT display_name FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
         if row is None:
             return None
         connection.execute(
@@ -1751,50 +1864,74 @@ def update_account_settings(
 def list_positions(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     connection = _connect(db_path)
     try:
-        positions = [dict(row) for row in connection.execute(
-            "SELECT * FROM positions WHERE user_id = ? ORDER BY status DESC, opened_at DESC",
-            (user_id,),
-        ).fetchall()]
+        positions = [
+            dict(row)
+            for row in connection.execute(
+                "SELECT * FROM positions WHERE user_id = ? ORDER BY status DESC, opened_at DESC",
+                (user_id,),
+            ).fetchall()
+        ]
         for position in positions:
-            position["funding_cashflows"] = [dict(row) for row in connection.execute(
-                "SELECT * FROM funding_cashflows WHERE user_id = ? AND position_id = ? ORDER BY occurred_at",
-                (user_id, position["id"]),
-            ).fetchall()]
-            position["alert_rules"] = [dict(row) for row in connection.execute(
-                "SELECT * FROM position_alert_rules WHERE user_id = ? AND position_id = ? ORDER BY created_at",
-                (user_id, position["id"]),
-            ).fetchall()]
+            position["funding_cashflows"] = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM funding_cashflows WHERE user_id = ? AND position_id = ? ORDER BY occurred_at",
+                    (user_id, position["id"]),
+                ).fetchall()
+            ]
+            position["alert_rules"] = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM position_alert_rules WHERE user_id = ? AND position_id = ? ORDER BY created_at",
+                    (user_id, position["id"]),
+                ).fetchall()
+            ]
         return positions
     finally:
         connection.close()
 
 
-def create_position(user_id: int, payload: dict[str, Any], *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
-    required_text = (
-        "token", "long_venue", "long_market_type", "short_venue", "short_market_type"
-    )
-    values = {key: str(payload.get(key) or "").strip() for key in required_text}
-    if not all(values.values()):
+def _position_values(payload: dict[str, Any]) -> dict[str, Any]:
+    required_text = ("token", "long_venue", "long_market_type", "short_venue", "short_market_type")
+    text = {key: str(payload.get(key) or "").strip() for key in required_text}
+    if not all(text.values()):
         raise ValueError("position_route_fields_required")
     numeric = {
         key: _positive_float(payload.get(key), key)
-        for key in (
-            "long_quantity", "long_entry_price", "short_quantity", "short_entry_price"
-        )
+        for key in ("long_quantity", "long_entry_price", "short_quantity", "short_entry_price")
     }
-    now = _utc_iso()
-    opened_at = _normalize_iso(str(payload.get("opened_at") or now))
-    long_symbol = str(payload.get("long_symbol") or "").strip() or None
-    short_symbol = str(payload.get("short_symbol") or "").strip() or None
-    entry_spread = payload.get("entry_spread_pct")
-    if entry_spread in (None, ""):
-        entry_spread = (numeric["short_entry_price"] / numeric["long_entry_price"] - 1) * 100
-    route_key = str(payload.get("route_key") or "").strip() or "|".join(
+    opened_at = _normalize_iso(str(payload.get("opened_at") or _utc_iso()))
+    entry_spread = (numeric["short_entry_price"] / numeric["long_entry_price"] - 1) * 100
+    token = text["token"].upper()
+    route_key = "|".join(
         (
-            values["token"].upper(), values["long_venue"], values["long_market_type"],
-            values["short_venue"], values["short_market_type"],
+            token,
+            text["long_venue"],
+            text["long_market_type"],
+            text["short_venue"],
+            text["short_market_type"],
         )
     )
+    return {
+        **text,
+        **numeric,
+        "token": token,
+        "route_key": route_key,
+        "long_symbol": str(payload.get("long_symbol") or "").strip() or None,
+        "short_symbol": str(payload.get("short_symbol") or "").strip() or None,
+        "entry_spread_pct": entry_spread,
+        "capital_usd": _optional_nonnegative_float(payload.get("capital_usd")),
+        "entry_fees_usd": _optional_nonnegative_float(payload.get("entry_fees_usd")) or 0.0,
+        "opened_at": opened_at,
+        "notes": str(payload.get("notes") or "")[:2000],
+    }
+
+
+def create_position(
+    user_id: int, payload: dict[str, Any], *, db_path: Path | str = DEFAULT_DB_PATH
+) -> dict[str, Any]:
+    values = _position_values(payload)
+    now = _utc_iso()
     connection = _connect(db_path)
     try:
         cursor = connection.execute(
@@ -1807,24 +1944,100 @@ def create_position(user_id: int, payload: dict[str, Any], *, db_path: Path | st
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                user_id, values["token"].upper(), route_key, values["long_venue"],
-                values["long_market_type"], long_symbol, numeric["long_quantity"],
-                numeric["long_entry_price"], values["short_venue"],
-                values["short_market_type"], short_symbol, numeric["short_quantity"],
-                numeric["short_entry_price"], float(entry_spread),
-                _optional_nonnegative_float(payload.get("capital_usd")),
-                _optional_nonnegative_float(payload.get("entry_fees_usd")) or 0.0,
-                opened_at, str(payload.get("notes") or "")[:2000], now, now,
+                user_id,
+                values["token"],
+                values["route_key"],
+                values["long_venue"],
+                values["long_market_type"],
+                values["long_symbol"],
+                values["long_quantity"],
+                values["long_entry_price"],
+                values["short_venue"],
+                values["short_market_type"],
+                values["short_symbol"],
+                values["short_quantity"],
+                values["short_entry_price"],
+                values["entry_spread_pct"],
+                values["capital_usd"],
+                values["entry_fees_usd"],
+                values["opened_at"],
+                values["notes"],
+                now,
+                now,
             ),
         )
         connection.commit()
         position_id = int(cursor.lastrowid)
     finally:
         connection.close()
-    return next(item for item in list_positions(user_id, db_path=db_path) if item["id"] == position_id)
+    return next(
+        item for item in list_positions(user_id, db_path=db_path) if item["id"] == position_id
+    )
 
 
-def close_position(user_id: int, position_id: int, payload: dict[str, Any], *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
+def update_position(
+    user_id: int,
+    position_id: int,
+    payload: dict[str, Any],
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Correct a user-owned journal entry without touching live venues."""
+
+    values = _position_values(payload)
+    connection = _connect(db_path)
+    try:
+        cursor = connection.execute(
+            """
+            UPDATE positions SET
+                token = ?, route_key = ?, long_venue = ?, long_market_type = ?,
+                long_symbol = ?, long_quantity = ?, long_entry_price = ?,
+                short_venue = ?, short_market_type = ?, short_symbol = ?,
+                short_quantity = ?, short_entry_price = ?, entry_spread_pct = ?,
+                capital_usd = ?, entry_fees_usd = ?, opened_at = ?, notes = ?,
+                updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                values["token"],
+                values["route_key"],
+                values["long_venue"],
+                values["long_market_type"],
+                values["long_symbol"],
+                values["long_quantity"],
+                values["long_entry_price"],
+                values["short_venue"],
+                values["short_market_type"],
+                values["short_symbol"],
+                values["short_quantity"],
+                values["short_entry_price"],
+                values["entry_spread_pct"],
+                values["capital_usd"],
+                values["entry_fees_usd"],
+                values["opened_at"],
+                values["notes"],
+                _utc_iso(),
+                position_id,
+                user_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("position_not_found")
+        connection.commit()
+    finally:
+        connection.close()
+    return next(
+        item for item in list_positions(user_id, db_path=db_path) if item["id"] == position_id
+    )
+
+
+def close_position(
+    user_id: int,
+    position_id: int,
+    payload: dict[str, Any],
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
     long_exit = _positive_float(payload.get("long_exit_price"), "long_exit_price")
     short_exit = _positive_float(payload.get("short_exit_price"), "short_exit_price")
     closed_at = _normalize_iso(str(payload.get("closed_at") or _utc_iso()))
@@ -1837,9 +2050,13 @@ def close_position(user_id: int, position_id: int, payload: dict[str, Any], *, d
             WHERE id = ? AND user_id = ? AND status = 'open'
             """,
             (
-                closed_at, long_exit, short_exit,
+                closed_at,
+                long_exit,
+                short_exit,
                 _optional_nonnegative_float(payload.get("exit_fees_usd")) or 0.0,
-                _utc_iso(), position_id, user_id,
+                _utc_iso(),
+                position_id,
+                user_id,
             ),
         )
         if cursor.rowcount != 1:
@@ -1847,10 +2064,18 @@ def close_position(user_id: int, position_id: int, payload: dict[str, Any], *, d
         connection.commit()
     finally:
         connection.close()
-    return next(item for item in list_positions(user_id, db_path=db_path) if item["id"] == position_id)
+    return next(
+        item for item in list_positions(user_id, db_path=db_path) if item["id"] == position_id
+    )
 
 
-def add_funding_cashflow(user_id: int, position_id: int, payload: dict[str, Any], *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
+def add_funding_cashflow(
+    user_id: int,
+    position_id: int,
+    payload: dict[str, Any],
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
     amount = float(payload.get("amount_usd"))
     venue = str(payload.get("venue") or "").strip()
     if not venue:
@@ -1868,16 +2093,32 @@ def add_funding_cashflow(user_id: int, position_id: int, payload: dict[str, Any]
             INSERT INTO funding_cashflows (user_id, position_id, venue, amount_usd, occurred_at, note, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, position_id, venue, amount, occurred_at, str(payload.get("note") or "")[:500], _utc_iso()),
+            (
+                user_id,
+                position_id,
+                venue,
+                amount,
+                occurred_at,
+                str(payload.get("note") or "")[:500],
+                _utc_iso(),
+            ),
         )
         connection.commit()
-        row = connection.execute("SELECT * FROM funding_cashflows WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        row = connection.execute(
+            "SELECT * FROM funding_cashflows WHERE id = ?", (cursor.lastrowid,)
+        ).fetchone()
         return dict(row)
     finally:
         connection.close()
 
 
-def add_alert_rule(user_id: int, position_id: int, payload: dict[str, Any], *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
+def add_alert_rule(
+    user_id: int,
+    position_id: int,
+    payload: dict[str, Any],
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
     metric = str(payload.get("metric") or "exit_spread_pct")
     operator = str(payload.get("operator") or "lte")
     if metric not in {"exit_spread_pct", "open_spread_pct", "pnl_usd", "funding_usd"}:
@@ -1902,19 +2143,26 @@ def add_alert_rule(user_id: int, position_id: int, payload: dict[str, Any], *, d
             (user_id, position_id, metric, operator, threshold, now, now),
         )
         connection.commit()
-        row = connection.execute("SELECT * FROM position_alert_rules WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        row = connection.execute(
+            "SELECT * FROM position_alert_rules WHERE id = ?", (cursor.lastrowid,)
+        ).fetchone()
         return dict(row)
     finally:
         connection.close()
 
 
-def list_notifications(user_id: int, *, limit: int = 30, db_path: Path | str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+def list_notifications(
+    user_id: int, *, limit: int = 30, db_path: Path | str = DEFAULT_DB_PATH
+) -> list[dict[str, Any]]:
     connection = _connect(db_path)
     try:
-        return [dict(row) for row in connection.execute(
-            "SELECT * FROM in_app_notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
-            (user_id, max(1, min(200, int(limit)))),
-        ).fetchall()]
+        return [
+            dict(row)
+            for row in connection.execute(
+                "SELECT * FROM in_app_notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                (user_id, max(1, min(200, int(limit)))),
+            ).fetchall()
+        ]
     finally:
         connection.close()
 
@@ -1939,7 +2187,9 @@ def create_notification(
             (user_id, alert_rule_id, position_id, title[:160], body[:1000], _utc_iso()),
         )
         connection.commit()
-        row = connection.execute("SELECT * FROM in_app_notifications WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        row = connection.execute(
+            "SELECT * FROM in_app_notifications WHERE id = ?", (cursor.lastrowid,)
+        ).fetchone()
         return dict(row)
     finally:
         connection.close()
@@ -2050,9 +2300,7 @@ def record_alert_evaluation(
         connection.close()
 
 
-def mark_notifications_read(
-    user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
-) -> int:
+def mark_notifications_read(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> int:
     connection = _connect(db_path)
     try:
         cursor = connection.execute(
@@ -2138,9 +2386,7 @@ def _widen_market_alert_metrics(connection: sqlite3.Connection) -> None:
     existing = str((row[0] if row else "") or "")
     if not existing or "token_price" in existing:
         return
-    columns = [
-        item[1] for item in connection.execute("PRAGMA table_info(market_alert_rules)")
-    ]
+    columns = [item[1] for item in connection.execute("PRAGMA table_info(market_alert_rules)")]
     connection.execute("ALTER TABLE market_alert_rules RENAME TO market_alert_rules_old")
     connection.execute(
         """
@@ -2193,11 +2439,19 @@ def _user_from_row(row: sqlite3.Row, *, csrf_token: str | None = None) -> User:
         role=str(row["role"]),
         subscription_status=str(row["subscription_status"]),
         subscription_expires_at=row["subscription_expires_at"],
-        monthly_capital_usd=float(row["monthly_capital_usd"]) if row["monthly_capital_usd"] is not None else None,
-        subscription_tier=(str(row["subscription_tier"]) if "subscription_tier" in keys else "research_pro"),
+        monthly_capital_usd=float(row["monthly_capital_usd"])
+        if row["monthly_capital_usd"] is not None
+        else None,
+        subscription_tier=(
+            str(row["subscription_tier"]) if "subscription_tier" in keys else "research_pro"
+        ),
         billing_customer_id=row["billing_customer_id"] if "billing_customer_id" in keys else None,
-        billing_subscription_id=row["billing_subscription_id"] if "billing_subscription_id" in keys else None,
-        subscription_cancel_at_period_end=bool(row["subscription_cancel_at_period_end"]) if "subscription_cancel_at_period_end" in keys else False,
+        billing_subscription_id=row["billing_subscription_id"]
+        if "billing_subscription_id" in keys
+        else None,
+        subscription_cancel_at_period_end=bool(row["subscription_cancel_at_period_end"])
+        if "subscription_cancel_at_period_end" in keys
+        else False,
         csrf_token=csrf_token,
     )
 
@@ -2259,7 +2513,11 @@ def _subscription_status(stripe_status: str, event_type: str) -> str:
 def _stripe_period_end(obj: dict[str, Any]) -> str | None:
     raw = obj.get("current_period_end")
     if not raw:
-        items = ((obj.get("items") or {}).get("data") or []) if isinstance(obj.get("items"), dict) else []
+        items = (
+            ((obj.get("items") or {}).get("data") or [])
+            if isinstance(obj.get("items"), dict)
+            else []
+        )
         raw = items[0].get("current_period_end") if items and isinstance(items[0], dict) else None
     try:
         return _utc_iso(datetime.fromtimestamp(int(raw), tz=timezone.utc)) if raw else None
@@ -2276,7 +2534,12 @@ def _privacy_hash(value: str) -> str | None:
 
 
 def _utc_iso(value: datetime | None = None) -> str:
-    return (value or datetime.now(tz=timezone.utc)).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return (
+        (value or datetime.now(tz=timezone.utc))
+        .astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _normalize_iso(value: str) -> str:
@@ -2381,10 +2644,25 @@ def delete_saved_chart(
 
 
 FILTER_PRESET_FIELDS = {
-    "q", "exchange", "kind", "min_spread_pct", "min_abs_funding_24h_pct",
-    "sort", "direction", "funding_only", "quote", "min_volume_24h_usd",
-    "min_market_cap_usd", "max_market_cap_usd", "min_fdv_usd", "max_fdv_usd",
-    "max_listing_age_days", "asset_class", "persistence", "view", "notional_usd",
+    "q",
+    "exchange",
+    "kind",
+    "min_spread_pct",
+    "min_abs_funding_24h_pct",
+    "sort",
+    "direction",
+    "funding_only",
+    "quote",
+    "min_volume_24h_usd",
+    "min_market_cap_usd",
+    "max_market_cap_usd",
+    "min_fdv_usd",
+    "max_fdv_usd",
+    "max_listing_age_days",
+    "asset_class",
+    "persistence",
+    "view",
+    "notional_usd",
 }
 
 
@@ -2463,7 +2741,8 @@ def delete_filter_preset(
     connection = _connect(db_path)
     try:
         cursor = connection.execute(
-            "DELETE FROM filter_presets WHERE id = ? AND user_id = ?", (int(preset_id), int(user_id))
+            "DELETE FROM filter_presets WHERE id = ? AND user_id = ?",
+            (int(preset_id), int(user_id)),
         )
         connection.commit()
         return cursor.rowcount > 0
@@ -2472,7 +2751,9 @@ def delete_filter_preset(
 
 
 def _watch_symbol(value: Any) -> str:
-    symbol = "".join(char for char in str(value or "").upper() if char.isalnum() or char in "_-")[:24]
+    symbol = "".join(char for char in str(value or "").upper() if char.isalnum() or char in "_-")[
+        :24
+    ]
     return symbol
 
 
@@ -2649,9 +2930,7 @@ def remove_web_push_subscription(
         connection.close()
 
 
-def web_push_subscription_count(
-    user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
-) -> int:
+def web_push_subscription_count(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> int:
     connection = _connect(db_path)
     try:
         return int(

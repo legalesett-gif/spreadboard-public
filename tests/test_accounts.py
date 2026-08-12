@@ -36,9 +36,7 @@ def test_login_uses_opaque_session_and_subscription_expiry(
         subscription_days=30,
         db_path=path,
     )
-    signed_in, token = accounts.login(
-        "member@example.com", "member-password-strong", db_path=path
-    )
+    signed_in, token = accounts.login("member@example.com", "member-password-strong", db_path=path)
     assert signed_in.id == user["id"]
     assert token and "member@example.com" not in token
     assert accounts.user_for_session(token, path).subscription_active
@@ -65,6 +63,7 @@ def test_page_analytics_store_only_aggregate_path_counts(
     assert summary["paths"][0] == {"path": "/pricing", "views": 2}
 
     import sqlite3
+
     connection = sqlite3.connect(path)
     try:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(daily_page_views)")}
@@ -136,12 +135,18 @@ def test_telegram_link_is_one_time_and_chat_cannot_be_reassigned(
 ) -> None:
     path = _database(tmp_path, monkeypatch)
     first = accounts.create_user(
-        email="telegram-first@example.com", display_name="First",
-        password="first-secure-password", subscription_status="active", db_path=path,
+        email="telegram-first@example.com",
+        display_name="First",
+        password="first-secure-password",
+        subscription_status="active",
+        db_path=path,
     )
     second = accounts.create_user(
-        email="telegram-second@example.com", display_name="Second",
-        password="second-secure-password", subscription_status="active", db_path=path,
+        email="telegram-second@example.com",
+        display_name="Second",
+        password="second-secure-password",
+        subscription_status="active",
+        db_path=path,
     )
     token = accounts.create_telegram_link_token(first["id"], db_path=path)
     linked = accounts.bind_telegram_chat(token, 12345, db_path=path)
@@ -154,10 +159,77 @@ def test_telegram_link_is_one_time_and_chat_cannot_be_reassigned(
         accounts.bind_telegram_chat(second_token, 12345, db_path=path)
 
 
+def test_position_corrections_are_owner_scoped_and_recompute_route(tmp_path, monkeypatch) -> None:
+    path = _database(tmp_path, monkeypatch)
+    owner = accounts.create_user(
+        email="position-owner@example.test",
+        display_name="Owner",
+        password="position-owner-password",
+        subscription_status="active",
+        db_path=path,
+    )
+    other = accounts.create_user(
+        email="position-other@example.test",
+        display_name="Other",
+        password="position-other-password",
+        subscription_status="active",
+        db_path=path,
+    )
+    created = accounts.create_position(
+        owner["id"],
+        {
+            "token": "BTW",
+            "long_venue": "Mexc",
+            "long_market_type": "Spot",
+            "long_symbol": "BTW/USDC",
+            "long_quantity": 13530,
+            "long_entry_price": 0.2026227273,
+            "short_venue": "Aster",
+            "short_market_type": "Futures",
+            "short_symbol": "BTW/USDT:USDT",
+            "short_quantity": 13530,
+            "short_entry_price": 0.2017316364,
+        },
+        db_path=path,
+    )
+    payload = {
+        "token": "BTW",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "long_symbol": "BTW/USDT",
+        "long_quantity": 13530,
+        "long_entry_price": 0.2017316364,
+        "short_venue": "Aster",
+        "short_market_type": "Futures",
+        "short_symbol": "BTW/USDT:USDT",
+        "short_quantity": 13530,
+        "short_entry_price": 0.2026227273,
+        "capital_usd": 2750,
+        "entry_fees_usd": 0,
+        "opened_at": "2026-08-11T23:19:58Z",
+        "notes": "Corrected from venue fills",
+    }
+    corrected = accounts.update_position(owner["id"], created["id"], payload, db_path=path)
+    assert corrected["long_symbol"] == "BTW/USDT"
+    assert corrected["long_entry_price"] == 0.2017316364
+    assert corrected["short_entry_price"] == 0.2026227273
+    assert corrected["route_key"] == "BTW|Mexc|Spot|Aster|Futures"
+    assert corrected["entry_spread_pct"] > 0
+    assert corrected["opened_at"] == "2026-08-11T23:19:58Z"
+    with pytest.raises(ValueError, match="position_not_found"):
+        accounts.update_position(other["id"], created["id"], payload, db_path=path)
+
+
 def _alert_user(tmp_path, monkeypatch):
     path = _database(tmp_path, monkeypatch)
-    user = accounts.create_user(email="a@b.c", display_name="A", password="member-password-strong",
-                                subscription_status="active", subscription_days=30, db_path=path)
+    user = accounts.create_user(
+        email="a@b.c",
+        display_name="A",
+        password="member-password-strong",
+        subscription_status="active",
+        subscription_days=30,
+        db_path=path,
+    )
     return path, user
 
 
@@ -165,14 +237,24 @@ def test_a_member_can_edit_and_delete_their_own_alert(tmp_path, monkeypatch) -> 
     """Members create alerts against a route and must be able to change the
     threshold, the stability window, turn one off, or remove it."""
     db, user = _alert_user(tmp_path, monkeypatch)
-    rule = accounts.add_market_alert_rule(user["id"] if isinstance(user, dict) else user.id, {
-        "route_key": "SIREN|Kucoin|Spot|Gate|Futures", "symbol": "SIREN",
-        "type": "token_spread", "direction": "above", "threshold": 32.0,
-        "stability_seconds": 10, "enabled": True}, db_path=db)
+    rule = accounts.add_market_alert_rule(
+        user["id"] if isinstance(user, dict) else user.id,
+        {
+            "route_key": "SIREN|Kucoin|Spot|Gate|Futures",
+            "symbol": "SIREN",
+            "type": "token_spread",
+            "direction": "above",
+            "threshold": 32.0,
+            "stability_seconds": 10,
+            "enabled": True,
+        },
+        db_path=db,
+    )
     uid = user["id"] if isinstance(user, dict) else user.id
 
-    updated = accounts.update_market_alert_rule(uid, rule["id"],
-        {"threshold": 45.0, "stability_seconds": 21, "enabled": False}, db_path=db)
+    updated = accounts.update_market_alert_rule(
+        uid, rule["id"], {"threshold": 45.0, "stability_seconds": 21, "enabled": False}, db_path=db
+    )
     assert updated["threshold"] == 45.0
     assert updated["stability_seconds"] == 21
     assert updated["enabled"] == 0
@@ -186,10 +268,22 @@ def test_editing_an_alert_rearms_it(tmp_path, monkeypatch) -> None:
     silent until it lapsed and re-armed itself."""
     db, user = _alert_user(tmp_path, monkeypatch)
     uid = user["id"] if isinstance(user, dict) else user.id
-    rule = accounts.add_market_alert_rule(uid, {
-        "route_key": "X|A|Spot|B|Futures", "symbol": "X", "type": "token_spread",
-        "direction": "above", "threshold": 5.0, "stability_seconds": 0, "enabled": True}, db_path=db)
-    accounts.record_market_alert_evaluation(uid, rule["id"], value=9.0, title="t", body="b", db_path=db)
+    rule = accounts.add_market_alert_rule(
+        uid,
+        {
+            "route_key": "X|A|Spot|B|Futures",
+            "symbol": "X",
+            "type": "token_spread",
+            "direction": "above",
+            "threshold": 5.0,
+            "stability_seconds": 0,
+            "enabled": True,
+        },
+        db_path=db,
+    )
+    accounts.record_market_alert_evaluation(
+        uid, rule["id"], value=9.0, title="t", body="b", db_path=db
+    )
     assert accounts.get_market_alert_rule(uid, rule["id"], db_path=db)["last_condition_met"] == 1
     updated = accounts.update_market_alert_rule(uid, rule["id"], {"threshold": 6.0}, db_path=db)
     assert updated["last_condition_met"] == 0 and updated["condition_since"] is None
@@ -198,30 +292,59 @@ def test_editing_an_alert_rearms_it(tmp_path, monkeypatch) -> None:
 def test_a_member_cannot_touch_someone_elses_alert(tmp_path, monkeypatch) -> None:
     db, user = _alert_user(tmp_path, monkeypatch)
     uid = user["id"] if isinstance(user, dict) else user.id
-    rule = accounts.add_market_alert_rule(uid, {
-        "route_key": "X|A|Spot|B|Futures", "symbol": "X", "type": "token_spread",
-        "direction": "above", "threshold": 5.0, "stability_seconds": 0, "enabled": True}, db_path=db)
-    other = accounts.create_user(email="c@d.e", display_name="C", password="member-password-strong",
-                                 subscription_status="active", subscription_days=30, db_path=db)
+    rule = accounts.add_market_alert_rule(
+        uid,
+        {
+            "route_key": "X|A|Spot|B|Futures",
+            "symbol": "X",
+            "type": "token_spread",
+            "direction": "above",
+            "threshold": 5.0,
+            "stability_seconds": 0,
+            "enabled": True,
+        },
+        db_path=db,
+    )
+    other = accounts.create_user(
+        email="c@d.e",
+        display_name="C",
+        password="member-password-strong",
+        subscription_status="active",
+        subscription_days=30,
+        db_path=db,
+    )
     other_id = other["id"] if isinstance(other, dict) else other.id
-    assert accounts.update_market_alert_rule(other_id, rule["id"], {"threshold": 1.0}, db_path=db) is None
+    assert (
+        accounts.update_market_alert_rule(other_id, rule["id"], {"threshold": 1.0}, db_path=db)
+        is None
+    )
     assert accounts.delete_market_alert_rule(other_id, rule["id"], db_path=db) is False
 
 
 def test_filter_presets_and_watchlist_are_account_scoped(tmp_path, monkeypatch) -> None:
     db = _database(tmp_path, monkeypatch)
     first = accounts.create_user(
-        email="preset-first@example.com", display_name="First",
-        password="first-secure-password", subscription_status="active", db_path=db,
+        email="preset-first@example.com",
+        display_name="First",
+        password="first-secure-password",
+        subscription_status="active",
+        db_path=db,
     )
     second = accounts.create_user(
-        email="preset-second@example.com", display_name="Second",
-        password="second-secure-password", subscription_status="active", db_path=db,
+        email="preset-second@example.com",
+        display_name="Second",
+        password="second-secure-password",
+        subscription_status="active",
+        db_path=db,
     )
-    preset = accounts.save_filter_preset(first["id"], {
-        "name": "Persistent DEX farms",
-        "query": {"kind": "DEX-FUTURES", "min_spread_pct": "0.5", "funding_only": "1"},
-    }, db_path=db)
+    preset = accounts.save_filter_preset(
+        first["id"],
+        {
+            "name": "Persistent DEX farms",
+            "query": {"kind": "DEX-FUTURES", "min_spread_pct": "0.5", "funding_only": "1"},
+        },
+        db_path=db,
+    )
     assert preset["name"] == "Persistent DEX farms"
     assert preset["query"]["kind"] == "DEX-FUTURES"
     assert accounts.list_filter_presets(second["id"], db_path=db) == []
@@ -238,8 +361,11 @@ def test_filter_presets_and_watchlist_are_account_scoped(tmp_path, monkeypatch) 
 def test_filter_presets_reject_unknown_query_fields(tmp_path, monkeypatch) -> None:
     db = _database(tmp_path, monkeypatch)
     user = accounts.create_user(
-        email="preset-validation@example.com", display_name="Member",
-        password="member-secure-password", subscription_status="active", db_path=db,
+        email="preset-validation@example.com",
+        display_name="Member",
+        password="member-secure-password",
+        subscription_status="active",
+        db_path=db,
     )
     with pytest.raises(ValueError, match="invalid_filter_field"):
         accounts.save_filter_preset(

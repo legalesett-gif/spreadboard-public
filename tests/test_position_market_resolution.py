@@ -7,7 +7,15 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from spreadboard import accounts, fast_quotes, portfolio, position_markets, server
+from spreadboard import (
+    accounts,
+    fast_quotes,
+    live_book_cache,
+    portfolio,
+    portfolio_funding,
+    position_markets,
+    server,
+)
 from scripts.websocket_book_worker import (
     _desired_legs,
     _install_ccxt_client_reset_compat,
@@ -30,6 +38,7 @@ def _catalogue() -> dict:
                 "venue": "Gate",
                 "market_type": "Futures",
                 "symbol": "ESPORTS/USDT:USDT",
+                "contract_size": 100.0,
             },
         ]
     }
@@ -77,15 +86,11 @@ def test_saved_dex_label_resolves_to_exact_catalogue_spot_adapter() -> None:
         "short_ask": 0.0156,
     }
 
-    result = position_markets.resolve_position_route(
-        position, [current], catalogue=_catalogue()
-    )
+    result = position_markets.resolve_position_route(position, [current], catalogue=_catalogue())
 
     assert result["listing_status"] == "listed"
     assert result["current_row"] is current
-    assert result["history_route_key"] == (
-        "ESPORTS|OKX DEX 56|Spot|Gate|Futures"
-    )
+    assert result["history_route_key"] == ("ESPORTS|OKX DEX 56|Spot|Gate|Futures")
     assert result["chart_route_key"].startswith("CUSTOM:")
     route = result["canonical_route"]
     assert route["long_market_type"] == "Spot"
@@ -141,7 +146,7 @@ def test_listed_position_is_refreshing_not_claimed_market_unavailable(monkeypatc
     assert "Markets listed · refreshing" in server.render_position_card(result)
 
 
-def test_fresh_exact_history_marks_both_position_legs(monkeypatch) -> None:
+def test_reference_history_does_not_mark_a_full_position(monkeypatch) -> None:
     now_us = int(datetime.now(tz=timezone.utc).timestamp() * 1_000_000)
     monkeypatch.setattr(
         portfolio,
@@ -166,11 +171,69 @@ def test_fresh_exact_history_marks_both_position_legs(monkeypatch) -> None:
         catalogue=_catalogue(),
     )
 
+    assert result["quote_status"] == "refreshing"
+    assert result["long_mark_price"] is None
+    assert result["short_mark_price"] is None
+    assert result["price_pnl_usd"] is None
+
+
+def test_position_marks_use_full_size_vwap_and_exact_dex_sell() -> None:
+    position = {**_dex_position(), "user_id": 9}
+    now = datetime.now(tz=timezone.utc)
+    now_us = int(now.timestamp() * 1_000_000)
+    snapshot = {
+        "schema": portfolio_funding.SCHEMA,
+        "generated_at": now.isoformat().replace("+00:00", "Z"),
+        "positions": {
+            "9:7": {
+                "status": "ok",
+                "position_fingerprint": portfolio_funding.position_fingerprint(position),
+                "amount_usd": "2.5",
+                "event_count": 2,
+                "synced_at": now.isoformat().replace("+00:00", "Z"),
+                "marks": {
+                    "long": {
+                        "status": "ok",
+                        "source": "paraswap_exact_sell_quote",
+                        "quantity": "1000",
+                        "price_usd": "0.0148",
+                        "quoted_at": now.isoformat().replace("+00:00", "Z"),
+                    }
+                },
+            }
+        },
+    }
+    books = {
+        "Gate|Futures|ESPORTS/USDT:USDT": live_book_cache.CachedBook(
+            bids=[[0.0157, 5.0], [0.0156, 5.0]],
+            asks=[[0.0158, 4.0], [0.0159, 6.0]],
+            quote_ts_us=now_us,
+        )
+    }
+
+    result = portfolio._hydrate_position(
+        position,
+        [],
+        books=books,
+        funding_legs={},
+        catalogue=_catalogue(),
+        funding_snapshot=snapshot,
+    )
+
     assert result["quote_status"] == "live"
-    assert result["long_mark_price"] == pytest.approx(0.0151)
-    assert result["short_mark_price"] == pytest.approx(0.0156)
-    assert result["current_open_spread_pct"] == pytest.approx((0.0155 / 0.0152 - 1) * 100)
-    assert result["current_exit_spread_pct"] == pytest.approx((0.0151 / 0.0156 - 1) * 100)
+    assert result["long_mark_price"] == pytest.approx(0.0148)
+    assert result["short_mark_price"] == pytest.approx(0.01586)
+    assert result["current_exit_spread_pct"] == pytest.approx((0.0148 / 0.01586 - 1) * 100)
+    assert result["funding_income_usd"] == pytest.approx(2.5)
+    assert result["total_pnl_usd"] == pytest.approx(result["price_pnl_usd"] + 2.5)
+    assert result["quote_source"] == ("paraswap_exact_sell_quote+resident_full_position_vwap")
+
+
+def test_quantity_vwap_requires_complete_depth_and_applies_contract_size() -> None:
+    levels = [[10.0, 2.0], [11.0, 3.0]]
+
+    assert portfolio._quantity_vwap(levels, 40.0, contract_size=10.0) == pytest.approx(10.5)
+    assert portfolio._quantity_vwap(levels, 60.0, contract_size=10.0) is None
 
 
 def test_position_chart_link_uses_exact_custom_route_and_since_entry() -> None:
@@ -210,11 +273,13 @@ def test_portfolio_schedules_shared_exact_route_without_blocking(monkeypatch) ->
         server.portfolio,
         "portfolio_snapshot",
         lambda *_args, **_kwargs: {
-            "positions": [{
-                "status": "open",
-                "quote_refresh_needed": True,
-                "canonical_route": {"route_key": "CUSTOM:exact"},
-            }]
+            "positions": [
+                {
+                    "status": "open",
+                    "quote_refresh_needed": True,
+                    "canonical_route": {"route_key": "CUSTOM:exact"},
+                }
+            ]
         },
     )
     monkeypatch.setattr(
@@ -235,11 +300,13 @@ def test_portfolio_does_not_resample_a_position_already_live(monkeypatch) -> Non
         server.portfolio,
         "portfolio_snapshot",
         lambda *_args, **_kwargs: {
-            "positions": [{
-                "status": "open",
-                "quote_refresh_needed": False,
-                "canonical_route": {"route_key": "CUSTOM:live"},
-            }]
+            "positions": [
+                {
+                    "status": "open",
+                    "quote_refresh_needed": False,
+                    "canonical_route": {"route_key": "CUSTOM:live"},
+                }
+            ]
         },
     )
     monkeypatch.setattr(

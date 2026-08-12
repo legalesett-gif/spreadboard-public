@@ -26,18 +26,22 @@ def test_alex_and_anatolij_can_operate_the_member_ledger() -> None:
 
 
 def test_partial_funding_refresh_merges_instead_of_erasing_previous_legs(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path,
+    monkeypatch,
 ) -> None:
     cache = tmp_path / "funding.json"
-    cache.write_text(json.dumps({
-        "schema": "spreadboard.venue_funding_history.v1",
-        "next_cursor": 0,
-        "legs": {"Bybit|OLD/USDT:USDT": {"1d": 1.0, "7d": 2.0, "30d": 3.0}},
-    }))
+    cache.write_text(
+        json.dumps(
+            {
+                "schema": "spreadboard.venue_funding_history.v1",
+                "next_cursor": 0,
+                "legs": {"Bybit|OLD/USDT:USDT": {"1d": 1.0, "7d": 2.0, "30d": 3.0}},
+            }
+        )
+    )
     now = 1_800_000_000_000
     entries = [
-        {"timestamp": now - index * 8 * 3_600_000, "fundingRate": 0.0001}
-        for index in range(91)
+        {"timestamp": now - index * 8 * 3_600_000, "fundingRate": 0.0001} for index in range(91)
     ]
     monkeypatch.setattr(venue_funding_history.time, "time", lambda: now / 1000)
     monkeypatch.setattr(
@@ -47,7 +51,9 @@ def test_partial_funding_refresh_merges_instead_of_erasing_previous_legs(
     )
 
     result = venue_funding_history.build(
-        [("Gate", "NEW/USDT:USDT")], cache_path=cache, budget_seconds=5,
+        [("Gate", "NEW/USDT:USDT")],
+        cache_path=cache,
+        budget_seconds=5,
     )
     payload = json.loads(cache.read_text())
 
@@ -87,11 +93,49 @@ def test_payout_cadence_has_no_exchange_names_and_dex_never_pays() -> None:
 
 
 def test_position_cancel_never_depends_on_required_field_validation() -> None:
-    html = server.render_position_dialog() + server.render_position_action_dialog()
-    assert html.count('type="button" data-dialog-cancel') == 4
+    html = (
+        server.render_position_dialog()
+        + server.render_position_edit_dialog()
+        + server.render_position_action_dialog()
+    )
+    assert html.count('type="button" data-dialog-cancel') == 6
     assert '<button value="cancel"' not in html
     script = server.render_account_script()
     assert "dialog?.close('cancel')" in script
+
+
+def test_portfolio_uses_edit_and_exact_funding_instead_of_manual_funding_button() -> None:
+    item = {
+        "id": 8,
+        "token": "BTW",
+        "status": "open",
+        "quote_status": "live",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "long_quantity": 13530,
+        "long_entry_price": 0.2017,
+        "long_mark_price": 0.21,
+        "short_venue": "Aster",
+        "short_market_type": "Futures",
+        "short_quantity": 13530,
+        "short_entry_price": 0.2026,
+        "short_mark_price": 0.211,
+        "current_funding": {},
+        "funding_sync_status": "exact",
+        "funding_event_count": 1,
+        "funding_synced_at": "2026-08-12T00:05:00Z",
+        "funding_income_usd": 0.49,
+        "price_pnl_usd": 20,
+        "fees_usd": 0,
+        "total_pnl_usd": 20.49,
+    }
+    html = server.render_position_card(item)
+    assert "Movement PnL" in html
+    assert "Settled funding" in html
+    assert "Fees" in html
+    assert "Exact private exchange ledger" in html
+    assert "Edit position" in html
+    assert "Add funding" not in html
 
 
 def test_position_suggestions_ignore_stale_out_of_order_responses() -> None:
@@ -104,20 +148,33 @@ def test_position_suggestions_ignore_stale_out_of_order_responses() -> None:
 def test_position_suggestions_include_chart_catalogue_dex_long_pairs(monkeypatch) -> None:
     monkeypatch.setattr(server.telegram_queries, "client_visible_payload", lambda: {})
     monkeypatch.setattr(server.api_spreads, "load_spreads", lambda **_k: {"rows": []})
-    monkeypatch.setattr(server.chart_catalog, "load", lambda: {
-        "generated_at": "now",
-        "markets": [
-            {"token": "GUA", "venue": "OKX DEX 56", "market_type": "Spot", "symbol": "GUA/USDT"},
-            {"token": "GUA", "venue": "Gate", "market_type": "Futures", "symbol": "GUA/USDT:USDT"},
-            {"token": "GUA", "venue": "Mexc", "market_type": "Spot", "symbol": "GUA/USDT"},
-        ],
-    })
+    monkeypatch.setattr(
+        server.chart_catalog,
+        "load",
+        lambda: {
+            "generated_at": "now",
+            "markets": [
+                {
+                    "token": "GUA",
+                    "venue": "OKX DEX 56",
+                    "market_type": "Spot",
+                    "symbol": "GUA/USDT",
+                },
+                {
+                    "token": "GUA",
+                    "venue": "Gate",
+                    "market_type": "Futures",
+                    "symbol": "GUA/USDT:USDT",
+                },
+                {"token": "GUA", "venue": "Mexc", "market_type": "Spot", "symbol": "GUA/USDT"},
+            ],
+        },
+    )
 
     data = server.api_position_suggestions(Path("missing"), {"q": ["GUA"], "limit": ["50"]})
 
     assert any(
-        route["long_market_type"] == "DEX"
-        and route["short_market_type"] == "Futures"
+        route["long_market_type"] == "DEX" and route["short_market_type"] == "Futures"
         for route in data["routes"]
     )
     assert len(data["routes"]) > 1
@@ -125,22 +182,38 @@ def test_position_suggestions_include_chart_catalogue_dex_long_pairs(monkeypatch
 
 def test_watchlist_uses_live_then_retained_then_chart_context(monkeypatch) -> None:
     live = {
-        "token": "GUA", "route_key": "gua-live", "route_kind": "SPOT-FUTURES",
-        "long_venue": "Mexc", "long_market_type": "Spot",
-        "short_venue": "Gate", "short_market_type": "Futures",
-        "executable_spread_pct": 2.5, "funding_24h_pct": 0.8, "freshness": "fresh",
+        "token": "GUA",
+        "route_key": "gua-live",
+        "route_kind": "SPOT-FUTURES",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        "executable_spread_pct": 2.5,
+        "funding_24h_pct": 0.8,
+        "freshness": "fresh",
     }
     cooled = {
-        "token": "ESPORTS", "route_key": "esports-old", "route_kind": "DEX-FUTURES",
-        "long_venue": "OKX DEX 56", "long_market_type": "Spot",
-        "short_venue": "Gate", "short_market_type": "Futures",
-        "radar_historical": True, "radar_windows": {"1d": 0.7},
+        "token": "ESPORTS",
+        "route_key": "esports-old",
+        "route_kind": "DEX-FUTURES",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "Spot",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        "radar_historical": True,
+        "radar_windows": {"1d": 0.7},
     }
     gua_cooled = {
-        "token": "GUA", "route_key": "gua-funding", "route_kind": "SPOT-FUTURES",
-        "long_venue": "Mexc", "long_market_type": "Spot",
-        "short_venue": "Aster", "short_market_type": "Futures",
-        "radar_historical": True, "radar_windows": {"1d": 1.2, "7d": 3.5},
+        "token": "GUA",
+        "route_key": "gua-funding",
+        "route_kind": "SPOT-FUTURES",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "short_venue": "Aster",
+        "short_market_type": "Futures",
+        "radar_historical": True,
+        "radar_windows": {"1d": 1.2, "7d": 3.5},
     }
     monkeypatch.setattr(server.telegram_queries, "client_visible_payload", lambda: {"rows": [live]})
     monkeypatch.setattr(
@@ -158,8 +231,14 @@ def test_watchlist_uses_live_then_retained_then_chart_context(monkeypatch) -> No
     assert by_symbol["GUA"]["research_score"]["reasons"][0].startswith(
         "Multi-horizon expected funding +0.882%"
     )
-    assert by_symbol["GUA"]["opportunities"]["funding"]["route"]["route_line"] == "Mexc Spot → Aster Futures"
-    assert by_symbol["GUA"]["opportunities"]["spread"]["route"]["route_line"] == "Mexc Spot → Gate Futures"
+    assert (
+        by_symbol["GUA"]["opportunities"]["funding"]["route"]["route_line"]
+        == "Mexc Spot → Aster Futures"
+    )
+    assert (
+        by_symbol["GUA"]["opportunities"]["spread"]["route"]["route_line"]
+        == "Mexc Spot → Gate Futures"
+    )
     assert "DEX DEX" not in by_symbol["ESPORTS"]["routes"][0]["route_line"]
     assert by_symbol["ESPORTS"]["status"] == "cooled funding radar"
     assert by_symbol["ESPORTS"]["routes"][0]["pair_url"].startswith("/charts?")
@@ -169,8 +248,15 @@ def test_watchlist_uses_live_then_retained_then_chart_context(monkeypatch) -> No
 def test_product_guide_and_fair_price_explain_every_major_tool() -> None:
     guide = server.render_guide_page()
     for label in (
-        "Membership", "Arbitrage", "Funding", "Fair price", "Charts",
-        "Intel", "Watchlist", "Portfolio", "Alerts and Telegram",
+        "Membership",
+        "Arbitrage",
+        "Funding",
+        "Fair price",
+        "Charts",
+        "Intel",
+        "Watchlist",
+        "Portfolio",
+        "Alerts and Telegram",
     ):
         assert label in guide
     assert "How to use SpreadBoard" in guide
@@ -195,5 +281,6 @@ def test_telegram_link_uses_same_tab_and_has_confirmation_fallback(tmp_path: Pat
     db = tmp_path / "accounts.sqlite3"
     accounts.initialize(db)
     assert "data-telegram-fallback" in server.render_account_settings(
-        _user("alex@spreadarbitrage.ink", "admin"), db,
+        _user("alex@spreadarbitrage.ink", "admin"),
+        db,
     )
