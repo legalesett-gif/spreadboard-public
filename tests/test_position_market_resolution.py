@@ -379,6 +379,55 @@ def test_background_position_alert_worker_warms_an_off_board_exact_route(
     assert scheduled[0].startswith("CUSTOM:")
 
 
+def test_background_position_alert_worker_uses_exact_portfolio_snapshot(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = tmp_path / "accounts.sqlite3"
+    accounts.initialize(db_path)
+    user = accounts.create_user(
+        email="exact-alert@example.test",
+        display_name="Exact Alert",
+        password="exact-alert-password",
+        subscription_status="active",
+        subscription_days=30,
+        db_path=db_path,
+    )
+    position = accounts.create_position(user["id"], _dex_position(), db_path=db_path)
+    accounts.add_alert_rule(
+        user["id"],
+        position["id"],
+        {"metric": "funding_usd", "operator": "gte", "threshold": 1},
+        db_path=db_path,
+    )
+    exact_snapshot = {"schema": portfolio_funding.SCHEMA, "positions": {}}
+    seen_snapshots: list[dict] = []
+
+    monkeypatch.setattr(portfolio.api_spreads, "load_spreads", lambda **_kwargs: {"rows": []})
+    monkeypatch.setattr(portfolio, "_live_books", lambda: {})
+    monkeypatch.setattr(portfolio.bulk_quotes, "load_funding", lambda: {})
+    monkeypatch.setattr(portfolio.chart_catalog, "load", _catalogue)
+    monkeypatch.setattr(portfolio.portfolio_funding, "load", lambda: exact_snapshot)
+
+    def hydrate(raw, _rows, **kwargs):
+        seen_snapshots.append(kwargs["funding_snapshot"])
+        return {
+            **raw,
+            "funding_income_usd": 2.0,
+            "quote_refresh_needed": False,
+        }
+
+    monkeypatch.setattr(portfolio, "_hydrate_position", hydrate)
+    worker = portfolio.PositionAlertWorker(
+        board_path=tmp_path / "board.json",
+        accounts_path=db_path,
+    )
+
+    summary = worker.check_once()
+
+    assert seen_snapshots == [exact_snapshot]
+    assert summary == {"users": 1, "positions": 1, "notifications": 1}
+
+
 def test_open_position_books_take_priority_over_ranked_board(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "accounts.sqlite3"
     accounts.initialize(db_path)

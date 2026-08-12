@@ -735,6 +735,11 @@ class PositionAlertWorker:
         funding_legs = bulk_quotes.load_funding()
         catalogue = chart_catalog.load()
         market_index = position_markets.catalogue_market_index(catalogue)
+        # Alert evaluation must use the same exact, position-windowed funding
+        # ledger and operator reference marks as the authenticated Portfolio
+        # page. Without this snapshot, total-PnL/funding rules are withheld and
+        # DEX legs can lose their current reference mark in the background.
+        funding_snapshot = portfolio_funding.load()
         user_count = position_count = notification_count = 0
         for user_id in accounts.list_alert_user_ids(db_path=self.accounts_path):
             user = accounts.get_user_object(user_id, db_path=self.accounts_path)
@@ -754,6 +759,7 @@ class PositionAlertWorker:
                     funding_legs=funding_legs,
                     catalogue=catalogue,
                     market_index=market_index,
+                    funding_snapshot=funding_snapshot,
                 )
                 if (
                     hydrated.get("quote_refresh_needed")
