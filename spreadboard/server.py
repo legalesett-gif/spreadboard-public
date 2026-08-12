@@ -39,6 +39,8 @@ from spreadboard import (  # noqa: E402
     chart_catalog,
     crypto_billing,
     crypto_watcher,
+    credential_crypto,
+    exchange_credentials,
     executor_boundary,
     fair_price,
     funding_radar,
@@ -119,7 +121,7 @@ _PUBLIC_INTEL_FEED_URL = os.environ.get(
     "b348e50f10b0ad7de8b71fd619ea7151/raw/spreadboard-community-feed.json",
 )
 _PUBLIC_INTEL_FEED_CACHE: tuple[float, dict[str, Any]] | None = None
-TERMS_VERSION = "2026-08-10"
+TERMS_VERSION = "2026-08-12"
 
 # Exact server-side Research Pro gates.  Navigation is presentation only; these
 # checks are the authority that prevents a Scanner account from opening the
@@ -1071,6 +1073,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     user.id, position_id, payload, db_path=self.server.accounts_path
                 )
                 self._send_json({"ok": True, "position": position})
+            elif parsed.path.startswith("/api/positions/") and parsed.path.endswith("/delete"):
+                position_id = int(parsed.path.split("/")[3])
+                deleted = accounts.delete_position(
+                    user.id,
+                    position_id,
+                    confirm_token=str(payload.get("confirm_token") or ""),
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json({"ok": True, "deleted": deleted})
             elif parsed.path.startswith("/api/positions/") and parsed.path.endswith("/close"):
                 position_id = int(parsed.path.split("/")[3])
                 position = accounts.close_position(
@@ -1102,6 +1113,30 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     db_path=self.server.accounts_path,
                 )
                 self._send_json({"ok": True, "user": updated})
+            elif parsed.path == "/api/exchange-connections":
+                if not credential_crypto.encryption_available():
+                    raise ValueError("accounting_encryption_not_configured")
+                venue = exchange_credentials.normalize_venue(str(payload.get("venue") or ""))
+                fields = exchange_credentials.validate_consent(venue, payload)
+                encrypted = str(payload.get("credential_encrypted") or "")
+                credential_crypto.validate_envelope(encrypted)
+                connection = accounts.save_exchange_connection(
+                    user.id,
+                    venue,
+                    encrypted,
+                    credential_fields=fields,
+                    terms_version=exchange_credentials.TERMS_VERSION,
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json({"ok": True, "connection": connection})
+            elif parsed.path.startswith("/api/exchange-connections/") and parsed.path.endswith(
+                "/disconnect"
+            ):
+                venue = exchange_credentials.normalize_venue(parsed.path.split("/")[3])
+                disconnected = accounts.disconnect_exchange_connection(
+                    user.id, venue, db_path=self.server.accounts_path
+                )
+                self._send_json({"ok": True, "connection": disconnected})
             elif parsed.path == "/api/margin-plan":
                 # Deliberately transient: private account equity and venue tier
                 # inputs are calculated, returned, and never written to disk.
@@ -4149,7 +4184,40 @@ def api_health(
             "last_result": getattr(subscription_lifecycle_worker, "last_result", None),
             **subscription_lifecycle.status(),
         },
+        "private_accounting": accounting_worker_status(),
     }
+
+
+def accounting_worker_status() -> dict[str, Any]:
+    path = accounts.RUNTIME_DIR / "accounting_worker_status.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {"configured": credential_crypto.encryption_available(), "running": False}
+    generated = _iso_datetime(data.get("generated_at"))
+    age_seconds = max(0.0, time.time() - generated.timestamp()) if generated else None
+    return {
+        "configured": credential_crypto.encryption_available(),
+        "running": age_seconds is not None and age_seconds <= 900,
+        "age_seconds": round(age_seconds, 1) if age_seconds is not None else None,
+        "connections": int(data.get("connections") or 0),
+        "users": int(data.get("users") or 0),
+        "positions": int(data.get("positions") or 0),
+        "exact": int(data.get("exact") or 0),
+        "errors": int(data.get("errors") or 0),
+        "read_only": bool(data.get("read_only")),
+    }
+
+
+def _iso_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment
 
 
 def funding_history_health() -> dict[str, Any]:
@@ -9833,6 +9901,10 @@ def render_legal_page(page: str) -> str:
                     "Do not attempt to bypass access controls, overload data providers, reverse engineer credentials, or use the service for unlawful activity. We may suspend access needed to protect users, providers, or the service.",
                 ),
                 (
+                    "Optional exchange accounting",
+                    "If you opt in, SpreadBoard uses credentials that you provide solely to read your exchange funding ledger and current reference prices. You must create dedicated credentials with trading, transfer, and withdrawal permissions disabled wherever the venue supports those controls. Connecting or disconnecting an account never authorises SpreadBoard to place or close an order. Aster is exceptional because its integration uses a private account key; its separate warning and confirmation apply.",
+                ),
+                (
                     "Availability",
                     "We aim to run continuously but do not guarantee uninterrupted access or that every venue, token, route, chart, or alert will always be available.",
                 ),
@@ -9861,6 +9933,10 @@ def render_legal_page(page: str) -> str:
                 (
                     "Notifications",
                     "Pushover user keys are encrypted at rest. Telegram and Pushover identifiers are used only to deliver the features you enable.",
+                ),
+                (
+                    "Exchange credentials",
+                    "Private-ledger accounting is opt-in. Exchange credential bundles are envelope-encrypted at rest and bound to your account and venue. The website has only the encryption key; a separate non-HTTP accounting worker has the decryption key. Plaintext exists in worker memory only while it reads your funding ledger and reference prices. Disconnecting erases the stored encrypted bundle. Do not provide withdrawal-enabled credentials, seed phrases, or a wallet holding unrelated assets.",
                 ),
                 (
                     "Technical data",
@@ -10126,7 +10202,7 @@ def render_account_page(
       {render_position_edit_dialog()}
       {render_position_action_dialog()}
     </section>
-    <script type="application/json" id="account-session">{json_script_data({"csrf_token": user.csrf_token})}</script>
+    <script type="application/json" id="account-session">{json_script_data({"csrf_token": user.csrf_token, "user_id": user.id})}</script>
     <script type="application/json" id="portfolio-position-data">{json_script_data({str(item["id"]): editable_position_data(item) for item in positions})}</script>
     {render_account_script()}
     {render_portfolio_market_refresh_script(positions)}
@@ -10192,7 +10268,7 @@ def render_position_card(item: dict[str, Any]) -> str:
       </div>
       <p class="position-funding-source">{h(movement_note)}<br>{h(funding_note)}</p>
       <div class="position-legs"><div><span>Long</span><strong>{h(item.get("long_venue"))} · {h(item.get("long_quantity"))}</strong><em>{fmt_price(item.get("long_entry_price"))} → {fmt_price(item.get("long_mark_price"))} · {h(position_mark_basis_label(item.get("long_mark_basis")))}</em><em>Funding {fmt_signed_pct(long_funding.get("rate_pct"), digits=4)} / {h(long_funding.get("interval_hours") or "—")}h</em></div><div><span>Short</span><strong>{h(item.get("short_venue"))} · {h(item.get("short_quantity"))}</strong><em>{fmt_price(item.get("short_entry_price"))} → {fmt_price(item.get("short_mark_price"))} · {h(position_mark_basis_label(item.get("short_mark_basis")))}</em><em>Funding {fmt_signed_pct(short_funding.get("rate_pct"), digits=4)} / {h(short_funding.get("interval_hours") or "—")}h</em></div></div>
-      <footer><span>Opened {h(item.get("opened_at"))}</span><div>{render_position_rules(item.get("alert_rules") or [])}<button type="button" data-position-edit>Edit position</button><button type="button" data-position-action="alert">Add alert</button>{'<button type="button" data-position-action="close">Close position</button>' if item.get("status") == "open" else ""}<a href="/charts?{h(chart_query)}">Chart since entry</a></div></footer>
+      <footer><span>Opened {h(item.get("opened_at"))}</span><div>{render_position_rules(item.get("alert_rules") or [])}<button type="button" data-position-edit>Edit position</button><button type="button" data-position-action="alert">Add alert</button>{'<button type="button" data-position-action="close">Close position</button>' if item.get("status") == "open" else ""}<button class="danger" type="button" data-position-action="delete">Delete entry</button><a href="/charts?{h(chart_query)}">Chart since entry</a></div></footer>
     </article>"""
 
 
@@ -10353,6 +10429,17 @@ def render_account_settings(
     push_key_note = "Key saved securely" if push.get("pushover_configured") else "No key saved"
     browser_push = web_push.status()
     browser_push_count = accounts.web_push_subscription_count(user.id, db_path=accounts_path)
+    exchange_connections = accounts.list_exchange_connections(user.id, db_path=accounts_path)
+    exchange_connection_rows = "".join(
+        f'<article data-exchange-connection="{h(item["venue"])}"><div><strong>{h(exchange_credentials.VENUES.get(item["venue"], {}).get("label") or item["venue"])}</strong><span>{h(item.get("last_status") or "pending")} · last sync {h(item.get("last_sync_at") or "awaiting first worker pass")}</span>{f"<em>{h(item.get('last_error'))}</em>" if item.get("last_error") else ""}</div><button class="sheet-button danger" type="button" data-exchange-disconnect="{h(item["venue"])}">Disconnect &amp; erase</button></article>'
+        for item in exchange_connections
+    ) or '<p data-exchange-empty>No exchange account is connected.</p>'
+    exchange_catalog = exchange_credentials.public_catalog()
+    exchange_options = "".join(
+        f'<option value="{h(item["slug"])}">{h(item["label"])}</option>'
+        for item in exchange_catalog
+    )
+    accounting_ready = credential_crypto.encryption_available()
     return f"""
     <section class="account-settings">
       <div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is optional and is used only as the denominator for return statistics; it never changes position PnL.</p></div></div>
@@ -10374,6 +10461,22 @@ def render_account_settings(
         <div><button class="sheet-button primary" type="button" data-web-push-enable {"disabled" if not browser_push.get("configured") else ""}>Enable on this browser</button><button class="sheet-button" type="button" data-web-push-disable>Disable on this browser</button><button class="sheet-button" type="button" data-web-push-test {"disabled" if not browser_push.get("configured") else ""}>Queue test</button></div>
         <p role="status" data-web-push-status>{h(browser_push_count)} active browser subscription{"s" if browser_push_count != 1 else ""} on this account.</p>
       </div>
+      <section class="exchange-accounting" data-exchange-accounting>
+        <div><strong>Automatic private-ledger accounting</strong><p>Optional and read-only. Credentials are encrypted in your browser request with a server public key; only the isolated accounting worker can decrypt them. The website never displays them again. Use exchange keys with trading and withdrawals disabled.</p></div>
+        <div class="exchange-connection-list">{exchange_connection_rows}</div>
+        <form data-exchange-connection-form>
+          <label><span>Exchange</span><select name="venue" required>{exchange_options}</select></label>
+          <label><span data-exchange-api-label>API key</span><input name="api_key" type="password" autocomplete="off" required></label>
+          <label><span data-exchange-secret-label>API secret</span><input name="secret" type="password" autocomplete="off" required></label>
+          <label data-exchange-passphrase><span>API passphrase</span><input name="passphrase" type="password" autocomplete="off"></label>
+          <label class="wide confirmation"><input name="read_only_confirmed" type="checkbox" required><span>I confirm this is a dedicated read-only key with trading, transfers and withdrawals disabled.</span></label>
+          <label class="wide confirmation" data-aster-confirmation hidden><input name="sensitive_signer_confirmed" type="checkbox"><span>Aster uses a private account key rather than a conventional read-only API key. I understand the added risk and explicitly opt in.</span></label>
+          <button class="sheet-button primary" type="submit" {"" if accounting_ready else "disabled"}>Encrypt &amp; connect</button>
+          <p class="wide" role="status" data-exchange-status>{"Ready for encrypted connections." if accounting_ready else "Encrypted accounting is not configured on this server."}</p>
+        </form>
+      </section>
+      <script type="application/json" data-exchange-catalog>{json_script_data(exchange_catalog)}</script>
+      <script type="application/json" data-accounting-public-key>{json_script_data(credential_crypto.public_key_pem() if accounting_ready else "")}</script>
     </section>"""
 
 
@@ -10409,7 +10512,7 @@ def render_account_script() -> str:
     return """<script>
 (() => {
   const root=document.querySelector('[data-account-page]'); if(!root) return;
-  const {csrf_token:csrf}=JSON.parse(document.getElementById('account-session').textContent||'{}');
+  const {csrf_token:csrf,user_id:sessionUserId}=JSON.parse(document.getElementById('account-session').textContent||'{}');
   const positionData=JSON.parse(document.getElementById('portfolio-position-data')?.textContent||'{}');
   const request=async(url,body)=>{const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw new Error(data.error||'Request failed');return data;};
   const utcToLocalInput=value=>{if(!value)return '';const date=new Date(value);if(Number.isNaN(date.getTime()))return '';const local=new Date(date.getTime()-date.getTimezoneOffset()*60000);return local.toISOString().slice(0,16);};
@@ -10435,9 +10538,18 @@ def render_account_script() -> str:
   editForm?.addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;try{await request(`/api/positions/${editPosition}/edit`,payloadFromForm(form));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   const actionDialog=root.querySelector('[data-action-dialog]');let actionPosition=null;let actionType='';
   const fields={alert:'<label><span>Metric</span><select name="metric"><option value="exit_spread_pct">Current marked spread %</option><option value="open_spread_pct">Enterable spread %</option><option value="pnl_usd">Total PnL USD</option><option value="funding_usd">Settled funding USD</option></select></label><label><span>Condition</span><select name="operator"><option value="lte">At or below</option><option value="gte">At or above</option></select></label><label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>',close:'<label><span>Long exit price</span><input name="long_exit_price" type="number" min="0" step="any" required></label><label><span>Short exit price</span><input name="short_exit_price" type="number" min="0" step="any" required></label><label><span>Exit fees, USD</span><input name="exit_fees_usd" type="number" min="0" step="0.01" value="0"></label>'};
-  root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;actionDialog.querySelector('[data-action-title]').textContent={alert:'Create alert rule',close:'Close position'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=fields[actionType];actionDialog.showModal();});
-  actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={alert:'alerts',close:'close'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
+  root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;const token=positionData[actionPosition]?.token||'';actionDialog.querySelector('[data-action-title]').textContent={alert:'Create alert rule',close:'Close position',delete:'Delete journal entry'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=actionType==='delete'?`<div class="delete-warning"><strong>This permanently deletes only the SpreadBoard journal entry.</strong><p>It will also remove its saved alerts, notifications and imported funding rows. It will not close or change either exchange position.</p></div><label><span>Type ${escapeHtml(token)} to confirm</span><input name="confirm_token" autocomplete="off" required></label>`:fields[actionType];const submit=actionDialog.querySelector('button[type="submit"]');submit.textContent=actionType==='delete'?'Delete entry':'Save';submit.classList.toggle('danger',actionType==='delete');actionDialog.showModal();});
+  actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={alert:'alerts',close:'close',delete:'delete'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   root.querySelector('[data-account-settings]')?.addEventListener('submit',async event=>{event.preventDefault();await request('/api/account-settings',Object.fromEntries(new FormData(event.currentTarget)));location.reload();});
+  const exchangeRoot=root.querySelector('[data-exchange-accounting]'),exchangeForm=exchangeRoot?.querySelector('[data-exchange-connection-form]'),exchangeStatus=exchangeForm?.querySelector('[data-exchange-status]'),exchangeCatalog=JSON.parse(root.querySelector('[data-exchange-catalog]')?.textContent||'[]');
+  const accountingPublicKey=JSON.parse(root.querySelector('[data-accounting-public-key]')?.textContent||'""');
+  const bytesToB64Url=bytes=>btoa(String.fromCharCode(...bytes)).split('+').join('-').split('/').join('_').replace(/=+$/,'');
+  const pemBytes=pem=>Uint8Array.from(atob(pem.replace(/-----[^-]+-----/g,'').replace(/\s/g,'')),char=>char.charCodeAt(0));
+  async function sealCredentialPayload(payload,context){const publicKey=await crypto.subtle.importKey('spki',pemBytes(accountingPublicKey),{name:'RSA-OAEP',hash:'SHA-256'},false,['encrypt']);const dataKey=crypto.getRandomValues(new Uint8Array(32)),nonce=crypto.getRandomValues(new Uint8Array(12)),wrapped=new Uint8Array(await crypto.subtle.encrypt({name:'RSA-OAEP'},publicKey,dataKey)),aes=await crypto.subtle.importKey('raw',dataKey,{name:'AES-GCM'},false,['encrypt']),encoded=new TextEncoder(),ciphertext=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv:nonce,additionalData:encoded.encode(context)},aes,encoded.encode(JSON.stringify(payload))));return JSON.stringify({schema:'spreadboard.exchange_credentials.v1',wrapped_key:bytesToB64Url(wrapped),nonce:bytesToB64Url(nonce),ciphertext:bytesToB64Url(ciphertext)});}
+  const syncExchangeFields=()=>{if(!exchangeForm)return;const spec=exchangeCatalog.find(item=>item.slug===exchangeForm.elements.venue.value)||{},fields=spec.fields||[];const pass=exchangeForm.querySelector('[data-exchange-passphrase]'),aster=exchangeForm.querySelector('[data-aster-confirmation]');pass.hidden=!fields.includes('passphrase');pass.querySelector('input').required=fields.includes('passphrase');aster.hidden=!spec.sensitive_signer;aster.querySelector('input').required=!!spec.sensitive_signer;exchangeForm.querySelector('[data-exchange-api-label]').textContent=spec.field_labels?.api_key||'API key';exchangeForm.querySelector('[data-exchange-secret-label]').textContent=spec.field_labels?.secret||'API secret';};
+  exchangeForm?.elements.venue.addEventListener('change',syncExchangeFields);syncExchangeFields();
+  exchangeForm?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('[type="submit"]'),raw=Object.fromEntries(new FormData(form)),spec=exchangeCatalog.find(item=>item.slug===raw.venue),credentialFields=spec?.fields||[],credentials=Object.fromEntries(credentialFields.map(field=>[field,raw[field]]));button.disabled=true;exchangeStatus.textContent='Encrypting in this browser and saving…';try{const credential_encrypted=await sealCredentialPayload(credentials,`spreadboard:exchange-credential:${sessionUserId}:${raw.venue}`);await request('/api/exchange-connections',{venue:raw.venue,credential_encrypted,credential_fields:credentialFields,read_only_confirmed:form.elements.read_only_confirmed.checked,sensitive_signer_confirmed:form.elements.sensitive_signer_confirmed.checked});for(const field of credentialFields)form.elements[field].value='';exchangeStatus.textContent='Encrypted connection saved. The worker will validate it within five minutes.';location.reload();}catch(error){exchangeStatus.textContent=error.message;button.disabled=false;}});
+  exchangeRoot?.addEventListener('click',async event=>{const button=event.target.closest('[data-exchange-disconnect]');if(!button)return;const venue=button.dataset.exchangeDisconnect;if(!confirm('Disconnect this exchange and erase its encrypted credential bundle?'))return;button.disabled=true;try{await request(`/api/exchange-connections/${venue}/disconnect`,{});location.reload();}catch(error){exchangeStatus.textContent=error.message;button.disabled=false;}});
   const pushoverMessage=code=>({pushover_app_not_configured:'Pushover delivery is not configured on the server.',pushover_user_key_required:'Enter your 30-character Pushover User Key.',invalid_pushover_user_key:'The Pushover User Key must be exactly 30 letters or numbers.',invalid_pushover_device:'The device name may contain only letters, numbers, hyphens or underscores.',pushover_user_not_valid:'Pushover could not validate this User Key or any active device.',pushover_validation_unavailable:'Pushover validation is temporarily unavailable. Nothing was changed.',pushover_device_not_active:'That saved device is not active in Pushover. Save again with Device blank.',pushover_delivery_rejected:'Pushover rejected the test notification.'}[code]||code||'Pushover request failed.');
   root.querySelector('[data-pushover-settings]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,status=form.querySelector('[data-pushover-status]'),button=form.querySelector('[type="submit"]');const payload=Object.fromEntries(new FormData(form));payload.pushover_enabled=form.elements.pushover_enabled.checked;button.disabled=true;status.textContent='Validating with Pushover…';try{const result=await request('/api/notification-preferences',payload);form.elements.pushover_user_key.value='';if(result.preferences)form.elements.pushover_device.value=result.preferences.pushover_device||'';status.textContent=result.warning==='pushover_device_cleared'?`Settings saved. The inactive device label was cleared; Pushover will use ${result.active_device_count||'your'} active device.`:`Settings validated and saved for ${result.active_device_count||'your'} active device${Number(result.active_device_count)===1?'':'s'}.`;}catch(error){status.textContent=pushoverMessage(error.message);}finally{button.disabled=false;}});
   root.querySelector('[data-pushover-test]')?.addEventListener('click',async event=>{const status=root.querySelector('[data-pushover-status]');event.currentTarget.disabled=true;status.textContent='Validating device and sending one test…';try{const result=await request('/api/alert-test',{});status.textContent=result.ok?`Accepted by Pushover for ${result.active_device_count||'your'} active device${Number(result.active_device_count)===1?'':'s'}.` : pushoverMessage(result.error);}catch(error){status.textContent=pushoverMessage(error.message);}finally{event.currentTarget.disabled=false;}});
@@ -15910,6 +16022,9 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 .position-metrics {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border-block:1px solid var(--terminal-line); margin:14px -16px 8px; }} .position-metrics span {{ min-width:0; padding:11px 16px; display:grid; gap:4px; color:var(--terminal-muted); font-size:11px; border-right:1px solid var(--terminal-line); border-bottom:1px solid var(--terminal-line); }} .position-metrics strong {{ overflow-wrap:anywhere; color:var(--terminal-text); font-size:16px; }}
 .position-funding-source {{ margin:0 0 12px; color:var(--terminal-muted); font-size:11px; }}
 .position-legs>div {{ flex:1; display:grid; grid-template-columns:auto 1fr auto; gap:10px; }} .position-legs span,.position-legs em {{ color:var(--terminal-muted); font-style:normal; }} .position-card footer {{ margin-top:14px; color:var(--terminal-muted); font-size:12px; }} .position-card footer div {{ display:flex; flex-wrap:wrap; gap:7px; align-items:center; }} .position-card footer button,.position-card footer a {{ border:1px solid var(--terminal-line); background:transparent; color:var(--terminal-text); padding:7px 10px; text-decoration:none; font:inherit; font-weight:700; cursor:pointer; }}
+.position-card footer button.danger,.sheet-button.danger,.account-dialog button.danger {{ border-color:var(--danger); color:var(--danger); }} .account-dialog button.danger {{ background:var(--danger); color:#fff; }}
+.delete-warning {{ grid-column:1/-1; padding:13px; border:1px solid var(--danger); background:var(--terminal-danger-soft); }} .delete-warning p {{ margin:6px 0 0; color:var(--terminal-muted); line-height:1.5; }}
+.exchange-accounting {{ border:1px solid var(--terminal-line); background:var(--terminal-panel); padding:16px; }} .exchange-accounting>div>p {{ color:var(--terminal-muted); line-height:1.5; }} .exchange-connection-list {{ display:grid; gap:7px; margin-top:12px; }} .exchange-connection-list article {{ display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px; border:1px solid var(--terminal-line); background:var(--terminal-row); }} .exchange-connection-list article div {{ display:grid; gap:3px; }} .exchange-connection-list article span,.exchange-connection-list article em {{ color:var(--terminal-muted); font-size:11px; font-style:normal; }} .account-settings .confirmation {{ display:flex; grid-column:1/-1; align-items:flex-start; gap:9px; text-transform:none; line-height:1.5; }} .account-settings .confirmation input {{ width:auto; min-height:0; margin-top:3px; }} .account-settings form p.wide {{ grid-column:1/-1; margin:0; color:var(--terminal-muted); }}
 .chart-position-opened {{ display:block; margin:-8px 0 12px; color:var(--terminal-warning); font-size:12px; font-weight:800; }}
 .account-dialog {{ width:min(760px,calc(100% - 28px)); max-height:90vh; overflow:auto; border:1px solid var(--terminal-line); background:var(--terminal-panel); color:var(--terminal-text); padding:0; }} .account-dialog::backdrop {{ background:rgba(0,0,0,.68); }} .account-dialog form>header,.account-dialog form>footer {{ padding:15px 18px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--terminal-line); }} .account-dialog form>footer {{ border:0; border-top:1px solid var(--terminal-line); justify-content:flex-end; }} .account-dialog h2 {{ margin:2px 0 0; }} .account-dialog header span {{ color:var(--terminal-muted); font-size:11px; text-transform:uppercase; }} .account-dialog button {{ border:1px solid var(--terminal-line); background:transparent; color:var(--terminal-text); padding:8px 13px; cursor:pointer; }} .account-dialog button.primary {{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }}
 .account-dialog [hidden] {{ display:none !important; }}

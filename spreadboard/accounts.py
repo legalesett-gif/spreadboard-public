@@ -273,6 +273,21 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS exchange_connections (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                venue TEXT NOT NULL,
+                credential_encrypted TEXT NOT NULL,
+                credential_fields_json TEXT NOT NULL DEFAULT '[]',
+                terms_version TEXT NOT NULL,
+                read_only_confirmed_at TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+                last_sync_at TEXT,
+                last_status TEXT NOT NULL DEFAULT 'pending',
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, venue)
+            );
             CREATE TABLE IF NOT EXISTS market_alert_rules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -511,6 +526,8 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS affiliate_payouts_partner_time ON affiliate_payout_batches(partner_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS subscription_lifecycle_state
                 ON subscription_lifecycle_events(state, attempts, updated_at);
+            CREATE INDEX IF NOT EXISTS exchange_connections_enabled
+                ON exchange_connections(enabled, venue, updated_at);
             """
         )
         _ensure_columns(
@@ -2076,6 +2093,69 @@ def update_position(
     )
 
 
+def delete_position(
+    user_id: int,
+    position_id: int,
+    *,
+    confirm_token: str,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Delete one user-owned journal record and only its local dependants."""
+
+    connection = _connect(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        owned = connection.execute(
+            "SELECT id, token, status FROM positions WHERE id = ? AND user_id = ?",
+            (int(position_id), int(user_id)),
+        ).fetchone()
+        if owned is None:
+            connection.rollback()
+            raise ValueError("position_not_found")
+        if not hmac.compare_digest(
+            str(owned["token"]).strip().upper(), str(confirm_token or "").strip().upper()
+        ):
+            connection.rollback()
+            raise ValueError("position_delete_confirmation_mismatch")
+        related = {
+            "funding_cashflows": int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM funding_cashflows WHERE position_id = ? AND user_id = ?",
+                    (int(position_id), int(user_id)),
+                ).fetchone()[0]
+            ),
+            "alert_rules": int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM position_alert_rules WHERE position_id = ? AND user_id = ?",
+                    (int(position_id), int(user_id)),
+                ).fetchone()[0]
+            ),
+            "notifications": int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM in_app_notifications WHERE position_id = ? AND user_id = ?",
+                    (int(position_id), int(user_id)),
+                ).fetchone()[0]
+            ),
+        }
+        cursor = connection.execute(
+            "DELETE FROM positions WHERE id = ? AND user_id = ?",
+            (int(position_id), int(user_id)),
+        )
+        if cursor.rowcount != 1:
+            connection.rollback()
+            raise ValueError("position_not_found")
+        connection.commit()
+        return {
+            "id": int(owned["id"]),
+            "token": str(owned["token"]),
+            "status": str(owned["status"]),
+            "deleted_related": related,
+            "exchange_actions": 0,
+        }
+    finally:
+        connection.close()
+
+
 def close_position(
     user_id: int,
     position_id: int,
@@ -2382,6 +2462,148 @@ def record_subscription_consent(
                 user_agent[:500],
                 _utc_iso(),
             ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def save_exchange_connection(
+    user_id: int,
+    venue: str,
+    credential_encrypted: str,
+    *,
+    credential_fields: list[str],
+    terms_version: str,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Store an already-encrypted, opt-in credential bundle."""
+
+    if not credential_encrypted.strip() or not terms_version.strip():
+        raise ValueError("invalid_exchange_connection")
+    now = _utc_iso()
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """
+            INSERT INTO exchange_connections (
+                user_id, venue, credential_encrypted, credential_fields_json,
+                terms_version, read_only_confirmed_at, enabled, last_status,
+                last_error, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, 'pending', NULL, ?, ?)
+            ON CONFLICT(user_id, venue) DO UPDATE SET
+                credential_encrypted = excluded.credential_encrypted,
+                credential_fields_json = excluded.credential_fields_json,
+                terms_version = excluded.terms_version,
+                read_only_confirmed_at = excluded.read_only_confirmed_at,
+                enabled = 1,
+                last_status = 'pending',
+                last_error = NULL,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(user_id),
+                venue,
+                credential_encrypted,
+                json.dumps(sorted(set(credential_fields)), separators=(",", ":")),
+                terms_version,
+                now,
+                now,
+                now,
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return next(
+        row
+        for row in list_exchange_connections(user_id, db_path=db_path)
+        if row["venue"] == venue
+    )
+
+
+def list_exchange_connections(
+    user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> list[dict[str, Any]]:
+    connection = _connect(db_path)
+    try:
+        rows = connection.execute(
+            """SELECT venue, credential_fields_json, terms_version,
+                      read_only_confirmed_at, enabled, last_sync_at,
+                      last_status, last_error, created_at, updated_at
+               FROM exchange_connections WHERE user_id = ? ORDER BY venue""",
+            (int(user_id),),
+        ).fetchall()
+    finally:
+        connection.close()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["credential_fields"] = json.loads(item.pop("credential_fields_json"))
+        except (TypeError, json.JSONDecodeError):
+            item["credential_fields"] = []
+        item["enabled"] = bool(item["enabled"])
+        result.append(item)
+    return result
+
+
+def encrypted_exchange_connections(
+    *, db_path: Path | str = DEFAULT_DB_PATH
+) -> list[dict[str, Any]]:
+    """Worker-only rows; never expose this function through an HTTP response."""
+
+    connection = _connect(db_path)
+    try:
+        rows = connection.execute(
+            """
+            SELECT c.user_id, c.venue, c.credential_encrypted,
+                   c.terms_version, c.read_only_confirmed_at
+            FROM exchange_connections c
+            JOIN users u ON u.id = c.user_id
+            WHERE c.enabled = 1
+              AND (u.role = 'admin' OR u.subscription_status IN ('active', 'trialing'))
+            ORDER BY c.user_id, c.venue
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
+
+
+def disconnect_exchange_connection(
+    user_id: int, venue: str, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> dict[str, Any]:
+    connection = _connect(db_path)
+    try:
+        cursor = connection.execute(
+            "DELETE FROM exchange_connections WHERE user_id = ? AND venue = ?",
+            (int(user_id), venue),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("exchange_connection_not_found")
+        connection.commit()
+        return {"venue": venue, "deleted": True}
+    finally:
+        connection.close()
+
+
+def record_exchange_connection_sync(
+    user_id: int,
+    venue: str,
+    *,
+    status: str,
+    error: str | None = None,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> None:
+    now = _utc_iso()
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """UPDATE exchange_connections
+               SET last_sync_at = ?, last_status = ?, last_error = ?, updated_at = ?
+               WHERE user_id = ? AND venue = ?""",
+            (now, status[:80], (error or "")[:500] or None, now, int(user_id), venue),
         )
         connection.commit()
     finally:

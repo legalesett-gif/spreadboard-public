@@ -1,10 +1,10 @@
-"""Exact account data imported by an operator-side read-only sync.
+"""Exact account data imported by the isolated read-only accounting worker.
 
-Exchange credentials deliberately stay off the public server. A local worker
-reads the private funding ledger plus quantity-independent venue/accounting
-reference prices, strips them down to per-position totals/marks, and writes one
-atomic snapshot into the production runtime. Portfolio totals use that snapshot
-only when it still matches the saved position inputs.
+Subscriber credentials are stored only as envelope-encrypted database values.
+The web process has the public encryption key; only the non-HTTP worker has the
+private decryption key. The worker strips venue responses down to per-position
+totals and reference marks before atomically writing this snapshot. Portfolio
+totals use it only while it matches the saved position inputs.
 """
 
 from __future__ import annotations

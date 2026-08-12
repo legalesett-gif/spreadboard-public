@@ -61,6 +61,7 @@ services:
       SPREADBOARD_CHART_CATALOG_SECONDS: "21600"
       SPREADBOARD_CHART_CATALOG_VENUE_TIMEOUT: "60"
       SPREADBOARD_POSITION_ALERT_SECONDS: "30"
+      SPREADBOARD_ACCOUNTING_PUBLIC_KEY_FILE: /run/secrets/accounting-public.pem
       SPREADBOARD_MARKET_ALERT_SECONDS: "10"
       SPREADBOARD_TELEGRAM_MEMBERSHIP_SECONDS: "60"
       SPREADBOARD_CEX_CANDIDATES: "550"
@@ -82,6 +83,7 @@ services:
       SPREADARB_MAX_ENTRY_SPREAD_PCT: "0"
     volumes:
       - /opt/spreadboard/runtime:/app/runtime
+      - /opt/spreadboard/secrets/accounting-public.pem:/run/secrets/accounting-public.pem:ro
     expose:
       - "8200"
     networks:
@@ -107,6 +109,39 @@ services:
       options:
         max-size: 20m
         max-file: "5"
+
+  accounting-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      SPREADBOARD_DATA_DIR: /app/runtime
+      SPREADBOARD_ACCOUNTING_PRIVATE_KEY_FILE: /run/secrets/accounting-private.pem
+    command: ["/app/.venv/bin/python", "scripts/accounting_worker.py", "--interval", "300"]
+    volumes:
+      - /opt/spreadboard/runtime:/app/runtime
+      - /opt/spreadboard/secrets/accounting-private.pem:/run/secrets/accounting-private.pem:ro
+    networks:
+      - backend
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 768m
+    cpus: 0.6
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "3"
 
   caddy:
     image: caddy:2.10.2-alpine

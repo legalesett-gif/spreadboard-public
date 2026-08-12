@@ -69,13 +69,20 @@ def timestamp_ms(value: Any) -> int:
     return int(parsed.timestamp() * 1000)
 
 
-def build_exchange(venue: str) -> Any:
-    spec = VENUES.get(venue)
+def build_exchange(venue: str, credentials: dict[str, str] | None = None) -> Any:
+    spec = next(
+        (item for label, item in VENUES.items() if label.casefold() == str(venue).casefold()),
+        None,
+    )
     if spec is None:
         raise RuntimeError(f"unsupported_venue:{venue}")
     ccxt_id, service = spec
-    api_key = keychain(f"SPREADARB/{service}/api_key")
-    secret = keychain(f"SPREADARB/{service}/secret")
+    api_key = str((credentials or {}).get("api_key") or "") or keychain(
+        f"SPREADARB/{service}/api_key"
+    )
+    secret = str((credentials or {}).get("secret") or "") or keychain(
+        f"SPREADARB/{service}/secret"
+    )
     if not api_key or not secret:
         raise RuntimeError(f"missing_credentials:{venue}")
     options: dict[str, Any] = {"defaultType": "swap"}
@@ -88,7 +95,9 @@ def build_exchange(venue: str) -> Any:
         "timeout": 20_000,
         "options": options,
     }
-    passphrase = keychain(f"SPREADARB/{service}/passphrase")
+    passphrase = str((credentials or {}).get("passphrase") or "") or keychain(
+        f"SPREADARB/{service}/passphrase"
+    )
     if passphrase:
         params["password"] = passphrase
     if ccxt_id == "aster":
