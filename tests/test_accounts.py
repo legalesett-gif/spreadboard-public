@@ -216,6 +216,47 @@ def test_position_corrections_are_owner_scoped_and_recompute_route(tmp_path, mon
     assert corrected["route_key"] == "BTW|Mexc|Spot|Aster|Futures"
     assert corrected["entry_spread_pct"] > 0
     assert corrected["opened_at"] == "2026-08-11T23:19:58Z"
+
+    closed = accounts.close_position(
+        owner["id"],
+        created["id"],
+        {
+            "long_exit_price": 0.23,
+            "short_exit_price": 0.231,
+            "exit_fees_usd": 1.5,
+            "closed_at": "2026-08-12T01:00:00Z",
+        },
+        db_path=path,
+    )
+    corrected_closed = accounts.update_position(
+        owner["id"],
+        created["id"],
+        {
+            **payload,
+            "status": "closed",
+            "closed_at": closed["closed_at"],
+            "long_exit_price": 0.229,
+            "short_exit_price": 0.2305,
+            "exit_fees_usd": 1.25,
+        },
+        db_path=path,
+    )
+    assert corrected_closed["status"] == "closed"
+    assert corrected_closed["long_exit_price"] == 0.229
+    assert corrected_closed["short_exit_price"] == 0.2305
+    assert corrected_closed["exit_fees_usd"] == 1.25
+
+    reopened = accounts.update_position(
+        owner["id"],
+        created["id"],
+        {**payload, "status": "open"},
+        db_path=path,
+    )
+    assert reopened["status"] == "open"
+    assert reopened["closed_at"] is None
+    assert reopened["long_exit_price"] is None
+    assert reopened["short_exit_price"] is None
+    assert reopened["exit_fees_usd"] == 0
     with pytest.raises(ValueError, match="position_not_found"):
         accounts.update_position(other["id"], created["id"], payload, db_path=path)
 

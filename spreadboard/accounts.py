@@ -1984,9 +1984,48 @@ def update_position(
 ) -> dict[str, Any]:
     """Correct a user-owned journal entry without touching live venues."""
 
-    values = _position_values(payload)
     connection = _connect(db_path)
     try:
+        existing = connection.execute(
+            "SELECT * FROM positions WHERE id = ? AND user_id = ?",
+            (position_id, user_id),
+        ).fetchone()
+        if existing is None:
+            raise ValueError("position_not_found")
+        values = _position_values(payload)
+        status = str(payload.get("status") or existing["status"] or "open").casefold()
+        if status not in {"open", "closed"}:
+            raise ValueError("invalid_position_status")
+        if status == "closed":
+            closed_at = _normalize_iso(
+                str(payload.get("closed_at") or existing["closed_at"] or "")
+            )
+            if not closed_at:
+                raise ValueError("closed_at_required")
+            if datetime.fromisoformat(closed_at.replace("Z", "+00:00")) < datetime.fromisoformat(
+                values["opened_at"].replace("Z", "+00:00")
+            ):
+                raise ValueError("closed_at_before_opened_at")
+            long_exit_price = _positive_float(
+                payload.get("long_exit_price", existing["long_exit_price"]),
+                "long_exit_price",
+            )
+            short_exit_price = _positive_float(
+                payload.get("short_exit_price", existing["short_exit_price"]),
+                "short_exit_price",
+            )
+            exit_fees_usd = (
+                _optional_nonnegative_float(payload.get("exit_fees_usd"))
+                if "exit_fees_usd" in payload
+                else float(existing["exit_fees_usd"] or 0.0)
+            ) or 0.0
+        else:
+            # Reopening corrects an accidental journal close only. It never
+            # sends an order or changes either venue.
+            closed_at = None
+            long_exit_price = None
+            short_exit_price = None
+            exit_fees_usd = 0.0
         cursor = connection.execute(
             """
             UPDATE positions SET
@@ -1995,7 +2034,8 @@ def update_position(
                 short_venue = ?, short_market_type = ?, short_symbol = ?,
                 short_quantity = ?, short_entry_price = ?, entry_spread_pct = ?,
                 capital_usd = ?, entry_fees_usd = ?, opened_at = ?, notes = ?,
-                updated_at = ?
+                status = ?, closed_at = ?, long_exit_price = ?, short_exit_price = ?,
+                exit_fees_usd = ?, updated_at = ?
             WHERE id = ? AND user_id = ?
             """,
             (
@@ -2016,6 +2056,11 @@ def update_position(
                 values["entry_fees_usd"],
                 values["opened_at"],
                 values["notes"],
+                status,
+                closed_at,
+                long_exit_price,
+                short_exit_price,
+                exit_fees_usd,
                 _utc_iso(),
                 position_id,
                 user_id,
