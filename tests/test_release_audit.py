@@ -3442,6 +3442,48 @@ def test_freshness_reprices_cached_routes_and_repairs_headline_panel(
     assert payload["summary"]["max_depth_weighted_spread_pct"] == pytest.approx(1.25)
 
 
+def test_freshness_does_not_downgrade_settled_funding_to_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route = {
+        "route_key": "GUA|funding",
+        "quote_ts_us": 9_000_000,
+        "depth_weighted_spread_pct": 0.2,
+        "funding_daily_pct": 0.3,
+        "depth_unverified": False,
+    }
+    group = {
+        "token": "GUA",
+        "best_route": route,
+        "best_edge_pct": 0.2,
+        "best_funding_route": route,
+        "best_funding_24h_pct": 0.7,
+        "best_funding_apr_pct": 255.5,
+        "best_funding_24h_basis": "settled_public_events",
+        "routes": [route],
+    }
+    payload = {
+        "filters": {"sort": "funding", "direction": "desc"},
+        "groups": [group],
+        "top_edges": [],
+        "top_funding": [],
+        "summary": {},
+    }
+    monkeypatch.setattr(
+        server.api_spreads,
+        "live_route_updates_for",
+        lambda _routes: {"GUA|funding": (0.25, 0.4, 10_000_000)},
+    )
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(server.api_spreads, "quote_age_min", lambda _row: 0.0)
+
+    server._apply_spread_freshness(payload)
+
+    assert group["best_funding_24h_pct"] == pytest.approx(0.7)
+    assert group["best_funding_apr_pct"] == pytest.approx(255.5)
+    assert group["best_funding_24h_basis"] == "settled_public_events"
+
+
 def test_the_stream_reports_only_what_changed(tmp_path, monkeypatch) -> None:
     """Re-sending every route every few seconds would push megabytes to every
     open page for no reason."""

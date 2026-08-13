@@ -2427,6 +2427,12 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                 and not route.get("identity_mismatch")
                 and route.get("deliverable") is not False
             ]
+            retained_settled_basis = str(group.get("best_funding_24h_basis") or "")
+            retained_settled_daily = (
+                _float_or_none(group.get("best_funding_24h_pct"))
+                if retained_settled_basis == "settled_public_events"
+                else None
+            )
             if funding_candidates:
                 best_funding = max(
                     funding_candidates,
@@ -2435,11 +2441,16 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                 )
                 daily_funding = _float_or_none(best_funding.get("funding_daily_pct"))
                 group["best_funding_route"] = best_funding
-                group["best_funding_24h_pct"] = daily_funding
-                group["best_funding_apr_pct"] = (
-                    daily_funding * 365.0 if daily_funding is not None else None
-                )
-                group["best_funding_24h_basis"] = "projected_current_rate"
+                # A live rate update must not downgrade a verified settled-24h
+                # headline for the same token to a projection.  Keep the
+                # settled observation when it exists; otherwise the current
+                # rate provides the honest projected daily carry.
+                if retained_settled_daily is None:
+                    group["best_funding_24h_pct"] = daily_funding
+                    group["best_funding_apr_pct"] = (
+                        daily_funding * 365.0 if daily_funding is not None else None
+                    )
+                    group["best_funding_24h_basis"] = "projected_current_rate"
         # Freshness, identity and matched-depth guards can invalidate the route
         # that originally bought a token its place. Re-sort every cached lane
         # after choosing its new valid best; otherwise guarded 100% ticker
