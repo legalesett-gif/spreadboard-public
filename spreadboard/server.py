@@ -2341,6 +2341,11 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
         matched = _float_or_none(route.get("depth_weighted_spread_pct"))
         return matched if matched is not None else _float_or_none(route.get("executable_spread_pct"))
 
+    filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+    sort_by = str(filters.get("sort") or "edge")
+    direction = str(filters.get("direction") or "desc")
+    preferred_sort = sort_by
+
     for name in ("groups", "top_edges", "top_funding"):
         for group in payload.get(name) or []:
             if not isinstance(group, dict):
@@ -2365,6 +2370,17 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                 group["best_edge_pct"] = spread_value(best)
             else:
                 group["best_edge_pct"] = None
+        # Freshness, identity and matched-depth guards can invalidate the route
+        # that originally bought a token its place. Re-sort every cached lane
+        # after choosing its new valid best; otherwise guarded 100% ticker
+        # collisions stay at the top as blank rows while real matched edges are
+        # stranded below the fold.
+        lane_sort = "funding" if name == "top_funding" else preferred_sort
+        lane_direction = "desc" if name in {"top_edges", "top_funding"} else direction
+        (payload.get(name) or []).sort(
+            key=lambda group: api_spreads._group_sort_value(group, lane_sort),
+            reverse=lane_direction != "asc",
+        )
     for route in payload.get("rows") or []:
         visit_route(route)
     summary = payload.get("summary")
@@ -2378,6 +2394,10 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
             default=None,
         )
         summary["max_executable_spread_pct"] = summary["max_depth_weighted_spread_pct"]
+    # `groups` is already the requested page, so its membership cannot be
+    # repaired without rebuilding the cached query. Keeping the valid rows
+    # first within that page is still essential, while the background cache
+    # refresh restores exact global pagination from the same current snapshot.
     return payload
 
 

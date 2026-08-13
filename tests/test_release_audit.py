@@ -3323,6 +3323,44 @@ def test_rows_carry_the_hooks_the_stream_patches() -> None:
     assert "data-live-spread" in source and "data-live-funding" in source
 
 
+def test_freshness_guard_resorts_blank_mirages_below_real_edges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cached former leader must not keep the first slot after its guard fires."""
+    mirage = {
+        "route_key": "VANRY|wrong",
+        "executable_spread_pct": 125.0,
+        "depth_weighted_spread_pct": None,
+        "depth_unverified": True,
+        "mirage_guarded": True,
+    }
+    valid = {
+        "route_key": "GUA|valid",
+        "executable_spread_pct": 1.2,
+        "depth_weighted_spread_pct": 1.1,
+        "depth_unverified": False,
+        "mirage_guarded": False,
+    }
+    payload = {
+        "filters": {"sort": "edge", "direction": "desc"},
+        "groups": [
+            {"token": "VANRY", "best_route": mirage, "best_edge_pct": 125.0, "routes": [mirage]},
+            {"token": "GUA", "best_route": valid, "best_edge_pct": 1.1, "routes": [valid]},
+        ],
+        "top_edges": [],
+        "top_funding": [],
+        "summary": {},
+    }
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(server.api_spreads, "quote_age_min", lambda _row: 0.1)
+
+    server._apply_spread_freshness(payload)
+
+    assert [group["token"] for group in payload["groups"]] == ["GUA", "VANRY"]
+    assert payload["groups"][0]["best_edge_pct"] == pytest.approx(1.1)
+    assert payload["groups"][1]["best_edge_pct"] is None
+
+
 def test_the_stream_reports_only_what_changed(tmp_path, monkeypatch) -> None:
     """Re-sending every route every few seconds would push megabytes to every
     open page for no reason."""
