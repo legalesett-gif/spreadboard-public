@@ -449,6 +449,7 @@ class FastQuoteRefresher:
             if _external_funding_is_fresh()
             else self.refresh_all_funding(payload)
         )
+        include_leg_funding = funding_summary.get("status") != "external_live_funding"
         rails = public_rails.load_public_rails()
         metadata = token_metadata.load_token_metadata()
         rows_by_lane: dict[str, list[dict[str, Any]]] = {lane: [] for lane in FAST_QUOTE_LANES}
@@ -549,6 +550,7 @@ class FastQuoteRefresher:
                     jobs,
                     target_notional_usd=target_notional_usd,
                     deadline=deadline,
+                    include_funding=include_leg_funding,
                 )
                 for venue_key, jobs in dex_batches
             ]
@@ -559,6 +561,7 @@ class FastQuoteRefresher:
                     jobs,
                     target_notional_usd=target_notional_usd,
                     deadline=deadline,
+                    include_funding=include_leg_funding,
                 )
                 for venue_key, jobs in cex_batches
             )
@@ -680,6 +683,7 @@ class FastQuoteRefresher:
         *,
         target_notional_usd: float,
         deadline: float | None = None,
+        include_funding: bool = True,
     ) -> dict[tuple[str, str, str], dict[str, Any] | None]:
         cache: dict[tuple[str, str, str], dict[str, Any] | None] = {}
         try:
@@ -694,7 +698,7 @@ class FastQuoteRefresher:
                     side,
                     target_notional_usd=target_notional_usd,
                     cache=cache,
-                    include_funding=True,
+                    include_funding=include_funding,
                 )
         finally:
             self._discard_client(*venue_key)
@@ -834,7 +838,17 @@ class FastQuoteRefresher:
                 venue,
                 market_type,
                 symbol,
-                max_age_seconds=5.0,
+                # The complete bulk generation is a first-class current book
+                # source and carries its own absolute exchange timestamp. A
+                # five-second read cap discarded it on nearly every pass,
+                # causing 150 redundant per-symbol REST calls that held fresh
+                # DEX quotes unpublished for another minute. Preserve the
+                # original quote timestamp and let the unchanged 90-second
+                # leader gate decide whether the resulting route is current.
+                max_age_seconds=max(
+                    5.0,
+                    float(os.environ.get("SPREADBOARD_LIVE_BOOK_AGE_SECONDS", "90")),
+                ),
             )
             native_book = (
                 (live_book.bids, live_book.asks)
