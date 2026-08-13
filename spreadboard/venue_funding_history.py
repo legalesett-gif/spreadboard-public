@@ -95,11 +95,17 @@ def _native_leg_history_outcome(venue: str, symbol: str) -> dict[str, Any]:
     if not template:
         return {"status": "unsupported_venue", "entries": []}
     native_symbol = symbol.split(":")[0].replace("/", "")
+    # urllib requires an ASCII URL. BitMart lists Unicode market ids (for
+    # example 龙虾USDT); interpolating them raw raises UnicodeEncodeError before
+    # the provider is contacted and leaves the history sweep retrying forever.
+    from urllib.parse import quote
+
+    encoded_symbol = quote(native_symbol, safe="")
     try:
         from urllib.request import Request, urlopen
 
         request = Request(
-            template.format(symbol=native_symbol),
+            template.format(symbol=encoded_symbol),
             headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"},
         )
         with urlopen(request, timeout=15) as response:

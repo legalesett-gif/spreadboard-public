@@ -167,6 +167,32 @@ def test_bitmart_http_success_with_provider_error_remains_retryable(monkeypatch)
     assert outcome["error_type"] == "BitMartResponseError"
 
 
+def test_bitmart_unicode_market_is_percent_encoded(monkeypatch) -> None:
+    seen = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"code":1000,"data":{"list":[]}}'
+
+    def open_url(request, **_kwargs):
+        seen.append(request.full_url)
+        return _Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", open_url)
+
+    outcome = vfh._native_leg_history_outcome("BitMart", "龙虾/USDT:USDT")
+
+    assert outcome["status"] == "no_history_rows"
+    assert "%E9%BE%99%E8%99%BEUSDT" in seen[0]
+    assert "龙虾" not in seen[0]
+
+
 def test_coverage_distinguishes_unattempted_from_an_honest_empty_result(tmp_path) -> None:
     path = tmp_path / "funding.json"
     path.write_text(
