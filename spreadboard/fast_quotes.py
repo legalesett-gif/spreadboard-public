@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
-from decimal import Decimal
 import gc
 import json
 import os
-from pathlib import Path
 import re
-from threading import Lock
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+from decimal import Decimal
+from pathlib import Path
+from threading import Lock
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from spreadboard import live_book_cache, public_rails, token_metadata, tokenized_assets
 from spreadarb.api_discovery.models import spread_pct
 from spreadarb.api_discovery.orderbook import depth_weighted_price
+from spreadboard import live_book_cache, public_rails, token_metadata, tokenized_assets
 
 ROOT = Path(__file__).resolve().parents[1]
 LEVERAGED_TOKEN_PATTERN = re.compile(r"^[A-Z0-9]+[2-5][LS]$")
@@ -539,6 +539,82 @@ class FastQuoteRefresher:
             max(1, venue_workers - dex_workers),
             max(1, len(cex_batches)),
         )
+        touched = {
+            row_id for row_id in (_snapshot_row_key(row) for row in selected) if row_id
+        }
+        pending = {
+            _snapshot_row_key(row): row
+            for row in selected
+            if _snapshot_row_key(row)
+        }
+        updated = failed = 0
+
+        def publish_ready(*, final: bool) -> None:
+            """Publish routes as soon as both exact legs have completed.
+
+            A provider-safe 25-contract DEX pass takes close to the full
+            90-second leader window. Waiting for the last contract before
+            publishing made the first successful quote 70-80 seconds old at
+            birth and it expired before the next cycle landed. This keeps the
+            truth boundary unchanged: every row retains its actual leg time;
+            only the atomic publication happens earlier.
+            """
+
+            nonlocal updated, failed
+            changed = False
+            changed_dex = False
+            for row_id, row in list(pending.items()):
+                keys = [_route_leg_key(row, side) for side in ("long", "short")]
+                if not final and any(key is None or key not in leg_cache for key in keys):
+                    continue
+                if final:
+                    # A venue task that reached the deadline leaves its
+                    # unattempted keys absent. Treat those as unavailable; do
+                    # not start new synchronous network calls after the bounded
+                    # pools have deliberately stopped.
+                    for key in keys:
+                        if key is not None:
+                            leg_cache.setdefault(key, None)
+                success = self._apply_completed_route_quote(
+                    row,
+                    leg_cache=leg_cache,
+                    target_notional_usd=target_notional_usd,
+                )
+                if success:
+                    updated += 1
+                else:
+                    failed += 1
+                pending.pop(row_id, None)
+                changed = True
+                changed_dex = changed_dex or _is_dex_route(row)
+            if not changed and not final:
+                return
+            # The complete CEX catalogue is refreshed by its own bulk worker.
+            # Publishing each tiny CEX canary batch here only invalidates the
+            # large grouped caches; partial publication exists specifically to
+            # stop slow on-chain chunks making completed DEX quotes stale.
+            if not final and not changed_dex:
+                return
+            refreshed_at = _utc_now_iso()
+            summary = {
+                "status": "ok" if updated else "unavailable",
+                "updated_at": refreshed_at,
+                "updated_routes": updated,
+                "failed_routes": failed,
+                "selected_routes": len(selected),
+                "target_notional_usd": target_notional_usd,
+                "funding_legs_refreshed": funding_summary.get("legs", 0),
+                "funding_venues": funding_summary.get("venues", 0),
+                "cycle_complete": final,
+            }
+            payload["fast_quote_refresh"] = summary
+            _publish_fast_quote_delta(
+                snapshot_path,
+                payload,
+                touched=touched,
+                summary=summary,
+            )
+
         with (
             ThreadPoolExecutor(max_workers=dex_workers) as dex_pool,
             ThreadPoolExecutor(max_workers=cex_workers) as cex_pool,
@@ -565,116 +641,75 @@ class FastQuoteRefresher:
                 )
                 for venue_key, jobs in cex_batches
             )
-            for future in futures:
+            for future in as_completed(futures):
                 leg_cache.update(future.result())
-        updated = failed = 0
-        for row in selected:
-            blockers = [
-                str(item)
-                for item in row.get("blockers") or []
-                if not str(item).startswith("mirage_guard:fast_")
-            ]
-            long_quote = self._leg_quote(
-                row,
-                "long",
-                target_notional_usd=target_notional_usd,
-                cache=leg_cache,
-                include_funding=True,
-            )
-            short_quote = self._leg_quote(
-                row,
-                "short",
-                target_notional_usd=target_notional_usd,
-                cache=leg_cache,
-                include_funding=True,
-            )
-            if long_quote is None or short_quote is None:
-                blockers.append("mirage_guard:fast_requote_unavailable")
-                row["blockers"] = list(dict.fromkeys(blockers))
-                _retire_failed_fast_quote(row)
-                failed += 1
-                continue
-            executable = spread_pct(long_quote["ask"], short_quote["bid"])
-            depth = spread_pct(long_quote["ask_vwap"], short_quote["bid_vwap"])
-            if executable is None or depth is None:
-                blockers.append("mirage_guard:fast_target_depth_unavailable")
-                row["blockers"] = list(dict.fromkeys(blockers))
-                _retire_failed_fast_quote(row)
-                failed += 1
-                continue
-            if _is_dex_route(row) and max(executable, depth) > 90.0:
-                blockers.append("mirage_guard:fast_spread_out_of_bounds")
-                row["blockers"] = list(dict.fromkeys(blockers))
-                _retire_failed_fast_quote(row)
-                failed += 1
-                continue
-            notes = row.setdefault("notes", {})
-            route_inputs = notes.setdefault("route_inputs", {})
-            route_inputs["long"] = {**(route_inputs.get("long") or {}), **long_quote}
-            route_inputs["short"] = {**(route_inputs.get("short") or {}), **short_quote}
-            row["executable_spread_pct"] = f"{executable:.8f}".rstrip("0").rstrip(".")
-            row["depth_weighted_spread_pct"] = f"{depth:.8f}".rstrip("0").rstrip(".")
-            row["displayed_open_spread_pct"] = row["executable_spread_pct"]
-            # Both ladders were just walked to the configured matched notional.
-            # Keeping the discovery ticker's flag made the sorter ignore this
-            # verified VWAP and headline the old top-of-book value instead.
-            blockers = [item for item in blockers if item != "depth_unverified"]
-            row["depth_usd"] = target_notional_usd
-            row["depth_unverified"] = False
-            row["quote_ts_us"] = min(long_quote["quote_ts_us"], short_quote["quote_ts_us"])
-            row["fast_quote_verified_at"] = _utc_now_iso()
-            row["blockers"] = list(dict.fromkeys(blockers))
-            updated += 1
-        refreshed_at = _utc_now_iso()
-        payload["fast_quote_refresh"] = {
-            "status": "ok" if updated else "unavailable",
-            "updated_at": refreshed_at,
-            "updated_routes": updated,
-            "failed_routes": failed,
-            "selected_routes": len(selected),
-            "target_notional_usd": target_notional_usd,
-            "funding_legs_refreshed": funding_summary.get("legs", 0),
-            "funding_venues": funding_summary.get("venues", 0),
-        }
-        # Rewriting the whole snapshot to update a few hundred routes invalidated
-        # every cache and forced a full rebuild -- a 50-77MB file rewritten every
-        # 60s to change ~400 rows. The refreshed rows go to a small delta file
-        # that readers overlay instead, so the expensive file only changes when
-        # discovery finishes.
-        touched = {row_id for row_id in (_snapshot_row_key(row) for row in selected) if row_id}
-        now_us = int(time.time() * 1_000_000)
-        retention_seconds = max(
-            60.0,
-            float(os.environ.get("SPREADBOARD_LIVE_MAX_AGE_MIN", "5")) * 60.0,
-        )
-        delta_rows = [
-            row
-            for bucket in ("api_discovered_rows", "dex_discovered_rows")
-            for row in payload.get(bucket) or []
-            if isinstance(row, dict)
-            and (
-                _snapshot_row_key(row) in touched
-                or _fresh_fast_quote_row(
-                    row,
-                    now_us=now_us,
-                    max_age_seconds=retention_seconds,
-                )
-            )
-        ]
-        _atomic_write(
-            _fast_quote_delta_path(snapshot_path),
-            {
-                "schema": "spreadboard.fast_quote_delta.v1",
-                "updated_at": refreshed_at,
-                "fast_quote_refresh": payload["fast_quote_refresh"],
-                "rows": delta_rows,
-            },
-        )
+                publish_ready(final=False)
+        publish_ready(final=True)
         if funding_summary.get("legs"):
             # A funding sweep touches legs across the whole board, which a delta
             # cannot express, so that one still lands in the snapshot itself.
             _atomic_write(snapshot_path, payload)
         return payload["fast_quote_refresh"]
+
+    def _apply_completed_route_quote(
+        self,
+        row: dict[str, Any],
+        *,
+        leg_cache: dict[tuple[str, str, str], dict[str, Any] | None],
+        target_notional_usd: float,
+    ) -> bool:
+        """Apply one completed matched-size route quote without changing its time."""
+
+        blockers = [
+            str(item)
+            for item in row.get("blockers") or []
+            if not str(item).startswith("mirage_guard:fast_")
+        ]
+        long_quote = self._leg_quote(
+            row,
+            "long",
+            target_notional_usd=target_notional_usd,
+            cache=leg_cache,
+            include_funding=True,
+        )
+        short_quote = self._leg_quote(
+            row,
+            "short",
+            target_notional_usd=target_notional_usd,
+            cache=leg_cache,
+            include_funding=True,
+        )
+        if long_quote is None or short_quote is None:
+            blockers.append("mirage_guard:fast_requote_unavailable")
+            row["blockers"] = list(dict.fromkeys(blockers))
+            _retire_failed_fast_quote(row)
+            return False
+        executable = spread_pct(long_quote["ask"], short_quote["bid"])
+        depth = spread_pct(long_quote["ask_vwap"], short_quote["bid_vwap"])
+        if executable is None or depth is None:
+            blockers.append("mirage_guard:fast_target_depth_unavailable")
+            row["blockers"] = list(dict.fromkeys(blockers))
+            _retire_failed_fast_quote(row)
+            return False
+        if _is_dex_route(row) and max(executable, depth) > 90.0:
+            blockers.append("mirage_guard:fast_spread_out_of_bounds")
+            row["blockers"] = list(dict.fromkeys(blockers))
+            _retire_failed_fast_quote(row)
+            return False
+        notes = row.setdefault("notes", {})
+        route_inputs = notes.setdefault("route_inputs", {})
+        route_inputs["long"] = {**(route_inputs.get("long") or {}), **long_quote}
+        route_inputs["short"] = {**(route_inputs.get("short") or {}), **short_quote}
+        row["executable_spread_pct"] = f"{executable:.8f}".rstrip("0").rstrip(".")
+        row["depth_weighted_spread_pct"] = f"{depth:.8f}".rstrip("0").rstrip(".")
+        row["displayed_open_spread_pct"] = row["executable_spread_pct"]
+        blockers = [item for item in blockers if item != "depth_unverified"]
+        row["depth_usd"] = target_notional_usd
+        row["depth_unverified"] = False
+        row["quote_ts_us"] = min(long_quote["quote_ts_us"], short_quote["quote_ts_us"])
+        row["fast_quote_verified_at"] = _utc_now_iso()
+        row["blockers"] = list(dict.fromkeys(blockers))
+        return True
 
     def _quote_venue_jobs(
         self,
@@ -1047,6 +1082,50 @@ def _external_funding_is_fresh(*, max_age_seconds: float = 600.0) -> bool:
 
 def _fast_quote_delta_path(snapshot_path: Path) -> Path:
     return Path(snapshot_path).with_name("api_discovery_fast_quotes.json")
+
+
+def _publish_fast_quote_delta(
+    snapshot_path: Path,
+    payload: dict[str, Any],
+    *,
+    touched: set[str],
+    summary: dict[str, Any],
+) -> None:
+    """Atomically expose a partial or complete fast-quote generation.
+
+    Rows keep their actual quote timestamps. Publishing a partial generation
+    therefore improves availability without extending the life of an old DEX
+    mark or weakening any downstream freshness check.
+    """
+
+    now_us = int(time.time() * 1_000_000)
+    retention_seconds = max(
+        60.0,
+        float(os.environ.get("SPREADBOARD_LIVE_MAX_AGE_MIN", "5")) * 60.0,
+    )
+    rows = [
+        row
+        for bucket in ("api_discovered_rows", "dex_discovered_rows")
+        for row in payload.get(bucket) or []
+        if isinstance(row, dict)
+        and (
+            _snapshot_row_key(row) in touched
+            or _fresh_fast_quote_row(
+                row,
+                now_us=now_us,
+                max_age_seconds=retention_seconds,
+            )
+        )
+    ]
+    _atomic_write(
+        _fast_quote_delta_path(snapshot_path),
+        {
+            "schema": "spreadboard.fast_quote_delta.v1",
+            "updated_at": summary["updated_at"],
+            "fast_quote_refresh": summary,
+            "rows": rows,
+        },
+    )
 
 
 def _overlay_current_fast_delta(payload: dict[str, Any], snapshot_path: Path) -> int:

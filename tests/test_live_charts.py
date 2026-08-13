@@ -1843,6 +1843,107 @@ def test_fast_quote_refresh_writes_what_it_has_when_the_deadline_passes(
     assert calls["n"] < 12, "the deadline did not stop the cycle early"
 
 
+def test_fast_quote_refresh_publishes_completed_routes_before_slow_batches(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A completed quote must not wait behind an unrelated slow venue batch."""
+
+    from threading import Event, Thread
+
+    routes = []
+    for token, venue in (("FAST", "Aster"), ("SLOW", "Bybit")):
+        route = _route()
+        route.update(
+            {
+                "route_key": f"{token}|{venue}|Futures|{venue}|Futures",
+                "token": token,
+                "long_venue": venue,
+                "short_venue": venue,
+                "long_market_symbol": f"{token}/USDT:USDT",
+                "short_market_symbol": f"{token}/USDT:USDT",
+                "depth_weighted_spread_pct": 2.0,
+                "blockers": [],
+            }
+        )
+        routes.append(route)
+
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "updated_at": "2020-01-01T00:00:00Z",
+                "api_discovered_rows": routes,
+                "dex_discovered_rows": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    slow_started = Event()
+    release_slow = Event()
+    refresher = FastQuoteRefresher()
+    monkeypatch.setattr(fast_quotes, "_external_funding_is_fresh", lambda: True)
+    monkeypatch.setattr(fast_quotes.public_rails, "load_public_rails", lambda: {})
+    monkeypatch.setattr(fast_quotes.token_metadata, "load_token_metadata", lambda: {})
+    monkeypatch.setattr(
+        fast_quotes,
+        "_is_dex_route",
+        lambda row: row.get("token") == "FAST",
+    )
+
+    def quote_batch(venue_key, jobs, **_kwargs):
+        if venue_key[0] == "Bybit":
+            slow_started.set()
+            assert release_slow.wait(3.0)
+        stamp = int(time.time() * 1_000_000)
+        return {
+            key: {
+                "symbol": row[f"{side}_market_symbol"],
+                "bid": 103.0,
+                "ask": 101.0,
+                "bid_vwap": 103.0,
+                "ask_vwap": 101.0,
+                "contract_size": 1.0,
+                "quote_ts_us": stamp,
+            }
+            for key, row, side in jobs
+        }
+
+    monkeypatch.setattr(refresher, "_quote_venue_jobs", quote_batch)
+    result: dict[str, object] = {}
+
+    def run() -> None:
+        # Three CEX lanes share the budget; six leaves two slots for FUTURES.
+        result.update(refresher.refresh(snapshot_path, route_limit=6))
+
+    worker = Thread(target=run)
+    worker.start()
+    assert slow_started.wait(2.0)
+    delta_path = snapshot_path.with_name("api_discovery_fast_quotes.json")
+    for _ in range(100):
+        if delta_path.exists():
+            partial = json.loads(delta_path.read_text(encoding="utf-8"))
+            if partial.get("fast_quote_refresh", {}).get("updated_routes") == 1:
+                break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("completed fast route was not published while slow batch waited")
+
+    assert partial["fast_quote_refresh"]["cycle_complete"] is False
+    fast = next(row for row in partial["rows"] if row["token"] == "FAST")
+    slow = next(row for row in partial["rows"] if row["token"] == "SLOW")
+    assert fast["fast_quote_verified_at"]
+    assert not slow.get("fast_quote_verified_at")
+
+    release_slow.set()
+    worker.join(timeout=5.0)
+    assert not worker.is_alive()
+    complete = json.loads(delta_path.read_text(encoding="utf-8"))
+    assert complete["fast_quote_refresh"]["cycle_complete"] is True
+    assert complete["fast_quote_refresh"]["updated_routes"] == 2
+    assert result["updated_routes"] == 2
+
+
 def test_a_custom_pair_prices_from_the_books_not_the_board(monkeypatch) -> None:
     """A custom chart is not on the board, so it has no board price.
 
