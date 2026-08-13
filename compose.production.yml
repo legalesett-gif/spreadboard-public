@@ -25,12 +25,11 @@ services:
       # Reserve extra exact candidates for Spot-Spot, whose venue books fail
       # more often, while keeping every other public lane above its top 25.
       SPREADBOARD_FAST_QUOTE_ROUTES: "220"
-      # OKX Web3 uses two rate-limited requests per DEX token. One combined
-      # rotation covers every tracked token plus current leaders and finishes
-      # before its earliest quote leaves the five-minute live window.
-      # Both DEX-Futures and DEX-Spot seed 30 tokens before route expansion.
-      # The 10-token reserve absorbs ordinary provider failures while shared
-      # DEX legs are still requested once and reused across paired routes.
+      # OKX Web3 is rate-limited. The current-board rotation requests only the
+      # executable opening direction for each exact DEX leg, shares that quote
+      # across paired routes, and keeps both DEX lanes inside the 90-second
+      # current-spread boundary. Full two-sided probes remain available to
+      # explicit chart/detail sampling.
       SPREADBOARD_FAST_DEX_ROUTES: "70"
       SPREADBOARD_FAST_DEX_CONTRACTS: "28"
       SPREADBOARD_FAST_QUOTE_WORKERS: "6"

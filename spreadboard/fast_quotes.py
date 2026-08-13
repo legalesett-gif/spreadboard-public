@@ -803,7 +803,11 @@ class FastQuoteRefresher:
         )
         if "okx dex" in venue.casefold():
             chain, contract = _dex_chain_contract(row, side=side)
-            key = (venue, market_type, f"{chain}:{contract}")
+            # The opening route only consumes the long leg's ask or the short
+            # leg's bid.  Keep direction in the key so one exact contract can
+            # be reused across many same-direction pairings without making a
+            # long-side quote masquerade as a current short-side quote.
+            key = (venue, market_type, f"{chain}:{contract}:{side}")
         else:
             key = (venue, market_type, symbol)
         if key in cache:
@@ -813,6 +817,7 @@ class FastQuoteRefresher:
                 row,
                 side,
                 target_notional_usd=target_notional_usd,
+                quote_both=False,
             )
             cache[key] = value
             return value
@@ -1130,7 +1135,7 @@ def _route_leg_key(
     )
     if "okx dex" in venue.casefold():
         chain, contract = _dex_chain_contract(row, side=side)
-        symbol = f"{chain}:{contract}" if chain and contract else ""
+        symbol = f"{chain}:{contract}:{side}" if chain and contract else ""
     return (venue, market_type, symbol) if venue and market_type and symbol else None
 
 
@@ -1390,13 +1395,13 @@ def _select_fast_quote_rows(
     # public top-25 readiness boundary. Seed each lane independently, then add
     # combined leaders up to the configured unique-contract ceiling. Shared
     # contracts are still quoted once by leg_cache below.
-    # Two OKX calls are needed for one exact contract (buy and sell). A
-    # 70-contract rotation therefore cannot finish inside the public 90-second
-    # spread boundary at the provider-safe request cadence. Spend the 70 route
-    # rows on at most 28 exact contracts, preferentially contracts shared by
-    # both DEX lanes. Production currently has enough overlap for 25 independently
-    # ranked tokens in each lane using 25 shared quotes rather than 50 separate
-    # ones. Small diagnostic/test budgets retain the simple rotation semantics.
+    # One opening-direction OKX call is needed per exact directional leg. A
+    # 70-contract rotation still cannot finish reliably inside the public
+    # 90-second spread boundary at the provider-safe request cadence. Spend the
+    # 70 route rows on at most 28 exact contracts, preferentially contracts
+    # shared by both DEX lanes. Production currently has enough overlap for 25
+    # independently ranked tokens in each lane. Small diagnostic/test budgets
+    # retain the simple rotation semantics.
     if dex_route_limit < 50:
         dex_seeds = _dex_rotating_rows(
             dex_rows,
@@ -2263,6 +2268,7 @@ def _okx_dex_leg_quote(
     side: str,
     *,
     target_notional_usd: float,
+    quote_both: bool = True,
 ) -> dict[str, Any] | None:
     chain, contract = _dex_chain_contract(row, side=side)
     if not chain or not contract:
@@ -2270,39 +2276,95 @@ def _okx_dex_leg_quote(
     try:
         from spreadarb.dex import okx_quotes
 
-        buy = okx_quotes.quote_usdc_to_token(
-            chain=chain,
-            token_address=contract,
-            notional_usd=Decimal(str(target_notional_usd)),
-        )
-        quantity = Decimal(str(buy.get("out_qty") or "0"))
-        decimals = _optional_int(buy.get("to_token_decimals"))
-        if buy.get("status") != "ok" or quantity <= 0 or decimals is None:
+        buy: dict[str, Any] | None = None
+        sell: dict[str, Any] | None = None
+        quantity: Decimal | None = None
+        decimals: int | None = None
+
+        if side == "long" or quote_both:
+            buy = okx_quotes.quote_usdc_to_token(
+                chain=chain,
+                token_address=contract,
+                notional_usd=Decimal(str(target_notional_usd)),
+            )
+            quantity = Decimal(str(buy.get("out_qty") or "0"))
+            decimals = _optional_int(buy.get("to_token_decimals"))
+            if buy.get("status") != "ok" or quantity <= 0 or decimals is None:
+                return None
+
+        if side == "short" or quote_both:
+            if quantity is None or decimals is None:
+                quantity, decimals = _dex_directional_sell_inputs(
+                    row,
+                    side=side,
+                    target_notional_usd=target_notional_usd,
+                )
+            # An old or incomplete discovery row may lack decimals. Preserve
+            # the two-sided fallback for that exceptional row; ordinary fast
+            # rotations carry exact identity decimals and therefore need only
+            # one provider request per opening direction.
+            if quantity is None or quantity <= 0 or decimals is None:
+                buy = okx_quotes.quote_usdc_to_token(
+                    chain=chain,
+                    token_address=contract,
+                    notional_usd=Decimal(str(target_notional_usd)),
+                )
+                quantity = Decimal(str(buy.get("out_qty") or "0"))
+                decimals = _optional_int(buy.get("to_token_decimals"))
+                if buy.get("status") != "ok" or quantity <= 0 or decimals is None:
+                    return None
+            sell = okx_quotes.quote_token_to_usdc(
+                chain=chain,
+                token_address=contract,
+                token_quantity=quantity,
+                token_decimals=decimals,
+            )
+            if sell.get("status") != "ok":
+                return None
+
+        bid = _optional_number((sell or {}).get("dex_sell_price_usd"))
+        ask = _optional_number((buy or {}).get("dex_buy_price_usd"))
+        if (side == "long" and ask is None) or (side == "short" and bid is None):
             return None
-        sell = okx_quotes.quote_token_to_usdc(
-            chain=chain,
-            token_address=contract,
-            token_quantity=quantity,
-            token_decimals=decimals,
-        )
-        bid = _optional_number(sell.get("dex_sell_price_usd"))
-        ask = _optional_number(buy.get("dex_buy_price_usd"))
-        if sell.get("status") != "ok" or bid is None or ask is None:
-            return None
-        return {
+        result: dict[str, Any] = {
             "symbol": str(row.get("token") or ""),
-            "bid": bid,
-            "ask": ask,
-            "bid_vwap": bid,
-            "ask_vwap": ask,
             "contract_size": 1.0,
             "quote_ts_us": int(time.time() * 1_000_000),
             "chain_id": chain,
             "token_address": contract,
             "sample_side": side,
         }
+        if bid is not None:
+            result.update({"bid": bid, "bid_vwap": bid})
+        if ask is not None:
+            result.update({"ask": ask, "ask_vwap": ask})
+        return result
     except Exception:
         return None
+
+
+def _dex_directional_sell_inputs(
+    row: dict[str, Any],
+    *,
+    side: str,
+    target_notional_usd: float,
+) -> tuple[Decimal | None, int | None]:
+    """Recover the exact token amount for a one-request DEX sell probe."""
+
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    identities = notes.get("identity") if isinstance(notes.get("identity"), dict) else {}
+    identity = identities.get(side) if isinstance(identities.get(side), dict) else {}
+    decimals = _optional_int(identity.get("decimals"))
+    route_inputs = (
+        notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+    )
+    leg = route_inputs.get(side) if isinstance(route_inputs.get(side), dict) else {}
+    if decimals is None:
+        decimals = _optional_int(leg.get("to_token_decimals") or leg.get("token_decimals"))
+    reference = _optional_number(leg.get("bid") or leg.get("ask"))
+    if reference is None or reference <= 0:
+        return None, decimals
+    return Decimal(str(target_notional_usd)) / Decimal(str(reference)), decimals
 
 
 def _dex_chain_contract(

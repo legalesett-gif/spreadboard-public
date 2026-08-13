@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from decimal import Decimal
 from pathlib import Path
 import sqlite3
 import time
@@ -969,6 +970,64 @@ def test_exact_okx_dex_leg_reads_raw_discovery_identity(
     assert captured == {"chain": "56", "token_address": "0x123"}
 
 
+def test_fast_okx_dex_leg_quotes_only_the_opening_direction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from spreadarb.dex import okx_quotes
+
+    calls: list[str] = []
+
+    def fake_buy(**_kwargs: object) -> dict:
+        calls.append("buy")
+        return {
+            "status": "ok",
+            "out_qty": "20",
+            "to_token_decimals": 9,
+            "dex_buy_price_usd": "2.5",
+        }
+
+    def fake_sell(**kwargs: object) -> dict:
+        calls.append("sell")
+        assert kwargs["token_quantity"] == Decimal("20")
+        assert kwargs["token_decimals"] == 9
+        return {"status": "ok", "dex_sell_price_usd": "2.45"}
+
+    monkeypatch.setattr(okx_quotes, "quote_usdc_to_token", fake_buy)
+    monkeypatch.setattr(okx_quotes, "quote_token_to_usdc", fake_sell)
+    common = {
+        "token": "TEST",
+        "dex_chain": "1",
+        "dex_contract": "0x123",
+        "notes": {
+            "identity": {"short": {"decimals": 9}},
+            "route_inputs": {"short": {"bid": 2.5}},
+        },
+    }
+
+    long_result = _okx_dex_leg_quote(
+        common,
+        "long",
+        target_notional_usd=50,
+        quote_both=False,
+    )
+    assert long_result is not None
+    assert long_result["ask"] == pytest.approx(2.5)
+    assert "bid" not in long_result
+    assert calls == ["buy"]
+
+    calls.clear()
+    short_result = _okx_dex_leg_quote(
+        common,
+        "short",
+        target_notional_usd=50,
+        quote_both=False,
+    )
+    assert short_result is not None
+    assert short_result["bid"] == pytest.approx(2.45)
+    assert "ask" not in short_result
+    assert calls == ["sell"]
+
+
 def test_exact_okx_dex_leg_reuses_cycle_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1009,6 +1068,21 @@ def test_exact_okx_dex_leg_reuses_cycle_cache(
     assert first == second
     assert calls == 1
 
+    opposite = {
+        **row,
+        "long_venue": row["short_venue"],
+        "long_market_type": row["short_market_type"],
+        "long_market_symbol": row["short_market_symbol"],
+    }
+    refresher._leg_quote(
+        opposite,
+        "long",
+        target_notional_usd=50,
+        cache=cache,
+        include_funding=True,
+    )
+    assert calls == 2
+
     other = {
         **row,
         "token": "OTHER",
@@ -1022,7 +1096,7 @@ def test_exact_okx_dex_leg_reuses_cycle_cache(
         include_funding=True,
     )
 
-    assert calls == 2
+    assert calls == 3
 
 
 def test_history_window_does_not_reinsert_an_older_current_snapshot(
