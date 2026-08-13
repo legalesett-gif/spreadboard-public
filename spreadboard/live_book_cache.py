@@ -213,6 +213,52 @@ class LiveBookStore:
             )
         return books
 
+    def get_many(
+        self,
+        keys: Iterable[str],
+        *,
+        max_age_seconds: float = 30.0,
+    ) -> dict[str, "CachedBook"]:
+        """Load only requested fresh books in one query."""
+
+        wanted = list(dict.fromkeys(str(key) for key in keys if key))
+        if not wanted:
+            return {}
+        cutoff_us = int((time.time() - max(0.1, max_age_seconds)) * 1_000_000)
+        rows: list[tuple[Any, ...]] = []
+        # Stay well below SQLite's ordinary bind-variable limit while keeping
+        # one connection and lock acquisition for the complete request.
+        with self._lock:
+            for offset in range(0, len(wanted), 500):
+                chunk = wanted[offset : offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows.extend(
+                    self._conn.execute(
+                        f"""
+                        SELECT cache_key, quote_ts_us, bids_json, asks_json, source
+                        FROM live_books
+                        WHERE quote_ts_us >= ? AND cache_key IN ({placeholders})
+                        """,
+                        (cutoff_us, *chunk),
+                    ).fetchall()
+                )
+        books: dict[str, CachedBook] = {}
+        for key, quote_ts_us, bids_json, asks_json, source in rows:
+            try:
+                bids = _levels(json.loads(bids_json))
+                asks = _levels(json.loads(asks_json))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not bids or not asks:
+                continue
+            books[str(key)] = CachedBook(
+                bids=sorted(bids, key=lambda item: item[0], reverse=True),
+                asks=sorted(asks, key=lambda item: item[0]),
+                quote_ts_us=int(quote_ts_us),
+                source=str(source or "public_websocket"),
+            )
+        return books
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             row = self._conn.execute("SELECT COUNT(*), MAX(quote_ts_us) FROM live_books").fetchone()
@@ -264,6 +310,22 @@ def load_live_book(
         symbol,
         max_age_seconds=max_age_seconds,
     )
+
+
+def load_live_books_by_keys(
+    keys: Iterable[str],
+    *,
+    max_age_seconds: float = 30.0,
+    path: Path | str = DEFAULT_PATH,
+) -> dict[str, CachedBook]:
+    if not Path(path).exists():
+        return {}
+    global _DEFAULT_STORE
+    with _DEFAULT_STORE_LOCK:
+        if _DEFAULT_STORE is None or _DEFAULT_STORE.path != Path(path):
+            _DEFAULT_STORE = LiveBookStore(path)
+        store = _DEFAULT_STORE
+    return store.get_many(keys, max_age_seconds=max_age_seconds)
 
 
 def _levels(value: Any) -> list[list[float]]:

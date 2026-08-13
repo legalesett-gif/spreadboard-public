@@ -3404,17 +3404,22 @@ def test_live_prices_come_from_the_books_for_streamed_routes() -> None:
                "short_market_type": "Futures", "short_market_symbol": "A/USDT:USDT",
                "funding_daily_pct": 0.2}]
     import unittest.mock as mock
-    with mock.patch.object(api_spreads, "_live_books", return_value=books):
+    with mock.patch.object(
+        live_book_cache, "load_live_books_by_keys", return_value=books
+    ):
         prices = api_spreads.live_prices_for(routes)
     assert prices["A|k"][0] == pytest.approx(5.0)
 
 
 def test_a_route_with_no_live_book_is_not_invented() -> None:
     import unittest.mock as mock
+    from spreadboard import live_book_cache
     routes = [{"route_key": "Z|k", "long_venue": "Gate", "long_market_type": "Futures",
                "long_market_symbol": "Z/USDT:USDT", "short_venue": "Bybit",
                "short_market_type": "Futures", "short_market_symbol": "Z/USDT:USDT"}]
-    with mock.patch.object(api_spreads, "_live_books", return_value={}):
+    with mock.patch.object(
+        live_book_cache, "load_live_books_by_keys", return_value={}
+    ):
         assert api_spreads.live_prices_for(routes) == {}
 
 

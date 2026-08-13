@@ -607,6 +607,32 @@ def test_a_book_batch_preserves_each_quote_and_source(tmp_path) -> None:
     assert all(book.source == "bulk_ticker" for book in books.values())
 
 
+def test_targeted_book_load_returns_only_requested_fresh_keys(tmp_path) -> None:
+    from spreadboard import live_book_cache
+
+    store = live_book_cache.LiveBookStore(tmp_path / "books.sqlite3")
+    timestamp = int(time.time() * 1_000_000)
+    store.put_many([
+        {
+            "venue": "Gate", "market_type": "Spot", "symbol": "A/USDT",
+            "bids": [[1.0, 5.0]], "asks": [[1.01, 5.0]],
+            "quote_ts_us": timestamp, "source": "bulk_ticker",
+        },
+        {
+            "venue": "Mexc", "market_type": "Spot", "symbol": "B/USDT",
+            "bids": [[2.0, 5.0]], "asks": [[2.01, 5.0]],
+            "quote_ts_us": timestamp, "source": "bulk_ticker",
+        },
+    ])
+
+    selected = store.get_many(
+        ["Gate|Spot|A/USDT", "missing"],
+        max_age_seconds=300.0,
+    )
+
+    assert set(selected) == {"Gate|Spot|A/USDT"}
+
+
 def test_a_zero_or_negative_price_is_still_rejected(tmp_path) -> None:
     from spreadboard import live_book_cache
 

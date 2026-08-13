@@ -733,12 +733,29 @@ def live_prices_for(
     The push path must not go through the grouped board's cache: a cached price
     is exactly what the stream exists to correct.
     """
-    books = _live_books()
     if not routes:
         return {}
     from spreadboard import live_book_cache
     from spreadboard import bulk_quotes
 
+    # A rendered page usually contains 25-100 routes. Loading and JSON-decoding
+    # every ~20k resident book for those few keys made 7D/30D Rankings take
+    # 9-11 seconds despite using a precomputed artifact. Read the exact keys in
+    # one bounded SQLite query; the broad board build still uses load_all().
+    wanted_keys = {
+        live_book_cache.cache_key(
+            str(route.get(f"{side}_venue") or ""),
+            str(route.get(f"{side}_market_type") or ""),
+            str(route.get(f"{side}_market_symbol") or ""),
+        )
+        for route in routes
+        for side in ("long", "short")
+        if route.get(f"{side}_venue") and route.get(f"{side}_market_symbol")
+    }
+    books = live_book_cache.load_live_books_by_keys(
+        wanted_keys,
+        max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS,
+    )
     out: dict[str, tuple[float | None, float | None]] = {}
     funding_legs = bulk_quotes.load_funding() if include_funding else {}
     for route in routes:

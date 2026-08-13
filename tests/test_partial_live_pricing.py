@@ -55,7 +55,7 @@ def test_a_live_short_leg_does_not_mix_with_a_stored_cex_long(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     key = live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT")
-    monkeypatch.setattr(api_spreads, "_live_books", lambda: {key: _book(1.20, 1.21)})
+    monkeypatch.setattr(live_book_cache, "load_live_books_by_keys", lambda *_args, **_kwargs: {key: _book(1.20, 1.21)})
 
     priced = api_spreads.live_prices_for([_route()])
 
@@ -66,7 +66,7 @@ def test_a_live_long_leg_does_not_mix_with_a_stored_cex_short(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     key = live_book_cache.cache_key("Gate", "Spot", "T/USDT")
-    monkeypatch.setattr(api_spreads, "_live_books", lambda: {key: _book(0.79, 0.80)})
+    monkeypatch.setattr(live_book_cache, "load_live_books_by_keys", lambda *_args, **_kwargs: {key: _book(0.79, 0.80)})
 
     priced = api_spreads.live_prices_for([_route()])
 
@@ -75,7 +75,7 @@ def test_a_live_long_leg_does_not_mix_with_a_stored_cex_short(
 
 def test_a_live_cex_leg_can_reprice_a_dex_route(monkeypatch: pytest.MonkeyPatch) -> None:
     key = live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT")
-    monkeypatch.setattr(api_spreads, "_live_books", lambda: {key: _book(1.20, 1.21)})
+    monkeypatch.setattr(live_book_cache, "load_live_books_by_keys", lambda *_args, **_kwargs: {key: _book(1.20, 1.21)})
 
     priced = api_spreads.live_prices_for([
         _route(long_venue="Uniswap", long_market_type="DEX")
@@ -86,7 +86,7 @@ def test_a_live_cex_leg_can_reprice_a_dex_route(monkeypatch: pytest.MonkeyPatch)
 
 def test_a_live_cex_leg_cannot_renew_an_old_dex_quote(monkeypatch: pytest.MonkeyPatch) -> None:
     key = live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT")
-    monkeypatch.setattr(api_spreads, "_live_books", lambda: {key: _book(1.20, 1.21)})
+    monkeypatch.setattr(live_book_cache, "load_live_books_by_keys", lambda *_args, **_kwargs: {key: _book(1.20, 1.21)})
 
     priced = api_spreads.live_prices_for([
         _route(long_venue="Uniswap", long_market_type="DEX", age_min=10.0)
@@ -99,9 +99,12 @@ def test_both_legs_live_still_uses_both(monkeypatch: pytest.MonkeyPatch) -> None
     long_key = live_book_cache.cache_key("Gate", "Spot", "T/USDT")
     short_key = live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT")
     monkeypatch.setattr(
-        api_spreads,
-        "_live_books",
-        lambda: {long_key: _book(0.99, 1.00), short_key: _book(1.50, 1.51)},
+        live_book_cache,
+        "load_live_books_by_keys",
+        lambda *_args, **_kwargs: {
+            long_key: _book(0.99, 1.00),
+            short_key: _book(1.50, 1.51),
+        },
     )
 
     priced = api_spreads.live_prices_for([_route()])
@@ -110,7 +113,7 @@ def test_both_legs_live_still_uses_both(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_no_live_leg_leaves_the_route_alone(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(api_spreads, "_live_books", lambda: {})
+    monkeypatch.setattr(live_book_cache, "load_live_books_by_keys", lambda *_args, **_kwargs: {})
 
     assert api_spreads.live_prices_for([_route()]) == {}
 
@@ -217,7 +220,7 @@ def test_top_only_bulk_quotes_do_not_claim_matched_depth() -> None:
 def test_live_funding_recomputes_each_leg_on_its_own_cadence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(api_spreads, "_live_books", lambda: {})
+    monkeypatch.setattr(live_book_cache, "load_live_books_by_keys", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
         "spreadboard.bulk_quotes.load_funding",
         lambda: {
