@@ -59,9 +59,11 @@ services:
       # result in one SQLite transaction. This keeps the complete catalogue
       # inside the 90-second current-spread truth window without raising it.
       SPREADBOARD_BULK_QUOTE_WORKERS: "4"
-      # Funding is rotated in four-venue slices and merged atomically. Running
-      # all venues after every quote pass made one "15 second" cycle take over
-      # two minutes and was the main reason complete-pair books aged out.
+      # Funding has its own isolated worker. A slow funding provider must never
+      # postpone a current-price pass or make a valid spread disappear.
+      SPREADBOARD_BULK_FUNDING_SECONDS: "15"
+      SPREADBOARD_BULK_FUNDING_TIMEOUT_SECONDS: "240"
+      # Funding is rotated in four-venue slices and merged atomically.
       SPREADBOARD_FUNDING_VENUES_PER_PASS: "4"
       # A provider failure may keep the last good rate through one rotation,
       # but never indefinitely. The reader independently enforces this age.

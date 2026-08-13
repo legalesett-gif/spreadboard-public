@@ -407,7 +407,7 @@ def test_nothing_that_loads_a_venue_or_a_snapshot_runs_in_the_server() -> None:
     """
     import inspect
 
-    from scripts.run_spreadboard_service import RefreshLoop, BulkQuoteLoop
+    from scripts.run_spreadboard_service import BulkFundingLoop, BulkQuoteLoop, RefreshLoop
 
     catalog = inspect.getsource(RefreshLoop.run_chart_catalog)
     assert "chart_catalog.refresh" not in catalog
@@ -418,6 +418,7 @@ def test_nothing_that_loads_a_venue_or_a_snapshot_runs_in_the_server() -> None:
     assert "artifact_worker" in identity
 
     assert "bulk_quote_worker" in inspect.getsource(BulkQuoteLoop)
+    assert "bulk_quote_worker" in inspect.getsource(BulkFundingLoop)
     for name in ("artifact_worker", "bulk_quote_worker", "snapshot_finalize_worker"):
         assert Path(f"scripts/{name}.py").exists()
 

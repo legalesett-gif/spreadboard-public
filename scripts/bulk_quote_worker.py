@@ -34,6 +34,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--budget-seconds", type=float, default=180.0)
     parser.add_argument(
+        "--skip-quotes",
+        action="store_true",
+        help="Run only the independent funding slice.",
+    )
+    parser.add_argument(
         "--funding-budget-seconds",
         type=float,
         default=180.0,
@@ -47,7 +52,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    summary = {"quotes": bulk_quotes.sweep(budget_seconds=args.budget_seconds)}
+    summary = {}
+    if not args.skip_quotes:
+        summary["quotes"] = bulk_quotes.sweep(budget_seconds=args.budget_seconds)
     if args.funding_budget_seconds > 0:
         funding_venues = [
             value.strip() for value in args.funding_venues.split(",") if value.strip()

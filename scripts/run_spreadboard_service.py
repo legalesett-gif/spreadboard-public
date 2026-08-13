@@ -568,7 +568,9 @@ def main() -> int:
     )
     # Shares the refresh loop's stop event so shutdown stops it too.
     bulk_quote_loop = BulkQuoteLoop(refresh_loop.stop_event)
+    bulk_funding_loop = BulkFundingLoop(refresh_loop.stop_event)
     bulk_quote_loop.start()
+    bulk_funding_loop.start()
     position_alert_worker.start()
     membership_worker.start()
     subscription_worker.start()
@@ -651,20 +653,16 @@ class BulkQuoteLoop(threading.Thread):
     fetch_tickers per venue closes that in about fifteen seconds.
     """
 
-    #: The bounded-concurrent quote pass measures about 43s and the rotating
-    #: funding slice remains provider-variable. A killed pass throws away its
-    #: summary and skips cache invalidation, so retain a generous hard ceiling.
+    #: The bounded-concurrent quote pass measures about 43s. A killed pass
+    #: throws away its summary and skips cache invalidation, so retain a
+    #: generous hard ceiling without coupling it to slower funding providers.
     TIMEOUT_SECONDS = max(
         120.0, float(os.environ.get("SPREADBOARD_BULK_QUOTE_TIMEOUT_SECONDS", "420"))
-    )
-    FUNDING_VENUES_PER_PASS = max(
-        1, int(os.environ.get("SPREADBOARD_FUNDING_VENUES_PER_PASS", "4"))
     )
 
     def __init__(self, stop_event: threading.Event) -> None:
         super().__init__(name="bulk-quotes", daemon=True)
         self.stop_event = stop_event
-        self.funding_cursor = 0
 
     def run(self) -> None:
         from spreadboard import bulk_quotes
@@ -684,19 +682,6 @@ class BulkQuoteLoop(threading.Thread):
         crossed its cgroup and was OOM-killed -- hourly, killing the discovery
         scan with it. It also held the GIL against every page load.
         """
-        from spreadboard.fast_quotes import NATIVE_FUNDING_SOURCES, VENUE_IDS
-
-        funding_venues = sorted(set(VENUE_IDS) | set(NATIVE_FUNDING_SOURCES))
-        count = min(self.FUNDING_VENUES_PER_PASS, len(funding_venues))
-        selected_funding = [
-            funding_venues[(self.funding_cursor + index) % len(funding_venues)]
-            for index in range(count)
-        ] if funding_venues else []
-        self.funding_cursor = (
-            (self.funding_cursor + count) % len(funding_venues)
-            if funding_venues
-            else 0
-        )
         completed = _run_worker(
             [
                 *_low_priority_prefix(),
@@ -705,9 +690,7 @@ class BulkQuoteLoop(threading.Thread):
                 "--budget-seconds",
                 str(self.TIMEOUT_SECONDS / 2),
                 "--funding-budget-seconds",
-                str(max(30.0, self.TIMEOUT_SECONDS * 0.35)),
-                "--funding-venues",
-                ",".join(selected_funding),
+                "0",
             ],
             timeout=self.TIMEOUT_SECONDS,
         )
@@ -724,19 +707,88 @@ class BulkQuoteLoop(threading.Thread):
             f"bulk quotes: {quotes.get('quotes')} from {quotes.get('venues')} venues "
             f"in {quotes.get('seconds')}s"
         )
-        funding = summary.get("funding") or {}
-        if funding:
-            _log(
-                f"bulk funding: {funding.get('legs')} legs from {funding.get('venues')} "
-                f"venues in {funding.get('seconds')}s"
-            )
         if (quotes.get("quotes") or 0) > 0:
             _invalidate_market_price_caches()
             # The rankings read the complete shared catalogue, so publish a new
             # atomic generation immediately after its prices move. This worker
             # is isolated and low-priority; HTTP readers keep serving the last
             # complete generation while it runs.
-            _refresh_token_rankings()
+            _schedule_token_rankings()
+
+
+class BulkFundingLoop(threading.Thread):
+    """Refresh current funding independently of price freshness.
+
+    Funding providers are materially slower and more failure-prone than bulk
+    tickers. Keeping them in the quote worker made a 43-second price pass wait
+    another minute or two before the next pass could begin, recreating stale
+    spreads despite faster quote collection.
+    """
+
+    TIMEOUT_SECONDS = max(
+        120.0, float(os.environ.get("SPREADBOARD_BULK_FUNDING_TIMEOUT_SECONDS", "240"))
+    )
+    INTERVAL_SECONDS = max(
+        15.0, float(os.environ.get("SPREADBOARD_BULK_FUNDING_SECONDS", "15"))
+    )
+    VENUES_PER_PASS = max(
+        1, int(os.environ.get("SPREADBOARD_FUNDING_VENUES_PER_PASS", "4"))
+    )
+
+    def __init__(self, stop_event: threading.Event) -> None:
+        super().__init__(name="bulk-funding", daemon=True)
+        self.stop_event = stop_event
+        self.funding_cursor = 0
+
+    def run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self._sweep_once()
+            except Exception as exc:  # noqa: BLE001 - one slice is best effort.
+                _log(f"bulk funding skipped: {type(exc).__name__}: {exc}")
+            self.stop_event.wait(self.INTERVAL_SECONDS)
+
+    def _sweep_once(self) -> None:
+        from spreadboard.fast_quotes import NATIVE_FUNDING_SOURCES, VENUE_IDS
+
+        funding_venues = sorted(set(VENUE_IDS) | set(NATIVE_FUNDING_SOURCES))
+        count = min(self.VENUES_PER_PASS, len(funding_venues))
+        selected = [
+            funding_venues[(self.funding_cursor + index) % len(funding_venues)]
+            for index in range(count)
+        ] if funding_venues else []
+        self.funding_cursor = (
+            (self.funding_cursor + count) % len(funding_venues)
+            if funding_venues
+            else 0
+        )
+        if not selected:
+            return
+        completed = _run_worker(
+            [
+                *_low_priority_prefix(),
+                sys.executable,
+                str(Path(__file__).with_name("bulk_quote_worker.py")),
+                "--skip-quotes",
+                "--funding-budget-seconds",
+                str(max(30.0, self.TIMEOUT_SECONDS * 0.7)),
+                "--funding-venues",
+                ",".join(selected),
+            ],
+            timeout=self.TIMEOUT_SECONDS,
+        )
+        if completed.timed_out or completed.returncode != 0:
+            _log(f"bulk funding worker exit={completed.returncode} {completed.stderr[-300:]}")
+            return
+        try:
+            funding = json.loads(completed.stdout.strip().splitlines()[-1]).get("funding") or {}
+        except (ValueError, IndexError, AttributeError):
+            _log("bulk funding worker produced no summary")
+            return
+        _log(
+            f"bulk funding: {funding.get('legs')} legs from {funding.get('venues')} "
+            f"venues in {funding.get('seconds')}s"
+        )
 
 
 def _invalidate_market_price_caches() -> None:
@@ -885,6 +937,16 @@ def _warm_board_cache(*, force: bool = False) -> None:
 
 
 _TOKEN_RANKING_REFRESH_LOCK = threading.Lock()
+
+
+def _schedule_token_rankings() -> None:
+    """Do not let ranking publication delay the next current-price pass."""
+
+    threading.Thread(
+        target=_refresh_token_rankings,
+        name="token-ranking-publish",
+        daemon=True,
+    ).start()
 
 
 def _refresh_token_rankings() -> None:

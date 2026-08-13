@@ -464,11 +464,15 @@ def test_the_sweep_runs_as_a_worker_process_not_inside_the_server() -> None:
     """Its memory only comes back if the process that held it exits."""
     import inspect
 
-    from scripts.run_spreadboard_service import BulkQuoteLoop
+    from scripts.run_spreadboard_service import BulkFundingLoop, BulkQuoteLoop
 
     source = inspect.getsource(BulkQuoteLoop)
     assert "bulk_quote_worker.py" in source
     assert "_run_worker" in source
+    assert '"--funding-budget-seconds",\n                "0"' in source
+    funding_source = inspect.getsource(BulkFundingLoop)
+    assert '"--skip-quotes"' in funding_source
+    assert '"--funding-venues"' in funding_source
     assert Path("scripts/bulk_quote_worker.py").exists()
 
 
