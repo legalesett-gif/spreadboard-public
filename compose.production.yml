@@ -22,9 +22,11 @@ services:
       SPREADBOARD_LIVE_MAX_AGE_MIN: "5"
       SPREADBOARD_REFRESH_TIMEOUT_SECONDS: "2700"
       SPREADBOARD_FAST_QUOTE_SECONDS: "60"
-      # Reserve extra exact candidates for Spot-Spot, whose venue books fail
-      # more often, while keeping every other public lane above its top 25.
-      SPREADBOARD_FAST_QUOTE_ROUTES: "220"
+      # The complete CEX catalogue is repriced independently in one bulk pass.
+      # This exact-route worker therefore spends 70 rows on the two rate-limited
+      # DEX lanes and one direct canary per CEX lane; including another 147 CEX
+      # routes kept valid DEX results unpublished beyond their truth boundary.
+      SPREADBOARD_FAST_QUOTE_ROUTES: "73"
       # OKX Web3 is rate-limited. The current-board rotation requests only the
       # executable opening direction for each exact DEX leg, shares that quote
       # across paired routes, and keeps both DEX lanes inside the 90-second

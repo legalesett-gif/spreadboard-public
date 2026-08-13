@@ -838,17 +838,11 @@ class FastQuoteRefresher:
                 venue,
                 market_type,
                 symbol,
-                # The complete bulk generation is a first-class current book
-                # source and carries its own absolute exchange timestamp. A
-                # five-second read cap discarded it on nearly every pass,
-                # causing 150 redundant per-symbol REST calls that held fresh
-                # DEX quotes unpublished for another minute. Preserve the
-                # original quote timestamp and let the unchanged 90-second
-                # leader gate decide whether the resulting route is current.
-                max_age_seconds=max(
-                    5.0,
-                    float(os.environ.get("SPREADBOARD_LIVE_BOOK_AGE_SECONDS", "90")),
-                ),
+                # The fast lane promises a current matched-size route. It may
+                # reuse a just-written websocket/bulk book, but a book already
+                # near the 90-second leader boundary would expire before this
+                # atomic cycle publishes and must be re-quoted directly.
+                max_age_seconds=5.0,
             )
             native_book = (
                 (live_book.bids, live_book.asks)

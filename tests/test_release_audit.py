@@ -545,20 +545,26 @@ def test_price_worker_invalidates_grouped_market_payloads() -> None:
     assert server._MARKET_STALE_CACHE == {("test",): (0.0, {"old": True})}
 
 
-def test_fast_quote_budget_covers_top_25_across_all_five_public_lanes() -> None:
+def test_combined_quote_budget_covers_cex_catalog_and_both_dex_lanes() -> None:
     compose = (Path(__file__).resolve().parents[1] / "compose.production.yml").read_text()
     routes = int(re.search(r'SPREADBOARD_FAST_QUOTE_ROUTES:\s*"(\d+)"', compose).group(1))
     dex_routes = int(re.search(r'SPREADBOARD_FAST_DEX_ROUTES:\s*"(\d+)"', compose).group(1))
     dex_contracts = int(re.search(r'SPREADBOARD_FAST_DEX_CONTRACTS:\s*"(\d+)"', compose).group(1))
     workers = int(re.search(r'SPREADBOARD_FAST_QUOTE_WORKERS:\s*"(\d+)"', compose).group(1))
     timeout = int(re.search(r'SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS:\s*"(\d+)"', compose).group(1))
+    bulk_seconds = int(re.search(r'SPREADBOARD_BULK_QUOTE_SECONDS:\s*"(\d+)"', compose).group(1))
+    bulk_workers = int(re.search(r'SPREADBOARD_BULK_QUOTE_WORKERS:\s*"(\d+)"', compose).group(1))
 
-    assert routes >= 5 * 25
-    assert routes <= 220
+    # The complete CEX catalogue has its own one-call-per-venue worker. The
+    # per-route worker must not repeat another 125+ CEX routes and hold the
+    # rate-limited DEX result past its 90-second truth boundary.
+    assert dex_routes + 3 <= routes <= 90
     assert dex_routes >= 2 * 30
     assert 25 <= dex_contracts <= 28
     assert 3 <= workers <= 8
     assert timeout <= 300
+    assert bulk_seconds <= 15
+    assert 3 <= bulk_workers <= 8
 
 
 def test_high_dislocation_dex_route_requires_exact_cex_identity() -> None:

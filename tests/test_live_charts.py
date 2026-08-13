@@ -185,6 +185,52 @@ def test_shared_dex_contracts_keep_25_tokens_current_in_both_public_lanes() -> N
     assert len({fast_quotes._dex_contract_identity(row) for row in selected}) <= 28
 
 
+def test_production_fast_budget_reserves_dex_truth_and_cex_canaries() -> None:
+    lanes: dict[str, list[dict]] = {}
+    for lane in ("FUTURES", "FUTURES-SPOT", "SPOT"):
+        lanes[lane] = [
+            {
+                **_route(),
+                "route_key": f"{lane}-{index}",
+                "token": f"{lane}{index}",
+                "depth_weighted_spread_pct": 100 - index,
+                "long_market_type": "Spot" if lane != "FUTURES" else "Futures",
+                "short_market_type": "Spot" if lane == "SPOT" else "Futures",
+            }
+            for index in range(10)
+        ]
+    for lane, short_type in (("DEX-FUTURES", "Futures"), ("DEX-SPOT", "Spot")):
+        lanes[lane] = [
+            {
+                "route_key": f"{lane}-{index}",
+                "token": f"T{index}",
+                "long_venue": "OKX DEX 1",
+                "long_market_type": "Spot",
+                "short_venue": "Gate",
+                "short_market_type": short_type,
+                "depth_weighted_spread_pct": 100 - index,
+                "notes": {"identity": {"long": {
+                    "chain_id": "1", "token_address": f"0x{index:040x}",
+                }}},
+            }
+            for index in range(30)
+        ]
+
+    selected = _select_fast_quote_rows(lanes, route_limit=73, priority_tokens=set())
+    counts = {
+        lane: len({row["token"] for row in selected if _fast_quote_lane(row) == lane})
+        for lane in lanes
+    }
+
+    # Fixtures expose exactly one shared route per lane/contract, so 28 shared
+    # contracts expand to 56 DEX rows plus the three CEX canaries. Production
+    # can use the remaining budget for additional pairings on those contracts.
+    assert len(selected) == 59
+    assert counts["FUTURES"] == counts["FUTURES-SPOT"] == counts["SPOT"] == 1
+    assert counts["DEX-FUTURES"] >= 25
+    assert counts["DEX-SPOT"] >= 25
+
+
 def test_fast_quote_budget_is_failure_tolerant_across_all_lanes(monkeypatch) -> None:
     monkeypatch.setenv("SPREADBOARD_FAST_DEX_ROUTES", "70")
     lanes = {}
