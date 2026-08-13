@@ -509,24 +509,45 @@ def test_failed_refresh_keeps_prior_exact_quote_only_until_truth_ttl() -> None:
         "quote_ts_us": 9_000_000,
         "status": "live",
     }
-    fast_quotes._retire_failed_fast_quote_unless_current(
+    assert fast_quotes._retain_current_fast_quote(
         current,
         now_us=10_000_000,
         max_age_seconds=2,
-    )
+    ) is True
     assert current["quote_ts_us"] == 9_000_000
     assert current["fast_quote_verified_at"]
     assert current["status"] == "live_last_verified"
 
     expired = dict(current)
-    fast_quotes._retire_failed_fast_quote_unless_current(
+    assert fast_quotes._retain_current_fast_quote(
         expired,
         now_us=12_000_001,
         max_age_seconds=2,
+    ) is False
+    # The caller performs normal retirement and applies a mirage blocker after
+    # this result; the predicate itself never mutates an expired row.
+    assert expired["quote_ts_us"] == 9_000_000
+
+
+def test_transient_failure_marks_current_quote_as_pending_not_mirage(monkeypatch) -> None:
+    refresher = FastQuoteRefresher()
+    row = {
+        **_route(),
+        "fast_quote_verified_at": "2026-08-13T20:00:00Z",
+        "quote_ts_us": int(time.time() * 1_000_000),
+        "status": "live",
+        "blockers": [],
+    }
+    monkeypatch.setattr(refresher, "_leg_quote", lambda *_args, **_kwargs: None)
+
+    assert not refresher._apply_completed_route_quote(
+        row,
+        leg_cache={},
+        target_notional_usd=50,
     )
-    assert expired["quote_ts_us"] == 0
-    assert expired["fast_quote_verified_at"] is None
-    assert expired["status"] == "refreshing"
+    assert row["status"] == "live_last_verified"
+    assert "condition:fast_refresh_pending" in row["blockers"]
+    assert not any(item.startswith("mirage_guard:") for item in row["blockers"])
 
 
 def test_fast_delta_publishes_exact_dex_lane_readiness(tmp_path, monkeypatch) -> None:

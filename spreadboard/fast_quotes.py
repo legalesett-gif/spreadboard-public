@@ -478,6 +478,7 @@ class FastQuoteRefresher:
                     str(item)
                     for item in row.get("blockers") or []
                     if not str(item).startswith("mirage_guard:fast_")
+                    and str(item) != "condition:fast_refresh_pending"
                 ]
                 row["blockers"] = list(dict.fromkeys(blockers))
         leg_jobs: dict[tuple[str, str, str], tuple[dict[str, Any], str]] = {}
@@ -664,6 +665,7 @@ class FastQuoteRefresher:
             str(item)
             for item in row.get("blockers") or []
             if not str(item).startswith("mirage_guard:fast_")
+            and str(item) != "condition:fast_refresh_pending"
         ]
         long_quote = self._leg_quote(
             row,
@@ -680,9 +682,15 @@ class FastQuoteRefresher:
             include_funding=True,
         )
         if long_quote is None or short_quote is None:
-            blockers.append("mirage_guard:fast_requote_unavailable")
+            if _retain_current_fast_quote(row):
+                # This is an operational refresh warning, not an identity or
+                # price-integrity failure. Marking it as a mirage guard would
+                # make lane_rankable() hide the still-current exact quote.
+                blockers.append("condition:fast_refresh_pending")
+            else:
+                blockers.append("mirage_guard:fast_requote_unavailable")
+                _retire_failed_fast_quote(row)
             row["blockers"] = list(dict.fromkeys(blockers))
-            _retire_failed_fast_quote_unless_current(row)
             return False
         executable = spread_pct(long_quote["ask"], short_quote["bid"])
         depth = spread_pct(long_quote["ask_vwap"], short_quote["bid_vwap"])
@@ -1227,12 +1235,12 @@ def _retire_failed_fast_quote(row: dict[str, Any]) -> None:
     row["status"] = "refreshing"
 
 
-def _retire_failed_fast_quote_unless_current(
+def _retain_current_fast_quote(
     row: dict[str, Any],
     *,
     now_us: int | None = None,
     max_age_seconds: float = 90.0,
-) -> None:
+) -> bool:
     """Preserve a prior exact quote only for the remainder of its truth TTL.
 
     A transient provider or CEX refresh failure is not evidence that a quote
@@ -1249,8 +1257,8 @@ def _retire_failed_fast_quote_unless_current(
         max_age_seconds=max_age_seconds,
     ):
         row["status"] = "live_last_verified"
-        return
-    _retire_failed_fast_quote(row)
+        return True
+    return False
 
 
 def _snapshot_row_key(row: dict[str, Any]) -> str:
