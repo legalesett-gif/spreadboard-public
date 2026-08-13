@@ -271,6 +271,7 @@ def load_spreads(
         row
         for row in public_universe
         if route_deliverable(row) is not False
+        and not _is_mirage_guarded(row)
         and row_is_presentable(row)
         and tokenized_route_rankable(row)
     ]
@@ -282,6 +283,7 @@ def load_spreads(
         row
         for row in public_universe
         if funding_intervals_known(row)
+        and not _is_mirage_guarded(row)
         and not price_ratio_implausible(row)
         and not leg_volume_too_thin(row)
         and not is_venue_specific_leveraged_token(row)
@@ -492,7 +494,12 @@ def lane_rankable(row: "SpreadTerminalRow") -> bool:
     whether its carry is collectable -- which is why deliverability is applied
     per lane rather than across the board.
     """
-    if price_ratio_implausible(row) or leg_volume_too_thin(row) or not tokenized_route_rankable(row):
+    if (
+        _is_mirage_guarded(row)
+        or price_ratio_implausible(row)
+        or leg_volume_too_thin(row)
+        or not tokenized_route_rankable(row)
+    ):
         return False
     if getattr(row, "route_kind", None) in TRANSFER_ROUTE_KINDS:
         return route_deliverable(row) is not False
@@ -2238,7 +2245,10 @@ def route_deliverable(row: "SpreadTerminalRow") -> bool | None:
 
 
 def _is_mirage_guarded(row: SpreadTerminalRow) -> bool:
-    return any(str(item).startswith("mirage_guard:") for item in row.blockers)
+    return any(
+        str(item).startswith("mirage_guard:")
+        for item in (getattr(row, "blockers", None) or [])
+    )
 
 
 def _normalize_kind_filter(value: Any) -> str:
@@ -2387,12 +2397,18 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
             row
             for row in token_rows
             if route_deliverable(row) is not False
+            and not _is_mirage_guarded(row)
             and not price_ratio_implausible(row)
             and not leg_volume_too_thin(row)
+            and row_is_presentable(row)
+            and tokenized_route_rankable(row)
         ]
         best = max(tradeable_rows or token_rows, key=_entrance_spread)
         funding_rows = [
-            row for row in token_rows if _effective_funding_24h(row) is not None
+            row
+            for row in token_rows
+            if _effective_funding_24h(row) is not None
+            and not _is_mirage_guarded(row)
         ]
         # Rank by the SIGNED carry: the farm you would put on receives funding.
         # Every route has a mirror -- ESPORTS' only funding source is Gate at
@@ -2467,6 +2483,11 @@ def _group_sort_value(group: dict[str, Any], sort_by: str) -> Any:
     if sort_by == "depth":
         return max((_float_or_none(row.get("depth_usd")) or 0.0 for row in routes), default=0.0)
     if sort_by == "edge":
+        # Keep guarded research rows searchable without letting an unresolved
+        # identity or transfer path buy a leader slot.  Healthy groups always
+        # sort ahead; an all-guarded token remains at the tail with its badge.
+        if (group.get("best_route") or {}).get("mirage_guarded"):
+            return -999999.0
         return _float_or_none(group.get("best_edge_pct")) or 0.0
     return _row_sort_key_dict(group.get("best_route") or {})
 

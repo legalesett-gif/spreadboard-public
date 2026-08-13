@@ -1891,6 +1891,46 @@ def test_group_headline_prefers_a_tradeable_route() -> None:
     assert groups[0]["best_edge_pct"] == 4.0, "headline must ignore the shut-rail route"
 
 
+def test_group_headline_and_lane_readiness_ignore_guarded_research_rows() -> None:
+    """A visible audit row must not become a client-facing opportunity."""
+    from spreadboard.api_spreads import SpreadTerminalRow
+
+    def row(edge, *, guarded=False):
+        base = {f.name: None for f in __import__("dataclasses").fields(SpreadTerminalRow)}
+        base.update(
+            token="TKN",
+            route_kind="SPOT",
+            executable_spread_pct=edge,
+            displayed_open_spread_pct=edge,
+            depth_weighted_spread_pct=edge,
+            long_withdraw_enabled=True,
+            short_deposit_enabled=True,
+            long_volume_24h_usd=100_000.0,
+            short_volume_24h_usd=100_000.0,
+            long_price=1.0,
+            short_price=1.0 + edge / 100.0,
+            blockers=(
+                ["mirage_guard:high_dislocation_exact_identity_required"]
+                if guarded
+                else []
+            ),
+            freshness="fresh",
+            age_min=1.0,
+            route_key=f"TKN|{edge}",
+            asset_class="crypto",
+        )
+        return SpreadTerminalRow(**base)
+
+    guarded = row(60.0, guarded=True)
+    clean = row(4.0)
+    group = api_spreads._group_rows([guarded, clean])[0]
+
+    assert group["best_edge_pct"] == 4.0
+    assert not group["best_route"]["mirage_guarded"]
+    assert api_spreads.lane_rankable(guarded) is False
+    assert api_spreads.lane_rankable(clean) is True
+
+
 def _vrow(**kw):
     from types import SimpleNamespace
     base = dict(route_kind="SPOT", long_withdraw_enabled=None, short_deposit_enabled=None,
