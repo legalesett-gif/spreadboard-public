@@ -1474,10 +1474,9 @@ def _shared_dex_lane_seeds(
     # remain inside the 90-second truth boundary. Fourteen oldest-first shared
     # contracts per pass cover the same top 28 in two short passes; the delta
     # retains the previous half while it is still current.
+    leader_pool_size = max(25, contract_limit * 2)
     shared_leader_pool = set(
-        sorted(shared, key=identity_score, reverse=True)[
-            : max(25, contract_limit * 2)
-        ]
+        sorted(shared, key=identity_score, reverse=True)[:leader_pool_size]
     )
     shared_leader_pool.update(
         identity for identity in shared if identity[0] in priority_tokens
@@ -1489,9 +1488,12 @@ def _shared_dex_lane_seeds(
             (_number(row.get("quote_ts_us"), 0.0) for row in rows),
             default=0.0,
         )
+        # Current leaders are the product promise. Rotate oldest-first *within*
+        # the top shared leader pool, not above it, or historical tail assets
+        # can displace the 25 routes a subscriber is actually trying to watch.
         return (
-            int(identity[0] in priority_tokens),
             -oldest_quote,
+            int(identity[0] in priority_tokens),
             max((_dex_opportunity_score(row) for row in rows), default=0.0),
         )
 
