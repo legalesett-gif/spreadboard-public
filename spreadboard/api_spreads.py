@@ -787,8 +787,15 @@ def live_prices_for(
             continue
         prior_depth_verified = (
             not bool(route.get("depth_unverified"))
-            and (_float_or_none(route.get("depth_usd")) or 0.0)
-            >= LIVE_BOOK_TARGET_NOTIONAL_USD
+            and (
+                (_float_or_none(route.get("depth_usd")) or 0.0)
+                >= LIVE_BOOK_TARGET_NOTIONAL_USD
+                or (
+                    _float_or_none(route.get("matched_size_notional_usd")) or 0.0
+                )
+                >= LIVE_BOOK_TARGET_NOTIONAL_USD
+                or _float_or_none(route.get("depth_weighted_spread_pct")) is not None
+            )
         )
         if long_book is not None:
             ask, ask_vwap = _book_side(long_book, "ask")
@@ -802,10 +809,20 @@ def live_prices_for(
             bid_vwap = bid if prior_depth_verified else None
         if not ask or not bid or ask <= 0:
             continue
-        out[str(route["route_key"])] = (
+        live_depth_spread = (
             (bid_vwap / ask_vwap - 1.0) * 100.0
             if bid_vwap is not None and ask_vwap is not None and ask_vwap > 0
-            else None,
+            else None
+        )
+        # A top-of-book-only fast leg is not allowed to erase a verified $50
+        # route. It can update the top quote, but the UI must keep the last
+        # timestamped depth result until a fresh ladder replaces it. Returning
+        # None here was what made DEX cards and valid bulk routes disappear as
+        # soon as the browser stream attached.
+        if live_depth_spread is None and prior_depth_verified:
+            live_depth_spread = _float_or_none(route.get("depth_weighted_spread_pct"))
+        out[str(route["route_key"])] = (
+            live_depth_spread,
             (
                 funding_daily
                 if funding_daily is not None

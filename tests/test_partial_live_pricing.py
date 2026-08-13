@@ -84,6 +84,28 @@ def test_a_live_cex_leg_can_reprice_a_dex_route(monkeypatch: pytest.MonkeyPatch)
     assert priced["T|Gate|Spot|Bybit|Futures"][0] == pytest.approx(20.0)
 
 
+def test_top_only_cex_fast_leg_keeps_a_verified_dex_depth_quote(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key = live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT")
+    monkeypatch.setattr(
+        live_book_cache,
+        "load_live_books_by_keys",
+        lambda *_args, **_kwargs: {key: _TopOnlyBook(1.20, 1.21)},
+    )
+    route = _route(
+        long_venue="Uniswap",
+        long_market_type="DEX",
+        depth_usd=None,
+        matched_size_notional_usd=50.0,
+        depth_weighted_spread_pct=9.5,
+    )
+
+    priced = api_spreads.live_prices_for([route])
+
+    assert priced[route["route_key"]][0] == pytest.approx(9.5)
+
+
 def test_a_live_cex_leg_cannot_renew_an_old_dex_quote(monkeypatch: pytest.MonkeyPatch) -> None:
     key = live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT")
     monkeypatch.setattr(live_book_cache, "load_live_books_by_keys", lambda *_args, **_kwargs: {key: _book(1.20, 1.21)})
