@@ -556,7 +556,7 @@ def test_fast_quote_budget_covers_top_25_across_all_five_public_lanes() -> None:
     assert routes >= 5 * 25
     assert routes <= 220
     assert dex_routes >= 2 * 30
-    assert 25 <= dex_contracts <= 36
+    assert 25 <= dex_contracts <= 28
     assert 3 <= workers <= 8
     assert timeout <= 300
 

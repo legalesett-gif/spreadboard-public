@@ -1393,7 +1393,7 @@ def _select_fast_quote_rows(
     # Two OKX calls are needed for one exact contract (buy and sell). A
     # 70-contract rotation therefore cannot finish inside the public 90-second
     # spread boundary at the provider-safe request cadence. Spend the 70 route
-    # rows on at most 36 exact contracts, preferentially contracts shared by
+    # rows on at most 28 exact contracts, preferentially contracts shared by
     # both DEX lanes. Production currently has enough overlap for 25 independently
     # ranked tokens in each lane using 25 shared quotes rather than 50 separate
     # ones. Small diagnostic/test budgets retain the simple rotation semantics.
@@ -1406,7 +1406,7 @@ def _select_fast_quote_rows(
     else:
         contract_limit = min(
             dex_token_limit,
-            max(25, int(os.environ.get("SPREADBOARD_FAST_DEX_CONTRACTS", "36"))),
+            max(25, int(os.environ.get("SPREADBOARD_FAST_DEX_CONTRACTS", "28"))),
         )
         dex_seeds = _shared_dex_lane_seeds(
             rows_by_lane,
@@ -1461,7 +1461,7 @@ def _shared_dex_lane_seeds(
 
     all_identities = set(futures) | set(spot)
     # When overlap is sparse, share the remaining contract budget evenly. It
-    # may be mathematically impossible to reach 25+25 inside 36 contracts, but
+    # may be mathematically impossible to reach 25+25 inside the contract cap, but
     # one lane must never consume every slot merely because set ordering changed.
     ranked_by_lane = {
         "DEX-FUTURES": sorted(set(futures) - selected, key=identity_score, reverse=True),

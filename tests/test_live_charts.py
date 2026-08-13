@@ -149,9 +149,9 @@ def test_disjoint_dex_lanes_share_the_finite_provider_contract_budget() -> None:
         lanes, route_limit=60, priority_tokens=set()
     )
 
-    assert sum(str(row["token"]).startswith("F") for row in selected) >= 18
-    assert sum(str(row["token"]).startswith("S") for row in selected) >= 18
-    assert len({fast_quotes._dex_contract_identity(row) for row in selected}) <= 36
+    assert sum(str(row["token"]).startswith("F") for row in selected) >= 14
+    assert sum(str(row["token"]).startswith("S") for row in selected) >= 14
+    assert len({fast_quotes._dex_contract_identity(row) for row in selected}) <= 28
 
 
 def test_shared_dex_contracts_keep_25_tokens_current_in_both_public_lanes() -> None:
@@ -181,7 +181,7 @@ def test_shared_dex_contracts_keep_25_tokens_current_in_both_public_lanes() -> N
 
     assert counts["DEX-FUTURES"] >= 25
     assert counts["DEX-SPOT"] >= 25
-    assert len({fast_quotes._dex_contract_identity(row) for row in selected}) <= 36
+    assert len({fast_quotes._dex_contract_identity(row) for row in selected}) <= 28
 
 
 def test_fast_quote_budget_is_failure_tolerant_across_all_lanes(monkeypatch) -> None:
@@ -229,7 +229,7 @@ def test_fast_quote_budget_is_failure_tolerant_across_all_lanes(monkeypatch) -> 
     }
     assert counts == {
         "FUTURES": 50, "FUTURES-SPOT": 50, "SPOT": 50,
-        "DEX-FUTURES": 18, "DEX-SPOT": 18,
+        "DEX-FUTURES": 14, "DEX-SPOT": 14,
     }
 
 
