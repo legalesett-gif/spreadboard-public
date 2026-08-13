@@ -3361,6 +3361,32 @@ def test_freshness_guard_resorts_blank_mirages_below_real_edges(
     assert payload["groups"][1]["best_edge_pct"] is None
 
 
+def test_freshness_keeps_timestamped_matched_depth_despite_fast_top_only_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fast ticker tick cannot erase the route's still-current $50 proof."""
+    route = {
+        "route_key": "GUA|matched",
+        "executable_spread_pct": 1.2,
+        "depth_weighted_spread_pct": 1.05,
+        "depth_unverified": True,
+        "mirage_guarded": False,
+    }
+    payload = {
+        "filters": {"sort": "edge", "direction": "desc"},
+        "groups": [{"token": "GUA", "best_route": route, "best_edge_pct": 1.05, "routes": [route]}],
+        "top_edges": [],
+        "top_funding": [],
+        "summary": {},
+    }
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(server.api_spreads, "quote_age_min", lambda _row: 0.1)
+
+    server._apply_spread_freshness(payload)
+
+    assert payload["groups"][0]["best_edge_pct"] == pytest.approx(1.05)
+
+
 def test_the_stream_reports_only_what_changed(tmp_path, monkeypatch) -> None:
     """Re-sending every route every few seconds would push megabytes to every
     open page for no reason."""

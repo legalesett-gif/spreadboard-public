@@ -2332,7 +2332,16 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
             return False
         if route.get("mirage_guarded") or route.get("identity_mismatch") or route.get("thin_book"):
             return False
-        if route.get("deliverable") is False or route.get("depth_unverified"):
+        if route.get("deliverable") is False:
+            return False
+        # `depth_unverified` can mean either "ticker/top book only" or "the
+        # newest fast tick had no ladder but this exact route still carries a
+        # timestamped matched-size quote". Only the latter may retain a leader
+        # slot. Treating the flag alone as disqualifying blanked the entire
+        # board immediately after every bulk/websocket overlay.
+        if route.get("depth_unverified") and _float_or_none(
+            route.get("depth_weighted_spread_pct")
+        ) is None:
             return False
         guard = route.get("tokenized_guard") or {}
         return not isinstance(guard, dict) or guard.get("rankable") is not False
