@@ -19,6 +19,8 @@ from spreadboard import live_book_cache
 from spreadarb.api_discovery.models import spread_pct
 from spreadarb.api_discovery.orderbook import depth_weighted_price
 
+ROOT = Path(__file__).resolve().parents[1]
+
 VENUE_IDS = {
     "Aster": "aster",
     "Binance": "binance",
@@ -428,6 +430,11 @@ class FastQuoteRefresher:
             payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             return {"status": "unavailable", "updated": 0, "error": type(exc).__name__}
+        # The prior delta contains the newest rows from recent rotations.  Use
+        # it as the selection baseline and retain its still-live rows below;
+        # otherwise every pass forgets the previous one and a rotating warmer
+        # can never build more coverage than a single pass.
+        _overlay_current_fast_delta(payload, snapshot_path)
         # The dedicated bulk worker already refreshes every venue into the
         # compact live_funding file. Repeating the same 18-venue sweep here made
         # the top-route quote cycle take more than four minutes and delayed the
@@ -447,7 +454,11 @@ class FastQuoteRefresher:
                 if lane is None:
                     continue
                 spread = _number(row.get("depth_weighted_spread_pct"), -999999.0)
-                if 0.0 <= spread <= 90.0 or row.get("fast_quote_verified_at"):
+                # A DEX-futures funding farm can have a negative entry basis
+                # while still paying exceptional carry.  Spread-only admission
+                # starved precisely those routes after their entry basis fell.
+                plausible_dex = lane.startswith("DEX-") and abs(spread) <= 90.0
+                if plausible_dex or 0.0 <= spread <= 90.0 or row.get("fast_quote_verified_at"):
                     rows_by_lane[lane].append(row)
         total_weight = sum(FAST_QUOTE_LANE_WEIGHTS.values())
         base_quota, extra = divmod(max(0, route_limit), total_weight)
@@ -457,13 +468,23 @@ class FastQuoteRefresher:
                 base_quota * FAST_QUOTE_LANE_WEIGHTS[lane]
                 + (1 if index < extra else 0)
             )
-            selected.extend(
-                _expanded_token_rows(
-                    rows_by_lane[lane],
-                    token_limit=min(90 if lane == "SPOT" else 50, lane_limit),
-                    route_limit=lane_limit,
+            lane_rows = rows_by_lane[lane]
+            if lane.startswith("DEX-"):
+                selected.extend(
+                    _dex_rotating_rows(
+                        lane_rows,
+                        priority_tokens=_dex_priority_tokens(),
+                        route_limit=lane_limit,
+                    )
                 )
-            )
+            else:
+                selected.extend(
+                    _expanded_token_rows(
+                        lane_rows,
+                        token_limit=min(90 if lane == "SPOT" else 50, lane_limit),
+                        route_limit=lane_limit,
+                    )
+                )
         for lane_rows in rows_by_lane.values():
             for row in lane_rows:
                 blockers = [
@@ -605,11 +626,24 @@ class FastQuoteRefresher:
         # that readers overlay instead, so the expensive file only changes when
         # discovery finishes.
         touched = {row_id for row_id in (_snapshot_row_key(row) for row in selected) if row_id}
+        now_us = int(time.time() * 1_000_000)
+        retention_seconds = max(
+            60.0,
+            float(os.environ.get("SPREADBOARD_LIVE_MAX_AGE_MIN", "5")) * 60.0,
+        )
         delta_rows = [
             row
             for bucket in ("api_discovered_rows", "dex_discovered_rows")
             for row in payload.get(bucket) or []
-            if isinstance(row, dict) and _snapshot_row_key(row) in touched
+            if isinstance(row, dict)
+            and (
+                _snapshot_row_key(row) in touched
+                or _fresh_fast_quote_row(
+                    row,
+                    now_us=now_us,
+                    max_age_seconds=retention_seconds,
+                )
+            )
         ]
         _atomic_write(
             _fast_quote_delta_path(snapshot_path),
@@ -981,10 +1015,62 @@ def _fast_quote_delta_path(snapshot_path: Path) -> Path:
     return Path(snapshot_path).with_name("api_discovery_fast_quotes.json")
 
 
+def _overlay_current_fast_delta(payload: dict[str, Any], snapshot_path: Path) -> int:
+    """Overlay newer fast rows before selecting the next rotation."""
+
+    try:
+        delta = json.loads(_fast_quote_delta_path(snapshot_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+    newer = {
+        _snapshot_row_key(row): row
+        for row in delta.get("rows") or []
+        if isinstance(row, dict) and _snapshot_row_key(row)
+    }
+    overlaid = 0
+    for bucket in ("api_discovered_rows", "dex_discovered_rows"):
+        rows = payload.get(bucket)
+        if not isinstance(rows, list):
+            continue
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            replacement = newer.get(_snapshot_row_key(row))
+            if replacement is None:
+                continue
+            if _number(replacement.get("quote_ts_us"), 0.0) < _number(
+                row.get("quote_ts_us"), 0.0
+            ):
+                continue
+            rows[index] = replacement
+            overlaid += 1
+    return overlaid
+
+
+def _fresh_fast_quote_row(
+    row: dict[str, Any],
+    *,
+    now_us: int,
+    max_age_seconds: float,
+) -> bool:
+    if not row.get("fast_quote_verified_at"):
+        return False
+    quoted_us = int(_number(row.get("quote_ts_us"), 0.0))
+    return quoted_us > 0 and 0 <= now_us - quoted_us <= max_age_seconds * 1_000_000
+
+
 def _snapshot_row_key(row: dict[str, Any]) -> str:
     return "|".join(
         str(row.get(key) or "")
-        for key in ("token", "long_venue", "long_market_type", "short_venue", "short_market_type")
+        for key in (
+            "token",
+            "long_venue",
+            "long_market_type",
+            "long_market_symbol",
+            "short_venue",
+            "short_market_type",
+            "short_market_symbol",
+        )
     )
 
 
@@ -1107,6 +1193,125 @@ def _expanded_token_rows(
         if token in selected_tokens and id(row) not in selected_ids:
             selected.append(row)
             selected_ids.add(id(row))
+    return selected
+
+
+def _dex_priority_tokens() -> set[str]:
+    """Public symbols whose DEX marks must not disappear between scans.
+
+    This intentionally reads only token symbols: no account, user, position or
+    PII fields leave the private database.  The static identity watchlist is
+    also included because those are the DEX assets whose contract identity has
+    already been reviewed.
+    """
+
+    tokens = {
+        item.strip().upper()
+        for item in os.environ.get("SPREADBOARD_DEX_PRIORITY_TOKENS", "").split(",")
+        if item.strip()
+    }
+    try:
+        from spreadboard import accounts
+
+        tokens.update(
+            str(item).upper()
+            for item in accounts.all_watchlist_symbols(db_path=accounts.DEFAULT_DB_PATH)
+        )
+        tokens.update(
+            str(item).upper()
+            for item in accounts.all_open_position_symbols(db_path=accounts.DEFAULT_DB_PATH)
+        )
+    except Exception:
+        pass
+    try:
+        watchlist = json.loads(
+            (ROOT / "data" / "api_discovery_watchlist.json").read_text(encoding="utf-8")
+        )
+        tokens.update(
+            str(item.get("symbol") or "").upper()
+            for item in watchlist.get("tokens") or []
+            if isinstance(item, dict) and item.get("symbol")
+        )
+    except (OSError, json.JSONDecodeError):
+        pass
+    return tokens
+
+
+def _dex_opportunity_score(row: dict[str, Any]) -> float:
+    """Independent current spread and carry evidence for DEX warm priority."""
+
+    spread = max(0.0, _number(row.get("depth_weighted_spread_pct"), 0.0))
+    carry = max(
+        0.0,
+        _number(
+            row.get("funding_projected_24h_pct")
+            or row.get("funding_daily_pct")
+            or row.get("funding_spread_pct"),
+            0.0,
+        ),
+    )
+    return spread + carry
+
+
+def _dex_rotating_rows(
+    rows: list[dict[str, Any]],
+    *,
+    priority_tokens: set[str],
+    route_limit: int,
+) -> list[dict[str, Any]]:
+    """Keep monitored DEX assets and current leaders warm without starvation.
+
+    Two thirds of the slots go first to reviewed/member-tracked tokens, oldest quote
+    first; the other half goes to current spread or funding leaders.  Because
+    recent rows are retained in the rolling delta, old rows rise on the next
+    pass and the set rotates rather than pinning the same headline tokens.
+    """
+
+    if route_limit <= 0:
+        return []
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            _dex_opportunity_score(row),
+            _number(row.get("depth_weighted_spread_pct"), -999999.0),
+        ),
+        reverse=True,
+    )
+    priority = [
+        row
+        for row in rows
+        if str(row.get("token") or "").upper() in priority_tokens
+    ]
+    priority.sort(
+        key=lambda row: (
+            _number(row.get("quote_ts_us"), 0.0),
+            -_dex_opportunity_score(row),
+        )
+    )
+    priority_slots = min(len(priority_tokens), max(1, (route_limit * 2) // 3))
+    seeds = _unique_rows_by_token(priority, priority_slots)
+    selected_tokens = {str(row.get("token") or "").upper() for row in seeds}
+    for row in _unique_rows_by_token(ranked, route_limit):
+        if len(seeds) >= route_limit:
+            break
+        token = str(row.get("token") or "").upper()
+        if token not in selected_tokens:
+            seeds.append(row)
+            selected_tokens.add(token)
+    return seeds
+
+
+def _unique_rows_by_token(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        token = str(row.get("token") or "").upper()
+        if not token or token in seen:
+            continue
+        selected.append(row)
+        seen.add(token)
+        if len(selected) >= limit:
+            break
     return selected
 
 

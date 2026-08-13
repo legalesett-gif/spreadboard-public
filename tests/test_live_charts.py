@@ -12,12 +12,15 @@ from spreadboard import fast_quotes, live_book_cache, market_history, server
 from spreadboard.fast_quotes import (
     FastQuoteRefresher,
     _expanded_token_rows,
+    _dex_rotating_rows,
     _fast_quote_lane,
+    _fresh_fast_quote_row,
     _has_permanent_mirage_guard,
     _native_order_book,
     _native_spot_order_book,
     _native_current_funding,
     _okx_dex_leg_quote,
+    _snapshot_row_key,
     _kraken_asset_code,
     _native_linear_symbol,
 )
@@ -63,6 +66,62 @@ def test_fast_quote_cycle_retries_temporary_guards_only() -> None:
     assert not _has_permanent_mirage_guard(
         {"blockers": ["mirage_guard:spot_sell_inventory_required"]}
     )
+
+
+def test_dex_rotation_keeps_negative_basis_high_funding_token_warm() -> None:
+    rows = [
+        {
+            "token": "GUA",
+            "depth_weighted_spread_pct": -0.4,
+            "funding_projected_24h_pct": 1.1,
+            "quote_ts_us": 1,
+        },
+        {
+            "token": "HEADLINE",
+            "depth_weighted_spread_pct": 8.0,
+            "funding_projected_24h_pct": 0.0,
+            "quote_ts_us": 9,
+        },
+        {
+            "token": "OTHER",
+            "depth_weighted_spread_pct": 2.0,
+            "funding_projected_24h_pct": 0.0,
+            "quote_ts_us": 2,
+        },
+    ]
+
+    selected = _dex_rotating_rows(rows, priority_tokens={"GUA"}, route_limit=2)
+
+    assert [row["token"] for row in selected] == ["GUA", "HEADLINE"]
+
+
+def test_fast_delta_retains_only_current_verified_rows() -> None:
+    now_us = 10_000_000
+    assert _fresh_fast_quote_row(
+        {"fast_quote_verified_at": "now", "quote_ts_us": 9_000_000},
+        now_us=now_us,
+        max_age_seconds=2,
+    )
+    assert not _fresh_fast_quote_row(
+        {"fast_quote_verified_at": "old", "quote_ts_us": 1_000_000},
+        now_us=now_us,
+        max_age_seconds=2,
+    )
+
+
+def test_fast_delta_identity_includes_exact_market_symbols() -> None:
+    first = {
+        "token": "BTC",
+        "long_venue": "Kraken",
+        "long_market_type": "Spot",
+        "long_market_symbol": "BTC/USD",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        "short_market_symbol": "BTC/USDT:USDT",
+    }
+    second = {**first, "long_market_symbol": "BTC/USDT"}
+
+    assert _snapshot_row_key(first) != _snapshot_row_key(second)
 
 
 def test_fast_quote_lane_covers_all_public_route_families() -> None:

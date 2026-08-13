@@ -3072,6 +3072,23 @@ def all_watchlist_symbols(*, db_path: Path | str = DEFAULT_DB_PATH) -> list[str]
         connection.close()
 
 
+def all_open_position_symbols(*, db_path: Path | str = DEFAULT_DB_PATH) -> list[str]:
+    """Distinct public token symbols in open journals, without user or PII data."""
+
+    connection = _connect(db_path)
+    try:
+        return [
+            str(row["token"])
+            for row in connection.execute(
+                """SELECT DISTINCT token FROM positions
+                   WHERE status = 'open' AND token != ''
+                   ORDER BY token"""
+            ).fetchall()
+        ]
+    finally:
+        connection.close()
+
+
 def all_open_position_futures_legs(
     *, db_path: Path | str = DEFAULT_DB_PATH
 ) -> list[tuple[str, str]]:
