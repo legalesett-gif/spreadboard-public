@@ -574,15 +574,6 @@ _RESULT_CACHE_MAX_ENTRIES = int(os.environ.get("SPREADBOARD_RESULT_CACHE_ENTRIES
 TOP_GROUP_SHORTLIST = 24
 
 
-# The websocket worker already streams order books for the busiest legs, but the
-# board only ever read them indirectly, through whatever the fast-quote worker
-# last wrote to disk. That is what made a route minutes old on a page load.
-# Prices are now taken from the live store at request time, so a streamed route
-# is as current as the exchange feed rather than as current as the last file.
-LIVE_BOOK_MAX_AGE_SECONDS = float(os.environ.get("SPREADBOARD_LIVE_BOOK_AGE_SECONDS", "30"))
-LIVE_BOOK_TARGET_NOTIONAL_USD = float(
-    os.environ.get("SPREADBOARD_LIVE_BOOK_NOTIONAL_USD", "50")
-)
 #: Maximum age of a matched-size price allowed to lead a *spread* ranking.
 #:
 #: The wider five-minute row window keeps a temporarily disconnected route
@@ -594,6 +585,18 @@ LIVE_BOOK_TARGET_NOTIONAL_USD = float(
 SPREAD_LEADER_MAX_AGE_MIN = max(
     0.25,
     float(os.environ.get("SPREADBOARD_SPREAD_LEADER_MAX_AGE_SECONDS", "90")) / 60.0,
+)
+# The read window must cover the same interval that a downstream row may call
+# current. Production previously read only ten seconds of a complete 55-second
+# bulk generation, so 19k current books existed while every initial page and
+# health lane appeared empty. This does not relax truth: apply_live_books keeps
+# the older leg timestamp and every leader rechecks SPREAD_LEADER_MAX_AGE_MIN.
+LIVE_BOOK_MAX_AGE_SECONDS = max(
+    SPREAD_LEADER_MAX_AGE_MIN * 60.0,
+    float(os.environ.get("SPREADBOARD_LIVE_BOOK_AGE_SECONDS", "90")),
+)
+LIVE_BOOK_TARGET_NOTIONAL_USD = float(
+    os.environ.get("SPREADBOARD_LIVE_BOOK_NOTIONAL_USD", "50")
 )
 
 

@@ -73,7 +73,9 @@ services:
       SPREADBOARD_CATALOG_BOOK_AGE_SECONDS: "180"
       # A five-minute-old book can turn a converged 0.08% route into a false
       # 10% headline. Only genuinely live books may override the snapshot.
-      SPREADBOARD_LIVE_BOOK_AGE_SECONDS: "10"
+      # Readers consume the complete current quote generation. Individual
+      # routes still expire at the unchanged 90-second leader boundary below.
+      SPREADBOARD_LIVE_BOOK_AGE_SECONDS: "90"
       # 1,100 concurrent subscriptions overwhelmed Gate/MEXC keepalives and
       # left actual leaders reconnecting.  The lane reserver needs roughly 200
       # legs for ten routes across every view; 320 keeps that set plus open

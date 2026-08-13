@@ -1994,6 +1994,14 @@ def _vrow(**kw):
     return SimpleNamespace(**base)
 
 
+def test_live_book_read_window_cannot_be_shorter_than_current_spread_policy() -> None:
+    from spreadboard import api_spreads
+
+    assert api_spreads.LIVE_BOOK_MAX_AGE_SECONDS >= (
+        api_spreads.SPREAD_LEADER_MAX_AGE_MIN * 60.0
+    )
+
+
 def test_a_single_shut_rail_blocks_even_if_the_other_is_unknown() -> None:
     """Treating unknown as fine let shut rails through; only 30 of 2718 rows fired."""
     assert api_spreads.route_deliverable(_vrow(short_deposit_enabled=False)) is False
