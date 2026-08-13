@@ -3387,6 +3387,61 @@ def test_freshness_keeps_timestamped_matched_depth_despite_fast_top_only_flag(
     assert payload["groups"][0]["best_edge_pct"] == pytest.approx(1.05)
 
 
+def test_freshness_reprices_cached_routes_and_repairs_headline_panel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JSON and Telegram must see the same current books as the browser SSE."""
+    cooled = {
+        "route_key": "OLD|route",
+        "quote_ts_us": 1,
+        "depth_weighted_spread_pct": 8.0,
+        "depth_unverified": False,
+    }
+    current = {
+        "route_key": "GUA|route",
+        "quote_ts_us": 2,
+        "depth_weighted_spread_pct": 0.1,
+        "funding_daily_pct": 0.01,
+        "depth_unverified": False,
+    }
+    payload = {
+        "filters": {"sort": "edge", "direction": "desc"},
+        "groups": [
+            {"token": "OLD", "best_route": cooled, "best_edge_pct": 8.0, "routes": [cooled]},
+            {"token": "GUA", "best_route": current, "best_edge_pct": 0.1, "routes": [current]},
+        ],
+        "top_edges": [
+            {"token": "OLD", "best_route": dict(cooled), "best_edge_pct": 8.0}
+        ],
+        "top_funding": [],
+        "summary": {},
+    }
+    monkeypatch.setattr(
+        server.api_spreads,
+        "live_route_updates_for",
+        lambda _routes: {"GUA|route": (1.25, 0.2, 9_000_000)},
+    )
+    monkeypatch.setattr(
+        server.api_spreads,
+        "spread_quote_current",
+        lambda row: int(row.get("quote_ts_us") or 0) == 9_000_000,
+    )
+    monkeypatch.setattr(
+        server.api_spreads,
+        "quote_age_min",
+        lambda row: 0.0 if row.get("quote_ts_us") == 9_000_000 else 99.0,
+    )
+
+    server._apply_spread_freshness(payload)
+
+    assert payload["groups"][0]["token"] == "GUA"
+    assert payload["groups"][0]["best_edge_pct"] == pytest.approx(1.25)
+    assert payload["top_edges"][0]["token"] == "GUA"
+    assert payload["top_funding"][0]["token"] == "GUA"
+    assert payload["top_funding"][0]["best_funding_24h_pct"] == pytest.approx(0.2)
+    assert payload["summary"]["max_depth_weighted_spread_pct"] == pytest.approx(1.25)
+
+
 def test_the_stream_reports_only_what_changed(tmp_path, monkeypatch) -> None:
     """Re-sending every route every few seconds would push megabytes to every
     open page for no reason."""

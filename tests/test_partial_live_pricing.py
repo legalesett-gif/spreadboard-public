@@ -134,6 +134,29 @@ def test_both_legs_live_still_uses_both(monkeypatch: pytest.MonkeyPatch) -> None
     assert priced["T|Gate|Spot|Bybit|Futures"][0] == pytest.approx(50.0)
 
 
+def test_live_route_update_uses_the_older_real_book_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    long_key = live_book_cache.cache_key("Gate", "Spot", "T/USDT")
+    short_key = live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT")
+    long_book = _book(0.99, 1.00)
+    short_book = _book(1.50, 1.51)
+    long_book.quote_ts_us = 1_700_000_200_000_000
+    short_book.quote_ts_us = 1_700_000_100_000_000
+    monkeypatch.setattr(
+        live_book_cache,
+        "load_live_books_by_keys",
+        lambda *_args, **_kwargs: {long_key: long_book, short_key: short_book},
+    )
+
+    update = api_spreads.live_route_updates_for([_route()])[
+        "T|Gate|Spot|Bybit|Futures"
+    ]
+
+    assert update[0] == pytest.approx(50.0)
+    assert update[2] == 1_700_000_100_000_000
+
+
 def test_no_live_leg_leaves_the_route_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(live_book_cache, "load_live_books_by_keys", lambda *_args, **_kwargs: {})
 

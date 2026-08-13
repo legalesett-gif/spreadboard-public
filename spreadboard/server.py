@@ -2314,9 +2314,45 @@ def _sync_telegram_client_universe(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
-    """Annotate cached route dictionaries with their current quote validity."""
+    """Reprice and annotate a cached structural payload from current books.
+
+    The grouped payload deliberately lives much longer than a quote.  Merely
+    recomputing the age made every route go blank after 90 seconds even though
+    the bulk/websocket book store had already refreshed both exact legs.  That
+    split-brain state looked correct in the browser only after its SSE patch,
+    while JSON and Telegram still saw no ranked spread.  Overlay the shared
+    books here so every consumer gets the same current matched-size truth.
+    """
 
     seen: set[int] = set()
+    route_copies: list[dict[str, Any]] = []
+
+    for name in ("groups", "top_edges", "top_funding"):
+        for group in payload.get(name) or []:
+            if not isinstance(group, dict):
+                continue
+            for route in [
+                group.get("best_route"),
+                group.get("best_funding_route"),
+                *(group.get("routes") or []),
+            ]:
+                if isinstance(route, dict) and route.get("route_key"):
+                    route_copies.append(route)
+    for route in payload.get("rows") or []:
+        if isinstance(route, dict) and route.get("route_key"):
+            route_copies.append(route)
+
+    live_updates = api_spreads.live_route_updates_for(route_copies)
+    for route in route_copies:
+        update = live_updates.get(str(route.get("route_key") or ""))
+        if update is None:
+            continue
+        spread, funding, quote_ts_us = update
+        if spread is not None and quote_ts_us is not None:
+            route["depth_weighted_spread_pct"] = spread
+            route["quote_ts_us"] = quote_ts_us
+        if funding is not None:
+            route["funding_daily_pct"] = funding
 
     def visit_route(route: Any) -> None:
         if not isinstance(route, dict) or id(route) in seen:
@@ -2379,6 +2415,31 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                 group["best_edge_pct"] = spread_value(best)
             else:
                 group["best_edge_pct"] = None
+            funding_candidates = [
+                route
+                for route in [
+                    *(group.get("routes") or []),
+                    group.get("best_funding_route"),
+                ]
+                if isinstance(route, dict)
+                and _float_or_none(route.get("funding_daily_pct")) is not None
+                and not route.get("mirage_guarded")
+                and not route.get("identity_mismatch")
+                and route.get("deliverable") is not False
+            ]
+            if funding_candidates:
+                best_funding = max(
+                    funding_candidates,
+                    key=lambda route: _float_or_none(route.get("funding_daily_pct"))
+                    or float("-inf"),
+                )
+                daily_funding = _float_or_none(best_funding.get("funding_daily_pct"))
+                group["best_funding_route"] = best_funding
+                group["best_funding_24h_pct"] = daily_funding
+                group["best_funding_apr_pct"] = (
+                    daily_funding * 365.0 if daily_funding is not None else None
+                )
+                group["best_funding_24h_basis"] = "projected_current_rate"
         # Freshness, identity and matched-depth guards can invalidate the route
         # that originally bought a token its place. Re-sort every cached lane
         # after choosing its new valid best; otherwise guarded 100% ticker
@@ -2390,13 +2451,59 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
             key=lambda group: api_spreads._group_sort_value(group, lane_sort),
             reverse=lane_direction != "asc",
         )
+    # The structural top-eight shortlist can itself be older than the live
+    # books.  Repair it from the current visible universe so a cooled former
+    # leader cannot leave the headline panel empty while current rows sit in
+    # the main lane.  A 500-row Telegram/API view therefore gets the same
+    # leaders clients see; smaller pages still contribute their current rows
+    # without inventing routes outside that requested result set.
+    edge_groups: dict[str, dict[str, Any]] = {}
+    for group in [*(payload.get("groups") or []), *(payload.get("top_edges") or [])]:
+        if not isinstance(group, dict) or _float_or_none(group.get("best_edge_pct")) is None:
+            continue
+        token = str(group.get("token") or "")
+        current = edge_groups.get(token)
+        if current is None or api_spreads._group_sort_value(
+            group, "edge"
+        ) > api_spreads._group_sort_value(current, "edge"):
+            edge_groups[token] = group
+    refreshed_top_edges = sorted(
+        edge_groups.values(),
+        key=lambda group: api_spreads._group_sort_value(group, "edge"),
+        reverse=True,
+    )[:8]
+    payload["top_edges"] = [
+        {key: value for key, value in group.items() if key != "routes"}
+        for group in refreshed_top_edges
+    ]
+    funding_groups: dict[str, dict[str, Any]] = {}
+    for group in [*(payload.get("groups") or []), *(payload.get("top_funding") or [])]:
+        if not isinstance(group, dict) or _float_or_none(
+            group.get("best_funding_24h_pct")
+        ) is None:
+            continue
+        token = str(group.get("token") or "")
+        current = funding_groups.get(token)
+        if current is None or api_spreads._group_sort_value(
+            group, "funding"
+        ) > api_spreads._group_sort_value(current, "funding"):
+            funding_groups[token] = group
+    refreshed_top_funding = sorted(
+        funding_groups.values(),
+        key=lambda group: api_spreads._group_sort_value(group, "funding"),
+        reverse=True,
+    )[:8]
+    payload["top_funding"] = [
+        {key: value for key, value in group.items() if key != "routes"}
+        for group in refreshed_top_funding
+    ]
     for route in payload.get("rows") or []:
         visit_route(route)
     summary = payload.get("summary")
     if isinstance(summary, dict):
         current_edges = [
             _float_or_none(group.get("best_edge_pct"))
-            for group in payload.get("top_edges") or []
+            for group in [*(payload.get("top_edges") or []), *(payload.get("groups") or [])]
         ]
         summary["max_depth_weighted_spread_pct"] = max(
             (value for value in current_edges if value is not None),

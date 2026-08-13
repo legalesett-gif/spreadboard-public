@@ -725,13 +725,17 @@ def _stream_funding_daily(
     return daily["short"] - daily["long"]
 
 
-def live_prices_for(
+def live_route_updates_for(
     routes: list[dict[str, Any]], *, include_funding: bool = True
-) -> dict[str, tuple[float | None, float | None]]:
-    """Spread and carry straight from the streaming books, for a set of rendered routes.
+) -> dict[str, tuple[float | None, float | None, int | None]]:
+    """Spread, carry and quote time straight from the current book store.
 
     The push path must not go through the grouped board's cache: a cached price
-    is exactly what the stream exists to correct.
+    is exactly what the stream exists to correct.  Returning the quote time as
+    well is important for cached API payloads: a newly matched pair of ladders
+    can make an old structural route current again, but it must use the older
+    of the two real book timestamps rather than pretending the HTTP request was
+    the quote time.
     """
     if not routes:
         return {}
@@ -756,7 +760,7 @@ def live_prices_for(
         wanted_keys,
         max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS,
     )
-    out: dict[str, tuple[float | None, float | None]] = {}
+    out: dict[str, tuple[float | None, float | None, int | None]] = {}
     funding_legs = bulk_quotes.load_funding() if include_funding else {}
     for route in routes:
         long_book = books.get(
@@ -783,7 +787,7 @@ def live_prices_for(
         funding_daily = _stream_funding_daily(route, funding_legs) if include_funding else None
         if not price_is_live:
             if funding_daily is not None:
-                out[str(route["route_key"])] = (None, funding_daily)
+                out[str(route["route_key"])] = (None, funding_daily, None)
             continue
         prior_depth_verified = (
             not bool(route.get("depth_unverified"))
@@ -809,7 +813,7 @@ def live_prices_for(
             bid_vwap = bid if prior_depth_verified else None
         if not ask or not bid or ask <= 0:
             continue
-        live_depth_spread = (
+        measured_depth_spread = (
             (bid_vwap / ask_vwap - 1.0) * 100.0
             if bid_vwap is not None and ask_vwap is not None and ask_vwap > 0
             else None
@@ -819,8 +823,26 @@ def live_prices_for(
         # timestamped depth result until a fresh ladder replaces it. Returning
         # None here was what made DEX cards and valid bulk routes disappear as
         # soon as the browser stream attached.
+        live_depth_spread = measured_depth_spread
         if live_depth_spread is None and prior_depth_verified:
             live_depth_spread = _float_or_none(route.get("depth_weighted_spread_pct"))
+        if measured_depth_spread is None:
+            # A top-only tick may retain a still-current prior $50 quote, but
+            # it cannot renew that proof.  Preserve the quote's own timestamp.
+            quote_ts_us = int(_float_or_none(route.get("quote_ts_us")) or 0) or None
+        else:
+            stamps = [
+                int(book.quote_ts_us)
+                for book in (long_book, short_book)
+                if book is not None and getattr(book, "quote_ts_us", None)
+            ]
+            # The DEX leg does not stream.  Its last exact quote remains the
+            # freshness boundary even while the CEX leg moves continuously.
+            if _route_has_dex_leg(route):
+                stored_ts = int(_float_or_none(route.get("quote_ts_us")) or 0)
+                if stored_ts:
+                    stamps.append(stored_ts)
+            quote_ts_us = min(stamps) if stamps else None
         out[str(route["route_key"])] = (
             live_depth_spread,
             (
@@ -830,8 +852,22 @@ def live_prices_for(
             )
             if include_funding
             else None,
+            quote_ts_us,
         )
     return out
+
+
+def live_prices_for(
+    routes: list[dict[str, Any]], *, include_funding: bool = True
+) -> dict[str, tuple[float | None, float | None]]:
+    """Compatibility view of :func:`live_route_updates_for` for UI streams."""
+
+    return {
+        route_key: (spread, funding)
+        for route_key, (spread, funding, _quote_ts_us) in live_route_updates_for(
+            routes, include_funding=include_funding
+        ).items()
+    }
 
 
 def apply_live_books(
