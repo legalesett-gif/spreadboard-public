@@ -1807,6 +1807,22 @@ def _expand_selected_dex_tokens(
         ),
         reverse=True,
     )
+    # Keep the fallback budget symmetric. A score-only ordering could spend all
+    # twenty production spare rows on DEX-SPOT before DEX-FUTURES received one,
+    # even though both lanes make the same top-25 availability promise.
+    ranked_by_lane: dict[str, list[tuple[tuple[str, str, str], str]]] = {
+        lane: [group for group in group_order if group[1] == lane]
+        for lane in ("DEX-FUTURES", "DEX-SPOT")
+    }
+    interleaved: list[tuple[tuple[str, str, str], str]] = []
+    for index in range(max((len(values) for values in ranked_by_lane.values()), default=0)):
+        for lane in ("DEX-FUTURES", "DEX-SPOT"):
+            values = ranked_by_lane[lane]
+            if index < len(values):
+                interleaved.append(values[index])
+    group_order = interleaved + [
+        group for group in group_order if group[1] not in ranked_by_lane
+    ]
     while len(selected) < limit:
         progressed = False
         for group in group_order:

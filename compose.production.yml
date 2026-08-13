@@ -35,10 +35,10 @@ services:
       # current-spread boundary. Full two-sided probes remain available to
       # explicit chart/detail sampling.
       SPREADBOARD_FAST_DEX_ROUTES: "90"
-      # Thirty exact contracts leave one third of the 90-row DEX budget for
-      # alternative CEX pairings. This stays above the honest top-25 product
-      # boundary while reducing provider latency and single-route fragility.
-      SPREADBOARD_FAST_DEX_CONTRACTS: "30"
+      # Thirty-five exact contracts provide a ten-token buffer above the honest
+      # top-25 boundary when an on-chain quote itself fails. The remaining 20
+      # rows are divided evenly between futures and spot CEX-pair fallbacks.
+      SPREADBOARD_FAST_DEX_CONTRACTS: "35"
       # The complete CEX catalogue is already refreshed independently. Reuse
       # only a depth-complete CEX book from the last 30 seconds while pairing
       # it with a new DEX quote. Its real timestamp is preserved and the mixed

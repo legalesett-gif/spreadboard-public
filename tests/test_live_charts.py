@@ -487,6 +487,10 @@ def test_dex_pair_fallbacks_are_shared_fairly_across_contract_lanes() -> None:
     }
 
     assert len(fallback_groups) == 4
+    assert {lane for _identity, lane in fallback_groups} == {
+        "DEX-FUTURES",
+        "DEX-SPOT",
+    }
 
 
 def test_fast_delta_retains_only_current_verified_rows() -> None:
