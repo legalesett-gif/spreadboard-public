@@ -529,48 +529,44 @@ class FastQuoteRefresher:
                 )
             else:
                 cex_batches.append((venue_key, jobs))
-        # DEX requests share a provider rate gate. The independent bulk worker
-        # refreshes the complete CEX book catalogue at the same time. Run the
-        # DEX phase first, then consume those newly written CEX books: starting
-        # direct CEX fallbacks concurrently raced the bulk sweep and spent
-        # another minute loading the same venue metadata. That left otherwise
-        # valid DEX rows older than the 90-second public truth boundary by the
-        # time the atomic delta landed.
+        # DEX requests share a provider rate gate. Putting every DEX chunk at
+        # the front of one pool occupied every worker waiting on that gate and
+        # delayed CEX books until late in the cycle. Dedicated pools let exact
+        # CEX ladders progress while the DEX rotation advances at its allowed
+        # rate, keeping both families inside the same freshness window.
         dex_workers = min(2, max(1, len(dex_batches)))
         cex_workers = min(
             max(1, venue_workers - dex_workers),
             max(1, len(cex_batches)),
         )
-        if dex_batches:
-            with ThreadPoolExecutor(max_workers=dex_workers) as dex_pool:
-                futures = [
-                    dex_pool.submit(
-                        self._quote_venue_jobs,
-                        venue_key,
-                        jobs,
-                        target_notional_usd=target_notional_usd,
-                        deadline=deadline,
-                        include_funding=include_leg_funding,
-                    )
-                    for venue_key, jobs in dex_batches
-                ]
-                for future in futures:
-                    leg_cache.update(future.result())
-        if cex_batches:
-            with ThreadPoolExecutor(max_workers=cex_workers) as cex_pool:
-                futures = [
-                    cex_pool.submit(
-                        self._quote_venue_jobs,
-                        venue_key,
-                        jobs,
-                        target_notional_usd=target_notional_usd,
-                        deadline=deadline,
-                        include_funding=include_leg_funding,
-                    )
-                    for venue_key, jobs in cex_batches
-                ]
-                for future in futures:
-                    leg_cache.update(future.result())
+        with (
+            ThreadPoolExecutor(max_workers=dex_workers) as dex_pool,
+            ThreadPoolExecutor(max_workers=cex_workers) as cex_pool,
+        ):
+            futures = [
+                dex_pool.submit(
+                    self._quote_venue_jobs,
+                    venue_key,
+                    jobs,
+                    target_notional_usd=target_notional_usd,
+                    deadline=deadline,
+                    include_funding=include_leg_funding,
+                )
+                for venue_key, jobs in dex_batches
+            ]
+            futures.extend(
+                cex_pool.submit(
+                    self._quote_venue_jobs,
+                    venue_key,
+                    jobs,
+                    target_notional_usd=target_notional_usd,
+                    deadline=deadline,
+                    include_funding=include_leg_funding,
+                )
+                for venue_key, jobs in cex_batches
+            )
+            for future in futures:
+                leg_cache.update(future.result())
         updated = failed = 0
         for row in selected:
             blockers = [
