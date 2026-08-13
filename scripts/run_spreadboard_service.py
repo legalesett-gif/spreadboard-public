@@ -1083,6 +1083,7 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
         interval = (
             VENUE_HISTORY_INTERVAL_SECONDS
             if before["catch_up_complete"]
+            and int(before.get("retryable_error_leg_count") or 0) == 0
             else VENUE_HISTORY_CATCH_UP_SECONDS
         )
         now = time.monotonic()
@@ -1142,7 +1143,12 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
             f"classified={after['classified_leg_count']} "
             f"pending={after['pending_leg_count']} verified={after['coverage_pct']}% "
             f"retryable={after['retryable_error_leg_count']} "
-            f"mode={'maintenance' if after['catch_up_complete'] else 'catch_up'} "
+            f"mode={
+                'maintenance'
+                if after['catch_up_complete']
+                and int(after.get('retryable_error_leg_count') or 0) == 0
+                else 'catch_up'
+            } "
             f"in {time.monotonic() - started:.1f}s"
         )
     except Exception as exc:  # noqa: BLE001 - best effort beside everything else.

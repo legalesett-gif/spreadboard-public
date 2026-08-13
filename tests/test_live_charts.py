@@ -835,6 +835,69 @@ def test_exact_route_prefers_fresh_websocket_book(
     assert result["quote_source"] == "public_websocket"
 
 
+def test_broad_refresh_reuses_only_a_bounded_current_cex_book(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refresher = FastQuoteRefresher()
+    seen: dict[str, float] = {}
+    websocket_book = live_book_cache.CachedBook(
+        bids=[[2.0, 30.0]],
+        asks=[[2.1, 30.0]],
+        quote_ts_us=123_000_000,
+    )
+
+    def load_book(*_args, **kwargs):
+        seen["max_age_seconds"] = kwargs["max_age_seconds"]
+        return websocket_book
+
+    monkeypatch.setenv("SPREADBOARD_FAST_CEX_BOOK_AGE_SECONDS", "20")
+    monkeypatch.setattr(
+        "spreadboard.fast_quotes.live_book_cache.load_live_book", load_book
+    )
+    row = _route()
+    key = fast_quotes._route_leg_key(row, "long")
+    assert key is not None
+
+    result = refresher._quote_venue_jobs(
+        (key[0], key[1]),
+        [(key, row, "long")],
+        target_notional_usd=50,
+        include_funding=False,
+    )
+
+    assert result[key] is not None
+    assert result[key]["quote_ts_us"] == websocket_book.quote_ts_us
+    assert seen["max_age_seconds"] == 20
+
+
+def test_broad_cex_book_reuse_is_capped_at_thirty_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refresher = FastQuoteRefresher()
+    seen: list[float] = []
+    websocket_book = live_book_cache.CachedBook(
+        bids=[[2.0, 30.0]], asks=[[2.1, 30.0]], quote_ts_us=123_000_000
+    )
+    monkeypatch.setenv("SPREADBOARD_FAST_CEX_BOOK_AGE_SECONDS", "300")
+    monkeypatch.setattr(
+        "spreadboard.fast_quotes.live_book_cache.load_live_book",
+        lambda *_args, **kwargs: seen.append(kwargs["max_age_seconds"])
+        or websocket_book,
+    )
+    row = _route()
+    key = fast_quotes._route_leg_key(row, "long")
+    assert key is not None
+
+    refresher._quote_venue_jobs(
+        (key[0], key[1]),
+        [(key, row, "long")],
+        target_notional_usd=50,
+        include_funding=False,
+    )
+
+    assert seen == [30.0]
+
+
 def test_native_binance_funding_uses_official_interval_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

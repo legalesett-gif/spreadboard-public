@@ -36,6 +36,11 @@ services:
       # explicit chart/detail sampling.
       SPREADBOARD_FAST_DEX_ROUTES: "50"
       SPREADBOARD_FAST_DEX_CONTRACTS: "25"
+      # The complete CEX catalogue is already refreshed independently. Reuse
+      # only a depth-complete CEX book from the last 20 seconds while pairing
+      # it with a new DEX quote. Its real timestamp is preserved and the mixed
+      # route still expires at the strict 90-second leader boundary.
+      SPREADBOARD_FAST_CEX_BOOK_AGE_SECONDS: "20"
       SPREADBOARD_FAST_QUOTE_WORKERS: "6"
       SPREADBOARD_DEX_QUOTE_CHUNK_SIZE: "8"
       SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS: "300"

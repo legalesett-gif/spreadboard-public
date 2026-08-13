@@ -185,6 +185,19 @@ def test_health_reports_crypto_provider(client):
     assert sorted(crypto["tokens"]) == ["USDC", "USDT"]
 
 
+def test_public_health_does_not_disclose_single_user_account_counts(client):
+    client.request("GET", "/api/health")
+    response = client.getresponse()
+    assert response.status == 200
+    payload = json.loads(response.read())
+
+    assert set(payload["private_accounting"]) == {"configured", "running", "read_only"}
+    assert set(payload["subscription_lifecycle"]) == {"running", "poll_seconds"}
+    assert "linked_accounts" not in payload["telegram_bot"]
+    assert "membership_errors" not in payload["telegram_bot"]
+    assert "community_title" not in payload["telegram_bot"]
+
+
 def test_public_status_exposes_setup_gaps_without_claiming_all_operational(client):
     client.request("GET", "/api/status")
     response = client.getresponse()

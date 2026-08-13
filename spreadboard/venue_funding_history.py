@@ -36,6 +36,7 @@ CLASSIFIED_STATUSES = frozenset(
         "no_history_rows",
         "unsupported_history_api",
         "symbol_not_indexed",
+        "market_paused",
         "unsupported_venue",
     }
 )
@@ -184,12 +185,23 @@ def leg_history_outcome(
         if symbol not in getattr(client, "symbols", []) or []:
             return {"status": "symbol_not_indexed", "entries": []}
         since = int((time.time() - days * 86_400) * 1000)
-        entries = client.fetch_funding_rate_history(symbol, since=since, limit=1000) or []
+        # WhiteBIT's documented hard maximum is 100; passing 1,000 made every
+        # one of its 305 futures legs fail with BadRequest and permanently left
+        # all realised windows cold. Three funding settlements per day means
+        # 100 rows still covers the full 30-day research window.
+        entries = client.fetch_funding_rate_history(symbol, since=since, limit=100) or []
         return {
             "status": "ok" if entries else "no_history_rows",
             "entries": entries,
         }
     except Exception as exc:  # noqa: BLE001 - one unreachable venue must not stop the sweep.
+        # BingX keeps paused synthetic contracts in its public market catalogue
+        # with active=true, but its history endpoint answers code 109415. That
+        # is a definitive source classification, not a transient outage and not
+        # a zero return. Keep the windows blank and stop retrying it forever.
+        message = str(exc).casefold()
+        if venue == "Bingx" and ("109415" in message or "pause currently" in message):
+            return {"status": "market_paused", "entries": []}
         return {
             "status": "api_error",
             "entries": [],
@@ -286,7 +298,21 @@ def build(
     ordered = list(dict.fromkeys(legs))
     start = int(previous.get("next_cursor") or 0) % max(1, len(ordered))
     priorities = list(dict.fromkeys(priority_legs or []))
-    rotated = priorities + [item for item in ordered[start:] + ordered[:start] if item not in priorities]
+    retryable_or_pending = [
+        item
+        for item in ordered
+        if not _status_was_attempted(leg_status.get(f"{item[0]}|{item[1]}"))
+        or str(
+            (leg_status.get(f"{item[0]}|{item[1]}") or {}).get("last_attempt_status")
+            or (leg_status.get(f"{item[0]}|{item[1]}") or {}).get("status")
+            or ""
+        )
+        in RETRYABLE_STATUSES
+    ]
+    leading = list(dict.fromkeys([*priorities, *retryable_or_pending]))
+    rotated = leading + [
+        item for item in ordered[start:] + ordered[:start] if item not in leading
+    ]
     attempted = 0
     background_attempted = 0
     retryable_errors = 0

@@ -601,6 +601,23 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                             ),
                         }
                     )
+            elif parsed.path == "/api/admin/health":
+                user = self._required_user()
+                if not user.is_admin:
+                    self._send_json(
+                        {"ok": False, "error": "admin_required"},
+                        status=HTTPStatus.FORBIDDEN,
+                    )
+                else:
+                    self._send_json(
+                        api_admin_health(
+                            self.server.board_path,
+                            self.server.config,
+                            self.server.alert_watcher,
+                            self.server.position_alert_worker,
+                            self.server.subscription_lifecycle_worker,
+                        )
+                    )
             elif parsed.path == "/api/partner/summary":
                 user = self._required_user()
                 summary = affiliates.partner_summary(user.id, db_path=self.server.accounts_path)
@@ -4433,9 +4450,16 @@ def api_health(
     position_alert_worker: Any = None,
     subscription_lifecycle_worker: Any = None,
 ) -> dict[str, Any]:
+    """Public operational health without private single-user telemetry."""
+
     del watcher
     source_health = api_source_health(board_path, config)
     canonical = source_health.get("canonical_api") or {}
+    accounting = accounting_worker_status()
+    lifecycle_running = bool(
+        subscription_lifecycle_worker and subscription_lifecycle_worker.running
+    )
+    telegram = telegram_bot.status()
     return {
         "ok": bool(source_health.get("ok")),
         "service": "spreadboard",
@@ -4451,17 +4475,55 @@ def api_health(
         },
         "billing": billing.status(),
         "crypto_billing": crypto_billing.status(),
-        "telegram_bot": telegram_bot.status(),
-        "subscription_lifecycle": {
-            "running": bool(
-                subscription_lifecycle_worker and subscription_lifecycle_worker.running
+        "telegram_bot": {
+            "configured": bool(telegram.get("configured")),
+            "webhook_ready": bool(telegram.get("webhook_ready")),
+            "community_configured": bool(telegram.get("community_configured")),
+            "query_snapshot_ready": bool(telegram.get("query_snapshot_ready")),
+            "public_feed_configured": bool(telegram.get("public_feed_configured")),
+            "public_feed_outbound_ready": bool(
+                telegram.get("public_feed_outbound_ready")
             ),
-            "poll_seconds": getattr(subscription_lifecycle_worker, "poll_seconds", None),
-            "last_result": getattr(subscription_lifecycle_worker, "last_result", None),
-            **subscription_lifecycle.status(),
         },
-        "private_accounting": accounting_worker_status(),
+        "subscription_lifecycle": {
+            "running": lifecycle_running,
+            "poll_seconds": getattr(subscription_lifecycle_worker, "poll_seconds", None),
+        },
+        "private_accounting": {
+            "configured": bool(accounting.get("configured")),
+            "running": bool(accounting.get("running")),
+            "read_only": bool(accounting.get("read_only")),
+        },
     }
+
+
+def api_admin_health(
+    board_path: Path,
+    config: dict[str, Any],
+    watcher: alerts.AlertWatcher | None,
+    position_alert_worker: Any = None,
+    subscription_lifecycle_worker: Any = None,
+) -> dict[str, Any]:
+    """Authenticated operator health, including private service counters."""
+
+    payload = api_health(
+        board_path,
+        config,
+        watcher,
+        position_alert_worker,
+        subscription_lifecycle_worker,
+    )
+    payload["telegram_bot"] = telegram_bot.status()
+    payload["subscription_lifecycle"] = {
+        "running": bool(
+            subscription_lifecycle_worker and subscription_lifecycle_worker.running
+        ),
+        "poll_seconds": getattr(subscription_lifecycle_worker, "poll_seconds", None),
+        "last_result": getattr(subscription_lifecycle_worker, "last_result", None),
+        **subscription_lifecycle.status(),
+    }
+    payload["private_accounting"] = accounting_worker_status()
+    return payload
 
 
 def accounting_worker_status() -> dict[str, Any]:

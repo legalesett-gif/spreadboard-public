@@ -265,6 +265,38 @@ def test_leg_history_outcome_distinguishes_source_failures() -> None:
     assert broken["error_type"] == "TimeoutError"
 
 
+def test_a_paused_bingx_market_is_classified_without_inventing_history() -> None:
+    class Paused:
+        has = {"fetchFundingRateHistory": True}
+        symbols = ["ONE"]
+
+        def fetch_funding_rate_history(self, *_args, **_kwargs):
+            raise RuntimeError('bingx {"code":109415,"msg":"ONE is pause currently"}')
+
+    outcome = vfh.leg_history_outcome(
+        "Bingx", "ONE", client_factory=lambda _exchange: Paused()
+    )
+
+    assert outcome == {"status": "market_paused", "entries": []}
+
+
+def test_history_request_respects_the_strictest_public_limit() -> None:
+    class Limited:
+        has = {"fetchFundingRateHistory": True}
+        symbols = ["ONE"]
+
+        def fetch_funding_rate_history(self, _symbol, *, since, limit):
+            assert since > 0
+            assert limit == 100
+            return [{"timestamp": since, "fundingRate": 0.0001}]
+
+    outcome = vfh.leg_history_outcome(
+        "WhiteBIT", "ONE", client_factory=lambda _exchange: Limited()
+    )
+
+    assert outcome["status"] == "ok"
+
+
 def test_failed_cached_client_is_retried_after_backoff(monkeypatch) -> None:
     exchange_id = "retry-test"
     vfh._CLIENTS.pop(exchange_id, None)
@@ -338,3 +370,31 @@ def test_retryable_refresh_does_not_verify_legacy_cached_windows(
     assert payload["catalog_attempted_leg_count"] == 1
     assert payload["catalog_classified_leg_count"] == 0
     assert payload["catalog_pending_leg_count"] == 0
+
+
+def test_retryable_and_unattempted_legs_run_before_healthy_maintenance(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "funding.json"
+    path.write_text(
+        '{"schema":"spreadboard.venue_funding_history.v4",'
+        '"leg_status":{"A|HEALTHY":{"status":"ok"},'
+        '"B|RETRY":{"status":"api_error","last_attempt_status":"api_error"}}}'
+    )
+    attempted: list[tuple[str, str]] = []
+
+    def outcome(venue, symbol):
+        attempted.append((venue, symbol))
+        return {"status": "no_history_rows", "entries": []}
+
+    monkeypatch.setattr(vfh, "leg_history_outcome", outcome)
+    ticks = iter((0.0, 0.0, 2.0))
+    monkeypatch.setattr(vfh.time, "monotonic", lambda: next(ticks))
+
+    vfh.build(
+        [("A", "HEALTHY"), ("B", "RETRY"), ("C", "PENDING")],
+        cache_path=path,
+        budget_seconds=1,
+    )
+
+    assert attempted == [("B", "RETRY")]
