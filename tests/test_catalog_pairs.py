@@ -166,6 +166,43 @@ def test_damaged_book_cache_returns_an_empty_pair_payload(monkeypatch) -> None:
     assert payload["missing_book_count"] == 3
 
 
+def test_identity_warned_catalogue_pair_remains_visible_but_cannot_lead(monkeypatch, tmp_path) -> None:
+    catalog = {
+        "markets": [
+            {"token": "T", "venue": "Gate", "market_type": "Futures", "symbol": "T/USDT:USDT", "quote": "USDT"},
+            {"token": "T", "venue": "Mexc", "market_type": "Futures", "symbol": "T/USDT:USDT", "quote": "USDT"},
+            {"token": "T", "venue": "Bybit", "market_type": "Futures", "symbol": "T/USDT:USDT", "quote": "USDT"},
+        ]
+    }
+    books = {
+        live_book_cache.cache_key("Gate", "Futures", "T/USDT:USDT"): _book(1.0, 1.0),
+        # 60% away: still within the broad 3x collision boundary, but identity warned.
+        live_book_cache.cache_key("Mexc", "Futures", "T/USDT:USDT"): _book(1.6, 1.61),
+        live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT"): _book(1.01, 1.02),
+    }
+    monkeypatch.setattr(catalog_pairs.chart_catalog, "load", lambda: catalog)
+    cache_path = tmp_path / "books.sqlite3"
+    cache_path.touch()
+    monkeypatch.setattr(catalog_pairs.live_book_cache, "DEFAULT_PATH", cache_path)
+
+    class Store:
+        def load_all(self, **_kwargs):
+            return books
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(catalog_pairs.live_book_cache, "LiveBookStore", Store)
+    monkeypatch.setattr(catalog_pairs.bulk_quotes, "load_funding", lambda: {})
+    monkeypatch.setattr(catalog_pairs.public_rails, "load_public_rails", lambda: {})
+
+    summary = catalog_pairs.all_token_summaries()["T"]
+
+    assert summary["quoteable_pair_count"] == 6
+    assert summary["best_spread_route"]["short_venue"] == "Bybit"
+    assert summary["best_spread_route"]["mirage_guarded"] is False
+
+
 def test_current_dex_rows_merge_with_complete_cex_pairs() -> None:
     cex = {
         "ok": True,

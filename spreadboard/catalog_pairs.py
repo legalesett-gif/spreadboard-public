@@ -382,9 +382,16 @@ def all_token_summaries(
                         best_any = row
                     # The leaderboard says "$50 VWAP". A ticker-only top book
                     # remains useful on the token page but cannot win that rank.
-                    if row.get("depth_weighted_spread_pct") is not None and (
+                    # The same applies to an identity warning: keep it in the
+                    # complete pair browser with its question mark, but do not
+                    # let an unproved symbol match become the token's headline.
+                    if (
+                        row.get("depth_weighted_spread_pct") is not None
+                        and not row.get("mirage_guarded")
+                        and (
                         best_spread is None
                         or _spread_rank(row) > _spread_rank(best_spread)
+                        )
                     ):
                         best_spread = row
                     funding_value = _number(row.get("funding_projected_24h_pct"))
@@ -393,7 +400,7 @@ def all_token_summaries(
                         if best_funding is not None
                         else None
                     )
-                    if funding_value is not None and (
+                    if funding_value is not None and not row.get("mirage_guarded") and (
                         current_funding is None or funding_value > current_funding
                     ):
                         best_funding = row
