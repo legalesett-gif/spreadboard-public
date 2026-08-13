@@ -34,6 +34,7 @@ const publicPages = [
 const memberPages = [
   ["markets", `${productionBase}/markets`],
   ["funding", `${productionBase}/funding`],
+  ["rankings", `${productionBase}/rankings`],
   ["charts", `${productionBase}/charts`],
   ["fair", `${productionBase}/fair`],
   ["intel", `${productionBase}/intel`],
@@ -46,6 +47,22 @@ const memberPages = [
 ];
 
 async function signIn(page) {
+  const session = process.env.SPREADBOARD_AUDIT_SESSION || "";
+  if (session) {
+    await page.context().addCookies([{
+      name: "spreadboard_session",
+      value: session,
+      url: productionBase,
+      httpOnly: true,
+      secure: true,
+      sameSite: "Lax",
+    }]);
+    const response = await page.goto(`${productionBase}/api/session`, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
+    return response?.ok() || false;
+  }
   const email = process.env.SPREADBOARD_AUDIT_EMAIL || "";
   const password = process.env.SPREADBOARD_AUDIT_PASSWORD || "";
   if (!email || !password) return false;

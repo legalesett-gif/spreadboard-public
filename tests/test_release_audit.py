@@ -3141,6 +3141,8 @@ def test_a_streaming_route_is_priced_from_the_feed_not_the_file() -> None:
     assert live.age_min < 1, "a streamed route must not read as minutes old"
     assert live.executable_spread_pct == pytest.approx(10.0), "priced from the feed"
     assert live.freshness == "fresh"
+    assert live.depth_usd == api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD
+    assert "depth_unverified" not in live.blockers
 
 
 def test_a_route_with_only_one_leg_streaming_is_left_alone() -> None:

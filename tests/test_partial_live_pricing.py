@@ -37,6 +37,13 @@ class _Book:
         self.quote_ts_us = 1_700_000_100_000_000
 
 
+class _TopOnlyBook(_Book):
+    def __init__(self, bid: float, ask: float) -> None:
+        super().__init__(bid, ask)
+        self.bids = [[bid, 0.0]]
+        self.asks = [[ask, 0.0]]
+
+
 def _book(bid: float, ask: float) -> _Book:
     return _Book(bid, ask)
 
@@ -121,6 +128,76 @@ def test_the_board_does_not_filter_on_one_live_cex_leg(monkeypatch: pytest.Monke
 
     assert updated[0].displayed_open_spread_pct == pytest.approx(10.0)
     assert updated[0].live_book is False
+
+
+def test_two_streamed_ladders_upgrade_ticker_depth_to_verified_vwap() -> None:
+    from dataclasses import fields
+
+    from spreadboard.api_spreads import SpreadTerminalRow, apply_live_books
+
+    row = SpreadTerminalRow.__new__(SpreadTerminalRow)
+    defaults = {field.name: None for field in fields(SpreadTerminalRow)}
+    defaults.update(
+        long_venue="Gate",
+        long_market_type="Spot",
+        long_market_symbol="T/USDT",
+        short_venue="Bybit",
+        short_market_type="Futures",
+        short_market_symbol="T/USDT:USDT",
+        long_ask=1.0,
+        short_bid=1.1,
+        long_price=1.0,
+        short_price=1.1,
+        displayed_open_spread_pct=10.0,
+        executable_spread_pct=10.0,
+        depth_weighted_spread_pct=10.0,
+        quote_ts_us=1_700_000_000_000_000,
+        blockers=["depth_unverified", "identity_unverified"],
+        live_book=False,
+    )
+    for key, value in defaults.items():
+        object.__setattr__(row, key, value)
+    books = {
+        live_book_cache.cache_key("Gate", "Spot", "T/USDT"): _book(0.99, 1.00),
+        live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT"): _book(1.05, 1.06),
+    }
+
+    live = apply_live_books([row], books, now=1_700_000_100.0)[0]
+
+    assert live.live_book is True
+    assert live.depth_weighted_spread_pct == pytest.approx(5.0)
+    assert live.depth_usd == api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD
+    assert live.blockers == ["identity_unverified"]
+
+
+def test_top_only_bulk_quotes_do_not_claim_matched_depth() -> None:
+    from dataclasses import fields
+
+    from spreadboard.api_spreads import SpreadTerminalRow, apply_live_books
+
+    row = SpreadTerminalRow.__new__(SpreadTerminalRow)
+    defaults = {field.name: None for field in fields(SpreadTerminalRow)}
+    defaults.update(
+        long_venue="Gate", long_market_type="Spot", long_market_symbol="T/USDT",
+        short_venue="Bybit", short_market_type="Futures", short_market_symbol="T/USDT:USDT",
+        long_ask=1.0, short_bid=1.1, long_price=1.0, short_price=1.1,
+        displayed_open_spread_pct=10.0, executable_spread_pct=10.0,
+        depth_weighted_spread_pct=10.0, depth_usd=50.0,
+        quote_ts_us=1_700_000_000_000_000, blockers=[], live_book=False,
+    )
+    for key, value in defaults.items():
+        object.__setattr__(row, key, value)
+    books = {
+        live_book_cache.cache_key("Gate", "Spot", "T/USDT"): _TopOnlyBook(0.99, 1.00),
+        live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT"): _TopOnlyBook(1.05, 1.06),
+    }
+
+    live = apply_live_books([row], books, now=1_700_000_100.0)[0]
+
+    assert live.executable_spread_pct == pytest.approx(5.0)
+    assert live.depth_weighted_spread_pct is None
+    assert live.depth_usd is None
+    assert "depth_unverified" in live.blockers
 
 
 def test_live_funding_recomputes_each_leg_on_its_own_cadence(

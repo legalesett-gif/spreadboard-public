@@ -44,6 +44,10 @@ def test_a_normal_row_is_presentable() -> None:
     assert row_is_presentable(_row()) is True
 
 
+def test_unmeasured_depth_never_headlines_a_matched_size_ranking() -> None:
+    assert row_is_presentable(_row(blockers=["depth_unverified"])) is False
+
+
 def test_a_leveraged_token_never_headlines() -> None:
     """SHIB3S led Top Arbitrage Edges at +177% while the lane rejected it."""
     assert row_is_presentable(_row(token="SHIB3S")) is False

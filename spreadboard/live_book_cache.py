@@ -44,10 +44,19 @@ class LiveBookStore:
                 symbol TEXT NOT NULL,
                 quote_ts_us INTEGER NOT NULL,
                 bids_json TEXT NOT NULL,
-                asks_json TEXT NOT NULL
+                asks_json TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'public_websocket'
             )
             """
         )
+        columns = {
+            str(row[1]) for row in self._conn.execute("PRAGMA table_info(live_books)")
+        }
+        if "source" not in columns:
+            self._conn.execute(
+                "ALTER TABLE live_books ADD COLUMN source TEXT NOT NULL "
+                "DEFAULT 'public_websocket'"
+            )
         self._conn.commit()
 
     def put(
@@ -59,6 +68,7 @@ class LiveBookStore:
         bids: list[list[float]],
         asks: list[list[float]],
         quote_ts_us: int,
+        source: str = "public_websocket",
     ) -> None:
         if not bids or not asks:
             return
@@ -66,18 +76,24 @@ class LiveBookStore:
             self._conn.execute(
                 """
                 INSERT INTO live_books (
-                    cache_key, venue, market_type, symbol, quote_ts_us, bids_json, asks_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    cache_key, venue, market_type, symbol, quote_ts_us, bids_json, asks_json, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(cache_key) DO UPDATE SET
                     quote_ts_us = excluded.quote_ts_us,
                     bids_json = excluded.bids_json,
-                    asks_json = excluded.asks_json
+                    asks_json = excluded.asks_json,
+                    source = excluded.source
                 -- A slower source must not overwrite a faster one. The bulk
                 -- ticker sweep covers the whole board every ninety seconds and
                 -- the websockets cover the busiest legs sub-second; without
                 -- this the sweep kept flattening the streamed books and the
                 -- push had almost nothing left to send.
                 WHERE excluded.quote_ts_us >= live_books.quote_ts_us
+                  AND NOT (
+                    excluded.source = 'bulk_ticker'
+                    AND live_books.source = 'public_websocket'
+                    AND live_books.quote_ts_us >= excluded.quote_ts_us - 30000000
+                  )
                 """,
                 (
                     cache_key(venue, market_type, symbol),
@@ -87,6 +103,7 @@ class LiveBookStore:
                     int(quote_ts_us),
                     json.dumps(bids[:50], separators=(",", ":")),
                     json.dumps(asks[:50], separators=(",", ":")),
+                    str(source or "public_websocket"),
                 ),
             )
             self._conn.commit()
@@ -103,7 +120,7 @@ class LiveBookStore:
         with self._lock:
             row = self._conn.execute(
                 """
-                SELECT quote_ts_us, bids_json, asks_json
+                SELECT quote_ts_us, bids_json, asks_json, source
                 FROM live_books
                 WHERE cache_key = ? AND quote_ts_us >= ?
                 """,
@@ -122,6 +139,7 @@ class LiveBookStore:
             bids=sorted(bids, key=lambda item: item[0], reverse=True),
             asks=sorted(asks, key=lambda item: item[0]),
             quote_ts_us=int(row[0]),
+            source=str(row[3] or "public_websocket"),
         )
 
     def load_all(self, *, max_age_seconds: float = 30.0) -> dict[str, "CachedBook"]:
@@ -135,14 +153,14 @@ class LiveBookStore:
         with self._lock:
             rows = self._conn.execute(
                 """
-                SELECT cache_key, quote_ts_us, bids_json, asks_json
+                SELECT cache_key, quote_ts_us, bids_json, asks_json, source
                 FROM live_books
                 WHERE quote_ts_us >= ?
                 """,
                 (cutoff_us,),
             ).fetchall()
         books: dict[str, CachedBook] = {}
-        for key, quote_ts_us, bids_json, asks_json in rows:
+        for key, quote_ts_us, bids_json, asks_json, source in rows:
             try:
                 bids = _levels(json.loads(bids_json))
                 asks = _levels(json.loads(asks_json))
@@ -154,6 +172,7 @@ class LiveBookStore:
                 bids=sorted(bids, key=lambda item: item[0], reverse=True),
                 asks=sorted(asks, key=lambda item: item[0]),
                 quote_ts_us=int(quote_ts_us),
+                source=str(source or "public_websocket"),
             )
         return books
 
@@ -227,9 +246,9 @@ def _levels(value: Any) -> list[list[float]]:
         # in the table and every lookup returned nothing, which is why the
         # operator's SKHY/SKHX chart had no prices at all.
         #
-        # The price is what a spread needs. `_book_side` takes the top level for
-        # the quote and falls back to it when the depth-weighted price cannot be
-        # computed, so a zero size costs the VWAP refinement and nothing else.
+        # The price is what a current top-of-book spread needs. `_book_side`
+        # keeps that quote but returns no depth-weighted price when size is zero,
+        # so the row remains explicitly `depth_unverified`.
         if price > 0 and amount >= 0:
             output.append([price, amount])
     return output

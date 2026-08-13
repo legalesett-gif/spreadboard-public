@@ -14,7 +14,13 @@ from typing import Any
 
 import pytest
 
-from scripts.websocket_book_worker import _board_leg_key, _desired_legs
+from scripts import websocket_book_worker
+from scripts.websocket_book_worker import (
+    BookWorker,
+    _base_quantity_levels,
+    _board_leg_key,
+    _desired_legs,
+)
 
 
 def _row(token: str, *, spread: float, long_venue: str = "Binance") -> dict[str, Any]:
@@ -31,3 +37,36 @@ def _row(token: str, *, spread: float, long_venue: str = "Binance") -> dict[str,
         "depth_weighted_spread_pct": spread,
         "executable_spread_pct": spread,
     }
+
+
+def test_fast_quote_generation_reconciles_websocket_subscriptions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = tmp_path / "api_discovery_latest.json"
+    fast = tmp_path / "api_discovery_fast_quotes.json"
+    accounts = tmp_path / "accounts.sqlite3"
+    snapshot.write_text("{}")
+    fast.write_text("{}")
+    accounts.write_text("")
+    monkeypatch.setattr(websocket_book_worker, "SNAPSHOT_PATH", snapshot)
+    monkeypatch.setattr(websocket_book_worker, "FAST_QUOTE_PATH", fast)
+    monkeypatch.setattr(websocket_book_worker, "ACCOUNTS_PATH", accounts)
+    calls = []
+    monkeypatch.setattr(
+        websocket_book_worker,
+        "_desired_legs",
+        lambda *_args, **_kwargs: calls.append(fast.stat().st_mtime_ns) or set(),
+    )
+    worker = BookWorker.__new__(BookWorker)
+    worker._desired = set()
+    worker._desired_signature = None
+
+    worker._desired_legs_cached()
+    fast.write_text('{"updated":true}')
+    worker._desired_legs_cached()
+
+    assert len(calls) == 2
+
+
+def test_futures_contract_counts_are_normalised_to_base_quantity() -> None:
+    assert _base_quantity_levels([[0.25, 40.0]], 100.0) == [[0.25, 4000.0]]

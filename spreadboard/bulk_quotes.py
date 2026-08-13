@@ -121,6 +121,17 @@ def sweep_venue(
                 continue
             if _market_type_of(markets.get(symbol) or {}) != market_type:
                 continue
+            market = markets.get(symbol) or {}
+            try:
+                contract_size = (
+                    float(market.get("contractSize") or 1.0)
+                    if market_type == "Futures"
+                    else 1.0
+                )
+            except (TypeError, ValueError):
+                contract_size = 1.0
+            if contract_size <= 0:
+                contract_size = 1.0
             if fair_price_rows is not None and market_type == "Futures":
                 row = fair_price.deviation(venue, str(symbol), ticker)
                 if row is not None:
@@ -131,13 +142,20 @@ def sweep_venue(
                     venue,
                     market_type,
                     str(symbol),
-                    bids=[[float(bid), float(ticker.get("bidVolume") or 0.0)]],
-                    asks=[[float(ask), float(ticker.get("askVolume") or 0.0)]],
+                    bids=[[
+                        float(bid),
+                        float(ticker.get("bidVolume") or 0.0) * contract_size,
+                    ]],
+                    asks=[[
+                        float(ask),
+                        float(ticker.get("askVolume") or 0.0) * contract_size,
+                    ]],
                     quote_ts_us=(
                         int(float(timestamp_ms) * 1000)
                         if timestamp_ms
                         else now_us
                     ),
+                    source="bulk_ticker",
                 )
                 written += 1
             except (TypeError, ValueError):

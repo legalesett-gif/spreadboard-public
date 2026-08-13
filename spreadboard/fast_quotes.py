@@ -460,31 +460,7 @@ class FastQuoteRefresher:
                 plausible_dex = lane.startswith("DEX-") and abs(spread) <= 90.0
                 if plausible_dex or 0.0 <= spread <= 90.0 or row.get("fast_quote_verified_at"):
                     rows_by_lane[lane].append(row)
-        total_weight = sum(FAST_QUOTE_LANE_WEIGHTS.values())
-        base_quota, extra = divmod(max(0, route_limit), total_weight)
-        selected: list[dict[str, Any]] = []
-        for index, lane in enumerate(FAST_QUOTE_LANES):
-            lane_limit = (
-                base_quota * FAST_QUOTE_LANE_WEIGHTS[lane]
-                + (1 if index < extra else 0)
-            )
-            lane_rows = rows_by_lane[lane]
-            if lane.startswith("DEX-"):
-                selected.extend(
-                    _dex_rotating_rows(
-                        lane_rows,
-                        priority_tokens=_dex_priority_tokens(),
-                        route_limit=lane_limit,
-                    )
-                )
-            else:
-                selected.extend(
-                    _expanded_token_rows(
-                        lane_rows,
-                        token_limit=min(90 if lane == "SPOT" else 50, lane_limit),
-                        route_limit=lane_limit,
-                    )
-                )
+        selected = _select_fast_quote_rows(rows_by_lane, route_limit=route_limit)
         for lane_rows in rows_by_lane.values():
             for row in lane_rows:
                 blockers = [
@@ -542,23 +518,40 @@ class FastQuoteRefresher:
                 )
             else:
                 cex_batches.append((venue_key, jobs))
-        # Submit the many independent DEX requests first. If the CEX batches
-        # occupy every worker before these are queued, the DEX chunks remain
-        # effectively serial until late in the cycle and the deadline wins.
-        job_batches = dex_batches + cex_batches
-        with ThreadPoolExecutor(
-            max_workers=max(1, min(venue_workers, len(job_batches)))
-        ) as pool:
+        # DEX requests share a provider rate gate. Putting every DEX chunk at
+        # the front of one pool occupied every worker waiting on that gate and
+        # delayed CEX books until late in the cycle. Dedicated pools let exact
+        # CEX ladders progress while the DEX rotation advances at its allowed
+        # rate, keeping both families inside the same freshness window.
+        dex_workers = min(2, max(1, len(dex_batches)))
+        cex_workers = min(
+            max(1, venue_workers - dex_workers),
+            max(1, len(cex_batches)),
+        )
+        with (
+            ThreadPoolExecutor(max_workers=dex_workers) as dex_pool,
+            ThreadPoolExecutor(max_workers=cex_workers) as cex_pool,
+        ):
             futures = [
-                pool.submit(
+                dex_pool.submit(
                     self._quote_venue_jobs,
                     venue_key,
                     jobs,
                     target_notional_usd=target_notional_usd,
                     deadline=deadline,
                 )
-                for venue_key, jobs in job_batches
+                for venue_key, jobs in dex_batches
             ]
+            futures.extend(
+                cex_pool.submit(
+                    self._quote_venue_jobs,
+                    venue_key,
+                    jobs,
+                    target_notional_usd=target_notional_usd,
+                    deadline=deadline,
+                )
+                for venue_key, jobs in cex_batches
+            )
             for future in futures:
                 leg_cache.update(future.result())
         updated = failed = 0
@@ -585,6 +578,7 @@ class FastQuoteRefresher:
             if long_quote is None or short_quote is None:
                 blockers.append("mirage_guard:fast_requote_unavailable")
                 row["blockers"] = list(dict.fromkeys(blockers))
+                _retire_failed_fast_quote(row)
                 failed += 1
                 continue
             executable = spread_pct(long_quote["ask"], short_quote["bid"])
@@ -592,11 +586,13 @@ class FastQuoteRefresher:
             if executable is None or depth is None:
                 blockers.append("mirage_guard:fast_target_depth_unavailable")
                 row["blockers"] = list(dict.fromkeys(blockers))
+                _retire_failed_fast_quote(row)
                 failed += 1
                 continue
             if _is_dex_route(row) and max(executable, depth) > 90.0:
                 blockers.append("mirage_guard:fast_spread_out_of_bounds")
                 row["blockers"] = list(dict.fromkeys(blockers))
+                _retire_failed_fast_quote(row)
                 failed += 1
                 continue
             notes = row.setdefault("notes", {})
@@ -605,6 +601,13 @@ class FastQuoteRefresher:
             route_inputs["short"] = {**(route_inputs.get("short") or {}), **short_quote}
             row["executable_spread_pct"] = f"{executable:.8f}".rstrip("0").rstrip(".")
             row["depth_weighted_spread_pct"] = f"{depth:.8f}".rstrip("0").rstrip(".")
+            row["displayed_open_spread_pct"] = row["executable_spread_pct"]
+            # Both ladders were just walked to the configured matched notional.
+            # Keeping the discovery ticker's flag made the sorter ignore this
+            # verified VWAP and headline the old top-of-book value instead.
+            blockers = [item for item in blockers if item != "depth_unverified"]
+            row["depth_usd"] = target_notional_usd
+            row["depth_unverified"] = False
             row["quote_ts_us"] = min(long_quote["quote_ts_us"], short_quote["quote_ts_us"])
             row["fast_quote_verified_at"] = _utc_now_iso()
             row["blockers"] = list(dict.fromkeys(blockers))
@@ -867,9 +870,17 @@ class FastQuoteRefresher:
                     if include_funding and market_type == "Futures"
                     else {}
                 )
-                contract_size = _number(
-                    leg.get("contract_size") or row.get(f"{side}_contract_size"),
-                    1.0,
+                # The shared cache stores futures amounts already normalised to
+                # base-asset quantity; native REST books still use contracts.
+                # Applying the contract multiplier to a cached book again made
+                # 100x contracts look one hundred times deeper than reality.
+                contract_size = (
+                    1.0
+                    if live_book is not None
+                    else _number(
+                        leg.get("contract_size") or row.get(f"{side}_contract_size"),
+                        1.0,
+                    )
                 )
             bid_vwap = depth_weighted_price(bids, target_notional_usd, contract_size=contract_size)
             ask_vwap = depth_weighted_price(asks, target_notional_usd, contract_size=contract_size)
@@ -1057,6 +1068,15 @@ def _fresh_fast_quote_row(
         return False
     quoted_us = int(_number(row.get("quote_ts_us"), 0.0))
     return quoted_us > 0 and 0 <= now_us - quoted_us <= max_age_seconds * 1_000_000
+
+
+def _retire_failed_fast_quote(row: dict[str, Any]) -> None:
+    """Make a failed current check non-live until a later cycle recovers it."""
+
+    row["quote_ts_us"] = 0
+    row["fast_quote_verified_at"] = None
+    row["freshness"] = "stale"
+    row["status"] = "refreshing"
 
 
 def _snapshot_row_key(row: dict[str, Any]) -> str:
@@ -1261,8 +1281,8 @@ def _dex_rotating_rows(
 ) -> list[dict[str, Any]]:
     """Keep monitored DEX assets and current leaders warm without starvation.
 
-    Two thirds of the slots go first to reviewed/member-tracked tokens, oldest quote
-    first; the other half goes to current spread or funding leaders.  Because
+    Reviewed/member-tracked tokens go first, oldest quote first; remaining
+    slots go to current spread or funding leaders.  Because
     recent rows are retained in the rolling delta, old rows rise on the next
     pass and the set rotates rather than pinning the same headline tokens.
     """
@@ -1288,7 +1308,10 @@ def _dex_rotating_rows(
             -_dex_opportunity_score(row),
         )
     )
-    priority_slots = min(len(priority_tokens), max(1, (route_limit * 2) // 3))
+    # Every open-position/watchlist token fits before opportunistic leaders.
+    # Dropping one merely because its current score cooled defeats the reason
+    # it was pinned; public symbols only, never account or position data.
+    priority_slots = min(len(priority_tokens), route_limit)
     seeds = _unique_rows_by_token(priority, priority_slots)
     selected_tokens = {str(row.get("token") or "").upper() for row in seeds}
     for row in _unique_rows_by_token(ranked, route_limit):
@@ -1299,6 +1322,96 @@ def _dex_rotating_rows(
             seeds.append(row)
             selected_tokens.add(token)
     return seeds
+
+
+def _select_fast_quote_rows(
+    rows_by_lane: dict[str, list[dict[str, Any]]],
+    *,
+    route_limit: int,
+    priority_tokens: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Allocate current-book work without making the DEX cycle self-stale.
+
+    OKX Web3 needs two rate-limited requests per token. Treating DEX-FUTURES
+    and DEX-SPOT as independent quotas sampled the same contract twice and
+    selected 70+ rows; the earliest quote had expired before the atomic delta
+    was published. One combined token rotation quotes the shared DEX mark once
+    and leaves a few slots for current leaders after every tracked token.
+    """
+
+    total_weight = sum(FAST_QUOTE_LANE_WEIGHTS.values())
+    base_quota, extra = divmod(max(0, route_limit), total_weight)
+    selected: list[dict[str, Any]] = []
+    for index, lane in enumerate(FAST_QUOTE_LANES):
+        if lane.startswith("DEX-"):
+            continue
+        lane_limit = (
+            base_quota * FAST_QUOTE_LANE_WEIGHTS[lane]
+            + (1 if index < extra else 0)
+        )
+        selected.extend(
+            _expanded_token_rows(
+                rows_by_lane.get(lane) or [],
+                token_limit=min(90 if lane == "SPOT" else 50, lane_limit),
+                route_limit=lane_limit,
+            )
+        )
+    dex_route_limit = max(0, route_limit - len(selected))
+    dex_token_limit = min(
+        dex_route_limit,
+        max(8, int(os.environ.get("SPREADBOARD_FAST_DEX_ROUTES", "40"))),
+    )
+    dex_rows = [
+        *rows_by_lane.get("DEX-FUTURES", []),
+        *rows_by_lane.get("DEX-SPOT", []),
+    ]
+    dex_seeds = _dex_rotating_rows(
+        dex_rows,
+        priority_tokens=(
+            priority_tokens if priority_tokens is not None else _dex_priority_tokens()
+        ),
+        route_limit=dex_token_limit,
+    )
+    # The DEX provider is charged once per contract, not once per paired route:
+    # leg_cache reuses that exact quote. Spend the remaining route budget on
+    # other current CEX pairings for the already-selected tokens so token pages
+    # and Telegram do not collapse to one arbitrary pair per DEX asset.
+    selected.extend(_expand_selected_dex_tokens(dex_seeds, dex_rows, dex_route_limit))
+    return selected
+
+
+def _expand_selected_dex_tokens(
+    seeds: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    tokens = {str(row.get("token") or "").upper() for row in seeds}
+    selected = list(seeds[:limit])
+    seen = {_snapshot_row_key(row) for row in selected}
+    remaining = sorted(
+        (
+            row
+            for row in rows
+            if str(row.get("token") or "").upper() in tokens
+            and _snapshot_row_key(row) not in seen
+        ),
+        key=lambda row: (
+            _dex_opportunity_score(row),
+            _number(row.get("quote_ts_us"), 0.0),
+        ),
+        reverse=True,
+    )
+    for row in remaining:
+        if len(selected) >= limit:
+            break
+        key = _snapshot_row_key(row)
+        if key in seen:
+            continue
+        selected.append(row)
+        seen.add(key)
+    return selected
 
 
 def _unique_rows_by_token(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:

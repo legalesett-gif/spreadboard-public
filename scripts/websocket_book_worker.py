@@ -28,6 +28,7 @@ from spreadboard.live_book_cache import LiveBookStore  # noqa: E402
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 SNAPSHOT_PATH = RUNTIME_DIR / "api_discovery_latest.json"
+FAST_QUOTE_PATH = RUNTIME_DIR / "api_discovery_fast_quotes.json"
 ACCOUNTS_PATH = RUNTIME_DIR / "spreadboard_accounts.sqlite3"
 MAX_SUBSCRIPTIONS = max(20, int(os.environ.get("SPREADBOARD_WS_BOOKS", "160")))
 RECONCILE_SECONDS = max(3.0, float(os.environ.get("SPREADBOARD_WS_RECONCILE_SECONDS", "10")))
@@ -71,7 +72,7 @@ class BookWorker:
         self.clients: dict[tuple[str, str], Any] = {}
         self.tasks: dict[LegKey, asyncio.Task[None]] = {}
         self._desired: set[LegKey] = set()
-        self._desired_signature: tuple[int | None, int | None, int | None] | None = None
+        self._desired_signature: tuple[int | None, int | None, int | None, int | None] | None = None
         self._market_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._markets_ready: set[tuple[str, str]] = set()
         #: Legs a venue refuses to serve without credentials. Kept out of the
@@ -110,6 +111,7 @@ class BookWorker:
         accounts_wal = ACCOUNTS_PATH.with_name(f"{ACCOUNTS_PATH.name}-wal")
         signature = (
             stamp(SNAPSHOT_PATH),
+            stamp(FAST_QUOTE_PATH),
             stamp(ACCOUNTS_PATH),
             stamp(accounts_wal),
         )
@@ -137,6 +139,14 @@ class BookWorker:
                 )
                 bids = _levels(book.get("bids"))
                 asks = _levels(book.get("asks"))
+                # CCXT futures books express amount in contracts.  The shared
+                # cache deliberately stores base-asset quantity so the generic
+                # $50 VWAP walker cannot overstate depth on 10x/100x contracts.
+                if market_type == "Futures":
+                    market = client.market(symbol)
+                    contract_size = _number((market or {}).get("contractSize")) or 1.0
+                    bids = _base_quantity_levels(bids, contract_size)
+                    asks = _base_quantity_levels(asks, contract_size)
                 now = time.monotonic()
                 if bids and asks and now - last_write >= WRITE_INTERVAL_SECONDS:
                     timestamp_ms = _number(book.get("timestamp"))
@@ -427,6 +437,13 @@ def _levels(value: Any) -> list[list[float]]:
         if price and amount and price > 0 and amount > 0:
             output.append([price, amount])
     return output
+
+
+def _base_quantity_levels(levels: list[list[float]], contract_size: float) -> list[list[float]]:
+    """Convert futures contract counts into base-asset quantities."""
+
+    size = contract_size if contract_size > 0 else 1.0
+    return [[price, amount * size] for price, amount in levels]
 
 
 def _number(value: Any) -> float | None:

@@ -12,6 +12,7 @@ from spreadboard import fast_quotes, live_book_cache, market_history, server
 from spreadboard.fast_quotes import (
     FastQuoteRefresher,
     _expanded_token_rows,
+    _expand_selected_dex_tokens,
     _dex_rotating_rows,
     _fast_quote_lane,
     _fresh_fast_quote_row,
@@ -20,6 +21,8 @@ from spreadboard.fast_quotes import (
     _native_spot_order_book,
     _native_current_funding,
     _okx_dex_leg_quote,
+    _retire_failed_fast_quote,
+    _select_fast_quote_rows,
     _snapshot_row_key,
     _kraken_asset_code,
     _native_linear_symbol,
@@ -95,6 +98,47 @@ def test_dex_rotation_keeps_negative_basis_high_funding_token_warm() -> None:
     assert [row["token"] for row in selected] == ["GUA", "HEADLINE"]
 
 
+def test_combined_dex_rotation_keeps_every_priority_token_before_leaders() -> None:
+    rows = [
+        {
+            "token": token,
+            "depth_weighted_spread_pct": spread,
+            "quote_ts_us": timestamp,
+        }
+        for token, spread, timestamp in (
+            ("GUA", -0.4, 10),
+            ("ESPORTS", -0.2, 20),
+            ("HEADLINE", 20.0, 30),
+        )
+    ]
+    selected = _select_fast_quote_rows(
+        {
+            "FUTURES": [], "FUTURES-SPOT": [], "SPOT": [],
+            "DEX-FUTURES": rows, "DEX-SPOT": [dict(rows[0])],
+        },
+        route_limit=3,
+        priority_tokens={"GUA", "ESPORTS"},
+    )
+
+    assert [row["token"] for row in selected] == ["GUA", "ESPORTS", "HEADLINE"]
+
+
+def test_selected_dex_token_uses_spare_budget_for_more_current_pairs() -> None:
+    seeds = [{"token": "GUA", "long_venue": "OKX DEX 56", "short_venue": "Gate"}]
+    rows = [
+        *seeds,
+        {"token": "GUA", "long_venue": "OKX DEX 56", "short_venue": "Mexc"},
+        {"token": "OTHER", "long_venue": "OKX DEX 56", "short_venue": "Bybit"},
+    ]
+
+    expanded = _expand_selected_dex_tokens(seeds, rows, 2)
+
+    assert [(row["token"], row["short_venue"]) for row in expanded] == [
+        ("GUA", "Gate"),
+        ("GUA", "Mexc"),
+    ]
+
+
 def test_fast_delta_retains_only_current_verified_rows() -> None:
     now_us = 10_000_000
     assert _fresh_fast_quote_row(
@@ -107,6 +151,22 @@ def test_fast_delta_retains_only_current_verified_rows() -> None:
         now_us=now_us,
         max_age_seconds=2,
     )
+
+
+def test_failed_fast_quote_retires_the_old_live_claim() -> None:
+    row = {
+        "quote_ts_us": int(time.time() * 1_000_000),
+        "fast_quote_verified_at": "2026-08-13T00:00:00Z",
+        "freshness": "fresh",
+        "status": "live",
+    }
+
+    _retire_failed_fast_quote(row)
+
+    assert row["quote_ts_us"] == 0
+    assert row["fast_quote_verified_at"] is None
+    assert row["freshness"] == "stale"
+    assert row["status"] == "refreshing"
 
 
 def test_fast_delta_identity_includes_exact_market_symbols() -> None:
@@ -1262,6 +1322,9 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
         sum(row["token"] == "SPOT00" and row["route_kind"] == "FUTURES-SPOT" for row in updated)
         == 2
     )
+    assert all(row["displayed_open_spread_pct"] == row["executable_spread_pct"] for row in updated)
+    assert all(row["depth_unverified"] is False for row in updated)
+    assert all("depth_unverified" not in row.get("blockers", []) for row in updated)
 
 
 def test_aster_and_hyperliquid_futures_are_not_mislabeled_as_dex() -> None:

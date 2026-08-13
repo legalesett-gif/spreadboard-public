@@ -571,15 +571,22 @@ def _live_books() -> dict[str, Any]:
 
         if not live_book_cache.DEFAULT_PATH.exists():
             return {}
-        return live_book_cache.LiveBookStore().load_all(
-            max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS
-        )
+        store = live_book_cache.LiveBookStore()
+        try:
+            return store.load_all(max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS)
+        finally:
+            store.close()
     except Exception:  # noqa: BLE001 - a missing feed must not take the board down.
         return {}
 
 
 def _book_side(book: Any, side: str) -> tuple[float | None, float | None]:
-    """Top of book and the depth-weighted price at the standard probe size."""
+    """Top of book and a *complete* VWAP at the standard probe size.
+
+    A one-level bulk ticker is still a useful current bid/ask, but a missing
+    size must never be promoted to verified matched depth.  Callers therefore
+    get ``None`` when the ladder cannot actually fill the full probe.
+    """
     from spreadarb.api_discovery.orderbook import depth_weighted_price
 
     levels = book.asks if side == "ask" else book.bids
@@ -592,7 +599,7 @@ def _book_side(book: Any, side: str) -> tuple[float | None, float | None]:
         )
     except Exception:  # noqa: BLE001
         vwap = None
-    return top, vwap or top
+    return top, vwap
 
 
 def _route_has_dex_leg(route: Any) -> bool:
@@ -731,25 +738,33 @@ def apply_live_books(
         if not _route_has_dex_leg(row) and (long_book is None or short_book is None):
             updated.append(row)
             continue
+        prior_depth_verified = (
+            "depth_unverified" not in (row.blockers or [])
+            and (_float_or_none(row.depth_usd) or 0.0) >= LIVE_BOOK_TARGET_NOTIONAL_USD
+        )
         if long_book is not None:
             ask, ask_vwap = _book_side(long_book, "ask")
         else:
             ask = _float_or_none(row.long_ask) or _float_or_none(row.long_price)
-            ask_vwap = ask
+            ask_vwap = ask if prior_depth_verified else None
         if short_book is not None:
             bid, bid_vwap = _book_side(short_book, "bid")
         else:
             bid = _float_or_none(row.short_bid) or _float_or_none(row.short_price)
-            bid_vwap = bid
+            bid_vwap = bid if prior_depth_verified else None
         if not ask or not bid or ask <= 0 or bid <= 0:
             updated.append(row)
             continue
         executable = (bid / ask - 1.0) * 100.0
+        depth_verified = bool(ask_vwap and bid_vwap and ask_vwap > 0 and bid_vwap > 0)
         depth = (
             (bid_vwap / ask_vwap - 1.0) * 100.0
-            if ask_vwap and bid_vwap and ask_vwap > 0
-            else executable
+            if depth_verified
+            else None
         )
+        blockers = [item for item in row.blockers if item != "depth_unverified"]
+        if not depth_verified:
+            blockers.append("depth_unverified")
         stamps = [
             int(book.quote_ts_us)
             for book in (long_book, short_book)
@@ -765,6 +780,8 @@ def apply_live_books(
                 executable_spread_pct=executable,
                 depth_weighted_spread_pct=depth,
                 displayed_open_spread_pct=executable,
+                depth_usd=LIVE_BOOK_TARGET_NOTIONAL_USD if depth_verified else None,
+                blockers=list(dict.fromkeys(blockers)),
                 quote_ts_us=quote_ts_us,
                 age_min=age_min,
                 freshness="fresh",
@@ -2151,6 +2168,7 @@ def row_is_presentable(row: "SpreadTerminalRow") -> bool:
         and not is_venue_specific_leveraged_token(row)
         and not is_non_perpetual_or_inverse(row)
         and not spread_is_untrustworthy(row)
+        and "depth_unverified" not in (getattr(row, "blockers", []) or [])
     )
 
 

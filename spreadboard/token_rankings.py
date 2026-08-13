@@ -90,6 +90,24 @@ def build(
         if dex_routes:
             current_dex_routes[token] = dex_routes
         spread_route = group.get("best_route") if isinstance(group.get("best_route"), dict) else {}
+        verified_spread_routes = [
+            row
+            for row in routes
+            if not row.get("depth_unverified")
+            and _number(row.get("depth_weighted_spread_pct")) is not None
+        ]
+        if verified_spread_routes:
+            spread_route = max(
+                verified_spread_routes,
+                key=lambda row: _number(row.get("depth_weighted_spread_pct")) or float("-inf"),
+            )
+        # Current top-of-book still belongs on the token page, but it is not a
+        # matched-$50 ranking observation until both ladders fill the probe.
+        ranked_spread = (
+            None
+            if spread_route.get("depth_unverified")
+            else _number(spread_route.get("depth_weighted_spread_pct"))
+        )
         funding_route = (
             group.get("best_funding_route")
             if isinstance(group.get("best_funding_route"), dict)
@@ -101,8 +119,8 @@ def build(
             "live_route_count": len(routes),
             "live_venue_count": len(group.get("venues") or []),
             "route_kinds": list(group.get("route_kinds") or []),
-            "best_spread_pct": _number(group.get("best_edge_pct")),
-            "best_spread_route": _route_summary(spread_route),
+            "best_spread_pct": ranked_spread,
+            "best_spread_route": _route_summary(spread_route) if ranked_spread is not None else None,
             "funding_now_24h_pct": _number(group.get("best_funding_24h_pct")),
             "funding_now_basis": group.get("best_funding_24h_basis"),
             "best_funding_route": _route_summary(funding_route),
@@ -461,6 +479,7 @@ def _route_summary(route: dict[str, Any]) -> dict[str, Any] | None:
             "short_market_symbol",
             "executable_spread_pct",
             "depth_weighted_spread_pct",
+            "depth_unverified",
             "funding_24h_pct",
             "funding_projected_24h_pct",
             "mirage_guarded",

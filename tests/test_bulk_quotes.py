@@ -23,7 +23,7 @@ class _Store:
     def __init__(self) -> None:
         self.written: list[tuple] = []
 
-    def put(self, venue, market_type, symbol, *, bids, asks, quote_ts_us):
+    def put(self, venue, market_type, symbol, *, bids, asks, quote_ts_us, source="public_websocket"):
         self.written.append((venue, market_type, symbol, bids[0][0], asks[0][0]))
 
 
@@ -466,6 +466,68 @@ def test_a_quote_with_an_unknown_size_is_still_a_quote(tmp_path) -> None:
     assert book is not None, "a sized-0 quote was dropped on read"
     assert book.bids[0][0] == 1167.409
     assert book.asks[0][0] == 1167.6
+
+
+def test_futures_ticker_volume_is_normalised_by_contract_size(tmp_path) -> None:
+    from spreadboard import bulk_quotes, live_book_cache
+
+    class Client:
+        has = {"fetchTickers": True}
+        markets = {
+            "T/USDT:USDT": {
+                "swap": True,
+                "inverse": False,
+                "contractSize": 100.0,
+            }
+        }
+
+        def fetch_tickers(self):
+            return {
+                "T/USDT:USDT": {
+                    "bid": 0.25,
+                    "ask": 0.26,
+                    "bidVolume": 4.0,
+                    "askVolume": 5.0,
+                }
+            }
+
+    store = live_book_cache.LiveBookStore(tmp_path / "books.sqlite3")
+    bulk_quotes.sweep_venue(
+        "Gate",
+        store=store,
+        client_factory=lambda _venue, market_type: Client() if market_type == "Futures" else None,
+    )
+    book = store.get("Gate", "Futures", "T/USDT:USDT", max_age_seconds=300.0)
+
+    assert book is not None
+    assert book.bids == [[0.25, 400.0]]
+    assert book.asks == [[0.26, 500.0]]
+    assert book.source == "bulk_ticker"
+
+
+def test_bulk_ticker_cannot_flatten_a_current_websocket_ladder(tmp_path) -> None:
+    from spreadboard import live_book_cache
+
+    store = live_book_cache.LiveBookStore(tmp_path / "books.sqlite3")
+    timestamp = int(time.time() * 1_000_000)
+    store.put(
+        "Gate", "Spot", "T/USDT",
+        bids=[[1.0, 100.0], [0.99, 100.0]],
+        asks=[[1.01, 100.0], [1.02, 100.0]],
+        quote_ts_us=timestamp,
+        source="public_websocket",
+    )
+    store.put(
+        "Gate", "Spot", "T/USDT",
+        bids=[[9.0, 0.0]], asks=[[9.1, 0.0]],
+        quote_ts_us=timestamp + 1_000_000,
+        source="bulk_ticker",
+    )
+
+    book = store.get("Gate", "Spot", "T/USDT", max_age_seconds=300.0)
+    assert book is not None
+    assert book.source == "public_websocket"
+    assert len(book.bids) == 2
 
 
 def test_a_zero_or_negative_price_is_still_rejected(tmp_path) -> None:
