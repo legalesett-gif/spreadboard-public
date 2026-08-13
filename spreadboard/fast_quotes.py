@@ -1528,7 +1528,12 @@ def _select_fast_quote_rows(
             priority_tokens=priority,
             route_limit=dex_route_limit,
             contract_limit=contract_limit,
-            lane_floor=min(contract_limit, 25, dex_route_limit // 2),
+            # Production observations include two to five thin, unavailable,
+            # or structurally rejected contracts in an otherwise healthy pass.
+            # Keep thirty leaders in each lane so those failures do not reduce
+            # the member-visible set below twenty-five. Every fallback is still
+            # an exact quote with its original timestamp.
+            lane_floor=min(contract_limit, 30, dex_route_limit // 2),
         )
     # The DEX provider is charged once per contract, not once per paired route:
     # leg_cache reuses that exact quote. Spend the remaining route budget on

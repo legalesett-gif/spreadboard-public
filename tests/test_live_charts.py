@@ -264,7 +264,7 @@ def test_production_shared_dex_contracts_publish_one_complete_top_25() -> None:
     assert counts == {"DEX-FUTURES": 25, "DEX-SPOT": 25}
 
 
-def test_production_dex_buffer_keeps_five_fallback_contracts_per_lane() -> None:
+def test_production_dex_buffer_keeps_ten_fallback_contracts_per_lane() -> None:
     lanes = {"FUTURES": [], "FUTURES-SPOT": [], "SPOT": []}
     for lane, short_type in (("DEX-FUTURES", "Futures"), ("DEX-SPOT", "Spot")):
         lanes[lane] = [
@@ -284,16 +284,16 @@ def test_production_dex_buffer_keeps_five_fallback_contracts_per_lane() -> None:
         ]
 
     with pytest.MonkeyPatch.context() as monkeypatch:
-        monkeypatch.setenv("SPREADBOARD_FAST_DEX_ROUTES", "60")
-        monkeypatch.setenv("SPREADBOARD_FAST_DEX_CONTRACTS", "30")
-        selected = _select_fast_quote_rows(lanes, route_limit=63, priority_tokens=set())
+        monkeypatch.setenv("SPREADBOARD_FAST_DEX_ROUTES", "70")
+        monkeypatch.setenv("SPREADBOARD_FAST_DEX_CONTRACTS", "35")
+        selected = _select_fast_quote_rows(lanes, route_limit=73, priority_tokens=set())
 
     counts = {
         lane: len({row["token"] for row in selected if _fast_quote_lane(row) == lane})
         for lane in ("DEX-FUTURES", "DEX-SPOT")
     }
-    assert counts == {"DEX-FUTURES": 30, "DEX-SPOT": 30}
-    assert len({fast_quotes._dex_contract_identity(row) for row in selected}) == 30
+    assert counts == {"DEX-FUTURES": 35, "DEX-SPOT": 35}
+    assert len({fast_quotes._dex_contract_identity(row) for row in selected}) == 35
 
 
 def test_production_fast_budget_reserves_dex_truth_and_cex_canaries() -> None:
