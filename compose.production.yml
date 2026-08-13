@@ -24,18 +24,18 @@ services:
       SPREADBOARD_FAST_QUOTE_SECONDS: "60"
       # The complete CEX catalogue is repriced independently in one bulk pass.
       # This exact-route worker therefore spends 50 rows on the two rate-limited
-      # DEX lanes and one direct canary per CEX lane. Twenty-five shared DEX
-      # contracts are published together: a rolling half expired before the
-      # following atomic delta landed and intermittently collapsed both public
-      # lanes back below the promised top 25.
-      SPREADBOARD_FAST_QUOTE_ROUTES: "53"
+      # DEX lanes and one direct canary per CEX lane. Thirty shared DEX
+      # contracts provide five honest fallbacks per lane when a provider quote
+      # has insufficient liquidity. Completed pairs publish incrementally, so
+      # the buffer does not make the first successful quote wait for the last.
+      SPREADBOARD_FAST_QUOTE_ROUTES: "63"
       # OKX Web3 is rate-limited. The current-board rotation requests only the
       # executable opening direction for each exact DEX leg, shares that quote
       # across paired routes, and keeps both DEX lanes inside the 90-second
       # current-spread boundary. Full two-sided probes remain available to
       # explicit chart/detail sampling.
-      SPREADBOARD_FAST_DEX_ROUTES: "50"
-      SPREADBOARD_FAST_DEX_CONTRACTS: "25"
+      SPREADBOARD_FAST_DEX_ROUTES: "60"
+      SPREADBOARD_FAST_DEX_CONTRACTS: "30"
       # The complete CEX catalogue is already refreshed independently. Reuse
       # only a depth-complete CEX book from the last 30 seconds while pairing
       # it with a new DEX quote. Its real timestamp is preserved and the mixed

@@ -1572,10 +1572,10 @@ def _shared_dex_lane_seeds(
         )
 
     # Small provider budgets rotate through a larger leader pool. Production
-    # uses 25 contracts, however, and must publish one complete public top-25
-    # set atomically. Rotating two halves looked cheaper but the first half
-    # expired while the following subprocess was still running, causing the
-    # public lane count to oscillate between 0 and 14 despite healthy quotes.
+    # uses at least 25 contracts, however, and must keep one complete public
+    # top-25 set in view. Rotating two halves looked cheaper but the first half
+    # expired while the following subprocess was still running. A production
+    # buffer above 25 provides honest fallbacks for transient provider failures.
     leader_pool_size = (
         contract_limit if contract_limit >= 25 else max(25, contract_limit * 2)
     )
@@ -1603,7 +1603,7 @@ def _shared_dex_lane_seeds(
 
     selected_identities = sorted(
         shared_leader_pool,
-        key=identity_score if contract_limit >= 25 else rotation_score,
+        key=rotation_score,
         reverse=True,
     )[:lane_floor]
     selected = set(selected_identities)
