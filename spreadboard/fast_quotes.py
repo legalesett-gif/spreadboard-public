@@ -1359,19 +1359,44 @@ def _select_fast_quote_rows(
     dex_route_limit = max(0, route_limit - len(selected))
     dex_token_limit = min(
         dex_route_limit,
-        max(8, int(os.environ.get("SPREADBOARD_FAST_DEX_ROUTES", "40"))),
+        max(8, int(os.environ.get("SPREADBOARD_FAST_DEX_ROUTES", "50"))),
     )
     dex_rows = [
         *rows_by_lane.get("DEX-FUTURES", []),
         *rows_by_lane.get("DEX-SPOT", []),
     ]
-    dex_seeds = _dex_rotating_rows(
+    priority = priority_tokens if priority_tokens is not None else _dex_priority_tokens()
+    # DEX-FUTURES and DEX-SPOT often share one contract, but they are separate
+    # client lanes. Selecting from their combined score alone let a rich
+    # futures universe consume the provider budget and left Spot-DEX below the
+    # public top-25 readiness boundary. Seed each lane independently, then add
+    # combined leaders up to the configured unique-contract ceiling. Shared
+    # contracts are still quoted once by leg_cache below.
+    lane_floor = min(25, dex_token_limit // 2)
+    dex_seeds: list[dict[str, Any]] = []
+    seed_keys: set[tuple[Any, ...]] = set()
+    for lane in ("DEX-FUTURES", "DEX-SPOT"):
+        for row in _dex_rotating_rows(
+            rows_by_lane.get(lane) or [],
+            priority_tokens=priority,
+            route_limit=lane_floor,
+        ):
+            key = _snapshot_row_key(row)
+            if key in seed_keys:
+                continue
+            dex_seeds.append(row)
+            seed_keys.add(key)
+    seeded_tokens = {str(row.get("token") or "").upper() for row in dex_seeds}
+    for row in _dex_rotating_rows(
         dex_rows,
-        priority_tokens=(
-            priority_tokens if priority_tokens is not None else _dex_priority_tokens()
-        ),
+        priority_tokens=priority,
         route_limit=dex_token_limit,
-    )
+    ):
+        token = str(row.get("token") or "").upper()
+        if token in seeded_tokens or len(seeded_tokens) >= dex_token_limit:
+            continue
+        dex_seeds.append(row)
+        seeded_tokens.add(token)
     # The DEX provider is charged once per contract, not once per paired route:
     # leg_cache reuses that exact quote. Spend the remaining route budget on
     # other current CEX pairings for the already-selected tokens so token pages

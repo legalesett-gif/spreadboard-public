@@ -123,6 +123,35 @@ def test_combined_dex_rotation_keeps_every_priority_token_before_leaders() -> No
     assert [row["token"] for row in selected] == ["GUA", "ESPORTS", "HEADLINE"]
 
 
+def test_combined_dex_rotation_keeps_25_tokens_in_each_public_lane() -> None:
+    lanes = {
+        "FUTURES": [], "FUTURES-SPOT": [], "SPOT": [],
+        "DEX-FUTURES": [
+            {
+                "route_key": f"F{index}|OKX DEX 1|Spot|Gate|Futures",
+                "token": f"F{index}",
+                "depth_weighted_spread_pct": 100 - index,
+            }
+            for index in range(30)
+        ],
+        "DEX-SPOT": [
+            {
+                "route_key": f"S{index}|OKX DEX 1|Spot|Mexc|Spot",
+                "token": f"S{index}",
+                "depth_weighted_spread_pct": 100 - index,
+            }
+            for index in range(30)
+        ],
+    }
+
+    selected = _select_fast_quote_rows(
+        lanes, route_limit=60, priority_tokens=set()
+    )
+
+    assert sum(str(row["token"]).startswith("F") for row in selected) >= 25
+    assert sum(str(row["token"]).startswith("S") for row in selected) >= 25
+
+
 def test_selected_dex_token_uses_spare_budget_for_more_current_pairs() -> None:
     seeds = [{"token": "GUA", "long_venue": "OKX DEX 56", "short_venue": "Gate"}]
     rows = [

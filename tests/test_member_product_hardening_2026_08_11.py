@@ -110,6 +110,28 @@ def test_portfolio_funding_is_exact_leg_data_even_when_route_is_not_ranked(
     assert position["current_net_funding_24h_pct"] == pytest.approx(0.36)
 
 
+def test_portfolio_never_rebuilds_the_ranked_board(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "accounts.sqlite3"
+    accounts.initialize(db_path)
+    user_row = _user(db_path, "warm-portfolio@example.test")
+    monkeypatch.setattr(
+        portfolio.api_spreads,
+        "load_spreads",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("ranked board rebuild")),
+    )
+    monkeypatch.setattr(portfolio, "_live_books", lambda: {})
+    user = accounts.get_user_object(user_row["id"], db_path=db_path)
+
+    snapshot = portfolio.portfolio_snapshot(
+        user,
+        board_path=tmp_path / "missing.jsonl",
+        accounts_path=db_path,
+        evaluate_alerts=False,
+    )
+
+    assert snapshot["ok"] is True
+
+
 def test_manual_position_marks_use_resident_books_without_exchange_calls() -> None:
     books = {
         "A|Spot|X/USDT": SimpleNamespace(bids=[[1.1, 20]], asks=[[1.2, 20]], quote_ts_us=1),

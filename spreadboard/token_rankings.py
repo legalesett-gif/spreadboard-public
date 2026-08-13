@@ -234,8 +234,12 @@ def build(
         encoded = quote(token, safe="")
         record["chart_url"] = f"/charts?token={encoded}"
         record["token_url"] = f"/token/{encoded}"
+        # A guarded audit-only pair remains visible on the token detail page,
+        # but it must not put a question mark beside a different, verified
+        # leaderboard leader. The marker describes the displayed ranked route.
         record["identity_warning"] = any(
-            bool(route.get("mirage_guarded")) for route in live_routes_by_token.get(token) or []
+            bool((record.get(key) or {}).get("mirage_guarded"))
+            for key in ("best_spread_route", "best_funding_route")
         )
 
     health = (market.get("source_health") or {}).get("canonical_api") or {}

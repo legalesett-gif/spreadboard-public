@@ -29,13 +29,14 @@ def portfolio_snapshot(
     evaluate_alerts: bool = True,
 ) -> dict[str, Any]:
     positions = accounts.list_positions(user.id, db_path=accounts_path)
-    market = api_spreads.load_spreads(
-        board_path=board_path,
-        include_stale=False,
-        include_unverified=False,
-        limit=None,
-    )
-    rows = [row for row in market.get("rows") or [] if isinstance(row, dict)]
+    # A position is an exact saved pair, not a ranked-board row. Rebuilding the
+    # entire 25k-route scanner here made the first account request after a
+    # cache generation wait almost a minute even though every value below is
+    # already available from resident exact-market books, the chart catalogue,
+    # public per-leg funding and the encrypted private ledger. An empty ranked
+    # row set makes that independence explicit; resolve_position_route still
+    # validates both saved symbols against the complete warm catalogue.
+    rows: list[dict[str, Any]] = []
     books = _live_books()
     funding_legs = bulk_quotes.load_funding()
     catalogue = chart_catalog.load()
@@ -724,13 +725,10 @@ class PositionAlertWorker:
             self._stop.wait(self.poll_seconds)
 
     def check_once(self) -> dict[str, int]:
-        market = api_spreads.load_spreads(
-            board_path=self.board_path,
-            include_stale=False,
-            include_unverified=False,
-            limit=None,
-        )
-        rows = [row for row in market.get("rows") or [] if isinstance(row, dict)]
+        # Alert evaluation uses the same exact warm sources as Portfolio. A
+        # ranked-board regroup adds no position evidence and can block the
+        # worker long enough to miss a threshold crossing.
+        rows: list[dict[str, Any]] = []
         books = _live_books()
         funding_legs = bulk_quotes.load_funding()
         catalogue = chart_catalog.load()

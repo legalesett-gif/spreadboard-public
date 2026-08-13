@@ -200,6 +200,30 @@ def test_token_with_only_guarded_routes_has_no_ranked_spread(tmp_path: Path) -> 
     assert row["best_spread_route"] is None
 
 
+def test_guarded_non_leader_does_not_mark_verified_ranked_token(tmp_path: Path) -> None:
+    market = _market()
+    clean = dict(market["groups"][0]["routes"][0])
+    clean["route_key"] = "clean"
+    clean["depth_weighted_spread_pct"] = 1.0
+    clean["mirage_guarded"] = False
+    guarded = dict(clean)
+    guarded["route_key"] = "guarded"
+    guarded["depth_weighted_spread_pct"] = 60.0
+    guarded["mirage_guarded"] = True
+    market["groups"][0]["routes"] = [guarded, clean]
+    market["groups"][0]["best_route"] = guarded
+
+    payload = token_rankings.build(
+        board_path=tmp_path / "board.jsonl", output_path=tmp_path / "rankings.json",
+        market_payload=market, catalog_payload={"markets": []}, radar_routes=[],
+        catalogue_summaries={},
+    )
+
+    row = payload["records"][0]
+    assert row["best_spread_route"]["route_key"] == "clean"
+    assert row["identity_warning"] is False
+
+
 def test_fresh_catalog_replaces_older_cex_leader_even_when_edge_fell(tmp_path: Path) -> None:
     current = {
         "best_spread_pct": 0.4,

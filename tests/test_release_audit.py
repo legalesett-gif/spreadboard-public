@@ -548,11 +548,13 @@ def test_price_worker_invalidates_grouped_market_payloads() -> None:
 def test_fast_quote_budget_covers_top_25_across_all_five_public_lanes() -> None:
     compose = (Path(__file__).resolve().parents[1] / "compose.production.yml").read_text()
     routes = int(re.search(r'SPREADBOARD_FAST_QUOTE_ROUTES:\s*"(\d+)"', compose).group(1))
+    dex_routes = int(re.search(r'SPREADBOARD_FAST_DEX_ROUTES:\s*"(\d+)"', compose).group(1))
     workers = int(re.search(r'SPREADBOARD_FAST_QUOTE_WORKERS:\s*"(\d+)"', compose).group(1))
     timeout = int(re.search(r'SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS:\s*"(\d+)"', compose).group(1))
 
     assert routes >= 5 * 25
     assert routes <= 220
+    assert dex_routes >= 2 * 25
     assert 3 <= workers <= 8
     assert timeout <= 300
 
