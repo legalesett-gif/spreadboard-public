@@ -36,6 +36,12 @@ services:
       # explicit chart/detail sampling.
       SPREADBOARD_FAST_DEX_ROUTES: "50"
       SPREADBOARD_FAST_DEX_CONTRACTS: "25"
+      # The independent WebSocket/bulk worker is continuously walking every
+      # CEX venue. Reuse a recent matched book during broad DEX publication so
+      # the rate-limited DEX quote, rather than redundant CEX metadata loading,
+      # determines cycle length. The row keeps the book's original timestamp
+      # and still fails the public 90-second current-route gate if it ages out.
+      SPREADBOARD_FAST_CEX_BOOK_AGE_SECONDS: "30"
       SPREADBOARD_FAST_QUOTE_WORKERS: "6"
       SPREADBOARD_DEX_QUOTE_CHUNK_SIZE: "8"
       SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS: "300"

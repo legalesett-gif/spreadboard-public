@@ -686,6 +686,13 @@ class FastQuoteRefresher:
         include_funding: bool = True,
     ) -> dict[tuple[str, str, str], dict[str, Any] | None]:
         cache: dict[tuple[str, str, str], dict[str, Any] | None] = {}
+        cache_book_age_seconds = max(
+            5.0,
+            min(
+                45.0,
+                float(os.environ.get("SPREADBOARD_FAST_CEX_BOOK_AGE_SECONDS", "30")),
+            ),
+        )
         try:
             for key, row, side in jobs:
                 # Stopping a venue short is far better than being killed mid
@@ -699,6 +706,7 @@ class FastQuoteRefresher:
                     target_notional_usd=target_notional_usd,
                     cache=cache,
                     include_funding=include_funding,
+                    cache_book_age_seconds=cache_book_age_seconds,
                 )
         finally:
             self._discard_client(*venue_key)
@@ -794,6 +802,7 @@ class FastQuoteRefresher:
         target_notional_usd: float,
         cache: dict[tuple[str, str, str], dict[str, Any] | None],
         include_funding: bool,
+        cache_book_age_seconds: float = 5.0,
     ) -> dict[str, Any] | None:
         venue = str(row.get(f"{side}_venue") or "")
         market_type = str(row.get(f"{side}_market_type") or "")
@@ -838,11 +847,12 @@ class FastQuoteRefresher:
                 venue,
                 market_type,
                 symbol,
-                # The fast lane promises a current matched-size route. It may
-                # reuse a just-written websocket/bulk book, but a book already
-                # near the 90-second leader boundary would expire before this
-                # atomic cycle publishes and must be re-quoted directly.
-                max_age_seconds=5.0,
+                # Explicit route/chart requests retain the five-second default.
+                # Broad refresh jobs may reuse a slightly older continuously
+                # streamed CEX book to avoid reloading the same venue metadata;
+                # its original timestamp is preserved and the final public row
+                # still has to pass the 90-second matched-route truth gate.
+                max_age_seconds=cache_book_age_seconds,
             )
             native_book = (
                 (live_book.bids, live_book.asks)
