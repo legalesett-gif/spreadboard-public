@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from spreadboard import live_book_cache, tokenized_assets
+from spreadboard import live_book_cache, public_rails, token_metadata, tokenized_assets
 from spreadarb.api_discovery.models import spread_pct
 from spreadarb.api_discovery.orderbook import depth_weighted_price
 
@@ -449,13 +449,15 @@ class FastQuoteRefresher:
             if _external_funding_is_fresh()
             else self.refresh_all_funding(payload)
         )
+        rails = public_rails.load_public_rails()
+        metadata = token_metadata.load_token_metadata()
         rows_by_lane: dict[str, list[dict[str, Any]]] = {lane: [] for lane in FAST_QUOTE_LANES}
         for bucket in ("api_discovered_rows", "dex_discovered_rows"):
             for row in payload.get(bucket) or []:
                 if (
                     not isinstance(row, dict)
                     or _has_permanent_mirage_guard(row)
-                    or _cannot_lead_public_lane(row)
+                    or _cannot_lead_public_lane(row, rails=rails, metadata=metadata)
                 ):
                     continue
                 lane = _fast_quote_lane(row)
@@ -1478,7 +1480,12 @@ def _has_permanent_mirage_guard(row: dict[str, Any]) -> bool:
     )
 
 
-def _cannot_lead_public_lane(row: dict[str, Any]) -> bool:
+def _cannot_lead_public_lane(
+    row: dict[str, Any],
+    *,
+    rails: dict[str, dict[str, Any]] | None = None,
+    metadata: dict[str, dict[str, Any]] | None = None,
+) -> bool:
     """Cheap structural gates shared with the public lane admission rules.
 
     Exact books cannot turn two unverified tokenized instruments into the same
@@ -1491,6 +1498,36 @@ def _cannot_lead_public_lane(row: dict[str, Any]) -> bool:
         return True
     if LEVERAGED_TOKEN_PATTERN.match(token) and row.get("long_venue") != row.get("short_venue"):
         return True
+    entry = (metadata or {}).get(token) or {}
+    volume = _number(entry.get("total_volume_usd"), 0.0)
+    if volume and volume < 1_000.0:
+        return True
+    rail_map = rails or {}
+    long_state = public_rails.rail_state(rail_map, row.get("long_venue"), token)
+    short_state = public_rails.rail_state(rail_map, row.get("short_venue"), token)
+    spread = max(
+        abs(_number(row.get("executable_spread_pct"), 0.0)),
+        abs(_number(row.get("depth_weighted_spread_pct"), 0.0)),
+    )
+    is_dex = "dex" in str(row.get("source_kind") or "").casefold()
+    # High CEX dislocations require exact public contract evidence. Spending a
+    # quote slot on a route the reader will necessarily guard reduced healthy
+    # Futures and Spot coverage below 25 during ordinary provider failures.
+    if (
+        spread >= 5.0
+        and not is_dex
+        and (long_state or short_state)
+        and not public_rails.exact_contract_match(long_state, short_state)
+    ):
+        return True
+    if (
+        str(row.get("long_market_type") or "") == "Spot"
+        and str(row.get("short_market_type") or "") == "Spot"
+    ):
+        if long_state.get("withdraw") is False or short_state.get("deposit") is False:
+            return True
+        if public_rails.transfer_compatibility(long_state, short_state).get("status") == "incompatible":
+            return True
     return False
 
 

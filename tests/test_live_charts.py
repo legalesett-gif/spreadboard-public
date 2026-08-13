@@ -215,6 +215,31 @@ def test_fast_quote_skips_unverified_tokenized_capacity() -> None:
     })
 
 
+def test_fast_quote_skips_known_unrankable_spot_routes_before_using_capacity() -> None:
+    row = {
+        "token": "VANRY",
+        "source_kind": "api_discovered",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "short_venue": "Binance",
+        "short_market_type": "Spot",
+        "depth_weighted_spread_pct": 60.0,
+    }
+    rails = {
+        "Mexc": {"VANRY": {"withdraw": True, "networks": []}},
+        "Binance": {"VANRY": {"deposit": True, "networks": []}},
+    }
+    assert _cannot_lead_public_lane(row, rails=rails)
+
+    row["token"] = "THIN"
+    row["depth_weighted_spread_pct"] = 1.0
+    assert _cannot_lead_public_lane(
+        row,
+        rails={},
+        metadata={"THIN": {"total_volume_usd": 999.0}},
+    )
+
+
 def test_selected_dex_token_uses_spare_budget_for_more_current_pairs() -> None:
     seeds = [{"token": "GUA", "long_venue": "OKX DEX 56", "short_venue": "Gate"}]
     rows = [
