@@ -257,18 +257,12 @@ class RefreshLoop:
             with self.quote_cycle_lock:
                 _log("fast quote cycle starting")
                 summary = self._refresh_fast_quotes()
-                with self.snapshot_lock:
-                    # This parsed the 40MB snapshot here, in the server, once a
-                    # minute. That is roughly a gigabyte of Python objects per
-                    # cycle; freeing them leaves the arenas fragmented, so RSS
-                    # only climbed -- 1.8GB after one minute, 4.3GB by five, and
-                    # then the kernel killed the whole container. It is the
-                    # reason the site kept going down and no scan ever landed.
-                    inserted = 0
-                    if summary.get("updated_routes"):
-                        recorded = _finalize_snapshot("record")
-                        inserted = (recorded or {}).get("history_inserted") or 0
-            _log(f"fast quotes {summary} history_inserted={inserted}")
+            # Recording the entire 25k-row snapshot is deliberately not on the
+            # current-quote path. It took another 45-60 seconds and prevented a
+            # 14-contract DEX half from rotating before the previous half
+            # expired. The scheduled discovery/funding-history pipeline still
+            # records broad history; the compact delta publishes immediately.
+            _log(f"fast quotes {summary} history_inserted=deferred")
             if summary.get("updated_routes"):
                 _invalidate_market_price_caches()
                 # Fast DEX quotes are part of the token page and Telegram

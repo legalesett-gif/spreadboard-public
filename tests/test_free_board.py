@@ -436,7 +436,7 @@ def test_the_fast_quote_cycle_does_not_parse_the_snapshot_in_the_server() -> Non
     source = inspect.getsource(RefreshLoop.run_fast_quotes)
     assert "json.loads(SNAPSHOT_PATH" not in source
     assert "market_history.record_snapshot" not in source
-    assert '_finalize_snapshot("record")' in source
+    assert '_finalize_snapshot("record")' not in source
 
 
 def test_no_worker_output_is_buffered_in_the_server() -> None:
