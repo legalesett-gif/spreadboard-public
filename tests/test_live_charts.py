@@ -898,7 +898,7 @@ def test_broad_cex_book_reuse_is_capped_at_thirty_seconds(
     assert seen == [30.0]
 
 
-def test_dex_pair_does_not_reload_a_whole_cex_when_shared_book_is_missing(
+def test_dex_pair_uses_lightweight_native_book_when_shared_book_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     refresher = FastQuoteRefresher()
@@ -922,7 +922,44 @@ def test_dex_pair_does_not_reload_a_whole_cex_when_shared_book_is_missing(
     )
     monkeypatch.setattr(
         "spreadboard.fast_quotes._native_order_book",
-        lambda *_args: pytest.fail("DEX publication made a redundant CEX REST call"),
+        lambda *_args: ([[2.0, 30.0]], [[2.1, 30.0]]),
+    )
+
+    result = refresher._quote_venue_jobs(
+        (key[0], key[1]),
+        [(key, row, "long")],
+        target_notional_usd=50,
+        include_funding=False,
+    )
+
+    assert result[key] is not None
+    assert result[key]["bid_vwap"] == 2.0
+
+
+def test_dex_pair_never_loads_full_cex_metadata_after_native_book_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refresher = FastQuoteRefresher()
+    row = {
+        **_route(),
+        "route_kind": "DEX-FUTURES",
+        "short_venue": "OKX DEX 56",
+        "short_market_type": "Spot",
+        "short_market_symbol": "TEST/USDC",
+    }
+    key = fast_quotes._route_leg_key(row, "long")
+    assert key is not None
+    monkeypatch.setattr(
+        "spreadboard.fast_quotes.live_book_cache.load_live_book",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "spreadboard.fast_quotes._native_order_book", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        refresher,
+        "_client",
+        lambda *_args: pytest.fail("DEX publication reloaded CEX metadata"),
     )
 
     result = refresher._quote_venue_jobs(
