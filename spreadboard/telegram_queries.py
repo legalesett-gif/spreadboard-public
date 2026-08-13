@@ -518,16 +518,15 @@ def _rows_for(symbol: str, board_path: Path | str) -> list[dict[str, Any]]:
         if str(group.get("token") or "").upper() != symbol:
             continue
         rows.extend(group.get("routes") or [])
-    if rows:
-        return rows
     # The canonical scanner keeps a bounded number of combinations per token;
-    # the full warm catalogue does not. An omitted route is therefore not the
-    # same thing as an unparsed token. This fallback reads the exact-symbol book
-    # and funding caches only -- no exchange call, no bot timeout, and no stale
-    # historical quote passed off as current.
+    # the full warm catalogue does not. Enrich even a token already present in
+    # the warm snapshot; otherwise the first scanner route short-circuited this
+    # fallback and `$TOKEN` kept claiming one route while the website correctly
+    # showed every complete warm pairing. This reads exact-symbol caches only --
+    # no exchange call, no bot timeout, and no stale quote passed off as live.
     payload = catalog_pairs.with_routes(
         catalog_pairs.for_token(symbol, limit=None),
-        token_rankings.dex_routes_for(token_rankings.load(), symbol),
+        [*rows, *token_rankings.dex_routes_for(token_rankings.load(), symbol)],
         limit=100,
     )
     return list(payload.get("routes") or [])

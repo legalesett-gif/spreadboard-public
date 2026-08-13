@@ -212,6 +212,35 @@ def test_spread_reply_lists_every_route_best_first(board_file):
     assert "$142K" in body
 
 
+def test_existing_warm_token_is_enriched_with_complete_catalogue(board_file, monkeypatch):
+    catalogue_route = route(
+        "GUA", "FUTURES", "MEXC", "Gate", 0.92, 0.04, 14.6, 77_000
+    )
+    monkeypatch.setattr(
+        telegram_queries.catalog_pairs,
+        "for_token",
+        lambda *_args, **_kwargs: {"token": "GUA", "routes": [catalogue_route]},
+    )
+    monkeypatch.setattr(
+        telegram_queries.catalog_pairs,
+        "with_routes",
+        lambda payload, extra, **_kwargs: {
+            **payload,
+            "routes": [*payload["routes"], *extra],
+        },
+    )
+    monkeypatch.setattr(
+        telegram_queries.token_rankings,
+        "dex_routes_for",
+        lambda *_args, **_kwargs: [],
+    )
+
+    rows = telegram_queries._rows_for("GUA", board_file)
+
+    assert len(rows) == 2
+    assert {row["short_venue"] for row in rows} == {"Gate", "KuCoin"}
+
+
 def test_funding_reply_shows_net_and_apr(board_file):
     body = telegram_queries.render(
         telegram_queries.Query("funding", "SIREN"), board_path=board_file
