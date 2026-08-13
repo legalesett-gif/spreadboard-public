@@ -179,6 +179,27 @@ def test_identity_warned_scanner_route_cannot_lead_token_rankings(tmp_path: Path
     assert row["best_funding_route"]["route_key"] == "clean"
 
 
+def test_token_with_only_guarded_routes_has_no_ranked_spread(tmp_path: Path) -> None:
+    market = _market()
+    guarded = {
+        "token": "GUA", "route_key": "collision", "long_venue": "A", "short_venue": "B",
+        "depth_weighted_spread_pct": 60.0, "mirage_guarded": True,
+    }
+    market["groups"][0]["routes"] = [guarded]
+    market["groups"][0]["best_route"] = guarded
+    market["groups"][0]["best_edge_pct"] = 60.0
+
+    payload = token_rankings.build(
+        board_path=tmp_path / "board.jsonl", output_path=tmp_path / "rankings.json",
+        market_payload=market, catalog_payload={"markets": []}, radar_routes=[],
+        catalogue_summaries={},
+    )
+
+    row = payload["records"][0]
+    assert row["best_spread_pct"] is None
+    assert row["best_spread_route"] is None
+
+
 def test_fresh_catalog_replaces_older_cex_leader_even_when_edge_fell(tmp_path: Path) -> None:
     current = {
         "best_spread_pct": 0.4,

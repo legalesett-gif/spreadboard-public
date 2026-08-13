@@ -106,7 +106,7 @@ def build(
         # matched-$50 ranking observation until both ladders fill the probe.
         ranked_spread = (
             None
-            if spread_route.get("depth_unverified")
+            if spread_route.get("depth_unverified") or spread_route.get("mirage_guarded")
             else _number(spread_route.get("depth_weighted_spread_pct"))
         )
         verified_funding_routes = [
