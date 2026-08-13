@@ -684,7 +684,10 @@ class BulkQuoteLoop(threading.Thread):
         """
         completed = _run_worker(
             [
-                *_low_priority_prefix(),
+                # Current prices are the board's truth boundary. Funding,
+                # catalogue and ranking workers remain low-priority, but
+                # deprioritising this process made a 43-second isolated pass
+                # take 85 seconds under production contention.
                 sys.executable,
                 str(Path(__file__).with_name("bulk_quote_worker.py")),
                 "--budget-seconds",

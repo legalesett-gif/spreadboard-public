@@ -58,7 +58,7 @@ _DEFAULT_TYPES = {"Futures": "swap", "Spot": "spot"}
 # so a 90-second current-only board could never hold every cross-venue pair at
 # once even when every provider answered successfully.
 BULK_QUOTE_WORKERS = max(
-    1, min(8, int(os.environ.get("SPREADBOARD_BULK_QUOTE_WORKERS", "4")))
+    1, min(8, int(os.environ.get("SPREADBOARD_BULK_QUOTE_WORKERS", "6")))
 )
 
 
@@ -287,7 +287,11 @@ def sweep(
     }
 
 
-INTERVAL_SECONDS = max(15.0, float(os.environ.get("SPREADBOARD_BULK_QUOTE_SECONDS", "45")))
+# The pass itself is non-overlapping: the loop sleeps only after its worker
+# exits. A 15-second hard minimum silently turned an 85-second production pass
+# into a 100-second cadence despite a 90-second truth boundary. Keep a small
+# configurable breath without contradicting that boundary.
+INTERVAL_SECONDS = max(1.0, float(os.environ.get("SPREADBOARD_BULK_QUOTE_SECONDS", "5")))
 
 #: Current funding per leg, written where the board can overlay it. The funding
 #: sweep runs inside the quote worker, which is a fresh process every cycle, so

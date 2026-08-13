@@ -476,6 +476,12 @@ def test_the_sweep_runs_as_a_worker_process_not_inside_the_server() -> None:
     assert Path("scripts/bulk_quote_worker.py").exists()
 
 
+def test_quote_loop_pause_can_fit_inside_the_current_spread_window() -> None:
+    """The old hard minimum was 15s; an 85s production pass therefore had a
+    100s cadence against a 90s current-spread boundary."""
+    assert bulk_quotes.INTERVAL_SECONDS <= 5.0
+
+
 def test_a_quote_with_an_unknown_size_is_still_a_quote(tmp_path) -> None:
     """Several venues return a bid and an ask but no volumes.
 

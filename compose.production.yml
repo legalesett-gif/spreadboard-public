@@ -51,14 +51,14 @@ services:
       # whose ceiling is 6g and which peaked at 5.1g. This is the code default
       # and still holds every warmed view resident.
       SPREADBOARD_MARKET_CACHE_ENTRIES: "14"
-      # One fetch_tickers per venue re-prices the full catalogue. The bounded
-      # four-venue sweep measured 42.5 seconds, so the small sleep below begins
-      # the next pass promptly while keeping every pair inside 90 seconds.
+      # One fetch_tickers per venue re-prices the full catalogue. Six bounded
+      # independent venue calls give the production pass headroom inside the
+      # 90-second truth boundary even while other warmers are active.
       SPREADBOARD_BULK_QUOTE_SECONDS: "5"
       # Independent venue adapters refresh concurrently; each venue writes its
       # result in one SQLite transaction. This keeps the complete catalogue
       # inside the 90-second current-spread truth window without raising it.
-      SPREADBOARD_BULK_QUOTE_WORKERS: "4"
+      SPREADBOARD_BULK_QUOTE_WORKERS: "6"
       # Funding has its own isolated worker. A slow funding provider must never
       # postpone a current-price pass or make a valid spread disappear.
       SPREADBOARD_BULK_FUNDING_SECONDS: "15"
