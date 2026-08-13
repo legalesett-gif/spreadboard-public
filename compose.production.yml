@@ -23,18 +23,19 @@ services:
       SPREADBOARD_REFRESH_TIMEOUT_SECONDS: "2700"
       SPREADBOARD_FAST_QUOTE_SECONDS: "60"
       # The complete CEX catalogue is repriced independently in one bulk pass.
-      # This exact-route worker therefore spends 40 rows on the two rate-limited
-      # DEX lanes and one direct canary per CEX lane. The top 28 shared DEX
-      # contracts rotate in two 14-contract passes, so the prior half remains
-      # current while the next half is published inside the truth boundary.
-      SPREADBOARD_FAST_QUOTE_ROUTES: "43"
+      # This exact-route worker therefore spends 50 rows on the two rate-limited
+      # DEX lanes and one direct canary per CEX lane. Twenty-five shared DEX
+      # contracts are published together: a rolling half expired before the
+      # following atomic delta landed and intermittently collapsed both public
+      # lanes back below the promised top 25.
+      SPREADBOARD_FAST_QUOTE_ROUTES: "53"
       # OKX Web3 is rate-limited. The current-board rotation requests only the
       # executable opening direction for each exact DEX leg, shares that quote
       # across paired routes, and keeps both DEX lanes inside the 90-second
       # current-spread boundary. Full two-sided probes remain available to
       # explicit chart/detail sampling.
-      SPREADBOARD_FAST_DEX_ROUTES: "40"
-      SPREADBOARD_FAST_DEX_CONTRACTS: "14"
+      SPREADBOARD_FAST_DEX_ROUTES: "50"
+      SPREADBOARD_FAST_DEX_CONTRACTS: "25"
       SPREADBOARD_FAST_QUOTE_WORKERS: "6"
       SPREADBOARD_DEX_QUOTE_CHUNK_SIZE: "8"
       SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS: "300"

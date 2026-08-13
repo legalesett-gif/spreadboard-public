@@ -225,6 +225,45 @@ def test_shared_dex_contracts_rotate_oldest_half_of_top_leader_pool() -> None:
         assert second_tokens == {f"T{index}" for index in range(14, 28)}
 
 
+def test_production_shared_dex_contracts_publish_one_complete_top_25() -> None:
+    lanes = {"FUTURES": [], "FUTURES-SPOT": [], "SPOT": []}
+    for lane, short_type in (("DEX-FUTURES", "Futures"), ("DEX-SPOT", "Spot")):
+        lanes[lane] = [
+            {
+                "route_key": f"{lane}-{index}",
+                "token": f"T{index}",
+                "long_venue": "OKX DEX 1",
+                "long_market_type": "Spot",
+                "short_venue": "Gate",
+                "short_market_type": short_type,
+                "depth_weighted_spread_pct": 100 - index,
+                # Make the lower-ranked rows much older. Production selection
+                # must still publish the current top 25 rather than an old tail.
+                "quote_ts_us": (index + 1) * 1_000_000,
+                "notes": {"identity": {"long": {
+                    "chain_id": "1", "token_address": f"0x{index:040x}",
+                }}},
+            }
+            for index in range(30)
+        ]
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("SPREADBOARD_FAST_DEX_ROUTES", "50")
+        monkeypatch.setenv("SPREADBOARD_FAST_DEX_CONTRACTS", "25")
+        selected = _select_fast_quote_rows(lanes, route_limit=53, priority_tokens=set())
+
+    dex_tokens = {
+        row["token"] for row in selected
+        if (_fast_quote_lane(row) or "").startswith("DEX-")
+    }
+    counts = {
+        lane: len({row["token"] for row in selected if _fast_quote_lane(row) == lane})
+        for lane in ("DEX-FUTURES", "DEX-SPOT")
+    }
+    assert dex_tokens == {f"T{index}" for index in range(25)}
+    assert counts == {"DEX-FUTURES": 25, "DEX-SPOT": 25}
+
+
 def test_production_fast_budget_reserves_dex_truth_and_cex_canaries() -> None:
     lanes: dict[str, list[dict]] = {}
     for lane in ("FUTURES", "FUTURES-SPOT", "SPOT"):

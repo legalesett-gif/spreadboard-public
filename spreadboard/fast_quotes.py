@@ -1469,12 +1469,14 @@ def _shared_dex_lane_seeds(
             -min((_number(row.get("quote_ts_us"), 0.0) for row in rows), default=0.0),
         )
 
-    # Quote the top shared leader pool in rolling halves. A single 28-contract
-    # provider batch cannot be published often enough for its oldest quote to
-    # remain inside the 90-second truth boundary. Fourteen oldest-first shared
-    # contracts per pass cover the same top 28 in two short passes; the delta
-    # retains the previous half while it is still current.
-    leader_pool_size = max(25, contract_limit * 2)
+    # Small provider budgets rotate through a larger leader pool. Production
+    # uses 25 contracts, however, and must publish one complete public top-25
+    # set atomically. Rotating two halves looked cheaper but the first half
+    # expired while the following subprocess was still running, causing the
+    # public lane count to oscillate between 0 and 14 despite healthy quotes.
+    leader_pool_size = (
+        contract_limit if contract_limit >= 25 else max(25, contract_limit * 2)
+    )
     shared_leader_pool = set(
         sorted(shared, key=identity_score, reverse=True)[:leader_pool_size]
     )
@@ -1499,7 +1501,7 @@ def _shared_dex_lane_seeds(
 
     selected_identities = sorted(
         shared_leader_pool,
-        key=rotation_score,
+        key=identity_score if contract_limit >= 25 else rotation_score,
         reverse=True,
     )[:lane_floor]
     selected = set(selected_identities)
