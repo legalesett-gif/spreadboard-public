@@ -503,6 +503,32 @@ def test_fast_delta_retains_only_current_verified_rows() -> None:
     )
 
 
+def test_failed_refresh_keeps_prior_exact_quote_only_until_truth_ttl() -> None:
+    current = {
+        "fast_quote_verified_at": "2026-08-13T20:00:00Z",
+        "quote_ts_us": 9_000_000,
+        "status": "live",
+    }
+    fast_quotes._retire_failed_fast_quote_unless_current(
+        current,
+        now_us=10_000_000,
+        max_age_seconds=2,
+    )
+    assert current["quote_ts_us"] == 9_000_000
+    assert current["fast_quote_verified_at"]
+    assert current["status"] == "live_last_verified"
+
+    expired = dict(current)
+    fast_quotes._retire_failed_fast_quote_unless_current(
+        expired,
+        now_us=12_000_001,
+        max_age_seconds=2,
+    )
+    assert expired["quote_ts_us"] == 0
+    assert expired["fast_quote_verified_at"] is None
+    assert expired["status"] == "refreshing"
+
+
 def test_fast_delta_publishes_exact_dex_lane_readiness(tmp_path, monkeypatch) -> None:
     snapshot = tmp_path / "api_discovery_latest.json"
     now_us = 10_000_000

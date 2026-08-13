@@ -682,7 +682,7 @@ class FastQuoteRefresher:
         if long_quote is None or short_quote is None:
             blockers.append("mirage_guard:fast_requote_unavailable")
             row["blockers"] = list(dict.fromkeys(blockers))
-            _retire_failed_fast_quote(row)
+            _retire_failed_fast_quote_unless_current(row)
             return False
         executable = spread_pct(long_quote["ask"], short_quote["bid"])
         depth = spread_pct(long_quote["ask_vwap"], short_quote["bid_vwap"])
@@ -1225,6 +1225,32 @@ def _retire_failed_fast_quote(row: dict[str, Any]) -> None:
     row["fast_quote_verified_at"] = None
     row["freshness"] = "stale"
     row["status"] = "refreshing"
+
+
+def _retire_failed_fast_quote_unless_current(
+    row: dict[str, Any],
+    *,
+    now_us: int | None = None,
+    max_age_seconds: float = 90.0,
+) -> None:
+    """Preserve a prior exact quote only for the remainder of its truth TTL.
+
+    A transient provider or CEX refresh failure is not evidence that a quote
+    verified seconds earlier became false. Zeroing that timestamp immediately
+    made otherwise healthy DEX lanes disappear on alternating rotations. The
+    original timestamp is never changed, so the normal freshness gate still
+    removes the row at exactly the same 90-second boundary.
+    """
+
+    current_us = int(time.time() * 1_000_000) if now_us is None else now_us
+    if _fresh_fast_quote_row(
+        row,
+        now_us=current_us,
+        max_age_seconds=max_age_seconds,
+    ):
+        row["status"] = "live_last_verified"
+        return
+    _retire_failed_fast_quote(row)
 
 
 def _snapshot_row_key(row: dict[str, Any]) -> str:
