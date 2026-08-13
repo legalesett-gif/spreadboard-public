@@ -1582,7 +1582,7 @@ def _shared_dex_lane_seeds(
         for row in rows_by_lane.get(lane) or []:
             identity = _dex_contract_identity(row)
             current = best.get(identity)
-            if current is None or _dex_opportunity_score(row) > _dex_opportunity_score(current):
+            if current is None or _dex_pair_selection_score(row) > _dex_pair_selection_score(current):
                 best[identity] = row
         lane_maps[lane] = best
 
@@ -1710,20 +1710,24 @@ def _expand_selected_dex_tokens(
     identities = {_dex_contract_identity(row) for row in seeds}
     selected = list(seeds[:limit])
     seen = {_snapshot_row_key(row) for row in selected}
-    remaining = sorted(
-        (
-            row
-            for row in rows
-            if _dex_contract_identity(row) in identities
-            and _snapshot_row_key(row) not in seen
-        ),
-        key=lambda row: (
-            _dex_opportunity_score(row),
-            _number(row.get("quote_ts_us"), 0.0),
-        ),
-        reverse=True,
-    )
-    for row in remaining:
+    # A selected contract may have been seeded from only one lane when shared
+    # coverage already met its floor. Add its best missing public-lane seed
+    # before ordinary pair fallbacks; otherwise the same exact DEX quote is paid
+    # for but cannot appear in the other valid lane.
+    present_groups = {
+        (_dex_contract_identity(row), _fast_quote_lane(row) or "") for row in selected
+    }
+    missing_group_best: dict[
+        tuple[tuple[str, str, str], str], dict[str, Any]
+    ] = {}
+    for row in rows:
+        group = (_dex_contract_identity(row), _fast_quote_lane(row) or "")
+        if group[0] not in identities or group in present_groups:
+            continue
+        current = missing_group_best.get(group)
+        if current is None or _dex_pair_selection_score(row) > _dex_pair_selection_score(current):
+            missing_group_best[group] = row
+    for row in sorted(missing_group_best.values(), key=_dex_pair_selection_score, reverse=True):
         if len(selected) >= limit:
             break
         key = _snapshot_row_key(row)
@@ -1731,7 +1735,71 @@ def _expand_selected_dex_tokens(
             continue
         selected.append(row)
         seen.add(key)
+        present_groups.add((_dex_contract_identity(row), _fast_quote_lane(row) or ""))
+
+    # The spare budget is insurance against one unavailable CEX pairing, not a
+    # second leaderboard.  A global opportunity sort let one rich token consume
+    # every spare row while thirty other selected token/lane groups had no
+    # fallback.  Allocate one alternative per exact contract and public lane
+    # before giving any group a third route.  Groups whose seed has never
+    # produced a fast exact quote are tried first; a successful alternative then
+    # becomes next cycle's preferred seed via _dex_pair_selection_score().
+    seed_by_group: dict[tuple[tuple[str, str, str], str], dict[str, Any]] = {}
+    group_order: list[tuple[tuple[str, str, str], str]] = []
+    for row in selected:
+        group = (_dex_contract_identity(row), _fast_quote_lane(row) or "")
+        if group not in seed_by_group:
+            group_order.append(group)
+            seed_by_group[group] = row
+
+    buckets: dict[tuple[tuple[str, str, str], str], list[dict[str, Any]]] = {}
+    for row in rows:
+        identity = _dex_contract_identity(row)
+        key = _snapshot_row_key(row)
+        if identity not in identities or key in seen:
+            continue
+        group = (identity, _fast_quote_lane(row) or "")
+        if group not in seed_by_group:
+            continue
+        buckets.setdefault(group, []).append(row)
+    for candidates in buckets.values():
+        candidates.sort(key=_dex_pair_selection_score, reverse=True)
+
+    group_order.sort(
+        key=lambda group: (
+            int(not bool(seed_by_group[group].get("fast_quote_verified_at"))),
+            -_number(seed_by_group[group].get("quote_ts_us"), 0.0),
+            _dex_opportunity_score(seed_by_group[group]),
+        ),
+        reverse=True,
+    )
+    while len(selected) < limit:
+        progressed = False
+        for group in group_order:
+            candidates = buckets.get(group) or []
+            while candidates and _snapshot_row_key(candidates[0]) in seen:
+                candidates.pop(0)
+            if not candidates:
+                continue
+            row = candidates.pop(0)
+            selected.append(row)
+            seen.add(_snapshot_row_key(row))
+            progressed = True
+            if len(selected) >= limit:
+                break
+        if not progressed:
+            break
     return selected
+
+
+def _dex_pair_selection_score(row: dict[str, Any]) -> tuple[int, float, float]:
+    """Prefer a pairing already proven quoteable, then its current economics."""
+
+    return (
+        int(bool(row.get("fast_quote_verified_at"))),
+        _number(row.get("quote_ts_us"), 0.0),
+        _dex_opportunity_score(row),
+    )
 
 
 def _dex_contract_identity(row: dict[str, Any]) -> tuple[str, str, str]:

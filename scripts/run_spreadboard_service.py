@@ -221,6 +221,12 @@ class RefreshLoop:
         _refresh_enrichment_subprocess()
         if not lightweight_mode:
             self._refresh_verified_identity_registry(snapshot_path=SNAPSHOT_PATH)
+            # A broad discovery publishes a new structural universe, so this is
+            # the useful point to rebuild every navigable view.  Fast quote
+            # deltas only replace prices in that universe and arrive roughly
+            # once a minute; warming all eleven grouped views after those deltas
+            # held the GIL for minutes and made the supposedly warm site slower.
+            self._start_board_warm()
         _return_freed_memory()
 
     def _refresh_verified_identity_registry(self, *, snapshot_path: Path) -> None:
@@ -270,10 +276,10 @@ class RefreshLoop:
                 # lock: the old synchronous 30-60s ranking build delayed the
                 # next rolling DEX half until the first half had expired.
                 _schedule_token_rankings()
-            self._start_board_warm()
             # The interval is a start-to-start target. Sleeping a full interval
-            # after a multi-minute quote pass and cache warm created a stale
-            # gap on every cycle even though the configured cadence was 60s.
+            # after a multi-minute quote pass created a stale gap on every cycle
+            # even though the configured cadence was 60s. Structural view warms
+            # belong to the much less frequent broad-discovery publication.
             self.stop_event.wait(max(0.0, interval - (time.monotonic() - cycle_started)))
 
     def _start_board_warm(self) -> None:

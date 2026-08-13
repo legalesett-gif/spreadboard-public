@@ -448,6 +448,47 @@ def test_selected_dex_token_uses_spare_budget_for_more_current_pairs() -> None:
     ]
 
 
+def test_dex_pair_fallbacks_are_shared_fairly_across_contract_lanes() -> None:
+    seeds = []
+    rows = []
+    for index in range(4):
+        identity = {
+            "chain_id": "1",
+            "token_address": f"0x{index:040x}",
+        }
+        for lane, short_type in (("DEX-FUTURES", "Futures"), ("DEX-SPOT", "Spot")):
+            seed = {
+                "route_key": f"seed-{lane}-{index}",
+                "token": f"T{index}",
+                "long_venue": "OKX DEX 1",
+                "long_market_type": "Spot",
+                "short_venue": "Gate",
+                "short_market_type": short_type,
+                "depth_weighted_spread_pct": 100 - index,
+                "notes": {"identity": {"long": identity}},
+            }
+            seeds.append(seed)
+            rows.extend([
+                seed,
+                {
+                    **seed,
+                    "route_key": f"fallback-{lane}-{index}",
+                    "short_venue": "Mexc",
+                    # Token zero would consume every spare slot under the old
+                    # global opportunity sort.
+                    "depth_weighted_spread_pct": 1000 - index,
+                },
+            ])
+
+    expanded = _expand_selected_dex_tokens(seeds, rows, len(seeds) + 4)
+    fallback_groups = {
+        (fast_quotes._dex_contract_identity(row), _fast_quote_lane(row))
+        for row in expanded[len(seeds):]
+    }
+
+    assert len(fallback_groups) == 4
+
+
 def test_fast_delta_retains_only_current_verified_rows() -> None:
     now_us = 10_000_000
     assert _fresh_fast_quote_row(

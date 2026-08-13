@@ -2565,15 +2565,16 @@ def test_headline_lists_do_not_group_the_whole_universe() -> None:
     assert api_spreads.TOP_GROUP_SHORTLIST >= api_spreads.DEFAULT_LIMIT // 2
 
 
-def test_the_service_warms_the_board_cache_after_writing() -> None:
-    """Every snapshot write invalidates the request cache; the warm must happen
-    off the request path or a member pays the rebuild."""
+def test_the_service_warms_views_after_structural_discovery_not_price_deltas() -> None:
+    """Minute price deltas must not start a multi-minute grouped-view rebuild."""
     import inspect
     from scripts import run_spreadboard_service
 
     quote_source = inspect.getsource(run_spreadboard_service.RefreshLoop.run_fast_quotes)
+    refresh_source = inspect.getsource(run_spreadboard_service.RefreshLoop.refresh_once)
     warm_source = inspect.getsource(run_spreadboard_service.RefreshLoop._start_board_warm)
-    assert "self._start_board_warm()" in quote_source
+    assert "self._start_board_warm()" not in quote_source
+    assert "self._start_board_warm()" in refresh_source
     assert "target=_warm_board_cache" in warm_source
 
 
