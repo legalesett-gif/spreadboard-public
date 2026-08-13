@@ -1410,7 +1410,7 @@ def _select_fast_quote_rows(
     # shared by both DEX lanes. Production currently has enough overlap for 25
     # independently ranked tokens in each lane. Small diagnostic/test budgets
     # retain the simple rotation semantics.
-    if dex_route_limit < 50:
+    if dex_route_limit < 30:
         dex_seeds = _dex_rotating_rows(
             dex_rows,
             priority_tokens=priority,
@@ -1419,14 +1419,14 @@ def _select_fast_quote_rows(
     else:
         contract_limit = min(
             dex_token_limit,
-            max(25, int(os.environ.get("SPREADBOARD_FAST_DEX_CONTRACTS", "28"))),
+            max(12, int(os.environ.get("SPREADBOARD_FAST_DEX_CONTRACTS", "28"))),
         )
         dex_seeds = _shared_dex_lane_seeds(
             rows_by_lane,
             priority_tokens=priority,
             route_limit=dex_route_limit,
             contract_limit=contract_limit,
-            lane_floor=min(25, dex_route_limit // 2),
+            lane_floor=min(contract_limit, 25, dex_route_limit // 2),
         )
     # The DEX provider is charged once per contract, not once per paired route:
     # leg_cache reuses that exact quote. Spend the remaining route budget on
@@ -1469,7 +1469,37 @@ def _shared_dex_lane_seeds(
             -min((_number(row.get("quote_ts_us"), 0.0) for row in rows), default=0.0),
         )
 
-    selected_identities = sorted(shared, key=identity_score, reverse=True)[:lane_floor]
+    # Quote the top shared leader pool in rolling halves. A single 28-contract
+    # provider batch cannot be published often enough for its oldest quote to
+    # remain inside the 90-second truth boundary. Fourteen oldest-first shared
+    # contracts per pass cover the same top 28 in two short passes; the delta
+    # retains the previous half while it is still current.
+    shared_leader_pool = set(
+        sorted(shared, key=identity_score, reverse=True)[
+            : max(25, contract_limit * 2)
+        ]
+    )
+    shared_leader_pool.update(
+        identity for identity in shared if identity[0] in priority_tokens
+    )
+
+    def rotation_score(identity: tuple[str, str, str]) -> tuple[int, float, float]:
+        rows = [row for row in (futures.get(identity), spot.get(identity)) if row]
+        oldest_quote = min(
+            (_number(row.get("quote_ts_us"), 0.0) for row in rows),
+            default=0.0,
+        )
+        return (
+            int(identity[0] in priority_tokens),
+            -oldest_quote,
+            max((_dex_opportunity_score(row) for row in rows), default=0.0),
+        )
+
+    selected_identities = sorted(
+        shared_leader_pool,
+        key=rotation_score,
+        reverse=True,
+    )[:lane_floor]
     selected = set(selected_identities)
 
     all_identities = set(futures) | set(spot)
