@@ -101,3 +101,24 @@ def test_stream_reprices_under_the_pages_own_query(monkeypatch: pytest.MonkeyPat
     server._board_stream_rows(Path("board.jsonl"), page_query)
 
     assert seen == [page_query], "the stream re-priced under a different query"
+
+
+def test_stream_does_not_erase_a_current_quote_when_fast_books_are_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bulk/DEX truth remains visible while the websocket lane is warming."""
+    from spreadboard import server
+
+    route = {
+        "route_key": "GUA|Mexc|Spot|Gate|Futures",
+        "depth_weighted_spread_pct": 1.125,
+        "executable_spread_pct": 1.2,
+        "funding_daily_pct": 0.4,
+    }
+    monkeypatch.setattr(server, "api_market_spreads", lambda *_args: {"groups": [{"routes": [route]}]})
+    monkeypatch.setattr(server.api_spreads, "live_prices_for", lambda _routes: {})
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _route: True)
+
+    rows = server._board_stream_rows(tmp_path / "board.jsonl", {})
+
+    assert rows[route["route_key"]] == (1.125, 0.4)

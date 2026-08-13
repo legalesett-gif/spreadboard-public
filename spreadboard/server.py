@@ -4847,6 +4847,16 @@ def _board_stream_rows(board_path: Path, query: dict[str, list[str]]) -> dict[st
     for route in routes:
         key = str(route["route_key"])
         spread, funding = live.get(key, (None, None))
+        # The websocket cache is an acceleration lane, not the source of truth
+        # for whether an exact bulk/DEX quote still exists. On restart (and on
+        # venues without a resident websocket) live_prices_for deliberately
+        # returns no override. Streaming that None erased a valid, current
+        # route from the member's screen and turned the whole board into
+        # "refreshing" until both books happened to enter the fast cache.
+        if spread is None and api_spreads.spread_quote_current(route):
+            spread = _float_or_none(route.get("depth_weighted_spread_pct"))
+            if spread is None:
+                spread = _float_or_none(route.get("executable_spread_pct"))
         rows[key] = (
             spread,
             funding if funding is not None else route.get("funding_daily_pct"),
