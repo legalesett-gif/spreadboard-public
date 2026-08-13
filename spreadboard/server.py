@@ -2088,6 +2088,13 @@ def api_market_spreads(
             offset=offset,
             limit=limit,
         )
+        # Discovery is deliberately capped per token so its atomic snapshot
+        # stays bounded.  The product page is a pair browser, not that scanner
+        # quota: expand only the already-selected visible tokens from the
+        # process-shared catalogue and live-book store.  No exchange request is
+        # made here, and a failure leaves the original scanner payload intact.
+        if limit <= api_spreads.DEFAULT_LIMIT:
+            data = _expand_visible_catalog_groups(data, query)
     except Exception:
         if cache_key is not None:
             _market_cache_finish(cache_key, None)
@@ -2098,6 +2105,141 @@ def api_market_spreads(
     if cache_key is not None:
         _market_cache_finish(cache_key, data)
     return _sync_telegram_client_universe(data)
+
+
+CATALOG_ROUTES_PER_VISIBLE_TOKEN = max(
+    12, int(os.environ.get("SPREADBOARD_CATALOG_ROUTES_PER_VISIBLE_TOKEN", "40"))
+)
+
+
+def _expand_visible_catalog_groups(
+    data: dict[str, Any], query: dict[str, list[str]]
+) -> dict[str, Any]:
+    """Overlay full warm CEX breadth on the bounded visible scanner groups."""
+
+    # Catalogue pairs intentionally carry exact books/funding/rails, not token
+    # valuation and listing metadata. Do not let the overlay bypass a filter it
+    # cannot prove. The bounded scanner remains authoritative for those views.
+    unsupported_filters = (
+        "source",
+        "min_volume_24h_usd",
+        "min_market_cap_usd",
+        "max_market_cap_usd",
+        "min_fdv_usd",
+        "max_fdv_usd",
+        "max_listing_age_days",
+        "persistence",
+        "asset_class",
+    )
+    if any(_query_first(query, key) for key in unsupported_filters):
+        return data
+
+    groups = [group for group in data.get("groups") or [] if isinstance(group, dict)]
+    tokens = [str(group.get("token") or "") for group in groups if group.get("token")]
+    if not tokens:
+        return data
+    try:
+        complete = catalog_pairs.for_tokens(
+            tokens,
+            # A pair can lead only inside the same 90-second truth boundary as
+            # every other current spread on the board.
+            max_age_seconds=api_spreads.LIVE_BOOK_MAX_AGE_SECONDS,
+            include_history=False,
+        )
+    except Exception:  # noqa: BLE001 - the scanner remains a valid fallback.
+        return data
+    if not complete:
+        return data
+
+    funding_only = _query_bool(query, "funding_only")
+    expanded_groups: list[dict[str, Any]] = []
+    for scanner_group in groups:
+        token = str(scanner_group.get("token") or "")
+        payload = complete.get(token)
+        if not payload:
+            expanded_groups.append(scanner_group)
+            continue
+        selected = catalog_pairs.filtered(
+            payload,
+            kind=_query_first(query, "kind"),
+            exchange=_query_first(query, "exchange"),
+            quote=_query_first(query, "quote"),
+            funding_only=funding_only,
+            min_spread_pct=_query_float(query, "min_spread_pct"),
+            min_abs_funding_24h_pct=_query_float(
+                query, "min_abs_funding_24h_pct"
+            ),
+            min_abs_funding_apr_pct=_query_float(
+                query, "min_abs_funding_apr_pct"
+            ),
+            limit=CATALOG_ROUTES_PER_VISIBLE_TOKEN,
+        )
+        if not selected.get("routes"):
+            expanded_groups.append(scanner_group)
+            continue
+
+        # Preserve current DEX routes and any scanner-only adapter evidence.
+        # Catalogue rows take precedence for duplicate CEX identities because
+        # they were rebuilt together from the newest shared book generation.
+        merged = catalog_pairs.with_routes(
+            selected,
+            list(scanner_group.get("routes") or []),
+            limit=None,
+        )
+        routes = list(merged.get("routes") or [])
+        routes.sort(
+            key=lambda row: _catalog_route_sort_value(row, funding_only=funding_only),
+            reverse=True,
+        )
+        routes = routes[:CATALOG_ROUTES_PER_VISIBLE_TOKEN]
+        merged["routes"] = routes
+        merged["displayed_route_count"] = len(routes)
+        merged["returned_route_count"] = len(routes)
+        # The complete CEX count may be larger than the rendered sample. DEX
+        # rows can only increase it, never shrink it back to the scanner quota.
+        merged["route_count"] = max(
+            int(selected.get("route_count") or 0),
+            int(merged.get("route_count") or 0),
+        )
+        expanded = catalog_pairs.group(merged)
+        if not expanded:
+            expanded_groups.append(scanner_group)
+            continue
+        expanded["token_name"] = scanner_group.get("token_name")
+        expanded["href"] = scanner_group.get("href") or expanded.get("href")
+        expanded["coverage_mode"] = "catalog_live_books"
+        expanded_groups.append(expanded)
+
+    result = dict(data)
+    result["groups"] = expanded_groups
+    result["rows"] = [
+        route
+        for group in expanded_groups
+        for route in group.get("routes") or []
+        if isinstance(route, dict)
+    ]
+    summary = dict(result.get("summary") or {})
+    summary["expanded_visible_route_count"] = sum(
+        int(group.get("route_count") or 0) for group in expanded_groups
+    )
+    summary["returned_rows"] = len(result["rows"])
+    result["summary"] = summary
+    result["coverage_mode"] = "bounded_scanner_plus_warm_complete_catalogue"
+    return result
+
+
+def _catalog_spread_value(row: dict[str, Any]) -> float | None:
+    value = _float_or_none(row.get("depth_weighted_spread_pct"))
+    return value if value is not None else _float_or_none(row.get("executable_spread_pct"))
+
+
+def _catalog_route_sort_value(row: dict[str, Any], *, funding_only: bool) -> float:
+    value = (
+        _float_or_none(row.get("funding_daily_pct"))
+        if funding_only
+        else _catalog_spread_value(row)
+    )
+    return value if value is not None else float("-inf")
 
 
 def _sync_telegram_client_universe(payload: dict[str, Any]) -> dict[str, Any]:

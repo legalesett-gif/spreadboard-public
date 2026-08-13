@@ -1390,37 +1390,137 @@ def _select_fast_quote_rows(
     # public top-25 readiness boundary. Seed each lane independently, then add
     # combined leaders up to the configured unique-contract ceiling. Shared
     # contracts are still quoted once by leg_cache below.
-    lane_floor = min(30, dex_token_limit // 2)
-    dex_seeds: list[dict[str, Any]] = []
-    seed_keys: set[tuple[Any, ...]] = set()
-    for lane in ("DEX-FUTURES", "DEX-SPOT"):
-        for row in _dex_rotating_rows(
-            rows_by_lane.get(lane) or [],
+    # Two OKX calls are needed for one exact contract (buy and sell). A
+    # 70-contract rotation therefore cannot finish inside the public 90-second
+    # spread boundary at the provider-safe request cadence. Spend the 70 route
+    # rows on at most 36 exact contracts, preferentially contracts shared by
+    # both DEX lanes. Production currently has enough overlap for 25 independently
+    # ranked tokens in each lane using 25 shared quotes rather than 50 separate
+    # ones. Small diagnostic/test budgets retain the simple rotation semantics.
+    if dex_route_limit < 50:
+        dex_seeds = _dex_rotating_rows(
+            dex_rows,
             priority_tokens=priority,
-            route_limit=lane_floor,
-        ):
-            key = _snapshot_row_key(row)
-            if key in seed_keys:
-                continue
-            dex_seeds.append(row)
-            seed_keys.add(key)
-    seeded_tokens = {str(row.get("token") or "").upper() for row in dex_seeds}
-    for row in _dex_rotating_rows(
-        dex_rows,
-        priority_tokens=priority,
-        route_limit=dex_token_limit,
-    ):
-        token = str(row.get("token") or "").upper()
-        if token in seeded_tokens or len(seeded_tokens) >= dex_token_limit:
-            continue
-        dex_seeds.append(row)
-        seeded_tokens.add(token)
+            route_limit=dex_token_limit,
+        )
+    else:
+        contract_limit = min(
+            dex_token_limit,
+            max(25, int(os.environ.get("SPREADBOARD_FAST_DEX_CONTRACTS", "36"))),
+        )
+        dex_seeds = _shared_dex_lane_seeds(
+            rows_by_lane,
+            priority_tokens=priority,
+            route_limit=dex_route_limit,
+            contract_limit=contract_limit,
+            lane_floor=min(25, dex_route_limit // 2),
+        )
     # The DEX provider is charged once per contract, not once per paired route:
     # leg_cache reuses that exact quote. Spend the remaining route budget on
     # other current CEX pairings for the already-selected tokens so token pages
     # and Telegram do not collapse to one arbitrary pair per DEX asset.
     selected.extend(_expand_selected_dex_tokens(dex_seeds, dex_rows, dex_route_limit))
     return selected
+
+
+def _shared_dex_lane_seeds(
+    rows_by_lane: dict[str, list[dict[str, Any]]],
+    *,
+    priority_tokens: set[str],
+    route_limit: int,
+    contract_limit: int,
+    lane_floor: int,
+) -> list[dict[str, Any]]:
+    """Cover both public DEX lanes with the fewest provider quote calls."""
+
+    lane_maps: dict[str, dict[tuple[str, str, str], dict[str, Any]]] = {}
+    for lane in ("DEX-FUTURES", "DEX-SPOT"):
+        best: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for row in rows_by_lane.get(lane) or []:
+            identity = _dex_contract_identity(row)
+            current = best.get(identity)
+            if current is None or _dex_opportunity_score(row) > _dex_opportunity_score(current):
+                best[identity] = row
+        lane_maps[lane] = best
+
+    futures = lane_maps["DEX-FUTURES"]
+    spot = lane_maps["DEX-SPOT"]
+    shared = set(futures) & set(spot)
+
+    def identity_score(identity: tuple[str, str, str]) -> tuple[int, float, float]:
+        rows = [row for row in (futures.get(identity), spot.get(identity)) if row]
+        token = identity[0]
+        return (
+            int(token in priority_tokens),
+            max((_dex_opportunity_score(row) for row in rows), default=0.0),
+            -min((_number(row.get("quote_ts_us"), 0.0) for row in rows), default=0.0),
+        )
+
+    selected_identities = sorted(shared, key=identity_score, reverse=True)[:lane_floor]
+    selected = set(selected_identities)
+
+    all_identities = set(futures) | set(spot)
+    # When overlap is sparse, share the remaining contract budget evenly. It
+    # may be mathematically impossible to reach 25+25 inside 36 contracts, but
+    # one lane must never consume every slot merely because set ordering changed.
+    ranked_by_lane = {
+        "DEX-FUTURES": sorted(set(futures) - selected, key=identity_score, reverse=True),
+        "DEX-SPOT": sorted(set(spot) - selected, key=identity_score, reverse=True),
+    }
+    lane_coverage = {
+        "DEX-FUTURES": sum(identity in futures for identity in selected),
+        "DEX-SPOT": sum(identity in spot for identity in selected),
+    }
+    cursors = {"DEX-FUTURES": 0, "DEX-SPOT": 0}
+    while len(selected) < contract_limit and any(
+        lane_coverage[lane] < lane_floor for lane in ranked_by_lane
+    ):
+        progressed = False
+        for lane, ranked in ranked_by_lane.items():
+            while cursors[lane] < len(ranked) and ranked[cursors[lane]] in selected:
+                cursors[lane] += 1
+            if lane_coverage[lane] >= lane_floor or cursors[lane] >= len(ranked):
+                continue
+            identity = ranked[cursors[lane]]
+            cursors[lane] += 1
+            selected.add(identity)
+            lane_coverage["DEX-FUTURES"] += int(identity in futures)
+            lane_coverage["DEX-SPOT"] += int(identity in spot)
+            progressed = True
+            if len(selected) >= contract_limit:
+                break
+        if not progressed:
+            break
+
+    # Never evict a member-tracked/open-position contract merely because its
+    # current score cooled. Shared lane coverage is fixed first, then tracked
+    # contracts and current leaders fill the remaining provider budget.
+    priority_identities = [
+        identity for identity in all_identities if identity[0] in priority_tokens
+    ]
+    for identity in sorted(priority_identities, key=identity_score, reverse=True):
+        if len(selected) >= contract_limit:
+            break
+        selected.add(identity)
+    for identity in sorted(all_identities, key=identity_score, reverse=True):
+        if len(selected) >= contract_limit:
+            break
+        selected.add(identity)
+
+    seeds: list[dict[str, Any]] = []
+    # Shared contracts first: one provider quote updates a route in each lane.
+    for identity in selected_identities:
+        for lane_map in (futures, spot):
+            row = lane_map.get(identity)
+            if row is not None and len(seeds) < route_limit:
+                seeds.append(row)
+    for identity in sorted(selected - set(selected_identities), key=identity_score, reverse=True):
+        if len(seeds) >= route_limit:
+            break
+        candidates = [row for row in (futures.get(identity), spot.get(identity)) if row]
+        if candidates:
+            seeds.append(max(candidates, key=_dex_opportunity_score))
+    return seeds
 
 
 def _expand_selected_dex_tokens(
@@ -1430,14 +1530,14 @@ def _expand_selected_dex_tokens(
 ) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
-    tokens = {str(row.get("token") or "").upper() for row in seeds}
+    identities = {_dex_contract_identity(row) for row in seeds}
     selected = list(seeds[:limit])
     seen = {_snapshot_row_key(row) for row in selected}
     remaining = sorted(
         (
             row
             for row in rows
-            if str(row.get("token") or "").upper() in tokens
+            if _dex_contract_identity(row) in identities
             and _snapshot_row_key(row) not in seen
         ),
         key=lambda row: (
@@ -1455,6 +1555,14 @@ def _expand_selected_dex_tokens(
         selected.append(row)
         seen.add(key)
     return selected
+
+
+def _dex_contract_identity(row: dict[str, Any]) -> tuple[str, str, str]:
+    """The exact reusable provider quote, with token fallback for fixtures."""
+
+    token = str(row.get("token") or "").upper()
+    chain, contract = _dex_chain_contract(row)
+    return (token, chain, contract.casefold())
 
 
 def _unique_rows_by_token(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:

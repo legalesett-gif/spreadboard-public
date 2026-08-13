@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import time
 
-from spreadboard import api_spreads, catalog_pairs, live_book_cache
+from spreadboard import api_spreads, catalog_pairs, live_book_cache, server
 
 
 def _book(
@@ -237,3 +237,148 @@ def test_current_dex_rows_merge_with_complete_cex_pairs() -> None:
     assert merged["displayed_route_count"] == 2
     assert merged["dex_route_count"] == 1
     assert [row["route_key"] for row in merged["routes"]] == ["dex", "cex"]
+
+
+def test_spread_and_funding_catalogue_filters_are_economically_independent(monkeypatch) -> None:
+    monkeypatch.setattr(
+        catalog_pairs.venue_funding_history,
+        "route_windows",
+        lambda _route: {"1d": None, "7d": None, "30d": None},
+    )
+    payload = {
+        "token": "GUA",
+        "routes": [
+            {
+                "route_key": "spread_only",
+                "route_kind": "FUTURES",
+                "depth_weighted_spread_pct": 1.2,
+                "funding_daily_pct": -0.4,
+            },
+            {
+                "route_key": "funding_only",
+                "route_kind": "FUTURES",
+                "depth_weighted_spread_pct": -0.8,
+                "funding_daily_pct": 0.6,
+            },
+        ],
+    }
+
+    spread = catalog_pairs.filtered(payload, funding_only=False)
+    funding = catalog_pairs.filtered(payload, funding_only=True)
+
+    assert [row["route_key"] for row in spread["routes"]] == ["spread_only"]
+    assert [row["route_key"] for row in funding["routes"]] == ["funding_only"]
+    assert funding["routes"][0]["funding_24h_pct"] is None
+
+
+def test_bulk_catalogue_expansion_reads_the_shared_book_store_once(monkeypatch, tmp_path: Path) -> None:
+    books = {
+        live_book_cache.cache_key("Mexc", "Spot", "GUA/USDT"): _book(0.0499, 0.05),
+        live_book_cache.cache_key("Mexc", "Futures", "GUA/USDT:USDT"): _book(0.0504, 0.0505),
+        live_book_cache.cache_key("Gate", "Futures", "GUA/USDT:USDT"): _book(0.051, 0.0511),
+    }
+    cache_path = tmp_path / "books.sqlite3"
+    cache_path.touch()
+    monkeypatch.setattr(catalog_pairs.live_book_cache, "DEFAULT_PATH", cache_path)
+    monkeypatch.setattr(catalog_pairs.chart_catalog, "load", _catalog)
+    calls = {"load_all": 0}
+
+    class Store:
+        def load_all(self, **_kwargs):
+            calls["load_all"] += 1
+            return books
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(catalog_pairs.live_book_cache, "LiveBookStore", Store)
+    monkeypatch.setattr(catalog_pairs.bulk_quotes, "load_funding", lambda: {})
+    monkeypatch.setattr(catalog_pairs.public_rails, "load_public_rails", lambda: {})
+
+    payloads = catalog_pairs.for_tokens(["GUA", "MISSING"])
+
+    assert calls["load_all"] == 1
+    assert payloads["GUA"]["route_count"] == 4
+    assert payloads["MISSING"]["route_count"] == 0
+
+
+def test_visible_board_group_expands_beyond_scanner_quota(monkeypatch) -> None:
+    now_us = int(time.time() * 1_000_000)
+
+    def route(key: str, spread: float, carry: float) -> dict:
+        return {
+            "token": "GUA",
+            "route_key": key,
+            "route_kind": "FUTURES",
+            "long_venue": "Mexc",
+            "long_market_type": "Futures",
+            "long_market_symbol": "GUA/USDT:USDT",
+            "short_venue": key,
+            "short_market_type": "Futures",
+            "short_market_symbol": "GUA/USDT:USDT",
+            "depth_weighted_spread_pct": spread,
+            "executable_spread_pct": spread,
+            "funding_daily_pct": carry,
+            "funding_projected_24h_pct": carry,
+            "quote_ts_us": now_us,
+            "age_min": 0.0,
+            "mirage_guarded": False,
+        }
+
+    scanner_route = route("Gate", 0.5, 0.1)
+    data = {
+        "groups": [{
+            "token": "GUA",
+            "token_name": "GUA",
+            "href": "/token/GUA",
+            "route_count": 1,
+            "routes": [scanner_route],
+            "best_route": scanner_route,
+        }],
+        "summary": {},
+        "rows": [scanner_route],
+    }
+    monkeypatch.setattr(
+        server.catalog_pairs,
+        "for_tokens",
+        lambda *_args, **_kwargs: {
+            "GUA": {
+                "token": "GUA",
+                "routes": [
+                    scanner_route,
+                    route("Bybit", 0.4, -0.2),
+                    route("Aster", -0.3, 0.6),
+                ],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        catalog_pairs.venue_funding_history,
+        "route_windows",
+        lambda _route: {"1d": None, "7d": None, "30d": None},
+    )
+
+    spread = server._expand_visible_catalog_groups(data, {})
+    funding = server._expand_visible_catalog_groups(data, {"funding_only": ["1"]})
+
+    assert spread["groups"][0]["route_count"] == 2
+    assert {row["route_key"] for row in spread["groups"][0]["routes"]} == {"Gate", "Bybit"}
+    assert funding["groups"][0]["route_count"] == 2
+    assert {row["route_key"] for row in funding["groups"][0]["routes"]} == {"Gate", "Aster"}
+
+
+def test_catalogue_overlay_cannot_bypass_unsupported_valuation_filter(monkeypatch) -> None:
+    called = False
+
+    def unexpected(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr(server.catalog_pairs, "for_tokens", unexpected)
+    data = {"groups": [{"token": "GUA"}]}
+
+    assert server._expand_visible_catalog_groups(
+        data, {"min_market_cap_usd": ["1000000"]}
+    ) is data
+    assert called is False

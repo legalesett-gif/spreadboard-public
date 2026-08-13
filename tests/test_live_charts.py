@@ -124,7 +124,7 @@ def test_combined_dex_rotation_keeps_every_priority_token_before_leaders() -> No
     assert [row["token"] for row in selected] == ["GUA", "ESPORTS", "HEADLINE"]
 
 
-def test_combined_dex_rotation_keeps_25_tokens_in_each_public_lane() -> None:
+def test_disjoint_dex_lanes_share_the_finite_provider_contract_budget() -> None:
     lanes = {
         "FUTURES": [], "FUTURES-SPOT": [], "SPOT": [],
         "DEX-FUTURES": [
@@ -149,8 +149,39 @@ def test_combined_dex_rotation_keeps_25_tokens_in_each_public_lane() -> None:
         lanes, route_limit=60, priority_tokens=set()
     )
 
-    assert sum(str(row["token"]).startswith("F") for row in selected) >= 25
-    assert sum(str(row["token"]).startswith("S") for row in selected) >= 25
+    assert sum(str(row["token"]).startswith("F") for row in selected) >= 18
+    assert sum(str(row["token"]).startswith("S") for row in selected) >= 18
+    assert len({fast_quotes._dex_contract_identity(row) for row in selected}) <= 36
+
+
+def test_shared_dex_contracts_keep_25_tokens_current_in_both_public_lanes() -> None:
+    lanes = {"FUTURES": [], "FUTURES-SPOT": [], "SPOT": []}
+    for lane, short_type in (("DEX-FUTURES", "Futures"), ("DEX-SPOT", "Spot")):
+        lanes[lane] = [
+            {
+                "route_key": f"{lane}-{index}",
+                "token": f"T{index}",
+                "long_venue": "OKX DEX 1",
+                "long_market_type": "Spot",
+                "short_venue": "Gate",
+                "short_market_type": short_type,
+                "depth_weighted_spread_pct": 100 - index,
+                "notes": {"identity": {"long": {
+                    "chain_id": "1", "token_address": f"0x{index:040x}",
+                }}},
+            }
+            for index in range(30)
+        ]
+
+    selected = _select_fast_quote_rows(lanes, route_limit=70, priority_tokens=set())
+    counts = {
+        lane: len({row["token"] for row in selected if _fast_quote_lane(row) == lane})
+        for lane in ("DEX-FUTURES", "DEX-SPOT")
+    }
+
+    assert counts["DEX-FUTURES"] >= 25
+    assert counts["DEX-SPOT"] >= 25
+    assert len({fast_quotes._dex_contract_identity(row) for row in selected}) <= 36
 
 
 def test_fast_quote_budget_is_failure_tolerant_across_all_lanes(monkeypatch) -> None:
@@ -198,7 +229,7 @@ def test_fast_quote_budget_is_failure_tolerant_across_all_lanes(monkeypatch) -> 
     }
     assert counts == {
         "FUTURES": 50, "FUTURES-SPOT": 50, "SPOT": 50,
-        "DEX-FUTURES": 35, "DEX-SPOT": 35,
+        "DEX-FUTURES": 18, "DEX-SPOT": 18,
     }
 
 

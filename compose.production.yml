@@ -32,6 +32,7 @@ services:
       # The 10-token reserve absorbs ordinary provider failures while shared
       # DEX legs are still requested once and reused across paired routes.
       SPREADBOARD_FAST_DEX_ROUTES: "70"
+      SPREADBOARD_FAST_DEX_CONTRACTS: "36"
       SPREADBOARD_FAST_QUOTE_WORKERS: "6"
       SPREADBOARD_DEX_QUOTE_CHUNK_SIZE: "8"
       SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS: "300"

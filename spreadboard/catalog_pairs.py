@@ -207,6 +207,251 @@ def for_token(
     return _limited(payload, limit)
 
 
+def for_tokens(
+    tokens: list[str] | tuple[str, ...] | set[str],
+    *,
+    max_age_seconds: float = MAX_BOOK_AGE_SECONDS,
+    limit_per_token: int | None = None,
+    include_history: bool = False,
+) -> dict[str, dict[str, Any]]:
+    """Build current CEX pair catalogues for several tokens from one book read.
+
+    The grouped board needs only its visible page (normally 25 tokens), but a
+    point lookup for every market made that page pay hundreds of SQLite reads.
+    This bulk path reads the shared store once and performs the same identity,
+    quote-basis, rail and matched-depth checks in memory.  It never calls an
+    exchange and is therefore safe for the already-warm page builder.
+    """
+
+    wanted = {_token(token) for token in tokens}
+    wanted.discard("")
+    if not wanted or not live_book_cache.DEFAULT_PATH.exists():
+        return {}
+
+    catalog = chart_catalog.load()
+    store: live_book_cache.LiveBookStore | None = None
+    try:
+        store = live_book_cache.LiveBookStore()
+        books = store.load_all(max_age_seconds=max_age_seconds)
+    except Exception:  # noqa: BLE001 - preserve the bounded scanner on failure.
+        return {}
+    finally:
+        if store is not None:
+            store.close()
+
+    markets_by_token: dict[str, dict[tuple[str, str, str], dict[str, Any]]] = {}
+    for item in catalog.get("markets") or []:
+        if not isinstance(item, dict) or _is_dex(item):
+            continue
+        token = _token(item.get("token"))
+        if token not in wanted:
+            continue
+        key = (
+            str(item.get("venue") or ""),
+            str(item.get("market_type") or ""),
+            str(item.get("symbol") or ""),
+        )
+        if all(key) and key[1] in {"Spot", "Futures"}:
+            markets_by_token.setdefault(token, {})[key] = item
+
+    funding = bulk_quotes.load_funding()
+    rails = public_rails.load_public_rails()
+    output: dict[str, dict[str, Any]] = {}
+    for token in wanted:
+        token_markets = markets_by_token.get(token) or {}
+        legs: list[Leg] = []
+        for (venue, market_type, symbol), item in token_markets.items():
+            book = books.get(live_book_cache.cache_key(venue, market_type, symbol))
+            if book is None:
+                continue
+            try:
+                contract_size = float(item.get("contract_size") or 1.0)
+            except (TypeError, ValueError):
+                contract_size = 1.0
+            legs.append(
+                Leg(
+                    token=token,
+                    venue=venue,
+                    market_type=market_type,
+                    symbol=symbol,
+                    quote=str(item.get("quote") or "").upper(),
+                    contract_size=contract_size if contract_size > 0 else 1.0,
+                    book=book,
+                )
+            )
+
+        payload = _payload_from_legs(
+            token,
+            legs,
+            funding=funding,
+            rails=rails,
+            catalog_generated_at=catalog.get("generated_at"),
+            catalog_market_count=len(token_markets),
+            max_age_seconds=max_age_seconds,
+            include_history=include_history,
+        )
+        output[token] = _limited(payload, limit_per_token)
+    return output
+
+
+def filtered(
+    payload: dict[str, Any],
+    *,
+    kind: str | None = None,
+    exchange: str | None = None,
+    quote: str | None = None,
+    funding_only: bool = False,
+    min_spread_pct: float | None = None,
+    min_abs_funding_24h_pct: float | None = None,
+    min_abs_funding_apr_pct: float | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Apply board economics without coupling spread eligibility to funding.
+
+    A positive spread remains a spread candidate when carry is negative.  A
+    positive-carry route remains a funding candidate when its opening basis is
+    negative.  This is the exact product distinction the bounded discovery
+    snapshot could not express after its per-token quota was exhausted.
+    """
+
+    normalized_kind = str(kind or "").upper().strip()
+    normalized_kind = {
+        "FUTURES-FUTURES": "FUTURES",
+        "FUTURES-SPOT": "FUTURES-SPOT-PAIR",
+        "SPOT-FUTURES": "FUTURES-SPOT-PAIR",
+        "SPOT-SPOT": "SPOT",
+    }.get(normalized_kind, normalized_kind)
+    wanted_exchange = str(exchange or "").casefold().strip()
+    wanted_quote = str(quote or "").upper().strip()
+    routes: list[dict[str, Any]] = []
+    for row in payload.get("routes") or []:
+        route_kind = str(row.get("route_kind") or "").upper()
+        if normalized_kind == "FUTURES-SPOT-PAIR":
+            if route_kind not in {"FUTURES-SPOT", "SPOT-FUTURES"}:
+                continue
+        elif normalized_kind and route_kind != normalized_kind:
+            continue
+        if wanted_exchange and wanted_exchange not in " ".join(
+            str(row.get(key) or "") for key in ("long_venue", "short_venue")
+        ).casefold():
+            continue
+        if wanted_quote and wanted_quote not in {
+            str(row.get("long_quote") or "").upper(),
+            str(row.get("short_quote") or "").upper(),
+        }:
+            continue
+        spread = _spread_rank(row)
+        carry = _number(row.get("funding_daily_pct"))
+        if funding_only:
+            if carry is None or carry <= 0:
+                continue
+        elif spread <= 0:
+            continue
+        if min_spread_pct is not None and not funding_only and spread < float(min_spread_pct):
+            continue
+        if min_abs_funding_24h_pct is not None and abs(carry or 0.0) < float(
+            min_abs_funding_24h_pct
+        ):
+            continue
+        if min_abs_funding_apr_pct is not None and abs(carry or 0.0) * 365.0 < float(
+            min_abs_funding_apr_pct
+        ):
+            continue
+        routes.append(row)
+
+    routes.sort(
+        key=(
+            (lambda row: _number(row.get("funding_daily_pct")) or float("-inf"))
+            if funding_only
+            else _spread_rank
+        ),
+        reverse=True,
+    )
+    total = len(routes)
+    returned = routes if limit is None else routes[: max(0, int(limit))]
+    # Historical settlement windows are useful for the rows a member can see,
+    # but calculating them for hundreds of hidden alternatives wastes work.
+    for row in returned:
+        if not row.get("catalog_history_loaded"):
+            windows = venue_funding_history.route_windows(row)
+            row["settled_funding_windows"] = windows
+            row["funding_24h_pct"] = windows.get("1d")
+            row["catalog_history_loaded"] = True
+    result = dict(payload)
+    result.update(
+        {
+            "ok": bool(returned),
+            "mode": "warm_complete_catalog_pairs_filtered_independently",
+            "route_count": total,
+            "displayed_route_count": len(returned),
+            "returned_route_count": len(returned),
+            "routes": returned,
+        }
+    )
+    return result
+
+
+def _payload_from_legs(
+    token: str,
+    legs: list[Leg],
+    *,
+    funding: dict[str, dict[str, Any]],
+    rails: dict[str, dict[str, Any]],
+    catalog_generated_at: Any,
+    catalog_market_count: int,
+    max_age_seconds: float,
+    include_history: bool,
+) -> dict[str, Any]:
+    routes: list[dict[str, Any]] = []
+    rejected = {
+        "same_venue": 0,
+        "price_ratio": 0,
+        "quote_mismatch": 0,
+        "closed_rail": 0,
+        "leveraged": 0,
+    }
+    for left_index, left in enumerate(legs):
+        for right in legs[left_index + 1 :]:
+            for long_leg, short_leg in _directions(left, right):
+                reason = _reject_reason(token, long_leg, short_leg, rails)
+                if reason:
+                    rejected[reason] += 1
+                    continue
+                routes.append(
+                    _route(
+                        token,
+                        long_leg,
+                        short_leg,
+                        funding,
+                        rails,
+                        include_history=include_history,
+                    )
+                )
+    routes.sort(
+        key=lambda row: (
+            _spread_rank(row),
+            _number(row.get("depth_weighted_spread_pct")) is not None,
+            _number(row.get("funding_projected_24h_pct")) or float("-inf"),
+        ),
+        reverse=True,
+    )
+    return {
+        "ok": bool(routes),
+        "mode": "warm_complete_catalog_pairs",
+        "token": token,
+        "catalog_generated_at": catalog_generated_at,
+        "book_max_age_seconds": max_age_seconds,
+        "target_notional_usd": TARGET_NOTIONAL_USD,
+        "catalog_market_count": catalog_market_count,
+        "fresh_market_count": len(legs),
+        "missing_book_count": max(0, catalog_market_count - len(legs)),
+        "route_count": len(routes),
+        "displayed_route_count": len(routes),
+        "rejected": rejected,
+        "routes": routes,
+    }
+
+
 def group(payload: dict[str, Any]) -> dict[str, Any]:
     """Shape a catalogue result for the existing grouped-route renderer."""
 
@@ -223,7 +468,10 @@ def group(payload: dict[str, Any]) -> dict[str, Any]:
         key=lambda row: _spread_rank(row),
     )
     funding_routes = [
-        row for row in routes if _number(row.get("funding_projected_24h_pct")) is not None
+        row
+        for row in routes
+        if _number(row.get("funding_projected_24h_pct")) is not None
+        and not row.get("mirage_guarded")
     ]
     funding_route = (
         max(funding_routes, key=lambda row: float(row["funding_projected_24h_pct"]))
@@ -239,7 +487,10 @@ def group(payload: dict[str, Any]) -> dict[str, Any]:
         }
     )
     kinds = sorted({str(row.get("route_kind") or "") for row in routes})
-    age = max((_number(row.get("age_min")) or 0.0 for row in routes), default=None)
+    age = min(
+        (_number(row.get("age_min")) for row in routes if _number(row.get("age_min")) is not None),
+        default=None,
+    )
     return {
         "token": payload.get("token"),
         "token_name": None,
@@ -609,6 +860,7 @@ def _route(
     )
     row["funding_24h_pct"] = windows.get("1d")
     row["settled_funding_windows"] = windows
+    row["catalog_history_loaded"] = include_history
     guard = tokenized_assets.classify(row)
     row["tokenized_guard"] = guard
     if guard.get("asset_class") == "tokenized" and guard.get("status") != "verified":
