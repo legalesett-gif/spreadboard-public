@@ -467,6 +467,10 @@ def _warm_telegram_payload_at_startup(board_path: Path) -> None:
         from spreadboard import server, telegram_queries
 
         started = time.monotonic()
+        # Markets is the first authenticated navigation view. Warm its exact
+        # default key before the larger Telegram catalogue so the first member
+        # after a deploy never pays a 15-20 second grouped-board build.
+        server.api_market_spreads(board_path, {})
         payload = server.api_market_spreads(
             board_path,
             {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},

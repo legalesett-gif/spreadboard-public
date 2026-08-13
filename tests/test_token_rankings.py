@@ -120,6 +120,36 @@ def test_ranked_metrics_are_independent() -> None:
     assert token_rankings.ranked(payload, metric="funding")[0]["token"] == "FUND"
 
 
+def test_non_spread_rank_only_reprices_rows_that_can_be_returned(monkeypatch) -> None:
+    payload = {
+        "records": [
+            {
+                "token": f"T{index:04d}",
+                "status": "live",
+                "best_spread_pct": float(index),
+                "best_spread_route": {
+                    "route_key": f"route-{index}",
+                    "quote_ts_us": int(time.time() * 1_000_000),
+                },
+                "settled_windows": {"30d": float(index)},
+            }
+            for index in range(1000)
+        ]
+    }
+    seen = []
+    monkeypatch.setattr(
+        token_rankings.api_spreads,
+        "live_prices_for",
+        lambda routes, include_funding=False: seen.extend(routes) or {},
+    )
+
+    rows = token_rankings.ranked(payload, metric="30d", limit=25)
+
+    assert len(rows) == 25
+    assert len(seen) == 25
+    assert rows[0]["token"] == "T0999"
+
+
 def test_ranked_reprices_precomputed_leader_from_current_matched_books(monkeypatch) -> None:
     payload = {
         "records": [

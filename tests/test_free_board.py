@@ -363,6 +363,7 @@ def test_telegram_snapshot_can_warm_before_the_first_quote_cycle(tmp_path, monke
 
     funding_queries = [query for query in service.WARM_QUERIES if query.get("funding_only")]
     assert seen == [
+        (board_path, {}),
         (board_path, {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]}),
         *((board_path, query) for query in funding_queries),
     ]

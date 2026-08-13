@@ -301,35 +301,12 @@ def ranked(
     needle = str(query or "").upper().strip()
     wanted_status = str(status or "").casefold().strip()
     # The artifact is structural and stays warm between worker generations.
-    # Overlay its one leader per token from the resident matched books, then
-    # reapply the absolute quote-age promise. This keeps the page instant while
-    # preventing either an obsolete rank or a blank gap between worker runs.
+    # Do not load and match the whole 20k-book store for all 5k catalogue tokens
+    # on every request: settled-window, coverage and A-Z ranks do not even use
+    # live spread as their ordering metric. Filter and provisionally rank first,
+    # then update only the rows that can materially reach the requested page.
     sources = [source for source in payload.get("records") or [] if isinstance(source, dict)]
-    candidate_routes = [
-        source.get("best_spread_route")
-        for source in sources
-        if isinstance(source.get("best_spread_route"), dict)
-        and source["best_spread_route"].get("route_key")
-    ]
-    live_spreads = api_spreads.live_prices_for(candidate_routes, include_funding=False)
-    rows = []
-    for source in sources:
-        row = dict(source)
-        spread_route = dict(row.get("best_spread_route") or {})
-        live_spread = (live_spreads.get(str(spread_route.get("route_key") or "")) or (None, None))[0]
-        if live_spread is not None:
-            row["best_spread_pct"] = live_spread
-            spread_route["depth_weighted_spread_pct"] = live_spread
-            spread_route["executable_spread_pct"] = live_spread
-            spread_route["age_min"] = 0.0
-            spread_route["spread_quote_current"] = True
-            row["best_spread_route"] = spread_route
-        elif row.get("best_spread_pct") is not None and not api_spreads.spread_quote_current(
-            spread_route
-        ):
-            row["best_spread_pct"] = None
-            row["best_spread_route"] = None
-        rows.append(row)
+    rows = [dict(source) for source in sources]
     if needle:
         rows = [
             row
@@ -350,19 +327,58 @@ def ranked(
             return _number(row.get("catalog_pair_count"))
         return _number((row.get("settled_windows") or {}).get(normalized_metric))
 
-    if normalized_metric == "token":
-        rows.sort(key=lambda row: str(row.get("token") or ""))
-    else:
-        rows.sort(
-            key=lambda row: (
-                metric_value(row) is not None,
-                metric_value(row) if metric_value(row) is not None else float("-inf"),
-                row.get("status") == "live",
-                str(row.get("token") or ""),
-            ),
-            reverse=True,
-        )
-    return rows[: max(1, min(500, int(limit)))]
+    def sort_rows(values: list[dict[str, Any]]) -> None:
+        if normalized_metric == "token":
+            values.sort(key=lambda row: str(row.get("token") or ""))
+        else:
+            values.sort(
+                key=lambda row: (
+                    metric_value(row) is not None,
+                    metric_value(row) if metric_value(row) is not None else float("-inf"),
+                    row.get("status") == "live",
+                    str(row.get("token") or ""),
+                ),
+                reverse=True,
+            )
+
+    page_limit = max(1, min(500, int(limit)))
+    sort_rows(rows)
+    # For spread, allow a broad buffer to move after the latest matched books;
+    # for all other metrics the order is independent of spread, so only the
+    # rows actually rendered need their spread cell refreshed.
+    overlay_limit = min(
+        len(rows),
+        max(page_limit, 500 if normalized_metric == "spread" else page_limit),
+    )
+    candidates = rows[:overlay_limit]
+    candidate_routes = [
+        row.get("best_spread_route")
+        for row in candidates
+        if isinstance(row.get("best_spread_route"), dict)
+        and row["best_spread_route"].get("route_key")
+    ]
+    live_spreads = api_spreads.live_prices_for(candidate_routes, include_funding=False)
+    for row in candidates:
+        spread_route = dict(row.get("best_spread_route") or {})
+        live_spread = (
+            live_spreads.get(str(spread_route.get("route_key") or ""))
+            or (None, None)
+        )[0]
+        if live_spread is not None:
+            row["best_spread_pct"] = live_spread
+            spread_route["depth_weighted_spread_pct"] = live_spread
+            spread_route["executable_spread_pct"] = live_spread
+            spread_route["age_min"] = 0.0
+            spread_route["spread_quote_current"] = True
+            row["best_spread_route"] = spread_route
+        elif row.get("best_spread_pct") is not None and not api_spreads.spread_quote_current(
+            spread_route
+        ):
+            row["best_spread_pct"] = None
+            row["best_spread_route"] = None
+    if normalized_metric == "spread":
+        sort_rows(candidates)
+    return candidates[:page_limit]
 
 
 def age_seconds(payload: dict[str, Any], *, now: float | None = None) -> float | None:
