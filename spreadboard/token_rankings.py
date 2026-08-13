@@ -94,6 +94,7 @@ def build(
             row
             for row in routes
             if not row.get("depth_unverified")
+            and not row.get("mirage_guarded")
             and _number(row.get("depth_weighted_spread_pct")) is not None
         ]
         if verified_spread_routes:
@@ -108,11 +109,17 @@ def build(
             if spread_route.get("depth_unverified")
             else _number(spread_route.get("depth_weighted_spread_pct"))
         )
+        verified_funding_routes = [
+            row
+            for row in routes
+            if not row.get("mirage_guarded") and _current_funding(row) is not None
+        ]
         funding_route = (
-            group.get("best_funding_route")
-            if isinstance(group.get("best_funding_route"), dict)
+            max(verified_funding_routes, key=lambda row: _current_funding(row) or float("-inf"))
+            if verified_funding_routes
             else {}
         )
+        funding_now = _current_funding(funding_route)
         records[token] = {
             **_base_record(token, status="live"),
             "token_name": group.get("token_name"),
@@ -121,9 +128,9 @@ def build(
             "route_kinds": list(group.get("route_kinds") or []),
             "best_spread_pct": ranked_spread,
             "best_spread_route": _route_summary(spread_route) if ranked_spread is not None else None,
-            "funding_now_24h_pct": _number(group.get("best_funding_24h_pct")),
-            "funding_now_basis": group.get("best_funding_24h_basis"),
-            "best_funding_route": _route_summary(funding_route),
+            "funding_now_24h_pct": funding_now,
+            "funding_now_basis": "projected_current_rate" if funding_now is not None else None,
+            "best_funding_route": _route_summary(funding_route) if funding_now is not None else None,
             "age_min": _number(group.get("age_min")),
         }
 
@@ -496,6 +503,14 @@ def _number(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _current_funding(route: dict[str, Any]) -> float | None:
+    for key in ("funding_projected_24h_pct", "funding_daily_pct", "funding_spread_pct"):
+        value = _number(route.get(key))
+        if value is not None:
+            return value
+    return None
 
 
 def _write_atomic(path: Path, payload: dict[str, Any]) -> None:

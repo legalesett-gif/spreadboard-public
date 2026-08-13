@@ -147,6 +147,38 @@ def test_unverified_top_book_cannot_replace_a_matched_spread(tmp_path: Path) -> 
     assert row["best_spread_route"]["route_key"] == "verified"
 
 
+def test_identity_warned_scanner_route_cannot_lead_token_rankings(tmp_path: Path) -> None:
+    market = _market()
+    market["groups"][0]["routes"] = [
+        {
+            "token": "GUA", "route_key": "collision", "long_venue": "A", "short_venue": "B",
+            "depth_weighted_spread_pct": 60.0, "mirage_guarded": True,
+            "funding_projected_24h_pct": 9.0,
+        },
+        {
+            "token": "GUA", "route_key": "clean", "long_venue": "C", "short_venue": "D",
+            "depth_weighted_spread_pct": 1.5, "mirage_guarded": False,
+            "funding_projected_24h_pct": 0.4,
+        },
+    ]
+    market["groups"][0]["best_route"] = market["groups"][0]["routes"][0]
+    market["groups"][0]["best_edge_pct"] = 60.0
+    market["groups"][0]["best_funding_route"] = market["groups"][0]["routes"][0]
+    market["groups"][0]["best_funding_24h_pct"] = 9.0
+
+    payload = token_rankings.build(
+        board_path=tmp_path / "board.jsonl", output_path=tmp_path / "rankings.json",
+        market_payload=market, catalog_payload={"markets": []}, radar_routes=[],
+        catalogue_summaries={},
+    )
+
+    row = payload["records"][0]
+    assert row["best_spread_pct"] == 1.5
+    assert row["best_spread_route"]["route_key"] == "clean"
+    assert row["funding_now_24h_pct"] == 0.4
+    assert row["best_funding_route"]["route_key"] == "clean"
+
+
 def test_fresh_catalog_replaces_older_cex_leader_even_when_edge_fell(tmp_path: Path) -> None:
     current = {
         "best_spread_pct": 0.4,
