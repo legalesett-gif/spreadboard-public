@@ -69,6 +69,7 @@ def test_board_stream_emits_a_board_event(
 
         assert saw_event, "the stream never emitted a board event"
         assert payload["updated_at"].endswith("Z")
+        assert payload["max_spread_pct"] == 1.25
         route = payload["routes"][0]
         assert route["spread_pct"] == 1.25
         assert route["funding_pct"] == 0.031

@@ -1869,11 +1869,22 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 changed = {key: value for key, value in rows.items() if previous.get(key) != value}
                 previous = rows
                 if changed:
+                    current_spreads = [
+                        spread
+                        for spread, _funding in rows.values()
+                        if _float_or_none(spread) is not None
+                    ]
                     payload = {
                         "updated_at": datetime.now(tz=timezone.utc)
                         .replace(microsecond=0)
                         .isoformat()
                         .replace("+00:00", "Z"),
+                        # The rows and headline must come from one generation.
+                        # Previously the stream updated individual cards while
+                        # leaving the server-rendered KPI behind, so a valid
+                        # fast move looked like a contradictory or fabricated
+                        # board until the next structural page reload.
+                        "max_spread_pct": max(current_spreads, default=None),
                         "routes": [
                             {"route_key": key, "spread_pct": value[0], "funding_pct": value[1]}
                             for key, value in changed.items()
@@ -4767,6 +4778,14 @@ def render_board_stream_script(
         }
         const stamp = document.querySelector("[data-live-stamp]");
         if (stamp) stamp.textContent = "live";
+        const maxSpread = document.querySelector("[data-live-max-spread]");
+        if (maxSpread) {
+          const next = pct(payload.max_spread_pct, 1) || "—";
+          if (maxSpread.textContent.trim() !== next) {
+            maxSpread.textContent = next;
+            flash(maxSpread);
+          }
+        }
       });
     })();
     </script>""".replace("__SUFFIX__", suffix).replace("__ENDPOINT__", endpoint)
@@ -4910,6 +4929,7 @@ def render_markets_page(
             "Largest matched edge",
             fmt_pct(summary.get("max_depth_weighted_spread_pct")),
             "$50 VWAP",
+            live_hook="live-max-spread",
         )
     }
       </section>
@@ -6263,8 +6283,11 @@ def render_market_active_filters(query: dict[str, list[str]]) -> str:
     return f'<div class="terminal-active-filters"><span>Active</span>{chips_html}</div>'
 
 
-def render_market_metric(label: str, value: Any, note: str = "") -> str:
-    return f"<article><span>{h(label)}</span><strong>{h(value if value is not None else '?')}</strong><em>{h(note)}</em></article>"
+def render_market_metric(
+    label: str, value: Any, note: str = "", *, live_hook: str | None = None
+) -> str:
+    hook = f' data-{h(live_hook)}' if live_hook else ""
+    return f"<article><span>{h(label)}</span><strong{hook}>{h(value if value is not None else '?')}</strong><em>{h(note)}</em></article>"
 
 
 def render_market_row(row: dict[str, Any]) -> str:
@@ -7121,6 +7144,7 @@ def render_funding_page(
             "Largest matched basis",
             fmt_pct(summary.get("max_depth_weighted_spread_pct")),
             "$50 VWAP",
+            live_hook="live-max-spread",
         )
     }
       </section>

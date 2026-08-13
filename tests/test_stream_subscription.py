@@ -35,6 +35,8 @@ def test_an_unfiltered_board_subscribes_without_parameters() -> None:
 
     assert "/api/stream/board?" not in script
     assert "/api/stream/board" in script
+    assert "payload.max_spread_pct" in script
+    assert "data-live-max-spread" in script
 
 
 def test_presentation_parameters_are_not_forwarded() -> None:
