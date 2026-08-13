@@ -186,6 +186,7 @@ class RefreshLoop:
         result = _run_worker(
             command,
             timeout=float(os.environ.get("SPREADBOARD_REFRESH_TIMEOUT_SECONDS", "900")),
+            env={**os.environ, "SPREADBOARD_OKX_DEX_BACKGROUND": "1"},
         )
         if result.timed_out:
             _log("refresh timeout")
@@ -1168,7 +1169,13 @@ class WorkerResult:
         self.timed_out = timed_out
 
 
-def _run_worker(command: list[str], *, timeout: float, cwd: Path = ROOT) -> WorkerResult:
+def _run_worker(
+    command: list[str],
+    *,
+    timeout: float,
+    cwd: Path = ROOT,
+    env: dict[str, str] | None = None,
+) -> WorkerResult:
     """Run a worker without buffering everything it says in this process.
 
     `subprocess.run(capture_output=True)` accumulates the child's entire stdout
@@ -1196,6 +1203,7 @@ def _run_worker(command: list[str], *, timeout: float, cwd: Path = ROOT) -> Work
                 cwd=cwd,
                 stdout=out,
                 stderr=err,
+                env=env,
                 timeout=timeout,
                 check=False,
             )

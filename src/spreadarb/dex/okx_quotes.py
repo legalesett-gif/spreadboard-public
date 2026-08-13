@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import os
+from pathlib import Path
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -82,6 +83,10 @@ HttpGet = Callable[[str, dict[str, str]], dict[str, Any]]
 OKX_DEX_RATE_STATE_PATH = os.environ.get(
     "SPREADBOARD_OKX_DEX_RATE_STATE_PATH",
     "/tmp/spreadboard-okx-dex-rate.state",
+)
+OKX_DEX_PRIORITY_STATE_PATH = os.environ.get(
+    "SPREADBOARD_OKX_DEX_PRIORITY_STATE_PATH",
+    "/tmp/spreadboard-okx-dex-priority.state",
 )
 OKX_DEX_MIN_REQUEST_INTERVAL_SECONDS = float(
     os.environ.get("SPREADBOARD_OKX_DEX_MIN_INTERVAL_S", "1.15")
@@ -388,6 +393,7 @@ def _http_get(url: str, headers: dict[str, str]) -> dict[str, Any]:
 def _wait_for_shared_request_slot() -> None:
     """Coordinate OKX Web3 requests across the web and discovery processes."""
 
+    _wait_for_priority_window()
     state_path = OKX_DEX_RATE_STATE_PATH
     with open(state_path, "a+", encoding="ascii") as state:
         fcntl.flock(state.fileno(), fcntl.LOCK_EX)
@@ -408,6 +414,35 @@ def _wait_for_shared_request_slot() -> None:
             state.flush()
         finally:
             fcntl.flock(state.fileno(), fcntl.LOCK_UN)
+
+
+def _wait_for_priority_window() -> None:
+    """Let the bounded current-board rotation precede broad DEX discovery.
+
+    Only discovery workers opt into this background gate. Interactive chart
+    samples keep working, and every caller still shares the provider's normal
+    request-rate lock below. A timestamp makes a worker crash self-healing.
+    """
+
+    if os.environ.get("SPREADBOARD_OKX_DEX_BACKGROUND", "").strip().casefold() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+    path = Path(OKX_DEX_PRIORITY_STATE_PATH)
+    stale_after = max(
+        60.0,
+        float(os.environ.get("SPREADBOARD_OKX_DEX_PRIORITY_STALE_SECONDS", "300")),
+    )
+    while path.exists():
+        try:
+            if time.time() - path.stat().st_mtime > stale_after:
+                return
+        except OSError:
+            return
+        time.sleep(0.25)
 
 
 def _is_rate_limited(payload: dict[str, Any]) -> bool:

@@ -2571,6 +2571,20 @@ def test_the_service_warms_the_board_cache_after_writing() -> None:
     assert "target=_warm_board_cache" in warm_source
 
 
+def test_broad_dex_discovery_yields_to_current_quote_rotation() -> None:
+    import inspect
+    from scripts import fast_quote_worker, run_spreadboard_service
+    from spreadarb.dex import okx_quotes
+
+    refresh_source = inspect.getsource(run_spreadboard_service.RefreshLoop.refresh_once)
+    worker_source = inspect.getsource(fast_quote_worker.main)
+    gate_source = inspect.getsource(okx_quotes._wait_for_priority_window)
+
+    assert "SPREADBOARD_OKX_DEX_BACKGROUND" in refresh_source
+    assert "OKX_DEX_PRIORITY_STATE_PATH" in worker_source
+    assert "SPREADBOARD_OKX_DEX_BACKGROUND" in gate_source
+
+
 def test_book_verification_upgrades_quotes_it_does_not_discard_them() -> None:
     """Replacing the quote list with the verified subset threw away every market
     that lost a candidate slot -- six of the ten largest coins were absent from

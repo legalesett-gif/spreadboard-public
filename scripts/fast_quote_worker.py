@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 while str(ROOT) in sys.path:
@@ -26,6 +27,17 @@ def main() -> int:
     parser.add_argument("--deadline-seconds", type=float, default=None)
     args = parser.parse_args()
 
+    priority_path = Path(
+        os.environ.get(
+            "SPREADBOARD_OKX_DEX_PRIORITY_STATE_PATH",
+            "/tmp/spreadboard-okx-dex-priority.state",
+        )
+    )
+    owner = f"{os.getpid()}:{time.time()}"
+    try:
+        priority_path.write_text(owner, encoding="ascii")
+    except OSError:
+        owner = ""
     refresher = FastQuoteRefresher()
     try:
         summary = refresher.refresh(
@@ -35,6 +47,12 @@ def main() -> int:
         )
     finally:
         refresher.close()
+        if owner:
+            try:
+                if priority_path.read_text(encoding="ascii") == owner:
+                    priority_path.unlink(missing_ok=True)
+            except OSError:
+                pass
     print(json.dumps(summary, sort_keys=True), flush=True)
     os._exit(0 if summary.get("status") == "ok" else 1)
 

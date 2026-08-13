@@ -65,3 +65,26 @@ def test_shared_request_slot_persists_process_rate_state(tmp_path: Path, monkeyp
 
     assert [round(value, 6) for value in sleeps] == [0.9]
     assert state_path.read_text(encoding="ascii") == "11.15"
+
+
+def test_background_discovery_yields_to_current_board_quote_window(
+    tmp_path: Path, monkeypatch
+) -> None:
+    priority_path = tmp_path / "okx-priority.state"
+    rate_path = tmp_path / "okx-rate.state"
+    priority_path.write_text("fast-worker", encoding="ascii")
+    sleeps = []
+
+    def release_after_first_wait(seconds: float) -> None:
+        sleeps.append(seconds)
+        priority_path.unlink(missing_ok=True)
+
+    monkeypatch.setenv("SPREADBOARD_OKX_DEX_BACKGROUND", "1")
+    monkeypatch.setattr(okx_quotes, "OKX_DEX_PRIORITY_STATE_PATH", str(priority_path))
+    monkeypatch.setattr(okx_quotes, "OKX_DEX_RATE_STATE_PATH", str(rate_path))
+    monkeypatch.setattr(okx_quotes, "OKX_DEX_MIN_REQUEST_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(okx_quotes.time, "sleep", release_after_first_wait)
+
+    okx_quotes._wait_for_shared_request_slot()
+
+    assert sleeps == [0.25]
