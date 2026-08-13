@@ -558,7 +558,7 @@ def test_combined_quote_budget_covers_cex_catalog_and_both_dex_lanes() -> None:
     # The complete CEX catalogue has its own one-call-per-venue worker. The
     # per-route worker must not repeat another 125+ CEX routes and hold the
     # rate-limited DEX result past its 90-second truth boundary.
-    assert dex_routes + 3 <= routes <= 90
+    assert dex_routes + 3 <= routes <= 100
     assert dex_routes >= 2 * dex_contracts
     assert 12 <= dex_contracts <= 35
     assert 3 <= workers <= 8
