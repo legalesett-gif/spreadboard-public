@@ -44,6 +44,12 @@ services:
       SPREADBOARD_FAST_QUOTE_WORKERS: "6"
       SPREADBOARD_DEX_QUOTE_CHUNK_SIZE: "8"
       SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS: "300"
+      # Heavy structural view generation runs in the background and the web
+      # server serves the preceding complete structure with live price pushes
+      # meanwhile. Rebuilding all eleven views every five minutes saturated
+      # both CPUs and made health/page requests wait 50-78 seconds.
+      SPREADBOARD_WARM_INTERVAL_SECONDS: "900"
+      SPREADBOARD_TOKEN_RANKING_SECONDS: "120"
       # Prices must move as the books move, not on a beat. The re-pricing is
       # shared between streams, so this is independent of how many people watch.
       SPREADBOARD_BOARD_STREAM_SECONDS: "0.25"
@@ -63,14 +69,14 @@ services:
       # One fetch_tickers per venue re-prices the full catalogue. Six bounded
       # independent venue calls give the production pass headroom inside the
       # 90-second truth boundary even while other warmers are active.
-      SPREADBOARD_BULK_QUOTE_SECONDS: "5"
+      SPREADBOARD_BULK_QUOTE_SECONDS: "10"
       # Independent venue adapters refresh concurrently; each venue writes its
       # result in one SQLite transaction. This keeps the complete catalogue
       # inside the 90-second current-spread truth window without raising it.
       SPREADBOARD_BULK_QUOTE_WORKERS: "6"
       # Funding has its own isolated worker. A slow funding provider must never
       # postpone a current-price pass or make a valid spread disappear.
-      SPREADBOARD_BULK_FUNDING_SECONDS: "15"
+      SPREADBOARD_BULK_FUNDING_SECONDS: "30"
       SPREADBOARD_BULK_FUNDING_TIMEOUT_SECONDS: "240"
       # Funding is rotated in four-venue slices and merged atomically.
       SPREADBOARD_FUNDING_VENUES_PER_PASS: "4"
@@ -85,12 +91,12 @@ services:
       # Readers consume the complete current quote generation. Individual
       # routes still expire at the unchanged 90-second leader boundary below.
       SPREADBOARD_LIVE_BOOK_AGE_SECONDS: "90"
-      # 1,100 concurrent subscriptions overwhelmed Gate/MEXC keepalives and
-      # left actual leaders reconnecting.  The lane reserver needs roughly 200
-      # legs for ten routes across every view; 320 keeps that set plus open
-      # positions and useful depth without turning the feed into a reconnect
-      # storm.
-      SPREADBOARD_WS_BOOKS: "320"
+      # Websockets are only the fast lane for currently visible routes; the
+      # one-call-per-venue bulk worker covers the complete catalogue. Hundreds
+      # of concurrent CCXT subscriptions consumed a full CPU and more than 1GB
+      # while repeatedly reconnecting. The lane reserver still gives each view
+      # first access to this bounded live set.
+      SPREADBOARD_WS_BOOKS: "96"
       # Search/history rows remain available for five minutes, but a spread
       # older than this cannot headline a current ranking. Funding is ranked
       # independently and is not suppressed by this basis-age boundary.

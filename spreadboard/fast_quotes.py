@@ -1140,6 +1140,29 @@ def _publish_fast_quote_delta(
             )
         )
     ]
+    lane_tokens: dict[str, set[str]] = {"DEX-FUTURES": set(), "DEX-SPOT": set()}
+    for row in rows:
+        lane = _fast_quote_lane(row)
+        if lane not in lane_tokens or not _fresh_fast_quote_row(
+            row,
+            now_us=now_us,
+            # This is the executable-spread promise, not the wider searchable
+            # row retention window.
+            max_age_seconds=90.0,
+        ):
+            continue
+        token = str(row.get("token") or "").upper()
+        if token:
+            lane_tokens[lane].add(token)
+    summary = {
+        **summary,
+        "lane_token_counts": {
+            lane: len(tokens) for lane, tokens in lane_tokens.items()
+        },
+        "top_25_ready": {
+            lane: len(tokens) >= 25 for lane, tokens in lane_tokens.items()
+        },
+    }
     _atomic_write(
         _fast_quote_delta_path(snapshot_path),
         {

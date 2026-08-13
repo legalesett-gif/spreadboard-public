@@ -153,8 +153,8 @@ def test_the_readiness_probe_never_builds_the_board(monkeypatch) -> None:
     first = server.api_source_health(Path("board.json"), {})
     second = server.api_source_health(Path("board.json"), {})
 
-    assert first["ok"] is True and second["ok"] is True
-    assert len(builds) == 1, "the probe rebuilt inside its own cache window"
+    assert first is not None and second is not None
+    assert len(builds) == 0, "an HTTP probe must never build the grouped board"
 
     # And while another thread holds the build, it answers without waiting.
     server._HEALTH_BUILD_LOCK.acquire()
@@ -163,7 +163,7 @@ def test_the_readiness_probe_never_builds_the_board(monkeypatch) -> None:
         answer = server.api_source_health(Path("board.json"), {})
     finally:
         server._HEALTH_BUILD_LOCK.release()
-    assert len(builds) == 1
+    assert len(builds) == 0
     assert answer is not None
 
 

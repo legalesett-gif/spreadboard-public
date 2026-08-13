@@ -902,6 +902,25 @@ def _mtime_ns(path: Path) -> int:
 _FAST_REFRESH_META_CACHE: dict[tuple[str, int], dict[str, Any]] = {}
 
 
+def fast_quote_health(
+    delta_path: Path | str | None = None, *, now: float | None = None
+) -> dict[str, Any]:
+    """Return the compact worker health block without loading the full board."""
+
+    path = (
+        Path(delta_path)
+        if delta_path is not None
+        else _fast_quote_delta_path(DEFAULT_API_DISCOVERY_PATH)
+    )
+    meta = _fast_quote_refresh_meta(path)
+    if not meta:
+        return {}
+    result = dict(meta)
+    age = _iso_age_min(_str_or_none(result.get("updated_at")), now=time.time() if now is None else now)
+    result["age_min"] = age
+    return result
+
+
 def _fast_quote_refresh_meta(delta_path: Path) -> dict[str, Any]:
     """The fast worker's own report of its last cycle, from the delta it wrote.
 

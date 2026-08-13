@@ -475,7 +475,7 @@ def _warm_telegram_payload_at_startup(board_path: Path) -> None:
             "telegram startup payload ready "
             f"in {time.monotonic() - started:.1f}s"
         )
-        _refresh_token_rankings()
+        _refresh_token_rankings(force=True)
     except Exception as exc:  # noqa: BLE001 - the regular warmer retries later.
         _log(f"telegram startup payload skipped: {type(exc).__name__}: {exc}")
 
@@ -820,7 +820,7 @@ def _board_path() -> Path:
 #: permanently, making every page slow instead of fast. One pass per interval,
 #: comfortably inside the 420s cache TTL so entries stay warm between passes.
 WARM_INTERVAL_SECONDS = max(
-    120.0, float(os.environ.get("SPREADBOARD_WARM_INTERVAL_SECONDS", "300"))
+    300.0, float(os.environ.get("SPREADBOARD_WARM_INTERVAL_SECONDS", "900"))
 )
 _LAST_WARM_AT = 0.0
 
@@ -924,7 +924,10 @@ def _warm_board_cache(*, force: bool = False) -> None:
         # and was in nobody's warm set -- so the readiness probe was one of the
         # most expensive requests on the server and timed out against a cold
         # cache, reporting the container unhealthy while it was merely starting.
-        server.api_source_health(_board_path(), {})
+        # Public readiness probes are deliberately O(1) and keep returning the
+        # last complete answer.  Only this background pass is allowed to pay
+        # for a new grouped health generation.
+        server.api_source_health(_board_path(), {"force": True})
     except Exception as exc:  # noqa: BLE001 - warming is best effort.
         _log(f"health warm skipped: {type(exc).__name__}: {exc}")
     _yield_to_requests()
@@ -936,6 +939,10 @@ def _warm_board_cache(*, force: bool = False) -> None:
 
 
 _TOKEN_RANKING_REFRESH_LOCK = threading.Lock()
+_LAST_TOKEN_RANKING_AT = 0.0
+TOKEN_RANKING_INTERVAL_SECONDS = max(
+    30.0, float(os.environ.get("SPREADBOARD_TOKEN_RANKING_SECONDS", "120"))
+)
 
 
 def _schedule_token_rankings() -> None:
@@ -948,12 +955,20 @@ def _schedule_token_rankings() -> None:
     ).start()
 
 
-def _refresh_token_rankings() -> None:
+def _refresh_token_rankings(*, force: bool = False) -> None:
     """Publish the individual-token leaderboard outside the web process."""
+
+    global _LAST_TOKEN_RANKING_AT
 
     if not _TOKEN_RANKING_REFRESH_LOCK.acquire(blocking=False):
         return
     try:
+        if (
+            not force
+            and time.monotonic() - _LAST_TOKEN_RANKING_AT
+            < TOKEN_RANKING_INTERVAL_SECONDS
+        ):
+            return
         result = _run_worker(
             [
                 *_low_priority_prefix(),
@@ -980,6 +995,7 @@ def _refresh_token_rankings() -> None:
             f"tokens={summary.get('tokens', 0)} live={summary.get('live', 0)} "
             f"cooled={summary.get('cooled', 0)}"
         )
+        _LAST_TOKEN_RANKING_AT = time.monotonic()
     finally:
         _TOKEN_RANKING_REFRESH_LOCK.release()
 

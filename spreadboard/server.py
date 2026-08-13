@@ -2587,15 +2587,22 @@ def _health_from_snapshot_file(board_path: Path) -> dict[str, Any]:
 
 
 def api_source_health(board_path: Path, config: dict[str, Any]) -> dict[str, Any]:
-    del config
     # A readiness probe must never build the board. This ran load_spreads at
     # limit=0 -- its own cache key, 14s cold -- against a 12s healthcheck
     # timeout, so the container reported unhealthy while it was serving pages in
     # two seconds, and every probe joined the stampede that OOM-killed it.
     now = time.monotonic()
+    force = bool(config.get("force"))
     cached = _HEALTH_CACHE.get("payload")
-    if cached is not None and now - float(_HEALTH_CACHE["at"]) <= _HEALTH_CACHE_TTL_SECONDS:
-        return cached
+    if cached is not None and not force:
+        # Returning the last complete structural answer is intentional.  Its
+        # timestamps and exact current DEX lane counts are overlaid below from
+        # the compact fast-quote artefact, while rebuilding 25k grouped rows in
+        # an HTTP healthcheck used to hold the GIL long enough to take the
+        # entire site offline.
+        return _health_with_fast_quote_state(cached)
+    if not force:
+        return _health_with_fast_quote_state(_health_from_snapshot_file(board_path))
     if not _HEALTH_BUILD_LOCK.acquire(blocking=False):
         return cached if cached is not None else _health_from_snapshot_file(board_path)
     try:
@@ -2615,7 +2622,36 @@ def api_source_health(board_path: Path, config: dict[str, Any]) -> dict[str, Any
     }
     _HEALTH_CACHE["payload"] = payload
     _HEALTH_CACHE["at"] = time.monotonic()
-    return payload
+    return _health_with_fast_quote_state(payload)
+
+
+def _health_with_fast_quote_state(payload: dict[str, Any]) -> dict[str, Any]:
+    """Overlay cheap current-cycle facts without rebuilding the market board."""
+
+    fast = api_spreads.fast_quote_health()
+    if not fast:
+        return payload
+    result = dict(payload)
+    canonical = dict(result.get("canonical_api") or {})
+    canonical["fast_quote_refresh"] = fast
+    if fast.get("age_min") is not None:
+        canonical["fast_quote_age_min"] = fast["age_min"]
+        current_age = _float_or_none(canonical.get("age_min"))
+        canonical["age_min"] = (
+            min(current_age, float(fast["age_min"]))
+            if current_age is not None
+            else float(fast["age_min"])
+        )
+    lane_counts = dict(canonical.get("lane_token_counts") or {})
+    lane_counts.update(fast.get("lane_token_counts") or {})
+    if lane_counts:
+        canonical["lane_token_counts"] = lane_counts
+    readiness = dict(canonical.get("top_25_ready") or {})
+    readiness.update(fast.get("top_25_ready") or {})
+    if readiness:
+        canonical["top_25_ready"] = readiness
+    result["canonical_api"] = canonical
+    return result
 
 
 def _live_book_status() -> dict[str, Any]:

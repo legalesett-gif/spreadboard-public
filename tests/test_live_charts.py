@@ -462,6 +462,50 @@ def test_fast_delta_retains_only_current_verified_rows() -> None:
     )
 
 
+def test_fast_delta_publishes_exact_dex_lane_readiness(tmp_path, monkeypatch) -> None:
+    snapshot = tmp_path / "api_discovery_latest.json"
+    now_us = 10_000_000
+    monkeypatch.setattr(time, "time", lambda: now_us / 1_000_000)
+    rows = []
+    for lane, short_type in (("DEX-FUTURES", "Futures"), ("DEX-SPOT", "Spot")):
+        for index in range(25):
+            rows.append({
+                "token": f"T{index}",
+                "source_kind": "dex_discovered",
+                "long_venue": "OKX DEX 1",
+                "long_market_type": "Spot",
+                "long_market_symbol": f"T{index}/USDT",
+                "short_venue": "Gate",
+                "short_market_type": short_type,
+                "short_market_symbol": f"T{index}/USDT",
+                "quote_ts_us": now_us - 1_000_000,
+                "fast_quote_verified_at": "now",
+                "notes": {"identity": {"long": {
+                    "chain_id": "1",
+                    "token_address": f"0x{index:040x}",
+                }}},
+            })
+    payload = {"dex_discovered_rows": rows, "api_discovered_rows": []}
+    touched = {_snapshot_row_key(row) for row in rows}
+
+    fast_quotes._publish_fast_quote_delta(
+        snapshot,
+        payload,
+        touched=touched,
+        summary={"status": "ok", "updated_at": "2026-08-13T00:00:00Z"},
+    )
+
+    published = json.loads((tmp_path / "api_discovery_fast_quotes.json").read_text())
+    assert published["fast_quote_refresh"]["lane_token_counts"] == {
+        "DEX-FUTURES": 25,
+        "DEX-SPOT": 25,
+    }
+    assert published["fast_quote_refresh"]["top_25_ready"] == {
+        "DEX-FUTURES": True,
+        "DEX-SPOT": True,
+    }
+
+
 def test_failed_fast_quote_retires_the_old_live_claim() -> None:
     row = {
         "quote_ts_us": int(time.time() * 1_000_000),
