@@ -18,6 +18,7 @@ instead of one call per symbol -- applied to prices.
 
 from __future__ import annotations
 
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 import json
 import os
@@ -50,6 +51,15 @@ _ALIASES = {"gateio": ("gate", "gateio"), "coinbaseexchange": ("coinbaseexchange
 _CLIENTS: dict[str, Any] = {}
 
 _DEFAULT_TYPES = {"Futures": "swap", "Spot": "spot"}
+
+# Venues have independent adapters and rate limits. Four simultaneous venue
+# calls keeps memory bounded while bringing a complete pass inside the
+# current-spread boundary. The previous sequential pass took about 127 seconds,
+# so a 90-second current-only board could never hold every cross-venue pair at
+# once even when every provider answered successfully.
+BULK_QUOTE_WORKERS = max(
+    1, min(8, int(os.environ.get("SPREADBOARD_BULK_QUOTE_WORKERS", "4")))
+)
 
 
 def _client(venue: str, market_type: str) -> Any:
@@ -103,7 +113,7 @@ def sweep_venue(
     """
     if venue in SKIP_VENUES:
         return 0
-    written = 0
+    pending_books: list[dict[str, Any]] = []
     for market_type in ("Spot", "Futures"):
         try:
             client = (client_factory or _client)(venue, market_type)
@@ -138,29 +148,41 @@ def sweep_venue(
                     fair_price_rows.append(row)
             timestamp_ms = ticker.get("timestamp")
             try:
-                store.put(
-                    venue,
-                    market_type,
-                    str(symbol),
-                    bids=[[
+                pending_books.append({
+                    "venue": venue,
+                    "market_type": market_type,
+                    "symbol": str(symbol),
+                    "bids": [[
                         float(bid),
                         float(ticker.get("bidVolume") or 0.0) * contract_size,
                     ]],
-                    asks=[[
+                    "asks": [[
                         float(ask),
                         float(ticker.get("askVolume") or 0.0) * contract_size,
                     ]],
-                    quote_ts_us=(
+                    "quote_ts_us": (
                         int(float(timestamp_ms) * 1000)
                         if timestamp_ms
                         else now_us
                     ),
-                    source="bulk_ticker",
-                )
-                written += 1
+                    "source": "bulk_ticker",
+                })
             except (TypeError, ValueError):
                 continue
-    return written
+    put_many = getattr(store, "put_many", None)
+    if callable(put_many):
+        return int(put_many(pending_books) or 0)
+    for book in pending_books:
+        store.put(
+            book["venue"],
+            book["market_type"],
+            book["symbol"],
+            bids=book["bids"],
+            asks=book["asks"],
+            quote_ts_us=book["quote_ts_us"],
+            source=book["source"],
+        )
+    return len(pending_books)
 
 
 #: Where the last sweep stopped. Without this every pass starts at the same
@@ -202,8 +224,9 @@ def sweep(
     *,
     store: live_book_cache.LiveBookStore | None = None,
     budget_seconds: float = 180.0,
+    workers: int | None = None,
 ) -> dict[str, Any]:
-    """One pass over the venues, resuming where the last pass ran out of time."""
+    """One bounded-concurrent pass, resuming where a prior pass timed out."""
     target = store or live_book_cache.LiveBookStore()
     deadline = time.monotonic() + budget_seconds
     started = time.monotonic()
@@ -214,14 +237,44 @@ def sweep(
     start = _load_cursor(len(ordered))
     rotation = ordered[start:] + ordered[:start]
     position = start
-    for venue in rotation:
-        if time.monotonic() >= deadline:
-            break
-        position = (ordered.index(venue) + 1) % max(1, len(ordered))
-        count = sweep_venue(venue, store=target, fair_price_rows=fair_price_rows)
-        if count:
-            covered += 1
-            written += count
+    concurrency = max(1, min(int(workers or BULK_QUOTE_WORKERS), len(rotation) or 1))
+    next_index = 0
+    in_flight: dict[Future[int], tuple[str, int]] = {}
+    with ThreadPoolExecutor(
+        max_workers=concurrency,
+        thread_name_prefix="bulk-quote-venue",
+    ) as executor:
+        while next_index < len(rotation) or in_flight:
+            while (
+                next_index < len(rotation)
+                and len(in_flight) < concurrency
+                and time.monotonic() < deadline
+            ):
+                venue = rotation[next_index]
+                ordered_index = ordered.index(venue)
+                future = executor.submit(
+                    sweep_venue,
+                    venue,
+                    store=target,
+                    fair_price_rows=fair_price_rows,
+                )
+                in_flight[future] = (venue, ordered_index)
+                next_index += 1
+                # The cursor follows attempts, not successes: a dead venue must
+                # not starve every venue behind it on the next worker process.
+                position = (ordered_index + 1) % max(1, len(ordered))
+            if not in_flight:
+                break
+            done, _pending = wait(tuple(in_flight), return_when=FIRST_COMPLETED)
+            for future in done:
+                in_flight.pop(future, None)
+                try:
+                    count = int(future.result() or 0)
+                except Exception:  # noqa: BLE001 - one venue is isolated.
+                    count = 0
+                if count:
+                    covered += 1
+                    written += count
     _store_cursor(position)
     deviations = fair_price.write(fair_price_rows)
     return {

@@ -651,8 +651,9 @@ class BulkQuoteLoop(threading.Thread):
     fetch_tickers per venue closes that in about fifteen seconds.
     """
 
-    #: A full pass measured 160s of quotes and 102s of funding, so it needs
-    #: room to finish; a killed pass throws away everything it had gathered.
+    #: The bounded-concurrent quote pass measures about 43s and the rotating
+    #: funding slice remains provider-variable. A killed pass throws away its
+    #: summary and skips cache invalidation, so retain a generous hard ceiling.
     TIMEOUT_SECONDS = max(
         120.0, float(os.environ.get("SPREADBOARD_BULK_QUOTE_TIMEOUT_SECONDS", "420"))
     )

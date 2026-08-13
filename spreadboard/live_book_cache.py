@@ -9,7 +9,7 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
-from typing import Any
+from typing import Any, Iterable
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,10 +70,55 @@ class LiveBookStore:
         quote_ts_us: int,
         source: str = "public_websocket",
     ) -> None:
-        if not bids or not asks:
-            return
+        self.put_many(
+            (
+                {
+                    "venue": venue,
+                    "market_type": market_type,
+                    "symbol": symbol,
+                    "bids": bids,
+                    "asks": asks,
+                    "quote_ts_us": quote_ts_us,
+                    "source": source,
+                },
+            )
+        )
+
+    def put_many(self, books: Iterable[dict[str, Any]]) -> int:
+        """Write a quote batch in one transaction.
+
+        A complete ticker sweep writes roughly twenty thousand books. Committing
+        each row separately made SQLite durability overhead longer than the
+        board's current-spread window even though each venue returned its
+        tickers quickly. Venue-sized batches preserve the same conflict rules
+        while giving readers one atomic commit per venue.
+        """
+        rows: list[tuple[Any, ...]] = []
+        for book in books:
+            bids = book.get("bids") or []
+            asks = book.get("asks") or []
+            if not bids or not asks:
+                continue
+            venue = str(book.get("venue") or "")
+            market_type = str(book.get("market_type") or "")
+            symbol = str(book.get("symbol") or "")
+            source = str(book.get("source") or "public_websocket")
+            rows.append(
+                (
+                    cache_key(venue, market_type, symbol),
+                    venue,
+                    market_type,
+                    symbol,
+                    int(book.get("quote_ts_us") or 0),
+                    json.dumps(bids[:50], separators=(",", ":")),
+                    json.dumps(asks[:50], separators=(",", ":")),
+                    source,
+                )
+            )
+        if not rows:
+            return 0
         with self._lock:
-            self._conn.execute(
+            self._conn.executemany(
                 """
                 INSERT INTO live_books (
                     cache_key, venue, market_type, symbol, quote_ts_us, bids_json, asks_json, source
@@ -95,18 +140,10 @@ class LiveBookStore:
                     AND live_books.quote_ts_us >= excluded.quote_ts_us - 30000000
                   )
                 """,
-                (
-                    cache_key(venue, market_type, symbol),
-                    venue,
-                    market_type,
-                    symbol,
-                    int(quote_ts_us),
-                    json.dumps(bids[:50], separators=(",", ":")),
-                    json.dumps(asks[:50], separators=(",", ":")),
-                    str(source or "public_websocket"),
-                ),
+                rows,
             )
             self._conn.commit()
+        return len(rows)
 
     def get(
         self,

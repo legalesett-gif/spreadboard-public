@@ -9,6 +9,7 @@ turned positive in between did not appear until the next scan.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from typing import Any
 
@@ -158,10 +159,10 @@ def test_the_sweep_resumes_where_it_ran_out_of_time(tmp_path, monkeypatch) -> No
     venues = ["A", "B", "C", "D", "E", "F"]
     bulk_quotes._CURSOR["index"] = 0
 
-    bulk_quotes.sweep(venues, store=_Store(), budget_seconds=0.05)
+    bulk_quotes.sweep(venues, store=_Store(), budget_seconds=0.05, workers=1)
     first = list(visited)
     visited.clear()
-    bulk_quotes.sweep(venues, store=_Store(), budget_seconds=0.05)
+    bulk_quotes.sweep(venues, store=_Store(), budget_seconds=0.05, workers=1)
 
     assert first, "the first pass must cover something"
     assert visited, "the second pass must cover something"
@@ -178,9 +179,40 @@ def test_a_full_pass_leaves_the_cursor_back_at_the_start(tmp_path, monkeypatch) 
     venues = ["A", "B", "C"]
     bulk_quotes._CURSOR["index"] = 0
 
-    bulk_quotes.sweep(venues, store=_Store(), budget_seconds=30.0)
+    bulk_quotes.sweep(venues, store=_Store(), budget_seconds=30.0, workers=1)
 
     assert bulk_quotes._CURSOR["index"] == 0
+
+
+def test_independent_venues_refresh_concurrently(tmp_path, monkeypatch) -> None:
+    active = 0
+    maximum_active = 0
+    lock = threading.Lock()
+    release = threading.Event()
+
+    def blocked(_venue, **_kwargs):
+        nonlocal active, maximum_active
+        with lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+            if maximum_active >= 2:
+                release.set()
+        assert release.wait(1.0)
+        with lock:
+            active -= 1
+        return 1
+
+    monkeypatch.setattr(bulk_quotes, "CURSOR_PATH", tmp_path / "cursor.json")
+    monkeypatch.setattr(bulk_quotes.fair_price, "write", lambda rows, **_k: 0)
+    monkeypatch.setattr(bulk_quotes, "sweep_venue", blocked)
+    bulk_quotes._CURSOR["index"] = 0
+
+    result = bulk_quotes.sweep(
+        ["A", "B", "C", "D"], store=_Store(), budget_seconds=30.0, workers=2
+    )
+
+    assert maximum_active == 2
+    assert result["venues"] == 4
 
 
 def test_live_funding_overlays_a_leg(monkeypatch) -> None:
@@ -528,6 +560,41 @@ def test_bulk_ticker_cannot_flatten_a_current_websocket_ladder(tmp_path) -> None
     assert book is not None
     assert book.source == "public_websocket"
     assert len(book.bids) == 2
+
+
+def test_a_book_batch_preserves_each_quote_and_source(tmp_path) -> None:
+    from spreadboard import live_book_cache
+
+    store = live_book_cache.LiveBookStore(tmp_path / "books.sqlite3")
+    timestamp = int(time.time() * 1_000_000)
+    written = store.put_many([
+        {
+            "venue": "Gate",
+            "market_type": "Spot",
+            "symbol": "A/USDT",
+            "bids": [[1.0, 100.0]],
+            "asks": [[1.01, 100.0]],
+            "quote_ts_us": timestamp,
+            "source": "bulk_ticker",
+        },
+        {
+            "venue": "Mexc",
+            "market_type": "Futures",
+            "symbol": "B/USDT:USDT",
+            "bids": [[2.0, 50.0]],
+            "asks": [[2.02, 50.0]],
+            "quote_ts_us": timestamp + 1,
+            "source": "bulk_ticker",
+        },
+    ])
+
+    assert written == 2
+    books = store.load_all(max_age_seconds=300.0)
+    assert set(books) == {
+        "Gate|Spot|A/USDT",
+        "Mexc|Futures|B/USDT:USDT",
+    }
+    assert all(book.source == "bulk_ticker" for book in books.values())
 
 
 def test_a_zero_or_negative_price_is_still_rejected(tmp_path) -> None:
