@@ -85,6 +85,7 @@ class MarketQuote:
     quote_ts_us: int
     source_name: str
     symbol: str | None = None
+    quote_asset: str | None = None
     identity_key: str | None = None
     identity_source: str | None = None
     decimals: int | None = None

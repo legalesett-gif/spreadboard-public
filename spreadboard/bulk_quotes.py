@@ -224,6 +224,9 @@ INTERVAL_SECONDS = max(15.0, float(os.environ.get("SPREADBOARD_BULK_QUOTE_SECOND
 #: pass: 554 of 5,382 futures legs carried no rate at all and 424 more disagreed
 #: with the venue. Here the clients are already loaded, so a full pass is cheap.
 FUNDING_CACHE_PATH = RUNTIME_DIR / "live_funding.json"
+FUNDING_MAX_AGE_SECONDS = max(
+    300.0, float(os.environ.get("SPREADBOARD_FUNDING_MAX_AGE_SECONDS", "1800"))
+)
 
 
 def sweep_funding(
@@ -231,6 +234,7 @@ def sweep_funding(
     *,
     cache_path: Path | str = FUNDING_CACHE_PATH,
     budget_seconds: float = 180.0,
+    merge_existing: bool = False,
 ) -> dict[str, Any]:
     """One bulk funding call per venue, for every leg the venue lists.
 
@@ -245,6 +249,24 @@ def sweep_funding(
     deadline = time.monotonic() + budget_seconds
     started = time.monotonic()
     rates: dict[str, dict[str, Any]] = {}
+    leg_updated_at: dict[str, float] = {}
+    path = Path(cache_path)
+    if merge_existing:
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+            rates.update(previous.get("legs") or {})
+            fallback_stamp = _iso_timestamp(previous.get("updated_at")) or time.time()
+            leg_updated_at.update(
+                {
+                    str(key): float(value)
+                    for key, value in (previous.get("leg_updated_at") or {}).items()
+                    if _float(value) is not None
+                }
+            )
+            for key in rates:
+                leg_updated_at.setdefault(str(key), fallback_stamp)
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
     covered = 0
     refresher = FastQuoteRefresher()
     try:
@@ -273,19 +295,28 @@ def sweep_funding(
                 if fields.get("next_funding_ts_us") is not None:
                     entry["next_funding_ts_us"] = fields["next_funding_ts_us"]
                 if entry:
-                    rates[f"{venue}|{symbol}"] = entry
+                    key = f"{venue}|{symbol}"
+                    rates[key] = entry
+                    leg_updated_at[key] = time.time()
     finally:
         try:
             refresher.close()
         except Exception:  # noqa: BLE001
             pass
 
+    cutoff = time.time() - FUNDING_MAX_AGE_SECONDS
+    rates = {
+        key: entry
+        for key, entry in rates.items()
+        if float(leg_updated_at.get(key) or 0.0) >= cutoff
+    }
+    leg_updated_at = {key: leg_updated_at[key] for key in rates}
     payload_out = {
         "schema": "spreadboard.live_funding.v1",
         "updated_at": datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat(),
         "legs": rates,
+        "leg_updated_at": leg_updated_at,
     }
-    path = Path(cache_path)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload_out, separators=(",", ":")), encoding="utf-8")
     temporary.replace(path)
@@ -312,6 +343,28 @@ def load_funding(*, cache_path: Path | str = FUNDING_CACHE_PATH) -> dict[str, di
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return {}
-        _FUNDING_CACHE["legs"] = payload.get("legs") or {}
+        legs = payload.get("legs") or {}
+        timestamps = payload.get("leg_updated_at") or {}
+        fallback_stamp = _iso_timestamp(payload.get("updated_at"))
+        cutoff = time.time() - FUNDING_MAX_AGE_SECONDS
+        _FUNDING_CACHE["legs"] = {
+            str(key): value
+            for key, value in legs.items()
+            if float(_float(timestamps.get(key)) or fallback_stamp or 0.0) >= cutoff
+        }
         _FUNDING_CACHE["stamp"] = stamp
     return _FUNDING_CACHE["legs"]
+
+
+def _float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iso_timestamp(value: Any) -> float | None:
+    try:
+        return datetime.fromisoformat(str(value or "").replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None

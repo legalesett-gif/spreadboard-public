@@ -36,6 +36,7 @@ from spreadboard import (  # noqa: E402
     api_spreads,
     billing,
     board,
+    catalog_pairs,
     chart_catalog,
     crypto_billing,
     crypto_watcher,
@@ -58,6 +59,7 @@ from spreadboard import (  # noqa: E402
     subscription_lifecycle,
     telegram_bot,
     telegram_queries,
+    token_rankings,
 )
 
 #: Same story as the board cache: intel takes ~24s to build and a 20s life meant
@@ -319,6 +321,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             "/status",
             "/account",
             "/markets",
+            "/rankings",
             "/intel",
             "/triage",
             "/arbitrage",
@@ -658,6 +661,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         accounts_path=self.server.accounts_path,
                     )
                 )
+            elif parsed.path == "/rankings":
+                self._send_html(render_rankings_page(query))
             elif parsed.path == "/intel":
                 self._send_html(
                     render_intel_page(self.server.board_path, self.server.config, query)
@@ -728,6 +733,16 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_json(api_board(self.server.board_path, query))
             elif parsed.path == "/api/spreads":
                 self._send_json(api_market_spreads(self.server.board_path, query))
+            elif parsed.path == "/api/catalog-pairs":
+                token = _clean_symbol(_query_first(query, "token") or "")
+                self._send_json(
+                    catalog_pairs.for_token(
+                        token,
+                        limit=max(1, min(2000, int(_query_float(query, "limit", 500) or 500))),
+                    )
+                )
+            elif parsed.path == "/api/rankings":
+                self._send_json(api_token_rankings(query))
             elif parsed.path == "/api/chart-catalog":
                 catalog = chart_catalog.load()
                 token = _clean_symbol(_query_first(query, "token") or "")
@@ -4084,7 +4099,13 @@ def _current_history_point(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def api_token(symbol: str, board_path: Path, *, include_live: bool = True) -> dict[str, Any]:
+def api_token(
+    symbol: str,
+    board_path: Path,
+    *,
+    include_live: bool = True,
+    include_community: bool = True,
+) -> dict[str, Any]:
     token_data = live.get_token_data(symbol) if include_live else local_token_data(symbol)
     token_data["public_enrichment"] = {
         "status": "ready" if include_live else "deferred",
@@ -4092,7 +4113,9 @@ def api_token(symbol: str, board_path: Path, *, include_live: bool = True) -> di
         "url": f"/api/token/{symbol}",
     }
     token_data["board_rows"] = _find_board_symbol(symbol, board_path)
-    token_data["community_pulse"] = token_community_pulse(symbol, board_path)
+    token_data["community_pulse"] = (
+        token_community_pulse(symbol, board_path) if include_community else {}
+    )
     return token_data
 
 
@@ -5143,19 +5166,19 @@ def render_market_token_group(group: dict[str, Any]) -> str:
     name = group.get("token_name") or "Metadata pending"
     venues = group.get("venues") or []
     kinds = group.get("route_kinds") or []
+    funding_route = group.get("best_funding_route") or best
     funding = (
-        best.get("funding_24h_pct")
-        if best.get("funding_24h_pct") is not None
-        else best.get("funding_projected_24h_pct")
+        funding_route.get("funding_24h_pct")
+        if funding_route.get("funding_24h_pct") is not None
+        else funding_route.get("funding_projected_24h_pct")
     )
     funding_basis = (
         "settled 24h"
-        if best.get("funding_24h_pct") is not None
+        if funding_route.get("funding_24h_pct") is not None
         else "24h at current"
-        if best.get("funding_projected_24h_pct") is not None
+        if funding_route.get("funding_projected_24h_pct") is not None
         else "history unavailable"
     )
-    funding_route = best
     funding_pair = " → ".join(
         venue
         for venue in (
@@ -5163,6 +5186,23 @@ def render_market_token_group(group: dict[str, Any]) -> str:
             funding_route.get("short_venue"),
         )
         if venue
+    )
+    catalog_coverage = group.get("coverage_mode") == "catalog_live_books"
+    spread_heading = "Best current pair" if catalog_coverage else "Best matched spread"
+    matched = best.get("depth_weighted_spread_pct")
+    spread_value = (
+        matched
+        if matched is not None
+        else best.get("executable_spread_pct")
+        if catalog_coverage
+        else group.get("best_edge_pct")
+    )
+    spread_note = (
+        f"$50 VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book"
+        if matched is not None
+        else f"{fmt_pct(best.get('executable_spread_pct'))} top book · depth not measured"
+        if catalog_coverage
+        else f"matched $50 VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book"
     )
     return f"""
     <details class="token-route-group" id="token-{h(group.get("token"))}"
@@ -5178,9 +5218,9 @@ def render_market_token_group(group: dict[str, Any]) -> str:
           <em>{h(route_kind_display(best.get("route_kind")))}</em>
         </div>
         <div class="group-number">
-          <span>Best matched spread</span>
-          <strong class="{spread_class(group.get("best_edge_pct"))}" data-live-spread>{fmt_pct(group.get("best_edge_pct"))}</strong>
-          <em>matched $50 VWAP · {fmt_pct(best.get("executable_spread_pct"))} top book</em>
+          <span>{h(spread_heading)}</span>
+          <strong class="{spread_class(spread_value)}" data-live-spread>{fmt_pct(spread_value)}</strong>
+          <em>{h(spread_note)}</em>
         </div>
         <div class="group-number">
           <span>Best-route funding</span>
@@ -5196,7 +5236,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
       </summary>
       <div class="token-route-body">
         <div class="expanded-asset-bar">
-          <span>{h(", ".join(venues))}</span>
+          <span>{h(", ".join(venues))}{f" · showing {h(group.get('displayed_route_count') or 0)} of {h(group.get('route_count') or 0)} complete warm catalogue pairs" if catalog_coverage else ""}</span>
           <div>
             <a href="/charts?token={h(group.get("token"))}">Token charts</a>
             <a href="{h(group.get("href") or "/markets")}">Token overview</a>
@@ -5214,6 +5254,163 @@ def render_market_token_group(group: dict[str, Any]) -> str:
     """
 
 
+RANKING_TABS: tuple[tuple[str, str], ...] = (
+    ("spread", "Spread now"),
+    ("funding", "Funding now"),
+    ("1d", "Settled 24h"),
+    ("7d", "Settled 7d"),
+    ("30d", "Settled 30d"),
+    ("coverage", "Pair coverage"),
+    ("token", "A-Z"),
+)
+
+
+def api_token_rankings(query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+    """The precomputed token leaderboard; never a live request-time rebuild."""
+
+    query = query or {}
+    metric = (_query_first(query, "rank") or "spread").casefold()
+    if metric not in {value for value, _label in RANKING_TABS}:
+        metric = "spread"
+    requested_limit = int(_query_float(query, "limit", 100) or 100)
+    payload = token_rankings.load()
+    rows = token_rankings.ranked(
+        payload,
+        metric=metric,
+        query=_query_first(query, "q"),
+        status=_query_first(query, "status"),
+        limit=requested_limit,
+    )
+    age = token_rankings.age_seconds(payload)
+    return {
+        "ok": bool(payload.get("records")),
+        "mode": "precomputed_individual_token_rankings",
+        "generated_at": payload.get("generated_at"),
+        "age_seconds": age,
+        "source_updated_at": payload.get("source_updated_at"),
+        "source_age_min": payload.get("source_age_min"),
+        "source_status": payload.get("source_status"),
+        "filters": {
+            "rank": metric,
+            "q": _query_first(query, "q"),
+            "status": _query_first(query, "status"),
+            "limit": max(1, min(500, requested_limit)),
+        },
+        "summary": {
+            "token_count": payload.get("token_count", 0),
+            "live_token_count": payload.get("live_token_count", 0),
+            "cooled_token_count": payload.get("cooled_token_count", 0),
+            "catalogued_token_count": payload.get("catalogued_token_count", 0),
+            "returned_token_count": len(rows),
+        },
+        "rows": rows,
+    }
+
+
+def render_rankings_page(query: dict[str, list[str]]) -> str:
+    data = api_token_rankings(query)
+    metric = str((data.get("filters") or {}).get("rank") or "spread")
+    summary = data.get("summary") or {}
+    rows = data.get("rows") or []
+    tabs = "".join(
+        f'<a class="{"active" if value == metric else ""}" '
+        f'href="/rankings?{h(urlencode(_query_with(query, rank=value, limit=100)))}">{h(label)}</a>'
+        for value, label in RANKING_TABS
+    )
+    body = f"""
+    <section class="rankings-page terminal-page" data-refresh="120" data-refresh-silent="1">
+      <header class="terminal-heading">
+        <div>
+          <span class="page-kicker">Rankings</span>
+          <h1>Individual token leaderboard</h1>
+          <p>Spread, current carry, and settled carry are independent rankings. Cooled leaders remain on the historical radar without their old quote being presented as live.</p>
+        </div>
+        <div class="terminal-live-box {"live" if data.get("ok") else "unavailable"}">
+          <span>{"Ready" if data.get("ok") else "Warming"}</span>
+          <strong>{fmt_age((_float_or_none(data.get("age_seconds")) or 0) / 60.0) if data.get("generated_at") else "—"}</strong>
+          <em>atomic precomputed ranking</em>
+        </div>
+      </header>
+      <section class="ranking-explainer">
+        <article><span>Spread now</span><strong>Matched $50 VWAP</strong><p>Price dislocation on the best currently visible route. It does not claim convergence.</p></article>
+        <article><span>Funding now</span><strong>Projected or settled 24h</strong><p>Positive paired carry the displayed long-short direction receives. Current and historical figures stay labelled.</p></article>
+        <article><span>Settled windows</span><strong>Venue payment history</strong><p>Actual public settlement events over 24h, 7d, and 30d. A dash means insufficient exact-symbol history.</p></article>
+        <article><span>Pair coverage</span><strong>Complete catalogue capacity</strong><p>All exact spot, futures, and verified DEX market combinations known for the token, independent of the live top-route quota.</p></article>
+      </section>
+      <nav class="ranking-tabs" aria-label="Rank tokens by">{tabs}</nav>
+      <form class="ranking-filter" method="get" action="/rankings">
+        <input type="hidden" name="rank" value="{h(metric)}">
+        <label><span>Token</span><input name="q" value="{h(_query_first(query, "q") or "")}" placeholder="GUA, SIREN, BTC"></label>
+        <label><span>Status</span><select name="status">
+          <option value="">Live and retained catalogue</option>
+          <option value="live" {"selected" if _query_first(query, "status") == "live" else ""}>Live now</option>
+          <option value="cooled" {"selected" if _query_first(query, "status") == "cooled" else ""}>Cooled radar</option>
+          <option value="catalogued" {"selected" if _query_first(query, "status") == "catalogued" else ""}>Catalogue only</option>
+        </select></label>
+        <button class="sheet-button primary" type="submit">Apply</button>
+        <a class="sheet-button" href="/rankings">Reset</a>
+      </form>
+      <section class="terminal-tape ranking-tape" aria-label="Token ranking summary">
+        {render_market_metric("Tokens", summary.get("token_count"), "full market catalogue")}
+        {render_market_metric("Live now", summary.get("live_token_count"), "client-visible tokens")}
+        {render_market_metric("Cooled radar", summary.get("cooled_token_count"), "historical funding leads")}
+        {render_market_metric("Catalogue", summary.get("catalogued_token_count"), f"{summary.get('returned_token_count') or 0} rows shown")}
+      </section>
+      <section class="ranking-table-wrap" role="region" aria-label="Individual token rankings" tabindex="0">
+        <table class="ranking-table">
+          <thead><tr><th>#</th><th>Token</th><th>Spread now</th><th>Funding now / 24h</th><th>Settled 24h</th><th>Settled 7d</th><th>Settled 30d</th><th>Coverage</th><th>Open</th></tr></thead>
+          <tbody>{"".join(render_token_ranking_row(index, row) for index, row in enumerate(rows, start=1)) or '<tr><td colspan="9" class="empty">The precomputed ranking is warming or no tokens match these filters.</td></tr>'}</tbody>
+        </table>
+      </section>
+      <p class="ranking-footnote"><strong>Freshness boundary:</strong> current rankings are rebuilt after shared public-book updates. Historical windows are never extrapolated to fill missing venue history, and unverified identity remains visibly marked.</p>
+    </section>
+    """
+    return shell("Token Rankings - SpreadBoard", "rankings", body)
+
+
+def render_token_ranking_row(index: int, row: dict[str, Any]) -> str:
+    spread_route = row.get("best_spread_route") or {}
+    funding_route = row.get("best_funding_route") or {}
+    windows = row.get("settled_windows") or {}
+    route = funding_route or spread_route
+    route_key = str(route.get("route_key") or "")
+    route_url = f"/pair/{board.route_key_url(route_key)}" if route_key else row.get("token_url")
+    status = str(row.get("status") or "cooled")
+    status_label = {
+        "live": "Live now",
+        "cooled": "Cooled",
+        "catalogued": "Catalogue",
+    }.get(status, "Catalogue")
+    return f"""
+    <tr class="ranking-row {h(status)}">
+      <td data-label="Rank"><strong>{h(index)}</strong></td>
+      <td data-label="Token"><a class="ranking-token" href="{h(row.get("token_url") or "#")}">{h(row.get("token"))}{"?" if row.get("identity_warning") else ""}</a><span class="ranking-status {h(status)}">{h(status_label)}</span><small>{h(row.get("token_name") or "Metadata pending")}</small></td>
+      <td data-label="Spread now"><strong class="{spread_class(row.get("best_spread_pct"))}">{fmt_pct(row.get("best_spread_pct"))}</strong><small>{h(_ranking_route_label(spread_route))}</small></td>
+      <td data-label="Funding now"><strong>{fmt_signed_pct(row.get("funding_now_24h_pct"), digits=3)}</strong><small>{h(_ranking_funding_basis(row))} · {h(_ranking_route_label(funding_route))}</small></td>
+      <td data-label="Settled 24h"><strong>{fmt_signed_pct(windows.get("1d"), digits=2)}</strong></td>
+      <td data-label="Settled 7d"><strong>{fmt_signed_pct(windows.get("7d"), digits=2)}</strong></td>
+      <td data-label="Settled 30d"><strong>{fmt_signed_pct(windows.get("30d"), digits=2)}</strong></td>
+      <td data-label="Coverage"><strong>{h(row.get("catalog_pair_count") or 0)}</strong><small>{h(row.get("live_route_count") or 0)} live routes · {h(row.get("catalog_venue_count") or 0)} venues</small></td>
+      <td data-label="Open"><a href="{h(route_url or "#")}">{"Route" if route_key else "Token"}</a><a href="{h(row.get("chart_url") or "#")}">Chart</a></td>
+    </tr>
+    """
+
+
+def _ranking_route_label(route: dict[str, Any]) -> str:
+    if not route:
+        return "not live"
+    return " → ".join(
+        str(value) for value in (route.get("long_venue"), route.get("short_venue")) if value
+    ) or "route unavailable"
+
+
+def _ranking_funding_basis(row: dict[str, Any]) -> str:
+    if row.get("status") != "live":
+        return "not live now"
+    basis = str(row.get("funding_now_basis") or "")
+    return "settled 24h" if basis == "settled_public_events" else "24h at current rate"
+
+
 def render_market_group_route(row: dict[str, Any]) -> str:
     settled_funding = row.get("funding_24h_pct")
     shown_funding = (
@@ -5225,6 +5422,11 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         else "24h at current"
         if shown_funding is not None
         else "history unavailable"
+    )
+    displayed_edge = (
+        row.get("depth_weighted_spread_pct")
+        if row.get("depth_weighted_spread_pct") is not None
+        else row.get("executable_spread_pct")
     )
     return f"""
     <article class="route-detail-row" data-route-key="{h(row.get("route_key") or "")}">
@@ -5238,8 +5440,8 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         <strong>{fmt_price(row.get("long_price"))}</strong><span>→</span><strong>{fmt_price(row.get("short_price"))}</strong>
       </div>
       <div class="route-edge">
-        <strong class="{spread_class(row.get("depth_weighted_spread_pct"))}" data-live-spread>{fmt_pct(row.get("depth_weighted_spread_pct"))}</strong>
-        <span>{fmt_pct(row.get("executable_spread_pct"))} top book{" · depth not measured" if row.get("depth_unverified") else ""}</span>
+        <strong class="{spread_class(displayed_edge)}" data-live-spread>{fmt_pct(displayed_edge)}</strong>
+        <span>{"$50 VWAP · " if row.get("depth_weighted_spread_pct") is not None else ""}{fmt_pct(row.get("executable_spread_pct"))} top book{" · depth not measured" if row.get("depth_unverified") else ""}</span>
       </div>
       <div class="route-funding">
         <strong data-live-funding>{fmt_signed_pct(shown_funding, digits=3) if shown_funding is not None else "—"}</strong>
@@ -8408,25 +8610,36 @@ def render_sparkline(
 
 
 def render_token_page(symbol: str, board_path: Path) -> str:
-    data = api_token(symbol, board_path, include_live=False)
-    market_data = api_market_spreads(
-        board_path,
-        {"q": [symbol], "limit": ["50"], "sort": ["edge"], "direction": ["desc"]},
+    # A token URL used to create a brand-new heavy board cache key. The first
+    # person opening an obscure asset therefore waited 10-25 seconds even
+    # though its exact books were already in the shared store. Derive its full
+    # catalogue combinations from those warm books instead: no public API call,
+    # no capped 28-route source, and no request-time board rebuild.
+    rankings_payload = token_rankings.load()
+    pair_data = catalog_pairs.with_routes(
+        catalog_pairs.for_token(symbol, limit=None),
+        token_rankings.dex_routes_for(rankings_payload, symbol),
+        limit=500,
     )
-    groups = [
-        group
-        for group in market_data.get("groups") or []
-        if str(group.get("token") or "").upper() == symbol.upper()
-    ]
-    group = groups[0] if groups else {}
-    token_name = group.get("token_name") or "Metadata pending"
-    community = data.get("community_pulse") or {}
+    group = catalog_pairs.group(pair_data)
+    ranking_rows = token_rankings.ranked(
+        rankings_payload, metric="token", query=symbol, limit=20
+    )
+    ranking = next(
+        (
+            row
+            for row in ranking_rows
+            if str(row.get("token") or "").upper() == symbol.upper()
+        ),
+        {},
+    )
+    token_name = ranking.get("token_name") or "Metadata pending"
     body = f"""
     <section class="intro compact">
       <div>
         <a class="back" href="/">Back to arbitrage</a>
         <h1>{h(symbol)} <small>{h(token_name)}</small></h1>
-        <p>All current public-API routes for this asset, followed by public venue details and community context.</p>
+        <p>Every currently quoteable catalogue pair for this asset, including combinations omitted by the scanner's ranking quota.</p>
       </div>
       <div class="intel-actions">
         <a class="secondary" href="/charts?token={h(symbol)}">Charts</a>
@@ -8434,13 +8647,39 @@ def render_token_page(symbol: str, board_path: Path) -> str:
       </div>
     </section>
       <section class="token-canonical-routes">
-        {render_market_token_group(group) if group else render_live_market_empty((market_data.get("source_health") or {}).get("canonical_api") or {})}
+        {render_market_token_group(group) if group else render_catalog_pair_empty(pair_data)}
       </section>
-	    {render_token_market_enrichment(symbol, data)}
-      {render_token_community_pulse(community)}
-	    {render_token_market_script(symbol)}
+	    {render_warm_token_coverage(pair_data, ranking)}
 	    """
     return shell(f"{symbol} - SpreadBoard", "board", body)
+
+
+def render_catalog_pair_empty(payload: dict[str, Any]) -> str:
+    return f"""
+    <section class="market-empty">
+      <strong>No two-sided fresh pair is available now.</strong>
+      <span>The complete catalogue knows {h(payload.get("catalog_market_count") or 0)} markets; {h(payload.get("fresh_market_count") or 0)} currently have a shared warm book and {h(payload.get("missing_book_count") or 0)} are awaiting the next bulk sweep. No old quote is substituted.</span>
+    </section>
+    """
+
+
+def render_warm_token_coverage(
+    pair_data: dict[str, Any], ranking: dict[str, Any]
+) -> str:
+    market_types = ranking.get("catalog_market_types") or {}
+    rejected = pair_data.get("rejected") or {}
+    return f"""
+    <section class="panel warm-token-coverage">
+      <div class="panel-head"><div><h2>Warm coverage audit</h2><p>This is the complete exact-symbol catalogue joined to the shared books. No browser-time exchange scan is queued.</p></div><span class="status-pill fresh">Ready</span></div>
+      <div class="terminal-kpis compact-kpis">
+        {render_market_metric("Catalogue markets", pair_data.get("catalog_market_count"), f"{ranking.get('catalog_venue_count') or 0} venues")}
+        {render_market_metric("Fresh books", pair_data.get("fresh_market_count"), f"within {int(_float_or_none(pair_data.get('book_max_age_seconds')) or 0)}s")}
+        {render_market_metric("Current pairs", pair_data.get("route_count"), f"showing {pair_data.get('returned_route_count') or len(pair_data.get('routes') or [])} · {pair_data.get('dex_route_count') or 0} DEX")}
+        {render_market_metric("Market types", sum(int(value or 0) for value in market_types.values()), f"{market_types.get('spot') or 0} spot · {market_types.get('futures') or 0} futures · {market_types.get('dex') or 0} DEX")}
+      </div>
+      <p class="small"><strong>Mirage controls:</strong> {h(rejected.get('price_ratio') or 0)} pairs rejected above the 3x identity boundary, {h(rejected.get('quote_mismatch') or 0)} cross-quote pairs separated from token spread, {h(rejected.get('closed_rail') or 0)} rejected for a known-closed/incompatible spot rail, and {h(rejected.get('leveraged') or 0)} cross-venue leveraged-token aliases rejected. Missing books remain absent instead of inheriting an old quote.</p>
+    </section>
+    """
 
 
 def render_token_market_enrichment(symbol: str, data: dict[str, Any]) -> str:
@@ -14093,6 +14332,7 @@ _VISITOR_NAV: tuple[tuple[str, str, str], ...] = (
 _MEMBER_NAV: tuple[tuple[str, str, str], ...] = (
     ("markets", "/", "Arbitrage"),
     ("funding", "/funding", "Funding"),
+    ("rankings", "/rankings", "Rankings"),
     ("fair", "/fair", "Fair price"),
     ("charts", "/charts", "Charts"),
     ("intel", "/intel", "Intel"),
@@ -14275,6 +14515,36 @@ input:focus, select:focus, a:focus-visible, button:focus-visible, summary:focus-
 .header-strip {{ height: 12px; background: var(--terminal-bg); border-bottom: 1px solid var(--terminal-line); }}
 .mobile-primary-nav, .mobile-secondary-nav {{ display: none; }}
 main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
+.rankings-page {{ width: min(1660px, 100%); margin: 0 auto 70px; display: grid; gap: 14px; }}
+.ranking-explainer {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--terminal-line); background: var(--terminal-panel); }}
+.ranking-explainer article {{ min-width: 0; padding: 14px; border-right: 1px solid var(--terminal-line); display: grid; gap: 5px; }}
+.ranking-explainer article:last-child {{ border-right: 0; }}
+.ranking-explainer span, .ranking-explainer p {{ color: var(--terminal-muted); font-size: 11px; }}
+.ranking-explainer span {{ font-weight: 900; text-transform: uppercase; }}
+.ranking-explainer p {{ margin: 0; line-height: 1.45; }}
+.ranking-tabs {{ display: flex; gap: 6px; overflow-x: auto; padding: 2px 0; }}
+.ranking-tabs a {{ flex: 0 0 auto; min-height: 34px; display: inline-flex; align-items: center; padding: 0 12px; border: 1px solid var(--terminal-line); background: var(--terminal-panel); color: var(--terminal-muted); font-size: 11px; font-weight: 900; }}
+.ranking-tabs a.active {{ border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }}
+.ranking-filter {{ display: grid; grid-template-columns: minmax(220px, 1fr) 210px auto auto; gap: 8px; align-items: end; border: 1px solid var(--terminal-line); padding: 10px; background: var(--terminal-panel); }}
+.ranking-filter label {{ display: grid; gap: 5px; color: var(--terminal-muted); font-size: 10px; font-weight: 900; text-transform: uppercase; }}
+.ranking-filter input, .ranking-filter select {{ min-height: 38px; width: 100%; border: 1px solid var(--terminal-line); background: var(--terminal-row); color: var(--terminal-text); padding: 8px; }}
+.ranking-tape {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }}
+.ranking-table-wrap {{ overflow: auto; border: 1px solid var(--terminal-line); background: var(--terminal-panel); }}
+.ranking-table {{ width: 100%; min-width: 1120px; border-collapse: collapse; }}
+.ranking-table th, .ranking-table td {{ padding: 10px 9px; border-bottom: 1px solid var(--terminal-line); text-align: left; vertical-align: middle; }}
+.ranking-table th {{ position: sticky; top: 0; z-index: 1; background: var(--terminal-panel-2); color: var(--terminal-muted); font-size: 9px; text-transform: uppercase; }}
+.ranking-table td {{ font-size: 12px; }}
+.ranking-table td > strong, .ranking-table td > small, .ranking-table td[data-label="Open"] > a {{ display: block; }}
+.ranking-table small {{ margin-top: 3px; color: var(--terminal-muted); font-size: 9px; }}
+.ranking-table td[data-label="Open"] {{ display: flex; gap: 6px; }}
+.ranking-table td[data-label="Open"] a {{ border: 1px solid var(--terminal-line); padding: 5px 7px; font-size: 10px; font-weight: 900; }}
+.ranking-token {{ color: var(--accent); font-size: 14px; font-weight: 900; }}
+.ranking-status {{ display: inline-flex; margin-left: 6px; padding: 2px 5px; border: 1px solid var(--terminal-line); color: var(--terminal-muted); font-size: 8px; font-weight: 900; text-transform: uppercase; }}
+.ranking-status.live {{ border-color: var(--green); color: var(--green); }}
+.ranking-status.catalogued {{ border-color: var(--terminal-muted); color: var(--terminal-muted); }}
+.ranking-row.cooled {{ opacity: .82; }}
+.ranking-row.catalogued {{ opacity: .72; }}
+.ranking-footnote {{ margin: 0; color: var(--terminal-muted); font-size: 11px; line-height: 1.5; }}
 .saved-charts-panel {{ background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 10px; }}
 .saved-chart-pin {{ display: flex; gap: 8px; flex-wrap: wrap; }}
 .saved-chart-pin input {{ flex: 1 1 180px; min-height: 34px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--row); color: inherit; }}
@@ -15722,8 +15992,9 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   .main-nav {{ display: none; }}
   .header-actions {{ margin-left: auto; }}
   .header-strip {{ height: 8px; }}
-  .mobile-primary-nav {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 6px 8px 8px; background: var(--dark); }}
+  .mobile-primary-nav {{ display: flex; gap: 4px; overflow-x: auto; padding: 6px 8px 8px; background: var(--dark); }}
   .mobile-primary-nav a {{ min-height: 40px; display: grid; place-items: center; border-radius: 8px; color: #dce8e5; font-size: 11px; font-weight: 900; white-space: nowrap; }}
+  .mobile-primary-nav a {{ flex: 0 0 min(24vw, 110px); padding: 0 9px; }}
   .mobile-primary-nav a.active {{ background: var(--accent); color: var(--accent-ink); }}
   .mobile-secondary-nav {{ display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; padding: 0 8px 8px; background: var(--dark); border-top: 1px solid rgba(255,255,255,.08); }}
   .mobile-secondary-nav a {{ min-height: 34px; display: grid; place-items: center; border-radius: 7px; color: #b9c8c3; font-size: 10px; font-weight: 900; white-space: nowrap; }}
@@ -15736,6 +16007,11 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   .market-reconnect-stats article:first-child {{ border-top: 0; }}
   .market-reconnect-actions {{ align-items: flex-start; flex-direction: column; }}
   .chart-builder-form {{ grid-template-columns: 1fr; }}
+  .ranking-explainer {{ grid-template-columns: 1fr 1fr; }}
+  .ranking-explainer article:nth-child(2) {{ border-right: 0; }}
+  .ranking-explainer article:nth-child(-n+2) {{ border-bottom: 1px solid var(--terminal-line); }}
+  .ranking-filter {{ grid-template-columns: 1fr 1fr; }}
+  .ranking-tape {{ grid-template-columns: 1fr 1fr; }}
   .chart-token-field, .chart-leg-picker, .chart-create-button {{ grid-column: 1; }}
   .chart-swap {{ justify-self: center; margin: 0; transform: rotate(90deg); }}
   .chart-builder-title, .selected-chart-head, .selected-chart-foot {{ align-items: flex-start; flex-direction: column; }}
@@ -15946,6 +16222,9 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   .auto-refresh-pill {{ right: 10px; bottom: 10px; max-width: calc(100vw - 20px); }}
 }}
 @media (max-width: 560px) {{
+  .ranking-explainer, .ranking-filter {{ grid-template-columns: 1fr; }}
+  .ranking-explainer article {{ border-right: 0; border-bottom: 1px solid var(--terminal-line); }}
+  .ranking-explainer article:last-child {{ border-bottom: 0; }}
   .chart-leg-stats {{ grid-template-columns: 1fr; }}
   .chart-leg-stats article,
   .chart-leg-stats article:first-child {{ border-left: 0; border-top: 1px solid var(--terminal-line); }}

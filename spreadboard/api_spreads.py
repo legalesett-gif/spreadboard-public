@@ -234,7 +234,12 @@ def load_spreads(
             ).items()
         )
     )
-    all_rows = [row for row in all_rows if row.route_kind not in RETIRED_ROUTE_KINDS]
+    all_rows = [
+        row
+        for row in all_rows
+        if row.route_kind not in RETIRED_ROUTE_KINDS
+        and not quote_basis_mismatch(row)
+    ]
     held_out = [row for row in all_rows if _is_mirage_guarded(row)]
     # Headline rankings must be executable research leads, not ticker
     # dislocations with unresolved identity, inventory, or transfer rails.
@@ -1944,6 +1949,21 @@ def price_ratio_implausible(row: "SpreadTerminalRow") -> bool:
     return ratio > MAX_CROSS_VENUE_PRICE_RATIO
 
 
+def quote_basis_mismatch(row: "SpreadTerminalRow") -> bool:
+    """True when two CEX legs are denominated in different quote assets.
+
+    USD, USDC and USDT can trade close to one another, but they are not the
+    same basis.  A route comparing them cannot honestly attribute the entire
+    difference to the token and therefore does not belong in the standard
+    spread or funding rankings.  Unknown quote assets (notably DEX legs) are
+    left untouched until their conversion path is explicitly modelled.
+    """
+
+    long_quote = str(getattr(row, "long_quote", "") or "").upper().strip()
+    short_quote = str(getattr(row, "short_quote", "") or "").upper().strip()
+    return bool(long_quote and short_quote and long_quote != short_quote)
+
+
 # Only these lanes require the coin to physically move between venues. Futures
 # legs settle in margin, and a DEX leg sits in your own wallet, so neither needs
 # a transfer rail.
@@ -2125,7 +2145,8 @@ def row_is_presentable(row: "SpreadTerminalRow") -> bool:
     must answer the same question.
     """
     return (
-        not price_ratio_implausible(row)
+        not quote_basis_mismatch(row)
+        and not price_ratio_implausible(row)
         and not leg_volume_too_thin(row)
         and not is_venue_specific_leveraged_token(row)
         and not is_non_perpetual_or_inverse(row)

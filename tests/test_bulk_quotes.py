@@ -8,6 +8,7 @@ turned positive in between did not appear until the next scan.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -278,6 +279,47 @@ def test_the_sweep_writes_entries_keyed_by_venue_and_symbol(tmp_path, monkeypatc
     assert out["legs"] == 1
     legs = bulk_quotes.load_funding(cache_path=tmp_path / "f.json")
     assert legs["Ourbit|QNTX/USDT:USDT"]["rate_pct"] == 0.02
+
+
+def test_rotating_funding_merge_expires_an_old_rate(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "funding.json"
+    path.write_text(json.dumps({
+        "schema": "spreadboard.live_funding.v1",
+        "updated_at": "2026-08-13T00:00:00+00:00",
+        "legs": {"Gate|OLD/USDT:USDT": {"rate_pct": 9.0}},
+        "leg_updated_at": {"Gate|OLD/USDT:USDT": 1.0},
+    }))
+
+    class _Refresher:
+        def _bulk_funding_rates(self, _venue):
+            return {"NEW/USDT:USDT": {"current_funding_pct": 0.02, "funding_interval_hours": 8}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("spreadboard.fast_quotes.FastQuoteRefresher", lambda: _Refresher())
+    monkeypatch.setattr(bulk_quotes.time, "time", lambda: 10_000.0)
+    monkeypatch.setattr(bulk_quotes, "FUNDING_MAX_AGE_SECONDS", 300.0)
+    bulk_quotes.sweep_funding(
+        ["Ourbit"], cache_path=path, merge_existing=True
+    )
+
+    payload = json.loads(path.read_text())
+    assert "Gate|OLD/USDT:USDT" not in payload["legs"]
+    assert payload["legs"]["Ourbit|NEW/USDT:USDT"]["rate_pct"] == 0.02
+
+
+def test_funding_reader_refuses_stale_cache_file(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "funding.json"
+    path.write_text(json.dumps({
+        "schema": "spreadboard.live_funding.v1",
+        "updated_at": "1970-01-01T00:00:01+00:00",
+        "legs": {"Gate|OLD/USDT:USDT": {"rate_pct": 9.0}},
+    }))
+    monkeypatch.setattr(bulk_quotes.time, "time", lambda: 10_000.0)
+    monkeypatch.setattr(bulk_quotes, "FUNDING_MAX_AGE_SECONDS", 300.0)
+    bulk_quotes._FUNDING_CACHE["stamp"] = None
+    assert bulk_quotes.load_funding(cache_path=path) == {}
 
 
 def test_the_overlay_keys_on_the_symbol_the_snapshot_actually_carries() -> None:

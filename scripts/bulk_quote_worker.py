@@ -39,12 +39,23 @@ def main() -> int:
         default=180.0,
         help="0 skips the funding sweep for this pass.",
     )
+    parser.add_argument(
+        "--funding-venues",
+        type=str,
+        default="",
+        help="Optional comma-delimited venue slice for a rotating funding pass.",
+    )
     args = parser.parse_args()
 
     summary = {"quotes": bulk_quotes.sweep(budget_seconds=args.budget_seconds)}
     if args.funding_budget_seconds > 0:
+        funding_venues = [
+            value.strip() for value in args.funding_venues.split(",") if value.strip()
+        ]
         summary["funding"] = bulk_quotes.sweep_funding(
-            budget_seconds=args.funding_budget_seconds
+            venues=funding_venues or None,
+            budget_seconds=args.funding_budget_seconds,
+            merge_existing=bool(funding_venues),
         )
     print(json.dumps(summary, sort_keys=True, default=str), flush=True)
     # The clients hold hundreds of megabytes and the interpreter is about to be

@@ -1380,13 +1380,16 @@ def pairwise_candidates(
         # Keep each token's strongest routes rather than every permutation of the
         # venues it trades on: presence is what coverage needs, and an unbounded
         # cross product would put a quarter of a million rows in the snapshot.
+        # Strength alone is not enough, though. It evicted the exact venue pair
+        # a member searched for whenever 28 high-carry mirrors ranked ahead of
+        # it. Reserve a foothold for each lane and venue-pair identity first.
         by_token: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             by_token.setdefault(str(row.get("token") or "").upper(), []).append(row)
         kept: list[dict[str, Any]] = []
         for token_rows in by_token.values():
             token_rows.sort(key=_row_strength, reverse=True)
-            kept.extend(token_rows[:MAX_ROWS_PER_TOKEN])
+            kept.extend(_keep_diverse_token_routes(token_rows, MAX_ROWS_PER_TOKEN))
         rows = kept
     return rows
 
@@ -1412,6 +1415,59 @@ def _row_strength(row: dict[str, Any]) -> float:
     if not _row_legs_have_books(row):
         return strength / 1_000_000.0
     return strength
+
+
+def _keep_diverse_token_routes(
+    rows: list[dict[str, Any]], limit: int
+) -> list[dict[str, Any]]:
+    """Reserve route-family and venue-pair diversity before filling by strength."""
+
+    if limit <= 0 or len(rows) <= limit:
+        return rows
+    kept: list[dict[str, Any]] = []
+    seen_rows: set[int] = set()
+    seen_lanes: set[str] = set()
+    seen_pairs: set[tuple[str, str, str]] = set()
+
+    for row in rows:
+        lane = str(row.get("route_kind") or "UNKNOWN")
+        if lane in seen_lanes:
+            continue
+        kept.append(row)
+        seen_rows.add(id(row))
+        seen_lanes.add(lane)
+        seen_pairs.add(_row_pair_identity(row))
+        if len(kept) >= limit:
+            return kept
+
+    for row in rows:
+        pair = _row_pair_identity(row)
+        if pair in seen_pairs or id(row) in seen_rows:
+            continue
+        kept.append(row)
+        seen_rows.add(id(row))
+        seen_pairs.add(pair)
+        if len(kept) >= limit:
+            return kept
+
+    for row in rows:
+        if id(row) in seen_rows:
+            continue
+        kept.append(row)
+        if len(kept) >= limit:
+            break
+    return kept
+
+
+def _row_pair_identity(row: dict[str, Any]) -> tuple[str, str, str]:
+    venues = sorted(
+        (str(row.get("long_venue") or ""), str(row.get("short_venue") or ""))
+    )
+    return (
+        str(row.get("route_kind") or "UNKNOWN"),
+        venues[0],
+        venues[1],
+    )
 
 
 def _row_legs_have_books(row: dict[str, Any]) -> bool:
@@ -1486,6 +1542,18 @@ def quote_candidate_pairs(
                 if (
                     long_quote.venue == short_quote.venue
                     and long_quote.market_type == short_quote.market_type
+                ):
+                    continue
+                # A USD leg and a USDT (or USDC) leg contain a stablecoin/fiat
+                # basis in addition to the token basis.  Treating those quote
+                # currencies as interchangeable manufactured persistent small
+                # "edges" and made the pair impossible to reconcile against a
+                # USDT-only reference.  Cross-quote research belongs in an
+                # explicit custom chart where both bases can be shown.
+                if (
+                    long_quote.quote_asset
+                    and short_quote.quote_asset
+                    and long_quote.quote_asset != short_quote.quote_asset
                 ):
                     continue
                 if _price_ratio_implausible(long_quote, short_quote):
@@ -1661,6 +1729,7 @@ def _quote_route_note(quote: MarketQuote) -> dict[str, Any]:
     note: dict[str, Any] = {
         "source_name": quote.source_name,
         "symbol": quote.symbol,
+        "quote": quote.quote_asset,
         "bid": quote.bid,
         "ask": quote.ask,
         "bid_vwap": quote.bid_vwap,
@@ -1853,6 +1922,7 @@ def _quote_from_book(
         quote_ts_us=now_us(),
         source_name=source_name,
         symbol=symbol,
+        quote_asset=source_quote.quote_asset,
         identity_key=identity_key,
         identity_source=(
             market_identity.source if market_identity is not None else source_quote.identity_source
@@ -2195,6 +2265,7 @@ def _ticker_quotes_for_symbols(
                 quote_ts_us=now_us(),
                 source_name=source_name,
                 symbol=str(symbol),
+                quote_asset=_market_quote(market, str(symbol)),
                 identity_key=identity.identity_key,
                 identity_source=market_identity.source if market_identity is not None else None,
                 decimals=market_identity.decimals if market_identity is not None else None,

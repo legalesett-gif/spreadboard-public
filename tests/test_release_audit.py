@@ -2490,6 +2490,29 @@ def test_each_token_keeps_only_its_strongest_routes() -> None:
     assert sources._row_strength(carry) > sources._row_strength(weak)
 
 
+def test_per_source_token_cap_preserves_lane_and_venue_pair_diversity() -> None:
+    rows = [
+        {
+            "token": "GUA",
+            "route_kind": "FUTURES",
+            "long_venue": "Gate",
+            "short_venue": f"V{index}",
+            "depth_weighted_spread_pct": 100.0 - index,
+            "notes": {"route_inputs": {"long": {"bid": 1, "ask": 2}, "short": {"bid": 1, "ask": 2}}},
+        }
+        for index in range(30)
+    ]
+    rows.extend(
+        [
+            {**rows[0], "route_kind": "SPOT", "long_venue": "Mexc", "short_venue": "Gate", "depth_weighted_spread_pct": 0.2},
+            {**rows[0], "route_kind": "SPOT-FUTURES", "long_venue": "Mexc", "short_venue": "Aster", "depth_weighted_spread_pct": 0.1},
+        ]
+    )
+    kept = sources._keep_diverse_token_routes(rows, 8)
+    assert {row["route_kind"] for row in kept} == {"FUTURES", "SPOT", "SPOT-FUTURES"}
+    assert len({(row["long_venue"], row["short_venue"]) for row in kept}) == 8
+
+
 def test_the_snapshot_trims_surplus_routes_not_whole_tokens() -> None:
     """Each source caps its own output, but a token quoted by ten sources arrives
     ten times over, and the row limit is a plain slice -- so an oversized snapshot
@@ -2860,6 +2883,28 @@ def test_a_real_dislocation_is_still_paired() -> None:
     pairs = sources.quote_candidate_pairs([q("Gate", 0.0100), q("Bybit", 0.0198)],
                                           min_spread_pct=0.0, max_spread_pct=0.0)
     assert pairs, "a ~2x genuine dislocation must still pair"
+
+
+def test_different_quote_assets_do_not_become_token_spread() -> None:
+    """Kraken USD versus Gate USDT contains a second, unmodelled basis."""
+    ts = int(time.time() * 1_000_000)
+
+    def q(venue: str, quote: str, price: float) -> MarketQuote:
+        return MarketQuote(
+            token="BTC", venue=venue, market_type="Futures",
+            bid=price * 0.999, ask=price * 1.001,
+            bid_vwap=price * 0.999, ask_vwap=price * 1.001,
+            quote_ts_us=ts, source_name="test",
+            symbol=f"BTC/{quote}:{quote}", quote_asset=quote,
+        )
+
+    assert not sources.quote_candidate_pairs(
+        [q("Kraken", "USD", 100.0), q("Gate", "USDT", 100.2)],
+        min_spread_pct=-100.0,
+    )
+    row = _vrow(long_quote="USD", short_quote="USDT")
+    assert api_spreads.quote_basis_mismatch(row) is True
+    assert api_spreads.row_is_presentable(row) is False
 
 
 def test_duplicate_routes_do_not_eat_a_tokens_slots() -> None:

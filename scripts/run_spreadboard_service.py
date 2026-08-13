@@ -475,6 +475,7 @@ def _warm_telegram_payload_at_startup(board_path: Path) -> None:
             "telegram startup payload ready "
             f"in {time.monotonic() - started:.1f}s"
         )
+        _refresh_token_rankings()
     except Exception as exc:  # noqa: BLE001 - the regular warmer retries later.
         _log(f"telegram startup payload skipped: {type(exc).__name__}: {exc}")
 
@@ -646,15 +647,19 @@ class BulkQuoteLoop(threading.Thread):
     fetch_tickers per venue closes that in about fifteen seconds.
     """
 
-    def __init__(self, stop_event: threading.Event) -> None:
-        super().__init__(name="bulk-quotes", daemon=True)
-        self.stop_event = stop_event
-
     #: A full pass measured 160s of quotes and 102s of funding, so it needs
     #: room to finish; a killed pass throws away everything it had gathered.
     TIMEOUT_SECONDS = max(
         120.0, float(os.environ.get("SPREADBOARD_BULK_QUOTE_TIMEOUT_SECONDS", "420"))
     )
+    FUNDING_VENUES_PER_PASS = max(
+        1, int(os.environ.get("SPREADBOARD_FUNDING_VENUES_PER_PASS", "4"))
+    )
+
+    def __init__(self, stop_event: threading.Event) -> None:
+        super().__init__(name="bulk-quotes", daemon=True)
+        self.stop_event = stop_event
+        self.funding_cursor = 0
 
     def run(self) -> None:
         from spreadboard import bulk_quotes
@@ -674,6 +679,19 @@ class BulkQuoteLoop(threading.Thread):
         crossed its cgroup and was OOM-killed -- hourly, killing the discovery
         scan with it. It also held the GIL against every page load.
         """
+        from spreadboard.fast_quotes import NATIVE_FUNDING_SOURCES, VENUE_IDS
+
+        funding_venues = sorted(set(VENUE_IDS) | set(NATIVE_FUNDING_SOURCES))
+        count = min(self.FUNDING_VENUES_PER_PASS, len(funding_venues))
+        selected_funding = [
+            funding_venues[(self.funding_cursor + index) % len(funding_venues)]
+            for index in range(count)
+        ] if funding_venues else []
+        self.funding_cursor = (
+            (self.funding_cursor + count) % len(funding_venues)
+            if funding_venues
+            else 0
+        )
         completed = _run_worker(
             [
                 *_low_priority_prefix(),
@@ -682,7 +700,9 @@ class BulkQuoteLoop(threading.Thread):
                 "--budget-seconds",
                 str(self.TIMEOUT_SECONDS / 2),
                 "--funding-budget-seconds",
-                str(self.TIMEOUT_SECONDS / 2),
+                str(max(30.0, self.TIMEOUT_SECONDS * 0.35)),
+                "--funding-venues",
+                ",".join(selected_funding),
             ],
             timeout=self.TIMEOUT_SECONDS,
         )
@@ -707,6 +727,11 @@ class BulkQuoteLoop(threading.Thread):
             )
         if (quotes.get("quotes") or 0) > 0:
             _invalidate_market_price_caches()
+            # The rankings read the complete shared catalogue, so publish a new
+            # atomic generation immediately after its prices move. This worker
+            # is isolated and low-priority; HTTP readers keep serving the last
+            # complete generation while it runs.
+            _refresh_token_rankings()
 
 
 def _invalidate_market_price_caches() -> None:
@@ -849,8 +874,48 @@ def _warm_board_cache(*, force: bool = False) -> None:
     _yield_to_requests()
     _log(f"board cache warmed {len(WARM_QUERIES)} views in {time.monotonic() - started:.1f}s")
     _refresh_funding_windows()
+    _refresh_token_rankings()
     # The generation this pass replaced is now unreferenced; give it back.
     _return_freed_memory()
+
+
+_TOKEN_RANKING_REFRESH_LOCK = threading.Lock()
+
+
+def _refresh_token_rankings() -> None:
+    """Publish the individual-token leaderboard outside the web process."""
+
+    if not _TOKEN_RANKING_REFRESH_LOCK.acquire(blocking=False):
+        return
+    try:
+        result = _run_worker(
+            [
+                *_low_priority_prefix(),
+                sys.executable,
+                str(ROOT / "scripts/token_ranking_worker.py"),
+                "--board-path",
+                str(_board_path()),
+            ],
+            timeout=float(os.environ.get("SPREADBOARD_TOKEN_RANKING_TIMEOUT_SECONDS", "240")),
+        )
+        if result.timed_out or result.returncode != 0:
+            _log(
+                "token rankings unavailable "
+                f"exit={result.returncode} {result.stderr[-300:]}"
+            )
+            return
+        try:
+            summary = json.loads(result.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            _log("token rankings produced no summary")
+            return
+        _log(
+            "token rankings ready "
+            f"tokens={summary.get('tokens', 0)} live={summary.get('live', 0)} "
+            f"cooled={summary.get('cooled', 0)}"
+        )
+    finally:
+        _TOKEN_RANKING_REFRESH_LOCK.release()
 
 
 def _warm_route_index() -> None:

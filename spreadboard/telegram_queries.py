@@ -26,7 +26,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from . import api_spreads, funding_radar, research_score
+from . import api_spreads, catalog_pairs, funding_radar, research_score, token_rankings
 
 MAX_ROWS = 8
 COOLDOWN_SECONDS = 60.0
@@ -330,6 +330,7 @@ def replace_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise TypeError("telegram_payload_must_be_a_mapping")
     if not isinstance(payload.get("groups"), list):
         raise TypeError("telegram_payload_groups_must_be_a_list")
+    catalog_pairs.clear_cache()
     global WARM_QUERY, _WARM_QUERY_UPDATED_AT
     with _WARM_QUERY_LOCK:
         WARM_QUERY = payload
@@ -504,7 +505,19 @@ def _rows_for(symbol: str, board_path: Path | str) -> list[dict[str, Any]]:
         if str(group.get("token") or "").upper() != symbol:
             continue
         rows.extend(group.get("routes") or [])
-    return rows
+    if rows:
+        return rows
+    # The canonical scanner keeps a bounded number of combinations per token;
+    # the full warm catalogue does not. An omitted route is therefore not the
+    # same thing as an unparsed token. This fallback reads the exact-symbol book
+    # and funding caches only -- no exchange call, no bot timeout, and no stale
+    # historical quote passed off as current.
+    payload = catalog_pairs.with_routes(
+        catalog_pairs.for_token(symbol, limit=None),
+        token_rankings.dex_routes_for(token_rankings.load(), symbol),
+        limit=100,
+    )
+    return list(payload.get("routes") or [])
 
 
 def _funding_rows_for(symbol: str) -> list[dict[str, Any]]:
