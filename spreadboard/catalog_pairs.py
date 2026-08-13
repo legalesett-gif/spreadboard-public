@@ -29,6 +29,7 @@ from typing import Any
 
 from spreadarb.api_discovery.orderbook import depth_weighted_price
 from spreadboard import (
+    api_spreads,
     bulk_quotes,
     chart_catalog,
     exchange_links,
@@ -212,7 +213,15 @@ def group(payload: dict[str, Any]) -> dict[str, Any]:
     routes = list(payload.get("routes") or [])
     if not routes:
         return {}
-    spread_route = max(routes, key=lambda row: _spread_rank(row))
+    current_spread_routes = [
+        row
+        for row in routes
+        if api_spreads.spread_quote_current(row) and not row.get("mirage_guarded")
+    ]
+    spread_route = max(
+        current_spread_routes or routes,
+        key=lambda row: _spread_rank(row),
+    )
     funding_routes = [
         row for row in routes if _number(row.get("funding_projected_24h_pct")) is not None
     ]
@@ -241,7 +250,9 @@ def group(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "venues": venues,
         "route_kinds": kinds,
-        "best_edge_pct": _spread_rank(spread_route),
+        "best_edge_pct": (
+            _spread_rank(spread_route) if current_spread_routes else None
+        ),
         "best_route": spread_route,
         "best_funding_24h_pct": funding_route.get("funding_projected_24h_pct"),
         "best_funding_24h_basis": "current_rate_projection",
@@ -388,9 +399,14 @@ def all_token_summaries(
                     if (
                         row.get("depth_weighted_spread_pct") is not None
                         and not row.get("mirage_guarded")
+                        # Missing age used to fall through as zero and could
+                        # therefore win a current leaderboard indefinitely.
+                        # The complete pair remains browseable via best_any;
+                        # only a timestamped matched quote may headline it.
+                        and api_spreads.spread_quote_current(row)
                         and (
-                        best_spread is None
-                        or _spread_rank(row) > _spread_rank(best_spread)
+                            best_spread is None
+                            or _spread_rank(row) > _spread_rank(best_spread)
                         )
                     ):
                         best_spread = row

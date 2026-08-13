@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 from spreadboard import server, token_rankings
 
 
 def _market() -> dict:
+    current_us = int(time.time() * 1_000_000)
     return {
         "source_health": {"canonical_api": {"status": "fresh", "updated_at": "now", "age_min": 0.1}},
         "groups": [
             {
                 "token": "GUA",
                 "token_name": "GUA",
-                "routes": [{"token": "GUA", "route_key": "GUA|A|Futures|B|Futures", "long_venue": "A", "long_market_type": "Futures", "long_market_symbol": "GUA/USDT:USDT", "short_venue": "B", "short_market_type": "Futures", "short_market_symbol": "GUA/USDT:USDT", "depth_weighted_spread_pct": 2.0, "funding_projected_24h_pct": 0.5}],
+                "routes": [{"token": "GUA", "route_key": "GUA|A|Futures|B|Futures", "long_venue": "A", "long_market_type": "Futures", "long_market_symbol": "GUA/USDT:USDT", "short_venue": "B", "short_market_type": "Futures", "short_market_symbol": "GUA/USDT:USDT", "depth_weighted_spread_pct": 2.0, "funding_projected_24h_pct": 0.5, "age_min": 0.1, "quote_ts_us": current_us}],
                 "venues": ["A", "B"],
                 "route_kinds": ["FUTURES"],
                 "best_edge_pct": 2.0,
@@ -118,16 +120,87 @@ def test_ranked_metrics_are_independent() -> None:
     assert token_rankings.ranked(payload, metric="funding")[0]["token"] == "FUND"
 
 
+def test_ranked_reprices_precomputed_leader_from_current_matched_books(monkeypatch) -> None:
+    payload = {
+        "records": [
+            {
+                "token": "OLD",
+                "status": "live",
+                "best_spread_pct": 9.0,
+                "best_spread_route": {
+                    "route_key": "OLD|A|Spot|B|Futures",
+                    "age_min": 10.0,
+                },
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        token_rankings.api_spreads,
+        "live_prices_for",
+        lambda routes, include_funding=False: {
+            "OLD|A|Spot|B|Futures": (0.25, None)
+        },
+    )
+
+    row = token_rankings.ranked(payload, metric="spread")[0]
+
+    assert row["best_spread_pct"] == 0.25
+    assert row["best_spread_route"]["spread_quote_current"] is True
+
+
+def test_ranked_expires_old_leader_when_no_two_leg_book_exists(monkeypatch) -> None:
+    payload = {
+        "records": [
+            {
+                "token": "OLD",
+                "status": "live",
+                "best_spread_pct": 9.0,
+                "best_spread_route": {"route_key": "OLD|A|Spot|B|Futures", "age_min": 10.0},
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        token_rankings.api_spreads,
+        "live_prices_for",
+        lambda routes, include_funding=False: {},
+    )
+
+    row = token_rankings.ranked(payload, metric="spread")[0]
+
+    assert row["best_spread_pct"] is None
+    assert row["best_spread_route"] is None
+
+
+def test_old_spread_cannot_lead_but_current_funding_remains_ranked(tmp_path: Path) -> None:
+    market = _market()
+    old = market["groups"][0]["routes"][0]
+    old["age_min"] = 10.0
+    old["quote_ts_us"] = int((time.time() - 600.0) * 1_000_000)
+    old["depth_weighted_spread_pct"] = 9.0
+    old["funding_projected_24h_pct"] = 0.7
+    payload = token_rankings.build(
+        board_path=tmp_path / "board.jsonl",
+        output_path=tmp_path / "rankings.json",
+        market_payload=market,
+        catalog_payload={"markets": []},
+        radar_routes=[],
+        catalogue_summaries={},
+    )
+    row = payload["records"][0]
+    assert row["best_spread_pct"] is None
+    assert row["funding_now_24h_pct"] == 0.7
+
+
 def test_unverified_top_book_cannot_replace_a_matched_spread(tmp_path: Path) -> None:
     market = _market()
     market["groups"][0]["routes"] = [
         {
             "token": "GUA", "route_key": "mirage", "long_venue": "A", "short_venue": "B",
-            "depth_weighted_spread_pct": 99.0, "depth_unverified": True,
+            "depth_weighted_spread_pct": 99.0, "depth_unverified": True, "age_min": 0.1,
         },
         {
             "token": "GUA", "route_key": "verified", "long_venue": "C", "short_venue": "D",
-            "depth_weighted_spread_pct": 1.25, "depth_unverified": False,
+            "depth_weighted_spread_pct": 1.25, "depth_unverified": False, "age_min": 0.1,
         },
     ]
     market["groups"][0]["best_route"] = market["groups"][0]["routes"][0]
@@ -153,12 +226,12 @@ def test_identity_warned_scanner_route_cannot_lead_token_rankings(tmp_path: Path
         {
             "token": "GUA", "route_key": "collision", "long_venue": "A", "short_venue": "B",
             "depth_weighted_spread_pct": 60.0, "mirage_guarded": True,
-            "funding_projected_24h_pct": 9.0,
+            "funding_projected_24h_pct": 9.0, "age_min": 0.1,
         },
         {
             "token": "GUA", "route_key": "clean", "long_venue": "C", "short_venue": "D",
             "depth_weighted_spread_pct": 1.5, "mirage_guarded": False,
-            "funding_projected_24h_pct": 0.4,
+            "funding_projected_24h_pct": 0.4, "age_min": 0.1,
         },
     ]
     market["groups"][0]["best_route"] = market["groups"][0]["routes"][0]
@@ -183,7 +256,7 @@ def test_token_with_only_guarded_routes_has_no_ranked_spread(tmp_path: Path) -> 
     market = _market()
     guarded = {
         "token": "GUA", "route_key": "collision", "long_venue": "A", "short_venue": "B",
-        "depth_weighted_spread_pct": 60.0, "mirage_guarded": True,
+        "depth_weighted_spread_pct": 60.0, "mirage_guarded": True, "age_min": 0.1,
     }
     market["groups"][0]["routes"] = [guarded]
     market["groups"][0]["best_route"] = guarded

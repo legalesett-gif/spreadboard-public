@@ -182,7 +182,7 @@ def test_watchlist_score_is_explainable_and_model_free() -> None:
         "integrity",
         "risk",
     }
-    assert result["method"] == "deterministic_dual_opportunity_evidence_v4"
+    assert result["method"] == "deterministic_dual_opportunity_evidence_v5"
     assert 0 <= result["funding_opportunity"]["score"] <= 100
     assert 0 <= result["spread_opportunity"]["score"] <= 100
     assert "spread_contribution" in result["funding_opportunity"]["components"]
@@ -200,6 +200,7 @@ def test_funding_and_spread_scores_are_separate_with_explicit_cross_effects() ->
         "depth_usd": 25_000,
         "executable_spread_pct": 1.0,
         "freshness": "fresh",
+        "age_min": 0.1,
         "long_market_symbol": "X/USDT",
         "short_market_symbol": "X/USDT:USDT",
         "blockers": [],
@@ -344,6 +345,7 @@ def test_dex_score_exposes_size_cost_and_identity_evidence() -> None:
             "dex_quote_source": "okx_dex_quote",
             "dex_route_plan": ["router"],
             "freshness": "fresh",
+            "age_min": 0.1,
             "long_market_symbol": "0xabc",
             "short_market_symbol": "X/USDT:USDT",
             "blockers": [],
@@ -467,6 +469,7 @@ def test_selected_chart_exposes_live_spread_and_funding_alerts() -> None:
             "short_market_type": "Futures",
             "displayed_open_spread_pct": 1.2,
             "funding_24h_pct": 0.3,
+            "age_min": 0.1,
         },
         {"legs": {}},
         [],

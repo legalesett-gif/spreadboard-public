@@ -115,7 +115,13 @@ def capture_routes(
                 db_path=history_db_path,
             )
             windows = {label: funding_radar.window_value(route, label) for label in ("1d", "7d", "30d")}
-            evaluation = research_score.evaluate(route, windows=windows, history=history)
+            # The observation is evaluated as-of its capture hour. An offline
+            # labeling run may execute days later; wall-clock quote freshness
+            # must not erase the entry basis from the frozen feature row.
+            observed_route = {**route, "spread_quote_current": True}
+            evaluation = research_score.evaluate(
+                observed_route, windows=windows, history=history
+            )
             funding = evaluation.get("funding_opportunity") or {}
             spread = evaluation.get("spread_opportunity") or {}
             economics = evaluation.get("route_economics") or {}

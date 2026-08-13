@@ -73,6 +73,7 @@ def test_route_alert_sends_once_then_rearms(tmp_path, monkeypatch) -> None:
         "long_venue": "Gate",
         "short_venue": "Bybit",
         "open_spread_pct": 6.0,
+        "age_min": 0.1,
     }
     monkeypatch.setattr(alerts.api_spreads, "load_spreads", lambda **kwargs: {"rows": [row]})
     sent = []
@@ -139,6 +140,7 @@ def test_custom_chart_alert_resolves_to_matching_live_board_route(tmp_path, monk
         "short_market_type": "Futures",
         "short_market_symbol": "X/USDT:USDT",
         "displayed_open_spread_pct": 6.0,
+        "spread_quote_current": True,
     }
     monkeypatch.setattr(alerts.api_spreads, "load_spreads", lambda **kwargs: {"rows": [board_row]})
     sent = []
@@ -177,6 +179,7 @@ def test_custom_chart_alert_quotes_noncanonical_dex_route(tmp_path, monkeypatch)
         "token": "GUA",
         "displayed_open_spread_pct": 4.2,
         "funding_projected_24h_pct": 0.8,
+        "spread_quote_current": True,
     }
     seen = []
     monkeypatch.setattr(
@@ -252,7 +255,11 @@ def test_cooled_standard_chart_alert_gets_exact_quote(tmp_path, monkeypatch) -> 
     monkeypatch.setattr(
         alerts,
         "_quote_custom_alert_route",
-        lambda route: {**route, "displayed_open_spread_pct": 1.25},
+        lambda route: {
+            **route,
+            "displayed_open_spread_pct": 1.25,
+            "spread_quote_current": True,
+        },
     )
 
     result = alerts.UserMarketAlertWorker(

@@ -626,6 +626,12 @@ def _alert_body(
 def _rule_value(row: dict[str, Any] | None, metric: str) -> float | None:
     if not row:
         return None
+    if (
+        metric == "open_spread_pct"
+        and row.get("spread_quote_current") is not True
+        and not api_spreads.spread_quote_current(row)
+    ):
+        return None
     # These must name fields the board actually produces. They did not: every
     # spread rule read None and silently never fired, so a member could set a
     # threshold, watch the board cross it, and never be told. The displayed

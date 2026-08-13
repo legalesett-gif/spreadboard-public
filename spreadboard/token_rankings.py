@@ -89,13 +89,14 @@ def build(
         dex_routes = [dict(row) for row in routes if _is_dex_route(row)]
         if dex_routes:
             current_dex_routes[token] = dex_routes
-        spread_route = group.get("best_route") if isinstance(group.get("best_route"), dict) else {}
+        spread_route: dict[str, Any] = {}
         verified_spread_routes = [
             row
             for row in routes
             if not row.get("depth_unverified")
             and not row.get("mirage_guarded")
             and _number(row.get("depth_weighted_spread_pct")) is not None
+            and api_spreads.spread_quote_current(row)
         ]
         if verified_spread_routes:
             spread_route = max(
@@ -104,11 +105,7 @@ def build(
             )
         # Current top-of-book still belongs on the token page, but it is not a
         # matched-$50 ranking observation until both ladders fill the probe.
-        ranked_spread = (
-            None
-            if spread_route.get("depth_unverified") or spread_route.get("mirage_guarded")
-            else _number(spread_route.get("depth_weighted_spread_pct"))
-        )
+        ranked_spread = _number(spread_route.get("depth_weighted_spread_pct"))
         verified_funding_routes = [
             row
             for row in routes
@@ -169,9 +166,10 @@ def build(
             or best_spread > current_spread
         ):
             record["best_spread_pct"] = best_spread
-            record["best_spread_route"] = _route_summary(
-                summary.get("best_spread_route") or {}
-            )
+            route_summary = _route_summary(summary.get("best_spread_route") or {})
+            if route_summary is not None and route_summary.get("age_min") is None:
+                route_summary["age_min"] = _number(summary.get("age_min"))
+            record["best_spread_route"] = route_summary
         funding_now = _number(summary.get("funding_now_24h_pct"))
         current_funding = _number(record.get("funding_now_24h_pct"))
         current_funding_route = record.get("best_funding_route") or {}
@@ -302,7 +300,36 @@ def ranked(
     normalized_metric = metric if metric in {"spread", "funding", *WINDOWS, "coverage", "token"} else "spread"
     needle = str(query or "").upper().strip()
     wanted_status = str(status or "").casefold().strip()
-    rows = [row for row in payload.get("records") or [] if isinstance(row, dict)]
+    # The artifact is structural and stays warm between worker generations.
+    # Overlay its one leader per token from the resident matched books, then
+    # reapply the absolute quote-age promise. This keeps the page instant while
+    # preventing either an obsolete rank or a blank gap between worker runs.
+    sources = [source for source in payload.get("records") or [] if isinstance(source, dict)]
+    candidate_routes = [
+        source.get("best_spread_route")
+        for source in sources
+        if isinstance(source.get("best_spread_route"), dict)
+        and source["best_spread_route"].get("route_key")
+    ]
+    live_spreads = api_spreads.live_prices_for(candidate_routes, include_funding=False)
+    rows = []
+    for source in sources:
+        row = dict(source)
+        spread_route = dict(row.get("best_spread_route") or {})
+        live_spread = (live_spreads.get(str(spread_route.get("route_key") or "")) or (None, None))[0]
+        if live_spread is not None:
+            row["best_spread_pct"] = live_spread
+            spread_route["depth_weighted_spread_pct"] = live_spread
+            spread_route["executable_spread_pct"] = live_spread
+            spread_route["age_min"] = 0.0
+            spread_route["spread_quote_current"] = True
+            row["best_spread_route"] = spread_route
+        elif row.get("best_spread_pct") is not None and not api_spreads.spread_quote_current(
+            spread_route
+        ):
+            row["best_spread_pct"] = None
+            row["best_spread_route"] = None
+        rows.append(row)
     if needle:
         rows = [
             row
@@ -491,6 +518,8 @@ def _route_summary(route: dict[str, Any]) -> dict[str, Any] | None:
             "executable_spread_pct",
             "depth_weighted_spread_pct",
             "depth_unverified",
+            "quote_ts_us",
+            "age_min",
             "funding_24h_pct",
             "funding_projected_24h_pct",
             "mirage_guarded",

@@ -23,6 +23,9 @@ def _route(**overrides) -> dict:
         "long_ask": 1.00,
         "short_bid": 1.10,
         "funding_daily_pct": 0.2,
+        "age_min": 0.1,
+        "depth_usd": 50.0,
+        "depth_unverified": False,
     }
     route.update(overrides)
     return route
@@ -79,6 +82,17 @@ def test_a_live_cex_leg_can_reprice_a_dex_route(monkeypatch: pytest.MonkeyPatch)
     ])
 
     assert priced["T|Gate|Spot|Bybit|Futures"][0] == pytest.approx(20.0)
+
+
+def test_a_live_cex_leg_cannot_renew_an_old_dex_quote(monkeypatch: pytest.MonkeyPatch) -> None:
+    key = live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT")
+    monkeypatch.setattr(api_spreads, "_live_books", lambda: {key: _book(1.20, 1.21)})
+
+    priced = api_spreads.live_prices_for([
+        _route(long_venue="Uniswap", long_market_type="DEX", age_min=10.0)
+    ])
+
+    assert priced == {}
 
 
 def test_both_legs_live_still_uses_both(monkeypatch: pytest.MonkeyPatch) -> None:

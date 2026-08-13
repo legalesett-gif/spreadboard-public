@@ -2102,6 +2102,10 @@ def api_market_spreads(
 
 def _sync_telegram_client_universe(payload: dict[str, Any]) -> dict[str, Any]:
     """Make Telegram use the exact unfiltered all-token generation clients got."""
+    # Warm structural payloads can outlive their quote. Recompute the
+    # presentation boundary on every response so an instant cache hit cannot
+    # keep a converged basis looking live until the next full rebuild.
+    _apply_spread_freshness(payload)
     filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
     pagination = payload.get("pagination") if isinstance(payload.get("pagination"), dict) else {}
     filtered_keys = (
@@ -2136,6 +2140,74 @@ def _sync_telegram_client_universe(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if full_page and first_page and unfiltered and safe_defaults:
         telegram_queries.replace_payload(payload)
+    return payload
+
+
+def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
+    """Annotate cached route dictionaries with their current quote validity."""
+
+    seen: set[int] = set()
+
+    def visit_route(route: Any) -> None:
+        if not isinstance(route, dict) or id(route) in seen:
+            return
+        seen.add(id(route))
+        route["spread_quote_current"] = api_spreads.spread_quote_current(route)
+        current_age = api_spreads.quote_age_min(route)
+        if current_age is not None:
+            route["age_min"] = current_age
+
+    def current_rankable(route: Any) -> bool:
+        if not isinstance(route, dict) or not api_spreads.spread_quote_current(route):
+            return False
+        if route.get("mirage_guarded") or route.get("identity_mismatch") or route.get("thin_book"):
+            return False
+        if route.get("deliverable") is False or route.get("depth_unverified"):
+            return False
+        guard = route.get("tokenized_guard") or {}
+        return not isinstance(guard, dict) or guard.get("rankable") is not False
+
+    def spread_value(route: dict[str, Any]) -> float | None:
+        matched = _float_or_none(route.get("depth_weighted_spread_pct"))
+        return matched if matched is not None else _float_or_none(route.get("executable_spread_pct"))
+
+    for name in ("groups", "top_edges", "top_funding"):
+        for group in payload.get(name) or []:
+            if not isinstance(group, dict):
+                continue
+            for key in ("best_route", "best_funding_route"):
+                visit_route(group.get(key))
+            for route in group.get("routes") or []:
+                visit_route(route)
+            candidates = [
+                route
+                for route in [*(group.get("routes") or []), group.get("best_route")]
+                if current_rankable(route)
+            ]
+            if candidates:
+                best = max(
+                    candidates,
+                    key=lambda route: spread_value(route)
+                    if spread_value(route) is not None
+                    else float("-inf"),
+                )
+                group["best_route"] = best
+                group["best_edge_pct"] = spread_value(best)
+            else:
+                group["best_edge_pct"] = None
+    for route in payload.get("rows") or []:
+        visit_route(route)
+    summary = payload.get("summary")
+    if isinstance(summary, dict):
+        current_edges = [
+            _float_or_none(group.get("best_edge_pct"))
+            for group in payload.get("top_edges") or []
+        ]
+        summary["max_depth_weighted_spread_pct"] = max(
+            (value for value in current_edges if value is not None),
+            default=None,
+        )
+        summary["max_executable_spread_pct"] = summary["max_depth_weighted_spread_pct"]
     return payload
 
 
@@ -2850,6 +2922,7 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
 
     def route_card(row: dict[str, Any], *, historical: bool) -> dict[str, Any]:
         route_key = str(row.get("route_key") or "")
+        basis_current = not historical and api_spreads.spread_quote_current(row)
         long_label = leg_market_label(row.get("long_venue"), row.get("long_market_type"))
         short_label = leg_market_label(row.get("short_venue"), row.get("short_market_type"))
 
@@ -2871,7 +2944,7 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
                 else f"/pair/{board.route_key_url(route_key)}"
             ),
             "chart_url": f"/charts?route_key={board.route_key_url(route_key)}",
-            "open_spread_pct": row.get("executable_spread_pct"),
+            "open_spread_pct": row.get("executable_spread_pct") if basis_current else None,
             "funding_projected_24h_pct": (
                 None if historical else row.get("funding_projected_24h_pct")
             ),
@@ -2881,7 +2954,13 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
             else row.get("funding_24h_pct")
             if row.get("funding_24h_pct") is not None
             else row.get("funding_projected_24h_pct"),
-            "freshness": "cooled funding radar" if historical else row.get("freshness") or "live",
+            "freshness": (
+                "cooled funding radar"
+                if historical
+                else row.get("freshness") or "live"
+                if basis_current
+                else "funding live; basis refreshing"
+            ),
             "identity_unresolved": bool(row.get("mirage_guarded")),
         }
 
@@ -2890,6 +2969,11 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
         live = live_by_token.get(symbol, [])
         retained = funding_radar.routes_for(symbol)
         live_keys = {str(row.get("route_key") or "") for row in live}
+        current_spread_keys = {
+            str(row.get("route_key") or "")
+            for row in live
+            if api_spreads.spread_quote_current(row)
+        }
         score_candidates: dict[str, dict[str, Any]] = {}
         for row in retained:
             score_candidates[str(row.get("route_key") or id(row))] = row
@@ -2927,12 +3011,12 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
             max(
                 score_candidates.values(),
                 key=lambda row: (
+                    int(str(row.get("route_key") or "") in current_spread_keys),
                     _float_or_none(row.get("depth_weighted_spread_pct"))
                     if _float_or_none(row.get("depth_weighted_spread_pct")) is not None
                     else _float_or_none(row.get("executable_spread_pct"))
                     if _float_or_none(row.get("executable_spread_pct")) is not None
                     else float("-inf"),
-                    int(str(row.get("route_key") or "") in live_keys),
                 ),
             )
             if score_candidates
@@ -2945,7 +3029,10 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
             cache_key = candidate_key or str(id(candidate))
             if cache_key in evaluation_cache:
                 return evaluation_cache[cache_key]
-            candidate_historical = bool(candidate) and candidate_key not in live_keys
+            candidate_historical = bool(candidate) and (
+                candidate_key not in live_keys
+                or not api_spreads.spread_quote_current(candidate or {})
+            )
             candidate_windows = {
                 label: funding_radar.window_value(candidate, label) if candidate else None
                 for label in ("1d", "7d", "30d")
@@ -2963,8 +3050,19 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
                     # A busy history database must lower confidence, never take
                     # the Watchlist down or silently substitute a guess.
                     candidate_history = []
+            score_candidate = (
+                {
+                    **candidate,
+                    "spread_quote_current": (
+                        not candidate_historical
+                        and api_spreads.spread_quote_current(candidate)
+                    ),
+                }
+                if candidate
+                else None
+            )
             result = research_score.evaluate(
-                candidate,
+                score_candidate,
                 windows=candidate_windows,
                 history=candidate_history,
                 historical=candidate_historical,
@@ -2977,7 +3075,9 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
         funding_route_key = str((funding_route or {}).get("route_key") or "")
         spread_route_key = str((spread_route or {}).get("route_key") or "")
         funding_is_historical = bool(funding_route) and funding_route_key not in live_keys
-        spread_is_historical = bool(spread_route) and spread_route_key not in live_keys
+        spread_is_historical = bool(spread_route) and (
+            spread_route_key not in current_spread_keys
+        )
         score_windows = {
             label: funding_radar.window_value(funding_route, label) if funding_route else None
             for label in ("1d", "7d", "30d")
@@ -3105,7 +3205,11 @@ def api_position_suggestions(
         }
     )[:limit]
     exact_rows = [
-        row for row in live_rows if requested and str(row.get("token") or "").upper() == requested
+        row
+        for row in live_rows
+        if requested
+        and str(row.get("token") or "").upper() == requested
+        and api_spreads.spread_quote_current(row)
     ]
     routes = []
     for row in exact_rows[:limit]:
@@ -3532,19 +3636,25 @@ def api_pair(route_key: str, board_path: Path, config: dict[str, Any]) -> dict[s
 
 def _canonical_pair_row(row: dict[str, Any]) -> dict[str, Any]:
     data = dict(row)
+    spread_current = api_spreads.spread_quote_current(row)
+    current_spread = row.get("executable_spread_pct") if spread_current else None
     data.update(
         {
             "symbol": row.get("token"),
             "kind": row.get("route_kind"),
             "kind_label": route_kind_display(row.get("route_kind")),
             "kind_class": f"kind-{str(row.get('route_kind') or '').lower().replace('-', '_')}",
-            "spread_pct": row.get("executable_spread_pct"),
-            "displayed_open_spread_pct": row.get("displayed_open_spread_pct")
-            if row.get("displayed_open_spread_pct") is not None
-            else row.get("executable_spread_pct"),
-            "displayed_headline_spread_pct": row.get("displayed_open_spread_pct")
-            if row.get("displayed_open_spread_pct") is not None
-            else row.get("executable_spread_pct"),
+            "spread_pct": current_spread,
+            "displayed_open_spread_pct": (
+                row.get("displayed_open_spread_pct")
+                if spread_current and row.get("displayed_open_spread_pct") is not None
+                else current_spread
+            ),
+            "displayed_headline_spread_pct": (
+                row.get("displayed_open_spread_pct")
+                if spread_current and row.get("displayed_open_spread_pct") is not None
+                else current_spread
+            ),
             "route_line": (
                 f"Buy on {row.get('long_venue') or '?'} {row.get('long_market_type') or '?'}, "
                 f"sell on {row.get('short_venue') or '?'} {row.get('short_market_type') or '?'}"
@@ -3555,6 +3665,7 @@ def _canonical_pair_row(row: dict[str, Any]) -> dict[str, Any]:
             "next_action": "monitor_route",
             "blockers": list(row.get("conditions") or []),
             "canonical_api": True,
+            "spread_quote_current": spread_current,
         }
     )
     return data
@@ -4400,8 +4511,9 @@ def render_board_stream_script(
           const carry = pct(route.funding_pct, 3);
           for (const row of rows) {
             for (const spread of row.querySelectorAll("[data-live-spread]")) {
-              if (text && spread.textContent.trim() !== text) {
-                spread.textContent = text;
+              const next = text || "—";
+              if (spread.textContent.trim() !== next) {
+                spread.textContent = next;
                 flash(spread);
               }
             }
@@ -4477,7 +4589,7 @@ def _board_stream_rows(board_path: Path, query: dict[str, list[str]]) -> dict[st
         key = str(route["route_key"])
         spread, funding = live.get(key, (None, None))
         rows[key] = (
-            spread if spread is not None else route.get("executable_spread_pct"),
+            spread,
             funding if funding is not None else route.get("funding_daily_pct"),
         )
     return rows
@@ -5158,6 +5270,7 @@ def render_funding_farm_empty(selected_farm: str, health: dict[str, Any]) -> str
 
 def render_market_token_group(group: dict[str, Any]) -> str:
     best = group.get("best_route") or {}
+    spread_current = api_spreads.spread_quote_current(best)
     best_chart_url = (
         f"/charts?route_key={board.route_key_url(str(best.get('route_key') or ''))}"
         if best.get("route_key")
@@ -5188,7 +5301,13 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         if venue
     )
     catalog_coverage = group.get("coverage_mode") == "catalog_live_books"
-    spread_heading = "Best current pair" if catalog_coverage else "Best matched spread"
+    spread_heading = (
+        "Best current pair"
+        if catalog_coverage and spread_current
+        else "Best matched spread"
+        if spread_current
+        else "Spread refreshing"
+    )
     matched = best.get("depth_weighted_spread_pct")
     spread_value = (
         matched
@@ -5196,14 +5315,14 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         else best.get("executable_spread_pct")
         if catalog_coverage
         else group.get("best_edge_pct")
-    )
+    ) if spread_current else None
     spread_note = (
         f"$50 VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book"
         if matched is not None
         else f"{fmt_pct(best.get('executable_spread_pct'))} top book · depth not measured"
         if catalog_coverage
         else f"matched $50 VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book"
-    )
+    ) if spread_current else "waiting for a two-leg matched quote"
     return f"""
     <details class="token-route-group" id="token-{h(group.get("token"))}"
              data-route-key="{h(best.get("route_key") or "")}">
@@ -5370,6 +5489,8 @@ def render_rankings_page(query: dict[str, list[str]]) -> str:
 
 def render_token_ranking_row(index: int, row: dict[str, Any]) -> str:
     spread_route = row.get("best_spread_route") or {}
+    spread_current = api_spreads.spread_quote_current(spread_route)
+    spread_value = row.get("best_spread_pct") if spread_current else None
     funding_route = row.get("best_funding_route") or {}
     windows = row.get("settled_windows") or {}
     route = funding_route or spread_route
@@ -5385,7 +5506,7 @@ def render_token_ranking_row(index: int, row: dict[str, Any]) -> str:
     <tr class="ranking-row {h(status)}">
       <td data-label="Rank"><strong>{h(index)}</strong></td>
       <td data-label="Token"><a class="ranking-token" href="{h(row.get("token_url") or "#")}">{h(row.get("token"))}{"?" if row.get("identity_warning") else ""}</a><span class="ranking-status {h(status)}">{h(status_label)}</span><small>{h(row.get("token_name") or "Metadata pending")}</small></td>
-      <td data-label="Spread now"><strong class="{spread_class(row.get("best_spread_pct"))}">{fmt_pct(row.get("best_spread_pct"))}</strong><small>{h(_ranking_route_label(spread_route))}</small></td>
+      <td data-label="Spread now"><strong class="{spread_class(spread_value)}">{fmt_pct(spread_value)}</strong><small>{h(_ranking_route_label(spread_route) if spread_current else "refreshing both legs")}</small></td>
       <td data-label="Funding now"><strong>{fmt_signed_pct(row.get("funding_now_24h_pct"), digits=3)}</strong><small>{h(_ranking_funding_basis(row))} · {h(_ranking_route_label(funding_route))}</small></td>
       <td data-label="Settled 24h"><strong>{fmt_signed_pct(windows.get("1d"), digits=2)}</strong></td>
       <td data-label="Settled 7d"><strong>{fmt_signed_pct(windows.get("7d"), digits=2)}</strong></td>
@@ -5412,6 +5533,7 @@ def _ranking_funding_basis(row: dict[str, Any]) -> str:
 
 
 def render_market_group_route(row: dict[str, Any]) -> str:
+    spread_current = api_spreads.spread_quote_current(row)
     settled_funding = row.get("funding_24h_pct")
     shown_funding = (
         settled_funding if settled_funding is not None else row.get("funding_projected_24h_pct")
@@ -5427,6 +5549,13 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         row.get("depth_weighted_spread_pct")
         if row.get("depth_weighted_spread_pct") is not None
         else row.get("executable_spread_pct")
+    ) if spread_current else None
+    spread_detail = (
+        f'{"$50 VWAP · " if row.get("depth_weighted_spread_pct") is not None else ""}'
+        f'{fmt_pct(row.get("executable_spread_pct"))} top book'
+        f'{" · depth not measured" if row.get("depth_unverified") else ""}'
+        if spread_current
+        else "refreshing both legs"
     )
     return f"""
     <article class="route-detail-row" data-route-key="{h(row.get("route_key") or "")}">
@@ -5441,7 +5570,7 @@ def render_market_group_route(row: dict[str, Any]) -> str:
       </div>
       <div class="route-edge">
         <strong class="{spread_class(displayed_edge)}" data-live-spread>{fmt_pct(displayed_edge)}</strong>
-        <span>{"$50 VWAP · " if row.get("depth_weighted_spread_pct") is not None else ""}{fmt_pct(row.get("executable_spread_pct"))} top book{" · depth not measured" if row.get("depth_unverified") else ""}</span>
+        <span>{h(spread_detail)}</span>
       </div>
       <div class="route-funding">
         <strong data-live-funding>{fmt_signed_pct(shown_funding, digits=3) if shown_funding is not None else "—"}</strong>
@@ -5451,8 +5580,8 @@ def render_market_group_route(row: dict[str, Any]) -> str:
       </div>
       <div class="route-rails">{render_market_dw(row)}{render_market_event_badges(row)}{render_tokenized_guard_badge(row)}</div>
       <div class="route-actions">
-        {render_net_edge_button(row)}
-        {render_alert_draft_button(row, alert_type="token_spread", compact=True)}
+        {render_net_edge_button(row) if spread_current else ""}
+        {render_alert_draft_button(row, alert_type="token_spread", compact=True) if spread_current else ""}
         <a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}" title="Open route details">Details</a>
         <a href="/charts?route_key={h(board.route_key_url(str(row.get("route_key") or "")))}" title="Open route chart">Chart</a>
       </div>
@@ -5641,21 +5770,36 @@ FILTER_PRESET_SCRIPT = r"""
 
 
 def render_pro_market_table(rows: list[dict[str, Any]]) -> str:
-    body = "".join(
-        f"""
+    def render_row(row: dict[str, Any]) -> str:
+        spread_current = api_spreads.spread_quote_current(row)
+        matched = row.get("depth_weighted_spread_pct") if spread_current else None
+        top_book = (
+            f"{fmt_pct(row.get('executable_spread_pct'))} top book"
+            if spread_current
+            else "refreshing both legs"
+        )
+        actions = (
+            render_net_edge_button(row)
+            + render_alert_draft_button(row, alert_type="token_spread", compact=True)
+            if spread_current
+            else ""
+        )
+        return f"""
         <tr data-route-key="{h(row.get("route_key") or "")}">
           <td data-label="Asset"><a class="pro-token" href="/token/{h(row.get("token"))}">{h(row.get("token"))}</a><small>{h(row.get("kind") or "")}</small></td>
           <td data-label="Market evidence">{render_route_market_metadata(row)}</td>
           <td data-label="Buy"><strong>{h(row.get("long_venue"))}</strong><small>{h(leg_market_label(row.get("long_venue"), row.get("long_market_type")))} · {fmt_price(row.get("long_price"))}</small></td>
           <td data-label="Sell"><strong>{h(row.get("short_venue"))}</strong><small>{h(leg_market_label(row.get("short_venue"), row.get("short_market_type")))} · {fmt_price(row.get("short_price"))}</small></td>
-          <td data-label="Matched edge"><strong class="{spread_class(row.get("depth_weighted_spread_pct"))}">{fmt_pct(row.get("depth_weighted_spread_pct"))}</strong><small>{fmt_pct(row.get("executable_spread_pct"))} top book</small></td>
+          <td data-label="Matched edge"><strong class="{spread_class(matched)}">{fmt_pct(matched)}</strong><small>{h(top_book)}</small></td>
           <td data-label="Funding 24h"><strong>{fmt_signed_pct(funding_24h_value(row), digits=3)}</strong><small>{h(funding_cadence_pair(row))}</small>{render_persistence_badge(row)}</td>
           <td data-label="Depth"><strong>{fmt_money(row.get("depth_usd"))}</strong><small>{"matched" if not row.get("depth_unverified") else "unverified"}</small></td>
           <td data-label="Rail">{render_market_dw(row)}</td>
-          <td data-label="Actions" class="pro-actions">{render_net_edge_button(row)}{render_alert_draft_button(row, alert_type="token_spread", compact=True)}<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a><a href="/charts?route_key={h(board.route_key_url(str(row.get("route_key") or "")))}">Chart</a></td>
+          <td data-label="Actions" class="pro-actions">{actions}<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a><a href="/charts?route_key={h(board.route_key_url(str(row.get("route_key") or "")))}">Chart</a></td>
         </tr>
         """
-        for row in rows
+
+    body = "".join(
+        render_row(row) for row in rows
     )
     if not body:
         return '<p class="empty market-empty">No live routes match these filters.</p>'
@@ -6765,6 +6909,7 @@ def render_funding_page(
 def render_funding_token_group(group: dict[str, Any]) -> str:
     best = group.get("best_funding_route") or group.get("best_route") or {}
     historical = bool(best.get("radar_historical"))
+    basis_current = not historical and api_spreads.spread_quote_current(best)
     funding_24h = (
         funding_radar.window_value(best, "1d")
         if historical
@@ -6802,7 +6947,7 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
         <div><span>Best farm</span><strong>{h(best.get("long_venue"))} → {h(best.get("short_venue"))}</strong></div>
         <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
         <div><span>Payouts</span><strong>{h(funding_cadence_pair(best))}</strong></div>
-        <div><span>{"Last basis" if historical else "Entry basis"}</span><strong data-live-spread>{fmt_pct(best.get("executable_spread_pct"))}</strong></div>
+        <div><span>{"Last basis" if historical else "Entry basis" if basis_current else "Basis refreshing"}</span><strong data-live-spread>{fmt_pct(best.get("executable_spread_pct") if historical or basis_current else None)}</strong></div>
         <div class="funding-realised"><span>Realised</span>{render_funding_windows(best, best.get("route_key"))}</div>
         <div><span>Pairs</span><strong>{h(group.get("route_count") or 0)}</strong></div>
         <span class="funding-chevron" aria-hidden="true">⌄</span>
@@ -6816,6 +6961,7 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
 
 def render_funding_pair(row: dict[str, Any]) -> str:
     historical = bool(row.get("radar_historical"))
+    basis_current = not historical and api_spreads.spread_quote_current(row)
     funding_24h = (
         funding_radar.window_value(row, "1d")
         if historical
@@ -6849,7 +6995,7 @@ def render_funding_pair(row: dict[str, Any]) -> str:
       <div><span>Long</span>{render_exchange_link(row, "long", include_market_type=True)}{long_funding}</div>
       <div><span>Short</span>{render_exchange_link(row, "short", include_market_type=True)}{short_funding}</div>
       <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)} · {h(funding_cadence_pair(row))}</em></div>
-      <div><span>Basis / VWAP</span><strong data-live-spread>{fmt_pct(row.get("executable_spread_pct"))}</strong><em>{fmt_pct(row.get("depth_weighted_spread_pct"))}</em></div>
+      <div><span>{"Last basis / VWAP" if historical else "Basis / VWAP" if basis_current else "Basis refreshing"}</span><strong data-live-spread>{fmt_pct(row.get("executable_spread_pct") if historical or basis_current else None)}</strong><em>{fmt_pct(row.get("depth_weighted_spread_pct") if historical or basis_current else None)}</em></div>
       <div><span>{"Last seen" if historical else "Updated"}</span><strong>{fmt_age(row.get("radar_last_seen_age_min") if historical else row.get("age_min"))}</strong></div>
       <div class="route-actions">{"" if historical else render_alert_draft_button(row, alert_type="funding", compact=True)}{"" if historical else f'<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a>'}<a href="/charts?route_key={h(board.route_key_url(str(row.get("route_key") or "")))}">Chart</a></div>
     </article>
@@ -6896,6 +7042,8 @@ def render_alert_draft_button(
     label: str | None = None,
 ) -> str:
     symbol = row.get("token") or row.get("symbol") or ""
+    if alert_type == "token_spread" and not api_spreads.spread_quote_current(row):
+        return ""
     if alert_type == "funding":
         current_value = (
             row.get("funding_24h_pct")
@@ -7618,6 +7766,7 @@ def render_selected_chart(
     position_opened_at: str = "",
     position_since_us: int | None = None,
 ) -> str:
+    spread_current = api_spreads.spread_quote_current(row)
     legs = detail.get("legs") or {}
     long_leg = legs.get("long") or {}
     short_leg = legs.get("short") or {}
@@ -7679,7 +7828,7 @@ def render_selected_chart(
           <section class="chart-plot-panel">
             <div class="chart-plot-title">
               <span>Spread progression</span>
-              <strong data-chart-headline>Open {fmt_pct(row.get("displayed_open_spread_pct"))}</strong>
+              <strong data-chart-headline>{"Open " + fmt_pct(row.get("displayed_open_spread_pct")) if spread_current else "Current basis refreshing"}</strong>
               <button type="button" data-funding-open>Funding history</button>
               <em data-chart-live-state>Connecting to exact route...</em>
             </div>
@@ -7690,7 +7839,7 @@ def render_selected_chart(
       <footer class="selected-chart-foot">
         <div class="selected-chart-alerts">
           <a href="/pair/{h(route_key)}">Open full pair details</a>
-          {render_alert_draft_button(row, alert_type="token_spread")}
+          {render_alert_draft_button(row, alert_type="token_spread") if spread_current else ""}
           {render_alert_draft_button(row, alert_type="funding")}
         </div>
         <span data-chart-observation-count>{h(len(history))} observations · {coverage_note}</span>
@@ -8433,8 +8582,9 @@ def render_chart_summary(
 ) -> str:
     if not rows:
         return '<article class="chart-summary-card"><span>Routes</span><strong>0</strong><em>No fresh rows</em></article>'
+    current_rows = [row for row in rows if api_spreads.spread_quote_current(row)]
     biggest = max(
-        rows,
+        current_rows or rows,
         key=lambda item: abs(
             _float_or_none(
                 item.get("executable_spread_pct")
@@ -8459,9 +8609,17 @@ def render_chart_summary(
         ("Live routes", str(len(rows)), "current API view"),
         ("History points", str(sample_count), "retained for 30 days"),
         (
-            "Largest spread",
-            f"{h(biggest.get('token') or biggest.get('symbol'))} {fmt_pct(biggest.get('executable_spread_pct') or biggest.get('displayed_open_spread_pct') or biggest.get('spread_pct'))}",
-            h(route_kind_display(biggest.get("route_kind") or biggest.get("kind"))),
+            "Largest spread" if current_rows else "Current spread",
+            (
+                f"{h(biggest.get('token') or biggest.get('symbol'))} {fmt_pct(biggest.get('executable_spread_pct') or biggest.get('displayed_open_spread_pct') or biggest.get('spread_pct'))}"
+                if current_rows
+                else "—"
+            ),
+            (
+                h(route_kind_display(biggest.get("route_kind") or biggest.get("kind")))
+                if current_rows
+                else "refreshing both legs"
+            ),
         ),
         (
             "Largest move",
@@ -8481,13 +8639,14 @@ def render_chart_summary(
 
 
 def render_chart_route_card(row: dict[str, Any], history: list[dict[str, Any]]) -> str:
+    spread_current = api_spreads.spread_quote_current(row)
     open_spread = (
         row.get("executable_spread_pct")
         if row.get("executable_spread_pct") is not None
         else row.get("displayed_open_spread_pct")
         if row.get("displayed_open_spread_pct") is not None
         else row.get("spread_pct")
-    )
+    ) if spread_current else None
     delta = history_delta(history, "executable_spread_pct")
     sample_count = len(history)
     external = (
@@ -11650,6 +11809,9 @@ PROFILE_SCRIPT = """
         return {status: "review", current: null, note: "Local route source unavailable"};
       }
       return {status: "review", current: null, note: "No matching local route row"};
+    }
+    if (rule.type === "token_spread" && row.spread_quote_current !== true) {
+      return {status: "review", current: null, note: "Two-leg basis is refreshing"};
     }
     const current = rule.type === "funding"
       ? Number(row.funding_apr_pct)
@@ -16345,6 +16507,7 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 
 def _decorate_board_row(row: board.BoardRow) -> dict[str, Any]:
     data = row.to_dict()
+    data["spread_quote_current"] = api_spreads.spread_quote_current(data)
     data["kind_label"] = row.route_label
     data["kind_class"] = f"kind-{row.kind.lower().replace('-', '_')}"
     data["route_line"] = (

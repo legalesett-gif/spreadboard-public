@@ -272,7 +272,7 @@ def load_spreads(
         for row in public_universe
         if route_deliverable(row) is not False
         and not _is_mirage_guarded(row)
-        and row_is_presentable(row)
+        and spread_leader_ready(row)
         and tokenized_route_rankable(row)
     ]
     # A funding farm holds both legs -- long spot on one venue, short futures on
@@ -506,6 +506,19 @@ def lane_rankable(row: "SpreadTerminalRow") -> bool:
     return True
 
 
+def lane_current_ready(row: "SpreadTerminalRow") -> bool:
+    """Whether a route can honestly count toward the live-ready lane promise.
+
+    ``lane_rankable`` answers the slower structural question (identity,
+    liquidity and rails) and remains useful for the complete pair catalogue.
+    A health badge labelled "Top 25 ready" is a current-data promise, so it
+    additionally requires the same matched-quote age boundary as spread
+    leaders.
+    """
+
+    return lane_rankable(row) and spread_leader_ready(row)
+
+
 def tokenized_route_rankable(row: "SpreadTerminalRow") -> bool:
     if getattr(row, "asset_class", "crypto") != "tokenized":
         return True
@@ -523,7 +536,7 @@ def _release_lane_token_counts(
         "DEX-SPOT": set(),
     }
     for row in rows:
-        if not lane_rankable(row):
+        if not lane_current_ready(row):
             continue
         if row.route_kind == "DEX-SPOT":
             tokens["DEX-SPOT"].add(row.token)
@@ -570,6 +583,52 @@ LIVE_BOOK_MAX_AGE_SECONDS = float(os.environ.get("SPREADBOARD_LIVE_BOOK_AGE_SECO
 LIVE_BOOK_TARGET_NOTIONAL_USD = float(
     os.environ.get("SPREADBOARD_LIVE_BOOK_NOTIONAL_USD", "50")
 )
+#: Maximum age of a matched-size price allowed to lead a *spread* ranking.
+#:
+#: The wider five-minute row window keeps a temporarily disconnected route
+#: searchable and lets its funding/history stay useful.  It is much too wide
+#: for a headline that claims an executable basis right now: KOMA and GUA both
+#: remained positive leaders for 2-3 minutes after direct $50 requotes showed
+#: the basis had converged or reversed.  Current funding is ranked separately,
+#: so withholding an old spread never hides its carry evidence.
+SPREAD_LEADER_MAX_AGE_MIN = max(
+    0.25,
+    float(os.environ.get("SPREADBOARD_SPREAD_LEADER_MAX_AGE_SECONDS", "90")) / 60.0,
+)
+
+
+def quote_age_min(row: Any, *, now: float | None = None) -> float | None:
+    """Current age for either a row object or a serialized route mapping.
+
+    Serialized pages can remain warm for minutes, so their stored ``age_min``
+    is only an observation from build time. Prefer the absolute quote timestamp
+    whenever it exists and recompute age at the moment of use.
+    """
+
+    getter = (
+        row.get
+        if isinstance(row, dict)
+        else lambda key, default=None: getattr(row, key, default)
+    )
+    quote_ts_us = _float_or_none(getter("quote_ts_us"))
+    if quote_ts_us is not None and quote_ts_us > 0:
+        return (
+            (time.time() if now is None else float(now))
+            - quote_ts_us / 1_000_000.0
+        ) / 60.0
+    return _float_or_none(getter("age_min"))
+
+
+def spread_quote_current(
+    row: Any,
+    *,
+    max_age_min: float = SPREAD_LEADER_MAX_AGE_MIN,
+    now: float | None = None,
+) -> bool:
+    """Whether both legs' matched quote is recent enough to call current."""
+
+    age = quote_age_min(row, now=now)
+    return age is not None and 0.0 <= age <= max_age_min
 
 
 def _live_books() -> dict[str, Any]:
@@ -661,7 +720,9 @@ def _stream_funding_daily(
     return daily["short"] - daily["long"]
 
 
-def live_prices_for(routes: list[dict[str, Any]]) -> dict[str, tuple[float | None, float | None]]:
+def live_prices_for(
+    routes: list[dict[str, Any]], *, include_funding: bool = True
+) -> dict[str, tuple[float | None, float | None]]:
     """Spread and carry straight from the streaming books, for a set of rendered routes.
 
     The push path must not go through the grouped board's cache: a cached price
@@ -674,7 +735,7 @@ def live_prices_for(routes: list[dict[str, Any]]) -> dict[str, tuple[float | Non
     from spreadboard import bulk_quotes
 
     out: dict[str, tuple[float | None, float | None]] = {}
-    funding_legs = bulk_quotes.load_funding()
+    funding_legs = bulk_quotes.load_funding() if include_funding else {}
     for route in routes:
         long_book = books.get(
             live_book_cache.cache_key(
@@ -693,26 +754,43 @@ def live_prices_for(routes: list[dict[str, Any]]) -> dict[str, tuple[float | Non
         price_is_live = not (long_book is None and short_book is None)
         if price_is_live and not _route_has_dex_leg(route):
             price_is_live = long_book is not None and short_book is not None
-        funding_daily = _stream_funding_daily(route, funding_legs)
+        # A current CEX book cannot renew an old on-chain quote. The DEX leg's
+        # own timestamp remains the freshness boundary for the mixed route.
+        if price_is_live and _route_has_dex_leg(route):
+            price_is_live = spread_quote_current(route)
+        funding_daily = _stream_funding_daily(route, funding_legs) if include_funding else None
         if not price_is_live:
             if funding_daily is not None:
                 out[str(route["route_key"])] = (None, funding_daily)
             continue
+        prior_depth_verified = (
+            not bool(route.get("depth_unverified"))
+            and (_float_or_none(route.get("depth_usd")) or 0.0)
+            >= LIVE_BOOK_TARGET_NOTIONAL_USD
+        )
         if long_book is not None:
-            ask, _ = _book_side(long_book, "ask")
+            ask, ask_vwap = _book_side(long_book, "ask")
         else:
             ask = _float_or_none(route.get("long_ask")) or _float_or_none(route.get("long_price"))
+            ask_vwap = ask if prior_depth_verified else None
         if short_book is not None:
-            bid, _ = _book_side(short_book, "bid")
+            bid, bid_vwap = _book_side(short_book, "bid")
         else:
             bid = _float_or_none(route.get("short_bid")) or _float_or_none(route.get("short_price"))
+            bid_vwap = bid if prior_depth_verified else None
         if not ask or not bid or ask <= 0:
             continue
         out[str(route["route_key"])] = (
-            (bid / ask - 1.0) * 100.0,
-            funding_daily
-            if funding_daily is not None
-            else _float_or_none(route.get("funding_daily_pct")),
+            (bid_vwap / ask_vwap - 1.0) * 100.0
+            if bid_vwap is not None and ask_vwap is not None and ask_vwap > 0
+            else None,
+            (
+                funding_daily
+                if funding_daily is not None
+                else _float_or_none(route.get("funding_daily_pct"))
+            )
+            if include_funding
+            else None,
         )
     return out
 
@@ -777,6 +855,12 @@ def apply_live_books(
             for book in (long_book, short_book)
             if book is not None
         ]
+        # DEX routes intentionally reprice the streamable CEX leg against a
+        # cached on-chain quote. Preserve the missing leg's older timestamp;
+        # otherwise each CEX tick made a never-refreshed DEX quote look new.
+        if long_book is None or short_book is None:
+            if row.quote_ts_us:
+                stamps.append(int(row.quote_ts_us))
         quote_ts_us = min(stamps) if stamps else int(row.quote_ts_us or 0)
         age_min = max(0.0, (now - quote_ts_us / 1_000_000) / 60.0)
         updated.append(
@@ -2179,6 +2263,26 @@ def row_is_presentable(row: "SpreadTerminalRow") -> bool:
     )
 
 
+def spread_leader_ready(
+    row: "SpreadTerminalRow",
+    *,
+    max_age_min: float = SPREAD_LEADER_MAX_AGE_MIN,
+) -> bool:
+    """Whether a matched-size quote is recent enough to claim a current edge.
+
+    This deliberately does not change row visibility or funding eligibility.
+    A cooled basis is still useful research and may have excellent carry; it
+    simply cannot occupy a live spread headline until either the websocket or
+    the exact quote rotation refreshes both legs again.
+    """
+
+    return (
+        row_is_presentable(row)
+        and getattr(row, "freshness", "fresh") == "fresh"
+        and spread_quote_current(row, max_age_min=max_age_min)
+    )
+
+
 def unverifiable_price_outliers(rows: list["SpreadTerminalRow"]) -> set[str]:
     """Route keys whose quote disagrees with the market and cannot be vouched for."""
     trusted: dict[str, list[float]] = {}
@@ -2295,6 +2399,7 @@ def _summary(
                 if route_deliverable(row) is not False
                 and not price_ratio_implausible(row)
                 and not leg_volume_too_thin(row)
+                and spread_leader_ready(row)
             ),
             default=None,
         ),
@@ -2306,7 +2411,16 @@ def _summary(
         ),
         "thin_book_rows": len([row for row in filtered if leg_volume_too_thin(row)]),
         "max_depth_weighted_spread_pct": max(
-            (_entrance_spread(row) for row in filtered),
+            (
+                _entrance_spread(row)
+                for row in filtered
+                if route_deliverable(row) is not False
+                and not _is_mirage_guarded(row)
+                and not price_ratio_implausible(row)
+                and not leg_volume_too_thin(row)
+                and spread_leader_ready(row)
+                and tokenized_route_rankable(row)
+            ),
             default=None,
         ),
         # The raw funding_apr_pct is the un-normalised source value; the summary
@@ -2400,7 +2514,7 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
             and not _is_mirage_guarded(row)
             and not price_ratio_implausible(row)
             and not leg_volume_too_thin(row)
-            and row_is_presentable(row)
+            and spread_leader_ready(row)
             and tokenized_route_rankable(row)
         ]
         best = max(tradeable_rows or token_rows, key=_entrance_spread)
@@ -2436,7 +2550,11 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
                 ),
                 "route_kinds": sorted({row.route_kind for row in token_rows}),
                 "best_route": _public_row(best),
-                "best_edge_pct": _entrance_spread(best),
+                # Keep the token and its routes visible when every price is
+                # cooling, but do not publish an old value as its current best.
+                "best_edge_pct": (
+                    _entrance_spread(best) if tradeable_rows else None
+                ),
                 "best_funding_route": (
                     _public_row(best_funding) if best_funding is not None else None
                 ),
@@ -2626,6 +2744,7 @@ def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload["identity_mismatch"] = price_ratio_implausible(row)
     payload["thin_book"] = leg_volume_too_thin(row)
     payload["funding_intervals_known"] = funding_intervals_known(row)
+    payload["spread_quote_current"] = spread_quote_current(row)
     # A route built from ticker quotes has a top-of-book "depth" nobody measured.
     # Showing that number unqualified is the same lie as showing a shut rail as
     # an opportunity, so the UI must be able to say which is which.

@@ -226,6 +226,7 @@ def test_watchlist_uses_live_then_retained_then_chart_context(monkeypatch) -> No
         "executable_spread_pct": 2.5,
         "funding_24h_pct": 0.8,
         "freshness": "fresh",
+        "age_min": 0.1,
     }
     cooled = {
         "token": "ESPORTS",

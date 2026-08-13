@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from bisect import bisect_left
 import math
+import os
 import statistics
 import time
 from typing import Any
@@ -44,7 +45,7 @@ def evaluate(
             "planning_buffer_label": "Collateral reserve unavailable",
             "risk_estimate": _unavailable_risk("no_route"),
             "reasons": ["No live or retained route is available for this token."],
-            "method": "deterministic_dual_opportunity_evidence_v4",
+            "method": "deterministic_dual_opportunity_evidence_v5",
         }
 
     windows = windows or {}
@@ -112,17 +113,24 @@ def evaluate(
 
     freshness = str(route.get("freshness") or "").casefold()
     age = _number(route.get("age_min"))
-    executable = _first_number(
-        route.get("depth_weighted_spread_pct"),
-        route.get("executable_spread_pct"),
-        route.get("displayed_open_spread_pct"),
+    spread_current = _spread_quote_current(route, historical=historical)
+    executable = (
+        _first_number(
+            route.get("depth_weighted_spread_pct"),
+            route.get("executable_spread_pct"),
+            route.get("displayed_open_spread_pct"),
+        )
+        if spread_current
+        else None
     )
-    gas_adjusted_entry = _number(route.get("gas_adjusted_spread_pct"))
+    gas_adjusted_entry = (
+        _number(route.get("gas_adjusted_spread_pct")) if spread_current else None
+    )
     economic_entry = gas_adjusted_entry if gas_adjusted_entry is not None else executable
     execution = 0.0
-    if not historical and freshness in {"fresh", "live"}:
+    if spread_current and freshness in {"fresh", "live"}:
         execution += 6.0
-    elif not historical and (age is None or age <= 10):
+    elif spread_current and (age is None or age <= 10):
         execution += 4.0
     if executable is not None:
         execution += 5.0
@@ -318,6 +326,8 @@ def evaluate(
         reasons.append("Token identity is unresolved; verify the exact contract before transfer.")
     if historical:
         reasons.append("This is a retained radar route, not a current executable row.")
+    elif not spread_current:
+        reasons.append("The two-leg basis is refreshing, so it contributes no current spread credit.")
     if not reasons:
         reasons.append("Inspect the exact pair, score components and risk evidence before acting.")
 
@@ -370,7 +380,7 @@ def evaluate(
         "planning_buffer_label": reserve_label,
         "risk_estimate": risk,
         "reasons": reasons[:5],
-        "method": "deterministic_dual_opportunity_evidence_v4",
+        "method": "deterministic_dual_opportunity_evidence_v5",
         "disclaimer": (
             "Rule-based research evidence, not personalized advice, an AI prediction or a liquidation calculation. "
             "Gross edge excludes unknown account fees, borrow, gas and exit slippage. Exact leverage, maintenance "
@@ -1299,6 +1309,35 @@ def _first_number(*values: Any) -> float | None:
         if parsed is not None:
             return parsed
     return None
+
+
+def _spread_quote_current(route: dict[str, Any], *, historical: bool) -> bool:
+    """Apply the same current-basis boundary without importing the web layer.
+
+    This module is also used by offline calibration jobs, so it deliberately
+    remains independent from ``api_spreads``. A route without an age existed in
+    older fixtures and retained radar artifacts; it is never evidence that a
+    two-leg quote is current. Fresh test/research inputs may opt in explicitly
+    with ``age_min`` or ``spread_quote_current``.
+    """
+
+    if historical or route.get("spread_quote_current") is False:
+        return False
+    if route.get("spread_quote_current") is True:
+        return True
+    max_age_min = max(
+        0.25,
+        _number(os.environ.get("SPREADBOARD_SPREAD_LEADER_MAX_AGE_SECONDS"))
+        / 60.0
+        if _number(os.environ.get("SPREADBOARD_SPREAD_LEADER_MAX_AGE_SECONDS")) is not None
+        else 1.5,
+    )
+    quote_ts_us = _number(route.get("quote_ts_us"))
+    if quote_ts_us is not None and quote_ts_us > 0:
+        age = (time.time() - quote_ts_us / 1_000_000.0) / 60.0
+    else:
+        age = _number(route.get("age_min"))
+    return age is not None and 0.0 <= age <= max_age_min
 
 
 def _number(value: Any) -> float | None:

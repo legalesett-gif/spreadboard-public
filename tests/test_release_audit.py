@@ -1681,14 +1681,27 @@ def test_lane_counts_are_unique_assets_not_route_permutations() -> None:
 
 
 def test_release_lane_counts_merge_spot_futures_directions() -> None:
+    current = dict(
+        freshness="fresh",
+        age_min=0.1,
+        executable_spread_pct=1.0,
+        depth_weighted_spread_pct=1.0,
+        depth_usd=50.0,
+        long_price=1.0,
+        short_price=1.01,
+        long_volume_24h_usd=1e5,
+        short_volume_24h_usd=1e5,
+        blockers=[],
+        asset_class="crypto",
+    )
     rows = [
-        SimpleNamespace(route_kind="FUTURES", token="ONE"),
-        SimpleNamespace(route_kind="FUTURES-SPOT", token="ONE"),
-        SimpleNamespace(route_kind="SPOT-FUTURES", token="ONE"),
-        SimpleNamespace(route_kind="SPOT-FUTURES", token="TWO"),
-        SimpleNamespace(route_kind="SPOT", token="THREE"),
-        SimpleNamespace(route_kind="DEX-FUTURES", token="FOUR"),
-        SimpleNamespace(route_kind="DEX-SPOT", token="FIVE"),
+        SimpleNamespace(route_kind="FUTURES", token="ONE", **current),
+        SimpleNamespace(route_kind="FUTURES-SPOT", token="ONE", **current),
+        SimpleNamespace(route_kind="SPOT-FUTURES", token="ONE", **current),
+        SimpleNamespace(route_kind="SPOT-FUTURES", token="TWO", **current),
+        SimpleNamespace(route_kind="SPOT", token="THREE", **current),
+        SimpleNamespace(route_kind="DEX-FUTURES", token="FOUR", **current),
+        SimpleNamespace(route_kind="DEX-SPOT", token="FIVE", **current),
     ]
 
     # DEX-SPOT added deliberately: the public contract advertises five lanes and
@@ -1931,10 +1944,52 @@ def test_group_headline_and_lane_readiness_ignore_guarded_research_rows() -> Non
     assert api_spreads.lane_rankable(clean) is True
 
 
+def test_old_matched_quote_stays_visible_but_cannot_lead_spread() -> None:
+    """A two-minute-old basis may have converged even while funding persists."""
+    from dataclasses import fields
+    from spreadboard.api_spreads import SpreadTerminalRow
+
+    def row(edge: float, age: float) -> SpreadTerminalRow:
+        base = {field.name: None for field in fields(SpreadTerminalRow)}
+        base.update(
+            token="AGE",
+            route_kind="FUTURES",
+            executable_spread_pct=edge,
+            displayed_open_spread_pct=edge,
+            depth_weighted_spread_pct=edge,
+            depth_usd=50.0,
+            long_volume_24h_usd=100_000.0,
+            short_volume_24h_usd=100_000.0,
+            long_price=1.0,
+            short_price=1.0 + edge / 100.0,
+            long_market_symbol="AGE/USDT:USDT",
+            short_market_symbol="AGE/USDT:USDT",
+            blockers=[],
+            freshness="fresh",
+            age_min=age,
+            route_key=f"AGE|{age}",
+            asset_class="crypto",
+        )
+        return SpreadTerminalRow(**base)
+
+    old = row(4.0, api_spreads.SPREAD_LEADER_MAX_AGE_MIN + 0.1)
+    current = row(0.8, 0.1)
+    group = api_spreads._group_rows([old, current])[0]
+
+    assert api_spreads.row_is_presentable(old) is True
+    assert api_spreads.spread_leader_ready(old) is False
+    assert group["best_edge_pct"] == 0.8
+    assert group["best_route"]["route_key"] == current.route_key
+
+
 def _vrow(**kw):
     from types import SimpleNamespace
     base = dict(route_kind="SPOT", long_withdraw_enabled=None, short_deposit_enabled=None,
-                long_volume_24h_usd=1e5, short_volume_24h_usd=1e5)
+                long_volume_24h_usd=1e5, short_volume_24h_usd=1e5,
+                freshness="fresh", age_min=0.1, executable_spread_pct=1.0,
+                depth_weighted_spread_pct=1.0, depth_usd=50.0,
+                long_price=1.0, short_price=1.01, blockers=[],
+                asset_class="crypto")
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -2453,6 +2508,13 @@ def test_lane_counts_exclude_routes_nobody_can_take() -> None:
                  short_deposit_enabled=True)
     counts = api_spreads._release_lane_token_counts([shut, collision, thin, good])
     assert counts["SPOT"] == 1
+
+
+def test_old_route_remains_structurally_rankable_but_not_live_ready() -> None:
+    old = _vrow(route_kind="FUTURES", token="OLD", age_min=10.0)
+    assert api_spreads.lane_rankable(old) is True
+    assert api_spreads.lane_current_ready(old) is False
+    assert api_spreads._release_lane_token_counts([old])["FUTURES"] == 0
 
 
 def test_a_shut_rail_does_not_disqualify_a_funding_farm() -> None:
@@ -3234,6 +3296,14 @@ def test_the_stream_reports_only_what_changed(tmp_path, monkeypatch) -> None:
             {"route_key": "B|y", "executable_spread_pct": 5.0, "funding_daily_pct": 0.2}]}]}
 
     monkeypatch.setattr(server, "api_market_spreads", market)
+    monkeypatch.setattr(
+        server.api_spreads,
+        "live_prices_for",
+        lambda routes: {
+            row["route_key"]: (row["executable_spread_pct"], row["funding_daily_pct"])
+            for row in routes
+        },
+    )
     first = server._board_stream_rows(tmp_path / "b.jsonl", {})
     second = server._board_stream_rows(tmp_path / "b.jsonl", {})
     changed = {k: v for k, v in second.items() if first.get(k) != v}

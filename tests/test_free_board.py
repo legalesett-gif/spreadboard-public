@@ -33,6 +33,10 @@ def _group(token: str, *, edge: float, funding: float) -> dict:
         "long_market_type": "Futures",
         "short_venue": "Gate",
         "short_market_type": "Futures",
+        "age_min": 0.1,
+        "executable_spread_pct": edge,
+        "depth_weighted_spread_pct": edge,
+        "depth_usd": 50.0,
     }
     return {
         "token": token,
@@ -102,7 +106,7 @@ def test_the_visible_rows_are_the_same_component_a_member_sees(
 
     assert 'class="token-route-group"' in html
     assert "Best pair" in html
-    assert "matched $50 VWAP" in html
+    assert "$50 VWAP" in html
     assert "Best-route funding" in html
 
 

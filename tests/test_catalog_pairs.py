@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
-from spreadboard import catalog_pairs, live_book_cache
+from spreadboard import api_spreads, catalog_pairs, live_book_cache
 
 
-def _book(bid: float, ask: float, *, stamp: int = 1_700_000_000_000_000, amount: float = 10_000) -> live_book_cache.CachedBook:
+def _book(
+    bid: float,
+    ask: float,
+    *,
+    stamp: int | None = None,
+    amount: float = 10_000,
+) -> live_book_cache.CachedBook:
     return live_book_cache.CachedBook(
-        bids=[[bid, amount]], asks=[[ask, amount]], quote_ts_us=stamp
+        bids=[[bid, amount]],
+        asks=[[ask, amount]],
+        quote_ts_us=stamp if stamp is not None else int(time.time() * 1_000_000),
     )
 
 
@@ -201,6 +210,12 @@ def test_identity_warned_catalogue_pair_remains_visible_but_cannot_lead(monkeypa
     assert summary["quoteable_pair_count"] == 6
     assert summary["best_spread_route"]["short_venue"] == "Bybit"
     assert summary["best_spread_route"]["mirage_guarded"] is False
+
+
+def test_missing_catalogue_quote_age_is_not_current() -> None:
+    assert api_spreads.spread_quote_current({"age_min": None}) is False
+    assert api_spreads.spread_quote_current({}) is False
+    assert api_spreads.spread_quote_current({"age_min": 0.1}) is True
 
 
 def test_current_dex_rows_merge_with_complete_cex_pairs() -> None:

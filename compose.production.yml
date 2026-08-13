@@ -68,7 +68,16 @@ services:
       # A five-minute-old book can turn a converged 0.08% route into a false
       # 10% headline. Only genuinely live books may override the snapshot.
       SPREADBOARD_LIVE_BOOK_AGE_SECONDS: "10"
-      SPREADBOARD_WS_BOOKS: "1100"
+      # 1,100 concurrent subscriptions overwhelmed Gate/MEXC keepalives and
+      # left actual leaders reconnecting.  The lane reserver needs roughly 200
+      # legs for ten routes across every view; 320 keeps that set plus open
+      # positions and useful depth without turning the feed into a reconnect
+      # storm.
+      SPREADBOARD_WS_BOOKS: "320"
+      # Search/history rows remain available for five minutes, but a spread
+      # older than this cannot headline a current ranking. Funding is ranked
+      # independently and is not suppressed by this basis-age boundary.
+      SPREADBOARD_SPREAD_LEADER_MAX_AGE_SECONDS: "90"
       SPREADBOARD_WS_RECONCILE_SECONDS: "10"
       SPREADBOARD_WS_WRITE_SECONDS: "0.25"
       SPREADBOARD_CHART_SAMPLE_SECONDS: "2"

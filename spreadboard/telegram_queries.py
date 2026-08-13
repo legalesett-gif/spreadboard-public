@@ -182,6 +182,19 @@ def _route(row: dict[str, Any]) -> str:
     return f"{row.get('long_venue') or '?'}>{row.get('short_venue') or '?'}{mark}"[:22]
 
 
+def _current_basis(row: dict[str, Any]) -> Any:
+    """A basis is current only while both legs meet the spread-age promise."""
+
+    current = api_spreads.spread_quote_current(row)
+    return (
+        row.get("depth_weighted_spread_pct")
+        if current and row.get("depth_weighted_spread_pct") is not None
+        else row.get("executable_spread_pct")
+        if current
+        else None
+    )
+
+
 def _radar_age(minutes: Any) -> str:
     try:
         value = max(0.0, float(minutes))
@@ -548,7 +561,7 @@ def _current_funding_monitor(
             (
                 _route(row),
                 _pct(row.get("funding_daily_pct") or row.get("funding_spread_pct"), 3),
-                _pct(row.get("executable_spread_pct"), 2),
+                _pct(_current_basis(row), 2),
             )
             for row in rows[:MAX_ROWS]
         ],
@@ -644,6 +657,8 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
     funding_rows = _funding_rows_for(symbol)
     if query.kind == "funding" and funding_rows:
         rows = funding_rows
+    elif query.kind == "spread":
+        rows = [row for row in rows if _current_basis(row) is not None]
     radar_rows = _radar_rows(symbol) if query.kind in {"spread", "funding"} else []
     if not rows:
         if funding_rows and query.kind == "spread":
@@ -686,9 +701,12 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
             [(_route(r), _pct(r.get("funding_daily_pct") or r.get("funding_spread_pct"), 3), _pct(r.get("funding_apr_pct"), 1)) for r in rows[:MAX_ROWS]],
         )
         title = f"{symbol} · funding · {len(rows)} routes"
+        current_basis = _current_basis(rows[0])
         basis_context = (
             f"\n<i>Current basis on the top funding pair: "
-            f"{_pct(rows[0].get('executable_spread_pct'), 2)}.</i>"
+            f"{_pct(current_basis, 2)}.</i>"
+            if current_basis is not None
+            else "\n<i>Basis is refreshing; the funding quote remains current.</i>"
         )
     elif query.kind == "transfer":
         venues: dict[str, tuple[Any, Any]] = {}
@@ -706,11 +724,11 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
     else:
         rows = sorted(
             rows,
-            key=lambda r: -(float(r.get("executable_spread_pct") or 0)),
+            key=lambda r: -(float(_current_basis(r) or 0)),
         )
         body = _table(
             ("ROUTE", "EDGE", "DEPTH"), (22, 8, 7),
-            [(_route(r), _pct(r.get("executable_spread_pct")), _usd(r.get("depth_usd"))) for r in rows[:MAX_ROWS]],
+            [(_route(r), _pct(_current_basis(r)), _usd(r.get("depth_usd"))) for r in rows[:MAX_ROWS]],
         )
         title = f"{symbol} · spread · {len(rows)} routes"
         basis_context = ""
