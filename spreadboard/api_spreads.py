@@ -183,8 +183,10 @@ def load_spreads(
         include_unverified, require_deliverable, max_age_min, sort_by, direction, offset, limit,
     )
     try:
+        delta_path = _fast_quote_delta_path(api_path)
         stamp = (
             api_path.stat().st_mtime_ns,
+            _mtime_ns(delta_path),
             token_metadata.DEFAULT_CACHE_PATH.stat().st_mtime_ns
             if token_metadata.DEFAULT_CACHE_PATH.exists()
             else 0,
@@ -199,7 +201,7 @@ def load_spreads(
             else 0,
         )
     except OSError:
-        stamp = (0, 0, 0, 0, 0)
+        stamp = (0, 0, 0, 0, 0, 0)
     with _SNAPSHOT_CACHE_LOCK:
         cached = _RESULT_CACHE.get(cache_key)
     if (

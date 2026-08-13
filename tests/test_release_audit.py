@@ -3191,7 +3191,6 @@ def test_a_price_refresh_does_not_invalidate_the_whole_board(tmp_path) -> None:
     (tmp_path / "api_discovery_fast_quotes.json").write_text(json.dumps({
         "updated_at": "2026-08-02T00:01:00Z", "rows": [raw("AAA", 7.5)]}))
     api_spreads._ROW_CACHE.clear()
-    api_spreads._RESULT_CACHE.clear()
 
     after = api_spreads.load_spreads(api_path=snapshot, board_path=tmp_path / "n.jsonl",
                                      limit=None, include_stale=True, include_unverified=True)
