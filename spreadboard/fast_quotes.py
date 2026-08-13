@@ -883,6 +883,7 @@ class FastQuoteRefresher:
         if venue not in VENUE_IDS and not supports_native_order_book(venue, market_type):
             return None
         try:
+            route_has_dex_leg = _is_dex_route(row)
             live_book = live_book_cache.load_live_book(
                 venue,
                 market_type,
@@ -893,6 +894,15 @@ class FastQuoteRefresher:
                 # make either leg younger than it really is.
                 max_age_seconds=cache_book_age_seconds,
             )
+            if live_book is None and route_has_dex_leg:
+                # The complete CEX catalogue has its own continuously running
+                # bulk/WebSocket producer. Loading full venue metadata here for
+                # a single DEX pair took 60-100 seconds and made the on-chain
+                # quote expire before publication. Do not fabricate a route or
+                # weaken freshness: leave it unavailable until the shared CEX
+                # book arrives, then the next bounded DEX cycle can pair it.
+                cache[key] = None
+                return None
             native_book = (
                 (live_book.bids, live_book.asks)
                 if live_book is not None
