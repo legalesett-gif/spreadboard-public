@@ -9,17 +9,19 @@ import gc
 import json
 import os
 from pathlib import Path
+import re
 from threading import Lock
 import time
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from spreadboard import live_book_cache
+from spreadboard import live_book_cache, tokenized_assets
 from spreadarb.api_discovery.models import spread_pct
 from spreadarb.api_discovery.orderbook import depth_weighted_price
 
 ROOT = Path(__file__).resolve().parents[1]
+LEVERAGED_TOKEN_PATTERN = re.compile(r"^[A-Z0-9]+[2-5][LS]$")
 
 VENUE_IDS = {
     "Aster": "aster",
@@ -93,9 +95,11 @@ FAST_QUOTE_LANES = (
 FAST_QUOTE_LANE_WEIGHTS = {
     "FUTURES": 1,
     "FUTURES-SPOT": 1,
-    # Spot books fail or disappear more often than perpetual books. Reserve a
-    # second share so enough exact routes survive to keep the public top 25.
-    "SPOT": 2,
+    # Public-book failure rates are measured at the release boundary. The
+    # formerly doubled Spot quota left Futures with only 37 attempts while
+    # Spot was succeeding on 72/73; equal CEX shares give every lane 50
+    # attempts inside the same 220-route ceiling.
+    "SPOT": 1,
     "DEX-FUTURES": 1,
     "DEX-SPOT": 1,
 }
@@ -448,7 +452,11 @@ class FastQuoteRefresher:
         rows_by_lane: dict[str, list[dict[str, Any]]] = {lane: [] for lane in FAST_QUOTE_LANES}
         for bucket in ("api_discovered_rows", "dex_discovered_rows"):
             for row in payload.get(bucket) or []:
-                if not isinstance(row, dict) or _has_permanent_mirage_guard(row):
+                if (
+                    not isinstance(row, dict)
+                    or _has_permanent_mirage_guard(row)
+                    or _cannot_lead_public_lane(row)
+                ):
                     continue
                 lane = _fast_quote_lane(row)
                 if lane is None:
@@ -1339,12 +1347,25 @@ def _select_fast_quote_rows(
     and leaves a few slots for current leaders after every tracked token.
     """
 
-    total_weight = sum(FAST_QUOTE_LANE_WEIGHTS.values())
-    base_quota, extra = divmod(max(0, route_limit), total_weight)
+    cex_lanes = [lane for lane in FAST_QUOTE_LANES if not lane.startswith("DEX-")]
+    dex_rows = [
+        *rows_by_lane.get("DEX-FUTURES", []),
+        *rows_by_lane.get("DEX-SPOT", []),
+    ]
+    active_cex_lanes = sum(bool(rows_by_lane.get(lane)) for lane in cex_lanes)
+    dex_route_limit = (
+        min(
+            max(0, route_limit - active_cex_lanes),
+            max(8, int(os.environ.get("SPREADBOARD_FAST_DEX_ROUTES", "70"))),
+        )
+        if dex_rows
+        else 0
+    )
+    cex_route_limit = max(0, route_limit - dex_route_limit)
+    cex_weight = sum(FAST_QUOTE_LANE_WEIGHTS[lane] for lane in cex_lanes)
+    base_quota, extra = divmod(cex_route_limit, cex_weight)
     selected: list[dict[str, Any]] = []
-    for index, lane in enumerate(FAST_QUOTE_LANES):
-        if lane.startswith("DEX-"):
-            continue
+    for index, lane in enumerate(cex_lanes):
         lane_limit = (
             base_quota * FAST_QUOTE_LANE_WEIGHTS[lane]
             + (1 if index < extra else 0)
@@ -1352,19 +1373,14 @@ def _select_fast_quote_rows(
         selected.extend(
             _expanded_token_rows(
                 rows_by_lane.get(lane) or [],
-                token_limit=min(90 if lane == "SPOT" else 50, lane_limit),
+                token_limit=min(50, lane_limit),
                 route_limit=lane_limit,
             )
         )
-    dex_route_limit = max(0, route_limit - len(selected))
     dex_token_limit = min(
         dex_route_limit,
-        max(8, int(os.environ.get("SPREADBOARD_FAST_DEX_ROUTES", "50"))),
+        max(8, int(os.environ.get("SPREADBOARD_FAST_DEX_ROUTES", "70"))),
     )
-    dex_rows = [
-        *rows_by_lane.get("DEX-FUTURES", []),
-        *rows_by_lane.get("DEX-SPOT", []),
-    ]
     priority = priority_tokens if priority_tokens is not None else _dex_priority_tokens()
     # DEX-FUTURES and DEX-SPOT often share one contract, but they are separate
     # client lanes. Selecting from their combined score alone let a rich
@@ -1372,7 +1388,7 @@ def _select_fast_quote_rows(
     # public top-25 readiness boundary. Seed each lane independently, then add
     # combined leaders up to the configured unique-contract ceiling. Shared
     # contracts are still quoted once by leg_cache below.
-    lane_floor = min(25, dex_token_limit // 2)
+    lane_floor = min(30, dex_token_limit // 2)
     dex_seeds: list[dict[str, Any]] = []
     seed_keys: set[tuple[Any, ...]] = set()
     for lane in ("DEX-FUTURES", "DEX-SPOT"):
@@ -1460,6 +1476,22 @@ def _has_permanent_mirage_guard(row: dict[str, Any]) -> bool:
         and str(item) != "mirage_guard:spot_sell_inventory_required"
         for item in row.get("blockers") or []
     )
+
+
+def _cannot_lead_public_lane(row: dict[str, Any]) -> bool:
+    """Cheap structural gates shared with the public lane admission rules.
+
+    Exact books cannot turn two unverified tokenized instruments into the same
+    legal asset, and cross-venue leveraged tokens cannot converge. Quoting
+    those rows consumed scarce warm capacity and pushed verified leaders out.
+    """
+
+    token = str(row.get("token") or "").upper()
+    if tokenized_assets.classify(row).get("status") == "blocked":
+        return True
+    if LEVERAGED_TOKEN_PATTERN.match(token) and row.get("long_venue") != row.get("short_venue"):
+        return True
+    return False
 
 
 def _native_order_book(

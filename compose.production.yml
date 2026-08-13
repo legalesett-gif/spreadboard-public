@@ -28,10 +28,10 @@ services:
       # OKX Web3 uses two rate-limited requests per DEX token. One combined
       # rotation covers every tracked token plus current leaders and finishes
       # before its earliest quote leaves the five-minute live window.
-      # Both DEX-Futures and DEX-Spot independently retain their top 25. Most
-      # contracts overlap, but 50 is the safe no-overlap ceiling; shared DEX
-      # legs are still requested once and reused across paired routes.
-      SPREADBOARD_FAST_DEX_ROUTES: "50"
+      # Both DEX-Futures and DEX-Spot seed 30 tokens before route expansion.
+      # The 10-token reserve absorbs ordinary provider failures while shared
+      # DEX legs are still requested once and reused across paired routes.
+      SPREADBOARD_FAST_DEX_ROUTES: "70"
       SPREADBOARD_FAST_QUOTE_WORKERS: "6"
       SPREADBOARD_DEX_QUOTE_CHUNK_SIZE: "8"
       SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS: "300"

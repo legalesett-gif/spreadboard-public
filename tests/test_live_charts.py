@@ -17,6 +17,7 @@ from spreadboard.fast_quotes import (
     _fast_quote_lane,
     _fresh_fast_quote_row,
     _has_permanent_mirage_guard,
+    _cannot_lead_public_lane,
     _native_order_book,
     _native_spot_order_book,
     _native_current_funding,
@@ -150,6 +151,68 @@ def test_combined_dex_rotation_keeps_25_tokens_in_each_public_lane() -> None:
 
     assert sum(str(row["token"]).startswith("F") for row in selected) >= 25
     assert sum(str(row["token"]).startswith("S") for row in selected) >= 25
+
+
+def test_fast_quote_budget_is_failure_tolerant_across_all_lanes(monkeypatch) -> None:
+    monkeypatch.setenv("SPREADBOARD_FAST_DEX_ROUTES", "70")
+    lanes = {}
+    for lane, prefix in (
+        ("FUTURES", "F"), ("FUTURES-SPOT", "P"), ("SPOT", "S"),
+        ("DEX-FUTURES", "D"), ("DEX-SPOT", "X"),
+    ):
+        rows = []
+        for index in range(90):
+            token = f"{prefix}{index}"
+            if lane == "FUTURES":
+                long_venue, long_type, short_venue, short_type = "Aster", "Futures", "Bybit", "Futures"
+            elif lane == "FUTURES-SPOT":
+                long_venue, long_type, short_venue, short_type = "Mexc", "Spot", "Bybit", "Futures"
+            elif lane == "SPOT":
+                long_venue, long_type, short_venue, short_type = "Mexc", "Spot", "Gate", "Spot"
+            elif lane == "DEX-FUTURES":
+                long_venue, long_type, short_venue, short_type = "OKX DEX 1", "Spot", "Bybit", "Futures"
+            else:
+                long_venue, long_type, short_venue, short_type = "OKX DEX 1", "Spot", "Mexc", "Spot"
+            rows.append({
+                "route_key": f"{token}|{long_venue}|{long_type}|{short_venue}|{short_type}",
+                "token": token,
+                "long_venue": long_venue,
+                "long_market_type": long_type,
+                "long_market_symbol": f"{token}/USDT" + (":USDT" if long_type == "Futures" else ""),
+                "short_venue": short_venue,
+                "short_market_type": short_type,
+                "short_market_symbol": f"{token}/USDT" + (":USDT" if short_type == "Futures" else ""),
+                "depth_weighted_spread_pct": 90 - index,
+                "blockers": [],
+                "notes": {"identity": {"long": {
+                    "chain_id": "1", "token_address": f"0x{index:040x}",
+                }}},
+            })
+        lanes[lane] = rows
+
+    selected = _select_fast_quote_rows(lanes, route_limit=220, priority_tokens=set())
+
+    counts = {
+        lane: len({row["token"] for row in selected if _fast_quote_lane(row) == lane})
+        for lane in lanes
+    }
+    assert counts == {
+        "FUTURES": 50, "FUTURES-SPOT": 50, "SPOT": 50,
+        "DEX-FUTURES": 35, "DEX-SPOT": 35,
+    }
+
+
+def test_fast_quote_skips_unverified_tokenized_capacity() -> None:
+    assert _cannot_lead_public_lane({
+        "token": "AAPLSTOCK",
+        "long_venue": "A",
+        "short_venue": "B",
+        "long_market_symbol": "AAPLSTOCK/USDT:USDT",
+        "short_market_symbol": "AAPLSTOCK/USDT:USDT",
+    })
+    assert not _cannot_lead_public_lane({
+        "token": "GUA", "long_venue": "A", "short_venue": "B",
+    })
 
 
 def test_selected_dex_token_uses_spare_budget_for_more_current_pairs() -> None:
@@ -1324,11 +1387,11 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
     )
     updated = [row for row in saved["rows"] if row.get("fast_quote_verified_at")]
 
-    assert result["selected_routes"] == 158
-    assert result["updated_routes"] == 158
-    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 34
-    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 34
-    assert sum(row["route_kind"] == "SPOT" for row in updated) == 66
+    assert result["selected_routes"] == 154
+    assert result["updated_routes"] == 154
+    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 44
+    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 43
+    assert sum(row["route_kind"] == "SPOT" for row in updated) == 43
     assert sum(row["route_kind"] == "DEX-FUTURES" for row in updated) == 12
     assert sum(row["route_kind"] == "DEX-SPOT" for row in updated) == 12
     assert {row["token"] for row in updated if row["route_kind"] == "FUTURES"} == {
@@ -1338,7 +1401,7 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
         f"SPOT{index:02d}" for index in range(30)
     }
     assert {row["token"] for row in updated if row["route_kind"] == "SPOT"} == {
-        f"CASH{index:02d}" for index in range(66)
+        f"CASH{index:02d}" for index in range(43)
     }
     assert {row["token"] for row in updated if row["route_kind"] == "DEX-FUTURES"} == {
         f"DEX{index:02d}" for index in range(12)
