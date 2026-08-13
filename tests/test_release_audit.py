@@ -2577,6 +2577,16 @@ def test_the_service_warms_the_board_cache_after_writing() -> None:
     assert "target=_warm_board_cache" in warm_source
 
 
+def test_fast_quote_cycle_publishes_rankings_without_blocking_next_rotation() -> None:
+    import inspect
+    from scripts import run_spreadboard_service
+
+    source = inspect.getsource(run_spreadboard_service.RefreshLoop.run_fast_quotes)
+
+    assert "_schedule_token_rankings()" in source
+    assert "_refresh_token_rankings()" not in source
+
+
 def test_broad_dex_discovery_yields_to_current_quote_rotation() -> None:
     import inspect
     from scripts import fast_quote_worker, run_spreadboard_service

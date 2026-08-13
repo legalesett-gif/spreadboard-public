@@ -272,9 +272,10 @@ class RefreshLoop:
             if summary.get("updated_routes"):
                 _invalidate_market_price_caches()
                 # Fast DEX quotes are part of the token page and Telegram
-                # fallback artefact. Publish them on this same cycle instead of
-                # waiting up to five minutes for the broad cache warmer.
-                _refresh_token_rankings()
+                # fallback artefact. Publish rankings without holding the quote
+                # lock: the old synchronous 30-60s ranking build delayed the
+                # next rolling DEX half until the first half had expired.
+                _schedule_token_rankings()
             self._start_board_warm()
             # The interval is a start-to-start target. Sleeping a full interval
             # after a multi-minute quote pass and cache warm created a stale
