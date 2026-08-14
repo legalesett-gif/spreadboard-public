@@ -553,6 +553,33 @@ def test_visual_audit_rejects_entitlement_redirects() -> None:
     assert "finalUrl.pathname !== expectedUrl.pathname" in source
 
 
+def test_concurrent_cached_readers_share_one_live_overlay(monkeypatch) -> None:
+    import threading
+
+    calls: list[int] = []
+    payload: dict[str, object] = {}
+
+    def slow_overlay(value) -> None:
+        calls.append(id(value))
+        time.sleep(0.05)
+
+    monkeypatch.setattr(server, "_apply_spread_freshness", slow_overlay)
+    monkeypatch.setattr(server, "_MARKET_FRESHNESS_INTERVAL_SECONDS", 60.0)
+    with server._MARKET_FRESHNESS_GATES_LOCK:
+        server._MARKET_FRESHNESS_GATES.clear()
+
+    threads = [
+        threading.Thread(target=server._sync_telegram_client_universe, args=(payload,))
+        for _ in range(20)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert calls == [id(payload)]
+
+
 def test_combined_quote_budget_covers_cex_catalog_and_both_dex_lanes() -> None:
     compose = (Path(__file__).resolve().parents[1] / "compose.production.yml").read_text()
     routes = int(re.search(r'SPREADBOARD_FAST_QUOTE_ROUTES:\s*"(\d+)"', compose).group(1))

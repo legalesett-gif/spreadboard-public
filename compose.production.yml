@@ -58,6 +58,9 @@ services:
       # shared between streams, so this is independent of how many people watch.
       SPREADBOARD_BOARD_STREAM_SECONDS: "0.25"
       SPREADBOARD_LIVE_TICK_SECONDS: "0.25"
+      # Concurrent readers share one initial live-book overlay per cached view.
+      # The SSE stream still takes over at 250ms after the HTML is delivered.
+      SPREADBOARD_MARKET_FRESHNESS_SECONDS: "2"
       SPREADBOARD_RESULT_CACHE_SECONDS: "1200"
       # Thirteen warmed views plus headroom for ad-hoc queries. Measured, the
       # whole warm set costs ~471MB: the first build is +210MB and the charts

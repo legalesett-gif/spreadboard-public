@@ -96,6 +96,29 @@ _MARKET_STALE_MAX_SECONDS = max(
 )
 _MARKET_CACHE_INFLIGHT: dict[tuple[Any, ...], threading.Event] = {}
 
+
+class _MarketFreshnessGate:
+    """One live-book overlay shared by concurrent readers of one payload."""
+
+    __slots__ = ("lock", "applied_at")
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.applied_at = 0.0
+
+
+# The initial HTML only needs a recent consistent mark; its SSE stream takes
+# over immediately and pushes current prices every 250ms. Without coalescing,
+# twenty readers of the same cached view each queried and mutated the same
+# thousand-route payload, producing 13s p95 latency in the production burst
+# test despite every response succeeding.
+_MARKET_FRESHNESS_INTERVAL_SECONDS = max(
+    0.25, float(os.environ.get("SPREADBOARD_MARKET_FRESHNESS_SECONDS", "2"))
+)
+_MARKET_FRESHNESS_GATES_LOCK = threading.Lock()
+_MARKET_FRESHNESS_GATES: dict[int, _MarketFreshnessGate] = {}
+_MARKET_FRESHNESS_GATE_MAX_ENTRIES = _MARKET_CACHE_MAX_ENTRIES * 2 + 8
+
 #: How many *different* board views may be built at the same time.
 #:
 #: Single-flight already stops N readers of one view from starting N builds.
@@ -2276,7 +2299,7 @@ def _sync_telegram_client_universe(payload: dict[str, Any]) -> dict[str, Any]:
     # Warm structural payloads can outlive their quote. Recompute the
     # presentation boundary on every response so an instant cache hit cannot
     # keep a converged basis looking live until the next full rebuild.
-    _apply_spread_freshness(payload)
+    _apply_spread_freshness_coalesced(payload)
     filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
     pagination = payload.get("pagination") if isinstance(payload.get("pagination"), dict) else {}
     filtered_keys = (
@@ -2311,6 +2334,43 @@ def _sync_telegram_client_universe(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if full_page and first_page and unfiltered and safe_defaults:
         telegram_queries.replace_payload(payload)
+    return payload
+
+
+def _apply_spread_freshness_coalesced(payload: dict[str, Any]) -> dict[str, Any]:
+    """Apply one consistent live overlay per cached payload and short tick.
+
+    Cached views are shared objects. Serialising the overlay for each object
+    prevents concurrent request threads from repeating the same database work
+    and from mutating the route dictionaries at the same time. Different views
+    still refresh independently, and browser streams remain fully live.
+    """
+
+    key = id(payload)
+    with _MARKET_FRESHNESS_GATES_LOCK:
+        gate = _MARKET_FRESHNESS_GATES.get(key)
+        if gate is None:
+            gate = _MarketFreshnessGate()
+            _MARKET_FRESHNESS_GATES[key] = gate
+            if len(_MARKET_FRESHNESS_GATES) > _MARKET_FRESHNESS_GATE_MAX_ENTRIES:
+                oldest = min(
+                    (
+                        (candidate_key, candidate)
+                        for candidate_key, candidate in _MARKET_FRESHNESS_GATES.items()
+                        if candidate_key != key
+                    ),
+                    key=lambda item: item[1].applied_at,
+                    default=None,
+                )
+                if oldest is not None and oldest[1].lock.acquire(blocking=False):
+                    oldest[1].lock.release()
+                    _MARKET_FRESHNESS_GATES.pop(oldest[0], None)
+    with gate.lock:
+        now = time.monotonic()
+        if now - gate.applied_at < _MARKET_FRESHNESS_INTERVAL_SECONDS:
+            return payload
+        _apply_spread_freshness(payload)
+        gate.applied_at = time.monotonic()
     return payload
 
 
