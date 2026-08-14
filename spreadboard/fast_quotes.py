@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -195,6 +196,11 @@ class FastQuoteRefresher:
         self._clients: dict[tuple[str, str], Any] = {}
         self._client_lock = Lock()
         self._client_request_locks: dict[tuple[str, str], Lock] = {}
+        # Public operational evidence only: exact symbols/contracts never leave
+        # the worker through this map.  The cycle summary exposes aggregate,
+        # sanitized reason counts so provider failures can be acted on without
+        # leaking a member token, route, API response, or credential detail.
+        self._leg_failure_reasons: dict[tuple[str, str, str], str] = {}
 
     def refresh_all_funding(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Re-quote funding for EVERY futures leg in the snapshot, not just the top routes.
@@ -434,6 +440,7 @@ class FastQuoteRefresher:
             payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             return {"status": "unavailable", "updated": 0, "error": type(exc).__name__}
+        self._leg_failure_reasons.clear()
         # The prior delta contains the newest rows from recent rotations.  Use
         # it as the selection baseline and retain its still-live rows below;
         # otherwise every pass forgets the previous one and a rotating warmer
@@ -574,8 +581,9 @@ class FastQuoteRefresher:
                     # not start new synchronous network calls after the bounded
                     # pools have deliberately stopped.
                     for key in keys:
-                        if key is not None:
-                            leg_cache.setdefault(key, None)
+                        if key is not None and key not in leg_cache:
+                            leg_cache[key] = None
+                            self._record_leg_failure(key, "deadline_unattempted")
                 success = self._apply_completed_route_quote(
                     row,
                     leg_cache=leg_cache,
@@ -607,6 +615,10 @@ class FastQuoteRefresher:
                 "funding_legs_refreshed": funding_summary.get("legs", 0),
                 "funding_venues": funding_summary.get("venues", 0),
                 "cycle_complete": final,
+                "failed_leg_count": len(self._leg_failure_reasons),
+                "failure_reason_counts": dict(
+                    sorted(Counter(self._leg_failure_reasons.values()).items())
+                ),
             }
             payload["fast_quote_refresh"] = summary
             _publish_fast_quote_delta(
@@ -874,21 +886,32 @@ class FastQuoteRefresher:
         if key in cache:
             return cache[key]
         if "okx dex" in venue.casefold():
+            failure: dict[str, str] = {}
             value = _okx_dex_leg_quote(
                 row,
                 side,
                 target_notional_usd=target_notional_usd,
                 quote_both=False,
+                failure=failure,
             )
             cache[key] = value
+            if value is None:
+                self._record_leg_failure(
+                    key,
+                    failure.get("reason", "dex_quote_unavailable"),
+                )
+            else:
+                self._leg_failure_reasons.pop(key, None)
             return value
         # Some venues have no ccxt adapter but do publish a public book, and
         # this gate rejected them before the native fetcher below was ever
         # reached -- so their legs could never be repriced and their charts sat
         # frozen reading "Stream sampler unavailable".
         if not venue or not symbol:
+            self._record_leg_failure(key, "cex_identity_missing")
             return None
         if venue not in VENUE_IDS and not supports_native_order_book(venue, market_type):
+            self._record_leg_failure(key, "cex_adapter_unavailable")
             return None
         try:
             route_has_dex_leg = _is_dex_route(row)
@@ -914,10 +937,12 @@ class FastQuoteRefresher:
                 # catalogue as a fallback: that 60-100s metadata path made the
                 # already-completed on-chain quote expire before publication.
                 cache[key] = None
+                self._record_leg_failure(key, "cex_book_unavailable")
                 return None
             if native_book is None and venue not in VENUE_IDS:
                 # No public book this time and no ccxt adapter to fall back on.
                 cache[key] = None
+                self._record_leg_failure(key, "cex_book_unavailable")
                 return None
             if native_book is None:
                 client = self._client(venue, market_type)
@@ -975,6 +1000,7 @@ class FastQuoteRefresher:
             ask_vwap = depth_weighted_price(asks, target_notional_usd, contract_size=contract_size)
             if not bids or not asks or bid_vwap is None or ask_vwap is None:
                 cache[key] = None
+                self._record_leg_failure(key, "cex_target_depth_unavailable")
                 return None
             value = {
                 "symbol": symbol,
@@ -989,10 +1015,20 @@ class FastQuoteRefresher:
                 "quote_source": (live_book.source if live_book is not None else "public_rest"),
                 **funding,
             }
-        except Exception:
+        except Exception as exc:
             value = None
+            self._record_leg_failure(key, f"cex_exception:{type(exc).__name__}")
         cache[key] = value
+        if value is not None:
+            self._leg_failure_reasons.pop(key, None)
         return value
+
+    def _record_leg_failure(
+        self,
+        key: tuple[str, str, str],
+        reason: str,
+    ) -> None:
+        self._leg_failure_reasons[key] = reason
 
     def _client(self, venue: str, market_type: str) -> Any:
         import ccxt
@@ -1164,6 +1200,7 @@ def _publish_fast_quote_delta(
             lane_tokens[lane].add(token)
     summary = {
         **summary,
+        "coverage_target_tokens": 25,
         "lane_token_counts": {
             lane: len(tokens) for lane, tokens in lane_tokens.items()
         },
@@ -1171,8 +1208,55 @@ def _publish_fast_quote_delta(
             lane: len(tokens) >= 25 for lane, tokens in lane_tokens.items()
         },
     }
+    previous: dict[str, Any] = {}
+    delta_path = _fast_quote_delta_path(snapshot_path)
+    try:
+        previous_payload = json.loads(delta_path.read_text(encoding="utf-8"))
+        previous_meta = previous_payload.get("fast_quote_refresh")
+        if isinstance(previous_meta, dict):
+            previous = previous_meta
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    previous_completed = previous.get("last_completed_cycle")
+    if not isinstance(previous_completed, dict):
+        previous_completed = {}
+    previous_streak = max(
+        0,
+        _optional_int(previous.get("consecutive_undercovered_complete_cycles")) or 0,
+    )
+    if summary.get("cycle_complete") is True:
+        undercovered = any(
+            int(summary["lane_token_counts"].get(lane) or 0)
+            < int(summary["coverage_target_tokens"])
+            for lane in ("DEX-FUTURES", "DEX-SPOT")
+        )
+        same_completion = previous_completed.get("updated_at") == summary.get("updated_at")
+        streak = (
+            previous_streak
+            if same_completion
+            else previous_streak + 1 if undercovered else 0
+        )
+        summary["last_completed_cycle"] = {
+            key: summary.get(key)
+            for key in (
+                "updated_at",
+                "updated_routes",
+                "failed_routes",
+                "selected_routes",
+                "failed_leg_count",
+                "failure_reason_counts",
+                "coverage_target_tokens",
+                "lane_token_counts",
+                "top_25_ready",
+            )
+        }
+        summary["consecutive_undercovered_complete_cycles"] = streak
+    else:
+        summary["last_completed_cycle"] = previous_completed
+        summary["consecutive_undercovered_complete_cycles"] = previous_streak
     _atomic_write(
-        _fast_quote_delta_path(snapshot_path),
+        delta_path,
         {
             "schema": "spreadboard.fast_quote_delta.v1",
             "updated_at": summary["updated_at"],
@@ -1610,9 +1694,9 @@ def _shared_dex_lane_seeds(
 ) -> list[dict[str, Any]]:
     """Cover both public DEX lanes with the fewest provider quote calls."""
 
-    lane_maps: dict[str, dict[tuple[str, str, str], dict[str, Any]]] = {}
+    lane_maps: dict[str, dict[tuple[str, str, str, str], dict[str, Any]]] = {}
     for lane in ("DEX-FUTURES", "DEX-SPOT"):
-        best: dict[tuple[str, str, str], dict[str, Any]] = {}
+        best: dict[tuple[str, str, str, str], dict[str, Any]] = {}
         for row in rows_by_lane.get(lane) or []:
             identity = _dex_contract_identity(row)
             current = best.get(identity)
@@ -1624,7 +1708,7 @@ def _shared_dex_lane_seeds(
     spot = lane_maps["DEX-SPOT"]
     shared = set(futures) & set(spot)
 
-    def identity_score(identity: tuple[str, str, str]) -> tuple[int, float, float]:
+    def identity_score(identity: tuple[str, str, str, str]) -> tuple[int, float, float]:
         rows = [row for row in (futures.get(identity), spot.get(identity)) if row]
         token = identity[0]
         return (
@@ -1648,7 +1732,7 @@ def _shared_dex_lane_seeds(
         identity for identity in shared if identity[0] in priority_tokens
     )
 
-    def rotation_score(identity: tuple[str, str, str]) -> tuple[int, float, float]:
+    def rotation_score(identity: tuple[str, str, str, str]) -> tuple[int, float, float]:
         rows = [row for row in (futures.get(identity), spot.get(identity)) if row]
         oldest_quote = min(
             (_number(row.get("quote_ts_us"), 0.0) for row in rows),
@@ -1752,7 +1836,7 @@ def _expand_selected_dex_tokens(
         (_dex_contract_identity(row), _fast_quote_lane(row) or "") for row in selected
     }
     missing_group_best: dict[
-        tuple[tuple[str, str, str], str], dict[str, Any]
+        tuple[tuple[str, str, str, str], str], dict[str, Any]
     ] = {}
     for row in rows:
         group = (_dex_contract_identity(row), _fast_quote_lane(row) or "")
@@ -1778,15 +1862,15 @@ def _expand_selected_dex_tokens(
     # before giving any group a third route.  Groups whose seed has never
     # produced a fast exact quote are tried first; a successful alternative then
     # becomes next cycle's preferred seed via _dex_pair_selection_score().
-    seed_by_group: dict[tuple[tuple[str, str, str], str], dict[str, Any]] = {}
-    group_order: list[tuple[tuple[str, str, str], str]] = []
+    seed_by_group: dict[tuple[tuple[str, str, str, str], str], dict[str, Any]] = {}
+    group_order: list[tuple[tuple[str, str, str, str], str]] = []
     for row in selected:
         group = (_dex_contract_identity(row), _fast_quote_lane(row) or "")
         if group not in seed_by_group:
             group_order.append(group)
             seed_by_group[group] = row
 
-    buckets: dict[tuple[tuple[str, str, str], str], list[dict[str, Any]]] = {}
+    buckets: dict[tuple[tuple[str, str, str, str], str], list[dict[str, Any]]] = {}
     for row in rows:
         identity = _dex_contract_identity(row)
         key = _snapshot_row_key(row)
@@ -1810,11 +1894,11 @@ def _expand_selected_dex_tokens(
     # Keep the fallback budget symmetric. A score-only ordering could spend all
     # twenty production spare rows on DEX-SPOT before DEX-FUTURES received one,
     # even though both lanes make the same top-25 availability promise.
-    ranked_by_lane: dict[str, list[tuple[tuple[str, str, str], str]]] = {
+    ranked_by_lane: dict[str, list[tuple[tuple[str, str, str, str], str]]] = {
         lane: [group for group in group_order if group[1] == lane]
         for lane in ("DEX-FUTURES", "DEX-SPOT")
     }
-    interleaved: list[tuple[tuple[str, str, str], str]] = []
+    interleaved: list[tuple[tuple[str, str, str, str], str]] = []
     for index in range(max((len(values) for values in ranked_by_lane.values()), default=0)):
         for lane in ("DEX-FUTURES", "DEX-SPOT"):
             values = ranked_by_lane[lane]
@@ -1852,12 +1936,26 @@ def _dex_pair_selection_score(row: dict[str, Any]) -> tuple[int, float, float]:
     )
 
 
-def _dex_contract_identity(row: dict[str, Any]) -> tuple[str, str, str]:
-    """The exact reusable provider quote, with token fallback for fixtures."""
+def _dex_contract_identity(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    """The exact reusable directional provider quote.
+
+    A buy quote and a sell quote for the same chain/contract are two provider
+    requests and are not interchangeable.  Omitting the DEX side made the
+    selector believe production's 42 directional requests were only 35,
+    invalidating its rate/time budget.
+    """
 
     token = str(row.get("token") or "").upper()
     chain, contract = _dex_chain_contract(row)
-    return (token, chain, contract.casefold())
+    dex_side = next(
+        (
+            side
+            for side in ("long", "short")
+            if "okx dex" in str(row.get(f"{side}_venue") or "").casefold()
+        ),
+        "",
+    )
+    return (token, chain, contract.casefold(), dex_side)
 
 
 def _unique_rows_by_token(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
@@ -2559,9 +2657,11 @@ def _okx_dex_leg_quote(
     *,
     target_notional_usd: float,
     quote_both: bool = True,
+    failure: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     chain, contract = _dex_chain_contract(row, side=side)
     if not chain or not contract:
+        _set_quote_failure(failure, "dex_identity_missing")
         return None
     try:
         from spreadarb.dex import okx_quotes
@@ -2579,7 +2679,11 @@ def _okx_dex_leg_quote(
             )
             quantity = Decimal(str(buy.get("out_qty") or "0"))
             decimals = _optional_int(buy.get("to_token_decimals"))
-            if buy.get("status") != "ok" or quantity <= 0 or decimals is None:
+            if buy.get("status") != "ok":
+                _set_quote_failure(failure, _dex_provider_failure_reason(buy))
+                return None
+            if quantity <= 0 or decimals is None:
+                _set_quote_failure(failure, "dex_buy_quantity_unavailable")
                 return None
 
         if side == "short" or quote_both:
@@ -2601,7 +2705,11 @@ def _okx_dex_leg_quote(
                 )
                 quantity = Decimal(str(buy.get("out_qty") or "0"))
                 decimals = _optional_int(buy.get("to_token_decimals"))
-                if buy.get("status") != "ok" or quantity <= 0 or decimals is None:
+                if buy.get("status") != "ok":
+                    _set_quote_failure(failure, _dex_provider_failure_reason(buy))
+                    return None
+                if quantity <= 0 or decimals is None:
+                    _set_quote_failure(failure, "dex_buy_quantity_unavailable")
                     return None
             sell = okx_quotes.quote_token_to_usdc(
                 chain=chain,
@@ -2610,11 +2718,13 @@ def _okx_dex_leg_quote(
                 token_decimals=decimals,
             )
             if sell.get("status") != "ok":
+                _set_quote_failure(failure, _dex_provider_failure_reason(sell))
                 return None
 
         bid = _optional_number((sell or {}).get("dex_sell_price_usd"))
         ask = _optional_number((buy or {}).get("dex_buy_price_usd"))
         if (side == "long" and ask is None) or (side == "short" and bid is None):
+            _set_quote_failure(failure, "dex_price_unavailable")
             return None
         result: dict[str, Any] = {
             "symbol": str(row.get("token") or ""),
@@ -2655,8 +2765,46 @@ def _okx_dex_leg_quote(
             }
         )
         return result
-    except Exception:
+    except Exception as exc:
+        _set_quote_failure(failure, f"dex_exception:{type(exc).__name__}")
         return None
+
+
+def _set_quote_failure(target: dict[str, str] | None, reason: str) -> None:
+    if target is not None:
+        target["reason"] = reason
+
+
+def _dex_provider_failure_reason(payload: dict[str, Any]) -> str:
+    """Return a low-cardinality provider failure category safe for health JSON."""
+
+    raw_blockers = payload.get("blockers")
+    blockers = [
+        str(item)
+        for item in (raw_blockers if isinstance(raw_blockers, list) else [])
+    ]
+    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+    message = " ".join(blockers).casefold()
+    raw_message = f"{raw.get('code', '')} {raw.get('msg', '')}".casefold()
+    if "missing_okx_dex_credentials" in message:
+        return "dex_credentials_unavailable"
+    if "unsupported_chain" in message or "stable_address_missing" in message:
+        return "dex_chain_unsupported"
+    if "geo_blocked" in message or str(raw.get("code") or "") == "53015":
+        return "dex_provider_geo_blocked"
+    combined_message = f"{message} {raw_message}"
+    if "rate limit" in combined_message or "too many requests" in combined_message:
+        return "dex_provider_rate_limited"
+    if str(raw.get("code") or "") == "url_error":
+        return "dex_provider_transport"
+    http_status = _optional_int(raw.get("http_status"))
+    if http_status is not None and http_status >= 500:
+        return "dex_provider_http_5xx"
+    if "quote_empty" in message:
+        return "dex_provider_empty"
+    if payload.get("status") == "blocked":
+        return "dex_provider_rejected"
+    return "dex_quote_unavailable"
 
 
 def _dex_directional_sell_inputs(

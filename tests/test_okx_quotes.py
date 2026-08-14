@@ -51,6 +51,66 @@ def test_signed_get_does_not_retry_injected_test_client() -> None:
     assert len(calls) == 1
 
 
+def test_signed_get_retries_default_client_transport_failure_once(
+    monkeypatch,
+) -> None:
+    responses = [
+        {"code": "url_error", "msg": "temporary DNS failure"},
+        {"code": "0", "data": []},
+    ]
+    calls = []
+
+    def fake_http_get(url, headers):
+        calls.append((url, headers))
+        return responses.pop(0)
+
+    monkeypatch.setattr(okx_quotes, "_http_get", fake_http_get)
+    result = okx_quotes._signed_get(
+        params={"chainIndex": "1"},
+        credentials=_credentials(),
+        http_get=None,
+    )
+
+    assert result["code"] == "0"
+    assert len(calls) == 2
+
+
+def test_signed_get_caps_repeated_upstream_failure_at_two_attempts(monkeypatch) -> None:
+    calls = []
+
+    def fake_http_get(url, headers):
+        calls.append((url, headers))
+        return {"code": "500", "msg": "upstream unavailable", "http_status": 503}
+
+    monkeypatch.setattr(okx_quotes, "_http_get", fake_http_get)
+    result = okx_quotes._signed_get(
+        params={"chainIndex": "1"},
+        credentials=_credentials(),
+        http_get=None,
+    )
+
+    assert result["http_status"] == 503
+    assert len(calls) == 2
+
+
+def test_signed_get_does_not_retry_non_transient_provider_rejection(monkeypatch) -> None:
+    calls = []
+
+    def fake_http_get(url, headers):
+        calls.append((url, headers))
+        return {"code": "51000", "msg": "insufficient liquidity"}
+
+    monkeypatch.setattr(okx_quotes, "_http_get", fake_http_get)
+    result = okx_quotes._signed_get(
+        params={"chainIndex": "1"},
+        credentials=_credentials(),
+        http_get=None,
+    )
+
+    assert result["code"] == "51000"
+    assert len(calls) == 1
+
+
 def test_shared_request_slot_persists_process_rate_state(tmp_path: Path, monkeypatch) -> None:
     state_path = tmp_path / "okx-rate.state"
     moments = iter((10.25, 11.15))

@@ -353,7 +353,7 @@ def _signed_get(
     getter = http_get or _http_get
     attempts = 1 if http_get is not None else OKX_DEX_RATE_LIMIT_RETRIES + 1
     result: dict[str, Any] = {}
-    for _attempt in range(attempts):
+    for attempt in range(attempts):
         timestamp = datetime.now(UTC).isoformat(timespec="milliseconds").replace(
             "+00:00", "Z"
         )
@@ -375,7 +375,13 @@ def _signed_get(
         if credentials.project_id:
             headers["OK-ACCESS-PROJECT"] = credentials.project_id
         result = getter(f"{OKX_DEX_BASE_URL}{path}{query}", headers)
-        if not _is_rate_limited(result):
+        if not _is_retryable_provider_failure(result):
+            break
+        # Rate limits are cheap responses and use the full two-retry allowance.
+        # A transport/server attempt can consume the 15-second HTTP timeout, so
+        # retry it once only; three such attempts would stall the entire current
+        # board behind one contract for up to 45 seconds.
+        if not _is_rate_limited(result) and attempt >= 1:
             break
     return result
 
@@ -464,6 +470,17 @@ def _wait_for_priority_window() -> None:
 def _is_rate_limited(payload: dict[str, Any]) -> bool:
     message = f"{payload.get('code', '')} {payload.get('msg', '')}".casefold()
     return "too many requests" in message or "rate limit" in message
+
+
+def _is_retryable_provider_failure(payload: dict[str, Any]) -> bool:
+    """Retry only transport, rate-limit, and upstream-server failures."""
+
+    if _is_rate_limited(payload) or str(payload.get("code") or "") == "url_error":
+        return True
+    try:
+        return int(payload.get("http_status") or 0) >= 500
+    except (TypeError, ValueError):
+        return False
 
 
 def _quote_payload(raw: dict[str, Any]) -> dict[str, Any]:

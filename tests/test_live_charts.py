@@ -296,6 +296,182 @@ def test_production_dex_buffer_keeps_ten_contract_fallbacks_and_pair_fallbacks()
     assert len({fast_quotes._dex_contract_identity(row) for row in selected}) == 35
 
 
+def test_dex_budget_counts_same_contract_buy_and_sell_as_distinct_provider_quotes() -> None:
+    identity = {"chain_id": "1", "token_address": "0x" + "1" * 40}
+    dex_long = {
+        "token": "TEST",
+        "long_venue": "OKX DEX 1",
+        "long_market_type": "Spot",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        "notes": {"identity": {"long": identity}},
+    }
+    dex_short = {
+        **dex_long,
+        "long_venue": "Gate",
+        "long_market_type": "Futures",
+        "short_venue": "OKX DEX 1",
+        "short_market_type": "Spot",
+        "notes": {"identity": {"short": identity}},
+    }
+
+    assert fast_quotes._dex_contract_identity(dex_long) != fast_quotes._dex_contract_identity(
+        dex_short
+    )
+    assert fast_quotes._route_leg_key(dex_long, "long") != fast_quotes._route_leg_key(
+        dex_short, "short"
+    )
+
+
+def test_fast_delta_tracks_only_sustained_completed_cycle_undercoverage(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "api_discovery_latest.json"
+    payload = {
+        "api_discovered_rows": [],
+        "dex_discovered_rows": [],
+    }
+    summary = {
+        "status": "ok",
+        "updated_at": "2026-08-14T16:00:00Z",
+        "updated_routes": 0,
+        "failed_routes": 0,
+        "selected_routes": 0,
+        "failed_leg_count": 0,
+        "failure_reason_counts": {},
+        "cycle_complete": True,
+    }
+
+    for cycle in range(3):
+        summary["updated_at"] = f"2026-08-14T16:0{cycle}:00Z"
+        fast_quotes._publish_fast_quote_delta(
+            snapshot,
+            payload,
+            touched=set(),
+            summary=summary,
+        )
+        saved = json.loads(
+            snapshot.with_name("api_discovery_fast_quotes.json").read_text()
+        )["fast_quote_refresh"]
+        assert saved["consecutive_undercovered_complete_cycles"] == cycle + 1
+        assert saved["last_completed_cycle"]["updated_at"] == summary["updated_at"]
+
+    partial = {**summary, "updated_at": "2026-08-14T16:03:00Z", "cycle_complete": False}
+    fast_quotes._publish_fast_quote_delta(
+        snapshot,
+        payload,
+        touched=set(),
+        summary=partial,
+    )
+    saved = json.loads(
+        snapshot.with_name("api_discovery_fast_quotes.json").read_text()
+    )["fast_quote_refresh"]
+    assert saved["consecutive_undercovered_complete_cycles"] == 3
+    assert saved["last_completed_cycle"]["updated_at"] == "2026-08-14T16:02:00Z"
+
+    now_us = int(time.time() * 1_000_000)
+    healthy_rows = []
+    for index in range(25):
+        identity = {
+            "chain_id": "1",
+            "token_address": f"0x{index:040x}",
+        }
+        for lane, short_type in (("DEX-FUTURES", "Futures"), ("DEX-SPOT", "Spot")):
+            healthy_rows.append(
+                {
+                    "route_key": f"{lane}-{index}",
+                    "token": f"T{index}",
+                    "long_venue": "OKX DEX 1",
+                    "long_market_type": "Spot",
+                    "short_venue": "Gate",
+                    "short_market_type": short_type,
+                    "notes": {"identity": {"long": identity}},
+                    "quote_ts_us": now_us,
+                    "fast_quote_verified_at": "2026-08-14T16:04:00Z",
+                }
+            )
+    healthy_payload = {
+        "api_discovered_rows": healthy_rows,
+        "dex_discovered_rows": [],
+    }
+    recovered = {
+        **summary,
+        "updated_at": "2026-08-14T16:04:00Z",
+        "cycle_complete": True,
+    }
+    fast_quotes._publish_fast_quote_delta(
+        snapshot,
+        healthy_payload,
+        touched={_snapshot_row_key(row) for row in healthy_rows},
+        summary=recovered,
+    )
+    saved = json.loads(
+        snapshot.with_name("api_discovery_fast_quotes.json").read_text()
+    )["fast_quote_refresh"]
+    assert saved["consecutive_undercovered_complete_cycles"] == 0
+    assert saved["last_completed_cycle"]["top_25_ready"] == {
+        "DEX-FUTURES": True,
+        "DEX-SPOT": True,
+    }
+
+
+def test_dex_leg_failure_is_sanitized_and_aggregated(monkeypatch) -> None:
+    row = {
+        "token": "TEST",
+        "long_venue": "OKX DEX 1",
+        "long_market_type": "Spot",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        "notes": {
+            "identity": {
+                "long": {
+                    "chain_id": "1",
+                    "token_address": "0x" + "1" * 40,
+                }
+            }
+        },
+    }
+    refresher = FastQuoteRefresher()
+
+    def unavailable(*_args, failure=None, **_kwargs):
+        failure["reason"] = "dex_provider_transport"
+        return None
+
+    monkeypatch.setattr(fast_quotes, "_okx_dex_leg_quote", unavailable)
+    assert refresher._leg_quote(
+        row,
+        "long",
+        target_notional_usd=50.0,
+        cache={},
+        include_funding=False,
+    ) is None
+
+    assert list(refresher._leg_failure_reasons.values()) == ["dex_provider_transport"]
+
+
+def test_cex_leg_failure_distinguishes_missing_book_from_dex_provider(monkeypatch) -> None:
+    row = {
+        "token": "TEST",
+        "long_venue": "OKX DEX 1",
+        "long_market_type": "Spot",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        "short_market_symbol": "TEST/USDT:USDT",
+    }
+    refresher = FastQuoteRefresher()
+    monkeypatch.setattr(fast_quotes.live_book_cache, "load_live_book", lambda *_a, **_k: None)
+    monkeypatch.setattr(fast_quotes, "_native_order_book", lambda *_a, **_k: None)
+
+    assert refresher._leg_quote(
+        row,
+        "short",
+        target_notional_usd=50.0,
+        cache={},
+        include_funding=False,
+    ) is None
+    assert list(refresher._leg_failure_reasons.values()) == ["cex_book_unavailable"]
+
+
 def test_production_fast_budget_reserves_dex_truth_and_cex_canaries() -> None:
     lanes: dict[str, list[dict]] = {}
     for lane in ("FUTURES", "FUTURES-SPOT", "SPOT"):

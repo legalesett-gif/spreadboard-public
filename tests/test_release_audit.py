@@ -560,7 +560,7 @@ def test_combined_quote_budget_covers_cex_catalog_and_both_dex_lanes() -> None:
     # rate-limited DEX result past its 90-second truth boundary.
     assert dex_routes + 3 <= routes <= 100
     assert dex_routes >= 2 * dex_contracts
-    assert 12 <= dex_contracts <= 35
+    assert 12 <= dex_contracts <= 45
     assert 3 <= workers <= 8
     assert timeout <= 300
     assert bulk_seconds <= 15
