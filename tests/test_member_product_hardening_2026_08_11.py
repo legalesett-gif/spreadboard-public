@@ -678,6 +678,14 @@ def test_watchlist_and_intel_hide_internal_source_cards_and_follow_dark_theme() 
     assert "background: var(--terminal-row); border: 1px solid var(--terminal-line)" in html
 
 
+def test_watchlist_does_not_claim_saved_account_is_empty_while_hydrating() -> None:
+    script = server.WATCHLIST_SCRIPT
+
+    assert "let accountWatchlistHydrating = true;" in script
+    assert "Loading saved watchlist…" in script
+    assert "finally {\n      accountWatchlistHydrating = false;\n      renderAll();" in script
+
+
 def test_fresh_bot_attention_joins_the_warmed_member_market(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         server.intel,

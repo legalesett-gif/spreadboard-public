@@ -12446,6 +12446,7 @@ WATCHLIST_SCRIPT = """
   const alertCards = Array.isArray((data.alert_preview || {}).cards) ? data.alert_preview.cards : [];
   const profileWatchlist = Array.isArray((data.profile_shell || {}).watchlist) ? data.profile_shell.watchlist : [];
   let routeBySymbol = new Map(routeReality.map((item) => [normaliseSymbol(item.symbol), item]).filter(([symbol]) => symbol));
+  let accountWatchlistHydrating = true;
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -12491,6 +12492,7 @@ WATCHLIST_SCRIPT = """
   }
 
   function saveTokens(tokens) {
+    accountWatchlistHydrating = false;
     const clean = [...new Set(tokens.map(normaliseSymbol).filter(Boolean))];
     localStorage.setItem(storageKey, JSON.stringify(clean));
     syncTokens(clean);
@@ -12529,8 +12531,11 @@ WATCHLIST_SCRIPT = """
       localStorage.setItem(storageKey, JSON.stringify(merged));
       if (merged.length !== serverTokens.length || merged.some((token, index) => token !== serverTokens[index])) syncTokens(merged);
       await refreshMarketContext(merged);
-      renderAll();
     } catch (error) { /* localStorage fallback is intentional */ }
+    finally {
+      accountWatchlistHydrating = false;
+      renderAll();
+    }
   }
 
   function addToken(symbol) {
@@ -12589,7 +12594,9 @@ WATCHLIST_SCRIPT = """
     const target = document.getElementById("watchItems");
     if (!target) return;
     if (!tokens.length) {
-      target.innerHTML = `<p class="watch-empty">No pinned tokens yet. Add a symbol or seed from the current hot list.</p>`;
+      target.innerHTML = accountWatchlistHydrating
+        ? `<p class="watch-empty">Loading saved watchlist…</p>`
+        : `<p class="watch-empty">No pinned tokens yet. Add a symbol or seed from the current hot list.</p>`;
       return;
     }
     target.innerHTML = tokens.map((token) => {

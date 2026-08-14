@@ -2623,11 +2623,37 @@ def _okx_dex_leg_quote(
             "chain_id": chain,
             "token_address": contract,
             "sample_side": side,
+            "quote_notional_usd": target_notional_usd,
         }
         if bid is not None:
             result.update({"bid": bid, "bid_vwap": bid})
         if ask is not None:
             result.update({"ask": ask, "ask_vwap": ask})
+
+        # Preserve execution evidence from the same directional quote that
+        # supplies the opening price.  The broad discovery source already
+        # records these fields, but the always-on fast worker used to replace
+        # the route input with price-only data.  That made a correctly quoted
+        # DEX route appear to have unknown tolerance and MEV state minutes
+        # later.  Include explicit None/empty values so a missing provider
+        # field clears stale evidence instead of silently carrying it forward.
+        execution = buy if side == "long" else sell
+        execution = execution if isinstance(execution, dict) else {}
+        router = str(execution.get("router") or "").strip()
+        result.update(
+            {
+                # OKX tradeFee is the provider's USD-denominated cost field;
+                # estimateGasFee is raw native-chain units and must not be
+                # mislabeled as USD without a contemporaneous conversion.
+                "gas_estimate_usd": _optional_number(execution.get("trade_fee_usd")),
+                "slippage_bps": _optional_int(execution.get("slippage_bps")),
+                "price_impact_pct": _optional_number(execution.get("price_impact_pct")),
+                "quote_source": "okx_dex_quote",
+                "route_plan": [router] if router else [],
+                "mev_protection": str(execution.get("mev_protection") or "").strip() or None,
+                "transfer_time_seconds": None,
+            }
+        )
         return result
     except Exception:
         return None

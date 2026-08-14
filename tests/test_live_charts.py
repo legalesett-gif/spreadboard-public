@@ -1417,13 +1417,26 @@ def test_fast_okx_dex_leg_quotes_only_the_opening_direction(
             "out_qty": "20",
             "to_token_decimals": 9,
             "dex_buy_price_usd": "2.5",
+            "trade_fee_usd": "0.42",
+            "slippage_bps": 50,
+            "price_impact_pct": "-0.12",
+            "mev_protection": "not_enabled_quote_only",
+            "router": "Uniswap",
         }
 
     def fake_sell(**kwargs: object) -> dict:
         calls.append("sell")
         assert kwargs["token_quantity"] == Decimal("20")
         assert kwargs["token_decimals"] == 9
-        return {"status": "ok", "dex_sell_price_usd": "2.45"}
+        return {
+            "status": "ok",
+            "dex_sell_price_usd": "2.45",
+            "trade_fee_usd": "0.31",
+            "slippage_bps": 50,
+            "price_impact_pct": "-0.08",
+            "mev_protection": "not_enabled_quote_only",
+            "router": "PancakeSwap",
+        }
 
     monkeypatch.setattr(okx_quotes, "quote_usdc_to_token", fake_buy)
     monkeypatch.setattr(okx_quotes, "quote_token_to_usdc", fake_sell)
@@ -1446,6 +1459,13 @@ def test_fast_okx_dex_leg_quotes_only_the_opening_direction(
     assert long_result is not None
     assert long_result["ask"] == pytest.approx(2.5)
     assert "bid" not in long_result
+    assert long_result["gas_estimate_usd"] == pytest.approx(0.42)
+    assert long_result["slippage_bps"] == 50
+    assert long_result["price_impact_pct"] == pytest.approx(-0.12)
+    assert long_result["quote_source"] == "okx_dex_quote"
+    assert long_result["route_plan"] == ["Uniswap"]
+    assert long_result["mev_protection"] == "not_enabled_quote_only"
+    assert long_result["transfer_time_seconds"] is None
     assert calls == ["buy"]
 
     calls.clear()
@@ -1458,6 +1478,12 @@ def test_fast_okx_dex_leg_quotes_only_the_opening_direction(
     assert short_result is not None
     assert short_result["bid"] == pytest.approx(2.45)
     assert "ask" not in short_result
+    assert short_result["gas_estimate_usd"] == pytest.approx(0.31)
+    assert short_result["slippage_bps"] == 50
+    assert short_result["price_impact_pct"] == pytest.approx(-0.08)
+    assert short_result["quote_source"] == "okx_dex_quote"
+    assert short_result["route_plan"] == ["PancakeSwap"]
+    assert short_result["mev_protection"] == "not_enabled_quote_only"
     assert calls == ["sell"]
 
 
