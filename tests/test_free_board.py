@@ -471,6 +471,16 @@ def test_the_fast_quote_cycle_does_not_parse_the_snapshot_in_the_server() -> Non
     assert '_finalize_snapshot("record")' not in source
 
 
+def test_continuous_price_collectors_yield_cpu_to_member_requests() -> None:
+    """Live data stays current without letting collectors starve HTTP."""
+    import inspect
+
+    from scripts.run_spreadboard_service import BulkQuoteLoop, RefreshLoop
+
+    assert "*_live_worker_prefix()" in inspect.getsource(RefreshLoop._ensure_websocket_worker)
+    assert "*_live_worker_prefix()" in inspect.getsource(BulkQuoteLoop._sweep_once)
+
+
 def test_no_worker_output_is_buffered_in_the_server() -> None:
     """capture_output=True holds everything a child says until it exits.
 

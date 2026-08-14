@@ -23,6 +23,13 @@ www.spreadarbitrage.ink, spreadboard.178.128.126.204.sslip.io {
 	redir https://spreadarbitrage.ink{uri} permanent
 }
 
+# Keep the product canonical on .ink. These hosts begin working as soon as the
+# registrar points them at this server; until then the apex is still a parked
+# third-party page and never reaches Caddy.
+spreadarbitrage.com, www.spreadarbitrage.com {
+	redir https://spreadarbitrage.ink{uri} permanent
+}
+
 http://178.128.126.204 {
 	redir https://spreadarbitrage.ink{uri} permanent
 }

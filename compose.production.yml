@@ -70,6 +70,14 @@ services:
       # whose ceiling is 6g and which peaked at 5.1g. This is the code default
       # and still holds every warmed view resident.
       SPREADBOARD_MARKET_CACHE_ENTRIES: "14"
+      # Each structural build materialises the full live universe. Production
+      # stack traces showed two at once while the cgroup was throttled, causing
+      # intermittent page stalls and a rising memory tail. The previous
+      # complete view remains available through stale-while-revalidate.
+      SPREADBOARD_MARKET_BUILD_SLOTS: "1"
+      # Live collectors keep the strict quote cadence but yield CPU to HTTP and
+      # the one admitted structural build when the four-vCPU host is busy.
+      SPREADBOARD_LIVE_WORKER_NICE: "8"
       # One fetch_tickers per venue re-prices the full catalogue. Six bounded
       # independent venue calls give the production pass headroom inside the
       # 90-second truth boundary even while other warmers are active.
@@ -155,9 +163,11 @@ services:
     mem_limit: 6g
     # The current Droplet has four vCPUs. The former 1.8 cap was inherited from
     # the two-vCPU host and became the measured bottleneck in the 100-client
-    # acceptance probe. Leave 0.8 vCPU for Caddy and the host while allowing the
-    # market workers and HTTP threads to use the capacity already paid for.
-    cpus: 3.2
+    # acceptance probe. Caddy and accounting are separately capped; 3.2 left
+    # paid-for capacity idle while this cgroup accumulated CPU throttling and
+    # delayed pages. 3.6 preserves host headroom while allowing prioritized
+    # HTTP work to run without weakening market-data cadence.
+    cpus: 3.6
     logging:
       driver: json-file
       options:

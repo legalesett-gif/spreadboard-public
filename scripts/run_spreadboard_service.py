@@ -123,6 +123,7 @@ class RefreshLoop:
             return
         self.websocket_process = subprocess.Popen(
             [
+                *_live_worker_prefix(),
                 sys.executable,
                 str(ROOT / "scripts/websocket_book_worker.py"),
             ],
@@ -652,6 +653,23 @@ def _low_priority_prefix() -> list[str]:
     return prefix
 
 
+def _live_worker_prefix() -> list[str]:
+    """Modestly deprioritise continuous collectors behind member requests.
+
+    Discovery, rankings and funding use nice 19 because they can finish later.
+    WebSocket and bulk-price collectors have a strict freshness budget, so
+    they use a smaller configurable value. A page request or structural cache
+    build therefore wins a saturated CPU slice without disabling collectors.
+    """
+    if not shutil.which("nice"):
+        return []
+    try:
+        value = int(os.environ.get("SPREADBOARD_LIVE_WORKER_NICE", "8"))
+    except ValueError:
+        value = 8
+    return ["nice", "-n", str(max(0, min(19, value)))]
+
+
 class BulkQuoteLoop(threading.Thread):
     """Re-price the whole board from one bulk call per venue.
 
@@ -694,9 +712,11 @@ class BulkQuoteLoop(threading.Thread):
         completed = _run_worker(
             [
                 # Current prices are the board's truth boundary. Funding,
-                # catalogue and ranking workers remain low-priority, but
-                # deprioritising this process made a 43-second isolated pass
-                # take 85 seconds under production contention.
+                # catalogue and ranking workers remain lowest-priority. Give
+                # this continuous collector a modest background priority too:
+                # it retains the measured 90-second freshness budget while
+                # HTTP is protected from a collector using a whole core.
+                *_live_worker_prefix(),
                 sys.executable,
                 str(Path(__file__).with_name("bulk_quote_worker.py")),
                 "--budget-seconds",

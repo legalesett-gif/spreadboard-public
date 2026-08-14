@@ -133,6 +133,16 @@ def test_the_limit_is_configurable_and_at_least_one() -> None:
     assert server._MARKET_BUILD_SLOTS._initial_value >= 1
 
 
+def test_production_serialises_full_market_view_builds() -> None:
+    """Stale views remain available, so parallel full builds only add stalls."""
+    import re
+
+    compose = (Path(__file__).resolve().parents[1] / "compose.production.yml").read_text()
+    match = re.search(r'SPREADBOARD_MARKET_BUILD_SLOTS:\s*"(\d+)"', compose)
+    assert match is not None
+    assert int(match.group(1)) == 1
+
+
 def test_admission_control_fails_fast() -> None:
     """It must not add a second long wait on top of the in-flight gate.
 

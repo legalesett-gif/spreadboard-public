@@ -108,7 +108,7 @@ _MARKET_CACHE_INFLIGHT: dict[tuple[Any, ...], threading.Event] = {}
 #: immediately if it has one, so the wait is invisible on any view served
 #: before.
 _MARKET_BUILD_SLOTS = threading.BoundedSemaphore(
-    max(1, int(os.environ.get("SPREADBOARD_MARKET_BUILD_SLOTS", "2")))
+    max(1, int(os.environ.get("SPREADBOARD_MARKET_BUILD_SLOTS", "1")))
 )
 _CHART_SAMPLE_LOCK = threading.Lock()
 _CHART_SAMPLE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}

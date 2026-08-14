@@ -61,7 +61,9 @@ async function signIn(page) {
       waitUntil: "domcontentloaded",
       timeout: 30_000,
     });
-    return response?.ok() || false;
+    if (!response?.ok()) return false;
+    const payload = await response.json().catch(() => null);
+    return Boolean(payload?.ok && payload?.user?.subscription_active);
   }
   const email = process.env.SPREADBOARD_AUDIT_EMAIL || "";
   const password = process.env.SPREADBOARD_AUDIT_PASSWORD || "";
@@ -73,7 +75,13 @@ async function signIn(page) {
     page.waitForURL(url => !url.pathname.endsWith("/login"), { timeout: 30_000 }),
     page.locator('button[type="submit"]').click(),
   ]);
-  return true;
+  const response = await page.goto(`${productionBase}/api/session`, {
+    waitUntil: "domcontentloaded",
+    timeout: 30_000,
+  });
+  if (!response?.ok()) return false;
+  const payload = await response.json().catch(() => null);
+  return Boolean(payload?.ok && payload?.user?.subscription_active);
 }
 
 async function exerciseMemberState(page, name) {
@@ -191,12 +199,38 @@ async function main() {
             ...memberPages.filter(([name]) => !requestedPages.size || requestedPages.has(name)),
           ];
       let signedIn = false;
+      let signInError = null;
       for (const [name, url] of pages) {
         if (name === "__sign_in__") {
-          signedIn = await signIn(page);
+          try {
+            signedIn = await signIn(page);
+            if (!signedIn) signInError = "AuthenticationError:active subscription required";
+          } catch (error) {
+            signInError = `${error.name}:${error.message}`;
+          }
           continue;
         }
-        if (memberPages.some(([memberName]) => memberName === name) && !signedIn) continue;
+        if (memberPages.some(([memberName]) => memberName === name) && !signedIn) {
+          results.push({
+            viewport: viewportName,
+            name,
+            url,
+            finalUrl: page.url(),
+            status: null,
+            elapsedMs: 0,
+            navigationError: signInError || "AuthenticationError:not signed in",
+            browserErrors: [],
+            interactiveState: null,
+            screenshot: null,
+            title: "",
+            h1: "",
+            bodyChars: 0,
+            invalidText: [],
+            bodyOverflowPx: 0,
+            unexpectedRedirect: false,
+          });
+          continue;
+        }
         errors.length = 0;
         const started = Date.now();
         let response = null;
@@ -221,17 +255,23 @@ async function main() {
         }).catch(() => ({ title: "", h1: "", bodyChars: 0, invalidText: [], bodyOverflowPx: 0 }));
         const screenshot = path.join(outputDir, `${viewportName}-${name}.png`);
         await page.screenshot({ path: screenshot, fullPage: true });
+        const expectedUrl = new URL(url);
+        const finalUrl = new URL(page.url());
+        const unexpectedRedirect = mode !== "reference" && (
+          finalUrl.origin !== expectedUrl.origin || finalUrl.pathname !== expectedUrl.pathname
+        );
         results.push({
           viewport: viewportName,
           name,
           url,
-          finalUrl: page.url(),
+          finalUrl: finalUrl.toString(),
           status: response?.status() || null,
           elapsedMs: Date.now() - started,
           navigationError,
           browserErrors: [...errors],
           interactiveState,
           screenshot,
+          unexpectedRedirect,
           ...audit,
         });
       }
@@ -246,7 +286,8 @@ async function main() {
     results,
     failures: results.filter(result =>
       !result.status || result.status >= 400 || result.navigationError ||
-      result.browserErrors.length || result.invalidText.length || result.bodyOverflowPx > 2
+      result.unexpectedRedirect || result.browserErrors.length ||
+      result.invalidText.length || result.bodyOverflowPx > 2
     ),
   };
   fs.writeFileSync(path.join(outputDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`);

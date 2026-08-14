@@ -545,6 +545,14 @@ def test_price_worker_invalidates_grouped_market_payloads() -> None:
     assert server._MARKET_STALE_CACHE == {("test",): (0.0, {"old": True})}
 
 
+def test_visual_audit_rejects_entitlement_redirects() -> None:
+    source = (Path(__file__).resolve().parents[1] / "scripts/playwright_visual_audit.js").read_text()
+
+    assert "payload?.user?.subscription_active" in source
+    assert "unexpectedRedirect" in source
+    assert "finalUrl.pathname !== expectedUrl.pathname" in source
+
+
 def test_combined_quote_budget_covers_cex_catalog_and_both_dex_lanes() -> None:
     compose = (Path(__file__).resolve().parents[1] / "compose.production.yml").read_text()
     routes = int(re.search(r'SPREADBOARD_FAST_QUOTE_ROUTES:\s*"(\d+)"', compose).group(1))
