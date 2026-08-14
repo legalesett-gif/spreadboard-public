@@ -10,18 +10,19 @@ deterministic fallback.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import math
 import sqlite3
+from pathlib import Path
 from typing import Any
 
-from . import research_calibration
-
+from . import market_core_backfill, research_calibration
 
 MIN_OUTCOMES = 5_000
 MIN_ROUTES = 100
 MIN_SPAN_DAYS = 30.0
 MIN_COST_COMPLETE = 0.80
 MIN_CLASS_SHARE = 0.10
+SPLIT_EMBARGO_US = 24 * 3_600_000_000
 
 
 def assess(
@@ -74,10 +75,7 @@ def assess(
         else 0.0
     )
     cost_complete = (
-        sum(
-            str(row["cost_status"]) in {"known", "observed_route_median"}
-            for row in outcomes
-        )
+        sum(str(row["cost_status"]) in {"known", "observed_route_median"} for row in outcomes)
         / len(outcomes)
         if outcomes
         else 0.0
@@ -102,20 +100,40 @@ def assess(
             "selected": selected_method or None,
             "available": available_methods,
         },
-        "outcomes": {"passed": len(outcomes) >= MIN_OUTCOMES, "actual": len(outcomes), "required": MIN_OUTCOMES},
+        "outcomes": {
+            "passed": len(outcomes) >= MIN_OUTCOMES,
+            "actual": len(outcomes),
+            "required": MIN_OUTCOMES,
+        },
         "routes": {"passed": routes >= MIN_ROUTES, "actual": routes, "required": MIN_ROUTES},
-        "span_days": {"passed": span_days >= MIN_SPAN_DAYS, "actual": round(span_days, 2), "required": MIN_SPAN_DAYS},
-        "cost_complete_fraction": {"passed": cost_complete >= MIN_COST_COMPLETE, "actual": round(cost_complete, 4), "required": MIN_COST_COMPLETE},
-        "funding_class_balance": {"passed": funding_balance >= MIN_CLASS_SHARE, "actual": round(funding_balance, 4), "required": MIN_CLASS_SHARE},
-        "spread_class_balance": {"passed": spread_balance >= MIN_CLASS_SHARE, "actual": round(spread_balance, 4), "required": MIN_CLASS_SHARE},
+        "span_days": {
+            "passed": span_days >= MIN_SPAN_DAYS,
+            "actual": round(span_days, 2),
+            "required": MIN_SPAN_DAYS,
+        },
+        "cost_complete_fraction": {
+            "passed": cost_complete >= MIN_COST_COMPLETE,
+            "actual": round(cost_complete, 4),
+            "required": MIN_COST_COMPLETE,
+        },
+        "funding_class_balance": {
+            "passed": funding_balance >= MIN_CLASS_SHARE,
+            "actual": round(funding_balance, 4),
+            "required": MIN_CLASS_SHARE,
+        },
+        "spread_class_balance": {
+            "passed": spread_balance >= MIN_CLASS_SHARE,
+            "actual": round(spread_balance, 4),
+            "required": MIN_CLASS_SHARE,
+        },
         "feature_leakage_scan": {"passed": not leakage_hits, "hits": leakage_hits[:20]},
     }
 
     baselines = _time_split_baselines(outcomes)
     candidate = _candidate_gates(candidate_metrics, baselines)
     data_ready = all(item["passed"] for item in data_gates.values())
-    activation_allowed = data_ready and baselines["valid"] and all(
-        item["passed"] for item in candidate.values()
+    activation_allowed = (
+        data_ready and baselines["valid"] and all(item["passed"] for item in candidate.values())
     )
     return {
         "mode": "shadow_only",
@@ -124,7 +142,9 @@ def assess(
         "data_ready": data_ready,
         "selected_method": selected_method or None,
         "available_method_versions": available_methods,
-        "excluded_observations_from_other_versions": sum(available_methods.values()) - len(observations),
+        "excluded_observations_from_other_versions": sum(available_methods.values())
+        - len(observations),
+        "historical_market_core": market_core_backfill.status(path),
         "data_gates": data_gates,
         "time_split": baselines,
         "candidate_gates": candidate,
@@ -139,6 +159,7 @@ def assess(
             "LLM-generated margin or liquidation predictions",
             "random train/test splits across time",
             "activation without calibrated probabilities and deterministic fallback",
+            "historical public-market backfill as proof of exact costs, identity, or activation readiness",
         ],
     }
 
@@ -146,22 +167,58 @@ def assess(
 def _time_split_baselines(rows: list[sqlite3.Row]) -> dict[str, Any]:
     if len(rows) < 100:
         return {"valid": False, "reason": "at_least_100_labeled_24h_outcomes_required"}
-    train_end = int(len(rows) * 0.60)
-    calibration_end = int(len(rows) * 0.80)
-    train = rows[:train_end]
-    calibration = rows[train_end:calibration_end]
-    test = rows[calibration_end:]
+    timestamps = sorted({int(row["observed_hour_us"]) for row in rows})
+    if len(timestamps) < 5:
+        return {
+            "valid": False,
+            "reason": "distinct_observation_times_required_for_purged_split",
+        }
+    train_boundary = timestamps[max(1, int(len(timestamps) * 0.60))]
+    calibration_boundary = timestamps[max(2, int(len(timestamps) * 0.80))]
+    train = [row for row in rows if int(row["observed_hour_us"]) < train_boundary]
+    calibration = [
+        row
+        for row in rows
+        if train_boundary + SPLIT_EMBARGO_US <= int(row["observed_hour_us"]) < calibration_boundary
+    ]
+    test = [
+        row
+        for row in rows
+        if int(row["observed_hour_us"]) >= calibration_boundary + SPLIT_EMBARGO_US
+    ]
     funding_train = _labels(train, "funding")
+    funding_calibration = _labels(calibration, "funding")
     funding_test = _labels(test, "funding")
     spread_train = _labels(train, "spread")
+    spread_calibration = _labels(calibration, "spread")
     spread_test = _labels(test, "spread")
-    if not all((funding_train, funding_test, spread_train, spread_test)):
-        return {"valid": False, "reason": "both_targets_require_non_null_time_split_labels"}
+    if not all(
+        (
+            funding_train,
+            funding_calibration,
+            funding_test,
+            spread_train,
+            spread_calibration,
+            spread_test,
+        )
+    ):
+        return {
+            "valid": False,
+            "reason": "all_purged_splits_require_both_non_null_targets",
+        }
     funding_prevalence = sum(funding_train) / len(funding_train)
     spread_prevalence = sum(spread_train) / len(spread_train)
     return {
         "valid": True,
-        "strategy": "chronological_60_train_20_calibration_20_test",
+        "strategy": "purged_chronological_60_train_20_calibration_20_test",
+        "embargo_hours": 24,
+        "train_latest_observed_us": max(int(row["observed_hour_us"]) for row in train),
+        "calibration_earliest_observed_us": min(
+            int(row["observed_hour_us"]) for row in calibration
+        ),
+        "calibration_latest_observed_us": max(int(row["observed_hour_us"]) for row in calibration),
+        "test_earliest_observed_us": min(int(row["observed_hour_us"]) for row in test),
+        "purged": len(rows) - len(train) - len(calibration) - len(test),
         "train": len(train),
         "calibration": len(calibration),
         "test": len(test),
@@ -183,11 +240,24 @@ def _candidate_gates(metrics: dict[str, Any] | None, baselines: dict[str, Any]) 
     spread_brier = _float(metrics.get("spread_brier"))
     return {
         "candidate_present": {"passed": True},
-        "beats_funding_baseline": {"passed": _beats(funding_brier, funding_baseline), "actual": funding_brier},
-        "beats_spread_baseline": {"passed": _beats(spread_brier, spread_baseline), "actual": spread_brier},
+        "beats_funding_baseline": {
+            "passed": _beats(funding_brier, funding_baseline),
+            "actual": funding_brier,
+        },
+        "beats_spread_baseline": {
+            "passed": _beats(spread_brier, spread_baseline),
+            "actual": spread_brier,
+        },
         "funding_calibration_ece": {"passed": _at_most(metrics.get("funding_ece"), 0.05)},
         "spread_calibration_ece": {"passed": _at_most(metrics.get("spread_ece"), 0.05)},
+        "walk_forward_folds": {"passed": int(_float(metrics.get("walk_forward_folds")) or 0) >= 3},
+        "purged_time_splits": {"passed": metrics.get("purged_time_splits") is True},
+        "probability_calibration": {
+            "passed": str(metrics.get("calibration_method") or "").casefold()
+            in {"isotonic", "platt", "beta"}
+        },
         "drift_psi": {"passed": _at_most(metrics.get("drift_psi_max"), 0.20)},
+        "drift_monitor": {"passed": metrics.get("drift_monitor_configured") is True},
         "latency": {"passed": _at_most(metrics.get("p95_inference_ms"), 100.0)},
         "deterministic_fallback": {"passed": metrics.get("fallback_tested") is True},
         "shadow_period": {"passed": int(_float(metrics.get("shadow_days")) or 0) >= 14},
@@ -196,8 +266,16 @@ def _candidate_gates(metrics: dict[str, Any] | None, baselines: dict[str, Any]) 
 
 def _labels(rows: list[sqlite3.Row], target: str) -> list[int]:
     if target == "funding":
-        return [int(float(row["funding_positive_fraction"]) >= 0.999) for row in rows if row["funding_positive_fraction"] is not None]
-    return [int(float(row["convergence_capture_pct"]) > 0) for row in rows if row["convergence_capture_pct"] is not None]
+        return [
+            int(float(row["funding_positive_fraction"]) >= 0.999)
+            for row in rows
+            if row["funding_positive_fraction"] is not None
+        ]
+    return [
+        int(float(row["convergence_capture_pct"]) > 0)
+        for row in rows
+        if row["convergence_capture_pct"] is not None
+    ]
 
 
 def _minority_share(values: list[bool]) -> float:
@@ -210,7 +288,7 @@ def _minority_share(values: list[bool]) -> float:
 def _leakage_hits(rows: list[sqlite3.Row]) -> list[str]:
     forbidden = ("future", "outcome", "label", "end_basis", "convergence_capture", "labeled_at")
     hits: set[str] = set()
-    for row in rows[:10_000]:
+    for row in rows:
         try:
             payload = json.loads(str(row["feature_json"]))
         except (TypeError, ValueError, json.JSONDecodeError):
@@ -244,7 +322,7 @@ def _float(value: Any) -> float | None:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number == number else None
+    return number if math.isfinite(number) else None
 
 
 def _empty(reason: str) -> dict[str, Any]:

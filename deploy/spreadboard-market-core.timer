@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily SpreadBoard public market-core backfill
+
+[Timer]
+OnCalendar=*-*-* 03:40:00 UTC
+RandomizedDelaySec=20m
+Persistent=true
+Unit=spreadboard-market-core.service
+
+[Install]
+WantedBy=timers.target

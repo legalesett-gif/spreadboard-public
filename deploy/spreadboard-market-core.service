@@ -1,0 +1,25 @@
+[Unit]
+Description=SpreadBoard leakage-safe public market-core backfill
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/spreadboard/app
+Environment=PYTHONPATH=/opt/spreadboard/app
+Environment=SPREADBOARD_DATA_DIR=/opt/spreadboard/runtime
+ExecStart=/usr/bin/python3 /opt/spreadboard/app/scripts/backfill_market_core.py --max-days 3
+Nice=10
+IOSchedulingClass=idle
+IOSchedulingPriority=7
+TimeoutStartSec=45m
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateNetwork=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/spreadboard/runtime
+InaccessiblePaths=/opt/spreadboard/secrets
+CapabilityBoundingSet=
+LockPersonality=true
+RestrictSUIDSGID=true
