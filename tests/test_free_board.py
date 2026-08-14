@@ -284,6 +284,18 @@ def test_status_page_does_not_call_an_unbuilt_market_cache_zero_rows() -> None:
     assert "0 current rows" not in page
 
 
+def test_status_page_handler_includes_subscription_lifecycle_health() -> None:
+    import inspect
+
+    source = inspect.getsource(server.SpreadBoardHandler.do_GET)
+    status_branch = source.split('parsed.path == "/status"', 1)[1].split(
+        'parsed.path == "/pricing"', 1
+    )[0]
+
+    assert "self.server.position_alert_worker" in status_branch
+    assert "self.server.subscription_lifecycle_worker" in status_branch
+
+
 def test_warming_yields_between_builds_so_the_server_can_answer() -> None:
     """The warm holds the GIL; without a yield the site is unreachable, not slow."""
     import inspect

@@ -365,6 +365,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                             self.server.board_path,
                             self.server.config,
                             self.server.position_alert_worker,
+                            self.server.subscription_lifecycle_worker,
                         )
                     )
                 )
