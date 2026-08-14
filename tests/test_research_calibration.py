@@ -180,3 +180,109 @@ def test_missing_history_is_backed_off_instead_of_starving_later_routes(tmp_path
 
     assert blocked == {"attempted": 2, "labeled": 0, "insufficient_history": 2}
     assert progressed["labeled"] == 2
+
+
+def test_shadow_followup_keeps_dropped_leader_and_records_one_exact_dex_point_per_hour(
+    tmp_path,
+) -> None:
+    hour = int(time.time() // 3600 * 3600)
+    observed = hour + 60
+    calibration_db = tmp_path / "calibration.sqlite3"
+    history_db = tmp_path / "history.sqlite3"
+    route = {
+        **_route(observed * 1_000_000, 1.2, 0.4),
+        "token": "DEXCAL",
+        "route_key": "DEXCAL|OKX DEX 56|DEX|Bybit|Futures",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "DEX",
+        "route_kind": "DEX-FUTURES",
+        "dex_chain": "56",
+        "dex_contract": "0xabc",
+        "dex_quote_source": "okx_dex_quote",
+        "dex_price_impact_pct": -0.02,
+        "dex_gas_estimate_usd": 0.01,
+        "dex_mev_protection": "not_enabled_quote_only",
+        "deliverable": True,
+    }
+    research_calibration.capture_routes(
+        [route],
+        now=observed,
+        db_path=calibration_db,
+        history_db_path=history_db,
+    )
+
+    keys = research_calibration.shadow_followup_route_keys(
+        [], now=observed + 3600, db_path=calibration_db
+    )
+    first = market_history.record_research_routes_hourly(
+        [route], route_keys=keys, now=observed, db_path=history_db
+    )
+    later_same_hour = {**route, "quote_ts_us": (observed + 120) * 1_000_000}
+    duplicate = market_history.record_research_routes_hourly(
+        [later_same_hour], route_keys=keys, now=observed + 120, db_path=history_db
+    )
+    point = market_history.load_history(route_key=route["route_key"], db_path=history_db)[0]
+
+    assert route["route_key"] in keys
+    assert first["inserted"] == 1
+    assert duplicate["inserted"] == 0
+    assert duplicate["already_recorded"] == 1
+    assert point["dex_chain"] == "56"
+    assert point["dex_contract"] == "0xabc"
+    assert point["dex_quote_source"] == "okx_dex_quote"
+    assert point["deliverable"] == 1
+    assert route["route_key"] not in research_calibration.shadow_followup_route_keys(
+        [], now=observed + 27 * 3600, db_path=calibration_db
+    )
+
+
+def test_dex_outcome_uses_only_the_frozen_chain_and_contract(tmp_path) -> None:
+    now = time.time()
+    start = int(((now - 25 * 3600) // 3600) * 3600 + 60)
+    calibration_db = tmp_path / "calibration.sqlite3"
+    history_db = tmp_path / "history.sqlite3"
+    route = {
+        **_route(start * 1_000_000, 2.0, 0.4),
+        "token": "DEXCAL",
+        "route_key": "DEXCAL|OKX DEX 56|DEX|Bybit|Futures",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "DEX",
+        "route_kind": "DEX-FUTURES",
+        "dex_chain": "56",
+        "dex_contract": "0xcorrect",
+    }
+    research_calibration.capture_routes(
+        [route], now=start, db_path=calibration_db, history_db_path=history_db
+    )
+    for horizon in (8, 24):
+        target = start + horizon * 3600
+        wrong = {
+            **route,
+            "quote_ts_us": target * 1_000_000,
+            "depth_weighted_spread_pct": 99.0,
+            "dex_contract": "0xwrong",
+        }
+        correct = {
+            **route,
+            "quote_ts_us": (target + 60) * 1_000_000,
+            "depth_weighted_spread_pct": 1.0,
+        }
+        market_history.record_route(wrong, db_path=history_db)
+        market_history.record_route(correct, db_path=history_db)
+
+    labeled = research_calibration.label_matured(
+        now=now, db_path=calibration_db, history_db_path=history_db
+    )
+    connection = research_calibration._connect(calibration_db)
+    try:
+        outcomes = connection.execute(
+            "SELECT horizon_hours, end_basis_pct FROM score_outcomes ORDER BY horizon_hours"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert labeled["labeled"] == 2
+    assert [(row["horizon_hours"], row["end_basis_pct"]) for row in outcomes] == [
+        (8, 1.0),
+        (24, 1.0),
+    ]

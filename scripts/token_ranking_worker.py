@@ -6,9 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import sqlite3
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 for import_path in (ROOT / "src", ROOT):
@@ -16,7 +16,14 @@ for import_path in (ROOT / "src", ROOT):
         sys.path.remove(str(import_path))
     sys.path.insert(0, str(import_path))
 
-from spreadboard import accounts, api_spreads, board, research_calibration, token_rankings  # noqa: E402
+from spreadboard import (  # noqa: E402
+    accounts,
+    api_spreads,
+    board,
+    market_history,
+    research_calibration,
+    token_rankings,
+)
 
 
 def main() -> int:
@@ -55,6 +62,11 @@ def main() -> int:
     except (OSError, ValueError, sqlite3.Error) as exc:
         account_evidence = {}
         account_evidence_status = f"unavailable:{type(exc).__name__}"
+    followup_keys = research_calibration.shadow_followup_route_keys(routes)
+    followup_history = market_history.record_research_routes_hourly(
+        routes,
+        route_keys=followup_keys,
+    )
     calibration_capture = research_calibration.capture_routes(
         routes, account_evidence=account_evidence
     )
@@ -71,6 +83,9 @@ def main() -> int:
                 "calibration_cost_evidenced": calibration_capture["cost_evidenced"],
                 "calibration_transfer_evidenced": calibration_capture["transfer_evidenced"],
                 "account_evidence_status": account_evidence_status,
+                "research_history_wanted": followup_history["wanted"],
+                "research_history_fresh": followup_history["fresh_candidates"],
+                "research_history_inserted": followup_history["inserted"],
                 "calibration_attempted": calibration_labels["attempted"],
                 "calibration_labeled": calibration_labels["labeled"],
             },

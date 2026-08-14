@@ -7,19 +7,21 @@ prevents look-ahead leakage and makes later walk-forward validation possible.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
 import os
-from pathlib import Path
 import sqlite3
 import time
-from typing import Any, Iterable
+from collections.abc import Iterable
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_DB_PATH = RUNTIME_DIR / "spreadboard_research_calibration.sqlite3"
 DEFAULT_HISTORY_DB_PATH = RUNTIME_DIR / "spreadboard_market_history.sqlite3"
 HORIZONS = (8, 24)
+OUTCOME_TARGET_TOLERANCE_US = 90 * 60 * 1_000_000
 
 
 def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
@@ -92,22 +94,7 @@ def capture_routes(
 
     moment = time.time() if now is None else float(now)
     hour_us = int(moment // 3600 * 3600 * 1_000_000)
-    unique: dict[str, dict[str, Any]] = {}
-    for route in routes:
-        if not isinstance(route, dict):
-            continue
-        key = str(route.get("route_key") or "")
-        if key:
-            unique[key] = route
-    ranked = sorted(
-        unique.values(),
-        key=lambda row: max(
-            abs(_number(row.get("funding_24h_pct")) or 0.0),
-            abs(_number(row.get("funding_projected_24h_pct")) or 0.0),
-            abs(_number(row.get("executable_spread_pct")) or 0.0),
-        ),
-        reverse=True,
-    )[: max(1, int(limit))]
+    ranked = ranked_capture_routes(routes, limit=limit)
     initialize(db_path)
     connection = _connect(db_path)
     inserted = 0
@@ -189,6 +176,65 @@ def capture_routes(
         "cost_evidenced": cost_evidenced,
         "transfer_evidenced": transfer_evidenced,
     }
+
+
+def ranked_capture_routes(
+    routes: Iterable[dict[str, Any]], *, limit: int = 60
+) -> list[dict[str, Any]]:
+    """Return the exact bounded candidate set frozen by ``capture_routes``."""
+
+    unique: dict[str, dict[str, Any]] = {}
+    for route in routes:
+        if not isinstance(route, dict):
+            continue
+        key = str(route.get("route_key") or "")
+        if key:
+            unique[key] = route
+    return sorted(
+        unique.values(),
+        key=lambda row: max(
+            abs(_number(row.get("funding_24h_pct")) or 0.0),
+            abs(_number(row.get("funding_projected_24h_pct")) or 0.0),
+            abs(_number(row.get("executable_spread_pct")) or 0.0),
+        ),
+        reverse=True,
+    )[: max(1, int(limit))]
+
+
+def shadow_followup_route_keys(
+    routes: Iterable[dict[str, Any]],
+    *,
+    now: float | None = None,
+    limit: int = 60,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> set[str]:
+    """Current leaders plus routes whose 8h/24h outcomes are still pending."""
+
+    moment_us = int((time.time() if now is None else float(now)) * 1_000_000)
+    keys = {
+        str(route.get("route_key") or "")
+        for route in ranked_capture_routes(routes, limit=limit)
+        if route.get("route_key")
+    }
+    path = Path(db_path)
+    if not path.exists():
+        return keys
+    initialize(path)
+    connection = _connect(path)
+    try:
+        lower_bound = moment_us - max(HORIZONS) * 3_600_000_000 - OUTCOME_TARGET_TOLERANCE_US
+        keys.update(
+            str(row[0])
+            for row in connection.execute(
+                """SELECT DISTINCT route_key FROM score_observations
+                   WHERE observed_hour_us >= ? AND observed_hour_us <= ?""",
+                (lower_bound, moment_us),
+            )
+            if row[0]
+        )
+    finally:
+        connection.close()
+    return keys
 
 
 def _route_with_account_evidence(
@@ -283,11 +329,16 @@ def label_matured(
             horizon = int(observation["horizon_hours"])
             target = int(observation["observed_hour_us"]) + horizon * 3600 * 1_000_000
             if observation_id not in history_cache:
-                history_cache[observation_id] = market_history.load_history(
+                loaded = market_history.load_history(
                     route_key=str(observation["route_key"]),
                     since_us=int(observation["observed_hour_us"]),
                     max_points=2_000,
                     db_path=history_db_path,
+                )
+                history_cache[observation_id] = _identity_matched_history(
+                    loaded,
+                    route_key=str(observation["route_key"]),
+                    feature_json=str(observation["feature_json"] or ""),
                 )
             outcome = _outcome(
                 history_cache[observation_id],
@@ -297,7 +348,12 @@ def label_matured(
             if outcome is None:
                 insufficient += 1
                 attempts = int(observation["label_attempt_count"] or 0) + 1
-                retry_seconds = min(24 * 3600, 15 * 60 * (2 ** min(7, attempts - 1)))
+                target_window_closed = now_us > target + OUTCOME_TARGET_TOLERANCE_US
+                retry_seconds = (
+                    10 * 365 * 24 * 3600
+                    if target_window_closed
+                    else min(24 * 3600, 15 * 60 * (2 ** min(7, attempts - 1)))
+                )
                 connection.execute(
                     """INSERT INTO score_label_attempts (
                            observation_id, horizon_hours, attempt_count,
@@ -314,7 +370,11 @@ def label_matured(
                         attempts,
                         now_us,
                         now_us + retry_seconds * 1_000_000,
-                        "history_missing_or_target_gap",
+                        (
+                            "target_window_elapsed_without_exact_history"
+                            if target_window_closed
+                            else "history_missing_or_target_gap"
+                        ),
                     ),
                 )
                 continue
@@ -374,11 +434,14 @@ def status(db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
 
 
 def _outcome(history: list[dict[str, Any]], *, entry_basis: float | None, target_us: int) -> dict[str, Any] | None:
-    candidates = [row for row in history if _timestamp(row) <= target_us + 90 * 60 * 1_000_000]
+    candidates = [
+        row for row in history
+        if _timestamp(row) <= target_us + OUTCOME_TARGET_TOLERANCE_US
+    ]
     if entry_basis is None or not candidates:
         return None
     end = min(candidates, key=lambda row: abs(_timestamp(row) - target_us))
-    if abs(_timestamp(end) - target_us) > 90 * 60 * 1_000_000:
+    if abs(_timestamp(end) - target_us) > OUTCOME_TARGET_TOLERANCE_US:
         return None
     in_window = [row for row in candidates if _timestamp(row) >= target_us - 24 * 3600 * 1_000_000]
     bases = [value for row in in_window if (value := _basis(row)) is not None]
@@ -396,6 +459,32 @@ def _outcome(history: list[dict[str, Any]], *, entry_basis: float | None, target
         "funding_positive_fraction": sum(value > 0 for value in funding) / len(funding) if funding else None,
         "sample_count": len(in_window),
     }
+
+
+def _identity_matched_history(
+    history: list[dict[str, Any]], *, route_key: str, feature_json: str
+) -> list[dict[str, Any]]:
+    """Fail closed when a DEX outcome is not the frozen chain/contract."""
+
+    try:
+        features = json.loads(feature_json)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        features = {}
+    dex = features.get("dex_evidence") if isinstance(features, dict) else {}
+    dex = dex if isinstance(dex, dict) else {}
+    is_dex = "DEX" in str(route_key).upper() or bool(dex.get("chain") or dex.get("contract"))
+    if not is_dex:
+        return history
+    expected_chain = str(dex.get("chain") or "").strip().casefold()
+    expected_contract = str(dex.get("contract") or "").strip().casefold()
+    if not expected_chain or not expected_contract:
+        return []
+    return [
+        row
+        for row in history
+        if str(row.get("dex_chain") or "").strip().casefold() == expected_chain
+        and str(row.get("dex_contract") or "").strip().casefold() == expected_contract
+    ]
 
 
 def _connect(path: Path | str) -> sqlite3.Connection:

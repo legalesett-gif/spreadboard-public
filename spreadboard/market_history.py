@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
 import json
 import os
 import sqlite3
 import threading
 import time
+from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,12 +19,20 @@ _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY: set[str] = set()
 
 
+def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
+    """Apply additive history schema changes before read-only consumers start."""
+
+    connection = _connect(db_path)
+    connection.close()
+
+
 def record_snapshot(
     snapshot: dict[str, Any],
     *,
     db_path: Path | str = DEFAULT_DB_PATH,
     retention_days: int = 30,
     sample_source: str = "board_snapshot",
+    prune: bool = True,
 ) -> int:
     rows = [
         row
@@ -74,8 +82,11 @@ def record_snapshot(
                     sample_source, target_notional_usd,
                     long_current_funding_pct, short_current_funding_pct,
                     long_funding_interval_hours, short_funding_interval_hours,
-                    long_next_funding_ts_us, short_next_funding_ts_us
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    long_next_funding_ts_us, short_next_funding_ts_us,
+                    dex_chain, dex_contract, dex_quote_source,
+                    dex_price_impact_pct, dex_gas_estimate_usd,
+                    dex_mev_protection, dex_transfer_time_seconds, deliverable
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     route_key,
@@ -109,14 +120,23 @@ def record_snapshot(
                     _funding_value(row, route_inputs, funding, "short", "funding_interval_hours"),
                     _funding_int(row, route_inputs, funding, "long", "next_funding_ts_us"),
                     _funding_int(row, route_inputs, funding, "short", "next_funding_ts_us"),
+                    _text_or_none(row.get("dex_chain")),
+                    _text_or_none(row.get("dex_contract")),
+                    _text_or_none(row.get("dex_quote_source")),
+                    _float_or_none(row.get("dex_price_impact_pct")),
+                    _float_or_none(row.get("dex_gas_estimate_usd")),
+                    _text_or_none(row.get("dex_mev_protection")),
+                    _float_or_none(row.get("dex_transfer_time_seconds")),
+                    _bool_int(row.get("deliverable")),
                 ),
             )
             inserted += int(connection.execute("SELECT changes()").fetchone()[0] > 0)
-        cutoff = int(
-            (datetime.now(tz=timezone.utc) - timedelta(days=max(1, retention_days))).timestamp()
-            * 1_000_000
-        )
-        connection.execute("DELETE FROM route_points WHERE quote_ts_us < ?", (cutoff,))
+        if prune:
+            cutoff = int(
+                (datetime.now(tz=timezone.utc) - timedelta(days=max(1, retention_days))).timestamp()
+                * 1_000_000
+            )
+            connection.execute("DELETE FROM route_points WHERE quote_ts_us < ?", (cutoff,))
         connection.commit()
     finally:
         connection.close()
@@ -134,6 +154,75 @@ def record_route(
         db_path=db_path,
         sample_source=sample_source,
     )
+
+
+def record_research_routes_hourly(
+    rows: Sequence[dict[str, Any]],
+    *,
+    route_keys: set[str],
+    now: float | None = None,
+    db_path: Path | str = DEFAULT_DB_PATH,
+    max_age_seconds: float = 600.0,
+) -> dict[str, int]:
+    """Persist one fresh exact-route point per hour for shadow outcomes.
+
+    The ranking worker already holds the current, filtered route universe.  A
+    bounded subset is followed after capture so an opportunity remains
+    measurable when it drops out of the leaders.  The actual quote timestamp
+    is retained; the hourly guard only prevents a two-minute worker from
+    growing the history database needlessly.
+    """
+
+    moment_us = int((time.time() if now is None else float(now)) * 1_000_000)
+    wanted = {str(key) for key in route_keys if str(key)}
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = route_key_for(row)
+        quote_ts_us = _int_or_none(row.get("quote_ts_us"))
+        if key not in wanted or quote_ts_us is None:
+            continue
+        age_us = moment_us - quote_ts_us
+        if age_us < -60 * 1_000_000 or age_us > max(1.0, float(max_age_seconds)) * 1_000_000:
+            continue
+        candidates.append(row)
+
+    connection = _connect(db_path)
+    selected: list[dict[str, Any]] = []
+    try:
+        for row in candidates:
+            key = route_key_for(row)
+            quote_ts_us = int(row["quote_ts_us"])
+            hour_start_us = quote_ts_us // 3_600_000_000 * 3_600_000_000
+            chain = _normalized_identity(row.get("dex_chain"))
+            contract = _normalized_identity(row.get("dex_contract"))
+            exists = connection.execute(
+                """SELECT 1 FROM route_points
+                   WHERE route_key = ?
+                     AND quote_ts_us >= ? AND quote_ts_us < ?
+                     AND LOWER(COALESCE(dex_chain, '')) = ?
+                     AND LOWER(COALESCE(dex_contract, '')) = ?
+                   LIMIT 1""",
+                (key, hour_start_us, hour_start_us + 3_600_000_000, chain, contract),
+            ).fetchone()
+            if not exists:
+                selected.append(row)
+    finally:
+        connection.close()
+
+    inserted = record_snapshot(
+        {"api_discovered_rows": selected},
+        db_path=db_path,
+        sample_source="research_shadow_followup_hourly",
+        prune=False,
+    ) if selected else 0
+    return {
+        "wanted": len(wanted),
+        "fresh_candidates": len(candidates),
+        "already_recorded": len(candidates) - len(selected),
+        "inserted": inserted,
+    }
 
 
 def load_history(
@@ -176,7 +265,10 @@ def load_history(
             sample_source, target_notional_usd,
             long_current_funding_pct, short_current_funding_pct,
             long_funding_interval_hours, short_funding_interval_hours,
-            long_next_funding_ts_us, short_next_funding_ts_us
+            long_next_funding_ts_us, short_next_funding_ts_us,
+            dex_chain, dex_contract, dex_quote_source,
+            dex_price_impact_pct, dex_gas_estimate_usd,
+            dex_mev_protection, dex_transfer_time_seconds, deliverable
     """
     limit = max(1, min(25000, int(max_points)))
     try:
@@ -331,6 +423,14 @@ def _connect(path: Path | str) -> sqlite3.Connection:
             short_funding_interval_hours REAL,
             long_next_funding_ts_us INTEGER,
             short_next_funding_ts_us INTEGER,
+            dex_chain TEXT,
+            dex_contract TEXT,
+            dex_quote_source TEXT,
+            dex_price_impact_pct REAL,
+            dex_gas_estimate_usd REAL,
+            dex_mev_protection TEXT,
+            dex_transfer_time_seconds REAL,
+            deliverable INTEGER,
             PRIMARY KEY (route_key, quote_ts_us)
             )
             """
@@ -355,6 +455,14 @@ def _connect(path: Path | str) -> sqlite3.Connection:
                 "short_funding_interval_hours": "REAL",
                 "long_next_funding_ts_us": "INTEGER",
                 "short_next_funding_ts_us": "INTEGER",
+                "dex_chain": "TEXT",
+                "dex_contract": "TEXT",
+                "dex_quote_source": "TEXT",
+                "dex_price_impact_pct": "REAL",
+                "dex_gas_estimate_usd": "REAL",
+                "dex_mev_protection": "TEXT",
+                "dex_transfer_time_seconds": "REAL",
+                "deliverable": "INTEGER",
             },
         )
         connection.execute(
@@ -388,6 +496,23 @@ def _ensure_columns(connection: sqlite3.Connection, columns: dict[str, str]) -> 
     for name, column_type in columns.items():
         if name not in existing:
             connection.execute(f"ALTER TABLE route_points ADD COLUMN {name} {column_type}")
+
+
+def _text_or_none(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _normalized_identity(value: Any) -> str:
+    return str(value or "").strip().casefold()
+
+
+def _bool_int(value: Any) -> int | None:
+    if value is True:
+        return 1
+    if value is False:
+        return 0
+    return None
 
 
 def _route_price(route_inputs: Any, side: str, *keys: str) -> float | None:

@@ -4,19 +4,18 @@
 from __future__ import annotations
 
 # ruff: noqa: E402
-
 import ctypes
 import gc
 import json
 import os
-from pathlib import Path
-import signal
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,8 +27,9 @@ for import_path in (ROOT / "src", ROOT):
 from spreadboard import (
     alerts,
     api_spreads,
-    crypto_watcher,
     board,
+    crypto_watcher,
+    market_history,
     portfolio,
     rail_watch,
     subscription_lifecycle,
@@ -499,6 +499,9 @@ def main() -> int:
     if _env_bool("SPREADBOARD_LIGHTWEIGHT_MODE"):
         interval = max(600.0, interval)
     board_path = Path(os.environ.get("SPREADBOARD_BOARD_PATH", str(board.DEFAULT_BOARD_PATH)))
+    # Read-only pages select the complete history schema. Apply additive
+    # columns before any warm thread or HTTP request can race the first writer.
+    market_history.initialize()
     _seed_public_caches()
     refresh_loop = RefreshLoop(interval)
     server = SpreadBoardServer(
