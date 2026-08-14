@@ -17268,8 +17268,10 @@ main {{ padding:22px 24px 56px; }}
   .ranking-table tr {{ padding:9px 0; border-bottom:1px solid var(--terminal-line); }}
   .ranking-table td {{ min-height:28px; display:flex; align-items:baseline; justify-content:space-between; gap:14px; padding:4px 0; border:0; text-align:right; }}
   .ranking-table td::before {{ content:attr(data-label); flex:0 0 auto; color:var(--terminal-muted); font-size:8.5px; font-weight:700; letter-spacing:.06em; text-align:left; text-transform:uppercase; }}
-  .ranking-table td[data-label="Token"] {{ display:grid; grid-template-columns:auto 1fr; justify-content:start; text-align:left; }}
+  .ranking-table td[data-label="Token"] {{ display:grid; grid-template-columns:auto auto; justify-content:start; align-items:center; text-align:left; }}
   .ranking-table td[data-label="Token"]::before {{ grid-column:1/-1; }}
+  .ranking-table td[data-label="Token"] small {{ grid-column:1/-1; }}
+  .ranking-table td[data-label="Token"] .ranking-status {{ width:max-content; }}
   .ranking-table td[data-label="Open"] {{ justify-content:flex-end; }}
   .ranking-table td[data-label="Open"]::before {{ margin-right:auto; }}
   .chart-builder-title,.selected-chart-head,.selected-chart-foot {{ gap:10px; }}
