@@ -22,6 +22,10 @@ DEFAULT_DB_PATH = RUNTIME_DIR / "spreadboard_research_calibration.sqlite3"
 DEFAULT_HISTORY_DB_PATH = RUNTIME_DIR / "spreadboard_market_history.sqlite3"
 HORIZONS = (8, 24)
 OUTCOME_TARGET_TOLERANCE_US = 90 * 60 * 1_000_000
+ML_MIN_OUTCOMES = 5_000
+ML_MIN_ROUTES = 100
+ML_MIN_SPAN_DAYS = 30.0
+ML_MIN_EXACT_COST_COVERAGE = 0.80
 
 
 def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
@@ -415,20 +419,78 @@ def status(db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
     initialize(path)
     connection = _connect(path)
     try:
-        observations = int(connection.execute("SELECT COUNT(*) FROM score_observations").fetchone()[0])
-        outcomes = int(connection.execute("SELECT COUNT(*) FROM score_outcomes").fetchone()[0])
-        routes = int(connection.execute("SELECT COUNT(DISTINCT route_key) FROM score_observations").fetchone()[0])
-        versions = [row[0] for row in connection.execute("SELECT DISTINCT method FROM score_observations ORDER BY method")]
+        versions = [
+            row[0]
+            for row in connection.execute(
+                "SELECT DISTINCT method FROM score_observations ORDER BY method"
+            )
+        ]
+        selected = connection.execute(
+            """SELECT method FROM score_observations
+               ORDER BY observed_hour_us DESC, id DESC LIMIT 1"""
+        ).fetchone()
+        selected_method = str(selected[0]) if selected is not None else None
+        totals = connection.execute(
+            """SELECT COUNT(*) observations,
+                      COUNT(DISTINCT route_key) routes,
+                      MIN(observed_hour_us) first_us,
+                      MAX(observed_hour_us) last_us,
+                      SUM(CASE WHEN cost_status = 'observed_route_median' THEN 1 ELSE 0 END)
+                          exact_cost_rows
+               FROM score_observations WHERE method = ?""",
+            (selected_method,),
+        ).fetchone()
+        observations = int(totals["observations"] or 0)
+        routes = int(totals["routes"] or 0)
+        first_us = int(totals["first_us"] or 0)
+        last_us = int(totals["last_us"] or 0)
+        exact_cost_rows = int(totals["exact_cost_rows"] or 0)
+        outcomes = int(
+            connection.execute(
+                """SELECT COUNT(*) FROM score_outcomes x
+                   JOIN score_observations o ON o.id = x.observation_id
+                   WHERE o.method = ?""",
+                (selected_method,),
+            ).fetchone()[0]
+        )
+        all_observations = int(
+            connection.execute("SELECT COUNT(*) FROM score_observations").fetchone()[0]
+        )
+        all_outcomes = int(
+            connection.execute("SELECT COUNT(*) FROM score_outcomes").fetchone()[0]
+        )
     finally:
         connection.close()
+    span_days = (last_us - first_us) / (24 * 3600 * 1_000_000) if first_us and last_us else 0.0
+    exact_cost_coverage = exact_cost_rows / observations if observations else 0.0
+    gates = {
+        "outcomes": outcomes >= ML_MIN_OUTCOMES,
+        "routes": routes >= ML_MIN_ROUTES,
+        "span_days": span_days >= ML_MIN_SPAN_DAYS,
+        "exact_cost_coverage": exact_cost_coverage >= ML_MIN_EXACT_COST_COVERAGE,
+    }
     return {
         "initialized": True,
+        "selected_method": selected_method,
         "observations": observations,
         "outcomes": outcomes,
         "routes": routes,
+        "span_days": round(span_days, 2),
+        "exact_cost_rows": exact_cost_rows,
+        "exact_cost_coverage_pct": round(exact_cost_coverage * 100.0, 2),
         "method_versions": versions,
-        "ml_ready": outcomes >= 5_000 and routes >= 100,
-        "ml_minimum_gate": {"outcomes": 5_000, "routes": 100},
+        "all_versions": {
+            "observations": all_observations,
+            "outcomes": all_outcomes,
+        },
+        "ml_ready": all(gates.values()),
+        "ml_gate_status": gates,
+        "ml_minimum_gate": {
+            "outcomes": ML_MIN_OUTCOMES,
+            "routes": ML_MIN_ROUTES,
+            "span_days": ML_MIN_SPAN_DAYS,
+            "exact_cost_coverage_pct": ML_MIN_EXACT_COST_COVERAGE * 100.0,
+        },
         "mode": "deterministic_shadow_calibration_only",
     }
 

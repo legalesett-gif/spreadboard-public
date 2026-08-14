@@ -71,6 +71,43 @@ def test_shadow_observations_are_hourly_versioned_and_labeled_without_lookahead(
     assert status["ml_ready"] is False
 
 
+def test_ml_readiness_never_pools_old_scoring_versions(tmp_path) -> None:
+    calibration_db = tmp_path / "calibration.sqlite3"
+    research_calibration.initialize(calibration_db)
+    connection = research_calibration._connect(calibration_db)
+    try:
+        for index in range(5_000):
+            method = "v4" if index < 4_999 else "v5"
+            observed = index * 3600 * 1_000_000
+            cursor = connection.execute(
+                """INSERT INTO score_observations (
+                       route_key, token, observed_hour_us, method,
+                       funding_confidence, spread_confidence, funding_regime,
+                       cost_status, feature_json, created_at
+                   ) VALUES (?, 'ONE', ?, ?, 50, 50, 'positive',
+                             'observed_route_median', '{}', 'x')""",
+                (f"route-{index % 200}", observed, method),
+            )
+            connection.execute(
+                """INSERT INTO score_outcomes (
+                       observation_id, horizon_hours, outcome_ts_us,
+                       sample_count, labeled_at
+                   ) VALUES (?, 24, ?, 2, 'x')""",
+                (cursor.lastrowid, observed + 24 * 3600 * 1_000_000),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = research_calibration.status(calibration_db)
+
+    assert result["all_versions"]["outcomes"] == 5_000
+    assert result["selected_method"] == "v5"
+    assert result["outcomes"] == 1
+    assert result["ml_ready"] is False
+    assert result["ml_gate_status"]["outcomes"] is False
+
+
 def test_opt_in_dex_cost_and_transfer_evidence_requires_exact_current_identity(tmp_path) -> None:
     now = time.time()
     calibration_db = tmp_path / "calibration.sqlite3"
