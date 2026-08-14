@@ -65,6 +65,7 @@ def test_chart_copy_names_the_two_directions_without_implying_an_exit_fill() -> 
     assert "In % · open" in html
     assert "Out % · close" in html
     assert "marked reverse direction" in html
+    assert "Open ask → bid" not in html
     assert "actual exit" not in html.lower()
 
 

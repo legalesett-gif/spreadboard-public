@@ -8263,8 +8263,8 @@ def render_selected_chart(
         <div class="chart-plot-stack">
           <section class="chart-plot-panel">
             <div class="chart-plot-title">
-              <span>Spread progression</span>
-              <strong data-chart-headline>{"Open " + fmt_pct(row.get("displayed_open_spread_pct")) if spread_current else "Current basis refreshing"}</strong>
+              <span>In / out progression</span>
+              <strong data-chart-headline>{"In % " + fmt_pct(row.get("displayed_open_spread_pct")) if spread_current else "Current basis refreshing"}</strong>
               <button type="button" data-funding-open>Funding history</button>
               <em data-chart-live-state>Connecting to exact route...</em>
             </div>
@@ -8474,9 +8474,9 @@ def render_live_spread_chart(
             priceLineVisible: true,
           }},
         );
-        chartSeries.entry = addLine(colors.matched, 'Open ask → bid', 3);
+        chartSeries.entry = addLine(colors.matched, 'In % · open', 3);
         chartSeries.matched = addLine('#4f8cff', '$50 VWAP', 1);
-        chartSeries.exit = addLine(colors.exit, 'Out top book', 2);
+        chartSeries.exit = addLine(colors.exit, 'Out % · close', 2);
         chartSeries.longFunding = addLine('#1ebf8f', 'Long funding', 2);
         chartSeries.shortFunding = addLine('#ff7a82', 'Short funding', 2);
         chartSeries.longFunding.moveToPane(1);
@@ -8584,9 +8584,9 @@ def render_live_spread_chart(
         }}
         tooltip.innerHTML = `
           <time>${{timeLabel(row.ts, true)}}</time>
-          <span>Open ask → bid<strong>${{pct(row.entry)}}</strong></span>
+          <span>In % · open<strong>${{pct(row.entry)}}</strong></span>
           <span>$50 VWAP<strong>${{pct(row.matched)}}</strong></span>
-          <span>Out top book<strong>${{pct(row.exit)}}</strong></span>
+          <span>Out % · close<strong>${{pct(row.exit)}}</strong></span>
           <span>Long funding<strong>${{pct(row.longFunding)}}</strong></span>
           <span>Short funding<strong>${{pct(row.shortFunding)}}</strong></span>`;
         tooltip.hidden = false;
@@ -8631,7 +8631,7 @@ def render_live_spread_chart(
         root.querySelector('[data-latest-exit]').textContent = pct(latest.exit);
         root.querySelector('[data-latest-long-funding]').textContent = pct(latest.longFunding);
         root.querySelector('[data-latest-short-funding]').textContent = pct(latest.shortFunding);
-        if (headline) headline.textContent = `Open ${{pct(latest.entry)}} · $50 VWAP ${{pct(latest.matched)}}`;
+        if (headline) headline.textContent = `In % ${{pct(latest.entry)}} · $50 VWAP ${{pct(latest.matched)}}`;
         for (const side of ['long', 'short']) {{
           const funding = latest[`${{side}}Funding`];
           const interval = latest[`${{side}}Interval`];

@@ -2009,8 +2009,8 @@ def test_live_chart_surface_explains_series_and_streams_exact_route() -> None:
     html = server.render_live_spread_chart(_route()["route_key"], [], "1h")
 
     assert "$50 VWAP" in html
-    assert "Open ask → bid" in html
-    assert "Out top book" in html
+    assert "In % · open" in html
+    assert "Out % · close" in html
     assert "?live=1&amp;" not in html
     assert "?live=1&wait=0&hours=" in html
     assert "gap_threshold_seconds" in html
