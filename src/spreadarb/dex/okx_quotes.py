@@ -187,6 +187,15 @@ def quote_usdc_to_token(
         "dex_buy_price_usd": str(price) if price is not None else None,
         "trade_fee_usd": quote.get("tradeFee"),
         "estimate_gas_fee": quote.get("estimateGasFee"),
+        "slippage_bps": _slippage_bps(slippage_percent),
+        "price_impact_pct": _first_present(
+            quote,
+            "priceImpactPercentage",
+            "priceImpactPercent",
+        ),
+        # A read-only quote does not use OKX's whitelisted Broadcast API, which
+        # is the only point at which MEV protection can be requested.
+        "mev_protection": "not_enabled_quote_only",
         "router": quote.get("router"),
         "raw_code": raw.get("code"),
     }
@@ -253,6 +262,13 @@ def quote_token_to_usdc(
         "dex_sell_price_usd": str(price) if price is not None else None,
         "trade_fee_usd": quote.get("tradeFee"),
         "estimate_gas_fee": quote.get("estimateGasFee"),
+        "slippage_bps": _slippage_bps(slippage_percent),
+        "price_impact_pct": _first_present(
+            quote,
+            "priceImpactPercentage",
+            "priceImpactPercent",
+        ),
+        "mev_protection": "not_enabled_quote_only",
         "router": quote.get("router"),
         "raw_code": raw.get("code"),
     }
@@ -460,6 +476,20 @@ def _quote_payload(raw: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(quote, dict):
         return {"status": "blocked", "blockers": ["okx_dex_quote_empty"], "raw": raw}
     return quote
+
+
+def _slippage_bps(value: str) -> int | None:
+    try:
+        return int(Decimal(value) * Decimal("100"))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def _first_present(payload: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in payload and payload[key] is not None:
+            return payload[key]
+    return None
 
 
 def _token_address(index: str, token_address: str) -> str:

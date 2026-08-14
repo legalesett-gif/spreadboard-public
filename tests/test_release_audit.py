@@ -830,6 +830,8 @@ def test_okx_dex_uses_usd_network_fee_not_raw_gas_units() -> None:
         return {
             "status": "ok",
             "dex_sell_price_usd": "2.49",
+            "trade_fee_usd": "0.31",
+            "price_impact_pct": "-0.08",
         }
 
     okx = SimpleNamespace(
@@ -840,6 +842,9 @@ def test_okx_dex_uses_usd_network_fee_not_raw_gas_units() -> None:
             "dex_buy_price_usd": "2.5",
             "trade_fee_usd": "0.42",
             "estimate_gas_fee": "123456",
+            "slippage_bps": 50,
+            "price_impact_pct": "-0.12",
+            "mev_protection": "not_enabled_quote_only",
             "router": "Uniswap",
         },
         quote_token_to_usdc=sell_quote,
@@ -861,8 +866,52 @@ def test_okx_dex_uses_usd_network_fee_not_raw_gas_units() -> None:
 
     assert quote is not None
     assert quote.gas_estimate_usd == 0.42
+    assert quote.ask_gas_estimate_usd == 0.42
+    assert quote.bid_gas_estimate_usd == 0.31
+    assert quote.slippage_bps == 50
+    assert quote.price_impact_pct == pytest.approx(-0.12)
+    assert quote.ask_price_impact_pct == pytest.approx(-0.12)
+    assert quote.bid_price_impact_pct == pytest.approx(-0.08)
+    assert quote.mev_protection == "not_enabled_quote_only"
     assert quote.token_address == "0x123"
     assert captured["token_decimals"] == 9
+
+    route_inputs = sources._quote_pair_notes(quote, quote)["route_inputs"]
+    assert route_inputs["long"]["gas_estimate_usd"] == pytest.approx(0.42)
+    assert route_inputs["short"]["gas_estimate_usd"] == pytest.approx(0.31)
+    assert route_inputs["long"]["price_impact_pct"] == pytest.approx(-0.12)
+    assert route_inputs["short"]["price_impact_pct"] == pytest.approx(-0.08)
+
+
+def test_okx_dex_quote_preserves_provider_impact_and_explicit_execution_limits() -> None:
+    from decimal import Decimal
+
+    from spreadarb.dex import okx_quotes
+
+    result = okx_quotes.quote_usdc_to_token(
+        chain="56",
+        token_address="0x123",
+        notional_usd=Decimal("10"),
+        credentials=okx_quotes.OkxDexCredentials("key", "secret", "passphrase"),
+        http_get=lambda _url, _headers: {
+            "code": "0",
+            "data": [
+                {
+                    "toTokenAmount": "2000000000000000000",
+                    "toToken": {"decimal": "18"},
+                    "tradeFee": "0.04",
+                    "estimateGasFee": "123456",
+                    "priceImpactPercentage": "-0.17",
+                    "router": "Uniswap",
+                }
+            ],
+        },
+    )
+
+    assert result["status"] == "ok"
+    assert result["slippage_bps"] == 50
+    assert result["price_impact_pct"] == "-0.17"
+    assert result["mev_protection"] == "not_enabled_quote_only"
 
 
 def test_okx_dex_pair_detail_recognizes_spot_leg_venue() -> None:

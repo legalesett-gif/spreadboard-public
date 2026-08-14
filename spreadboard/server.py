@@ -12621,8 +12621,9 @@ WATCHLIST_SCRIPT = """
           evidence.chain && evidence.contract ? `chain ${evidence.chain} · ${evidence.contract}` : "identity missing",
           Number.isFinite(Number(evidence.matched_size_notional_usd)) ? `$${Number(evidence.matched_size_notional_usd).toFixed(0)} matched quote` : "size missing",
           Number.isFinite(Number(evidence.price_impact_pct)) ? `impact ${Number(evidence.price_impact_pct).toFixed(3)}%` : "impact embedded/unknown",
+          Number.isFinite(Number(evidence.slippage_bps)) ? `tolerance ${Number(evidence.slippage_bps).toFixed(0)} bps` : "tolerance unknown",
           Number.isFinite(Number(evidence.gas_estimate_usd)) ? `gas $${Number(evidence.gas_estimate_usd).toFixed(2)}` : "gas missing",
-          evidence.mev_status === "provider_reported" ? `MEV ${labelText(evidence.mev_protection)}` : "MEV unknown",
+          evidence.mev_status !== "unknown" ? `MEV ${labelText(evidence.mev_protection)}` : "MEV unknown",
           transfer.status === "not_required" ? "transfer not required" : `transfer ${labelText(transfer.status || "unknown")}`,
           Number.isFinite(Number(transfer.estimated_seconds)) ? `ETA ${Number(transfer.estimated_seconds).toFixed(0)}s` : (transfer.required ? "transfer time unknown" : null)
         ].filter(Boolean);

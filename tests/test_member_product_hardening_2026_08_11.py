@@ -359,7 +359,7 @@ def test_dex_score_exposes_size_cost_and_identity_evidence() -> None:
 
     assert result["dex_evidence"]["status"] == "size_and_cost_evidenced"
     assert result["dex_evidence"]["entry_gas_pct"] == pytest.approx(0.1)
-    assert result["dex_evidence"]["mev_status"] == "provider_reported"
+    assert result["dex_evidence"]["mev_status"] == "source_explicit"
     assert result["dex_evidence"]["transfer"]["status"] == "verified"
     assert result["dex_evidence"]["transfer"]["estimated_seconds"] == 45
     assert result["route_economics"]["known_dex_entry_gas_pct"] == pytest.approx(0.1)

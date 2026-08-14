@@ -388,7 +388,16 @@ class OkxDexQuoteSource:
         ask = as_float(buy.get("dex_buy_price_usd"))
         if bid is None or ask is None:
             return None
-        network_fee_usd = as_float(buy.get("trade_fee_usd"))
+        buy_network_fee_usd = as_float(buy.get("trade_fee_usd"))
+        sell_network_fee_usd = as_float(sell.get("trade_fee_usd"))
+        buy_impact_pct = as_float(buy.get("price_impact_pct"))
+        sell_impact_pct = as_float(sell.get("price_impact_pct"))
+        evidenced_fees = [
+            value for value in (buy_network_fee_usd, sell_network_fee_usd) if value is not None
+        ]
+        evidenced_impacts = [
+            value for value in (buy_impact_pct, sell_impact_pct) if value is not None
+        ]
         router = buy.get("router")
         return MarketQuote(
             token=asset.token,
@@ -405,9 +414,18 @@ class OkxDexQuoteSource:
             decimals=decimals,
             chain_id=chain_id,
             token_address=contract,
-            gas_estimate_usd=network_fee_usd,
+            gas_estimate_usd=max(evidenced_fees) if evidenced_fees else None,
+            ask_gas_estimate_usd=buy_network_fee_usd,
+            bid_gas_estimate_usd=sell_network_fee_usd,
+            slippage_bps=_as_int(buy.get("slippage_bps")),
+            price_impact_pct=(
+                max(evidenced_impacts, key=abs) if evidenced_impacts else None
+            ),
+            ask_price_impact_pct=buy_impact_pct,
+            bid_price_impact_pct=sell_impact_pct,
             quote_notional_usd=float(context.target_notional_usd),
             route_plan=(str(router),) if router else (),
+            mev_protection=str(buy.get("mev_protection") or "").strip() or None,
         )
 
     def _quote_with_retry(
@@ -1694,8 +1712,8 @@ def _quote_pair_notes(
             "short": _quote_identity_note(short_quote),
         },
         "route_inputs": {
-            "long": _quote_route_note(long_quote),
-            "short": _quote_route_note(short_quote),
+            "long": _quote_route_note(long_quote, execution_side="buy"),
+            "short": _quote_route_note(short_quote, execution_side="sell"),
         },
     }
     funding = funding if funding is not None else _funding_pair_metrics(long_quote, short_quote)
@@ -1725,7 +1743,35 @@ def _quote_identity_note(quote: MarketQuote) -> dict[str, Any]:
     return note
 
 
-def _quote_route_note(quote: MarketQuote) -> dict[str, Any]:
+def _quote_route_note(
+    quote: MarketQuote,
+    *,
+    execution_side: str | None = None,
+) -> dict[str, Any]:
+    gas_estimate = quote.gas_estimate_usd
+    price_impact = quote.price_impact_pct
+    if execution_side == "buy":
+        gas_estimate = (
+            quote.ask_gas_estimate_usd
+            if quote.ask_gas_estimate_usd is not None
+            else gas_estimate
+        )
+        price_impact = (
+            quote.ask_price_impact_pct
+            if quote.ask_price_impact_pct is not None
+            else price_impact
+        )
+    elif execution_side == "sell":
+        gas_estimate = (
+            quote.bid_gas_estimate_usd
+            if quote.bid_gas_estimate_usd is not None
+            else gas_estimate
+        )
+        price_impact = (
+            quote.bid_price_impact_pct
+            if quote.bid_price_impact_pct is not None
+            else price_impact
+        )
     note: dict[str, Any] = {
         "source_name": quote.source_name,
         "symbol": quote.symbol,
@@ -1735,11 +1781,13 @@ def _quote_route_note(quote: MarketQuote) -> dict[str, Any]:
         "bid_vwap": quote.bid_vwap,
         "ask_vwap": quote.ask_vwap,
         "volume_24h_usd": quote.volume_24h_usd,
-        "gas_estimate_usd": quote.gas_estimate_usd,
+        "gas_estimate_usd": gas_estimate,
         "slippage_bps": quote.slippage_bps,
-        "price_impact_pct": quote.price_impact_pct,
+        "price_impact_pct": price_impact,
         "quote_notional_usd": quote.quote_notional_usd,
         "route_plan": list(quote.route_plan),
+        "mev_protection": quote.mev_protection,
+        "transfer_time_seconds": quote.transfer_time_seconds,
         # Carried so the snapshot can answer whether depth_unverified is
         # accurate. A walked ladder whose $50 probe fills at the first level
         # leaves the VWAP equal to top of book, so the numbers alone cannot

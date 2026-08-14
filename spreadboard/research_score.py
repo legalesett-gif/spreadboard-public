@@ -1124,6 +1124,7 @@ def _dex_evidence(route: dict[str, Any]) -> dict[str, Any]:
         "entry_gas_pct": _dex_entry_gas_pct(route),
         "price_impact_pct": impact,
         "slippage_bps": slippage,
+        "slippage_status": "quote_tolerance" if slippage is not None else "unknown",
         "chain": chain,
         "contract": contract,
         "quote_source": route.get("dex_quote_source"),
@@ -1133,7 +1134,7 @@ def _dex_evidence(route: dict[str, Any]) -> dict[str, Any]:
         "impact_status": "provider_reported" if impact is not None else "embedded_or_unknown",
         "gas_status": "provider_estimate" if gas is not None else "missing",
         "mev_protection": mev,
-        "mev_status": "provider_reported" if mev else "unknown",
+        "mev_status": "source_explicit" if mev else "unknown",
         "transfer": {
             "required": requires_transfer,
             "deliverable": deliverable if isinstance(deliverable, bool) else None,

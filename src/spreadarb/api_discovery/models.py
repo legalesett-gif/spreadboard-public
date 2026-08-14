@@ -100,10 +100,16 @@ class MarketQuote:
     funding_interval_assumed: bool = False
     volume_24h_usd: float | None = None
     gas_estimate_usd: float | None = None
+    ask_gas_estimate_usd: float | None = None
+    bid_gas_estimate_usd: float | None = None
     slippage_bps: int | None = None
     price_impact_pct: float | None = None
+    ask_price_impact_pct: float | None = None
+    bid_price_impact_pct: float | None = None
     quote_notional_usd: float | None = None
     route_plan: tuple[str, ...] = ()
+    mev_protection: str | None = None
+    transfer_time_seconds: float | None = None
     blockers: tuple[str, ...] = ()
     #: Which path produced this quote: "ticker" for a top-of-book ticker,
     #: "orderbook" for a walked ladder. Without it the snapshot cannot tell the
