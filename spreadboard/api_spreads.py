@@ -122,6 +122,8 @@ class SpreadTerminalRow:
     dex_slippage_bps: float | None = None
     dex_price_impact_pct: float | None = None
     dex_quote_source: str | None = None
+    dex_mev_protection: str | None = None
+    dex_transfer_time_seconds: float | None = None
     dex_route_plan: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -1819,6 +1821,13 @@ def _row_from_api(
         ),
         dex_quote_source=_str_or_none(
             dex_input.get("quote_source") if isinstance(dex_input, dict) else None
+        ),
+        dex_mev_protection=_str_or_none(
+            dex_input.get("mev_protection") if isinstance(dex_input, dict) else None
+        ),
+        dex_transfer_time_seconds=_float_or_none(
+            dex_input.get("transfer_time_seconds") if isinstance(dex_input, dict) else None,
+            dex_input.get("estimated_transfer_seconds") if isinstance(dex_input, dict) else None,
         ),
         dex_route_plan=tuple(
             str(item)

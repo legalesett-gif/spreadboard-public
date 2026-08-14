@@ -342,6 +342,10 @@ def test_dex_score_exposes_size_cost_and_identity_evidence() -> None:
             "dex_price_impact_pct": 0.2,
             "dex_chain": "56",
             "dex_contract": "0xabc",
+            "dex_mev_protection": "private relay",
+            "dex_transfer_time_seconds": 45,
+            "requires_transfer": True,
+            "deliverable": True,
             "dex_quote_source": "okx_dex_quote",
             "dex_route_plan": ["router"],
             "freshness": "fresh",
@@ -355,6 +359,9 @@ def test_dex_score_exposes_size_cost_and_identity_evidence() -> None:
 
     assert result["dex_evidence"]["status"] == "size_and_cost_evidenced"
     assert result["dex_evidence"]["entry_gas_pct"] == pytest.approx(0.1)
+    assert result["dex_evidence"]["mev_status"] == "provider_reported"
+    assert result["dex_evidence"]["transfer"]["status"] == "verified"
+    assert result["dex_evidence"]["transfer"]["estimated_seconds"] == 45
     assert result["route_economics"]["known_dex_entry_gas_pct"] == pytest.approx(0.1)
     assert "Gas-adjusted opening basis" in result["spread_opportunity"]["components"]["entry_edge"]["detail"]
 

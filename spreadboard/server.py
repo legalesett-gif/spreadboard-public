@@ -3481,6 +3481,7 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
                         ),
                         "economics": funding_evaluation.get("route_economics") or {},
                         "risk_estimate": funding_evaluation.get("risk_estimate") or {},
+                        "dex_evidence": funding_evaluation.get("dex_evidence") or {},
                     },
                     "spread": {
                         **(spread_evaluation.get("spread_opportunity") or {}),
@@ -3491,6 +3492,7 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
                         ),
                         "economics": spread_evaluation.get("route_economics") or {},
                         "risk_estimate": spread_evaluation.get("risk_estimate") or {},
+                        "dex_evidence": spread_evaluation.get("dex_evidence") or {},
                     },
                 },
                 "funding_windows": score_windows,
@@ -12604,6 +12606,22 @@ WATCHLIST_SCRIPT = """
         Number.isFinite(correlation) ? `leg correlation ${correlation.toFixed(2)}` : null,
         riskQuality.samples ? `${riskQuality.samples} hourly samples / ${labelText(riskQuality.grade || "limited")}` : "limited route history"
       ].filter(Boolean).join(" · ");
+      const dexLine = (evidence) => {
+        if (!evidence || evidence.status === "not_applicable") return "";
+        const transfer = evidence.transfer || {};
+        const bits = [
+          evidence.chain && evidence.contract ? `chain ${evidence.chain} · ${evidence.contract}` : "identity missing",
+          Number.isFinite(Number(evidence.matched_size_notional_usd)) ? `$${Number(evidence.matched_size_notional_usd).toFixed(0)} matched quote` : "size missing",
+          Number.isFinite(Number(evidence.price_impact_pct)) ? `impact ${Number(evidence.price_impact_pct).toFixed(3)}%` : "impact embedded/unknown",
+          Number.isFinite(Number(evidence.gas_estimate_usd)) ? `gas $${Number(evidence.gas_estimate_usd).toFixed(2)}` : "gas missing",
+          evidence.mev_status === "provider_reported" ? `MEV ${labelText(evidence.mev_protection)}` : "MEV unknown",
+          transfer.status === "not_required" ? "transfer not required" : `transfer ${labelText(transfer.status || "unknown")}`,
+          Number.isFinite(Number(transfer.estimated_seconds)) ? `ETA ${Number(transfer.estimated_seconds).toFixed(0)}s` : (transfer.required ? "transfer time unknown" : null)
+        ].filter(Boolean);
+        return bits.join(" · ");
+      };
+      const fundingDexLine = dexLine(funding.dex_evidence);
+      const spreadDexLine = dexLine(spread.dex_evidence);
       return `
         <article class="watch-token-card">
           <div><strong>${escapeHtml(token)}</strong><span>${escapeHtml(labelText(reality.status || 'watching'))}</span></div>
@@ -12620,6 +12638,8 @@ WATCHLIST_SCRIPT = """
           <p class="watch-score-explain"><strong>Funding regime:</strong> ${escapeHtml(labelText(fundingOutlook.regime || "unavailable"))}${fundingOutlook.regime_conflict ? " · current/history conflict haircut applied" : ""}. Uses only available current, settled 1d, dailyized 7d and dailyized 30d evidence.</p>
           <p class="watch-score-explain"><strong>${escapeHtml(funding.label || "Waiting for funding evidence")}</strong> · Evidence confidence ${escapeHtml(funding.confidence ?? 0)}%. ${escapeHtml(componentLine(funding) || "A live or retained route is required.")}</p>
           <p class="watch-score-explain"><strong>${escapeHtml(spread.label || "Waiting for convergence evidence")}</strong> · Evidence confidence ${escapeHtml(spread.confidence ?? 0)}%. ${escapeHtml(componentLine(spread) || "Executable basis and route history are required.")}</p>
+          ${fundingDexLine ? `<p class="watch-score-explain"><strong>Funding-route DEX evidence:</strong> ${escapeHtml(fundingDexLine)}</p>` : ""}
+          ${spreadDexLine && spreadDexLine !== fundingDexLine ? `<p class="watch-score-explain"><strong>Spread-route DEX evidence:</strong> ${escapeHtml(spreadDexLine)}</p>` : ""}
           <p class="watch-score-explain">${escapeHtml(research.planning_buffer_label || "Collateral reserve unavailable.")} ${escapeHtml(riskLine)}</p>
           <p class="watch-score-explain">${escapeHtml(research.disclaimer || "")}</p>
           <button class="watch-remove" type="button" data-remove-symbol="${escapeHtml(token)}" aria-label="Remove ${escapeHtml(token)}">Remove</button>

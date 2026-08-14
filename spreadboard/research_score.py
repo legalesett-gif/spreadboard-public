@@ -1093,12 +1093,27 @@ def _dex_evidence(route: dict[str, Any]) -> dict[str, Any]:
     chain = route.get("dex_chain")
     contract = route.get("dex_contract")
     route_plan = route.get("dex_route_plan") or []
+    mev = str(route.get("dex_mev_protection") or "").strip() or None
+    transfer_seconds = _number(route.get("dex_transfer_time_seconds"))
+    requires_transfer = bool(route.get("requires_transfer"))
+    deliverable = route.get("deliverable")
     size_evidenced = notional is not None and notional > 0
     cost_evidenced = gas is not None
     identity_evidenced = bool(chain and contract)
-    if size_evidenced and cost_evidenced and identity_evidenced:
+    transfer_evidenced = not requires_transfer or deliverable is True
+    if deliverable is False:
+        status = "blocked_by_transfer_rails"
+    elif size_evidenced and cost_evidenced and identity_evidenced and transfer_evidenced:
         status = "size_and_cost_evidenced"
-    elif any((size_evidenced, cost_evidenced, identity_evidenced, impact is not None)):
+    elif any(
+        (
+            size_evidenced,
+            cost_evidenced,
+            identity_evidenced,
+            impact is not None,
+            deliverable is not None,
+        )
+    ):
         status = "partial"
     else:
         status = "missing"
@@ -1113,9 +1128,33 @@ def _dex_evidence(route: dict[str, Any]) -> dict[str, Any]:
         "contract": contract,
         "quote_source": route.get("dex_quote_source"),
         "route_plan_present": bool(route_plan),
+        "identity_status": "exact_chain_contract" if identity_evidenced else "missing",
+        "size_status": "matched_notional_quote" if size_evidenced else "missing",
+        "impact_status": "provider_reported" if impact is not None else "embedded_or_unknown",
+        "gas_status": "provider_estimate" if gas is not None else "missing",
+        "mev_protection": mev,
+        "mev_status": "provider_reported" if mev else "unknown",
+        "transfer": {
+            "required": requires_transfer,
+            "deliverable": deliverable if isinstance(deliverable, bool) else None,
+            "status": (
+                "not_required"
+                if not requires_transfer
+                else "verified"
+                if deliverable is True
+                else "blocked"
+                if deliverable is False
+                else "unknown"
+            ),
+            "estimated_seconds": transfer_seconds,
+            "time_status": "provider_reported" if transfer_seconds is not None else "unknown",
+            "long_withdraw_enabled": route.get("long_withdraw_enabled"),
+            "short_deposit_enabled": route.get("short_deposit_enabled"),
+        },
         "limitations": [
             "The quote proves only the displayed notional; larger size must be re-quoted.",
-            "Gas can change before signing and a route quote does not quantify MEV or failed-transaction risk.",
+            "Gas can change before signing; missing MEV protection remains unknown rather than assumed safe.",
+            "A transfer-time estimate is not a guarantee of chain confirmation or exchange crediting.",
             "Price impact already embedded in executable quote prices must not be charged twice.",
         ],
     }
