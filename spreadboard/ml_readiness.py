@@ -27,6 +27,7 @@ MIN_CLASS_SHARE = 0.10
 def assess(
     db_path: Path | str = research_calibration.DEFAULT_DB_PATH,
     *,
+    method: str | None = None,
     candidate_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     path = Path(db_path)
@@ -36,14 +37,31 @@ def assess(
     connection = sqlite3.connect(path)
     connection.row_factory = sqlite3.Row
     try:
+        available_methods = {
+            str(row[0]): int(row[1])
+            for row in connection.execute(
+                "SELECT method, COUNT(*) FROM score_observations GROUP BY method ORDER BY method"
+            )
+        }
+        selected_method = str(method or "").strip()
+        if not selected_method:
+            latest = connection.execute(
+                """SELECT method FROM score_observations
+                   ORDER BY observed_hour_us DESC, id DESC LIMIT 1"""
+            ).fetchone()
+            selected_method = str(latest[0]) if latest else ""
         observations = connection.execute(
-            "SELECT * FROM score_observations ORDER BY observed_hour_us, id"
+            """SELECT * FROM score_observations
+               WHERE method = ? ORDER BY observed_hour_us, id""",
+            (selected_method,),
         ).fetchall()
         outcomes = connection.execute(
             """SELECT x.*, o.route_key, o.observed_hour_us, o.cost_status,
                       o.feature_json
                FROM score_outcomes x JOIN score_observations o ON o.id=x.observation_id
-               WHERE x.horizon_hours=24 ORDER BY o.observed_hour_us, o.id"""
+               WHERE x.horizon_hours=24 AND o.method = ?
+               ORDER BY o.observed_hour_us, o.id""",
+            (selected_method,),
         ).fetchall()
     finally:
         connection.close()
@@ -73,9 +91,13 @@ def assess(
     funding_balance = _minority_share(funding_labels)
     spread_balance = _minority_share(spread_labels)
     leakage_hits = _leakage_hits(observations)
-    methods = sorted({str(row["method"]) for row in observations})
 
     data_gates = {
+        "version_selected": {
+            "passed": bool(selected_method) and selected_method in available_methods,
+            "selected": selected_method or None,
+            "available": available_methods,
+        },
         "outcomes": {"passed": len(outcomes) >= MIN_OUTCOMES, "actual": len(outcomes), "required": MIN_OUTCOMES},
         "routes": {"passed": routes >= MIN_ROUTES, "actual": routes, "required": MIN_ROUTES},
         "span_days": {"passed": span_days >= MIN_SPAN_DAYS, "actual": round(span_days, 2), "required": MIN_SPAN_DAYS},
@@ -83,7 +105,6 @@ def assess(
         "funding_class_balance": {"passed": funding_balance >= MIN_CLASS_SHARE, "actual": round(funding_balance, 4), "required": MIN_CLASS_SHARE},
         "spread_class_balance": {"passed": spread_balance >= MIN_CLASS_SHARE, "actual": round(spread_balance, 4), "required": MIN_CLASS_SHARE},
         "feature_leakage_scan": {"passed": not leakage_hits, "hits": leakage_hits[:20]},
-        "single_method_version": {"passed": len(methods) == 1, "versions": methods},
     }
 
     baselines = _time_split_baselines(outcomes)
@@ -97,6 +118,9 @@ def assess(
         "model_configured": False,
         "activation_allowed": activation_allowed,
         "data_ready": data_ready,
+        "selected_method": selected_method or None,
+        "available_method_versions": available_methods,
+        "excluded_observations_from_other_versions": sum(available_methods.values()) - len(observations),
         "data_gates": data_gates,
         "time_split": baselines,
         "candidate_gates": candidate,

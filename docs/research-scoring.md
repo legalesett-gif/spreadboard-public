@@ -2,7 +2,7 @@
 
 ## Current production method
 
-`deterministic_dual_opportunity_evidence_v3` keeps two different trade theses
+`deterministic_dual_opportunity_evidence_v5` keeps two different trade theses
 separate. It is a rule-based research screen, not an AI prediction or a promise
 of profit.
 
@@ -67,3 +67,8 @@ cost-aware comparison against simple baselines, data-leakage tests, drift and
 coverage monitoring, shadow-mode evaluation, an explanation for every output,
 and an automatic deterministic fallback. Until these gates pass, ML outputs
 must not be subscriber-facing or control position sizing.
+
+Readiness is assessed on one immutable scoring-method version at a time. Older
+versioned observations remain in the audit database but are excluded from a
+newer candidate's training and test splits rather than permanently blocking
+future experiments.

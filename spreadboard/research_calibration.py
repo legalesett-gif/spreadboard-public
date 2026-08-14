@@ -15,12 +15,10 @@ import sqlite3
 import time
 from typing import Any, Iterable
 
-from . import funding_radar, market_history, research_score
-
-
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_DB_PATH = RUNTIME_DIR / "spreadboard_research_calibration.sqlite3"
+DEFAULT_HISTORY_DB_PATH = RUNTIME_DIR / "spreadboard_market_history.sqlite3"
 HORIZONS = (8, 24)
 
 
@@ -62,6 +60,17 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
             );
             CREATE INDEX IF NOT EXISTS score_observations_maturity
                 ON score_observations(observed_hour_us, id);
+            CREATE TABLE IF NOT EXISTS score_label_attempts (
+                observation_id INTEGER NOT NULL REFERENCES score_observations(id) ON DELETE CASCADE,
+                horizon_hours INTEGER NOT NULL CHECK (horizon_hours IN (8, 24)),
+                attempt_count INTEGER NOT NULL,
+                last_attempt_us INTEGER NOT NULL,
+                next_attempt_us INTEGER NOT NULL,
+                last_reason TEXT NOT NULL,
+                PRIMARY KEY (observation_id, horizon_hours)
+            );
+            CREATE INDEX IF NOT EXISTS score_label_attempts_retry
+                ON score_label_attempts(next_attempt_us, observation_id, horizon_hours);
             """
         )
         connection.commit()
@@ -75,9 +84,11 @@ def capture_routes(
     now: float | None = None,
     limit: int = 60,
     db_path: Path | str = DEFAULT_DB_PATH,
-    history_db_path: Path | str = market_history.DEFAULT_DB_PATH,
+    history_db_path: Path | str = DEFAULT_HISTORY_DB_PATH,
 ) -> dict[str, int]:
     """Freeze a bounded hourly set of the strongest public candidates."""
+    from . import funding_radar, market_history, research_score
+
     moment = time.time() if now is None else float(now)
     hour_us = int(moment // 3600 * 3600 * 1_000_000)
     unique: dict[str, dict[str, Any]] = {}
@@ -166,8 +177,10 @@ def label_matured(
     now: float | None = None,
     limit: int = 240,
     db_path: Path | str = DEFAULT_DB_PATH,
-    history_db_path: Path | str = market_history.DEFAULT_DB_PATH,
+    history_db_path: Path | str = DEFAULT_HISTORY_DB_PATH,
 ) -> dict[str, int]:
+    from . import market_history
+
     moment = time.time() if now is None else float(now)
     now_us = int(moment * 1_000_000)
     initialize(db_path)
@@ -176,60 +189,92 @@ def label_matured(
     insufficient = 0
     try:
         rows = connection.execute(
-            """SELECT o.* FROM score_observations o
-               WHERE o.observed_hour_us <= ?
-                 AND (
-                   NOT EXISTS (SELECT 1 FROM score_outcomes x WHERE x.observation_id=o.id AND x.horizon_hours=8)
-                   OR NOT EXISTS (SELECT 1 FROM score_outcomes x WHERE x.observation_id=o.id AND x.horizon_hours=24)
-                 )
-               ORDER BY o.observed_hour_us, o.id LIMIT ?""",
-            (now_us - 8 * 3600 * 1_000_000, max(1, int(limit))),
+            """WITH horizons(horizon_hours) AS (VALUES (8), (24))
+               SELECT o.*, h.horizon_hours,
+                      COALESCE(a.attempt_count, 0) AS label_attempt_count
+               FROM score_observations o
+               CROSS JOIN horizons h
+               LEFT JOIN score_outcomes x
+                 ON x.observation_id = o.id AND x.horizon_hours = h.horizon_hours
+               LEFT JOIN score_label_attempts a
+                 ON a.observation_id = o.id AND a.horizon_hours = h.horizon_hours
+               WHERE x.observation_id IS NULL
+                 AND o.observed_hour_us + h.horizon_hours * 3600000000 <= ?
+                 AND (a.next_attempt_us IS NULL OR a.next_attempt_us <= ?)
+               ORDER BY COALESCE(a.next_attempt_us, 0), o.observed_hour_us,
+                        o.id, h.horizon_hours
+               LIMIT ?""",
+            (now_us, now_us, max(1, int(limit))),
         ).fetchall()
+        history_cache: dict[int, list[dict[str, Any]]] = {}
         for observation in rows:
-            for horizon in HORIZONS:
-                target = int(observation["observed_hour_us"]) + horizon * 3600 * 1_000_000
-                if target > now_us:
-                    continue
-                exists = connection.execute(
-                    "SELECT 1 FROM score_outcomes WHERE observation_id = ? AND horizon_hours = ?",
-                    (observation["id"], horizon),
-                ).fetchone()
-                if exists:
-                    continue
-                history = market_history.load_history(
+            observation_id = int(observation["id"])
+            horizon = int(observation["horizon_hours"])
+            target = int(observation["observed_hour_us"]) + horizon * 3600 * 1_000_000
+            if observation_id not in history_cache:
+                history_cache[observation_id] = market_history.load_history(
                     route_key=str(observation["route_key"]),
                     since_us=int(observation["observed_hour_us"]),
                     max_points=2_000,
                     db_path=history_db_path,
                 )
-                outcome = _outcome(
-                    history,
-                    entry_basis=_number(observation["entry_basis_pct"]),
-                    target_us=target,
-                )
-                if outcome is None:
-                    insufficient += 1
-                    continue
+            outcome = _outcome(
+                history_cache[observation_id],
+                entry_basis=_number(observation["entry_basis_pct"]),
+                target_us=target,
+            )
+            if outcome is None:
+                insufficient += 1
+                attempts = int(observation["label_attempt_count"] or 0) + 1
+                retry_seconds = min(24 * 3600, 15 * 60 * (2 ** min(7, attempts - 1)))
                 connection.execute(
-                    """INSERT INTO score_outcomes (
-                           observation_id, horizon_hours, outcome_ts_us,
-                           end_basis_pct, convergence_capture_pct,
-                           max_adverse_basis_widening_pct, end_funding_daily_pct,
-                           funding_positive_fraction, sample_count, labeled_at
-                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO score_label_attempts (
+                           observation_id, horizon_hours, attempt_count,
+                           last_attempt_us, next_attempt_us, last_reason
+                       ) VALUES (?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(observation_id, horizon_hours) DO UPDATE SET
+                           attempt_count = excluded.attempt_count,
+                           last_attempt_us = excluded.last_attempt_us,
+                           next_attempt_us = excluded.next_attempt_us,
+                           last_reason = excluded.last_reason""",
                     (
-                        observation["id"], horizon, outcome["outcome_ts_us"],
-                        outcome["end_basis_pct"], outcome["convergence_capture_pct"],
-                        outcome["max_adverse_basis_widening_pct"],
-                        outcome["end_funding_daily_pct"], outcome["funding_positive_fraction"],
-                        outcome["sample_count"], _utc_iso(moment),
+                        observation_id,
+                        horizon,
+                        attempts,
+                        now_us,
+                        now_us + retry_seconds * 1_000_000,
+                        "history_missing_or_target_gap",
                     ),
                 )
-                labeled += 1
+                continue
+            connection.execute(
+                """INSERT INTO score_outcomes (
+                       observation_id, horizon_hours, outcome_ts_us,
+                       end_basis_pct, convergence_capture_pct,
+                       max_adverse_basis_widening_pct, end_funding_daily_pct,
+                       funding_positive_fraction, sample_count, labeled_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    observation_id, horizon, outcome["outcome_ts_us"],
+                    outcome["end_basis_pct"], outcome["convergence_capture_pct"],
+                    outcome["max_adverse_basis_widening_pct"],
+                    outcome["end_funding_daily_pct"], outcome["funding_positive_fraction"],
+                    outcome["sample_count"], _utc_iso(moment),
+                ),
+            )
+            connection.execute(
+                "DELETE FROM score_label_attempts WHERE observation_id = ? AND horizon_hours = ?",
+                (observation_id, horizon),
+            )
+            labeled += 1
         connection.commit()
     finally:
         connection.close()
-    return {"labeled": labeled, "insufficient_history": insufficient}
+    return {
+        "attempted": len(rows),
+        "labeled": labeled,
+        "insufficient_history": insufficient,
+    }
 
 
 def status(db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:

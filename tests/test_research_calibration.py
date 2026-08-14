@@ -58,3 +58,44 @@ def test_shadow_observations_are_hourly_versioned_and_labeled_without_lookahead(
     assert status["observations"] == 1
     assert status["outcomes"] == 2
     assert status["ml_ready"] is False
+
+
+def test_missing_history_is_backed_off_instead_of_starving_later_routes(tmp_path) -> None:
+    now = time.time()
+    bad_observed = int(((now - 30 * 3600) // 3600) * 3600 * 1_000_000)
+    good_observed = int(((now - 25 * 3600) // 3600) * 3600 * 1_000_000)
+    history_db = tmp_path / "history.sqlite3"
+    calibration_db = tmp_path / "calibration.sqlite3"
+    research_calibration.initialize(calibration_db)
+    connection = research_calibration._connect(calibration_db)
+    try:
+        for route_key, token, observed in (
+            ("missing-route", "MISS", bad_observed),
+            ("good-route", "GOOD", good_observed),
+        ):
+            connection.execute(
+                """INSERT INTO score_observations (
+                       route_key, token, observed_hour_us, method,
+                       funding_confidence, spread_confidence, entry_basis_pct,
+                       funding_regime, cost_status, feature_json, created_at
+                   ) VALUES (?, ?, ?, 'v1', 50, 50, 2, 'positive', 'known', '{}', 'x')""",
+                (route_key, token, observed),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+    for horizon in (8, 24):
+        row = _route(good_observed + horizon * 3600 * 1_000_000, 1.0, 0.2)
+        row["route_key"] = "good-route"
+        market_history.record_route(row, db_path=history_db)
+
+    blocked = research_calibration.label_matured(
+        now=now, limit=2, db_path=calibration_db, history_db_path=history_db
+    )
+    progressed = research_calibration.label_matured(
+        now=now, limit=2, db_path=calibration_db, history_db_path=history_db
+    )
+
+    assert blocked == {"attempted": 2, "labeled": 0, "insufficient_history": 2}
+    assert progressed["labeled"] == 2
