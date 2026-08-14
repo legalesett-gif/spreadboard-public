@@ -178,7 +178,15 @@ def test_reference_history_does_not_mark_a_full_position(monkeypatch) -> None:
 
 
 def test_position_marks_use_reference_prices_without_exit_impact() -> None:
-    position = {**_dex_position(), "user_id": 9}
+    position = {
+        **_dex_position(),
+        "user_id": 9,
+        "entry_fees_usd": 1.0,
+        "borrow_costs_usd": 2.0,
+        "gas_costs_usd": 3.0,
+        "transfer_costs_usd": 4.0,
+        "slippage_costs_usd": 5.0,
+    }
     now = datetime.now(tz=timezone.utc)
     now_us = int(now.timestamp() * 1_000_000)
     snapshot = {
@@ -227,7 +235,12 @@ def test_position_marks_use_reference_prices_without_exit_impact() -> None:
     assert result["current_marked_spread_pct"] == pytest.approx((0.01575 / 0.0148 - 1) * 100)
     assert result["current_exit_spread_pct"] == result["current_marked_spread_pct"]
     assert result["funding_income_usd"] == pytest.approx(2.5)
-    assert result["total_pnl_usd"] == pytest.approx(result["price_pnl_usd"] + 2.5)
+    assert result["fees_usd"] == pytest.approx(1.0)
+    assert result["other_costs_usd"] == pytest.approx(9.0)
+    assert result["total_costs_usd"] == pytest.approx(10.0)
+    assert result["slippage_costs_usd"] == pytest.approx(5.0)
+    assert result["slippage_included_in_fills"] is True
+    assert result["total_pnl_usd"] == pytest.approx(result["price_pnl_usd"] + 2.5 - 10.0)
     assert result["quote_source"] == ("dexscreener_exact_contract_pool+resident_book_midpoint")
     assert result["long_mark_basis"] == "dex_pool_reference"
     assert result["short_mark_basis"] == "bid_ask_midpoint"

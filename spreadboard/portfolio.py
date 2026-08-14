@@ -124,8 +124,16 @@ def _hydrate_position(
     fees = (_number(position.get("entry_fees_usd")) or 0.0) + (
         _number(position.get("exit_fees_usd")) or 0.0
     )
+    borrow_costs = _number(position.get("borrow_costs_usd")) or 0.0
+    gas_costs = _number(position.get("gas_costs_usd")) or 0.0
+    transfer_costs = _number(position.get("transfer_costs_usd")) or 0.0
+    slippage_costs = _number(position.get("slippage_costs_usd")) or 0.0
+    # Actual entry and exit fills already include execution slippage. Retain the
+    # measured amount as model-validation evidence, but never deduct it again.
+    other_costs = borrow_costs + gas_costs + transfer_costs
+    total_costs = fees + other_costs
     total_pnl = (
-        price_pnl + funding_usd - fees
+        price_pnl + funding_usd - total_costs
         if price_pnl is not None and funding_usd is not None and settled_funding.get("known")
         else None
     )
@@ -201,6 +209,13 @@ def _hydrate_position(
             "funding_synced_at": settled_funding.get("synced_at"),
             "funding_latest_event_at": settled_funding.get("latest_event_at"),
             "fees_usd": fees,
+            "borrow_costs_usd": borrow_costs,
+            "gas_costs_usd": gas_costs,
+            "transfer_costs_usd": transfer_costs,
+            "slippage_costs_usd": slippage_costs,
+            "slippage_included_in_fills": True,
+            "other_costs_usd": other_costs,
+            "total_costs_usd": total_costs,
             "total_pnl_usd": total_pnl,
             "current_open_spread_pct": open_spread,
             # Keep the old response key for existing alert rules, but the value

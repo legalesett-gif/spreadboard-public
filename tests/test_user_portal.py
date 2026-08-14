@@ -261,6 +261,10 @@ def test_portfolio_separates_price_funding_and_fees(
             "short_quantity": 2,
             "short_entry_price": 110,
             "entry_fees_usd": 2,
+            "borrow_costs_usd": 1,
+            "gas_costs_usd": 2,
+            "transfer_costs_usd": 3,
+            "slippage_costs_usd": 4,
             "capital_usd": 400,
         },
         db_path=db_path,
@@ -305,11 +309,15 @@ def test_portfolio_separates_price_funding_and_fees(
     assert marked["price_pnl_usd"] == 28
     assert marked["funding_income_usd"] == 5
     assert marked["fees_usd"] == 2
-    assert marked["total_pnl_usd"] == 31
-    assert snapshot["summary"]["monthly_return_pct"] == pytest.approx(3.1)
-    assert snapshot["summary"]["open_position_pnl_usd"] == pytest.approx(31)
+    assert marked["other_costs_usd"] == 6
+    assert marked["total_costs_usd"] == 8
+    assert marked["slippage_costs_usd"] == 4
+    assert marked["slippage_included_in_fills"] is True
+    assert marked["total_pnl_usd"] == 25
+    assert snapshot["summary"]["monthly_return_pct"] == pytest.approx(2.5)
+    assert snapshot["summary"]["open_position_pnl_usd"] == pytest.approx(25)
     assert snapshot["summary"]["open_position_funding_usd"] == pytest.approx(5)
-    assert snapshot["summary"]["open_position_return_pct"] == pytest.approx(3.1)
+    assert snapshot["summary"]["open_position_return_pct"] == pytest.approx(2.5)
 
 
 def test_portfolio_return_falls_back_to_tracked_position_capital() -> None:

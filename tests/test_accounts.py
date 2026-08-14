@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -14,6 +15,27 @@ def _database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.delenv("SPREADBOARD_ADMIN_PASSWORD", raising=False)
     accounts.initialize(path)
     return path
+
+
+def test_initialize_migrates_existing_positions_with_lifecycle_cost_columns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _database(tmp_path, monkeypatch)
+    cost_columns = {
+        "borrow_costs_usd",
+        "gas_costs_usd",
+        "transfer_costs_usd",
+        "slippage_costs_usd",
+    }
+    with sqlite3.connect(path) as connection:
+        for column in cost_columns:
+            connection.execute(f"ALTER TABLE positions DROP COLUMN {column}")
+
+    accounts.initialize(path)
+
+    with sqlite3.connect(path) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(positions)")}
+    assert cost_columns <= columns
 
 
 def test_password_hash_is_salted_and_verifiable() -> None:
@@ -205,7 +227,11 @@ def test_position_corrections_are_owner_scoped_and_recompute_route(tmp_path, mon
         "short_quantity": 13530,
         "short_entry_price": 0.2026227273,
         "capital_usd": 2750,
-        "entry_fees_usd": 0,
+        "entry_fees_usd": 1.25,
+        "borrow_costs_usd": 2.5,
+        "gas_costs_usd": 3.75,
+        "transfer_costs_usd": 4.0,
+        "slippage_costs_usd": 5.25,
         "opened_at": "2026-08-11T23:19:58Z",
         "notes": "Corrected from venue fills",
     }
@@ -216,6 +242,11 @@ def test_position_corrections_are_owner_scoped_and_recompute_route(tmp_path, mon
     assert corrected["route_key"] == "BTW|Mexc|Spot|Aster|Futures"
     assert corrected["entry_spread_pct"] > 0
     assert corrected["opened_at"] == "2026-08-11T23:19:58Z"
+    assert corrected["entry_fees_usd"] == 1.25
+    assert corrected["borrow_costs_usd"] == 2.5
+    assert corrected["gas_costs_usd"] == 3.75
+    assert corrected["transfer_costs_usd"] == 4.0
+    assert corrected["slippage_costs_usd"] == 5.25
 
     closed = accounts.close_position(
         owner["id"],

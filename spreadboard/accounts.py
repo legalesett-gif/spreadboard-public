@@ -172,6 +172,10 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 capital_usd REAL CHECK (capital_usd IS NULL OR capital_usd >= 0),
                 entry_fees_usd REAL NOT NULL DEFAULT 0,
                 exit_fees_usd REAL NOT NULL DEFAULT 0,
+                borrow_costs_usd REAL NOT NULL DEFAULT 0,
+                gas_costs_usd REAL NOT NULL DEFAULT 0,
+                transfer_costs_usd REAL NOT NULL DEFAULT 0,
+                slippage_costs_usd REAL NOT NULL DEFAULT 0,
                 opened_at TEXT NOT NULL,
                 closed_at TEXT,
                 long_exit_price REAL,
@@ -568,6 +572,16 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 "payout_asset": "TEXT NOT NULL DEFAULT 'USDT'",
                 "payout_network": "TEXT NOT NULL DEFAULT 'Arbitrum'",
                 "payout_destination": "TEXT NOT NULL DEFAULT ''",
+            },
+        )
+        _ensure_columns(
+            connection,
+            "positions",
+            {
+                "borrow_costs_usd": "REAL NOT NULL DEFAULT 0",
+                "gas_costs_usd": "REAL NOT NULL DEFAULT 0",
+                "transfer_costs_usd": "REAL NOT NULL DEFAULT 0",
+                "slippage_costs_usd": "REAL NOT NULL DEFAULT 0",
             },
         )
         _ensure_columns(
@@ -1939,6 +1953,10 @@ def _position_values(payload: dict[str, Any]) -> dict[str, Any]:
         "entry_spread_pct": entry_spread,
         "capital_usd": _optional_nonnegative_float(payload.get("capital_usd")),
         "entry_fees_usd": _optional_nonnegative_float(payload.get("entry_fees_usd")) or 0.0,
+        "borrow_costs_usd": _optional_nonnegative_float(payload.get("borrow_costs_usd")) or 0.0,
+        "gas_costs_usd": _optional_nonnegative_float(payload.get("gas_costs_usd")) or 0.0,
+        "transfer_costs_usd": _optional_nonnegative_float(payload.get("transfer_costs_usd")) or 0.0,
+        "slippage_costs_usd": _optional_nonnegative_float(payload.get("slippage_costs_usd")) or 0.0,
         "opened_at": opened_at,
         "notes": str(payload.get("notes") or "")[:2000],
     }
@@ -1957,8 +1975,10 @@ def create_position(
                 user_id, token, route_key, long_venue, long_market_type, long_symbol,
                 long_quantity, long_entry_price, short_venue, short_market_type,
                 short_symbol, short_quantity, short_entry_price, entry_spread_pct,
-                capital_usd, entry_fees_usd, opened_at, notes, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                capital_usd, entry_fees_usd, borrow_costs_usd, gas_costs_usd,
+                transfer_costs_usd, slippage_costs_usd, opened_at, notes,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -1977,6 +1997,10 @@ def create_position(
                 values["entry_spread_pct"],
                 values["capital_usd"],
                 values["entry_fees_usd"],
+                values["borrow_costs_usd"],
+                values["gas_costs_usd"],
+                values["transfer_costs_usd"],
+                values["slippage_costs_usd"],
                 values["opened_at"],
                 values["notes"],
                 now,
@@ -2050,7 +2074,9 @@ def update_position(
                 long_symbol = ?, long_quantity = ?, long_entry_price = ?,
                 short_venue = ?, short_market_type = ?, short_symbol = ?,
                 short_quantity = ?, short_entry_price = ?, entry_spread_pct = ?,
-                capital_usd = ?, entry_fees_usd = ?, opened_at = ?, notes = ?,
+                capital_usd = ?, entry_fees_usd = ?, borrow_costs_usd = ?,
+                gas_costs_usd = ?, transfer_costs_usd = ?, slippage_costs_usd = ?,
+                opened_at = ?, notes = ?,
                 status = ?, closed_at = ?, long_exit_price = ?, short_exit_price = ?,
                 exit_fees_usd = ?, updated_at = ?
             WHERE id = ? AND user_id = ?
@@ -2071,6 +2097,10 @@ def update_position(
                 values["entry_spread_pct"],
                 values["capital_usd"],
                 values["entry_fees_usd"],
+                values["borrow_costs_usd"],
+                values["gas_costs_usd"],
+                values["transfer_costs_usd"],
+                values["slippage_costs_usd"],
                 values["opened_at"],
                 values["notes"],
                 status,

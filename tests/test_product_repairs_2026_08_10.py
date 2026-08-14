@@ -136,6 +136,10 @@ def test_portfolio_uses_edit_and_exact_funding_instead_of_manual_funding_button(
     assert "Current marked spread" in html
     assert "Settled funding" in html
     assert "Actual fees" in html
+    assert "Borrow costs" in html
+    assert "Gas costs" in html
+    assert "Transfer costs" in html
+    assert "Slippage evidence · in fills" in html
     assert "bid/ask midpoint" in html
     assert "venue mark" in html
     assert "Exact private exchange ledger" in html
