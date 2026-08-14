@@ -4,7 +4,8 @@ After=docker.service
 
 [Service]
 Type=oneshot
-User=root
+User=do-agent
+Group=systemd-journal
 WorkingDirectory=/opt/spreadboard/app
 Environment=PYTHONPATH=/opt/spreadboard/app
 Environment=SPREADBOARD_DATA_DIR=/opt/spreadboard/runtime
