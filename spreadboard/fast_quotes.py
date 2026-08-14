@@ -926,11 +926,11 @@ class FastQuoteRefresher:
                 max_age_seconds=cache_book_age_seconds,
             )
             native_book = (
-                (live_book.bids, live_book.asks)
+                None
                 if live_book is not None
                 else _native_order_book(venue, market_type, symbol)
             )
-            if native_book is None and route_has_dex_leg:
+            if live_book is None and native_book is None and route_has_dex_leg:
                 # All CEX venues selected for DEX publication have a lightweight
                 # native order-book adapter. If that exact endpoint cannot fill
                 # the $50 probe, do not load the exchange's entire market
@@ -939,12 +939,53 @@ class FastQuoteRefresher:
                 cache[key] = None
                 self._record_leg_failure(key, "cex_book_unavailable")
                 return None
-            if native_book is None and venue not in VENUE_IDS:
+            if live_book is None and native_book is None and venue not in VENUE_IDS:
                 # No public book this time and no ccxt adapter to fall back on.
                 cache[key] = None
                 self._record_leg_failure(key, "cex_book_unavailable")
                 return None
-            if native_book is None:
+            if live_book is not None:
+                bids, asks = live_book.bids, live_book.asks
+                funding = (
+                    _native_current_funding(venue, symbol)
+                    if include_funding and market_type == "Futures"
+                    else {}
+                )
+                # The shared cache stores futures amounts already normalised to
+                # base-asset quantity; native REST books still use contracts.
+                contract_size = 1.0
+                cached_bid_vwap = depth_weighted_price(
+                    bids,
+                    target_notional_usd,
+                    contract_size=contract_size,
+                )
+                cached_ask_vwap = depth_weighted_price(
+                    asks,
+                    target_notional_usd,
+                    contract_size=contract_size,
+                )
+                if (
+                    route_has_dex_leg
+                    and (
+                        not bids
+                        or not asks
+                        or cached_bid_vwap is None
+                        or cached_ask_vwap is None
+                    )
+                ):
+                    # The broad sweep deliberately stores ticker books too.
+                    # They are fresh, but a one-level ticker can be shallower
+                    # than the exact $50 check even when the venue's full book
+                    # is deep.  Previously its mere presence suppressed the
+                    # lightweight native REST fallback and made valid DEX/CEX
+                    # routes disappear together after a websocket reconnect.
+                    # Retry the exact public book; the same depth gate below
+                    # still rejects genuinely thin legs.
+                    rest_book = _native_order_book(venue, market_type, symbol)
+                    if rest_book is not None:
+                        live_book = None
+                        native_book = rest_book
+            if live_book is None and native_book is None:
                 client = self._client(venue, market_type)
                 with self._client_request_lock(venue, market_type):
                     market = client.market(symbol)
@@ -977,24 +1018,16 @@ class FastQuoteRefresher:
                     )
                 bids = _levels(book.get("bids"))
                 asks = _levels(book.get("asks"))
-            else:
+            elif live_book is None:
                 bids, asks = native_book
                 funding = (
                     _native_current_funding(venue, symbol)
                     if include_funding and market_type == "Futures"
                     else {}
                 )
-                # The shared cache stores futures amounts already normalised to
-                # base-asset quantity; native REST books still use contracts.
-                # Applying the contract multiplier to a cached book again made
-                # 100x contracts look one hundred times deeper than reality.
-                contract_size = (
-                    1.0
-                    if live_book is not None
-                    else _number(
-                        leg.get("contract_size") or row.get(f"{side}_contract_size"),
-                        1.0,
-                    )
+                contract_size = _number(
+                    leg.get("contract_size") or row.get(f"{side}_contract_size"),
+                    1.0,
                 )
             bid_vwap = depth_weighted_price(bids, target_notional_usd, contract_size=contract_size)
             ask_vwap = depth_weighted_price(asks, target_notional_usd, contract_size=contract_size)

@@ -470,7 +470,9 @@ def test_the_ccxt_fallback_is_not_attempted_without_an_adapter() -> None:
     from spreadboard import fast_quotes
 
     source = inspect.getsource(fast_quotes.FastQuoteRefresher._leg_quote)
-    guard = "if native_book is None and venue not in VENUE_IDS:"
+    guard = (
+        "if live_book is None and native_book is None and venue not in VENUE_IDS:"
+    )
     assert guard in source
     # The guard has to come before the client is constructed.
     assert source.index(guard) < source.index("client = self._client(venue, market_type)")
