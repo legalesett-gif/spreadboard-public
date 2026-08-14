@@ -5065,6 +5065,16 @@ def render_markets_page(
         )
         + "</div>"
     )
+    market_group_header = (
+        ""
+        if pro_view
+        else """
+          <div class="token-route-ledger-head" aria-hidden="true">
+            <span>Token</span><span>Best route</span><span>Matched spread</span>
+            <span>Best-route funding</span><span>Routes</span><span>Updated</span>
+          </div>
+        """
+    )
 
     body = f"""
     <section class="markets-page terminal-page" data-refresh="{
@@ -5113,6 +5123,7 @@ def render_markets_page(
         h(urlencode(_query_with(query, limit=500, offset=0)))
     }">JSON</a></div>
           </div>
+          {market_group_header}
           {market_results}
           {render_market_pagination(query, pagination)}
           {render_board_stream_script(query)}
@@ -7315,6 +7326,10 @@ def render_funding_page(
         h(urlencode(_query_with(funding_query, limit=500, offset=0)))
     }">JSON</a>
         </div>
+        <div class="funding-ledger-head" aria-hidden="true">
+          <span>Token</span><span>Best farm</span><span>Net 24h</span><span>Payouts</span>
+          <span>Entry basis</span><span>Settled windows</span><span>Pairs</span><span></span>
+        </div>
         <div class="funding-group-list">
           {
         "".join(render_funding_token_group(group) for group in funding_groups)
@@ -8330,16 +8345,16 @@ def render_live_spread_chart(
     <script src="/assets/lightweight-charts.js"></script>
     <div class="live-spread-chart" data-live-spread-chart>
       <div class="live-chart-legend" aria-label="Chart series">
-        <button class="entry active" type="button" data-series-toggle="entry"><i></i>Open ask → bid <strong data-latest-entry>—</strong></button>
+        <button class="entry active" type="button" data-series-toggle="entry"><i></i>In % · open <strong data-latest-entry>—</strong></button>
         <button class="matched" type="button" data-series-toggle="matched"><i></i>$50 VWAP <strong data-latest-matched>—</strong></button>
-        <button class="exit active" type="button" data-series-toggle="exit"><i></i>Out top book <strong data-latest-exit>—</strong></button>
+        <button class="exit active" type="button" data-series-toggle="exit"><i></i>Out % · close <strong data-latest-exit>—</strong></button>
         <span class="funding-a"><i></i>Long fund <strong data-latest-long-funding>—</strong></span>
         <span class="funding-b"><i></i>Short fund <strong data-latest-short-funding>—</strong></span>
       </div>
       <div class="live-chart-canvas" data-live-chart-canvas aria-label="Interactive entry, exit and funding chart"></div>
       <div class="live-chart-tooltip" data-live-chart-tooltip hidden></div>
       <div class="live-chart-note">
-        <span>Drag to pan · scroll to zoom · In buys the long ask and sells the short bid · Out reverses both legs.</span>
+        <span>In % is the marked opening direction; Out % is the marked reverse direction. Drag to pan and scroll to zoom.</span>
         <strong data-live-chart-age>Waiting for sample</strong>
       </div>
     </div>
@@ -9707,6 +9722,16 @@ def render_login_page(query: dict[str, list[str]]) -> str:
 label {{ display:grid; gap:7px; margin:0 0 16px; color:var(--muted); font-size:12px; font-weight:800; text-transform:uppercase; }} input {{ width:100%; min-height:46px; border:1px solid var(--line); background:#081310; color:var(--ink); border-radius:5px; padding:0 13px; font:inherit; }} input:focus {{ outline:2px solid var(--accent); outline-offset:1px; }}
 button {{ width:100%; min-height:46px; border:0; border-radius:5px; background:var(--accent); color:#052c26; font:inherit; font-weight:900; cursor:pointer; }} button:disabled {{ opacity:.55; cursor:wait; }}
 .login-error {{ min-height:20px; margin:14px 0 0; color:var(--danger); font-size:13px; }} .login-note {{ margin-top:18px; color:var(--muted); font-size:12px; text-align:center; }} .login-note a {{ color:var(--accent); font-weight:800; }}
+.login-shell {{ width:min(376px,100%); }}
+.login-brand {{ gap:9px;margin-bottom:24px;font-size:15px;font-weight:650; }}
+.login-mark {{ width:10px;height:10px;border:0;border-radius:50%;background:var(--accent);box-shadow:none; }}
+.login-panel {{ padding:24px 0;border-width:1px 0;border-radius:0;background:transparent; }}
+h1 {{ font-size:27px;font-weight:650;letter-spacing:-.03em; }}
+p {{ font-size:12.5px; }}
+label {{ font-size:9px;font-weight:700;letter-spacing:.08em; }}
+input {{ min-height:42px;border-radius:2px;background:#0b1714; }}
+button {{ min-height:42px;border-radius:2px;font-weight:700; }}
+.login-note {{ font-size:11px;line-height:1.5; }}
 </style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div>
 <section class="login-panel"><h1>Welcome back</h1><p>Sign in to your private market workspace and position journal.</p>
 <form id="loginForm"><label>Email<input name="email" type="email" autocomplete="username" required autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">Sign in</button><div class="login-error" role="alert"></div></form></section>
@@ -9734,6 +9759,7 @@ def render_forgot_password_page() -> str:
 <style>
 :root {{ color-scheme:dark;--bg:#07110f;--panel:#101d1a;--line:#29443d;--ink:#edf8f4;--muted:#9bb1aa;--accent:#38d4bd;--danger:#ff8695; }}
 *{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}}.login-shell{{width:min(440px,100%)}}.login-brand{{display:flex;align-items:center;gap:12px;margin-bottom:28px;font-size:24px;font-weight:800}}.login-mark{{width:26px;height:26px;border-radius:50%;background:var(--accent);border:3px solid #dffff8;box-shadow:12px 9px 0 -5px #7fdccf}}.login-panel{{border:1px solid var(--line);background:var(--panel);padding:28px;border-radius:8px}}h1{{margin:0 0 8px;font-size:28px}}p{{color:var(--muted);margin:0 0 24px;line-height:1.5}}label{{display:grid;gap:7px;margin:0 0 16px;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}}input{{width:100%;min-height:46px;border:1px solid var(--line);background:#081310;color:var(--ink);border-radius:5px;padding:0 13px;font:inherit}}input:focus{{outline:2px solid var(--accent);outline-offset:1px}}button{{width:100%;min-height:46px;border:0;border-radius:5px;background:var(--accent);color:#052c26;font:inherit;font-weight:900;cursor:pointer}}button:disabled{{opacity:.55;cursor:not-allowed}}.login-error{{min-height:20px;margin:14px 0 0;color:var(--muted);font-size:13px}}.login-note{{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}}.login-note a{{color:var(--accent);font-weight:800}}
+.login-shell{{width:min(376px,100%)}}.login-brand{{gap:9px;margin-bottom:24px;font-size:15px;font-weight:650}}.login-mark{{width:10px;height:10px;border:0;border-radius:50%;background:var(--accent);box-shadow:none}}.login-panel{{padding:24px 0;border-width:1px 0;border-radius:0;background:transparent}}h1{{font-size:27px;font-weight:650;letter-spacing:-.03em}}p{{font-size:12.5px}}label{{font-size:9px;font-weight:700;letter-spacing:.08em}}input{{min-height:42px;border-radius:2px;background:#0b1714}}button{{min-height:42px;border-radius:2px;font-weight:700}}.login-note{{font-size:11px;line-height:1.5}}
 </style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div>
 <section class="login-panel"><h1>Reset your password</h1><p>{h(intro)}</p><form id="resetForm"><label>Email<input name="email" type="email" autocomplete="email" required autofocus{disabled}></label><button type="submit"{disabled}>Send reset link</button><div class="login-error" role="status"></div></form></section><div class="login-note"><a href="/login">Back to sign in</a></div></main>
 <script>document.getElementById('resetForm').addEventListener('submit',async(event)=>{{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),message=form.querySelector('.login-error');button.disabled=true;message.textContent='Sending...';try{{const response=await fetch('/api/request-password-reset',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(Object.fromEntries(new FormData(form)))}});const data=await response.json();if(!response.ok)throw new Error(data.error==='recovery_delivery_unavailable'?'Email recovery is temporarily unavailable.':'The request could not be completed.');message.textContent='If that account exists, a reset link has been sent.';form.reset();}}catch(error){{message.textContent=error.message;button.disabled={str(not ready).lower()};}}}});</script></body></html>"""
@@ -9803,6 +9829,7 @@ def render_register_page() -> str:
 <style>
 :root { color-scheme:dark;--bg:#07110f;--panel:#101d1a;--line:#29443d;--ink:#edf8f4;--muted:#9bb1aa;--accent:#38d4bd;--danger:#ff8695; }
 *{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}.login-shell{width:min(440px,100%)}.login-brand{display:flex;align-items:center;gap:12px;margin-bottom:28px;font-size:24px;font-weight:800}.login-mark{width:26px;height:26px;border-radius:50%;background:var(--accent);border:3px solid #dffff8;box-shadow:12px 9px 0 -5px #7fdccf}.login-panel{border:1px solid var(--line);background:var(--panel);padding:28px;border-radius:8px}h1{margin:0 0 8px;font-size:28px}p{color:var(--muted);margin:0 0 24px;line-height:1.5}label{display:grid;gap:7px;margin:0 0 16px;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}input{width:100%;min-height:46px;border:1px solid var(--line);background:#081310;color:var(--ink);border-radius:5px;padding:0 13px;font:inherit}input:focus{outline:2px solid var(--accent);outline-offset:1px}button{width:100%;min-height:46px;border:0;border-radius:5px;background:var(--accent);color:#052c26;font:inherit;font-weight:900;cursor:pointer}button:disabled{opacity:.55;cursor:wait}.login-error{min-height:20px;margin:14px 0 0;color:var(--danger);font-size:13px}.login-note{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}.login-note a{color:var(--accent);font-weight:800}
+.login-shell{width:min(376px,100%)}.login-brand{gap:9px;margin-bottom:24px;font-size:15px;font-weight:650}.login-mark{width:10px;height:10px;border:0;border-radius:50%;background:var(--accent);box-shadow:none}.login-panel{padding:24px 0;border-width:1px 0;border-radius:0;background:transparent}h1{font-size:27px;font-weight:650;letter-spacing:-.03em}p{font-size:12.5px}label{font-size:9px;font-weight:700;letter-spacing:.08em}input{min-height:42px;border-radius:2px;background:#0b1714}button{min-height:42px;border-radius:2px;font-weight:700}.login-note{font-size:11px;line-height:1.5}
 </style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div><section class="login-panel"><h1>Create your account</h1><p>Set up your private workspace, then choose prepaid crypto access.</p><form id="registerForm"><label>Name<input name="display_name" maxlength="100" autocomplete="name" required autofocus></label><label>Email<input name="email" type="email" maxlength="254" autocomplete="email" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><button type="submit">Continue</button><div class="login-error" role="alert"></div></form></section><div class="login-note">Already registered? <a href="/login">Sign in</a><br><br><a href="/pricing">See membership details</a></div></main>
 <script>document.getElementById('registerForm').addEventListener('submit',async(event)=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),error=form.querySelector('.login-error');button.disabled=true;error.textContent='';try{const response=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(form)))});const data=await response.json();if(!response.ok)throw new Error(({email_already_registered:'An account already exists for this email.',invalid_email:'Enter a valid email address.',password_must_be_at_least_12_characters:'Use at least 12 characters.',too_many_registration_attempts:'Too many attempts. Try again later.'})[data.error]||'Could not create the account.');location.assign(data.next||'/subscription')}catch(exc){error.textContent=exc.message||'Could not create the account.';button.disabled=false}});</script></body></html>"""
 
@@ -10097,7 +10124,25 @@ def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
       .pricing-steps p {{ margin:0; color:var(--terminal-muted); font-size:13px; line-height:1.5; }}
       .pricing-note {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
       {MEMBERSHIP_STYLE}
-      @media(max-width:820px) {{ .pricing-tiers,.pricing-steps {{ grid-template-columns:1fr; }} .pricing-tier p {{ min-height:0; }} }}
+      .pricing-page {{ width:min(1180px,calc(100% - 40px));margin-top:24px;gap:20px; }}
+      .pricing-intro {{ padding:22px 0 26px;border-width:0 0 1px;background:transparent; }}
+      .pricing-intro h1 {{ max-width:14ch;font-weight:650;letter-spacing:-.045em; }}
+      .pricing-intro p {{ max-width:760px;font-size:13px; }}
+      .pricing-tiers {{ gap:0;border-block:1px solid var(--terminal-line); }}
+      .pricing-tier {{ padding:22px;border:0;border-right:1px solid var(--terminal-line);background:transparent; }}
+      .pricing-tier:last-child {{ border-right:0; }}
+      .pricing-tier.featured {{ border-color:var(--terminal-line);border-top:2px solid var(--accent);box-shadow:none; }}
+      .pricing-tier > span {{ font-size:9px;font-weight:700;letter-spacing:.08em; }}
+      .pricing-tier h2 {{ font-size:18px;font-weight:650; }}
+      .pricing-tier p,.pricing-note {{ font-size:11px; }}
+      .pricing-price strong {{ font-size:36px;font-weight:620;letter-spacing:-.035em; }}
+      .pricing-button {{ min-height:40px;border-radius:2px;font-size:11px;font-weight:700; }}
+      .pricing-block {{ padding:22px 0;border-width:1px 0;background:transparent; }}
+      .pricing-steps {{ gap:0; }}
+      .pricing-steps article {{ padding:16px 18px;border:0;border-right:1px solid var(--terminal-line);background:transparent; }}
+      .pricing-steps article:last-child {{ border-right:0; }}
+      .reason-grid article {{ border-radius:0;background:transparent;box-shadow:none; }}
+      @media(max-width:820px) {{ .pricing-tiers,.pricing-steps {{ grid-template-columns:1fr; }} .pricing-tier,.pricing-steps article {{ border-right:0;border-bottom:1px solid var(--terminal-line); }} .pricing-tier:last-child,.pricing-steps article:last-child {{ border-bottom:0; }} .pricing-tier p {{ min-height:0; }} }}
     </style>
     <section class="pricing-page">
       {referral_banner}
@@ -16898,6 +16943,338 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 @media(max-width:900px) {{ .partner-policy-grid {{ grid-template-columns:1fr; }} .partner-create-form,.partner-payout-form {{ grid-template-columns:1fr 1fr; }} .partner-admin-row {{ grid-template-columns:1fr; }} .partner-row-actions {{ justify-items:start; }} }}
 @media(max-width:600px) {{ .account-heading {{ flex-direction:column; }} .account-membership {{ width:100%; }} .account-kpis {{ grid-template-columns:1fr 1fr; }} .position-metrics {{ grid-template-columns:1fr 1fr; }} .position-card header,.position-card footer {{ align-items:flex-start; flex-direction:column; }} .position-legs>div {{ grid-template-columns:72px minmax(0,1fr); align-items:start; }} .position-legs>div>span {{ grid-column:1; grid-row:1; }} .position-legs>div>strong {{ grid-column:2; grid-row:1; overflow-wrap:anywhere; }} .position-legs>div>em {{ grid-column:2; }} .position-form-grid,.account-dialog [data-action-fields],.account-settings form,.member-create-form {{ grid-template-columns:1fr; }} .position-form-grid .wide {{ grid-column:auto; }} .notification-list article,.member-row {{ grid-template-columns:1fr; }} .member-row > * {{ min-width:0;overflow-wrap:anywhere; }} }}
 @media(max-width:600px) {{ .partner-create-form,.partner-payout-form {{ grid-template-columns:1fr; }} .partner-link-card {{ align-items:stretch; flex-direction:column; }} }}
+
+/* Editorial market-terminal refresh, reconciled from the Claude Design handoff.
+   These overrides intentionally change presentation only: route, funding,
+   billing, entitlement and portfolio hooks above remain the source of truth. */
+:root {{
+  --surface:#f3f6f4;
+  --panel:#fbfcfb;
+  --row:#f8faf9;
+  --row-hover:#eef4f1;
+  --line:#cbd8d3;
+  --ink:#11201c;
+  --muted:#64766f;
+  --shadow:none;
+  --radius:2px;
+  --terminal-bg:#f3f6f4;
+  --terminal-panel:#fbfcfb;
+  --terminal-panel-2:#f1f5f3;
+  --terminal-row:#f8faf9;
+  --terminal-row-hover:#edf4f1;
+  --terminal-text:#11201c;
+  --terminal-muted:#64766f;
+  --terminal-line:#cbd8d3;
+  --terminal-shell:#f8faf9;
+  --terminal-shell-text:#11201c;
+  --terminal-accent:#168f81;
+  --terminal-accent-soft:rgba(22,143,129,.10);
+}}
+:root[data-theme="dark"] {{
+  --surface:#07110f;
+  --panel:#0b1714;
+  --row:#0d1a17;
+  --row-hover:#12231f;
+  --line:rgba(172,216,203,.20);
+  --ink:#ecf4f1;
+  --muted:#91a69f;
+  --terminal-bg:#07110f;
+  --terminal-panel:#0b1714;
+  --terminal-panel-2:#0e1d19;
+  --terminal-row:#0d1a17;
+  --terminal-row-hover:#12231f;
+  --terminal-text:#ecf4f1;
+  --terminal-muted:#91a69f;
+  --terminal-line:rgba(172,216,203,.20);
+  --terminal-shell:#07110f;
+  --terminal-shell-text:#ecf4f1;
+  --terminal-accent:#43d7c4;
+  --terminal-accent-soft:rgba(67,215,196,.10);
+}}
+body {{
+  background:var(--terminal-bg);
+  color:var(--terminal-text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Arial,sans-serif;
+  font-size:13px;
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}}
+strong, b, table, .terminal-kpi, .terminal-kpis, .terminal-tape,
+.group-number, .group-routes, .funding-window, .position-metrics {{
+  font-variant-numeric:tabular-nums;
+}}
+.site-header {{ box-shadow:none; border-bottom:1px solid var(--terminal-line); background:var(--terminal-bg); }}
+.topbar {{ height:50px; padding:0 24px; gap:20px; background:var(--terminal-bg); color:var(--terminal-text); border-bottom:0; font-weight:600; }}
+.brand {{ gap:9px; color:var(--terminal-text); font-size:15px; font-weight:650; letter-spacing:-.01em; }}
+.brand-mark {{ width:10px; height:10px; border-radius:50%; background:var(--terminal-accent); }}
+.brand-mark::before,.brand-mark::after {{ display:none; }}
+.main-nav {{ gap:0; overflow-x:auto; scrollbar-width:none; }}
+.main-nav a {{ height:50px; padding:0 11px; border-bottom:2px solid transparent; color:var(--terminal-muted); font-size:12px; font-weight:600; }}
+.main-nav a.active {{ color:var(--terminal-text); border-bottom-color:var(--terminal-accent); box-shadow:none; }}
+.header-actions {{ gap:10px; }}
+.account-chip {{ color:var(--terminal-text); font-weight:600; }}
+.account-chip em {{ color:var(--terminal-accent); font-size:9px; font-weight:700; }}
+.logout-button,.theme-toggle {{ border-color:var(--terminal-line); border-radius:2px; background:transparent; color:var(--terminal-text); box-shadow:none; }}
+.logout-button {{ width:34px; height:34px; }}
+.theme-toggle {{ min-height:34px; padding:0 9px; font-size:11px; font-weight:650; }}
+.theme-toggle:hover {{ background:var(--terminal-panel-2); }}
+.header-strip {{ display:none; }}
+main {{ padding:22px 24px 56px; }}
+
+.terminal-page,.charts-page {{ width:min(1680px,100%); margin:0 auto; gap:14px; }}
+.terminal-heading {{
+  min-height:0;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:end;
+  gap:28px;
+  padding:0 0 18px;
+  border:0;
+  border-bottom:1px solid var(--terminal-line);
+  border-radius:0;
+  background:transparent;
+  color:var(--terminal-text);
+  box-shadow:none;
+}}
+.terminal-heading h1 {{ margin:4px 0 6px; max-width:22ch; color:var(--terminal-text); font-size:clamp(27px,3vw,40px); font-weight:650; letter-spacing:-.035em; line-height:1.02; }}
+.terminal-heading p {{ max-width:780px; color:var(--terminal-muted); font-size:12.5px; line-height:1.55; }}
+.terminal-heading .page-kicker,.page-kicker {{ color:var(--terminal-accent); font-size:10px; font-weight:750; letter-spacing:.09em; text-transform:uppercase; }}
+.terminal-live-box {{
+  min-width:170px;
+  padding:0 0 1px 20px;
+  justify-items:end;
+  border:0;
+  border-left:1px solid var(--terminal-line);
+  border-radius:0;
+  background:transparent;
+}}
+.terminal-live-box span,.terminal-live-box em {{ color:var(--terminal-muted); font-size:9px; font-weight:700; letter-spacing:.06em; }}
+.terminal-live-box strong {{ color:var(--terminal-text); font-size:21px; font-weight:600; }}
+.terminal-live-box.live strong {{ color:var(--terminal-accent); }}
+
+.terminal-kpis,.terminal-tape {{ gap:0; border-block:1px solid var(--terminal-line); background:transparent; }}
+.terminal-kpi,.terminal-kpis article,.terminal-tape article {{
+  min-height:72px;
+  padding:11px 14px;
+  border:0;
+  border-right:1px solid var(--terminal-line);
+  border-radius:0;
+  background:transparent;
+  box-shadow:none;
+}}
+.terminal-kpi:last-child,.terminal-kpis article:last-child,.terminal-tape article:last-child {{ border-right:0; }}
+.terminal-kpi span,.terminal-kpis span,.terminal-tape span {{ font-size:9px; font-weight:700; letter-spacing:.07em; }}
+.terminal-kpi strong,.terminal-kpis strong,.terminal-tape strong {{ font-size:20px; font-weight:620; letter-spacing:-.02em; }}
+.terminal-kpi em,.terminal-kpi small,.terminal-kpis em,.terminal-kpis small,.terminal-tape em {{ font-size:10px; }}
+
+.market-filter-panel,.terminal-filter-panel,.ranking-filter {{
+  padding:11px 0;
+  border:0;
+  border-bottom:1px solid var(--terminal-line);
+  border-radius:0;
+  background:transparent;
+  box-shadow:none;
+}}
+.terminal-filter-row {{ grid-template-columns:64px minmax(0,1fr); }}
+.terminal-filter-row > span,.market-filter-form label span,.ranking-filter label {{ font-size:9px; font-weight:700; letter-spacing:.07em; }}
+.market-tabs {{ gap:0; border-bottom:1px solid var(--terminal-line); }}
+.terminal-filter-panel .market-tab,.market-tab,.ranking-tabs a,.funding-farm-tabs a,.funding-window-tabs a,.chart-window-tabs a {{
+  min-height:34px;
+  padding:0 10px;
+  border:0;
+  border-bottom:2px solid transparent;
+  border-radius:0;
+  background:transparent;
+  color:var(--terminal-muted);
+  font-size:10.5px;
+  font-weight:650;
+}}
+.terminal-filter-panel .market-tab.active,.market-tab.active,.ranking-tabs a.active,.funding-farm-tabs a.active,.funding-window-tabs a.active,.chart-window-tabs a.active {{
+  border-color:var(--terminal-accent);
+  background:transparent;
+  color:var(--terminal-text);
+}}
+.terminal-filter-panel .market-tab em {{ border-radius:1px; background:var(--terminal-panel-2); color:var(--terminal-muted); }}
+.terminal-filter-panel .market-filter-form input,.terminal-filter-panel .market-filter-form select,
+.ranking-filter input,.ranking-filter select,.chart-builder-form select,.chart-builder-form input {{
+  min-height:36px;
+  border-color:var(--terminal-line);
+  border-radius:2px;
+  background:var(--terminal-panel);
+  color:var(--terminal-text);
+  font-size:11.5px;
+  font-weight:550;
+}}
+.terminal-filter-panel .market-check,.terminal-filter-panel .sheet-button,.sheet-button,.mini-action,.pricing-button {{
+  min-height:34px;
+  border:1px solid var(--terminal-line);
+  border-radius:2px;
+  background:transparent;
+  color:var(--terminal-text);
+  font-size:10.5px;
+  font-weight:650;
+}}
+.terminal-filter-panel .sheet-button.primary,.sheet-button.primary,.mini-action.primary-link,.pricing-button.primary {{ background:var(--terminal-accent); border-color:var(--terminal-accent); color:#042b26; }}
+.advanced-market-filters,.filter-preset-chip,.filter-preset-save input {{ border-radius:2px; background:transparent; }}
+
+.terminal-layout {{ grid-template-columns:minmax(0,1fr) 290px; gap:22px; }}
+.market-main,.market-side {{ gap:0; }}
+.panel-head.flat {{ padding:16px 0 10px; border-bottom:1px solid var(--terminal-line); }}
+.panel-head h2,.token-board-title h2,.terminal-table-title h2 {{ font-size:15px; font-weight:650; letter-spacing:-.01em; }}
+.panel-head p,.terminal-table-title p {{ color:var(--terminal-muted); font-size:10.5px; }}
+.token-route-ledger-head,.funding-ledger-head {{
+  min-height:32px;
+  display:grid;
+  align-items:end;
+  gap:10px;
+  padding:0 9px 7px;
+  border-bottom:1px solid var(--terminal-line);
+  color:var(--terminal-muted);
+  font-size:8.5px;
+  font-weight:750;
+  letter-spacing:.07em;
+  text-transform:uppercase;
+}}
+.token-route-ledger-head {{ grid-template-columns:minmax(180px,1.2fr) minmax(180px,1.25fr) 108px 108px 100px 82px; }}
+.funding-ledger-head {{ grid-template-columns:minmax(150px,1.3fr) minmax(140px,1.15fr) minmax(82px,.62fr) minmax(82px,.68fr) minmax(76px,.58fr) minmax(174px,1.05fr) 46px 24px; }}
+.token-group-list,.funding-group-list {{ gap:0; }}
+.token-route-group,.funding-token-group {{ border:0; border-bottom:1px solid var(--terminal-line); border-radius:0; background:transparent; overflow:visible; }}
+.token-route-group[open],.funding-token-group[open] {{ border-color:var(--terminal-line); }}
+.token-route-summary,.funding-token-group > summary {{ min-height:58px; padding:7px 9px; }}
+.token-route-summary:hover,.funding-token-group > summary:hover {{ background:var(--terminal-row-hover); }}
+.asset-monogram {{ display:none; }}
+.asset-identity {{ gap:0; }}
+.asset-chart-symbol {{ font-size:15px; font-weight:650; }}
+.asset-identity em,.best-route span,.best-route em,.group-number span,.group-number em,.group-routes span,.group-routes em {{ font-size:9px; }}
+.best-route strong,.funding-token-group > summary > div:not(.asset-identity) strong {{ font-size:12px; font-weight:620; }}
+.group-number strong,.group-routes strong {{ font-size:14px; font-weight:620; }}
+.token-route-summary > .best-route > span,.token-route-summary > .group-number > span,.token-route-summary > .group-routes > span,
+.funding-token-group > summary > div:not(.asset-identity) > span:first-child {{ display:none; }}
+.funding-token-group > summary .funding-realised > span:first-child {{ display:none; }}
+.funding-window {{ padding:1px 4px; border-radius:1px; background:transparent; }}
+.funding-radar-badge,.funding-live-badge,.ranking-status,.partner-status,.persistence-badge,.saved-ratio {{ border-radius:1px; background:transparent; }}
+.token-route-body,.funding-pair-list {{ border-top:1px solid var(--terminal-line); background:var(--terminal-panel); }}
+.expanded-asset-bar {{ background:transparent; }}
+.route-detail-row,.funding-pair-row {{ background:transparent; }}
+.route-detail-row:hover,.funding-pair-row:hover {{ background:var(--terminal-row-hover); }}
+.route-actions a,.route-alert-btn,.net-edge-open {{ border-radius:2px; background:transparent; }}
+
+.market-side {{ border-top:1px solid var(--terminal-line); }}
+.market-side-panel {{ gap:0; padding:0 0 14px; border:0; border-bottom:1px solid var(--terminal-line); border-radius:0; background:transparent; box-shadow:none; }}
+.market-mini-list {{ gap:0; }}
+.market-mini-row {{ min-height:48px; padding:8px 0; border:0; border-bottom:1px solid var(--terminal-line); border-radius:0; background:transparent; color:var(--terminal-text); }}
+.market-mini-row:last-child {{ border-bottom:0; }}
+.market-pagination {{ margin-top:12px; border-width:1px 0; border-radius:0; background:transparent; }}
+
+.funding-farm-tabs {{ gap:0; padding:0; border:0; border-bottom:1px solid var(--terminal-line); border-radius:0; background:transparent; }}
+.funding-window-tabs {{ gap:0; margin:0; border-bottom:1px solid var(--terminal-line); }}
+.funding-window-tabs span {{ margin-right:8px; }}
+.funding-radar-note {{ margin:0; padding:9px 12px; border:0; border-left:2px solid var(--terminal-warning); border-radius:0; background:transparent; font-size:10px; }}
+.funding-terminal-panel {{ gap:0; padding:0; border:0; border-top:1px solid var(--terminal-line); border-radius:0; background:transparent; }}
+.funding-token-group.historical-radar {{ background:linear-gradient(90deg,rgba(250,204,21,.035),transparent 24%); }}
+.funding-pair-row {{ min-height:54px; }}
+
+.ranking-explainer {{ border-width:1px 0; background:transparent; }}
+.ranking-explainer article {{ padding:12px 14px; }}
+.ranking-explainer span {{ font-size:9px; font-weight:700; letter-spacing:.06em; }}
+.ranking-explainer strong {{ font-size:12px; font-weight:620; }}
+.ranking-explainer p {{ font-size:10px; }}
+.ranking-tabs {{ gap:0; padding:0; border-bottom:1px solid var(--terminal-line); }}
+.ranking-table-wrap {{ border-width:1px 0; background:transparent; }}
+.ranking-table {{ min-width:1060px; }}
+.ranking-table th {{ background:var(--terminal-panel); font-size:8.5px; font-weight:700; letter-spacing:.06em; }}
+.ranking-table th,.ranking-table td {{ padding:9px 8px; }}
+.ranking-table td {{ font-size:11px; }}
+.ranking-token {{ font-size:13px; font-weight:650; }}
+
+.saved-charts-panel,.chart-builder,.selected-chart,.chart-blank-state {{ border-radius:0; background:transparent; box-shadow:none; }}
+.saved-charts-panel {{ padding:10px 0; border-width:1px 0; }}
+.saved-chart-list {{ gap:0; }}
+.saved-chart-list li {{ padding:8px 0; border-bottom:1px solid var(--terminal-line); border-radius:0; background:transparent; }}
+.chart-builder {{ border-width:1px 0; }}
+.chart-builder-title {{ padding:10px 0; }}
+.chart-builder-icon {{ width:24px; height:24px; border:0; border-radius:0; background:transparent; color:var(--terminal-accent); }}
+.chart-builder-title > div:first-child {{ grid-template-columns:24px auto; }}
+.chart-builder-state {{ border-radius:1px; background:transparent; }}
+.chart-builder-form {{ padding:12px 0; }}
+.chart-quote-preview {{ gap:0; }}
+.chart-quote-preview span {{ border-radius:0; background:transparent; }}
+.chart-swap {{ border-radius:2px; background:transparent; }}
+.chart-create-button {{ min-height:38px; border-radius:2px; }}
+.chart-blank-state {{ min-height:330px; border-width:1px 0; }}
+.chart-blank-state div {{ width:34px; height:34px; border-radius:0; }}
+.selected-chart {{ border-width:1px 0; }}
+.selected-chart-head {{ padding:10px 0; }}
+.selected-chart-head strong {{ font-size:21px; font-weight:620; }}
+.selected-chart-layout {{ grid-template-columns:220px minmax(0,1fr); min-height:520px; }}
+.chart-leg-stats article {{ padding:10px; }}
+.chart-plot-stack {{ grid-template-rows:minmax(520px,1fr); }}
+.chart-plot-panel {{ padding:8px 0 4px 12px; }}
+.chart-window-tabs {{ gap:0; border-bottom:1px solid var(--terminal-line); }}
+.chart-plot-title button,.funding-history-open {{ border-radius:2px; background:transparent; }}
+.live-spread-chart {{ grid-template-rows:auto minmax(460px,1fr) auto; }}
+.live-chart-canvas {{ min-height:460px; }}
+.live-chart-legend {{ justify-content:flex-start; }}
+.live-chart-legend button {{ border-radius:1px; }}
+.live-chart-legend button.active {{ background:transparent; text-decoration:underline; text-underline-offset:4px; }}
+.live-chart-tooltip,.funding-history-dialog {{ border-radius:2px; box-shadow:0 14px 40px rgba(0,0,0,.25); }}
+.selected-chart-foot {{ padding:8px 0; }}
+
+.panel,.data-card,.leg-card,.intel-section,.side-card,.source-card,.chart-route-card,.chart-summary-card,
+.route-timeline,.pair-checklist,.spread-lens,.pair-intel-strip,.route-summary-card,.pair-community,
+.position-card,.account-empty-panel,.account-settings,.notification-list article,.member-row,
+.partner-policy-grid article,.partner-panel,.partner-link-card,.telegram-hero,.telegram-flow article,
+.telegram-command-grid article,.telegram-preview,.research-hero,.research-grid,.worked-example,.audit-process {{
+  border-radius:2px;
+  box-shadow:none;
+}}
+
+@media(max-width:960px) {{
+  .topbar {{ min-height:48px; padding:7px 14px; align-items:center; }}
+  .brand {{ font-size:14px; }}
+  .mobile-primary-nav,.mobile-secondary-nav {{ display:flex; gap:0; overflow-x:auto; padding:0 8px; border-bottom:1px solid var(--terminal-line); background:var(--terminal-bg); }}
+  .mobile-primary-nav a,.mobile-secondary-nav a {{ flex:0 0 auto; min-height:42px; display:inline-flex; align-items:center; padding:0 9px; border-bottom:2px solid transparent; color:var(--terminal-muted); font-size:11px; font-weight:650; }}
+  .mobile-primary-nav a.active,.mobile-secondary-nav a.active {{ border-bottom-color:var(--terminal-accent); background:transparent; color:var(--terminal-text); }}
+  main {{ padding:18px 14px 44px; }}
+  .terminal-heading {{ grid-template-columns:1fr; gap:12px; padding:0 0 14px; }}
+  .terminal-heading h1 {{ font-size:27px; }}
+  .terminal-heading p {{ display:block; font-size:11.5px; }}
+  .terminal-live-box {{ min-width:0; padding:9px 0 0; grid-template-columns:auto auto 1fr; align-items:baseline; justify-items:start; gap:8px; border-left:0; border-top:1px solid var(--terminal-line); }}
+  .terminal-live-box strong {{ font-size:16px; }}
+  .terminal-kpi,.terminal-kpis article,.terminal-tape article {{ min-height:64px; padding:9px 10px; }}
+  .terminal-layout {{ grid-template-columns:1fr; gap:20px; }}
+  .token-route-ledger-head,.funding-ledger-head {{ display:none; }}
+  .token-route-summary > .best-route > span,.token-route-summary > .group-number > span,.token-route-summary > .group-routes > span,
+  .funding-token-group > summary > div:not(.asset-identity) > span:first-child,
+  .funding-token-group > summary .funding-realised > span:first-child {{ display:block; }}
+  .token-route-summary,.funding-token-group > summary {{ padding:10px 0; }}
+  .token-route-summary .best-route {{ padding-top:8px; }}
+  .market-side {{ border-top:1px solid var(--terminal-line); }}
+  .chart-builder-form {{ padding:12px 0; }}
+  .selected-chart-layout {{ grid-template-columns:1fr; min-height:0; }}
+  .chart-plot-panel {{ padding:8px 0; }}
+  .live-spread-chart {{ grid-template-rows:auto minmax(380px,1fr) auto; }}
+  .live-chart-canvas {{ min-height:380px; }}
+}}
+@media(max-width:640px) {{
+  .header-actions {{ margin-left:auto; }}
+  .theme-toggle > span:last-child {{ display:none; }}
+  .terminal-kpis,.terminal-tape,.funding-tape {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+  .terminal-kpis article:nth-child(2n),.terminal-tape article:nth-child(2n) {{ border-right:0; }}
+  .terminal-kpis article:nth-child(n+3),.terminal-tape article:nth-child(n+3) {{ border-top:1px solid var(--terminal-line); }}
+  .ranking-table-wrap {{ overflow:visible; }}
+  .ranking-table {{ display:block; min-width:0; }}
+  .ranking-table thead {{ display:none; }}
+  .ranking-table tbody,.ranking-table tr,.ranking-table td {{ display:block; width:100%; }}
+  .ranking-table tr {{ padding:9px 0; border-bottom:1px solid var(--terminal-line); }}
+  .ranking-table td {{ min-height:28px; display:flex; align-items:baseline; justify-content:space-between; gap:14px; padding:4px 0; border:0; text-align:right; }}
+  .ranking-table td::before {{ content:attr(data-label); flex:0 0 auto; color:var(--terminal-muted); font-size:8.5px; font-weight:700; letter-spacing:.06em; text-align:left; text-transform:uppercase; }}
+  .ranking-table td[data-label="Token"] {{ display:grid; grid-template-columns:auto 1fr; justify-content:start; text-align:left; }}
+  .ranking-table td[data-label="Token"]::before {{ grid-column:1/-1; }}
+  .ranking-table td[data-label="Open"] {{ justify-content:flex-end; }}
+  .ranking-table td[data-label="Open"]::before {{ margin-right:auto; }}
+  .chart-builder-title,.selected-chart-head,.selected-chart-foot {{ gap:10px; }}
+  .live-chart-legend {{ gap:8px; }}
+}}
 </style>
 </head>
 <body>
