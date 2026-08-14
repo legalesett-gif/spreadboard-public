@@ -171,6 +171,13 @@ def evaluate(
         route.get("estimated_round_trip_cost_pct"),
         route.get("known_round_trip_cost_pct"),
     )
+    cost_status = (
+        "observed_route_median"
+        if known_costs is not None and route.get("account_cost_evidence")
+        else "known"
+        if known_costs is not None
+        else "account_fee_and_exit_costs_required"
+    )
 
     stability_points = _funding_stability_score(funding_stability, maximum=15.0)
     spread_cross = 5.0 + _clamp((expected_convergence or 0.0) * 5.0, -5.0, 5.0)
@@ -372,7 +379,7 @@ def evaluate(
                 if expected_gross is not None and known_costs is not None
                 else None
             ),
-            "cost_status": "known" if known_costs is not None else "account_fee_and_exit_costs_required",
+            "cost_status": cost_status,
             "known_dex_entry_gas_pct": _dex_entry_gas_pct(route),
         },
         "dex_evidence": _dex_evidence(route),
@@ -1095,6 +1102,7 @@ def _dex_evidence(route: dict[str, Any]) -> dict[str, Any]:
     route_plan = route.get("dex_route_plan") or []
     mev = str(route.get("dex_mev_protection") or "").strip() or None
     transfer_seconds = _number(route.get("dex_transfer_time_seconds"))
+    transfer_time_source = str(route.get("dex_transfer_time_source") or "").strip()
     requires_transfer = bool(route.get("requires_transfer"))
     deliverable = route.get("deliverable")
     size_evidenced = notional is not None and notional > 0
@@ -1148,7 +1156,15 @@ def _dex_evidence(route: dict[str, Any]) -> dict[str, Any]:
                 else "unknown"
             ),
             "estimated_seconds": transfer_seconds,
-            "time_status": "provider_reported" if transfer_seconds is not None else "unknown",
+            "time_status": (
+                "observed_opt_in_median"
+                if transfer_seconds is not None
+                and transfer_time_source == "opt_in_observed_median"
+                else "provider_reported"
+                if transfer_seconds is not None
+                else "unknown"
+            ),
+            "time_source": transfer_time_source or None,
             "long_withdraw_enabled": route.get("long_withdraw_enabled"),
             "short_deposit_enabled": route.get("short_deposit_enabled"),
         },

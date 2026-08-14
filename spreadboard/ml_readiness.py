@@ -74,7 +74,11 @@ def assess(
         else 0.0
     )
     cost_complete = (
-        sum(str(row["cost_status"]) == "known" for row in outcomes) / len(outcomes)
+        sum(
+            str(row["cost_status"]) in {"known", "observed_route_median"}
+            for row in outcomes
+        )
+        / len(outcomes)
         if outcomes
         else 0.0
     )

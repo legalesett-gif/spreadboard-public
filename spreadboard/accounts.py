@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+import statistics
 import threading
 from typing import Any, Iterator
 
@@ -176,6 +177,16 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 gas_costs_usd REAL NOT NULL DEFAULT 0,
                 transfer_costs_usd REAL NOT NULL DEFAULT 0,
                 slippage_costs_usd REAL NOT NULL DEFAULT 0,
+                transfer_chain TEXT,
+                transfer_contract TEXT,
+                transfer_started_at TEXT,
+                transfer_credited_at TEXT,
+                research_costs_complete INTEGER NOT NULL DEFAULT 0,
+                research_cost_consent INTEGER NOT NULL DEFAULT 0,
+                research_transfer_consent INTEGER NOT NULL DEFAULT 0,
+                research_matched_notional_usd REAL,
+                research_consent_version TEXT,
+                research_consented_at TEXT,
                 opened_at TEXT NOT NULL,
                 closed_at TEXT,
                 long_exit_price REAL,
@@ -582,6 +593,16 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 "gas_costs_usd": "REAL NOT NULL DEFAULT 0",
                 "transfer_costs_usd": "REAL NOT NULL DEFAULT 0",
                 "slippage_costs_usd": "REAL NOT NULL DEFAULT 0",
+                "transfer_chain": "TEXT",
+                "transfer_contract": "TEXT",
+                "transfer_started_at": "TEXT",
+                "transfer_credited_at": "TEXT",
+                "research_costs_complete": "INTEGER NOT NULL DEFAULT 0",
+                "research_cost_consent": "INTEGER NOT NULL DEFAULT 0",
+                "research_transfer_consent": "INTEGER NOT NULL DEFAULT 0",
+                "research_matched_notional_usd": "REAL",
+                "research_consent_version": "TEXT",
+                "research_consented_at": "TEXT",
             },
         )
         _ensure_columns(
@@ -1922,6 +1943,142 @@ def list_positions(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> li
         connection.close()
 
 
+def research_route_signature(row: dict[str, Any]) -> str:
+    """Return a case-insensitive route identity without account or fill data."""
+
+    def market_type(value: Any) -> str:
+        normalized = str(value or "").strip().casefold()
+        if normalized in {"future", "futures", "perp", "perpetual", "swap"}:
+            return "futures"
+        if normalized == "dex":
+            return "dex"
+        if normalized == "spot":
+            return "spot"
+        return normalized
+
+    return "|".join(
+        (
+            str(row.get("token") or "").strip().casefold(),
+            str(row.get("long_venue") or "").strip().casefold(),
+            market_type(row.get("long_market_type")),
+            str(row.get("short_venue") or "").strip().casefold(),
+            market_type(row.get("short_market_type")),
+        )
+    )
+
+
+def anonymized_research_evidence(
+    *,
+    as_of: datetime | float | None = None,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    """Aggregate explicitly contributed closed-position evidence.
+
+    The return value intentionally contains no user/position identifiers,
+    quantities, fills, notionals, or event timestamps. Lifecycle slippage is
+    included here because public route gross edge does not contain a member's
+    realised entry/exit slippage; portfolio PnL still does not deduct it twice.
+    """
+
+    if isinstance(as_of, datetime):
+        cutoff = as_of.astimezone(timezone.utc)
+    elif as_of is None:
+        cutoff = datetime.now(tz=timezone.utc)
+    else:
+        cutoff = datetime.fromtimestamp(float(as_of), tz=timezone.utc)
+    connection = _connect(db_path)
+    try:
+        rows = [
+            dict(row)
+            for row in connection.execute(
+                """SELECT token, long_venue, long_market_type, short_venue,
+                          short_market_type, status, closed_at,
+                          entry_fees_usd, exit_fees_usd, borrow_costs_usd,
+                          gas_costs_usd, transfer_costs_usd, slippage_costs_usd,
+                          transfer_chain, transfer_contract,
+                          transfer_started_at, transfer_credited_at,
+                          research_costs_complete, research_cost_consent,
+                          research_transfer_consent, research_matched_notional_usd
+                   FROM positions
+                   WHERE status = 'closed'
+                     AND (research_cost_consent = 1 OR research_transfer_consent = 1)"""
+            ).fetchall()
+        ]
+    finally:
+        connection.close()
+
+    grouped: dict[
+        tuple[str, str, str], dict[str, list[float]]
+    ] = {}
+    for row in rows:
+        closed_at = _optional_normalized_iso(row.get("closed_at"))
+        if not closed_at:
+            continue
+        if datetime.fromisoformat(closed_at.replace("Z", "+00:00")) > cutoff:
+            continue
+        signature = research_route_signature(row)
+        is_dex = "dex" in {
+            str(row.get("long_market_type") or "").strip().casefold(),
+            str(row.get("short_market_type") or "").strip().casefold(),
+        }
+        chain = str(row.get("transfer_chain") or "").strip().casefold()
+        contract = str(row.get("transfer_contract") or "").strip().casefold()
+        if is_dex and not (chain and contract):
+            continue
+        bucket = grouped.setdefault((signature, chain, contract), {"costs": [], "transfers": []})
+        if row.get("research_cost_consent") and row.get("research_costs_complete"):
+            notional = _optional_nonnegative_float(row.get("research_matched_notional_usd"))
+            if notional:
+                cost_usd = sum(
+                    float(row.get(field) or 0.0)
+                    for field in (
+                        "entry_fees_usd",
+                        "exit_fees_usd",
+                        "borrow_costs_usd",
+                        "gas_costs_usd",
+                        "transfer_costs_usd",
+                        "slippage_costs_usd",
+                    )
+                )
+                bucket["costs"].append(cost_usd / notional * 100.0)
+        if row.get("research_transfer_consent"):
+            started_at = _optional_normalized_iso(row.get("transfer_started_at"))
+            credited_at = _optional_normalized_iso(row.get("transfer_credited_at"))
+            if started_at and credited_at:
+                duration = (
+                    datetime.fromisoformat(credited_at.replace("Z", "+00:00"))
+                    - datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                ).total_seconds()
+                if 0 <= duration <= 30 * 24 * 3600:
+                    bucket["transfers"].append(duration)
+
+    output: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for (signature, chain, contract), values in grouped.items():
+        route = output.setdefault(signature, {"costs": [], "transfers": []})
+        if values["costs"]:
+            route["costs"].append(
+                {
+                    "chain": chain or None,
+                    "contract": contract or None,
+                    "round_trip_cost_pct": round(statistics.median(values["costs"]), 8),
+                    "sample_count": len(values["costs"]),
+                    "source": "opt_in_completed_positions",
+                    "includes": "fees_borrow_gas_transfer_and_measured_slippage",
+                }
+            )
+        if values["transfers"]:
+            route["transfers"].append(
+                {
+                    "chain": chain,
+                    "contract": contract,
+                    "transfer_time_seconds": round(statistics.median(values["transfers"]), 3),
+                    "sample_count": len(values["transfers"]),
+                    "source": "opt_in_successful_transfers",
+                }
+            )
+    return output
+
+
 def _position_values(payload: dict[str, Any]) -> dict[str, Any]:
     required_text = ("token", "long_venue", "long_market_type", "short_venue", "short_market_type")
     text = {key: str(payload.get(key) or "").strip() for key in required_text}
@@ -2067,6 +2224,78 @@ def update_position(
             long_exit_price = None
             short_exit_price = None
             exit_fees_usd = 0.0
+        transfer_chain = str(
+            payload.get("transfer_chain", existing["transfer_chain"] or "") or ""
+        ).strip()[:120] or None
+        transfer_contract = str(
+            payload.get("transfer_contract", existing["transfer_contract"] or "") or ""
+        ).strip()[:240] or None
+        transfer_started_at = _optional_normalized_iso(
+            payload.get("transfer_started_at", existing["transfer_started_at"])
+        )
+        transfer_credited_at = _optional_normalized_iso(
+            payload.get("transfer_credited_at", existing["transfer_credited_at"])
+        )
+        if bool(transfer_started_at) != bool(transfer_credited_at):
+            raise ValueError("transfer_timestamps_must_be_complete")
+        if transfer_started_at and transfer_credited_at:
+            started = datetime.fromisoformat(transfer_started_at.replace("Z", "+00:00"))
+            credited = datetime.fromisoformat(transfer_credited_at.replace("Z", "+00:00"))
+            if credited < started:
+                raise ValueError("transfer_credited_before_started")
+
+        research_costs_complete = _payload_bool(
+            payload,
+            "research_costs_complete",
+            default=bool(existing["research_costs_complete"]),
+        )
+        research_cost_consent = _payload_bool(
+            payload,
+            "research_cost_consent",
+            default=bool(existing["research_cost_consent"]),
+        )
+        research_transfer_consent = _payload_bool(
+            payload,
+            "research_transfer_consent",
+            default=bool(existing["research_transfer_consent"]),
+        )
+        research_matched_notional_usd = (
+            _optional_nonnegative_float(payload.get("research_matched_notional_usd"))
+            if "research_matched_notional_usd" in payload
+            else _optional_nonnegative_float(existing["research_matched_notional_usd"])
+        )
+        if status != "closed":
+            research_costs_complete = False
+            research_cost_consent = False
+            research_transfer_consent = False
+        if research_cost_consent and not research_costs_complete:
+            raise ValueError("complete_lifecycle_costs_before_research_consent")
+        if research_cost_consent and not research_matched_notional_usd:
+            raise ValueError("matched_notional_required_for_research_consent")
+        is_dex = any(
+            str(value or "").casefold() == "dex"
+            for value in (values["long_market_type"], values["short_market_type"])
+        )
+        if research_cost_consent and is_dex and not (transfer_chain and transfer_contract):
+            raise ValueError("exact_dex_identity_required_for_research_consent")
+        if research_transfer_consent:
+            if not is_dex:
+                raise ValueError("transfer_research_requires_dex_route")
+            if not (transfer_chain and transfer_contract):
+                raise ValueError("exact_dex_identity_required_for_transfer_research")
+            if not (transfer_started_at and transfer_credited_at):
+                raise ValueError("transfer_timestamps_required_for_research_consent")
+        consent_active = research_cost_consent or research_transfer_consent
+        was_consented = bool(
+            existing["research_cost_consent"] or existing["research_transfer_consent"]
+        )
+        research_consent_version = "portfolio_research_v1" if consent_active else None
+        if consent_active and was_consented:
+            research_consented_at = str(existing["research_consented_at"] or "") or _utc_iso()
+        elif consent_active:
+            research_consented_at = _utc_iso()
+        else:
+            research_consented_at = None
         cursor = connection.execute(
             """
             UPDATE positions SET
@@ -2076,6 +2305,11 @@ def update_position(
                 short_quantity = ?, short_entry_price = ?, entry_spread_pct = ?,
                 capital_usd = ?, entry_fees_usd = ?, borrow_costs_usd = ?,
                 gas_costs_usd = ?, transfer_costs_usd = ?, slippage_costs_usd = ?,
+                transfer_chain = ?, transfer_contract = ?, transfer_started_at = ?,
+                transfer_credited_at = ?, research_costs_complete = ?,
+                research_cost_consent = ?, research_transfer_consent = ?,
+                research_matched_notional_usd = ?, research_consent_version = ?,
+                research_consented_at = ?,
                 opened_at = ?, notes = ?,
                 status = ?, closed_at = ?, long_exit_price = ?, short_exit_price = ?,
                 exit_fees_usd = ?, updated_at = ?
@@ -2101,6 +2335,16 @@ def update_position(
                 values["gas_costs_usd"],
                 values["transfer_costs_usd"],
                 values["slippage_costs_usd"],
+                transfer_chain,
+                transfer_contract,
+                transfer_started_at,
+                transfer_credited_at,
+                int(research_costs_complete),
+                int(research_cost_consent),
+                int(research_transfer_consent),
+                research_matched_notional_usd,
+                research_consent_version,
+                research_consented_at,
                 values["opened_at"],
                 values["notes"],
                 status,
@@ -2847,6 +3091,21 @@ def _normalize_iso(value: str) -> str:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return _utc_iso(parsed)
+
+
+def _optional_normalized_iso(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    return _normalize_iso(str(value))
+
+
+def _payload_bool(payload: dict[str, Any], key: str, *, default: bool = False) -> bool:
+    if key not in payload:
+        return bool(default)
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
 def _positive_float(value: Any, name: str) -> float:

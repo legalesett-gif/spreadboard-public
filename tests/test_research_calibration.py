@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 
 from spreadboard import market_history, research_calibration
@@ -52,12 +53,92 @@ def test_shadow_observations_are_hourly_versioned_and_labeled_without_lookahead(
     )
     status = research_calibration.status(calibration_db)
 
-    assert first == {"considered": 1, "inserted": 1}
-    assert duplicate == {"considered": 1, "inserted": 0}
+    assert first == {
+        "considered": 1,
+        "inserted": 1,
+        "cost_evidenced": 0,
+        "transfer_evidenced": 0,
+    }
+    assert duplicate == {
+        "considered": 1,
+        "inserted": 0,
+        "cost_evidenced": 0,
+        "transfer_evidenced": 0,
+    }
     assert labeled["labeled"] == 2
     assert status["observations"] == 1
     assert status["outcomes"] == 2
     assert status["ml_ready"] is False
+
+
+def test_opt_in_dex_cost_and_transfer_evidence_requires_exact_current_identity(tmp_path) -> None:
+    now = time.time()
+    calibration_db = tmp_path / "calibration.sqlite3"
+    history_db = tmp_path / "history.sqlite3"
+    route = {
+        **_route(int(now * 1_000_000), 1.2, 0.4),
+        "token": "DEXCAL",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "DEX",
+        "route_kind": "DEX-FUTURES",
+        "route_key": "DEXCAL|OKX DEX 56|DEX|Bybit|Futures",
+        "dex_chain": "Base",
+        "dex_contract": "0xabc",
+        "requires_transfer": True,
+        "deliverable": False,
+    }
+    evidence = {
+        "dexcal|okx dex 56|dex|bybit|futures": {
+            "costs": [
+                {
+                    "chain": "base",
+                    "contract": "0xabc",
+                    "round_trip_cost_pct": 0.42,
+                    "sample_count": 3,
+                    "includes": "fees_borrow_gas_transfer_and_measured_slippage",
+                }
+            ],
+            "transfers": [
+                {
+                    "chain": "base",
+                    "contract": "0xabc",
+                    "transfer_time_seconds": 95,
+                    "sample_count": 2,
+                }
+            ],
+        }
+    }
+
+    captured = research_calibration.capture_routes(
+        [route],
+        now=now,
+        account_evidence=evidence,
+        db_path=calibration_db,
+        history_db_path=history_db,
+    )
+    connection = research_calibration._connect(calibration_db)
+    try:
+        row = connection.execute(
+            "SELECT cost_status, feature_json FROM score_observations"
+        ).fetchone()
+    finally:
+        connection.close()
+    features = json.loads(row["feature_json"])
+
+    assert captured["cost_evidenced"] == 1
+    assert captured["transfer_evidenced"] == 1
+    assert row["cost_status"] == "observed_route_median"
+    assert features["account_cost_evidence"]["sample_count"] == 3
+    assert features["dex_evidence"]["transfer"]["deliverable"] is False
+    assert features["dex_evidence"]["transfer"]["status"] == "blocked"
+    assert features["dex_evidence"]["transfer"]["time_status"] == "observed_opt_in_median"
+
+    wrong_identity = research_calibration._route_with_account_evidence(
+        {**route, "dex_contract": "0xdifferent"},
+        evidence["dexcal|okx dex 56|dex|bybit|futures"],
+    )
+    assert "known_round_trip_cost_pct" not in wrong_identity
+    assert "dex_transfer_time_seconds" not in wrong_identity
 
 
 def test_missing_history_is_backed_off_instead_of_starving_later_routes(tmp_path) -> None:

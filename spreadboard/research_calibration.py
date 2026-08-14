@@ -83,11 +83,12 @@ def capture_routes(
     *,
     now: float | None = None,
     limit: int = 60,
+    account_evidence: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
     db_path: Path | str = DEFAULT_DB_PATH,
     history_db_path: Path | str = DEFAULT_HISTORY_DB_PATH,
 ) -> dict[str, int]:
     """Freeze a bounded hourly set of the strongest public candidates."""
-    from . import funding_radar, market_history, research_score
+    from . import accounts, funding_radar, market_history, research_score
 
     moment = time.time() if now is None else float(now)
     hour_us = int(moment // 3600 * 3600 * 1_000_000)
@@ -110,6 +111,9 @@ def capture_routes(
     initialize(db_path)
     connection = _connect(db_path)
     inserted = 0
+    cost_evidenced = 0
+    transfer_evidenced = 0
+    contributed = account_evidence or {}
     try:
         for route in ranked:
             key = str(route["route_key"])
@@ -129,7 +133,10 @@ def capture_routes(
             # The observation is evaluated as-of its capture hour. An offline
             # labeling run may execute days later; wall-clock quote freshness
             # must not erase the entry basis from the frozen feature row.
-            observed_route = {**route, "spread_quote_current": True}
+            observed_route = _route_with_account_evidence(
+                {**route, "spread_quote_current": True},
+                contributed.get(accounts.research_route_signature(route)) or {},
+            )
             evaluation = research_score.evaluate(
                 observed_route, windows=windows, history=history
             )
@@ -143,6 +150,8 @@ def capture_routes(
                 "funding_outlook": outlook,
                 "risk_data_quality": (evaluation.get("risk_estimate") or {}).get("data_quality") or {},
                 "dex_evidence": evaluation.get("dex_evidence") or {},
+                "account_cost_evidence": observed_route.get("account_cost_evidence") or {},
+                "observed_transfer_evidence": observed_route.get("observed_transfer_evidence") or {},
             }
             connection.execute(
                 """INSERT OR IGNORE INTO score_observations (
@@ -165,11 +174,73 @@ def capture_routes(
                     _utc_iso(moment),
                 ),
             )
-            inserted += int(connection.execute("SELECT changes()").fetchone()[0] > 0)
+            was_inserted = int(connection.execute("SELECT changes()").fetchone()[0] > 0)
+            inserted += was_inserted
+            if was_inserted and observed_route.get("account_cost_evidence"):
+                cost_evidenced += 1
+            if was_inserted and observed_route.get("observed_transfer_evidence"):
+                transfer_evidenced += 1
         connection.commit()
     finally:
         connection.close()
-    return {"considered": len(ranked), "inserted": inserted}
+    return {
+        "considered": len(ranked),
+        "inserted": inserted,
+        "cost_evidenced": cost_evidenced,
+        "transfer_evidenced": transfer_evidenced,
+    }
+
+
+def _route_with_account_evidence(
+    route: dict[str, Any], evidence: dict[str, list[dict[str, Any]]]
+) -> dict[str, Any]:
+    """Add anonymous historical evidence without overriding current rail state."""
+
+    output = dict(route)
+    long_type = str(route.get("long_market_type") or "").strip().casefold()
+    short_type = str(route.get("short_market_type") or "").strip().casefold()
+    is_dex = "dex" in {long_type, short_type} or "DEX" in str(route.get("route_kind") or "").upper()
+    chain = str(route.get("dex_chain") or "").strip().casefold()
+    contract = str(route.get("dex_contract") or "").strip().casefold()
+
+    def matching(items: Any) -> dict[str, Any] | None:
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            item_chain = str(item.get("chain") or "").strip().casefold()
+            item_contract = str(item.get("contract") or "").strip().casefold()
+            if is_dex:
+                if chain and contract and item_chain == chain and item_contract == contract:
+                    return item
+            elif not item_chain and not item_contract:
+                return item
+        return None
+
+    cost = matching(evidence.get("costs"))
+    if cost is not None:
+        value = _number(cost.get("round_trip_cost_pct"))
+        if value is not None and value >= 0:
+            output["known_round_trip_cost_pct"] = value
+            output["account_cost_evidence"] = {
+                "source": "opt_in_completed_positions",
+                "sample_count": int(cost.get("sample_count") or 0),
+                "scope": "median_route_percentage_only",
+                "includes": cost.get("includes"),
+                "identity_match": "exact_chain_contract" if is_dex else "exact_route",
+            }
+    transfer = matching(evidence.get("transfers"))
+    if transfer is not None and bool(route.get("requires_transfer")):
+        value = _number(transfer.get("transfer_time_seconds"))
+        if value is not None and value >= 0:
+            output["dex_transfer_time_seconds"] = value
+            output["dex_transfer_time_source"] = "opt_in_observed_median"
+            output["observed_transfer_evidence"] = {
+                "source": "opt_in_successful_transfers",
+                "sample_count": int(transfer.get("sample_count") or 0),
+                "identity_match": "exact_chain_contract",
+                "does_not_override_current_rails": True,
+            }
+    return output
 
 
 def label_matured(

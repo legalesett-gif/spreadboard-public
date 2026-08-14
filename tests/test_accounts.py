@@ -26,6 +26,16 @@ def test_initialize_migrates_existing_positions_with_lifecycle_cost_columns(
         "gas_costs_usd",
         "transfer_costs_usd",
         "slippage_costs_usd",
+        "transfer_chain",
+        "transfer_contract",
+        "transfer_started_at",
+        "transfer_credited_at",
+        "research_costs_complete",
+        "research_cost_consent",
+        "research_transfer_consent",
+        "research_matched_notional_usd",
+        "research_consent_version",
+        "research_consented_at",
     }
     with sqlite3.connect(path) as connection:
         for column in cost_columns:
@@ -290,6 +300,173 @@ def test_position_corrections_are_owner_scoped_and_recompute_route(tmp_path, mon
     assert reopened["exit_fees_usd"] == 0
     with pytest.raises(ValueError, match="position_not_found"):
         accounts.update_position(other["id"], created["id"], payload, db_path=path)
+
+
+def test_completed_position_research_evidence_is_explicit_anonymous_and_revocable(
+    tmp_path, monkeypatch
+) -> None:
+    path = _database(tmp_path, monkeypatch)
+    owner = accounts.create_user(
+        email="research-owner@example.test",
+        display_name="Research owner",
+        password="research-owner-password",
+        subscription_status="active",
+        db_path=path,
+    )
+    payload = {
+        "token": "COST",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "long_symbol": "COST/USDT",
+        "long_quantity": 1000,
+        "long_entry_price": 2.5,
+        "short_venue": "Bybit",
+        "short_market_type": "Futures",
+        "short_symbol": "COST/USDT:USDT",
+        "short_quantity": 1000,
+        "short_entry_price": 2.5,
+        "entry_fees_usd": 2,
+        "borrow_costs_usd": 3,
+        "gas_costs_usd": 4,
+        "transfer_costs_usd": 5,
+        "slippage_costs_usd": 6,
+        "opened_at": "2026-08-10T00:00:00Z",
+    }
+    created = accounts.create_position(owner["id"], payload, db_path=path)
+    closed = accounts.close_position(
+        owner["id"],
+        created["id"],
+        {
+            "long_exit_price": 2.6,
+            "short_exit_price": 2.4,
+            "exit_fees_usd": 5,
+            "closed_at": "2026-08-11T00:00:00Z",
+        },
+        db_path=path,
+    )
+
+    with pytest.raises(ValueError, match="complete_lifecycle_costs"):
+        accounts.update_position(
+            owner["id"],
+            created["id"],
+            {
+                **payload,
+                "status": "closed",
+                "closed_at": closed["closed_at"],
+                "long_exit_price": 2.6,
+                "short_exit_price": 2.4,
+                "exit_fees_usd": 5,
+                "research_matched_notional_usd": 2500,
+                "research_cost_consent": True,
+            },
+            db_path=path,
+        )
+
+    contributed = accounts.update_position(
+        owner["id"],
+        created["id"],
+        {
+            **payload,
+            "status": "closed",
+            "closed_at": closed["closed_at"],
+            "long_exit_price": 2.6,
+            "short_exit_price": 2.4,
+            "exit_fees_usd": 5,
+            "research_matched_notional_usd": 2500,
+            "research_costs_complete": True,
+            "research_cost_consent": True,
+        },
+        db_path=path,
+    )
+    evidence = accounts.anonymized_research_evidence(
+        as_of=datetime(2026, 8, 12, tzinfo=timezone.utc), db_path=path
+    )
+    cost = evidence["cost|mexc|spot|bybit|futures"]["costs"][0]
+
+    assert contributed["research_consent_version"] == "portfolio_research_v1"
+    assert cost["round_trip_cost_pct"] == 1.0
+    assert cost["sample_count"] == 1
+    serialized = str(evidence)
+    assert "research-owner" not in serialized
+    assert "2500" not in serialized
+    assert "2.6" not in serialized
+
+    accounts.update_position(
+        owner["id"],
+        created["id"],
+        {
+            **payload,
+            "status": "closed",
+            "closed_at": closed["closed_at"],
+            "long_exit_price": 2.6,
+            "short_exit_price": 2.4,
+            "exit_fees_usd": 5,
+            "research_matched_notional_usd": 2500,
+            "research_costs_complete": True,
+            "research_cost_consent": False,
+            "research_transfer_consent": False,
+        },
+        db_path=path,
+    )
+    assert accounts.anonymized_research_evidence(db_path=path) == {}
+
+
+def test_dex_transfer_evidence_requires_identity_and_uses_only_duration(
+    tmp_path, monkeypatch
+) -> None:
+    path = _database(tmp_path, monkeypatch)
+    owner = accounts.create_user(
+        email="dex-evidence@example.test",
+        display_name="DEX evidence",
+        password="dex-evidence-password",
+        subscription_status="active",
+        db_path=path,
+    )
+    payload = {
+        "token": "DX",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "DEX",
+        "long_symbol": "0xabc",
+        "long_quantity": 100,
+        "long_entry_price": 1,
+        "short_venue": "Gate",
+        "short_market_type": "Spot",
+        "short_symbol": "DX/USDT",
+        "short_quantity": 100,
+        "short_entry_price": 1,
+        "opened_at": "2026-08-10T00:00:00Z",
+    }
+    created = accounts.create_position(owner["id"], payload, db_path=path)
+    closed = accounts.close_position(
+        owner["id"],
+        created["id"],
+        {
+            "long_exit_price": 1,
+            "short_exit_price": 1,
+            "closed_at": "2026-08-11T00:00:00Z",
+        },
+        db_path=path,
+    )
+    contributed = {
+        **payload,
+        "status": "closed",
+        "closed_at": closed["closed_at"],
+        "long_exit_price": 1,
+        "short_exit_price": 1,
+        "transfer_chain": "Base",
+        "transfer_contract": "0xAbC",
+        "transfer_started_at": "2026-08-10T01:00:00Z",
+        "transfer_credited_at": "2026-08-10T01:10:00Z",
+        "research_transfer_consent": True,
+    }
+    accounts.update_position(owner["id"], created["id"], contributed, db_path=path)
+    evidence = accounts.anonymized_research_evidence(db_path=path)
+    transfer = evidence["dx|okx dex 56|dex|gate|spot"]["transfers"][0]
+
+    assert transfer["chain"] == "base"
+    assert transfer["contract"] == "0xabc"
+    assert transfer["transfer_time_seconds"] == 600
+    assert "2026-08-10" not in str(evidence)
 
 
 def _alert_user(tmp_path, monkeypatch):

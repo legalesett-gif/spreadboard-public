@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sqlite3
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,7 +16,7 @@ for import_path in (ROOT / "src", ROOT):
         sys.path.remove(str(import_path))
     sys.path.insert(0, str(import_path))
 
-from spreadboard import api_spreads, board, research_calibration, token_rankings  # noqa: E402
+from spreadboard import accounts, api_spreads, board, research_calibration, token_rankings  # noqa: E402
 
 
 def main() -> int:
@@ -48,7 +49,15 @@ def main() -> int:
         for route in group.get("routes") or []
         if isinstance(route, dict)
     ]
-    calibration_capture = research_calibration.capture_routes(routes)
+    try:
+        account_evidence = accounts.anonymized_research_evidence()
+        account_evidence_status = "available"
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        account_evidence = {}
+        account_evidence_status = f"unavailable:{type(exc).__name__}"
+    calibration_capture = research_calibration.capture_routes(
+        routes, account_evidence=account_evidence
+    )
     calibration_labels = research_calibration.label_matured()
     print(
         json.dumps(
@@ -59,6 +68,9 @@ def main() -> int:
                 "cooled": payload.get("cooled_token_count", 0),
                 "generated_at": payload.get("generated_at"),
                 "calibration_captured": calibration_capture["inserted"],
+                "calibration_cost_evidenced": calibration_capture["cost_evidenced"],
+                "calibration_transfer_evidenced": calibration_capture["transfer_evidenced"],
+                "account_evidence_status": account_evidence_status,
                 "calibration_attempted": calibration_labels["attempted"],
                 "calibration_labeled": calibration_labels["labeled"],
             },

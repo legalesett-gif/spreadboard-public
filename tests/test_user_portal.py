@@ -331,10 +331,13 @@ def test_portfolio_return_falls_back_to_tracked_position_capital() -> None:
     assert summary["open_position_return_pct"] == pytest.approx(5)
 
 
-def test_position_correction_converts_both_local_timestamps_to_utc() -> None:
+def test_position_correction_converts_all_local_timestamps_to_utc() -> None:
     script = render_account_script()
 
-    assert "for(const field of ['opened_at','closed_at'])" in script
+    assert (
+        "for(const field of ['opened_at','closed_at','transfer_started_at','transfer_credited_at'])"
+        in script
+    )
     assert "new Date(payload[field]).toISOString()" in script
 
 
