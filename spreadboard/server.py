@@ -2792,6 +2792,13 @@ def _health_with_fast_quote_state(payload: dict[str, Any]) -> dict[str, Any]:
     result = dict(payload)
     canonical = dict(result.get("canonical_api") or {})
     canonical["fast_quote_refresh"] = fast
+    if fast.get("updated_at"):
+        # This is the timestamp of the current executable quote feed.  A cheap
+        # readiness probe intentionally does not rebuild the 25k-row grouped
+        # board, so it may have no structural `updated_at` at all after a fresh
+        # process start.  Leaving it empty made /status claim the operational
+        # feed was "updated unavailable" while live rows were on screen.
+        canonical["updated_at"] = fast["updated_at"]
     if fast.get("age_min") is not None:
         canonical["fast_quote_age_min"] = fast["age_min"]
         current_age = _float_or_none(canonical.get("age_min"))
@@ -9797,9 +9804,12 @@ def render_status_page(payload: dict[str, Any]) -> str:
         status = str(item.get("status") or "unknown")
         detail = ""
         if key == "market_data":
+            updated = h(compact_timestamp(item.get("updated_at")))
+            row_count = item.get("row_count")
             detail = (
-                f"{h(item.get('row_count') or 0)} current rows · "
-                f"updated {h(compact_timestamp(item.get('updated_at')))}"
+                f"{h(row_count)} current rows · updated {updated}"
+                if row_count is not None
+                else f"Live feed · updated {updated}"
             )
         elif key == "crypto_checkout":
             detail = f"{h(item.get('chain') or 'Not configured')} · {h(', '.join(item.get('tokens') or []))}"

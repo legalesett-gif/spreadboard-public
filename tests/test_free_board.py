@@ -265,6 +265,25 @@ def test_status_page_compacts_market_timestamp_for_small_cards() -> None:
     assert "2026-08-09T21:56:37Z" not in page
 
 
+def test_status_page_does_not_call_an_unbuilt_market_cache_zero_rows() -> None:
+    page = server.render_status_page(
+        {
+            "ok": True,
+            "checked_at": "2026-08-14T17:30:00+00:00",
+            "components": {
+                "market_data": {
+                    "status": "operational",
+                    "row_count": None,
+                    "updated_at": "2026-08-14T17:29:30Z",
+                }
+            },
+        }
+    )
+
+    assert "Live feed · updated 14 Aug 2026 · 17:29 UTC" in page
+    assert "0 current rows" not in page
+
+
 def test_warming_yields_between_builds_so_the_server_can_answer() -> None:
     """The warm holds the GIL; without a yield the site is unreachable, not slow."""
     import inspect

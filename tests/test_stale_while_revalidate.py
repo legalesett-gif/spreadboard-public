@@ -167,6 +167,27 @@ def test_the_readiness_probe_never_builds_the_board(monkeypatch) -> None:
     assert answer is not None
 
 
+def test_fast_quote_timestamp_completes_the_cheap_health_answer(monkeypatch) -> None:
+    from spreadboard import api_spreads, server
+
+    monkeypatch.setattr(
+        api_spreads,
+        "fast_quote_health",
+        lambda: {
+            "updated_at": "2026-08-14T17:29:30Z",
+            "age_min": 0.25,
+            "lane_token_counts": {"DEX-FUTURES": 40, "DEX-SPOT": 31},
+        },
+    )
+
+    health = server._health_with_fast_quote_state(
+        {"ok": True, "canonical_api": {"status": "warming"}, "market": {}}
+    )
+
+    assert health["canonical_api"]["updated_at"] == "2026-08-14T17:29:30Z"
+    assert health["canonical_api"]["age_min"] == 0.25
+
+
 def test_a_waiter_serves_stale_immediately_instead_of_waiting(monkeypatch) -> None:
     """It must not wait out someone else's build when it already has an answer.
 
