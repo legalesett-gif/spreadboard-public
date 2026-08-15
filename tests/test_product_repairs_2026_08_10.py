@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
+
+import pytest
 
 from spreadboard import accounts, server, venue_funding_history
 
@@ -392,3 +395,103 @@ def test_completed_position_evidence_callout_is_private_and_consent_neutral() ->
             }
         ]
     ) == ""
+
+
+def test_member_size_quote_reports_requested_depth_and_directional_dex_cost() -> None:
+    now_us = int(time.time() * 1_000_000)
+    row = {
+        "route_key": "GUA|OKX DEX 56|Spot|Gate|Futures",
+        "token": "GUA",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "Spot",
+        "long_market_symbol": "GUA/USDC",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        "short_market_symbol": "GUA/USDT:USDT",
+        "dex_chain": 56,
+        "dex_contract": "0xabc",
+        "requires_transfer": True,
+        "deliverable": True,
+        "long_withdraw_enabled": True,
+        "short_deposit_enabled": True,
+        "executable_spread_pct": 1.4,
+        "depth_weighted_spread_pct": 1.1,
+        "notes": {
+            "route_inputs": {
+                "long": {
+                    "ask": 1.0,
+                    "ask_vwap": 1.01,
+                    "quote_ts_us": now_us,
+                    "quote_source": "okx_dex_quote",
+                    "quote_notional_usd": 2500,
+                    "gas_estimate_usd": 0.5,
+                    "price_impact_pct": 0.18,
+                    "slippage_bps": 50,
+                    "mev_protection": "not_enabled_quote_only",
+                },
+                "short": {
+                    "bid": 1.02,
+                    "bid_vwap": 1.015,
+                    "quote_ts_us": now_us,
+                    "quote_source": "ccxt_order_book",
+                },
+            }
+        },
+    }
+
+    payload = server._member_size_quote_payload(
+        row, target_notional_usd=2500, duration_ms=123
+    )
+
+    assert payload["mode"] == "isolated_member_size_quote"
+    assert payload["depth_proven_at_target"] is True
+    assert payload["target_notional_usd"] == 2500
+    assert payload["matched_spread_pct"] == pytest.approx(1.1)
+    assert payload["estimated_opening_gas_usd"] == pytest.approx(0.5)
+    assert payload["gas_adjusted_matched_spread_pct"] == pytest.approx(1.08)
+    assert payload["legs"]["long"]["matched_vwap"] == pytest.approx(1.01)
+    assert payload["legs"]["short"]["matched_vwap"] == pytest.approx(1.015)
+    assert payload["dex_evidence"][0]["contract"] == "0xabc"
+    assert payload["dex_evidence"][0]["mev_protection"] == "not_enabled_quote_only"
+    assert "isolated from the standard $50 rankings" in " ".join(payload["limitations"])
+
+
+def test_member_size_quote_cache_single_flights_identical_route_and_size(monkeypatch) -> None:
+    calls: list[float] = []
+
+    def quote(_row: dict[str, object], notional: float) -> dict[str, object]:
+        calls.append(notional)
+        return {"ok": True, "target_notional_usd": notional}
+
+    monkeypatch.setattr(server, "_run_member_size_quote", quote)
+    with server._SIZE_QUOTE_LOCK:
+        server._SIZE_QUOTE_CACHE.clear()
+        server._SIZE_QUOTE_INFLIGHT.clear()
+    first = server._cached_member_size_quote(("route", 2500.0), {"route_key": "route"}, 2500)
+    second = server._cached_member_size_quote(("route", 2500.0), {"route_key": "route"}, 2500)
+
+    assert first["ok"] is True
+    assert second["cached"] is True
+    assert calls == [2500]
+    with server._SIZE_QUOTE_LOCK:
+        server._SIZE_QUOTE_CACHE.clear()
+        server._SIZE_QUOTE_INFLIGHT.clear()
+
+
+def test_member_size_quote_ui_requotes_without_changing_canonical_board() -> None:
+    html = server.render_pair_size_quote_panel({"route_key": "GUA|DEX|Gate"})
+    calculator = server.render_net_edge_dialog()
+
+    assert "Quote this route at your intended size" in html
+    assert "/api/size-quote/" in html
+    assert "has not changed the $50 rankings or chart history" in html
+    assert "no order, transfer or wallet action is sent" in html
+    assert "Quote current books at this size" in calculator
+    assert "standardized $50 matched quote" in calculator
+    assert "/api/size-quote/" in calculator
+
+
+def test_member_size_quote_rejects_unbounded_notional(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(server, "_find_canonical_route", lambda *_args: {"route_key": "route"})
+    with pytest.raises(ValueError, match="notional_usd_must_be_between"):
+        server.api_size_quote("route", tmp_path / "board.json", {"notional_usd": ["100001"]})

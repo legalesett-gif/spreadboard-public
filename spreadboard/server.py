@@ -141,6 +141,23 @@ _CHART_SAMPLE_BACKGROUND: set[str] = set()
 _CHART_SAMPLE_SLOTS = threading.BoundedSemaphore(
     max(1, int(os.environ.get("SPREADBOARD_CHART_SAMPLE_CONCURRENCY", "2")))
 )
+# Member-requested size quotes are deliberately isolated from the canonical
+# $50 scanner and chart history.  A short shared cache and single-flight keep
+# several members checking the same route/size from multiplying exchange and
+# DEX-provider calls, while the bounded slot count protects the resident board
+# workers from an interactive quote burst.
+_SIZE_QUOTE_LOCK = threading.Lock()
+_SIZE_QUOTE_CACHE: dict[tuple[str, float], tuple[float, dict[str, Any]]] = {}
+_SIZE_QUOTE_INFLIGHT: dict[tuple[str, float], threading.Event] = {}
+_SIZE_QUOTE_SLOTS = threading.BoundedSemaphore(
+    max(1, int(os.environ.get("SPREADBOARD_SIZE_QUOTE_CONCURRENCY", "1")))
+)
+_SIZE_QUOTE_CACHE_SECONDS = max(
+    5.0, float(os.environ.get("SPREADBOARD_SIZE_QUOTE_CACHE_SECONDS", "15"))
+)
+_SIZE_QUOTE_MAX_ENTRIES = max(
+    16, int(os.environ.get("SPREADBOARD_SIZE_QUOTE_CACHE_ENTRIES", "256"))
+)
 _PUBLIC_INTEL_FEED_URL = os.environ.get(
     "SPREADBOARD_PUBLIC_INTEL_URL",
     "https://gist.githubusercontent.com/legalesett-gif/"
@@ -839,6 +856,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path.startswith("/api/pair/"):
                 route_key = unquote(parsed.path.removeprefix("/api/pair/"))
                 self._send_json(api_pair(route_key, self.server.board_path, self.server.config))
+            elif parsed.path.startswith("/api/size-quote/"):
+                route_key = unquote(parsed.path.removeprefix("/api/size-quote/"))
+                self._send_json(api_size_quote(route_key, self.server.board_path, query))
             elif parsed.path.startswith("/api/history/"):
                 route_key = unquote(parsed.path.removeprefix("/api/history/"))
                 self._send_json(api_history(route_key, self.server.board_path, query))
@@ -4058,6 +4078,257 @@ def api_pair(route_key: str, board_path: Path, config: dict[str, Any]) -> dict[s
     return {"ok": True, **live.get_route_detail(row_data, config=config)}
 
 
+def api_size_quote(
+    route_key: str,
+    board_path: Path,
+    query: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    """Reprice one canonical route at a member's intended one-leg notional.
+
+    The result is intentionally not written to the $50 board or its history:
+    mixing several private notionals into one ranked time series would make the
+    public spread history internally inconsistent.  Authentication and active
+    subscription gates are applied by the request handler before this runs.
+    """
+
+    query = query or {}
+    notional = _query_float(query, "notional_usd", 50.0)
+    if notional is None or not 10.0 <= notional <= 100_000.0:
+        raise ValueError("notional_usd_must_be_between_10_and_100000")
+    notional = round(float(notional), 2)
+    row = _find_canonical_route(route_key, board_path)
+    if row is None:
+        return {"ok": False, "error": "route_not_found", "route_key": route_key}
+    key = (str(row.get("route_key") or route_key), notional)
+    result = _cached_member_size_quote(key, row, notional)
+    if not result.get("ok"):
+        return {
+            "ok": False,
+            "mode": "isolated_member_size_quote",
+            "route_key": key[0],
+            "target_notional_usd": notional,
+            "error": result.get("error") or "exact_size_quote_unavailable",
+            "retryable": result.get("error") in {
+                "size_quote_busy",
+                "size_quote_timeout",
+                "exact_route_order_book_unavailable",
+                "exact_route_target_depth_unavailable",
+            },
+        }
+    return result
+
+
+def _cached_member_size_quote(
+    key: tuple[str, float],
+    row: dict[str, Any],
+    notional: float,
+) -> dict[str, Any]:
+    now = time.monotonic()
+    with _SIZE_QUOTE_LOCK:
+        cached = _SIZE_QUOTE_CACHE.get(key)
+        if cached and now - cached[0] <= _SIZE_QUOTE_CACHE_SECONDS:
+            return {**cached[1], "cached": True}
+        event = _SIZE_QUOTE_INFLIGHT.get(key)
+        if event is None:
+            event = threading.Event()
+            _SIZE_QUOTE_INFLIGHT[key] = event
+            leader = True
+        else:
+            leader = False
+    if not leader:
+        event.wait(timeout=28.0)
+        with _SIZE_QUOTE_LOCK:
+            cached = _SIZE_QUOTE_CACHE.get(key)
+        return (
+            {**cached[1], "cached": True}
+            if cached
+            else {"ok": False, "error": "size_quote_timeout"}
+        )
+
+    if not _SIZE_QUOTE_SLOTS.acquire(timeout=1.5):
+        result = {"ok": False, "error": "size_quote_busy"}
+    else:
+        try:
+            try:
+                result = _run_member_size_quote(row, notional)
+            except Exception:  # noqa: BLE001 - always release and wake single-flight waiters.
+                result = {"ok": False, "error": "exact_size_quote_unavailable"}
+        finally:
+            _SIZE_QUOTE_SLOTS.release()
+    with _SIZE_QUOTE_LOCK:
+        _SIZE_QUOTE_CACHE[key] = (time.monotonic(), result)
+        if len(_SIZE_QUOTE_CACHE) > _SIZE_QUOTE_MAX_ENTRIES:
+            oldest = min(_SIZE_QUOTE_CACHE, key=lambda item: _SIZE_QUOTE_CACHE[item][0])
+            _SIZE_QUOTE_CACHE.pop(oldest, None)
+        finished = _SIZE_QUOTE_INFLIGHT.pop(key, None)
+        if finished is not None:
+            finished.set()
+    return result
+
+
+def _run_member_size_quote(row: dict[str, Any], notional: float) -> dict[str, Any]:
+    started = time.monotonic()
+    try:
+        if _native_chart_route(row):
+            from spreadboard.fast_quotes import FastQuoteRefresher
+
+            refresher = FastQuoteRefresher()
+            try:
+                worker = refresher.quote_route(row, target_notional_usd=notional)
+            finally:
+                refresher.close()
+            exit_code = 0 if worker.get("status") == "ok" else 1
+        else:
+            command = [
+                sys.executable,
+                str(Path(__file__).resolve().parents[1] / "scripts/route_quote_worker.py"),
+            ]
+            worker_env = dict(os.environ)
+            worker_env["SPREADBOARD_CHART_NOTIONAL_USD"] = str(notional)
+            completed = subprocess.run(
+                command,
+                cwd=Path(__file__).resolve().parents[1],
+                input=json.dumps(row, separators=(",", ":"), default=str),
+                capture_output=True,
+                text=True,
+                timeout=float(os.environ.get("SPREADBOARD_SIZE_QUOTE_TIMEOUT_SECONDS", "25")),
+                check=False,
+                env=worker_env,
+            )
+            worker = json.loads((completed.stdout or "").strip().splitlines()[-1])
+            exit_code = completed.returncode
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "size_quote_timeout"}
+    except (IndexError, json.JSONDecodeError, OSError):
+        return {"ok": False, "error": "size_quote_worker_failed"}
+    except Exception:  # noqa: BLE001 - provider internals are not exposed to members.
+        return {"ok": False, "error": "exact_size_quote_unavailable"}
+    quoted = worker.get("row") if isinstance(worker, dict) else None
+    if exit_code != 0 or not isinstance(quoted, dict):
+        return {
+            "ok": False,
+            "error": str((worker or {}).get("error") or "exact_size_quote_unavailable")[:120],
+        }
+    return _member_size_quote_payload(
+        quoted,
+        target_notional_usd=notional,
+        duration_ms=round((time.monotonic() - started) * 1000),
+    )
+
+
+def _member_size_quote_payload(
+    row: dict[str, Any],
+    *,
+    target_notional_usd: float,
+    duration_ms: int,
+) -> dict[str, Any]:
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+    legs: dict[str, dict[str, Any]] = {}
+    dex_evidence: list[dict[str, Any]] = []
+    dex_gas_values: list[float] = []
+    dex_leg_count = 0
+    quote_timestamps: list[int] = []
+    def first_float(*values: Any) -> float | None:
+        for value in values:
+            parsed = _float_or_none(value)
+            if parsed is not None:
+                return parsed
+        return None
+
+    for side in ("long", "short"):
+        leg = inputs.get(side) if isinstance(inputs.get(side), dict) else {}
+        market_type = str(row.get(f"{side}_market_type") or "")
+        venue = str(row.get(f"{side}_venue") or "")
+        is_dex = (
+            market_type.casefold() == "dex"
+            or "dex" in venue.casefold()
+            or str(leg.get("quote_source") or "").casefold() == "okx_dex_quote"
+        )
+        timestamp = int(first_float(leg.get("quote_ts_us"), row.get("quote_ts_us")) or 0)
+        if timestamp:
+            quote_timestamps.append(timestamp)
+        opening_field = "ask" if side == "long" else "bid"
+        vwap_field = "ask_vwap" if side == "long" else "bid_vwap"
+        legs[side] = {
+            "side": "buy" if side == "long" else "sell",
+            "venue": venue,
+            "market_type": market_type,
+            "symbol": row.get(f"{side}_market_symbol") or leg.get("symbol"),
+            "opening_price": _float_or_none(leg.get(opening_field)),
+            "matched_vwap": first_float(leg.get(vwap_field), leg.get(opening_field)),
+            "bid": _float_or_none(leg.get("bid")),
+            "ask": _float_or_none(leg.get("ask")),
+            "bid_vwap": _float_or_none(leg.get("bid_vwap")),
+            "ask_vwap": _float_or_none(leg.get("ask_vwap")),
+            "quote_ts_us": timestamp or None,
+            "quote_source": leg.get("quote_source"),
+        }
+        if is_dex:
+            dex_leg_count += 1
+            gas = _float_or_none(leg.get("gas_estimate_usd"))
+            if gas is not None:
+                dex_gas_values.append(gas)
+            dex_evidence.append(
+                {
+                    "side": "buy" if side == "long" else "sell",
+                    "chain": row.get("dex_chain") or leg.get("chain_id"),
+                    "contract": row.get("dex_contract") or leg.get("token_address"),
+                    "quoted_notional_usd": first_float(
+                        leg.get("quote_notional_usd"), target_notional_usd
+                    ),
+                    "gas_estimate_usd": gas,
+                    "price_impact_pct": _float_or_none(leg.get("price_impact_pct")),
+                    "slippage_bps": _float_or_none(leg.get("slippage_bps")),
+                    "route_plan": list(leg.get("route_plan") or []),
+                    "mev_protection": leg.get("mev_protection"),
+                    "quote_source": leg.get("quote_source"),
+                }
+            )
+    quote_ts_us = min(quote_timestamps) if quote_timestamps else None
+    matched = _float_or_none(row.get("depth_weighted_spread_pct"))
+    total_gas = sum(dex_gas_values) if dex_leg_count and len(dex_gas_values) == dex_leg_count else None
+    gas_adjusted = (
+        matched - total_gas / target_notional_usd * 100.0
+        if matched is not None and total_gas is not None and target_notional_usd > 0
+        else None
+    )
+    return {
+        "ok": True,
+        "mode": "isolated_member_size_quote",
+        "route_key": row.get("route_key"),
+        "token": row.get("token") or row.get("symbol"),
+        "target_notional_usd": target_notional_usd,
+        "depth_proven_at_target": True,
+        "top_book_spread_pct": _float_or_none(row.get("executable_spread_pct")),
+        "matched_spread_pct": matched,
+        "estimated_opening_gas_usd": total_gas,
+        "gas_adjusted_matched_spread_pct": gas_adjusted,
+        "quote_ts_us": quote_ts_us,
+        "age_seconds": (
+            max(0.0, time.time() - quote_ts_us / 1_000_000.0) if quote_ts_us else None
+        ),
+        "duration_ms": duration_ms,
+        "legs": legs,
+        "dex_evidence": dex_evidence,
+        "transfer_evidence": {
+            "required": bool(row.get("requires_transfer")),
+            "deliverable": row.get("deliverable")
+            if isinstance(row.get("deliverable"), bool)
+            else None,
+            "long_withdraw_enabled": row.get("long_withdraw_enabled"),
+            "short_deposit_enabled": row.get("short_deposit_enabled"),
+            "observed_seconds": _float_or_none(row.get("dex_transfer_time_seconds")),
+        },
+        "limitations": [
+            "This quote proves only the requested one-leg notional and is not an order.",
+            "It is isolated from the standard $50 rankings and history.",
+            "Gas, price impact and MEV fields remain unknown when the quote provider does not report them.",
+            "A transfer status or timing observation is not a guarantee of exchange crediting.",
+        ],
+    }
+
+
 def _canonical_pair_row(row: dict[str, Any]) -> dict[str, Any]:
     data = dict(row)
     spread_current = api_spreads.spread_quote_current(row)
@@ -6467,6 +6738,10 @@ def render_net_edge_dialog() -> str:
           <label>Transfer / gas, USD<input name="transfer_usd" type="number" min="0" step="0.01" value="0"></label>
           <label>Funding horizon<select name="days"><option value="1">1 day</option><option value="3">3 days</option><option value="7" selected>7 days</option><option value="30">30 days</option></select></label>
         </div>
+        <div class="net-edge-requote">
+          <button type="button" data-net-requote>Quote current books at this size</button>
+          <span data-net-quote-state>The opening basis currently uses the standardized $50 matched quote.</span>
+        </div>
         <section class="net-edge-results" aria-live="polite">
           <article><span>Opening basis</span><strong data-net-opening>—</strong></article>
           <article><span>Funding</span><strong data-net-funding>—</strong></article>
@@ -6493,7 +6768,9 @@ NET_EDGE_SCRIPT = r"""
     if (!route) return;
     const notional = Math.max(0, number('notional'));
     const days = Math.max(1, number('days'));
-    const opening = notional * Number(route.matched_edge_pct || 0) / 100;
+    const exactApplies = Number(route.exact_quote_notional) === notional && Number.isFinite(Number(route.exact_matched_edge_pct));
+    const openingPct = exactApplies ? Number(route.exact_matched_edge_pct) : Number(route.board_matched_edge_pct || 0);
+    const opening = notional * openingPct / 100;
     const fee = notional * Math.max(0, number('fee_pct')) / 100 * 4;
     const slippage = notional * Math.max(0, number('exit_slippage_pct')) / 100;
     const costs = fee + slippage + Math.max(0, number('transfer_usd'));
@@ -6510,14 +6787,41 @@ NET_EDGE_SCRIPT = r"""
     dialog.querySelector('[data-net-breakeven]').textContent = Number.isFinite(breakEven) ? `${breakEven.toFixed(1)} days` : 'Not reached';
     dialog.querySelector('[data-net-source]').textContent = Number.isFinite(Number(exact)) ? `Settled ${days}d` : (Number.isFinite(daily) ? 'Current rate projection' : 'Funding unavailable');
   }
+  async function quoteExact() {
+    if (!route || !route.route_key) return;
+    const notional = Math.max(0, number('notional'));
+    const button = dialog.querySelector('[data-net-requote]');
+    const state = dialog.querySelector('[data-net-quote-state]');
+    if (!Number.isFinite(notional) || notional < 10 || notional > 100000) { state.textContent = 'Enter a notional from $10 to $100,000.'; return; }
+    button.disabled = true; state.textContent = `Requesting an exact $${notional.toLocaleString()} matched quote…`;
+    try {
+      const response = await fetch(`/api/size-quote/${encodeURIComponent(route.route_key)}?notional_usd=${encodeURIComponent(notional)}`, {credentials:'same-origin', cache:'no-store'});
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      route.exact_quote_notional = Number(data.target_notional_usd);
+      route.exact_matched_edge_pct = Number(data.matched_spread_pct);
+      const gasAvailable = data.estimated_opening_gas_usd !== null && data.estimated_opening_gas_usd !== undefined && data.estimated_opening_gas_usd !== '' && Number.isFinite(Number(data.estimated_opening_gas_usd));
+      const gas = gasAvailable ? `; reported opening gas $${Number(data.estimated_opening_gas_usd).toFixed(2)} is not silently deducted` : '; opening gas unavailable / not applicable';
+      state.textContent = `Using exact $${route.exact_quote_notional.toLocaleString()} matched spread ${route.exact_matched_edge_pct >= 0 ? '+' : ''}${route.exact_matched_edge_pct.toFixed(3)}%${gas}.`;
+      calculate();
+    } catch (error) {
+      state.textContent = `Exact-size quote unavailable: ${String(error.message || error).replaceAll('_', ' ')}. The calculator still uses the standardized $50 quote.`;
+      route.exact_quote_notional = null; route.exact_matched_edge_pct = null; calculate();
+    } finally { button.disabled = false; }
+  }
   document.addEventListener('click', event => {
     const button = event.target.closest('[data-net-edge]');
     if (!button) return;
     try { route = JSON.parse(button.dataset.netEdge); } catch (error) { return; }
+    route.board_matched_edge_pct = route.matched_edge_pct;
+    route.exact_quote_notional = null;
+    route.exact_matched_edge_pct = null;
+    dialog.querySelector('[data-net-quote-state]').textContent = 'The opening basis currently uses the standardized $50 matched quote.';
     dialog.querySelector('[data-net-route]').textContent = `${route.token || 'Route'} · matched edge ${Number(route.matched_edge_pct || 0).toFixed(3)}%`;
     calculate();
     if (typeof dialog.showModal === 'function') dialog.showModal();
   });
+  dialog.querySelector('[data-net-requote]').addEventListener('click', quoteExact);
   dialog.querySelectorAll('input,select').forEach(input => input.addEventListener('input', calculate));
 })();
 """
@@ -7854,6 +8158,7 @@ def render_pair_page(route_key: str, board_path: Path, config: dict[str, Any]) -
     <section class="pair-page">
       {render_pair_snapshot_banner(row)}
       {render_pair_cockpit(row, detail, pair_intel, history)}
+      {render_pair_size_quote_panel(row)}
       {render_pair_intel_strip(row, pair_intel)}
       {render_pair_market_events(row)}
       {render_pair_tokenized_guard(row)}
@@ -7888,6 +8193,93 @@ def render_pair_page(route_key: str, board_path: Path, config: dict[str, Any]) -
     {render_funding_history_script()}
     """
     return shell(f"{row.get('symbol')} route - SpreadBoard", "board", body)
+
+
+def render_pair_size_quote_panel(row: dict[str, Any]) -> str:
+    route_key = str(row.get("route_key") or "")
+    return f"""
+    <section id="size-quote" class="pair-size-quote" data-size-quote data-route-key="{h(route_key)}">
+      <div class="size-quote-head">
+        <div>
+          <span class="page-kicker">Matched-size check</span>
+          <h2>Quote this route at your intended size</h2>
+          <p>The board stays standardized at $50. This read-only check walks the current books or requests a fresh directional DEX quote for your chosen one-leg notional.</p>
+        </div>
+        <span class="read-only-pill">Isolated quote</span>
+      </div>
+      <form class="size-quote-form" data-size-quote-form>
+        <label><span>Notional per leg, USD</span><input name="notional_usd" type="number" min="10" max="100000" step="10" value="1000" required></label>
+        <div class="size-quote-presets" aria-label="Quote size shortcuts">
+          <button type="button" data-size-preset="50">$50</button>
+          <button type="button" data-size-preset="500">$500</button>
+          <button type="button" data-size-preset="1000">$1,000</button>
+          <button type="button" data-size-preset="2500">$2,500</button>
+        </div>
+        <button class="primary" type="submit" data-size-submit>Quote exact size</button>
+      </form>
+      <p class="size-quote-state" data-size-state>Not quoted yet. The figures elsewhere on this page remain the canonical $50 comparison.</p>
+      <div class="size-quote-results" data-size-results hidden aria-live="polite">
+        <article><span>Top book spread</span><strong data-size-top>—</strong><em>best visible prices</em></article>
+        <article><span>Matched spread</span><strong data-size-matched>—</strong><em data-size-matched-note>at requested size</em></article>
+        <article><span>After reported opening gas</span><strong data-size-gas-adjusted>—</strong><em data-size-gas>gas unavailable / not applicable</em></article>
+        <article><span>Quote age</span><strong data-size-age>—</strong><em data-size-duration>provider round trip</em></article>
+      </div>
+      <div class="size-quote-evidence" data-size-evidence hidden>
+        <p><strong>Buy:</strong> <span data-size-long>—</span></p>
+        <p><strong>Sell:</strong> <span data-size-short>—</span></p>
+        <p><strong>DEX:</strong> <span data-size-dex>Not applicable</span></p>
+        <p><strong>Transfer:</strong> <span data-size-transfer>—</span></p>
+      </div>
+      <p class="size-quote-warning">Research quote only—no order, transfer or wallet action is sent. A successful quote proves only this notional at this moment; fees, borrow, transfer delay and provider-unknown MEV risk remain separate.</p>
+    </section>
+    <script>
+    (() => {{
+      const root = document.querySelector('[data-size-quote]');
+      if (!root) return;
+      const form = root.querySelector('[data-size-quote-form]');
+      const input = form.elements.notional_usd;
+      const submit = root.querySelector('[data-size-submit]');
+      const state = root.querySelector('[data-size-state]');
+      const results = root.querySelector('[data-size-results]');
+      const evidence = root.querySelector('[data-size-evidence]');
+      const numeric = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+      const pct = value => numeric(value) ? `${{Number(value) >= 0 ? '+' : ''}}${{Number(value).toFixed(3)}}%` : '—';
+      const price = value => numeric(value) ? Number(value).toLocaleString(undefined, {{maximumSignificantDigits: 9}}) : '—';
+      const money = value => numeric(value) ? `$${{Number(value).toFixed(2)}}` : 'unknown';
+      const legLine = leg => leg ? `${{leg.venue || '?'}} ${{leg.market_type || ''}} · ${{leg.side}} ${{price(leg.opening_price)}} · matched ${{price(leg.matched_vwap)}}` : 'unavailable';
+      root.querySelectorAll('[data-size-preset]').forEach(button => button.addEventListener('click', () => {{ input.value = button.dataset.sizePreset; }}));
+      form.addEventListener('submit', async event => {{
+        event.preventDefault();
+        const notional = Number(input.value);
+        if (!Number.isFinite(notional) || notional < 10 || notional > 100000) {{ state.textContent = 'Enter a notional from $10 to $100,000.'; return; }}
+        submit.disabled = true; state.textContent = `Requesting an exact $${{notional.toLocaleString()}} matched quote…`; results.hidden = true; evidence.hidden = true;
+        try {{
+          const endpoint = `/api/size-quote/${{encodeURIComponent(root.dataset.routeKey)}}?notional_usd=${{encodeURIComponent(notional)}}`;
+          const response = await fetch(endpoint, {{credentials:'same-origin', cache:'no-store'}});
+          const data = await response.json();
+          if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${{response.status}}`);
+          root.querySelector('[data-size-top]').textContent = pct(data.top_book_spread_pct);
+          root.querySelector('[data-size-matched]').textContent = pct(data.matched_spread_pct);
+          root.querySelector('[data-size-matched-note]').textContent = `$${{Number(data.target_notional_usd).toLocaleString()}} fully matched`;
+          root.querySelector('[data-size-gas-adjusted]').textContent = pct(data.gas_adjusted_matched_spread_pct);
+          root.querySelector('[data-size-gas]').textContent = numeric(data.estimated_opening_gas_usd) ? `${{money(data.estimated_opening_gas_usd)}} reported opening gas` : 'gas unavailable / not applicable';
+          root.querySelector('[data-size-age]').textContent = numeric(data.age_seconds) ? `${{Number(data.age_seconds).toFixed(1)}}s` : '—';
+          root.querySelector('[data-size-duration]').textContent = `${{Number(data.duration_ms || 0).toLocaleString()}}ms provider round trip${{data.cached ? ' · cached briefly' : ''}}`;
+          root.querySelector('[data-size-long]').textContent = legLine(data.legs && data.legs.long);
+          root.querySelector('[data-size-short]').textContent = legLine(data.legs && data.legs.short);
+          const dex = Array.isArray(data.dex_evidence) ? data.dex_evidence : [];
+          root.querySelector('[data-size-dex]').textContent = dex.length ? dex.map(item => `${{item.side}} · chain ${{item.chain || '?'}} · ${{item.contract || 'identity missing'}} · impact ${{pct(item.price_impact_pct)}} · gas ${{money(item.gas_estimate_usd)}} · MEV ${{item.mev_protection || 'unknown'}}`).join(' | ') : 'No DEX leg on this route';
+          const transfer = data.transfer_evidence || {{}};
+          root.querySelector('[data-size-transfer]').textContent = transfer.required ? `required · deliverability ${{transfer.deliverable === true ? 'verified now' : transfer.deliverable === false ? 'blocked now' : 'unknown'}} · observed timing ${{numeric(transfer.observed_seconds) ? `${{Number(transfer.observed_seconds).toFixed(0)}}s` : 'unavailable'}}` : 'not required by the current route evidence';
+          state.textContent = `Exact $${{Number(data.target_notional_usd).toLocaleString()}} quote received. It has not changed the $50 rankings or chart history.`;
+          results.hidden = false; evidence.hidden = false;
+        }} catch (error) {{
+          state.textContent = `Exact-size quote unavailable: ${{String(error.message || error).replaceAll('_', ' ')}}. Try again; the canonical $50 board remains unchanged.`;
+        }} finally {{ submit.disabled = false; }}
+      }});
+    }})();
+    </script>
+    """
 
 
 def render_pair_market_events(row: dict[str, Any]) -> str:
@@ -14105,6 +14497,7 @@ def render_pair_cockpit(
       <div class="pair-cockpit-foot">
         <nav class="pair-anchors" aria-label="Pair sections">
           <a href="#spread">Spread</a>
+          <a href="#size-quote">Quote my size</a>
           <a href="#timeline">Timeline</a>
           <a href="#funding">Funding</a>
           <a href="#community">Community</a>
@@ -15625,6 +16018,9 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .net-edge-fields {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }}
 .net-edge-fields label {{ display:grid; gap:5px; color:var(--terminal-muted); font-size:10px; font-weight:900; text-transform:uppercase; }}
 .net-edge-fields input, .net-edge-fields select {{ width:100%; min-height:38px; padding:0 9px; border:1px solid var(--terminal-line); border-radius:5px; background:var(--terminal-row); color:var(--terminal-text); }}
+.net-edge-requote {{ display:flex; align-items:center; gap:10px; padding:10px; border:1px solid var(--terminal-line); border-radius:6px; background:var(--terminal-row); }}
+.net-edge-requote button {{ min-height:34px; padding:0 10px; border:1px solid var(--terminal-accent); border-radius:4px; background:transparent; color:var(--terminal-text); font:inherit; font-size:11px; font-weight:800; cursor:pointer; }}
+.net-edge-requote span {{ color:var(--terminal-muted); font-size:11px; line-height:1.4; }}
 .net-edge-results {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }}
 .net-edge-results article {{ display:grid; gap:5px; padding:12px; border:1px solid var(--terminal-line); border-radius:7px; background:var(--terminal-panel-2); }}
 .net-edge-results span {{ color:var(--terminal-muted); font-size:10px; text-transform:uppercase; font-weight:900; }}
@@ -16086,6 +16482,25 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .pair-cockpit-foot {{ align-items: center; padding-top: 2px; }}
 .pair-cockpit-foot .pair-anchors a {{ background: rgba(255,255,255,.12); color: white; }}
 .pair-cockpit-foot .pair-anchors a:hover {{ background: var(--accent); color: var(--accent-ink); }}
+.pair-size-quote {{ display:grid; gap:12px; padding:16px; border:1px solid var(--terminal-line); border-radius:var(--radius); background:var(--terminal-panel); box-shadow:var(--shadow); }}
+.size-quote-head {{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }}
+.size-quote-head h2 {{ margin:3px 0 4px; font-size:19px; }}
+.size-quote-head p,.size-quote-state,.size-quote-warning {{ margin:0; color:var(--terminal-muted); font-size:11px; line-height:1.5; }}
+.size-quote-form {{ display:grid; grid-template-columns:minmax(180px,260px) auto auto; align-items:end; gap:10px; }}
+.size-quote-form label {{ display:grid; gap:5px; color:var(--terminal-muted); font-size:10px; font-weight:850; text-transform:uppercase; letter-spacing:.04em; }}
+.size-quote-form input {{ width:100%; min-height:38px; padding:0 10px; border:1px solid var(--terminal-line); border-radius:3px; background:var(--terminal-row); color:var(--terminal-text); font:inherit; }}
+.size-quote-form button {{ min-height:38px; padding:0 12px; border:1px solid var(--terminal-line); border-radius:3px; background:transparent; color:var(--terminal-text); font:inherit; font-size:11px; font-weight:800; cursor:pointer; }}
+.size-quote-form button.primary {{ border-color:var(--terminal-accent); background:var(--terminal-accent); color:#042b26; }}
+.size-quote-presets {{ display:flex; gap:5px; flex-wrap:wrap; }}
+.size-quote-results {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }}
+.size-quote-results article {{ display:grid; gap:4px; padding:11px; border:1px solid var(--terminal-line); border-radius:4px; background:var(--terminal-row); }}
+.size-quote-results span {{ color:var(--terminal-muted); font-size:9px; font-weight:850; text-transform:uppercase; }}
+.size-quote-results strong {{ font-size:16px; font-variant-numeric:tabular-nums; }}
+.size-quote-results em {{ color:var(--terminal-muted); font-size:10px; font-style:normal; }}
+.size-quote-evidence {{ display:grid; gap:5px; padding:10px; border-left:2px solid var(--terminal-accent); background:var(--terminal-row); }}
+.size-quote-evidence p {{ margin:0; color:var(--terminal-muted); font-size:11px; line-height:1.5; overflow-wrap:anywhere; }}
+.size-quote-evidence strong {{ color:var(--terminal-text); }}
+.size-quote-warning {{ padding-top:2px; }}
 .pair-intel-strip {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 8px; align-items: stretch; padding: 10px; border-radius: 10px; background: #f7f7f7; border: 1px solid #d0d0d0; box-shadow: var(--shadow); }}
 .pair-intel-strip article {{ display: grid; gap: 4px; align-content: center; min-height: 74px; padding: 9px; border-radius: 7px; background: white; min-width: 0; }}
 .pair-intel-strip span {{ color: #666; font-size: 11px; font-weight: 900; text-transform: uppercase; }}
@@ -16959,7 +17374,10 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   .pro-market-table td::before {{ content:attr(data-label); display:block; margin-bottom:4px; color:var(--terminal-muted); font-size:9px; font-weight:900; text-transform:uppercase; letter-spacing:.05em; }}
   .pro-market-table td:first-child, .pro-market-table .pro-actions {{ grid-column:1 / -1; }}
   .net-edge-fields, .net-edge-results {{ grid-template-columns:1fr 1fr; }}
+  .net-edge-requote, .size-quote-head {{ align-items:flex-start; flex-direction:column; }}
   .net-edge-card {{ padding:16px; }}
+  .size-quote-form, .size-quote-results {{ grid-template-columns:1fr 1fr; }}
+  .size-quote-form > label, .size-quote-form > .primary {{ grid-column:1 / -1; }}
   .telegram-page {{ width:min(100% - 20px,1080px); margin-top:18px; }}
   .telegram-hero, .telegram-preview {{ grid-template-columns:1fr; }}
   .telegram-hero > div {{ padding:24px 20px; }}
@@ -17110,6 +17528,7 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
 }}
 @media (max-width: 560px) {{
   .ranking-explainer, .ranking-filter {{ grid-template-columns: 1fr; }}
+  .size-quote-form, .size-quote-results, .net-edge-fields, .net-edge-results {{ grid-template-columns:1fr; }}
   .ranking-explainer article {{ border-right: 0; border-bottom: 1px solid var(--terminal-line); }}
   .ranking-explainer article:last-child {{ border-bottom: 0; }}
   .chart-leg-stats {{ grid-template-columns: 1fr; }}
