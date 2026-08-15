@@ -14,13 +14,16 @@ import sqlite3
 from typing import Any
 
 import pytest
+from aiohttp import ClientConnectionResetError
 
 from scripts import websocket_book_worker
 from scripts.websocket_book_worker import (
     BookWorker,
+    _asyncio_exception_handler,
     _base_quantity_levels,
     _board_leg_key,
     _desired_legs,
+    _expected_closing_pong,
 )
 
 
@@ -95,3 +98,38 @@ def test_non_lock_prune_database_failure_is_not_hidden() -> None:
 
     with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
         worker._prune_stale_books()
+
+
+def test_expected_pong_after_transport_close_is_quiet() -> None:
+    async def pong() -> None:
+        return None
+
+    task_coro = pong()
+
+    class Future:
+        def get_coro(self):
+            return task_coro
+
+    try:
+        context = {
+            "exception": ClientConnectionResetError(
+                "Cannot write to closing transport"
+            ),
+            "future": Future(),
+        }
+        assert _expected_closing_pong(context) is True
+    finally:
+        task_coro.close()
+
+
+def test_async_exception_handler_preserves_unexpected_fault() -> None:
+    seen = []
+
+    class Loop:
+        def default_exception_handler(self, context):
+            seen.append(context)
+
+    context = {"exception": RuntimeError("real failure")}
+    _asyncio_exception_handler(Loop(), context)
+
+    assert seen == [context]

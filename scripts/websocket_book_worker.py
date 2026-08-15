@@ -21,6 +21,7 @@ for import_path in (ROOT / "src", ROOT):
     sys.path.insert(0, str(import_path))
 
 import ccxt.pro as ccxtpro  # noqa: E402
+from aiohttp import ClientConnectionResetError  # noqa: E402
 
 from spreadboard.fast_quotes import VENUE_IDS  # noqa: E402
 from spreadboard import accounts  # noqa: E402
@@ -64,6 +65,31 @@ def _install_ccxt_client_reset_compat(client_class: type[Any] | None = None) -> 
 
 
 _install_ccxt_client_reset_compat()
+
+
+def _expected_closing_pong(context: dict[str, Any]) -> bool:
+    """Identify aiohttp's harmless pong-after-close task precisely."""
+
+    error = context.get("exception")
+    if not isinstance(error, ClientConnectionResetError):
+        return False
+    if "closing transport" not in str(error).casefold():
+        return False
+    future = context.get("future") or context.get("task")
+    get_coro = getattr(future, "get_coro", None)
+    coroutine = get_coro() if callable(get_coro) else None
+    name = str(getattr(coroutine, "__qualname__", ""))
+    return name.endswith(".pong")
+
+
+def _asyncio_exception_handler(
+    loop: asyncio.AbstractEventLoop, context: dict[str, Any]
+) -> None:
+    """Hide only an expected transport-close race; preserve every real fault."""
+
+    if _expected_closing_pong(context):
+        return
+    loop.default_exception_handler(context)
 
 
 class BookWorker:
@@ -485,6 +511,7 @@ def _websocket_depth_limit(venue: str, market_type: str) -> int:
 async def main() -> None:
     worker = BookWorker()
     loop = asyncio.get_running_loop()
+    loop.set_exception_handler(_asyncio_exception_handler)
     for signum in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(signum, worker.stop.set)
     await worker.run()
