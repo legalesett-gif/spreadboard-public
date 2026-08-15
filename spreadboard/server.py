@@ -12603,7 +12603,7 @@ def render_alerts_page(
     except sqlite3.Error:
         preferences = {}
     pushover_ready = bool(
-        flags.get("pushover_configured")
+        os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
         and preferences.get("pushover_configured")
         and preferences.get("pushover_enabled")
     )
@@ -16268,6 +16268,8 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 :root[data-theme="dark"] .source-card,
 :root[data-theme="dark"] .chart-route-card,
 :root[data-theme="dark"] .chart-summary-card,
+:root[data-theme="dark"] .community-panel,
+:root[data-theme="dark"] .alert-template,
 :root[data-theme="dark"] .route-timeline,
 :root[data-theme="dark"] .pair-checklist,
 :root[data-theme="dark"] .spread-lens,
@@ -16285,6 +16287,9 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 :root[data-theme="dark"] .facts strong,
 :root[data-theme="dark"] .metric strong,
 :root[data-theme="dark"] .kv-row strong {{ color: var(--terminal-text); }}
+:root[data-theme="dark"] .alert-template p,
+:root[data-theme="dark"] .alert-template span {{ color: var(--terminal-muted); }}
+:root[data-theme="dark"] .alert-template span {{ background: var(--terminal-row); }}
 :root[data-theme="dark"] .facts span,
 :root[data-theme="dark"] .metric,
 :root[data-theme="dark"] .kv-row,

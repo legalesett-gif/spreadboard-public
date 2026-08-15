@@ -2993,6 +2993,37 @@ def test_the_alerts_page_no_longer_claims_it_cannot_send() -> None:
     assert "render_member_alert_rules" in source
 
 
+def test_alerts_page_reports_real_per_member_pushover_readiness(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SPREADBOARD_PUSHOVER_APP_TOKEN", "configured-app-token")
+    user = SimpleNamespace(
+        id=7,
+        display_name="Alex",
+        is_admin=True,
+        csrf_token="csrf",
+        subscription_tier="research_pro",
+        subscription_active=True,
+    )
+    monkeypatch.setattr(server.accounts, "current_user", lambda *a, **k: user)
+    monkeypatch.setattr(
+        server.accounts,
+        "notification_preferences",
+        lambda *a, **k: {"pushover_configured": True, "pushover_enabled": True},
+    )
+    monkeypatch.setattr(server.accounts, "list_market_alert_rules", lambda *a, **k: [])
+
+    html = server.render_alerts_page(tmp_path / "board.jsonl", {}, {})
+
+    assert "in-app and Pushover enabled" in html
+    assert "Add and enable a Pushover key" not in html
+
+
+def test_dark_alert_panels_use_terminal_colours() -> None:
+    source = Path("spreadboard/server.py").read_text(encoding="utf-8")
+
+    assert ':root[data-theme="dark"] .community-panel' in source
+    assert ':root[data-theme="dark"] .alert-template' in source
+
+
 def _prow(token, lv, sv, lp, sp, lvol, svol, key=None):
     from types import SimpleNamespace
     return SimpleNamespace(token=token, route_key=key or f"{token}|{lv}|{sv}",
