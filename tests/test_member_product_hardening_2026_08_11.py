@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -119,7 +120,11 @@ def test_portfolio_never_rebuilds_the_ranked_board(tmp_path, monkeypatch) -> Non
         "load_spreads",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("ranked board rebuild")),
     )
-    monkeypatch.setattr(portfolio, "_live_books", lambda: {})
+    monkeypatch.setattr(
+        portfolio,
+        "_market_inputs",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("empty portfolio loaded markets")),
+    )
     user = accounts.get_user_object(user_row["id"], db_path=db_path)
 
     snapshot = portfolio.portfolio_snapshot(
@@ -130,6 +135,35 @@ def test_portfolio_never_rebuilds_the_ranked_board(tmp_path, monkeypatch) -> Non
     )
 
     assert snapshot["ok"] is True
+
+
+def test_concurrent_portfolios_share_one_large_market_input_load(tmp_path, monkeypatch) -> None:
+    portfolio._PORTFOLIO_INPUT_CACHE.clear()
+    calls = {"books": 0, "funding": 0, "catalogue": 0, "index": 0, "ledger": 0}
+
+    def counted(name, value):
+        def load(*_args, **_kwargs):
+            calls[name] += 1
+            return value
+
+        return load
+
+    monkeypatch.setattr(portfolio, "_live_books", counted("books", {}))
+    monkeypatch.setattr(portfolio.bulk_quotes, "load_funding", counted("funding", {}))
+    monkeypatch.setattr(portfolio.chart_catalog, "load", counted("catalogue", {"markets": []}))
+    monkeypatch.setattr(
+        portfolio.position_markets,
+        "catalogue_market_index",
+        counted("index", {}),
+    )
+    monkeypatch.setattr(portfolio.portfolio_funding, "load", counted("ledger", {}))
+    db_path = tmp_path / "accounts.sqlite3"
+
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        values = list(pool.map(lambda _: portfolio._market_inputs(db_path), range(100)))
+
+    assert len(values) == 100
+    assert calls == {"books": 1, "funding": 1, "catalogue": 1, "index": 1, "ledger": 1}
 
 
 def test_manual_position_marks_use_resident_books_without_exchange_calls() -> None:

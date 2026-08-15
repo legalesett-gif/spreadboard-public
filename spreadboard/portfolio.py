@@ -21,6 +21,25 @@ from spreadboard import (
 )
 
 
+PORTFOLIO_INPUT_CACHE_SECONDS = max(
+    0.25, float(os.environ.get("SPREADBOARD_PORTFOLIO_INPUT_CACHE_SECONDS", "2"))
+)
+_PORTFOLIO_INPUT_CACHE_LOCK = threading.Lock()
+_PORTFOLIO_INPUT_CACHE: dict[
+    str,
+    tuple[
+        float,
+        tuple[
+            dict[str, Any],
+            dict[str, dict[str, Any]],
+            dict[str, Any],
+            dict[tuple[str, str, str, str], dict[str, Any]],
+            dict[str, Any],
+        ],
+    ],
+] = {}
+
+
 def portfolio_snapshot(
     user: accounts.User,
     *,
@@ -29,6 +48,16 @@ def portfolio_snapshot(
     evaluate_alerts: bool = True,
 ) -> dict[str, Any]:
     positions = accounts.list_positions(user.id, db_path=accounts_path)
+    if not positions:
+        notifications = accounts.list_notifications(user.id, db_path=accounts_path)
+        return {
+            "ok": True,
+            "generated_at": datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+            "user": user.public_dict(),
+            "summary": _portfolio_totals([], user.monthly_capital_usd),
+            "positions": [],
+            "notifications": notifications,
+        }
     # A position is an exact saved pair, not a ranked-board row. Rebuilding the
     # entire 25k-route scanner here made the first account request after a
     # cache generation wait almost a minute even though every value below is
@@ -37,11 +66,9 @@ def portfolio_snapshot(
     # row set makes that independence explicit; resolve_position_route still
     # validates both saved symbols against the complete warm catalogue.
     rows: list[dict[str, Any]] = []
-    books = _live_books()
-    funding_legs = bulk_quotes.load_funding()
-    catalogue = chart_catalog.load()
-    market_index = position_markets.catalogue_market_index(catalogue)
-    funding_snapshot = portfolio_funding.load()
+    books, funding_legs, catalogue, market_index, funding_snapshot = _market_inputs(
+        accounts_path
+    )
     hydrated = [
         _hydrate_position(
             item,
@@ -67,6 +94,44 @@ def portfolio_snapshot(
         "positions": hydrated,
         "notifications": notifications,
     }
+
+
+def _market_inputs(
+    accounts_path: Path | str,
+) -> tuple[
+    dict[str, Any],
+    dict[str, dict[str, Any]],
+    dict[str, Any],
+    dict[tuple[str, str, str, str], dict[str, Any]],
+    dict[str, Any],
+]:
+    """Single-flight the large read-only inputs shared by account requests."""
+
+    key = str(Path(accounts_path))
+    now = time.monotonic()
+    with _PORTFOLIO_INPUT_CACHE_LOCK:
+        cached = _PORTFOLIO_INPUT_CACHE.get(key)
+        if cached is not None and now - cached[0] <= PORTFOLIO_INPUT_CACHE_SECONDS:
+            return cached[1]
+        books = _live_books()
+        funding_legs = bulk_quotes.load_funding()
+        catalogue = chart_catalog.load()
+        inputs = (
+            books,
+            funding_legs,
+            catalogue,
+            position_markets.catalogue_market_index(catalogue),
+            portfolio_funding.load(),
+        )
+        _PORTFOLIO_INPUT_CACHE[key] = (time.monotonic(), inputs)
+        if len(_PORTFOLIO_INPUT_CACHE) > 8:
+            oldest = min(
+                _PORTFOLIO_INPUT_CACHE,
+                key=lambda item: _PORTFOLIO_INPUT_CACHE[item][0],
+            )
+            if oldest != key:
+                _PORTFOLIO_INPUT_CACHE.pop(oldest, None)
+        return inputs
 
 
 def _hydrate_position(
