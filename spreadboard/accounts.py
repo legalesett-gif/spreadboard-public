@@ -22,6 +22,7 @@ RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_DB_PATH = RUNTIME_DIR / "spreadboard_accounts.sqlite3"
 SESSION_COOKIE = "spreadboard_session"
 SESSION_DAYS = 30
+RESEARCH_CONSENT_VERSION = "portfolio_research_v2"
 _REQUEST_STATE = threading.local()
 
 
@@ -1998,7 +1999,8 @@ def anonymized_research_evidence(
                           transfer_chain, transfer_contract,
                           transfer_started_at, transfer_credited_at,
                           research_costs_complete, research_cost_consent,
-                          research_transfer_consent, research_matched_notional_usd
+                          research_transfer_consent, research_matched_notional_usd,
+                          research_consent_version
                    FROM positions
                    WHERE status = 'closed'
                      AND (research_cost_consent = 1 OR research_transfer_consent = 1)"""
@@ -2007,10 +2009,13 @@ def anonymized_research_evidence(
     finally:
         connection.close()
 
-    grouped: dict[
-        tuple[str, str, str], dict[str, list[float]]
-    ] = {}
+    grouped: dict[tuple[str, str, str], dict[str, list[Any]]] = {}
     for row in rows:
+        # A wider evidence payload requires fresh, version-matched consent.
+        # Never reinterpret a legacy total-only opt-in as permission to emit
+        # the component breakdown introduced in portfolio_research_v2.
+        if str(row.get("research_consent_version") or "") != RESEARCH_CONSENT_VERSION:
+            continue
         closed_at = _optional_normalized_iso(row.get("closed_at"))
         if not closed_at:
             continue
@@ -2029,18 +2034,24 @@ def anonymized_research_evidence(
         if row.get("research_cost_consent") and row.get("research_costs_complete"):
             notional = _optional_nonnegative_float(row.get("research_matched_notional_usd"))
             if notional:
-                cost_usd = sum(
-                    float(row.get(field) or 0.0)
-                    for field in (
-                        "entry_fees_usd",
-                        "exit_fees_usd",
-                        "borrow_costs_usd",
-                        "gas_costs_usd",
-                        "transfer_costs_usd",
-                        "slippage_costs_usd",
-                    )
+                components_usd = {
+                    "fee_pct": float(row.get("entry_fees_usd") or 0.0)
+                    + float(row.get("exit_fees_usd") or 0.0),
+                    "borrow_pct": float(row.get("borrow_costs_usd") or 0.0),
+                    "gas_pct": float(row.get("gas_costs_usd") or 0.0),
+                    "transfer_pct": float(row.get("transfer_costs_usd") or 0.0),
+                    "measured_slippage_pct": float(row.get("slippage_costs_usd") or 0.0),
+                }
+                component_pct = {
+                    name: amount / notional * 100.0
+                    for name, amount in components_usd.items()
+                }
+                bucket["costs"].append(
+                    {
+                        **component_pct,
+                        "round_trip_cost_pct": sum(component_pct.values()),
+                    }
                 )
-                bucket["costs"].append(cost_usd / notional * 100.0)
         if row.get("research_transfer_consent"):
             started_at = _optional_normalized_iso(row.get("transfer_started_at"))
             credited_at = _optional_normalized_iso(row.get("transfer_credited_at"))
@@ -2056,14 +2067,29 @@ def anonymized_research_evidence(
     for (signature, chain, contract), values in grouped.items():
         route = output.setdefault(signature, {"costs": [], "transfers": []})
         if values["costs"]:
+            component_names = (
+                "fee_pct",
+                "borrow_pct",
+                "gas_pct",
+                "transfer_pct",
+                "measured_slippage_pct",
+                "round_trip_cost_pct",
+            )
             route["costs"].append(
                 {
                     "chain": chain or None,
                     "contract": contract or None,
-                    "round_trip_cost_pct": round(statistics.median(values["costs"]), 8),
+                    **{
+                        name: round(
+                            statistics.median(item[name] for item in values["costs"]),
+                            8,
+                        )
+                        for name in component_names
+                    },
                     "sample_count": len(values["costs"]),
                     "source": "opt_in_completed_positions",
                     "includes": "fees_borrow_gas_transfer_and_measured_slippage",
+                    "consent_version": RESEARCH_CONSENT_VERSION,
                 }
             )
         if values["transfers"]:
@@ -2289,8 +2315,22 @@ def update_position(
         was_consented = bool(
             existing["research_cost_consent"] or existing["research_transfer_consent"]
         )
-        research_consent_version = "portfolio_research_v1" if consent_active else None
-        if consent_active and was_consented:
+        research_consent_version = RESEARCH_CONSENT_VERSION if consent_active else None
+        same_consent_version = (
+            was_consented
+            and str(existing["research_consent_version"] or "")
+            == RESEARCH_CONSENT_VERSION
+        )
+        submitted_consent_version = str(
+            payload.get("research_consent_version") or ""
+        ).strip()
+        if (
+            consent_active
+            and not same_consent_version
+            and submitted_consent_version != RESEARCH_CONSENT_VERSION
+        ):
+            raise ValueError("current_research_consent_required")
+        if consent_active and same_consent_version:
             research_consented_at = str(existing["research_consented_at"] or "") or _utc_iso()
         elif consent_active:
             research_consented_at = _utc_iso()

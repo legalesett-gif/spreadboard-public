@@ -79,6 +79,7 @@ def test_small_dataset_cannot_activate_even_with_claimed_candidate_metrics(tmp_p
     )
     assert result["data_gates"]["outcomes"]["passed"] is False
     assert result["data_gates"]["routes"]["passed"] is False
+    assert result["data_gates"]["cost_complete_fraction"]["actual"] == 0.0
     assert result["activation_allowed"] is False
 
 

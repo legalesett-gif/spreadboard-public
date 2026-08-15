@@ -44,6 +44,13 @@ confidence. Gross edge is shown separately from costs. A net edge is calculated
 only when route-specific known costs are supplied; unknown account fees,
 borrow, gas and exit slippage are never silently guessed.
 
+Completed-position evidence is explicit opt-in and versioned. The anonymous
+route aggregate preserves the median total lifecycle-cost percentage and the
+separate median fee, borrow, gas, transfer and measured-slippage percentages,
+plus sample count. It never sends account identifiers, fills, quantities,
+notional or event timestamps to calibration. DEX evidence additionally requires
+the exact current chain and contract before any aggregate can be reused.
+
 The collateral reserve remains separate from both opportunity scores. It uses
 observed leg volatility, adverse 24-hour tails, basis widening, correlation,
 liquidity, route type and evidence quality. It is not a personalized
@@ -61,6 +68,12 @@ predict measurable outcomes:
 4. P95 adverse future basis widening and per-leg adverse excursion.
 5. Liquidation probability using exact venue tiers, account equity, margin mode
    and other positions.
+
+The 5,000-outcome gate means 5,000 labeled **24-hour** observations for the
+selected immutable scoring version. Eight-hour labels are monitored and remain
+useful for the separate 8-hour target, but cannot be added to 24-hour labels to
+inflate readiness. Route count, time span and exact-cost coverage are calculated
+on the labeled 24-hour training population, not on unlabeled observations.
 
 Release gates are time-split/walk-forward backtesting, probability calibration,
 cost-aware comparison against simple baselines, data-leakage tests, drift and

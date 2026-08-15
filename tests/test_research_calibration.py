@@ -67,8 +67,53 @@ def test_shadow_observations_are_hourly_versioned_and_labeled_without_lookahead(
     }
     assert labeled["labeled"] == 2
     assert status["observations"] == 1
-    assert status["outcomes"] == 2
+    assert status["outcomes"] == 1
+    assert status["outcomes_horizon"] == "24h"
+    assert status["outcomes_by_horizon"] == {"8h": 1, "24h": 1}
+    assert status["outcomes_all_horizons"] == 2
     assert status["ml_ready"] is False
+
+
+def test_capture_does_not_let_an_old_method_block_the_current_version(tmp_path) -> None:
+    now = time.time()
+    calibration_db = tmp_path / "calibration.sqlite3"
+    history_db = tmp_path / "history.sqlite3"
+    route = _route(int(now * 1_000_000), 1.2, 0.4)
+    route["route_key"] = market_history.route_key_for(route)
+    hour_us = int(now // 3600 * 3600 * 1_000_000)
+    research_calibration.initialize(calibration_db)
+    connection = research_calibration._connect(calibration_db)
+    try:
+        connection.execute(
+            """INSERT INTO score_observations (
+                   route_key, token, observed_hour_us, method,
+                   funding_confidence, spread_confidence, funding_regime,
+                   cost_status, feature_json, created_at
+               ) VALUES (?, 'CAL', ?, 'old-method', 1, 1, 'mixed',
+                         'account_fee_and_exit_costs_required', '{}', 'x')""",
+            (route["route_key"], hour_us),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = research_calibration.capture_routes(
+        [route], now=now, db_path=calibration_db, history_db_path=history_db
+    )
+    connection = research_calibration._connect(calibration_db)
+    try:
+        methods = {
+            row[0]
+            for row in connection.execute(
+                "SELECT method FROM score_observations WHERE route_key = ?",
+                (route["route_key"],),
+            )
+        }
+    finally:
+        connection.close()
+
+    assert result["inserted"] == 1
+    assert methods == {"old-method", "deterministic_dual_opportunity_evidence_v5"}
 
 
 def test_ml_readiness_never_pools_old_scoring_versions(tmp_path) -> None:
@@ -131,8 +176,14 @@ def test_opt_in_dex_cost_and_transfer_evidence_requires_exact_current_identity(t
                     "chain": "base",
                     "contract": "0xabc",
                     "round_trip_cost_pct": 0.42,
+                    "fee_pct": 0.10,
+                    "borrow_pct": 0.04,
+                    "gas_pct": 0.08,
+                    "transfer_pct": 0.12,
+                    "measured_slippage_pct": 0.08,
                     "sample_count": 3,
                     "includes": "fees_borrow_gas_transfer_and_measured_slippage",
+                    "consent_version": "portfolio_research_v2",
                 }
             ],
             "transfers": [
@@ -166,6 +217,15 @@ def test_opt_in_dex_cost_and_transfer_evidence_requires_exact_current_identity(t
     assert captured["transfer_evidenced"] == 1
     assert row["cost_status"] == "observed_route_median"
     assert features["account_cost_evidence"]["sample_count"] == 3
+    assert features["account_cost_evidence"]["round_trip_cost_pct"] == 0.42
+    assert features["account_cost_evidence"]["components_pct"] == {
+        "fee_pct": 0.10,
+        "borrow_pct": 0.04,
+        "gas_pct": 0.08,
+        "transfer_pct": 0.12,
+        "measured_slippage_pct": 0.08,
+    }
+    assert features["account_cost_evidence"]["consent_version"] == "portfolio_research_v2"
     assert features["dex_evidence"]["transfer"]["deliverable"] is False
     assert features["dex_evidence"]["transfer"]["status"] == "blocked"
     assert features["dex_evidence"]["transfer"]["time_status"] == "observed_opt_in_median"

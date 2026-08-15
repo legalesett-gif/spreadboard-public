@@ -16,6 +16,9 @@ import time
 from typing import Any
 
 
+SCORE_METHOD = "deterministic_dual_opportunity_evidence_v5"
+
+
 def evaluate(
     route: dict[str, Any] | None,
     *,
@@ -45,7 +48,7 @@ def evaluate(
             "planning_buffer_label": "Collateral reserve unavailable",
             "risk_estimate": _unavailable_risk("no_route"),
             "reasons": ["No live or retained route is available for this token."],
-            "method": "deterministic_dual_opportunity_evidence_v5",
+            "method": SCORE_METHOD,
         }
 
     windows = windows or {}
@@ -387,7 +390,7 @@ def evaluate(
         "planning_buffer_label": reserve_label,
         "risk_estimate": risk,
         "reasons": reasons[:5],
-        "method": "deterministic_dual_opportunity_evidence_v5",
+        "method": SCORE_METHOD,
         "disclaimer": (
             "Rule-based research evidence, not personalized advice, an AI prediction or a liquidation calculation. "
             "Gross edge excludes unknown account fees, borrow, gas and exit slippage. Exact leverage, maintenance "

@@ -375,6 +375,7 @@ def test_completed_position_research_evidence_is_explicit_anonymous_and_revocabl
             "research_matched_notional_usd": 2500,
             "research_costs_complete": True,
             "research_cost_consent": True,
+            "research_consent_version": accounts.RESEARCH_CONSENT_VERSION,
         },
         db_path=path,
     )
@@ -383,13 +384,48 @@ def test_completed_position_research_evidence_is_explicit_anonymous_and_revocabl
     )
     cost = evidence["cost|mexc|spot|bybit|futures"]["costs"][0]
 
-    assert contributed["research_consent_version"] == "portfolio_research_v1"
+    assert contributed["research_consent_version"] == accounts.RESEARCH_CONSENT_VERSION
     assert cost["round_trip_cost_pct"] == 1.0
+    assert cost["fee_pct"] == 0.28
+    assert cost["borrow_pct"] == 0.12
+    assert cost["gas_pct"] == 0.16
+    assert cost["transfer_pct"] == 0.2
+    assert cost["measured_slippage_pct"] == 0.24
+    assert cost["consent_version"] == accounts.RESEARCH_CONSENT_VERSION
     assert cost["sample_count"] == 1
     serialized = str(evidence)
     assert "research-owner" not in serialized
     assert "2500" not in serialized
     assert "2.6" not in serialized
+
+    connection = accounts._connect(path)
+    try:
+        connection.execute(
+            "UPDATE positions SET research_consent_version = 'portfolio_research_v1' WHERE id = ?",
+            (created["id"],),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    assert accounts.anonymized_research_evidence(db_path=path) == {}
+
+    with pytest.raises(ValueError, match="current_research_consent_required"):
+        accounts.update_position(
+            owner["id"],
+            created["id"],
+            {
+                **payload,
+                "status": "closed",
+                "closed_at": closed["closed_at"],
+                "long_exit_price": 2.6,
+                "short_exit_price": 2.4,
+                "exit_fees_usd": 5,
+                "research_matched_notional_usd": 2500,
+                "research_costs_complete": True,
+                "research_cost_consent": True,
+            },
+            db_path=path,
+        )
 
     accounts.update_position(
         owner["id"],
@@ -458,6 +494,7 @@ def test_dex_transfer_evidence_requires_identity_and_uses_only_duration(
         "transfer_started_at": "2026-08-10T01:00:00Z",
         "transfer_credited_at": "2026-08-10T01:10:00Z",
         "research_transfer_consent": True,
+        "research_consent_version": accounts.RESEARCH_CONSENT_VERSION,
     }
     accounts.update_position(owner["id"], created["id"], contributed, db_path=path)
     evidence = accounts.anonymized_research_evidence(db_path=path)

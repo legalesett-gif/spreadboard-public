@@ -104,6 +104,14 @@ def test_position_cancel_never_depends_on_required_field_validation() -> None:
     assert "dialog?.close('cancel')" in script
 
 
+def test_research_consent_names_component_costs_and_current_version() -> None:
+    html = server.render_position_edit_dialog()
+    assert "total and component lifecycle-cost percentages" in html
+    assert "fees, borrow, gas, transfer and measured slippage" in html
+    assert "portfolio_research_v2" in html
+    assert 'name="research_consent_version" value="portfolio_research_v2"' in html
+
+
 def test_portfolio_uses_edit_and_exact_funding_instead_of_manual_funding_button() -> None:
     item = {
         "id": 8,

@@ -105,12 +105,14 @@ def capture_routes(
     cost_evidenced = 0
     transfer_evidenced = 0
     contributed = account_evidence or {}
+    current_method = research_score.SCORE_METHOD
     try:
         for route in ranked:
             key = str(route["route_key"])
             if connection.execute(
-                "SELECT 1 FROM score_observations WHERE route_key = ? AND observed_hour_us = ?",
-                (key, hour_us),
+                """SELECT 1 FROM score_observations
+                   WHERE route_key = ? AND observed_hour_us = ? AND method = ?""",
+                (key, hour_us, current_method),
             ).fetchone():
                 continue
             history = market_history.load_history(
@@ -276,6 +278,20 @@ def _route_with_account_evidence(
                 "sample_count": int(cost.get("sample_count") or 0),
                 "scope": "median_route_percentage_only",
                 "includes": cost.get("includes"),
+                "consent_version": cost.get("consent_version"),
+                "round_trip_cost_pct": value,
+                "components_pct": {
+                    name: component
+                    for name in (
+                        "fee_pct",
+                        "borrow_pct",
+                        "gas_pct",
+                        "transfer_pct",
+                        "measured_slippage_pct",
+                    )
+                    if (component := _number(cost.get(name))) is not None
+                    and component >= 0
+                },
                 "identity_match": "exact_chain_contract" if is_dex else "exact_route",
             }
     transfer = matching(evidence.get("transfers"))
@@ -430,39 +446,105 @@ def status(db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
                ORDER BY observed_hour_us DESC, id DESC LIMIT 1"""
         ).fetchone()
         selected_method = str(selected[0]) if selected is not None else None
-        totals = connection.execute(
+        observation_totals = connection.execute(
             """SELECT COUNT(*) observations,
-                      COUNT(DISTINCT route_key) routes,
                       MIN(observed_hour_us) first_us,
-                      MAX(observed_hour_us) last_us,
-                      SUM(CASE WHEN cost_status = 'observed_route_median' THEN 1 ELSE 0 END)
-                          exact_cost_rows
+                      MAX(observed_hour_us) last_us
                FROM score_observations WHERE method = ?""",
             (selected_method,),
         ).fetchone()
-        observations = int(totals["observations"] or 0)
-        routes = int(totals["routes"] or 0)
-        first_us = int(totals["first_us"] or 0)
-        last_us = int(totals["last_us"] or 0)
-        exact_cost_rows = int(totals["exact_cost_rows"] or 0)
-        outcomes = int(
-            connection.execute(
-                """SELECT COUNT(*) FROM score_outcomes x
+        observations = int(observation_totals["observations"] or 0)
+        observation_first_us = int(observation_totals["first_us"] or 0)
+        observation_last_us = int(observation_totals["last_us"] or 0)
+        outcomes_by_horizon = {
+            f"{int(row[0])}h": int(row[1])
+            for row in connection.execute(
+                """SELECT x.horizon_hours, COUNT(*) FROM score_outcomes x
                    JOIN score_observations o ON o.id = x.observation_id
-                   WHERE o.method = ?""",
+                   WHERE o.method = ? GROUP BY x.horizon_hours
+                   ORDER BY x.horizon_hours""",
                 (selected_method,),
-            ).fetchone()[0]
-        )
+            )
+        }
+        training_totals = connection.execute(
+            """SELECT COUNT(*) outcomes,
+                      COUNT(DISTINCT o.route_key) routes,
+                      MIN(o.observed_hour_us) first_us,
+                      MAX(o.observed_hour_us) last_us,
+                      SUM(CASE WHEN o.cost_status = 'observed_route_median'
+                               THEN 1 ELSE 0 END) exact_cost_rows
+               FROM score_outcomes x
+               JOIN score_observations o ON o.id = x.observation_id
+               WHERE o.method = ? AND x.horizon_hours = 24""",
+            (selected_method,),
+        ).fetchone()
+        outcomes = int(training_totals["outcomes"] or 0)
+        routes = int(training_totals["routes"] or 0)
+        first_us = int(training_totals["first_us"] or 0)
+        last_us = int(training_totals["last_us"] or 0)
+        exact_cost_rows = int(training_totals["exact_cost_rows"] or 0)
         all_observations = int(
             connection.execute("SELECT COUNT(*) FROM score_observations").fetchone()[0]
         )
         all_outcomes = int(
             connection.execute("SELECT COUNT(*) FROM score_outcomes").fetchone()[0]
         )
+        all_outcomes_by_horizon = {
+            f"{int(row[0])}h": int(row[1])
+            for row in connection.execute(
+                """SELECT horizon_hours, COUNT(*) FROM score_outcomes
+                   GROUP BY horizon_hours ORDER BY horizon_hours"""
+            )
+        }
+        now_us = int(time.time() * 1_000_000)
+        label_quality = {}
+        for horizon in HORIZONS:
+            matured = int(
+                connection.execute(
+                    """SELECT COUNT(*) FROM score_observations
+                       WHERE method = ?
+                         AND observed_hour_us + ? * 3600000000 <= ?""",
+                    (selected_method, horizon, now_us),
+                ).fetchone()[0]
+            )
+            labeled = int(outcomes_by_horizon.get(f"{horizon}h", 0))
+            terminal = int(
+                connection.execute(
+                    """SELECT COUNT(*) FROM score_label_attempts a
+                       JOIN score_observations o ON o.id = a.observation_id
+                       WHERE o.method = ? AND a.horizon_hours = ?
+                         AND a.last_reason =
+                             'target_window_elapsed_without_exact_history'""",
+                    (selected_method, horizon),
+                ).fetchone()[0]
+            )
+            retrying = int(
+                connection.execute(
+                    """SELECT COUNT(*) FROM score_label_attempts a
+                       JOIN score_observations o ON o.id = a.observation_id
+                       WHERE o.method = ? AND a.horizon_hours = ?
+                         AND a.last_reason !=
+                             'target_window_elapsed_without_exact_history'""",
+                    (selected_method, horizon),
+                ).fetchone()[0]
+            )
+            label_quality[f"{horizon}h"] = {
+                "matured": matured,
+                "labeled": labeled,
+                "terminal_missing_history": terminal,
+                "retrying": retrying,
+                "unaccounted_matured": max(0, matured - labeled - terminal - retrying),
+                "yield_pct": round(labeled / matured * 100.0, 2) if matured else 0.0,
+            }
     finally:
         connection.close()
     span_days = (last_us - first_us) / (24 * 3600 * 1_000_000) if first_us and last_us else 0.0
-    exact_cost_coverage = exact_cost_rows / observations if observations else 0.0
+    observation_span_days = (
+        (observation_last_us - observation_first_us) / (24 * 3600 * 1_000_000)
+        if observation_first_us and observation_last_us
+        else 0.0
+    )
+    exact_cost_coverage = exact_cost_rows / outcomes if outcomes else 0.0
     gates = {
         "outcomes": outcomes >= ML_MIN_OUTCOMES,
         "routes": routes >= ML_MIN_ROUTES,
@@ -474,14 +556,20 @@ def status(db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
         "selected_method": selected_method,
         "observations": observations,
         "outcomes": outcomes,
+        "outcomes_horizon": "24h",
+        "outcomes_by_horizon": outcomes_by_horizon,
+        "outcomes_all_horizons": sum(outcomes_by_horizon.values()),
         "routes": routes,
         "span_days": round(span_days, 2),
+        "observation_span_days": round(observation_span_days, 2),
         "exact_cost_rows": exact_cost_rows,
         "exact_cost_coverage_pct": round(exact_cost_coverage * 100.0, 2),
+        "label_quality": label_quality,
         "method_versions": versions,
         "all_versions": {
             "observations": all_observations,
             "outcomes": all_outcomes,
+            "outcomes_by_horizon": all_outcomes_by_horizon,
         },
         "ml_ready": all(gates.values()),
         "ml_gate_status": gates,
