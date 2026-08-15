@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .dex_identity import identity_key
+
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_DB_PATH = RUNTIME_DIR / "spreadboard_research_calibration.sqlite3"
@@ -254,15 +256,15 @@ def _route_with_account_evidence(
     long_type = str(route.get("long_market_type") or "").strip().casefold()
     short_type = str(route.get("short_market_type") or "").strip().casefold()
     is_dex = "dex" in {long_type, short_type} or "DEX" in str(route.get("route_kind") or "").upper()
-    chain = str(route.get("dex_chain") or "").strip().casefold()
-    contract = str(route.get("dex_contract") or "").strip().casefold()
+    chain, contract = identity_key(route.get("dex_chain"), route.get("dex_contract"))
 
     def matching(items: Any) -> dict[str, Any] | None:
         for item in items if isinstance(items, list) else []:
             if not isinstance(item, dict):
                 continue
-            item_chain = str(item.get("chain") or "").strip().casefold()
-            item_contract = str(item.get("contract") or "").strip().casefold()
+            item_chain, item_contract = identity_key(
+                item.get("chain"), item.get("contract")
+            )
             if is_dex:
                 if chain and contract and item_chain == chain and item_contract == contract:
                     return item
@@ -748,15 +750,16 @@ def _identity_matched_history(
     is_dex = "DEX" in str(route_key).upper() or bool(dex.get("chain") or dex.get("contract"))
     if not is_dex:
         return history
-    expected_chain = str(dex.get("chain") or "").strip().casefold()
-    expected_contract = str(dex.get("contract") or "").strip().casefold()
+    expected_chain, expected_contract = identity_key(
+        dex.get("chain"), dex.get("contract")
+    )
     if not expected_chain or not expected_contract:
         return []
     return [
         row
         for row in history
-        if str(row.get("dex_chain") or "").strip().casefold() == expected_chain
-        and str(row.get("dex_contract") or "").strip().casefold() == expected_contract
+        if identity_key(row.get("dex_chain"), row.get("dex_contract"))
+        == (expected_chain, expected_contract)
     ]
 
 

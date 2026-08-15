@@ -16,6 +16,8 @@ import statistics
 import threading
 from typing import Any, Iterator
 
+from .dex_identity import identity_key
+
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
@@ -318,7 +320,10 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                     'open_spread_pct', 'funding_24h_pct',
                     -- Per token rather than per route: "tell me when DOGE
                     -- trades above X", or when anything on this token pays.
-                    'token_price', 'token_funding_24h_pct'
+                    'token_price', 'token_funding_24h_pct',
+                    -- Route-operability rules.  These keep a watched pair on
+                    -- the member's radar when a rail closes or its quote ages.
+                    'route_deliverable', 'quote_age_seconds'
                 )),
                 operator TEXT NOT NULL CHECK (operator IN ('lte', 'gte')),
                 threshold REAL NOT NULL,
@@ -1415,6 +1420,8 @@ def add_market_alert_rule(
         "funding": "funding_24h_pct",
         "price": "token_price",
         "token_funding": "token_funding_24h_pct",
+        "dw_tracking": "route_deliverable",
+        "freshness": "quote_age_seconds",
     }.get(alert_type, "open_spread_pct")
     operator = "lte" if str(payload.get("direction") or "above") == "below" else "gte"
     threshold = float(payload.get("threshold"))
@@ -2099,8 +2106,9 @@ def anonymized_research_evidence(
             str(row.get("long_market_type") or "").strip().casefold(),
             str(row.get("short_market_type") or "").strip().casefold(),
         }
-        chain = str(row.get("transfer_chain") or "").strip().casefold()
-        contract = str(row.get("transfer_contract") or "").strip().casefold()
+        chain, contract = identity_key(
+            row.get("transfer_chain"), row.get("transfer_contract")
+        )
         if is_dex and not (chain and contract):
             continue
         bucket = grouped.setdefault((signature, chain, contract), {"costs": [], "transfers": []})
@@ -3046,7 +3054,8 @@ def _widen_market_alert_metrics(connection: sqlite3.Connection) -> None:
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='market_alert_rules'"
     ).fetchone()
     existing = str((row[0] if row else "") or "")
-    if not existing or "token_price" in existing:
+    required_metrics = {"token_price", "route_deliverable", "quote_age_seconds"}
+    if not existing or all(metric in existing for metric in required_metrics):
         return
     columns = [item[1] for item in connection.execute("PRAGMA table_info(market_alert_rules)")]
     connection.execute("ALTER TABLE market_alert_rules RENAME TO market_alert_rules_old")
@@ -3059,7 +3068,8 @@ def _widen_market_alert_metrics(connection: sqlite3.Connection) -> None:
             symbol TEXT NOT NULL,
             metric TEXT NOT NULL CHECK (metric IN (
                 'open_spread_pct', 'funding_24h_pct',
-                'token_price', 'token_funding_24h_pct'
+                'token_price', 'token_funding_24h_pct',
+                'route_deliverable', 'quote_age_seconds'
             )),
             operator TEXT NOT NULL CHECK (operator IN ('lte', 'gte')),
             threshold REAL NOT NULL,

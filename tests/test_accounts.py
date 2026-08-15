@@ -549,7 +549,7 @@ def test_dex_transfer_evidence_requires_identity_and_uses_only_duration(
     evidence = accounts.anonymized_research_evidence(db_path=path)
     transfer = evidence["dx|okx dex 56|dex|gate|spot"]["transfers"][0]
 
-    assert transfer["chain"] == "base"
+    assert transfer["chain"] == "8453"
     assert transfer["contract"] == "0xabc"
     assert transfer["transfer_time_seconds"] == 600
     assert "2026-08-10" not in str(evidence)

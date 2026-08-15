@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from cryptography.fernet import Fernet
 
 from spreadboard import accounts, alerts
 
@@ -127,6 +128,123 @@ def test_a_price_rule_fires_and_says_the_number(db: Path, monkeypatch) -> None:
     assert "0.2005" in body or "0.2" in body
 
 
+def test_token_push_opens_the_token_page(db: Path, monkeypatch) -> None:
+    user_id = _user(db)
+    accounts.update_subscription(
+        user_id, status="active", expires_at="2099-01-01T00:00:00+00:00", db_path=db
+    )
+    monkeypatch.setenv("SPREADBOARD_FIELD_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("SPREADBOARD_PUSHOVER_APP_TOKEN", "app-token")
+    monkeypatch.setenv("SPREADBOARD_PUBLIC_URL", "https://example.test")
+    accounts.save_notification_preferences(
+        user_id,
+        {"pushover_user_key": "k" * 30, "pushover_enabled": True},
+        db_path=db,
+    )
+    rule = accounts.add_market_alert_rule(
+        user_id,
+        {"type": "price", "symbol": "DOGE", "direction": "above", "threshold": 0.15},
+        db_path=db,
+    )
+    monkeypatch.setattr(alerts.api_spreads, "load_spreads", lambda **_kwargs: {"rows": BOARD})
+    sent = []
+    monkeypatch.setattr(
+        alerts,
+        "send_pushover_message",
+        lambda **kwargs: sent.append(kwargs) or {"ok": True, "status": 200},
+    )
+
+    summary = alerts.UserMarketAlertWorker(
+        board_path=Path("board.json"), accounts_path=db, poll_seconds=10
+    ).check_once(rule_ids={int(rule["id"])})
+
+    assert summary == {"evaluated": 1, "triggered": 1, "delivered": 1}
+    assert sent[0]["url"] == "https://example.test/token/DOGE"
+    assert sent[0]["title"] == "DOGE token price alert"
+
+
+def test_route_operability_and_freshness_rules_are_live(db: Path, monkeypatch) -> None:
+    user_id = _user(db)
+    accounts.update_subscription(
+        user_id, status="active", expires_at="2099-01-01T00:00:00+00:00", db_path=db
+    )
+    route_key = "GUA|Mexc|Spot|Gate|Futures"
+    rail_rule = accounts.add_market_alert_rule(
+        user_id,
+        {"type": "dw_tracking", "symbol": "GUA", "route_key": route_key,
+         "direction": "below", "threshold": 0.5, "stability_seconds": 0},
+        db_path=db,
+    )
+    age_rule = accounts.add_market_alert_rule(
+        user_id,
+        {"type": "freshness", "symbol": "GUA", "route_key": route_key,
+         "direction": "above", "threshold": 120, "stability_seconds": 0},
+        db_path=db,
+    )
+    row = {
+        "route_key": route_key,
+        "token": "GUA",
+        "long_venue": "Mexc",
+        "short_venue": "Gate",
+        "deliverable": False,
+        "age_min": 3.0,
+    }
+    monkeypatch.setattr(alerts.api_spreads, "load_spreads", lambda **_kwargs: {"rows": [row]})
+
+    summary = alerts.UserMarketAlertWorker(
+        board_path=Path("board.json"), accounts_path=db, poll_seconds=10
+    ).check_once(rule_ids={int(rail_rule["id"]), int(age_rule["id"])})
+
+    assert summary["evaluated"] == 2 and summary["triggered"] == 2
+    bodies = [item["body"] for item in accounts.list_notifications(user_id, db_path=db)]
+    assert any("blocked" in body and "deposit / withdrawal" in body for body in bodies)
+    assert any("3.0 min" in body and "quote age" in body for body in bodies)
+
+
+def test_stale_structure_can_trigger_status_but_never_a_spread(db: Path, monkeypatch) -> None:
+    user_id = _user(db)
+    accounts.update_subscription(
+        user_id, status="active", expires_at="2099-01-01T00:00:00+00:00", db_path=db
+    )
+    route_key = "OLD|Mexc|Spot|Gate|Futures"
+    rule_ids = set()
+    for alert_type, direction, threshold in (
+        ("dw_tracking", "below", 0.5),
+        ("freshness", "above", 120),
+        ("token_spread", "above", 1),
+    ):
+        rule = accounts.add_market_alert_rule(
+            user_id,
+            {"type": alert_type, "symbol": "OLD", "route_key": route_key,
+             "direction": direction, "threshold": threshold, "stability_seconds": 0},
+            db_path=db,
+        )
+        rule_ids.add(int(rule["id"]))
+    structural = {
+        "route_key": route_key,
+        "token": "OLD",
+        "long_venue": "Mexc",
+        "short_venue": "Gate",
+        "deliverable": False,
+        "age_min": 8.0,
+        "displayed_open_spread_pct": 99.0,
+        "spread_quote_current": False,
+    }
+    monkeypatch.setattr(
+        alerts.api_spreads,
+        "load_spreads",
+        lambda **kwargs: {"rows": [structural] if kwargs.get("include_stale") else []},
+    )
+    monkeypatch.setattr(alerts, "_quote_custom_alert_route", lambda _route: None)
+
+    summary = alerts.UserMarketAlertWorker(
+        board_path=Path("board.json"), accounts_path=db, poll_seconds=10
+    ).check_once(rule_ids=rule_ids)
+
+    assert summary == {"evaluated": 2, "triggered": 2, "delivered": 0}
+    assert len(accounts.list_notifications(user_id, db_path=db)) == 2
+
+
 def test_a_rule_that_has_not_crossed_stays_quiet(db: Path, monkeypatch) -> None:
     user_id = _user(db)
     accounts.update_subscription(
@@ -198,6 +316,13 @@ def test_an_old_database_accepts_the_new_metrics(tmp_path: Path) -> None:
         db_path=path,
     )
     assert rule["metric"] == "token_price"
+    rail_rule = accounts.add_market_alert_rule(
+        user_id,
+        {"type": "dw_tracking", "symbol": "DOGE", "route_key": "DOGE|A|B",
+         "direction": "below", "threshold": 0.5},
+        db_path=path,
+    )
+    assert rail_rule["metric"] == "route_deliverable"
     # ...and the rule stored before the rebuild survived it.
     assert any(r["symbol"] == "OLD" for r in accounts.list_market_alert_rules(user_id, db_path=path))
 

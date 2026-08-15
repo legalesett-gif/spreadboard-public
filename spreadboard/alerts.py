@@ -314,7 +314,13 @@ class UserMarketAlertWorker:
                 print(f"spreadboard-market-alerts: {type(exc).__name__}: {exc}", flush=True)
             self._stop.wait(self.poll_seconds)
 
-    def check_once(self) -> dict[str, int]:
+    def check_once(self, *, rule_ids: set[int] | None = None) -> dict[str, int]:
+        """Evaluate market alerts, optionally restricting a diagnostic run.
+
+        The filter is deliberately server-side.  It lets operations exercise
+        one temporary rule end to end without evaluating or triggering every
+        other subscriber rule during the test.
+        """
         # Ask who is waiting before building anything. This runs every ten
         # seconds and `limit=None` materialises the entire board -- every row of
         # every token, the largest payload the process ever holds, on its own
@@ -335,10 +341,13 @@ class UserMarketAlertWorker:
             if isinstance(row, dict) and row.get("route_key")
         ]
         rows = {str(row["route_key"]): row for row in board_rows}
-        rules_by_user = {
-            user_id: accounts.list_market_alert_rules(user_id, db_path=self.accounts_path)
-            for user_id in user_ids
-        }
+        rules_by_user = {}
+        for user_id in user_ids:
+            rules = accounts.list_market_alert_rules(user_id, db_path=self.accounts_path)
+            if rule_ids is not None:
+                rules = [rule for rule in rules if int(rule.get("id") or 0) in rule_ids]
+            if rules:
+                rules_by_user[user_id] = rules
         chart_keys = {
             str(rule.get("route_key") or "")
             for rules in rules_by_user.values()
@@ -367,6 +376,11 @@ class UserMarketAlertWorker:
                 if isinstance(row, dict)
                 and str(row.get("route_key") or "") in missing_standard_keys
             ]
+        status_rows = {
+            str(row.get("route_key") or ""): row
+            for row in [*board_rows, *structural_rows]
+            if row.get("route_key")
+        }
         rows.update(self._custom_alert_rows(chart_keys, board_rows, structural_rows))
         tokens = token_metrics(board_rows)
         evaluated = triggered = delivered = 0
@@ -386,7 +400,14 @@ class UserMarketAlertWorker:
                     row = None
                     value = (tokens.get(token) or {}).get(metric)
                 else:
-                    row = rows.get(str(rule.get("route_key") or ""))
+                    route_key = str(rule.get("route_key") or "")
+                    row = rows.get(route_key)
+                    if metric in {"route_deliverable", "quote_age_seconds"}:
+                        # Stale structural rows are invalid price evidence but
+                        # are exactly the evidence a freshness or rail-status
+                        # rule needs. Prefer a successful exact refresh; fall
+                        # back to the structural age/rail state when it fails.
+                        row = row or status_rows.get(route_key)
                     value = _rule_value(row, metric) if row else None
                 if value is None:
                     continue
@@ -396,11 +417,7 @@ class UserMarketAlertWorker:
                     user_id,
                     int(rule["id"]),
                     value=value,
-                    title=(
-                        f"{rule['symbol']} {'price' if metric == 'token_price' else 'alert'}"
-                        if token is not None
-                        else f"{rule['symbol']} route alert"
-                    ),
+                    title=_notification_title(rule, metric, token is not None),
                     body=body,
                     db_path=self.accounts_path,
                 )
@@ -413,9 +430,7 @@ class UserMarketAlertWorker:
                         user_key=delivery["user_key"],
                         title=notification["title"],
                         message=notification["body"],
-                        url=f"{public_url}/pair/{urllib.parse.quote(str(rule['route_key']), safe='')}"
-                        if public_url
-                        else None,
+                        url=_notification_url(public_url, rule, token),
                         device=delivery.get("device"),
                         sound=delivery.get("sound"),
                     )
@@ -600,6 +615,8 @@ _METRIC_LABELS = {
     "open_spread_pct": ("open spread", True),
     "token_price": ("price", False),
     "token_funding_24h_pct": ("best 24h funding", True),
+    "route_deliverable": ("deposit / withdrawal route", False),
+    "quote_age_seconds": ("quote age", False),
 }
 
 
@@ -612,20 +629,35 @@ def _alert_body(
 ) -> str:
     """What the member reads. It must say the number and what it crossed."""
     label, is_pct = _METRIC_LABELS.get(metric, ("value", True))
-    shown = f"{value:+.4f}%" if is_pct else f"{value:,.6g}"
-    limit = f"{float(rule['threshold']):+.4f}%" if is_pct else f"{float(rule['threshold']):,.6g}"
+    if metric == "route_deliverable":
+        shown = "transferable" if value >= 0.5 else "blocked"
+        limit = "transferable" if rule["operator"] == "gte" else "blocked"
+    elif metric == "quote_age_seconds":
+        shown = _duration_label(value)
+        limit = _duration_label(float(rule["threshold"]))
+    else:
+        shown = f"{value:+.4f}%" if is_pct else f"{value:,.6g}"
+        limit = f"{float(rule['threshold']):+.4f}%" if is_pct else f"{float(rule['threshold']):,.6g}"
     direction = "at or above" if rule["operator"] == "gte" else "at or below"
     where = ""
     if row is not None:
         where = f" on {row.get('long_venue') or '?'} -> {row.get('short_venue') or '?'}"
     elif token_view:
         where = " across every venue quoting it"
+    if metric == "route_deliverable":
+        return f"{rule['symbol']} {label} is {shown}{where}; alert condition is {limit}."
     return f"{rule['symbol']} {label} is {shown}{where}; threshold {direction} {limit}."
 
 
 def _rule_value(row: dict[str, Any] | None, metric: str) -> float | None:
     if not row:
         return None
+    if metric == "route_deliverable":
+        deliverable = row.get("deliverable")
+        return float(deliverable) if isinstance(deliverable, bool) else None
+    if metric == "quote_age_seconds":
+        age_min = api_spreads.quote_age_min(row)
+        return max(0.0, age_min * 60.0) if age_min is not None else None
     if (
         metric == "open_spread_pct"
         and row.get("spread_quote_current") is not True
@@ -663,6 +695,39 @@ def _rule_value(row: dict[str, Any] | None, metric: str) -> float | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _duration_label(seconds: float) -> str:
+    seconds = max(0.0, float(seconds))
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    return f"{seconds / 60.0:.1f} min"
+
+
+def _notification_title(rule: dict[str, Any], metric: str, token_wide: bool) -> str:
+    kind = {
+        "token_price": "price",
+        "token_funding_24h_pct": "funding",
+        "funding_24h_pct": "funding",
+        "open_spread_pct": "spread",
+        "route_deliverable": "D/W status",
+        "quote_age_seconds": "quote freshness",
+    }.get(metric, "market")
+    scope = "token" if token_wide else "route"
+    return f"{rule['symbol']} {scope} {kind} alert"
+
+
+def _notification_url(
+    public_url: str,
+    rule: dict[str, Any],
+    token: str | None,
+) -> str | None:
+    if not public_url:
+        return None
+    if token is not None:
+        return f"{public_url}/token/{urllib.parse.quote(token, safe='')}"
+    route_key = urllib.parse.quote(str(rule.get("route_key") or ""), safe="")
+    return f"{public_url}/pair/{route_key}"
 
 
 def _matching_board_route(

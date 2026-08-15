@@ -513,9 +513,12 @@ def test_route_alert_dialog_only_offers_server_evaluated_metrics() -> None:
     assert '<option value="token_spread">' in source
     assert '<option value="funding">' in source
     assert '<option value="price">' in source
+    assert '<option value="token_funding">' in source
+    assert '<option value="dw_tracking">' in source
+    assert '<option value="freshness">' in source
     for unsupported in (
-        "exchange_spread", "custom_pair_spread", "dw_tracking", "freshness",
-        "community_call", "hyperliquid", "token_index",
+        "exchange_spread", "custom_pair_spread", "community_call", "hyperliquid",
+        "token_index",
     ):
         assert f'<option value="{unsupported}">' not in source
 
@@ -2960,7 +2963,8 @@ def test_a_member_sees_their_alerts_against_the_live_value(tmp_path, monkeypatch
                         lambda *a, **k: SimpleNamespace(id=1))
     monkeypatch.setattr(server.accounts, "list_market_alert_rules", lambda *a, **k: rules)
     monkeypatch.setattr(server, "api_market_spreads", lambda *a, **k: {"rows": [
-        {"route_key": "SIREN|Kucoin|Spot|Gate|Futures", "executable_spread_pct": 15.13}]})
+        {"route_key": "SIREN|Kucoin|Spot|Gate|Futures", "executable_spread_pct": 15.13,
+         "spread_quote_current": True}]})
     html = server.render_member_alert_rules(tmp_path / "board.jsonl")
     assert "SIREN" in html
     assert "Kucoin Spot -&gt; Gate Futures" in html, "the member must see which route"

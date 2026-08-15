@@ -182,7 +182,7 @@ def test_opt_in_dex_cost_and_transfer_evidence_requires_exact_current_identity(t
         "dexcal|okx dex 56|dex|bybit|futures": {
             "costs": [
                 {
-                    "chain": "base",
+                    "chain": "8453",
                     "contract": "0xabc",
                     "round_trip_cost_pct": 0.42,
                     "fee_pct": 0.10,
@@ -197,7 +197,7 @@ def test_opt_in_dex_cost_and_transfer_evidence_requires_exact_current_identity(t
             ],
             "transfers": [
                 {
-                    "chain": "base",
+                    "chain": "8453",
                     "contract": "0xabc",
                     "transfer_time_seconds": 95,
                     "sample_count": 2,
@@ -245,6 +245,21 @@ def test_opt_in_dex_cost_and_transfer_evidence_requires_exact_current_identity(t
     )
     assert "known_round_trip_cost_pct" not in wrong_identity
     assert "dex_transfer_time_seconds" not in wrong_identity
+
+
+def test_solana_history_identity_remains_case_sensitive() -> None:
+    history = [
+        {"dex_chain": "501", "dex_contract": "AbCdMint", "value": "exact"},
+        {"dex_chain": "501", "dex_contract": "abcdmint", "value": "wrong"},
+    ]
+
+    matched = research_calibration._identity_matched_history(
+        history,
+        route_key="SOLX|OKX DEX 501|DEX|Gate|Futures",
+        feature_json=json.dumps({"dex_evidence": {"chain": "Solana", "contract": "AbCdMint"}}),
+    )
+
+    assert [row["value"] for row in matched] == ["exact"]
 
 
 def test_missing_history_is_backed_off_instead_of_starving_later_routes(tmp_path) -> None:

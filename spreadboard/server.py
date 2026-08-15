@@ -11986,6 +11986,10 @@ def render_position_edit_dialog() -> str:
             "Contribute anonymous total and component lifecycle-cost percentages to future route calibration.",
         )
         .replace(
+            'placeholder="e.g. Base"><em>Required for DEX contributions.</em>',
+            'placeholder="e.g. 8453 / Base or 501 / Solana"><em>Required for DEX contributions. Familiar network names and numeric chain IDs are normalized to the exact same identity.</em>',
+        )
+        .replace(
             "Consent version portfolio_research_v1.",
             f"Consent version {accounts.RESEARCH_CONSENT_VERSION}.",
         )
@@ -12337,26 +12341,7 @@ def render_profile_pushover(flags: dict[str, Any]) -> str:
           <div><h3>Alerts <span id="profileAlertCount">(0)</span></h3><p>Spread, funding, token price and token funding rules all evaluate against the live board. Other rule types remain templates.</p></div>
           <button class="sheet-button primary js-alert-draft" type="button" data-alert-type="token_spread">Add route alert</button>
         </div>
-        <form class="token-alert-form" id="tokenAlertForm">
-          <div>
-            <strong>Watch a token</strong>
-            <p class="pricing-note">No route to pick. Price is the median across every venue quoting it,
-               so one stale print cannot trip the alert; funding is the best 24h carry on the asset.</p>
-          </div>
-          <label><span>Token</span><input name="symbol" placeholder="DOGE" maxlength="40" required></label>
-          <label><span>Watch</span><select name="type">
-            <option value="price">Price</option>
-            <option value="token_funding">Funding 24h</option>
-          </select></label>
-          <label><span>When it is</span><select name="direction">
-            <option value="above">At or above</option>
-            <option value="below">At or below</option>
-          </select></label>
-          <label><span>Level</span><input name="threshold" type="number" step="any" placeholder="0.25" required></label>
-          <label><span>Hold for</span><input name="stability_seconds" type="number" min="0" max="3600" value="30"></label>
-          <button class="sheet-button primary" type="submit">Create</button>
-          <span class="token-alert-status" data-token-alert-status></span>
-        </form>
+        {render_token_alert_form()}
         <div class="profile-alert-filters">
           <label><span>Alert type</span><select id="profileAlertTypeFilter">
             <option value="all">All</option><option value="token_spread">Token spread</option><option value="funding">Funding</option><option value="price">Price</option><option value="exchange_spread">Exchange spread</option><option value="custom_pair_spread">Custom pair spread</option><option value="dw_tracking">D/W tracking</option><option value="freshness">Freshness</option>
@@ -12367,6 +12352,31 @@ def render_profile_pushover(flags: dict[str, Any]) -> str:
         <div class="profile-alert-grid" id="profileAlertGrid"></div>
       </section>
     </section>
+    """
+
+
+def render_token_alert_form() -> str:
+    return """
+        <form class="token-alert-form" id="tokenAlertForm">
+          <div>
+            <strong>Watch a token</strong>
+            <p class="pricing-note">Set a price or best-funding alert without choosing a route.
+               Price uses the median across live venues so one stale print cannot trip it.</p>
+          </div>
+          <label><span>Token</span><input name="symbol" placeholder="DOGE" maxlength="40" required></label>
+          <label><span>Watch</span><select name="type">
+            <option value="price">Token price</option>
+            <option value="token_funding">Best funding / 24h</option>
+          </select></label>
+          <label><span>When it is</span><select name="direction">
+            <option value="above">At or above</option>
+            <option value="below">At or below</option>
+          </select></label>
+          <label><span>Level</span><input name="threshold" type="number" step="any" placeholder="0.25" required></label>
+          <label><span>Hold for, sec</span><input name="stability_seconds" type="number" min="0" max="3600" value="30"></label>
+          <button class="sheet-button primary" type="submit">Create alert</button>
+          <span class="token-alert-status" role="status" data-token-alert-status></span>
+        </form>
     """
 
 
@@ -12400,17 +12410,25 @@ def render_member_alert_rules(board_path: Path) -> str:
     <section class="member-alerts">
       <div class="profile-section-title"><div><span class="page-kicker">My alerts</span>
         <h2>You have no alerts yet</h2>
-        <p>Open any route on the board and use "Alert" to watch its spread or funding.
+        <p>Create a token price or funding alert here, or open any route and use "Alert"
+           to watch its spread, funding, deposit/withdrawal status or quote freshness.
            {h(delivery_note)}</p></div></div>
-    </section>"""
+      {render_token_alert_form()}
+    </section>
+    {render_member_alert_script()}"""
     market = api_market_spreads(board_path, {"limit": ["0"]})
+    market_rows = [row for row in (market.get("rows") or []) if isinstance(row, dict)]
     current: dict[str, dict[str, Any]] = {
         str(row.get("route_key") or ""): row
-        for row in (market.get("rows") or [])
-        if isinstance(row, dict)
+        for row in market_rows
     }
+    current_tokens = alerts.token_metrics(market_rows)
     cards = "".join(
-        render_member_alert_card(rule, current.get(str(rule.get("route_key") or "")))
+        render_member_alert_card(
+            rule,
+            current.get(str(rule.get("route_key") or "")),
+            current_tokens.get(accounts.token_from_alert_key(str(rule.get("route_key") or "")) or ""),
+        )
         for rule in rules
     )
     return f"""
@@ -12420,24 +12438,54 @@ def render_member_alert_rules(board_path: Path) -> str:
         <p>{h(delivery_note)} An alert fires once when the level holds for its stability
            window, and re-arms after the market moves back.</p></div>
       </div>
+      {render_token_alert_form()}
       <div class="member-alert-grid">{cards}</div>
     </section>
     {render_member_alert_script()}"""
 
 
-def render_member_alert_card(rule: dict[str, Any], row: dict[str, Any] | None) -> str:
+def render_member_alert_card(
+    rule: dict[str, Any],
+    row: dict[str, Any] | None,
+    token_view: dict[str, float] | None = None,
+) -> str:
     metric = str(rule.get("metric") or "")
-    is_funding = metric == "funding_24h_pct"
-    label = "24h funding" if is_funding else "open spread"
-    value = None
-    if row is not None:
-        value = row.get("funding_24h_pct") if is_funding else row.get("executable_spread_pct")
+    labels = {
+        "funding_24h_pct": "route funding / 24h",
+        "open_spread_pct": "route spread",
+        "token_price": "token price",
+        "token_funding_24h_pct": "best token funding / 24h",
+        "route_deliverable": "deposit / withdrawal",
+        "quote_age_seconds": "quote freshness",
+    }
+    label = labels.get(metric, "market alert")
+    if metric in accounts.TOKEN_METRICS:
+        value = (token_view or {}).get(metric)
+    else:
+        value = alerts._rule_value(row, metric) if row is not None else None
     threshold = _float_or_none(rule.get("threshold")) or 0.0
     above = str(rule.get("operator") or "gte") == "gte"
     enabled = bool(rule.get("enabled"))
     live = _float_or_none(value)
     met = live is not None and ((live >= threshold) if above else (live <= threshold))
     state = "armed" if enabled else "paused"
+    token_wide = accounts.token_from_alert_key(str(rule.get("route_key") or "")) is not None
+    if live is None:
+        current_display = "no live quote"
+    elif metric == "token_price":
+        current_display = f"{live:,.8g}"
+    elif metric == "route_deliverable":
+        current_display = "transferable" if live >= 0.5 else "blocked"
+    elif metric == "quote_age_seconds":
+        current_display = alerts._duration_label(live)
+    else:
+        current_display = fmt_signed_pct(live, digits=3)
+    route_display = (
+        "All live venues for this token"
+        if token_wide
+        else route_label_from_key(str(rule.get("route_key") or ""))
+    )
+    threshold_step = "0.5" if metric == "quote_age_seconds" else "0.0001"
     return f"""
     <article class="member-alert-card {h(state)} {"met" if met and enabled else ""}" data-alert-id="{h(rule.get("id"))}">
       <div class="member-alert-head">
@@ -12445,10 +12493,10 @@ def render_member_alert_card(rule: dict[str, Any], row: dict[str, Any] | None) -
         <span class="member-alert-kind">{h(label)}</span>
       </div>
       <strong class="member-alert-token">{h(rule.get("symbol"))}</strong>
-      <div class="member-alert-route">{h(route_label_from_key(str(rule.get("route_key") or "")))}</div>
-      <div class="member-alert-now">Now <strong>{fmt_signed_pct(live, digits=3) if live is not None else "no live quote"}</strong></div>
+      <div class="member-alert-route">{h(route_display)}</div>
+      <div class="member-alert-now">Now <strong>{h(current_display)}</strong></div>
       <label><span>Fires when {"at or above" if above else "at or below"}</span>
-        <input type="number" step="0.0001" name="threshold" value="{h(threshold)}"></label>
+        <input type="number" step="{threshold_step}" name="threshold" value="{h(threshold)}"></label>
       <label><span>Direction</span>
         <select name="direction">
           <option value="above" {"selected" if above else ""}>at or above</option>
@@ -12572,7 +12620,7 @@ def render_alerts_page(
         <div>
           <span class="page-kicker">Alerts</span>
           <h1>Your alerts</h1>
-          <p>Watch any route's spread or funding and get a push on your own phone when it hits your level.</p>
+          <p>Watch token prices and funding, exact-route spreads, transfer rails and quote freshness. Get a push on your own phone when the condition holds.</p>
         </div>
         <div class="intel-actions">
           {telegram_button}
@@ -12583,15 +12631,18 @@ def render_alerts_page(
       <section class="alert-status-grid">
         <article class="chart-summary-card"><span>Delivery</span><strong>Live</strong><em>{h(delivery_detail)}</em></article>
         <article class="chart-summary-card"><span>Saved rules</span><strong>{h(live_rule_count)}</strong><em>evaluated continuously</em></article>
-        <article class="chart-summary-card"><span>Rule types</span><strong>3</strong><em>route spread · route funding · token price</em></article>
+        <article class="chart-summary-card"><span>Rule types</span><strong>6</strong><em>price · funding · spread · rails · freshness</em></article>
         <article class="chart-summary-card"><span>Phone delivery</span><strong>{"Ready" if pushover_ready else "Setup needed"}</strong><em>per-account Pushover settings</em></article>
       </section>
       <section class="community-panel">
-        <div class="panel-head flat"><div><h2>Live alert types</h2><p>Create these from the Alert action on a current route. Each crossing is recorded in Portfolio and optionally sent through Pushover.</p></div></div>
+        <div class="panel-head flat"><div><h2>Live alert types</h2><p>Create token alerts above, or use the Alert action on a current route. Each crossing is recorded in Portfolio and optionally sent through Pushover.</p></div></div>
         <div class="alert-template-grid">
           {render_alert_template("Route spread", "Fires when the exact route open spread holds at or above or below your threshold.", "Live")}
           {render_alert_template("Route funding", "Fires when the exact route 24-hour funding value holds at your threshold.", "Live")}
-          {render_alert_template("Token price", "Fires when the selected token price holds at or above or below your threshold.", "Live")}
+          {render_alert_template("Token price", "Uses a cross-venue median and fires when the selected token holds at your price.", "Live")}
+          {render_alert_template("Token funding", "Fires when the best current 24-hour carry on the token reaches your level.", "Live")}
+          {render_alert_template("D/W status", "Fires when the exact route becomes blocked or transferable according to live rails.", "Live")}
+          {render_alert_template("Quote freshness", "Fires when an exact-route quote is older than your chosen number of seconds.", "Live")}
         </div>
       </section>
     </section>
@@ -15447,7 +15498,10 @@ def render_alert_draft_script() -> str:
     return ({
       token_spread: "Token spread",
       funding: "Funding",
-      price: "Price"
+      price: "Price",
+      token_funding: "Token funding",
+      dw_tracking: "Deposit / withdrawal status",
+      freshness: "Quote freshness"
     })[value] || "Alert";
   }
 
@@ -15496,9 +15550,12 @@ def render_alert_draft_script() -> str:
         </div>
         <form>
           <label><span>Alert type</span><select name="type">
-            <option value="token_spread">Token spread</option>
-            <option value="funding">Funding 24h</option>
-            <option value="price">Price</option>
+            <option value="token_spread">Exact route spread</option>
+            <option value="funding">Exact route funding / 24h</option>
+            <option value="price">Token price</option>
+            <option value="token_funding">Best token funding / 24h</option>
+            <option value="dw_tracking">Deposit / withdrawal status</option>
+            <option value="freshness">Quote freshness</option>
           </select></label>
           <label><span>Token</span><input name="symbol" autocomplete="off" placeholder="Token symbol"></label>
           <label><span>Direction</span><select name="direction"><option value="above">Crosses above</option><option value="below">Crosses below</option></select></label>
@@ -15530,6 +15587,21 @@ def render_alert_draft_script() -> str:
       ? "Current value unavailable"
       : `Current ${labelForType(draft.type).toLowerCase()}: ${Number(draft.currentValue).toFixed(4)}`;
     backdrop.querySelector("#alertModalTitle").textContent = draft.id ? "Edit alert" : "Create alert";
+
+    type.addEventListener("change", () => {
+      if (type.value === "dw_tracking") {
+        threshold.value = "0.5";
+        direction.value = "below";
+      } else if (type.value === "freshness") {
+        threshold.value = "120";
+        direction.value = "above";
+      } else if (type.value === "funding" || type.value === "token_funding") {
+        threshold.value = "0.1";
+        direction.value = "above";
+      }
+      backdrop.querySelector("[data-alert-current]").textContent =
+        `Set ${labelForType(type.value).toLowerCase()} threshold`;
+    });
 
     function close() {
       backdrop.remove();
