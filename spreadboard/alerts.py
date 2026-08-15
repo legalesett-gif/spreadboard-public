@@ -11,12 +11,17 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from spreadboard import accounts, api_spreads, board, chart_catalog
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
+RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(Path(__file__).resolve().parents[1] / "data")))
+# Operators already read *_worker_status.json files for the other workers; the
+# alert path is the one with no way to answer "why did nothing arrive?".
+STATUS_PATH = RUNTIME_DIR / "alert_worker_status.json"
 PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
 PUSHOVER_VALIDATE_URL = "https://api.pushover.net/1/users/validate.json"
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -272,6 +277,61 @@ class AlertWatcher:
         return results
 
 
+def _empty_run() -> dict[str, Any]:
+    return {
+        "generated_at": None,
+        "evaluated": 0,
+        "triggered": 0,
+        "delivered": 0,
+        "rules_considered": 0,
+        "skipped": {
+            "inactive_subscriber": 0,
+            "disabled_rule": 0,
+            "no_value": 0,
+            "condition_not_met": 0,
+        },
+        "rejected": {},
+        "latency_seconds": {"samples": 0, "p50": None, "p95": None, "max": None},
+    }
+
+
+def _latency_summary(samples: list[float]) -> dict[str, Any]:
+    if not samples:
+        return {"samples": 0, "p50": None, "p95": None, "max": None}
+    ordered = sorted(samples)
+
+    def pick(fraction: float) -> float:
+        # Nearest-rank: with a handful of alerts per poll, interpolation would
+        # invent a latency no alert actually had.
+        index = min(len(ordered) - 1, max(0, round(fraction * len(ordered) + 0.5) - 1))
+        return round(ordered[index], 3)
+
+    return {
+        "samples": len(ordered),
+        "p50": pick(0.50),
+        "p95": pick(0.95),
+        "max": round(ordered[-1], 3),
+    }
+
+
+def _condition_latency(rule: dict[str, Any], now: float) -> float:
+    """Seconds from the condition first holding to this delivery.
+
+    A rule that crosses and fires within one poll has no stored `condition_since`
+    yet, which is a real zero rather than missing data.
+    """
+    raw = str(rule.get("condition_since") or "").strip()
+    if not raw:
+        return 0.0
+    try:
+        started = datetime.fromisoformat(raw)
+    except ValueError:
+        return 0.0
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    return max(0.0, now - started.timestamp())
+
+
 class UserMarketAlertWorker:
     """Evaluate authenticated route rules and deliver crossing notifications."""
 
@@ -291,10 +351,22 @@ class UserMarketAlertWorker:
         )
         self._custom_quote_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._custom_quote_cursor = 0
+        self.last_run: dict[str, Any] = _empty_run()
 
     @property
     def running(self) -> bool:
         return self._thread.is_alive()
+
+    def write_status(self, path: Path | str | None = None) -> Path:
+        """Publish the last run beside the other worker status files."""
+        target = Path(path) if path is not None else STATUS_PATH
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(self.last_run, indent=2, sort_keys=True) + "\n"
+        # Same-directory temp then rename, so a reader never sees half a file.
+        temporary = target.with_name(f".{target.name}.tmp")
+        temporary.write_text(payload, encoding="utf-8")
+        os.replace(temporary, target)
+        return target
 
     def start(self) -> None:
         if not self.running:
@@ -310,6 +382,7 @@ class UserMarketAlertWorker:
         while not self._stop.is_set():
             try:
                 self.check_once()
+                self.write_status()
             except Exception as exc:  # noqa: BLE001
                 print(f"spreadboard-market-alerts: {type(exc).__name__}: {exc}", flush=True)
             self._stop.wait(self.poll_seconds)
@@ -326,8 +399,12 @@ class UserMarketAlertWorker:
         # every token, the largest payload the process ever holds, on its own
         # cache key. Doing that for an empty rule table was several hundred
         # megabytes rebuilt six times a minute to deliver nothing.
+        run = _empty_run()
+        run["generated_at"] = datetime.now(tz=UTC).isoformat()
+        latencies: list[float] = []
         user_ids = accounts.list_market_alert_user_ids(db_path=self.accounts_path)
         if not user_ids:
+            self.last_run = run
             return {"evaluated": 0, "triggered": 0, "delivered": 0}
         market = api_spreads.load_spreads(
             board_path=self.board_path,
@@ -389,10 +466,14 @@ class UserMarketAlertWorker:
         for user_id in user_ids:
             user = accounts.get_user_object(user_id, db_path=self.accounts_path)
             if user is None or not user.subscription_active:
+                run["skipped"]["inactive_subscriber"] += len(rules_by_user.get(user_id, []))
+                run["rules_considered"] += len(rules_by_user.get(user_id, []))
                 continue
             delivery = accounts.notification_delivery(user_id, db_path=self.accounts_path)
             for rule in rules_by_user.get(user_id, []):
+                run["rules_considered"] += 1
                 if not rule.get("enabled"):
+                    run["skipped"]["disabled_rule"] += 1
                     continue
                 metric = str(rule.get("metric") or "")
                 token = accounts.token_from_alert_key(str(rule.get("route_key") or ""))
@@ -410,6 +491,10 @@ class UserMarketAlertWorker:
                         row = row or status_rows.get(route_key)
                     value = _rule_value(row, metric) if row else None
                 if value is None:
+                    # No quote reached this route at all. Indistinguishable from
+                    # "condition not met" in the totals, and the usual cause of
+                    # a rule that a member swears never fires.
+                    run["skipped"]["no_value"] += 1
                     continue
                 evaluated += 1
                 body = _alert_body(rule, metric, value, row, tokens.get(token or ""))
@@ -422,8 +507,18 @@ class UserMarketAlertWorker:
                     db_path=self.accounts_path,
                 )
                 if notification is None:
+                    run["skipped"]["condition_not_met"] += 1
                     continue
                 triggered += 1
+                latencies.append(_condition_latency(rule, time.time()))
+                if not app_token:
+                    run["rejected"]["pushover_unconfigured"] = (
+                        run["rejected"].get("pushover_unconfigured", 0) + 1
+                    )
+                elif not delivery:
+                    run["rejected"]["pushover_not_enabled_by_member"] = (
+                        run["rejected"].get("pushover_not_enabled_by_member", 0) + 1
+                    )
                 if app_token and delivery:
                     result = send_pushover_message(
                         app_token=app_token,
@@ -435,6 +530,19 @@ class UserMarketAlertWorker:
                         sound=delivery.get("sound"),
                     )
                     delivered += int(bool(result.get("ok")))
+                    if not result.get("ok"):
+                        status_code = result.get("status")
+                        reason = (
+                            f"pushover_http_{status_code}"
+                            if status_code
+                            else "pushover_error"
+                        )
+                        run["rejected"][reason] = run["rejected"].get(reason, 0) + 1
+        run["evaluated"] = evaluated
+        run["triggered"] = triggered
+        run["delivered"] = delivered
+        run["latency_seconds"] = _latency_summary(latencies)
+        self.last_run = run
         return {"evaluated": evaluated, "triggered": triggered, "delivered": delivered}
 
     def _custom_alert_rows(
