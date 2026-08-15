@@ -11180,6 +11180,7 @@ def render_account_page(
     summary = data.get("summary") or {}
     positions = data.get("positions") or []
     notifications = data.get("notifications") or []
+    research_evidence_callout = render_research_evidence_callout(positions)
     body = f"""
     <section class="account-page" data-account-page>
       <header class="terminal-heading account-heading">
@@ -11195,6 +11196,7 @@ def render_account_page(
       <nav class="account-tabs" aria-label="Account sections"><button class="active" data-account-tab="positions">Positions</button><button data-account-tab="alerts">Alerts <i>{h(len([item for item in notifications if not item.get("read_at")]))}</i></button><button data-account-tab="settings">Settings</button>{'<button data-account-tab="members">Members</button>' if user.can_manage_members else ""}</nav>
       <section data-account-panel="positions">
         <div class="account-panel-head"><div><h2>Position journal</h2><p>Saved fills can be corrected at any time. Current reference prices mark movement PnL without assuming a market-order exit; only exact settled exchange cashflows enter funding PnL.</p></div><button class="sheet-button primary" type="button" data-position-new>Add position</button></div>
+        {research_evidence_callout}
         <div class="position-list">{"".join(render_position_card(item) for item in positions) or '<div class="account-empty-panel"><strong>No positions yet</strong><p>Add the first spread or funding farm to start tracking it.</p></div>'}</div>
       </section>
       <section data-account-panel="alerts" hidden><div class="account-panel-head"><div><h2>Notifications</h2><p>Marked-spread, enterable-spread, PnL, and funding rules are evaluated continuously, even while you are signed out.</p></div><button class="sheet-button" type="button" data-notifications-read>Mark all read</button></div><div class="notification-list">{"".join(render_account_notification(item) for item in notifications) or '<div class="account-empty-panel"><strong>No notifications</strong><p>Position alerts will appear here when a rule crosses its threshold.</p></div>'}</div></section>
@@ -11215,6 +11217,41 @@ def render_account_page(
 
 def render_account_kpi(label: str, value: Any, note: str) -> str:
     return f"<article><span>{h(label)}</span><strong>{h(value if value is not None else '—')}</strong><em>{h(note)}</em></article>"
+
+
+def render_research_evidence_callout(positions: list[dict[str, Any]]) -> str:
+    """Show a user's own incomplete journal evidence without implying consent."""
+
+    completed = [item for item in positions if item.get("status") == "closed"]
+    unconfirmed_costs = sum(not bool(item.get("research_costs_complete")) for item in completed)
+    missing_transfer_timing = sum(
+        1
+        for item in completed
+        if "dex"
+        in {
+            str(item.get("long_market_type") or "").casefold(),
+            str(item.get("short_market_type") or "").casefold(),
+        }
+        and not (item.get("transfer_started_at") and item.get("transfer_credited_at"))
+    )
+    if not unconfirmed_costs and not missing_transfer_timing:
+        return ""
+    details = []
+    if unconfirmed_costs:
+        details.append(
+            f"{unconfirmed_costs} completed position{'s' if unconfirmed_costs != 1 else ''} "
+            "without confirmed final lifecycle costs"
+        )
+    if missing_transfer_timing:
+        details.append(
+            f"{missing_transfer_timing} completed DEX position"
+            f"{'s' if missing_transfer_timing != 1 else ''} without observed transfer timing"
+        )
+    return (
+        '<aside class="account-empty-panel account-evidence-callout"><strong>Complete your journal evidence</strong><p>'
+        + h("; ".join(details))
+        + ". Edit a completed row to add the exact values. Anonymous research sharing is separate and always optional.</p></aside>"
+    )
 
 
 def render_position_card(item: dict[str, Any]) -> str:
@@ -11593,12 +11630,13 @@ def render_account_script() -> str:
   const editDialog=root.querySelector('[data-position-edit-dialog]'),editForm=editDialog?.querySelector('form');let editPosition=null;
   const syncClosedCorrectionFields=()=>{if(!editForm)return;const closed=editForm.elements.status?.value==='closed';editForm.querySelectorAll('[data-closed-correction]').forEach(label=>{label.hidden=!closed;const field=label.querySelector('input');if(field){field.disabled=!closed;field.required=closed&&field.name!=='exit_fees_usd';}});const research=editForm.querySelector('[data-research-contribution]');if(research){research.hidden=!closed;research.querySelectorAll('input').forEach(field=>field.disabled=!closed);}};
   editForm?.elements.status?.addEventListener('change',syncClosedCorrectionFields);
-  root.addEventListener('click',event=>{const button=event.target.closest('[data-position-edit]');if(!button)return;editPosition=button.closest('[data-position-id]')?.dataset.positionId;const item=positionData[editPosition];if(!item||!editForm)return;editForm.reset();for(const [name,value] of Object.entries(item)){const field=editForm.elements[name];if(!field)continue;if(field.type==='checkbox')field.checked=Boolean(Number(value));else field.value=['opened_at','closed_at','transfer_started_at','transfer_credited_at'].includes(name)?utcToLocalInput(value):(value??'');}syncClosedCorrectionFields();editForm.querySelector('[data-form-error]').textContent='';editDialog.showModal();});
+  const openPositionEditor=(positionId,closing=false)=>{editPosition=positionId;const item=positionData[editPosition];if(!item||!editForm)return;editForm.reset();for(const [name,value] of Object.entries(item)){const field=editForm.elements[name];if(!field)continue;if(field.type==='checkbox')field.checked=Boolean(Number(value));else field.value=['opened_at','closed_at','transfer_started_at','transfer_credited_at'].includes(name)?utcToLocalInput(value):(value??'');}if(closing){editForm.elements.status.value='closed';editForm.elements.closed_at.value=utcToLocalInput(new Date().toISOString());}syncClosedCorrectionFields();editDialog.querySelector('h2').textContent=closing?'Record completed journal position':'Correct position details';editForm.querySelector('button[type="submit"]').textContent=closing?'Save completed journal entry':'Save corrections';editForm.querySelector('[data-form-error]').textContent='';editDialog.showModal();};
+  root.addEventListener('click',event=>{const button=event.target.closest('[data-position-edit]');if(!button)return;openPositionEditor(button.closest('[data-position-id]')?.dataset.positionId);});
   editForm?.addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;try{await request(`/api/positions/${editPosition}/edit`,payloadFromForm(form));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   const actionDialog=root.querySelector('[data-action-dialog]');let actionPosition=null;let actionType='';
-  const fields={alert:'<label><span>Metric</span><select name="metric"><option value="exit_spread_pct">Current marked spread %</option><option value="open_spread_pct">Enterable spread %</option><option value="pnl_usd">Total PnL USD</option><option value="funding_usd">Settled funding USD</option></select></label><label><span>Condition</span><select name="operator"><option value="lte">At or below</option><option value="gte">At or above</option></select></label><label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>',close:'<label><span>Long exit price</span><input name="long_exit_price" type="number" min="0" step="any" required></label><label><span>Short exit price</span><input name="short_exit_price" type="number" min="0" step="any" required></label><label><span>Exit fees, USD</span><input name="exit_fees_usd" type="number" min="0" step="0.01" value="0"></label>'};
-  root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;const token=positionData[actionPosition]?.token||'';actionDialog.querySelector('[data-action-title]').textContent={alert:'Create alert rule',close:'Close position',delete:'Delete journal entry'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=actionType==='delete'?`<div class="delete-warning"><strong>This permanently deletes only the SpreadBoard journal entry.</strong><p>It will also remove its saved alerts, notifications and imported funding rows. It will not close or change either exchange position.</p></div><label><span>Type ${escapeHtml(token)} to confirm</span><input name="confirm_token" autocomplete="off" required></label>`:fields[actionType];const submit=actionDialog.querySelector('button[type="submit"]');submit.textContent=actionType==='delete'?'Delete entry':'Save';submit.classList.toggle('danger',actionType==='delete');actionDialog.showModal();});
-  actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={alert:'alerts',close:'close',delete:'delete'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
+  const fields={alert:'<label><span>Metric</span><select name="metric"><option value="exit_spread_pct">Current marked spread %</option><option value="open_spread_pct">Enterable spread %</option><option value="pnl_usd">Total PnL USD</option><option value="funding_usd">Settled funding USD</option></select></label><label><span>Condition</span><select name="operator"><option value="lte">At or below</option><option value="gte">At or above</option></select></label><label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>'};
+  root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;if(actionType==='close'){openPositionEditor(actionPosition,true);return;}const token=positionData[actionPosition]?.token||'';actionDialog.querySelector('[data-action-title]').textContent={alert:'Create alert rule',delete:'Delete journal entry'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=actionType==='delete'?`<div class="delete-warning"><strong>This permanently deletes only the SpreadBoard journal entry.</strong><p>It will also remove its saved alerts, notifications and imported funding rows. It will not close or change either exchange position.</p></div><label><span>Type ${escapeHtml(token)} to confirm</span><input name="confirm_token" autocomplete="off" required></label>`:fields[actionType];const submit=actionDialog.querySelector('button[type="submit"]');submit.textContent=actionType==='delete'?'Delete entry':'Save';submit.classList.toggle('danger',actionType==='delete');actionDialog.showModal();});
+  actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={alert:'alerts',delete:'delete'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   root.querySelector('[data-account-settings]')?.addEventListener('submit',async event=>{event.preventDefault();await request('/api/account-settings',Object.fromEntries(new FormData(event.currentTarget)));location.reload();});
   const exchangeRoot=root.querySelector('[data-exchange-accounting]'),exchangeForm=exchangeRoot?.querySelector('[data-exchange-connection-form]'),exchangeStatus=exchangeForm?.querySelector('[data-exchange-status]'),exchangeCatalog=JSON.parse(root.querySelector('[data-exchange-catalog]')?.textContent||'[]');
   const accountingPublicKey=JSON.parse(root.querySelector('[data-accounting-public-key]')?.textContent||'""');

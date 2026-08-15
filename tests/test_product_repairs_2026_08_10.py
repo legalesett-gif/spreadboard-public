@@ -335,3 +335,60 @@ def test_telegram_link_uses_same_tab_and_has_confirmation_fallback(tmp_path: Pat
         _user("alex@spreadarbitrage.ink", "admin"),
         db,
     )
+
+
+def test_close_position_uses_full_atomic_cost_and_consent_editor() -> None:
+    script = server.render_account_script()
+    dialog = server.render_position_edit_dialog()
+
+    assert "openPositionEditor(actionPosition,true)" in script
+    assert "Record completed journal position" in script
+    assert "Save completed journal entry" in script
+    assert "close:'<label><span>Long exit price" not in script
+    for field in (
+        "long_exit_price",
+        "short_exit_price",
+        "exit_fees_usd",
+        "borrow_costs_usd",
+        "gas_costs_usd",
+        "transfer_costs_usd",
+        "slippage_costs_usd",
+        "research_matched_notional_usd",
+        "research_costs_complete",
+        "research_cost_consent",
+        "transfer_started_at",
+        "transfer_credited_at",
+        "research_transfer_consent",
+        "research_consent_version",
+    ):
+        assert f'name="{field}"' in dialog
+
+
+def test_completed_position_evidence_callout_is_private_and_consent_neutral() -> None:
+    html = server.render_research_evidence_callout(
+        [
+            {
+                "status": "closed",
+                "long_market_type": "DEX",
+                "short_market_type": "Futures",
+                "research_costs_complete": 0,
+                "transfer_started_at": None,
+                "transfer_credited_at": None,
+            },
+            {"status": "open", "research_costs_complete": 0},
+        ]
+    )
+
+    assert "1 completed position without confirmed final lifecycle costs" in html
+    assert "1 completed DEX position without observed transfer timing" in html
+    assert "sharing is separate and always optional" in html
+    assert server.render_research_evidence_callout(
+        [
+            {
+                "status": "closed",
+                "long_market_type": "Spot",
+                "short_market_type": "Futures",
+                "research_costs_complete": 1,
+            }
+        ]
+    ) == ""
