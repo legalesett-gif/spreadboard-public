@@ -189,6 +189,10 @@ services:
       <<: *spreadboard_runtime_environment
       SPREADBOARD_SERVICE_ROLE: "collector"
       SPREADBOARD_DISABLE_LOCAL_CACHE_WARM: "1"
+      # Structural discovery is deliberately broad and can span long venue/DEX
+      # cycles. Live truth has separate 3-minute book/generation and 15-minute
+      # DEX gates below; the structural universe must still advance within 72h.
+      SPREADBOARD_COLLECTOR_SNAPSHOT_MAX_AGE_SECONDS: "259200"
     command: ["/app/.venv/bin/python", "scripts/run_spreadboard_service.py"]
     healthcheck:
       test: ["CMD", "/app/.venv/bin/python", "scripts/collector_healthcheck.py"]

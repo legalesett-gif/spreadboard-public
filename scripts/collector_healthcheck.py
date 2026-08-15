@@ -46,7 +46,7 @@ def collector_health(
     data_dir: Path,
     *,
     now: float | None = None,
-    snapshot_max_age_seconds: float = 3600.0,
+    snapshot_max_age_seconds: float = 259200.0,
     generation_max_age_seconds: float = 180.0,
     live_book_max_age_seconds: float = 180.0,
     fast_cycle_max_age_seconds: float = 900.0,
@@ -149,7 +149,9 @@ def main() -> int:
     result = collector_health(
         data_dir,
         snapshot_max_age_seconds=float(
-            os.environ.get("SPREADBOARD_COLLECTOR_SNAPSHOT_MAX_AGE_SECONDS", "3600")
+            os.environ.get(
+                "SPREADBOARD_COLLECTOR_SNAPSHOT_MAX_AGE_SECONDS", "259200"
+            )
         ),
         generation_max_age_seconds=float(
             os.environ.get("SPREADBOARD_COLLECTOR_GENERATION_MAX_AGE_SECONDS", "180")
