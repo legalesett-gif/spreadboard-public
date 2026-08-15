@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sqlite3
 import sys
 import time
 from typing import Any
@@ -86,12 +87,32 @@ class BookWorker:
                 self.tasks.pop(key).cancel()
             for key in desired - set(self.tasks):
                 self.tasks[key] = asyncio.create_task(self._watch(key))
-            self.store.prune(max_age_seconds=3600)
+            self._prune_stale_books()
             try:
                 await asyncio.wait_for(self.stop.wait(), timeout=RECONCILE_SECONDS)
             except TimeoutError:
                 pass
         await self.close()
+
+    def _prune_stale_books(self) -> bool:
+        """Keep a maintenance lock from killing every live subscription.
+
+        The bulk ticker sweep and the WebSocket writer intentionally share the
+        same WAL database.  A venue-sized bulk commit can therefore occupy the
+        sole SQLite writer briefly while this best-effort hourly cleanup tries
+        to delete stale rows.  Missing one prune is harmless; tearing down all
+        exchange clients and rebuilding every subscription is not.  Retry on
+        the next reconcile tick while still surfacing every non-lock database
+        failure.
+        """
+
+        try:
+            self.store.prune(max_age_seconds=3600)
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).casefold():
+                raise
+            return False
+        return True
 
     def _desired_legs_cached(self) -> set[LegKey]:
         """Re-read the subscription list only when the snapshot actually changes.

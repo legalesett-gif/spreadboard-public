@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 import pytest
@@ -70,3 +71,27 @@ def test_fast_quote_generation_reconciles_websocket_subscriptions(
 
 def test_futures_contract_counts_are_normalised_to_base_quantity() -> None:
     assert _base_quantity_levels([[0.25, 40.0]], 100.0) == [[0.25, 4000.0]]
+
+
+def test_transient_prune_lock_does_not_kill_websocket_worker() -> None:
+    class LockedStore:
+        def prune(self, *, max_age_seconds: float) -> None:
+            assert max_age_seconds == 3600
+            raise sqlite3.OperationalError("database is locked")
+
+    worker = BookWorker.__new__(BookWorker)
+    worker.store = LockedStore()
+
+    assert worker._prune_stale_books() is False
+
+
+def test_non_lock_prune_database_failure_is_not_hidden() -> None:
+    class BrokenStore:
+        def prune(self, *, max_age_seconds: float) -> None:
+            raise sqlite3.OperationalError("disk I/O error")
+
+    worker = BookWorker.__new__(BookWorker)
+    worker.store = BrokenStore()
+
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+        worker._prune_stale_books()
