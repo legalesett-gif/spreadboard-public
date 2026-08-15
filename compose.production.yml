@@ -6,9 +6,10 @@ services:
     restart: unless-stopped
     env_file:
       - ${SPREADBOARD_ENV_FILE:-/opt/spreadboard/secrets/app.env}
-    environment:
+    environment: &spreadboard_runtime_environment
       HOST: 0.0.0.0
       PORT: "8200"
+      SPREADBOARD_SERVICE_ROLE: "web"
       SPREADBOARD_DATA_DIR: /app/runtime
       SPREADBOARD_PUBLIC_MODE: "1"
       SPREADBOARD_AUTH_REQUIRED: "1"
@@ -158,19 +159,55 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # The box has 8GB; this stayed at 3g from when it had 4. The scan reaches
-    # ~1.6GB RSS on its own, so the container total crossed the cgroup limit and
-    # the kernel killed it 18 times in four hours -- which is why no discovery
-    # scan finished, why the container restarted five times, and why the board
-    # went blank mid-session. 6g leaves room for Caddy and the host.
-    mem_limit: 6g
-    # The current Droplet has four vCPUs. The former 1.8 cap was inherited from
-    # the two-vCPU host and became the measured bottleneck in the 100-client
-    # acceptance probe. Caddy and accounting are separately capped; 3.2 left
-    # paid-for capacity idle while this cgroup accumulated CPU throttling and
-    # delayed pages. 3.6 preserves host headroom while allowing prioritized
-    # HTTP work to run without weakening market-data cadence.
-    cpus: 3.6
+    # This process now owns HTTP, user lifecycle and the bounded view caches;
+    # exchange clients and discovery allocations live in the collector cgroup.
+    # The limit retains a measured cache-generation peak plus request headroom.
+    mem_limit: 3584m
+    # The current Droplet has four vCPUs. This is a ceiling, not a reservation;
+    # the higher CPU share below makes subscriber work win when both roles run.
+    cpus: 2.6
+    # Subscriber HTTP, payments and lifecycle work win scheduling contention
+    # over background exchange collection.
+    cpu_shares: 1536
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      # Contains only market-source credentials (currently OKX DEX and the
+      # read-only venue keys used for deposit/withdrawal rail evidence). It
+      # deliberately excludes billing, Telegram, email, push and field keys.
+      - ${SPREADBOARD_COLLECTOR_ENV_FILE:-/opt/spreadboard/secrets/collector.env}
+    environment:
+      <<: *spreadboard_runtime_environment
+      SPREADBOARD_SERVICE_ROLE: "collector"
+      SPREADBOARD_DISABLE_LOCAL_CACHE_WARM: "1"
+    command: ["/app/.venv/bin/python", "scripts/run_spreadboard_service.py"]
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "scripts/collector_healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      start_period: 600s
+      retries: 3
+    volumes:
+      - /opt/spreadboard/runtime:/app/runtime
+    networks:
+      - backend
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 4g
+    cpus: 2.8
+    cpu_shares: 768
     logging:
       driver: json-file
       options:

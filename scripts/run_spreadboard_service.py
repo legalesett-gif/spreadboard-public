@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,7 @@ RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 SNAPSHOT_PATH = RUNTIME_DIR / "api_discovery_latest.json"
 REFRESH_SNAPSHOT_PATH = RUNTIME_DIR / "api_discovery_refresh.json"
 GENERATED_IDENTITY_PATH = RUNTIME_DIR / "api_discovery_identity_registry.generated.json"
+MARKET_GENERATION_PATH = RUNTIME_DIR / "market_generation.json"
 
 
 class RefreshLoop:
@@ -219,8 +221,9 @@ class RefreshLoop:
             f"history_inserted={published.get('history_inserted')} "
             f"funding={enriched.get('funding')} status={published.get('refresh_status')}"
         )
+        _publish_shared_market_generation("discovery")
         _refresh_enrichment_subprocess()
-        if not lightweight_mode:
+        if not lightweight_mode and not _env_bool("SPREADBOARD_DISABLE_LOCAL_CACHE_WARM"):
             self._refresh_verified_identity_registry(snapshot_path=SNAPSHOT_PATH)
             # A broad discovery publishes a new structural universe, so this is
             # the useful point to rebuild every navigable view.  Fast quote
@@ -271,6 +274,7 @@ class RefreshLoop:
             # records broad history; the compact delta publishes immediately.
             _log(f"fast quotes {summary} history_inserted=deferred")
             if summary.get("updated_routes"):
+                _publish_shared_market_generation("fast_quotes")
                 _invalidate_market_price_caches()
                 # Fast DEX quotes are part of the token page and Telegram
                 # fallback artefact. Publish rankings without holding the quote
@@ -376,6 +380,38 @@ def _snapshot_route_key(row: dict[str, Any]) -> str:
             "short_market_type",
         )
     )
+
+
+def _publish_shared_market_generation(kind: str) -> None:
+    """Tell a separate web process that shared market artifacts advanced.
+
+    The combined service can invalidate its in-memory caches directly. Once
+    collectors run in another container, that direct call only clears the
+    collector's unused caches. This tiny atomic file is the process boundary:
+    it contains no market rows or credentials, only a generation and reason.
+    """
+
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": "spreadboard.market_generation.v1",
+        "kind": str(kind or "market"),
+        "updated_at_unix": time.time(),
+        "generation_ns": time.time_ns(),
+    }
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{MARKET_GENERATION_PATH.name}.",
+        dir=RUNTIME_DIR,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, MARKET_GENERATION_PATH)
+    except Exception:
+        with suppress(OSError):
+            os.unlink(temporary)
+        raise
 
 
 def _artifact_worker(job: str, *arguments: str) -> dict[str, Any] | None:
@@ -491,8 +527,142 @@ def _warm_telegram_payload_at_startup(board_path: Path) -> None:
         _log(f"telegram startup payload skipped: {type(exc).__name__}: {exc}")
 
 
+def _service_role() -> str:
+    """Return the explicit process role, retaining combined mode for local use."""
+
+    role = os.environ.get("SPREADBOARD_SERVICE_ROLE", "combined").strip().casefold()
+    if role not in {"combined", "web", "collector"}:
+        raise ValueError(
+            "SPREADBOARD_SERVICE_ROLE must be combined, web, or collector"
+        )
+    return role
+
+
+def _artifact_signature(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
+
+
+class SharedArtifactWatcher(threading.Thread):
+    """Bridge collector file generations into the web process's memory caches."""
+
+    def __init__(
+        self,
+        stop_event: threading.Event,
+        *,
+        poll_seconds: float = 1.0,
+        initial_warm_delay_seconds: float = 30.0,
+    ) -> None:
+        super().__init__(name="shared-market-artifact-watcher", daemon=True)
+        self.stop_event = stop_event
+        self.poll_seconds = max(0.05, poll_seconds)
+        self.initial_warm_at = time.monotonic() + max(
+            0.0, initial_warm_delay_seconds
+        )
+        self.initial_warm_requested = False
+        self.generation_signature = _artifact_signature(MARKET_GENERATION_PATH)
+        self.snapshot_signature = _artifact_signature(SNAPSHOT_PATH)
+        self.warm_lock = threading.Lock()
+        self.warm_pending = False
+        self.warm_thread: threading.Thread | None = None
+
+    def run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self.check_once()
+            except Exception as exc:  # noqa: BLE001 - stale data is safer than a dead site.
+                _log(f"shared artifact watcher: {type(exc).__name__}: {exc}")
+            self.stop_event.wait(self.poll_seconds)
+
+    def check_once(self) -> None:
+        generation = _artifact_signature(MARKET_GENERATION_PATH)
+        if generation != self.generation_signature:
+            self.generation_signature = generation
+            _invalidate_market_price_caches()
+
+        snapshot = _artifact_signature(SNAPSHOT_PATH)
+        if snapshot != self.snapshot_signature:
+            self.snapshot_signature = snapshot
+            self.request_warm()
+
+        if (
+            not self.initial_warm_requested
+            and time.monotonic() >= self.initial_warm_at
+        ):
+            self.initial_warm_requested = True
+            self.request_warm()
+
+    def request_warm(self) -> None:
+        """Coalesce structural changes while never losing the newest one."""
+
+        with self.warm_lock:
+            self.warm_pending = True
+            if self.warm_thread is not None and self.warm_thread.is_alive():
+                return
+            self.warm_thread = threading.Thread(
+                target=self._drain_warms,
+                name="shared-market-cache-warm",
+                daemon=True,
+            )
+            self.warm_thread.start()
+
+    def _drain_warms(self) -> None:
+        while not self.stop_event.is_set():
+            with self.warm_lock:
+                if not self.warm_pending:
+                    return
+                self.warm_pending = False
+            _warm_board_cache(force=True)
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.join(timeout=5.0)
+        if self.warm_thread is not None and self.warm_thread.is_alive():
+            self.warm_thread.join(timeout=5.0)
+
+
+def _run_collector_service() -> int:
+    """Own exchange I/O and artifact publication without accepting HTTP."""
+
+    os.environ["SPREADBOARD_DISABLE_LOCAL_CACHE_WARM"] = "1"
+    interval = float(os.environ.get("SPREADBOARD_REFRESH_SECONDS", "300"))
+    if _env_bool("SPREADBOARD_LIGHTWEIGHT_MODE"):
+        interval = max(600.0, interval)
+    market_history.initialize()
+    _seed_public_caches()
+    refresh_loop = RefreshLoop(interval)
+    bulk_quote_loop = BulkQuoteLoop(refresh_loop.stop_event)
+    bulk_funding_loop = BulkFundingLoop(refresh_loop.stop_event)
+
+    def stop_collector(_signum: int, _frame: Any) -> None:
+        refresh_loop.stop_event.set()
+
+    signal.signal(signal.SIGTERM, stop_collector)
+    signal.signal(signal.SIGINT, stop_collector)
+    refresh_loop.start()
+    bulk_quote_loop.start()
+    bulk_funding_loop.start()
+    MemoryWatchdog(refresh_loop.stop_event).start()
+    _log("collector role started")
+    try:
+        while not refresh_loop.stop_event.wait(0.5):
+            pass
+    finally:
+        refresh_loop.stop()
+        bulk_quote_loop.join(timeout=5.0)
+        bulk_funding_loop.join(timeout=5.0)
+    return 0
+
+
 def main() -> int:
     from spreadboard import server as server_module
+
+    role = _service_role()
+    if role == "collector":
+        return _run_collector_service()
 
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8200"))
@@ -504,7 +674,13 @@ def main() -> int:
     # columns before any warm thread or HTTP request can race the first writer.
     market_history.initialize()
     _seed_public_caches()
-    refresh_loop = RefreshLoop(interval)
+    refresh_loop = RefreshLoop(interval) if role == "combined" else None
+    service_stop_event = (
+        refresh_loop.stop_event if refresh_loop is not None else threading.Event()
+    )
+    artifact_watcher = (
+        SharedArtifactWatcher(service_stop_event) if role == "web" else None
+    )
     server = SpreadBoardServer(
         (host, port),
         SpreadBoardHandler,
@@ -564,8 +740,11 @@ def main() -> int:
         name="spreadboard-telegram-startup-warm",
         daemon=True,
     ).start()
-    refresh_loop.start()
-    MemoryWatchdog(refresh_loop.stop_event).start()
+    if refresh_loop is not None:
+        refresh_loop.start()
+    elif artifact_watcher is not None:
+        artifact_watcher.start()
+    MemoryWatchdog(service_stop_event).start()
     # Without this nothing watches the chain, so a member could send USDC and
     # the invoice would simply expire an hour later having credited nothing.
     # The watcher was only ever started by server.py's standalone CLI main(),
@@ -576,11 +755,18 @@ def main() -> int:
         if crypto_stop is not None
         else "crypto watcher idle (receiving address or RPC URL not configured)"
     )
-    # Shares the refresh loop's stop event so shutdown stops it too.
-    bulk_quote_loop = BulkQuoteLoop(refresh_loop.stop_event)
-    bulk_funding_loop = BulkFundingLoop(refresh_loop.stop_event)
-    bulk_quote_loop.start()
-    bulk_funding_loop.start()
+    # Combined mode remains useful for a one-process local checkout. Production
+    # gives these workers to the collector role so exchange load cannot starve
+    # the subscriber-facing HTTP process.
+    bulk_quote_loop = (
+        BulkQuoteLoop(service_stop_event) if role == "combined" else None
+    )
+    bulk_funding_loop = (
+        BulkFundingLoop(service_stop_event) if role == "combined" else None
+    )
+    if bulk_quote_loop is not None and bulk_funding_loop is not None:
+        bulk_quote_loop.start()
+        bulk_funding_loop.start()
     position_alert_worker.start()
     membership_worker.start()
     subscription_worker.start()
@@ -599,7 +785,13 @@ def main() -> int:
         market_alert_worker.stop()
         web_push_worker.stop()
         rail_reopen_worker.stop()
-        refresh_loop.stop()
+        if crypto_stop is not None:
+            crypto_stop.set()
+        service_stop_event.set()
+        if refresh_loop is not None:
+            refresh_loop.stop()
+        if artifact_watcher is not None:
+            artifact_watcher.stop()
         server.server_close()
     return 0
 
@@ -740,6 +932,7 @@ class BulkQuoteLoop(threading.Thread):
             f"in {quotes.get('seconds')}s"
         )
         if (quotes.get("quotes") or 0) > 0:
+            _publish_shared_market_generation("bulk_quotes")
             _invalidate_market_price_caches()
             # The rankings read the complete shared catalogue, so publish a new
             # atomic generation immediately after its prices move. This worker
@@ -821,6 +1014,8 @@ class BulkFundingLoop(threading.Thread):
             f"bulk funding: {funding.get('legs')} legs from {funding.get('venues')} "
             f"venues in {funding.get('seconds')}s"
         )
+        if (funding.get("legs") or 0) > 0:
+            _publish_shared_market_generation("bulk_funding")
 
 
 def _invalidate_market_price_caches() -> None:

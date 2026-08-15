@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+import inspect
+import json
+import sqlite3
+import threading
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from scripts import collector_healthcheck
+from scripts import run_spreadboard_service as service
+
+
+def test_service_role_defaults_to_combined_and_rejects_typos(monkeypatch) -> None:
+    monkeypatch.delenv("SPREADBOARD_SERVICE_ROLE", raising=False)
+    assert service._service_role() == "combined"
+    for role in ("web", "collector", "combined"):
+        monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role.upper())
+        assert service._service_role() == role
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "collecter")
+    with pytest.raises(ValueError):
+        service._service_role()
+
+
+def test_shared_generation_is_atomic_and_contains_no_market_data(
+    tmp_path, monkeypatch
+) -> None:
+    target = tmp_path / "market_generation.json"
+    monkeypatch.setattr(service, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(service, "MARKET_GENERATION_PATH", target)
+
+    service._publish_shared_market_generation("bulk_quotes")
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["schema"] == "spreadboard.market_generation.v1"
+    assert payload["kind"] == "bulk_quotes"
+    assert set(payload) == {"schema", "kind", "updated_at_unix", "generation_ns"}
+    assert list(tmp_path.glob(".market_generation.json.*")) == []
+
+
+def test_web_watcher_invalidates_prices_and_warms_structural_changes(
+    tmp_path, monkeypatch
+) -> None:
+    generation = tmp_path / "market_generation.json"
+    snapshot = tmp_path / "api_discovery_latest.json"
+    monkeypatch.setattr(service, "MARKET_GENERATION_PATH", generation)
+    monkeypatch.setattr(service, "SNAPSHOT_PATH", snapshot)
+    invalidations: list[bool] = []
+    warms: list[bool] = []
+    monkeypatch.setattr(
+        service, "_invalidate_market_price_caches", lambda: invalidations.append(True)
+    )
+    monkeypatch.setattr(
+        service, "_warm_board_cache", lambda *, force=False: warms.append(force)
+    )
+    watcher = service.SharedArtifactWatcher(
+        threading.Event(), initial_warm_delay_seconds=3600
+    )
+
+    generation.write_text("{}", encoding="utf-8")
+    watcher.check_once()
+    assert invalidations == [True]
+
+    snapshot.write_text("{}", encoding="utf-8")
+    watcher.check_once()
+    assert watcher.warm_thread is not None
+    watcher.warm_thread.join(timeout=2)
+    assert warms == [True]
+
+
+def _write_live_books(path: Path, *, quote_ts_us: int) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE live_books (
+                cache_key TEXT PRIMARY KEY,
+                quote_ts_us INTEGER NOT NULL,
+                source TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO live_books (cache_key, quote_ts_us, source) VALUES (?, ?, ?)",
+            ("Gate|Futures|BTC/USDT:USDT", quote_ts_us, "bulk_ticker"),
+        )
+
+
+def _healthy_collector_artifacts(path: Path, *, now: float) -> None:
+    (path / "api_discovery_latest.json").write_text("{}", encoding="utf-8")
+    (path / "market_generation.json").write_text(
+        json.dumps(
+            {
+                "schema": "spreadboard.market_generation.v1",
+                "kind": "bulk_quotes",
+                "updated_at_unix": now,
+                "generation_ns": int(now * 1_000_000_000),
+            }
+        ),
+        encoding="utf-8",
+    )
+    completed = datetime.fromtimestamp(now, tz=UTC).isoformat()
+    (path / "api_discovery_fast_quotes.json").write_text(
+        json.dumps(
+            {
+                "fast_quote_refresh": {
+                    "last_completed_cycle": {"updated_at": completed}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_live_books(
+        path / "spreadboard_live_books.sqlite3",
+        quote_ts_us=int(now * 1_000_000),
+    )
+
+
+def test_collector_health_requires_all_independent_data_paths(tmp_path) -> None:
+    now = time.time()
+    _healthy_collector_artifacts(tmp_path, now=now)
+
+    result = collector_healthcheck.collector_health(
+        tmp_path, now=now, min_current_bulk_books=1
+    )
+
+    assert result["status"] == "ok"
+    assert all(result["checks"].values())
+    assert result["live_book_count"] == 1
+
+
+def test_collector_health_fails_when_generation_stops_even_if_books_exist(
+    tmp_path,
+) -> None:
+    now = time.time()
+    _healthy_collector_artifacts(tmp_path, now=now)
+    generation = json.loads(
+        (tmp_path / "market_generation.json").read_text(encoding="utf-8")
+    )
+    generation["updated_at_unix"] = now - 181
+    (tmp_path / "market_generation.json").write_text(
+        json.dumps(generation), encoding="utf-8"
+    )
+
+    result = collector_healthcheck.collector_health(
+        tmp_path, now=now, min_current_bulk_books=1
+    )
+
+    assert result["status"] == "stale"
+    assert result["checks"]["generation_current"] is False
+    assert result["checks"]["live_books_current"] is True
+
+
+def test_websocket_leader_cannot_hide_a_dead_bulk_catalogue(tmp_path) -> None:
+    now = time.time()
+    _healthy_collector_artifacts(tmp_path, now=now)
+    with sqlite3.connect(tmp_path / "spreadboard_live_books.sqlite3") as connection:
+        connection.execute(
+            "UPDATE live_books SET source = 'public_websocket'"
+        )
+
+    result = collector_healthcheck.collector_health(
+        tmp_path, now=now, min_current_bulk_books=1
+    )
+
+    assert result["checks"]["live_books_current"] is True
+    assert result["checks"]["bulk_books_current"] is False
+    assert result["status"] == "stale"
+
+
+def test_collector_role_contains_no_subscriber_or_payment_workers() -> None:
+    source = inspect.getsource(service._run_collector_service)
+    assert "RefreshLoop" in source
+    assert "BulkQuoteLoop" in source
+    assert "BulkFundingLoop" in source
+    for forbidden in (
+        "SpreadBoardServer",
+        "crypto_watcher",
+        "MembershipWorker",
+        "subscription_lifecycle",
+        "PublicFeedWorker",
+    ):
+        assert forbidden not in source
+
+
+def test_production_compose_assigns_separate_roles_and_secret_sets() -> None:
+    source = Path("compose.production.yml").read_text(encoding="utf-8")
+    assert 'SPREADBOARD_SERVICE_ROLE: "web"' in source
+    assert 'SPREADBOARD_SERVICE_ROLE: "collector"' in source
+    assert "/opt/spreadboard/secrets/collector.env" in source
+    collector = source.split("\n  collector:\n", 1)[1].split(
+        "\n  accounting-worker:\n", 1
+    )[0]
+    assert "/opt/spreadboard/runtime:/app/runtime" in collector
+    assert "accounting-public.pem" not in collector
+    assert "collector_healthcheck.py" in collector
+    assert "ports:" not in collector
