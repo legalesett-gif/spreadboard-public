@@ -55,6 +55,7 @@ from spreadboard import (  # noqa: E402
     venue_funding_history,
     web_push,
     portfolio,
+    research_calibration,
     research_score,
     subscription_lifecycle,
     telegram_bot,
@@ -4733,6 +4734,7 @@ def api_health(
         "market_row_count": canonical.get("row_count"),
         "source_health": source_health,
         "funding_history": funding_history_health(),
+        "research_evidence": research_evidence_health(),
         "position_alerts": {
             "running": bool(position_alert_worker and position_alert_worker.running),
             "poll_seconds": getattr(position_alert_worker, "poll_seconds", None),
@@ -4758,6 +4760,57 @@ def api_health(
             "running": bool(accounting.get("running")),
             "read_only": bool(accounting.get("read_only")),
         },
+    }
+
+
+def research_evidence_health() -> dict[str, Any]:
+    """Public aggregate health for the anonymous shadow-evidence pipeline."""
+
+    try:
+        status = research_calibration.status()
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        return {
+            "initialized": False,
+            "current_method_active": False,
+            "status": "unavailable",
+            "error_type": type(exc).__name__,
+        }
+    selected_method = str(status.get("selected_method") or "")
+    label_quality = status.get("label_quality") or {}
+    if not isinstance(label_quality, dict):
+        label_quality = {}
+    public_quality = {
+        horizon: {
+            key: value
+            for key, value in (details if isinstance(details, dict) else {}).items()
+            if key
+            in {
+                "matured",
+                "labeled",
+                "terminal_missing_history",
+                "retrying",
+                "unaccounted_matured",
+                "yield_pct",
+            }
+        }
+        for horizon, details in label_quality.items()
+        if horizon in {"8h", "24h"}
+    }
+    return {
+        "initialized": bool(status.get("initialized")),
+        "status": "collecting" if status.get("initialized") else "warming",
+        "mode": status.get("mode"),
+        "selected_method": selected_method or None,
+        "current_method_active": selected_method == research_score.SCORE_METHOD,
+        "observations": int(status.get("observations") or 0),
+        "latest_observation_at": status.get("latest_observation_at"),
+        "latest_observation_age_hours": status.get("latest_observation_age_hours"),
+        "labeled_24h_outcomes": int(status.get("outcomes") or 0),
+        "labeled_routes": int(status.get("routes") or 0),
+        "observation_span_days": status.get("observation_span_days"),
+        "labeled_24h_span_days": status.get("span_days"),
+        "label_quality": public_quality,
+        "ml_ready": bool(status.get("ml_ready")),
     }
 
 

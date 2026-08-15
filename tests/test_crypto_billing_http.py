@@ -196,6 +196,26 @@ def test_public_health_does_not_disclose_single_user_account_counts(client):
     assert "linked_accounts" not in payload["telegram_bot"]
     assert "membership_errors" not in payload["telegram_bot"]
     assert "community_title" not in payload["telegram_bot"]
+    assert set(payload["research_evidence"]) <= {
+        "initialized",
+        "status",
+        "mode",
+        "selected_method",
+        "current_method_active",
+        "observations",
+        "latest_observation_at",
+        "latest_observation_age_hours",
+        "labeled_24h_outcomes",
+        "labeled_routes",
+        "observation_span_days",
+        "labeled_24h_span_days",
+        "label_quality",
+        "ml_ready",
+        "error_type",
+    }
+    assert "user_id" not in json.dumps(payload["research_evidence"])
+    assert "position_id" not in json.dumps(payload["research_evidence"])
+    assert "exact_cost" not in json.dumps(payload["research_evidence"])
 
 
 def test_public_status_exposes_setup_gaps_without_claiming_all_operational(client):

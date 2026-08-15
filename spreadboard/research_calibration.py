@@ -545,6 +545,14 @@ def status(db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
         else 0.0
     )
     exact_cost_coverage = exact_cost_rows / outcomes if outcomes else 0.0
+    latest_observation_at = (
+        _utc_iso(observation_last_us / 1_000_000) if observation_last_us else None
+    )
+    latest_observation_age_hours = (
+        max(0.0, (now_us - observation_last_us) / 3_600_000_000)
+        if observation_last_us
+        else None
+    )
     gates = {
         "outcomes": outcomes >= ML_MIN_OUTCOMES,
         "routes": routes >= ML_MIN_ROUTES,
@@ -562,6 +570,12 @@ def status(db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
         "routes": routes,
         "span_days": round(span_days, 2),
         "observation_span_days": round(observation_span_days, 2),
+        "latest_observation_at": latest_observation_at,
+        "latest_observation_age_hours": (
+            round(latest_observation_age_hours, 2)
+            if latest_observation_age_hours is not None
+            else None
+        ),
         "exact_cost_rows": exact_cost_rows,
         "exact_cost_coverage_pct": round(exact_cost_coverage * 100.0, 2),
         "label_quality": label_quality,
