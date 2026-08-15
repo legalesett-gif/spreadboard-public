@@ -26,6 +26,8 @@ ML_MIN_OUTCOMES = 5_000
 ML_MIN_ROUTES = 100
 ML_MIN_SPAN_DAYS = 30.0
 ML_MIN_EXACT_COST_COVERAGE = 0.80
+RECENT_QUALITY_COHORT_HOURS = 6
+RECENT_QUALITY_MIN_OBSERVATIONS = 120
 
 
 def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
@@ -536,6 +538,15 @@ def status(db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
                 "unaccounted_matured": max(0, matured - labeled - terminal - retrying),
                 "yield_pct": round(labeled / matured * 100.0, 2) if matured else 0.0,
             }
+        recent_label_quality = {
+            f"{horizon}h": _recent_label_quality(
+                connection,
+                selected_method=selected_method,
+                horizon=horizon,
+                now_us=now_us,
+            )
+            for horizon in HORIZONS
+        }
     finally:
         connection.close()
     span_days = (last_us - first_us) / (24 * 3600 * 1_000_000) if first_us and last_us else 0.0
@@ -579,6 +590,7 @@ def status(db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
         "exact_cost_rows": exact_cost_rows,
         "exact_cost_coverage_pct": round(exact_cost_coverage * 100.0, 2),
         "label_quality": label_quality,
+        "recent_label_quality": recent_label_quality,
         "method_versions": versions,
         "all_versions": {
             "observations": all_observations,
@@ -594,6 +606,103 @@ def status(db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
             "exact_cost_coverage_pct": ML_MIN_EXACT_COST_COVERAGE * 100.0,
         },
         "mode": "deterministic_shadow_calibration_only",
+    }
+
+
+def _recent_label_quality(
+    connection: sqlite3.Connection,
+    *,
+    selected_method: str | None,
+    horizon: int,
+    now_us: int,
+) -> dict[str, Any]:
+    """Measure recent closed cohorts without letting legacy gaps dominate.
+
+    The 24-hour cohort includes only observations that already produced an
+    eight-hour outcome. The eight-hour monitor therefore catches early-history
+    loss, while the 24-hour monitor tests whether those same proven routes kept
+    collecting through the longer horizon.
+    """
+
+    if not selected_method or horizon not in HORIZONS:
+        return {"monitoring_ready": False, "observations": 0, "cohort_hours": 0}
+    prior_join = (
+        "JOIN score_outcomes prior "
+        "ON prior.observation_id = o.id AND prior.horizon_hours = 8"
+        if horizon == 24
+        else ""
+    )
+    row = connection.execute(
+        f"""WITH eligible AS (
+                 SELECT o.id, o.observed_hour_us
+                 FROM score_observations o
+                 {prior_join}
+                 WHERE o.method = ?
+                   AND o.observed_hour_us + ? * 3600000000 + ? <= ?
+             ), cohort_hours AS (
+                 SELECT observed_hour_us
+                 FROM eligible
+                 GROUP BY observed_hour_us
+                 ORDER BY observed_hour_us DESC
+                 LIMIT ?
+             )
+             SELECT COUNT(DISTINCT e.id) observations,
+                    COUNT(DISTINCT h.observed_hour_us) cohort_hours,
+                    MIN(e.observed_hour_us) first_us,
+                    MAX(e.observed_hour_us) last_us,
+                    SUM(CASE WHEN x.observation_id IS NOT NULL THEN 1 ELSE 0 END) labeled,
+                    SUM(CASE WHEN a.last_reason =
+                                      'target_window_elapsed_without_exact_history'
+                             THEN 1 ELSE 0 END) terminal,
+                    SUM(CASE WHEN a.last_reason IS NOT NULL
+                                  AND a.last_reason !=
+                                      'target_window_elapsed_without_exact_history'
+                             THEN 1 ELSE 0 END) retrying
+             FROM eligible e
+             JOIN cohort_hours h ON h.observed_hour_us = e.observed_hour_us
+             LEFT JOIN score_outcomes x
+               ON x.observation_id = e.id AND x.horizon_hours = ?
+             LEFT JOIN score_label_attempts a
+               ON a.observation_id = e.id AND a.horizon_hours = ?""",
+        (
+            selected_method,
+            horizon,
+            OUTCOME_TARGET_TOLERANCE_US,
+            now_us,
+            RECENT_QUALITY_COHORT_HOURS,
+            horizon,
+            horizon,
+        ),
+    ).fetchone()
+    observations = int(row["observations"] or 0)
+    cohort_hours = int(row["cohort_hours"] or 0)
+    labeled = int(row["labeled"] or 0)
+    terminal = int(row["terminal"] or 0)
+    retrying = int(row["retrying"] or 0)
+    unaccounted = max(0, observations - labeled - terminal - retrying)
+    return {
+        "monitoring_ready": (
+            observations >= RECENT_QUALITY_MIN_OBSERVATIONS and cohort_hours >= 2
+        ),
+        "eligibility": (
+            "eight_hour_outcome_present" if horizon == 24 else "all_current_method_rows"
+        ),
+        "observations": observations,
+        "cohort_hours": cohort_hours,
+        "cohort_first_at": (
+            _utc_iso(int(row["first_us"]) / 1_000_000) if row["first_us"] else None
+        ),
+        "cohort_last_at": (
+            _utc_iso(int(row["last_us"]) / 1_000_000) if row["last_us"] else None
+        ),
+        "labeled": labeled,
+        "terminal_missing_history": terminal,
+        "retrying": retrying,
+        "unaccounted_matured": unaccounted,
+        "yield_pct": round(labeled / observations * 100.0, 2) if observations else 0.0,
+        "terminal_pct": (
+            round(terminal / observations * 100.0, 2) if observations else 0.0
+        ),
     }
 
 

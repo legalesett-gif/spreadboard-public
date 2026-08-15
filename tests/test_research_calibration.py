@@ -73,6 +73,10 @@ def test_shadow_observations_are_hourly_versioned_and_labeled_without_lookahead(
     assert status["outcomes_all_horizons"] == 2
     assert status["latest_observation_at"]
     assert status["latest_observation_age_hours"] >= 24
+    assert status["recent_label_quality"]["8h"]["labeled"] == 1
+    assert status["recent_label_quality"]["24h"]["labeled"] == 1
+    assert status["recent_label_quality"]["24h"]["eligibility"] == "eight_hour_outcome_present"
+    assert status["recent_label_quality"]["24h"]["monitoring_ready"] is False
     assert status["ml_ready"] is False
 
 

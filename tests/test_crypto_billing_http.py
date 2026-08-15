@@ -210,6 +210,7 @@ def test_public_health_does_not_disclose_single_user_account_counts(client):
         "observation_span_days",
         "labeled_24h_span_days",
         "label_quality",
+        "recent_label_quality",
         "ml_ready",
         "error_type",
     }

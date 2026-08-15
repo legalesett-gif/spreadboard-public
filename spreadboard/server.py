@@ -4796,6 +4796,9 @@ def research_evidence_health() -> dict[str, Any]:
         for horizon, details in label_quality.items()
         if horizon in {"8h", "24h"}
     }
+    recent_quality = status.get("recent_label_quality") or {}
+    if not isinstance(recent_quality, dict):
+        recent_quality = {}
     return {
         "initialized": bool(status.get("initialized")),
         "status": "collecting" if status.get("initialized") else "warming",
@@ -4810,6 +4813,11 @@ def research_evidence_health() -> dict[str, Any]:
         "observation_span_days": status.get("observation_span_days"),
         "labeled_24h_span_days": status.get("span_days"),
         "label_quality": public_quality,
+        "recent_label_quality": {
+            horizon: details
+            for horizon, details in recent_quality.items()
+            if horizon in {"8h", "24h"} and isinstance(details, dict)
+        },
         "ml_ready": bool(status.get("ml_ready")),
     }
 
