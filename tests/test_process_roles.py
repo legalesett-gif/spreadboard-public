@@ -226,3 +226,10 @@ def test_production_compose_assigns_separate_roles_and_secret_sets() -> None:
     assert "accounting-public.pem" not in collector
     assert "collector_healthcheck.py" in collector
     assert "ports:" not in collector
+
+
+def test_web_role_flushes_analytics_outside_request_threads() -> None:
+    source = inspect.getsource(service.main)
+    assert "accounts.PageViewWorker" in source
+    assert "page_view_worker.start()" in source
+    assert "page_view_worker.stop()" in source

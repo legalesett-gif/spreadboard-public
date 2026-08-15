@@ -32,7 +32,10 @@ def _route(timestamp_us: int, basis: float, funding: float) -> dict:
 
 def test_shadow_observations_are_hourly_versioned_and_labeled_without_lookahead(tmp_path) -> None:
     now = time.time()
-    start = ((now - 25 * 3600) // 3600) * 3600 + 60
+    # The 24h quality monitor admits only cohorts whose 90-minute outcome
+    # window has closed. Twenty-five hours was eligible only in the latter
+    # half of each wall-clock hour, making this test time-dependent.
+    start = ((now - 26 * 3600) // 3600) * 3600 + 60
     history_db = tmp_path / "history.sqlite3"
     calibration_db = tmp_path / "calibration.sqlite3"
     rows = []

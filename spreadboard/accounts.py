@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -22,8 +22,13 @@ RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_DB_PATH = RUNTIME_DIR / "spreadboard_accounts.sqlite3"
 SESSION_COOKIE = "spreadboard_session"
 SESSION_DAYS = 30
+SESSION_TOUCH_SECONDS = 300
 RESEARCH_CONSENT_VERSION = "portfolio_research_v2"
 _REQUEST_STATE = threading.local()
+_PAGE_VIEW_LOCK = threading.Lock()
+_PAGE_VIEW_PENDING: dict[tuple[str, str, str], int] = {}
+_DATABASE_PRAGMA_LOCK = threading.Lock()
+_DATABASE_PRAGMA_READY: set[str] = set()
 
 
 def _member_manager_emails() -> set[str]:
@@ -737,7 +742,8 @@ def user_for_session(token: str, db_path: Path | str = DEFAULT_DB_PATH) -> User 
     try:
         row = connection.execute(
             """
-            SELECT u.*, s.csrf_token, s.id AS session_id
+            SELECT u.*, s.csrf_token, s.id AS session_id,
+                   s.last_seen_at AS session_last_seen_at
             FROM sessions s JOIN users u ON u.id = s.user_id
             WHERE s.token_hash = ? AND s.expires_at > ?
             """,
@@ -745,11 +751,14 @@ def user_for_session(token: str, db_path: Path | str = DEFAULT_DB_PATH) -> User 
         ).fetchone()
         if row is None:
             return None
-        connection.execute(
-            "UPDATE sessions SET last_seen_at = ? WHERE id = ?",
-            (_utc_iso(), row["session_id"]),
-        )
-        connection.commit()
+        now = datetime.now(tz=timezone.utc)
+        touch_cutoff = _utc_iso(now - timedelta(seconds=SESSION_TOUCH_SECONDS))
+        if str(row["session_last_seen_at"] or "") < touch_cutoff:
+            connection.execute(
+                "UPDATE sessions SET last_seen_at = ? WHERE id = ?",
+                (_utc_iso(now), row["session_id"]),
+            )
+            connection.commit()
         return _user_from_row(row, csrf_token=str(row["csrf_token"]))
     finally:
         connection.close()
@@ -904,25 +913,89 @@ def record_page_view(
     at: datetime | None = None,
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> None:
-    """Increment a path/day counter without storing cookies, IPs, or user agents."""
+    """Queue an aggregate path/day count without writing on the request path."""
     clean_path = "/" + str(path or "/").strip().lstrip("/")
     if len(clean_path) > 180 or not clean_path.startswith("/"):
         clean_path = "/other"
     day = (at or datetime.now(tz=timezone.utc)).astimezone(timezone.utc).date().isoformat()
-    connection = _connect(db_path)
-    try:
-        connection.execute(
-            """INSERT INTO daily_page_views (day, path, view_count) VALUES (?, ?, 1)
-               ON CONFLICT(day, path) DO UPDATE SET view_count = view_count + 1""",
-            (day, clean_path),
-        )
-        connection.commit()
-    finally:
-        connection.close()
+    key = (str(Path(db_path)), day, clean_path)
+    with _PAGE_VIEW_LOCK:
+        _PAGE_VIEW_PENDING[key] = _PAGE_VIEW_PENDING.get(key, 0) + 1
+
+
+def flush_page_views(db_path: Path | str | None = None) -> int:
+    """Persist queued aggregate analytics in one transaction per database."""
+
+    wanted = str(Path(db_path)) if db_path is not None else None
+    with _PAGE_VIEW_LOCK:
+        selected = {
+            key: count
+            for key, count in _PAGE_VIEW_PENDING.items()
+            if wanted is None or key[0] == wanted
+        }
+        for key in selected:
+            _PAGE_VIEW_PENDING.pop(key, None)
+    if not selected:
+        return 0
+
+    grouped: dict[str, list[tuple[str, str, int]]] = {}
+    for (path, day, page), count in selected.items():
+        grouped.setdefault(path, []).append((day, page, count))
+    written = 0
+    for path, rows in grouped.items():
+        connection = _connect(path)
+        try:
+            connection.executemany(
+                """INSERT INTO daily_page_views (day, path, view_count)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(day, path)
+                   DO UPDATE SET view_count = view_count + excluded.view_count""",
+                rows,
+            )
+            connection.commit()
+            written += sum(count for _, _, count in rows)
+        except Exception:
+            with _PAGE_VIEW_LOCK:
+                for day, page, count in rows:
+                    key = (path, day, page)
+                    _PAGE_VIEW_PENDING[key] = _PAGE_VIEW_PENDING.get(key, 0) + count
+            raise
+        finally:
+            connection.close()
+    return written
+
+
+class PageViewWorker(threading.Thread):
+    """Flush aggregate analytics periodically, away from page rendering."""
+
+    def __init__(
+        self,
+        *,
+        db_path: Path | str = DEFAULT_DB_PATH,
+        interval_seconds: float = 5.0,
+    ) -> None:
+        super().__init__(name="page-view-flush", daemon=True)
+        self.db_path = Path(db_path)
+        self.interval_seconds = max(1.0, interval_seconds)
+        self.stop_event = threading.Event()
+
+    def run(self) -> None:
+        while not self.stop_event.wait(self.interval_seconds):
+            try:
+                flush_page_views(self.db_path)
+            except Exception:
+                continue
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.join(timeout=5.0)
+        with suppress(Exception):
+            flush_page_views(self.db_path)
 
 
 def page_view_summary(*, days: int = 30, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
     """Return privacy-safe aggregate traffic for the owner dashboard."""
+    flush_page_views(db_path)
     bounded_days = max(1, min(365, int(days)))
     since = (datetime.now(tz=timezone.utc).date() - timedelta(days=bounded_days - 1)).isoformat()
     connection = _connect(db_path)
@@ -2948,8 +3021,16 @@ def _connect(db_path: Path | str) -> sqlite3.Connection:
     connection = sqlite3.connect(path, timeout=10)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA busy_timeout = 10000")
+    # Setting journal_mode is a database mutation. Repeating it on every
+    # authenticated read makes otherwise independent sessions queue behind a
+    # schema-level lock; establish WAL once per database/process instead.
+    canonical = str(path.resolve())
+    if canonical not in _DATABASE_PRAGMA_READY:
+        with _DATABASE_PRAGMA_LOCK:
+            if canonical not in _DATABASE_PRAGMA_READY:
+                connection.execute("PRAGMA journal_mode = WAL")
+                _DATABASE_PRAGMA_READY.add(canonical)
     return connection
 
 

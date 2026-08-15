@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -80,6 +81,42 @@ def test_login_uses_opaque_session_and_subscription_expiry(
     assert accounts.user_for_session(token, path) is None
 
 
+def test_active_session_reads_do_not_write_until_touch_interval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _database(tmp_path, monkeypatch)
+    user = accounts.create_user(
+        email="touch@example.com",
+        display_name="Touch",
+        password="member-password-strong",
+        db_path=path,
+    )
+    _, token = accounts.login("touch@example.com", "member-password-strong", db_path=path)
+    with sqlite3.connect(path) as connection:
+        before = connection.execute(
+            "SELECT last_seen_at FROM sessions WHERE user_id = ?", (user["id"],)
+        ).fetchone()[0]
+
+    assert accounts.user_for_session(token, path) is not None
+    with sqlite3.connect(path) as connection:
+        unchanged = connection.execute(
+            "SELECT last_seen_at FROM sessions WHERE user_id = ?", (user["id"],)
+        ).fetchone()[0]
+        connection.execute(
+            "UPDATE sessions SET last_seen_at = ? WHERE user_id = ?",
+            ("2000-01-01T00:00:00Z", user["id"]),
+        )
+        connection.commit()
+    assert unchanged == before
+
+    assert accounts.user_for_session(token, path) is not None
+    with sqlite3.connect(path) as connection:
+        touched = connection.execute(
+            "SELECT last_seen_at FROM sessions WHERE user_id = ?", (user["id"],)
+        ).fetchone()[0]
+    assert touched != "2000-01-01T00:00:00Z"
+
+
 def test_page_analytics_store_only_aggregate_path_counts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -102,6 +139,18 @@ def test_page_analytics_store_only_aggregate_path_counts(
     finally:
         connection.close()
     assert columns == {"day", "path", "view_count"}
+
+
+def test_concurrent_page_analytics_flush_in_one_aggregate(tmp_path, monkeypatch) -> None:
+    path = _database(tmp_path, monkeypatch)
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        list(pool.map(lambda _: accounts.record_page_view("/markets", db_path=path), range(100)))
+
+    assert accounts.flush_page_views(path) == 100
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT view_count FROM daily_page_views WHERE path = '/markets'"
+        ).fetchone()[0] == 100
 
 
 def test_position_funding_and_alert_records_are_user_scoped(

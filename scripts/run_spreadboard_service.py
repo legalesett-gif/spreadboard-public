@@ -26,6 +26,7 @@ for import_path in (ROOT / "src", ROOT):
     sys.path.insert(0, str(import_path))
 
 from spreadboard import (
+    accounts,
     alerts,
     api_spreads,
     board,
@@ -726,6 +727,7 @@ def main() -> int:
     rail_reopen_worker = rail_watch.RailReopenWatcher(
         poll_seconds=float(os.environ.get("SPREADBOARD_RAIL_REOPEN_SECONDS", "300")),
     )
+    page_view_worker = accounts.PageViewWorker(db_path=server.accounts_path)
 
     # Route links are a primary navigation path. Building their index on the
     # first request cost 14-15 seconds and made the first chart after every
@@ -778,6 +780,7 @@ def main() -> int:
     market_alert_worker.start()
     web_push_worker.start()
     rail_reopen_worker.start()
+    page_view_worker.start()
     _log(f"serving http://{host}:{port}")
     try:
         server.serve_forever(poll_interval=0.5)
@@ -789,6 +792,7 @@ def main() -> int:
         market_alert_worker.stop()
         web_push_worker.stop()
         rail_reopen_worker.stop()
+        page_view_worker.stop()
         if crypto_stop is not None:
             crypto_stop.set()
         service_stop_event.set()
