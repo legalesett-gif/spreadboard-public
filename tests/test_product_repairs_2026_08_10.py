@@ -110,6 +110,10 @@ def test_research_consent_names_component_costs_and_current_version() -> None:
     assert "fees, borrow, gas, transfer and measured slippage" in html
     assert "portfolio_research_v2" in html
     assert 'name="research_consent_version" value="portfolio_research_v2"' in html
+    methodology = server.render_methodology_page()
+    assert "median total and component lifecycle-cost percentages" in methodology
+    assert "5,000 labeled 24-hour outcomes" in methodology
+    assert "Eight-hour labels are monitored separately" in methodology
 
 
 def test_portfolio_uses_edit_and_exact_funding_instead_of_manual_funding_button() -> None:
