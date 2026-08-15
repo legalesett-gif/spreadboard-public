@@ -16443,7 +16443,7 @@ main {{ max-width: none; margin: 0; padding: 32px 24px 0; }}
 .pair-snapshot-banner nav {{ display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; flex: 0 0 auto; }}
 .pair-snapshot-banner a {{ min-height: 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0 10px; border-radius: 7px; background: var(--dark); color: white; font-size: 12px; font-weight: 900; }}
 .pair-snapshot-banner a:first-child {{ background: var(--accent); color: var(--accent-ink); }}
-.pair-cockpit {{ display: grid; gap: 14px; padding: 18px; border-radius: 10px; background: var(--dark); color: white; box-shadow: var(--shadow); }}
+.pair-cockpit {{ display: grid; gap: 14px; min-width: 0; max-width: 100%; padding: 18px; border-radius: 10px; background: var(--dark); color: white; box-shadow: var(--shadow); }}
 .pair-cockpit .page-kicker, .pair-cockpit .route-subline {{ color: #b9c8c3; }}
 .pair-cockpit .back {{ color: var(--accent); }}
 .pair-cockpit-head, .ticket-head, .pair-cockpit-foot {{ display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; }}
@@ -17504,6 +17504,7 @@ pre {{ background: var(--dark); color: white; padding: 14px; border-radius: 8px;
   .route-empty-metrics {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
   .mobile-metric-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
   .pair-hero, .pair-cockpit {{ padding: 14px; }}
+  .pair-page, .pair-cockpit, .pair-cockpit-head, .pair-cockpit-grid, .pair-trade-ticket, .pair-edge-panel, .pair-cockpit-foot {{ width: 100%; min-width: 0; max-width: 100%; }}
   .pair-snapshot-banner {{ align-items: stretch; flex-direction: column; padding: 12px; }}
   .pair-snapshot-banner nav {{ justify-content: flex-start; }}
   .pair-cockpit-head, .ticket-head, .pair-cockpit-foot, .pair-subnav, .spread-lens-head {{ align-items: flex-start; flex-direction: column; }}

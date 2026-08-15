@@ -481,6 +481,7 @@ def test_member_size_quote_cache_single_flights_identical_route_and_size(monkeyp
 def test_member_size_quote_ui_requotes_without_changing_canonical_board() -> None:
     html = server.render_pair_size_quote_panel({"route_key": "GUA|DEX|Gate"})
     calculator = server.render_net_edge_dialog()
+    stylesheet = Path(server.__file__).read_text(encoding="utf-8")
 
     assert "Quote this route at your intended size" in html
     assert "/api/size-quote/" in html
@@ -489,6 +490,8 @@ def test_member_size_quote_ui_requotes_without_changing_canonical_board() -> Non
     assert "Quote current books at this size" in calculator
     assert "standardized $50 matched quote" in calculator
     assert "/api/size-quote/" in calculator
+    assert ".pair-cockpit {{ display: grid; gap: 14px; min-width: 0; max-width: 100%;" in stylesheet
+    assert ".pair-page, .pair-cockpit, .pair-cockpit-head, .pair-cockpit-grid" in stylesheet
 
 
 def test_member_size_quote_rejects_unbounded_notional(monkeypatch, tmp_path: Path) -> None:
