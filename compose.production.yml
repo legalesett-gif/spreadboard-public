@@ -55,6 +55,10 @@ services:
       # both CPUs and made health/page requests wait 50-78 seconds.
       SPREADBOARD_WARM_INTERVAL_SECONDS: "900"
       SPREADBOARD_TOKEN_RANKING_SECONDS: "120"
+      # Live books still overlay every response immediately. Rebuilding the
+      # entire structural/ranking cache on each 10-second quote generation held
+      # the Python GIL continuously and stalled unrelated Account requests.
+      SPREADBOARD_WEB_CACHE_INVALIDATION_SECONDS: "120"
       # Prices must move as the books move, not on a beat. The re-pricing is
       # shared between streams, so this is independent of how many people watch.
       SPREADBOARD_BOARD_STREAM_SECONDS: "0.25"

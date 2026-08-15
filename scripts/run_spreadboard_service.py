@@ -557,6 +557,7 @@ class SharedArtifactWatcher(threading.Thread):
         *,
         poll_seconds: float = 1.0,
         initial_warm_delay_seconds: float = 30.0,
+        invalidation_interval_seconds: float | None = None,
     ) -> None:
         super().__init__(name="shared-market-artifact-watcher", daemon=True)
         self.stop_event = stop_event
@@ -565,6 +566,18 @@ class SharedArtifactWatcher(threading.Thread):
             0.0, initial_warm_delay_seconds
         )
         self.initial_warm_requested = False
+        self.invalidation_interval_seconds = max(
+            1.0,
+            float(
+                invalidation_interval_seconds
+                if invalidation_interval_seconds is not None
+                else os.environ.get(
+                    "SPREADBOARD_WEB_CACHE_INVALIDATION_SECONDS", "120"
+                )
+            ),
+        )
+        self.last_invalidation_at = 0.0
+        self.invalidation_pending = False
         self.generation_signature = _artifact_signature(MARKET_GENERATION_PATH)
         self.snapshot_signature = _artifact_signature(SNAPSHOT_PATH)
         self.warm_lock = threading.Lock()
@@ -583,7 +596,8 @@ class SharedArtifactWatcher(threading.Thread):
         generation = _artifact_signature(MARKET_GENERATION_PATH)
         if generation != self.generation_signature:
             self.generation_signature = generation
-            _invalidate_market_price_caches()
+            self.invalidation_pending = True
+        self._invalidate_if_due()
 
         snapshot = _artifact_signature(SNAPSHOT_PATH)
         if snapshot != self.snapshot_signature:
@@ -596,6 +610,19 @@ class SharedArtifactWatcher(threading.Thread):
         ):
             self.initial_warm_requested = True
             self.request_warm()
+
+    def _invalidate_if_due(self) -> None:
+        """Coalesce price/funding generations while live overlays stay current."""
+
+        now = time.monotonic()
+        if not self.invalidation_pending or (
+            self.last_invalidation_at
+            and now - self.last_invalidation_at < self.invalidation_interval_seconds
+        ):
+            return
+        _invalidate_market_price_caches()
+        self.invalidation_pending = False
+        self.last_invalidation_at = now
 
     def request_warm(self) -> None:
         """Coalesce structural changes while never losing the newest one."""

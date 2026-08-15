@@ -57,7 +57,9 @@ def test_web_watcher_invalidates_prices_and_warms_structural_changes(
         service, "_warm_board_cache", lambda *, force=False: warms.append(force)
     )
     watcher = service.SharedArtifactWatcher(
-        threading.Event(), initial_warm_delay_seconds=3600
+        threading.Event(),
+        initial_warm_delay_seconds=3600,
+        invalidation_interval_seconds=120,
     )
 
     generation.write_text("{}", encoding="utf-8")
@@ -69,6 +71,36 @@ def test_web_watcher_invalidates_prices_and_warms_structural_changes(
     assert watcher.warm_thread is not None
     watcher.warm_thread.join(timeout=2)
     assert warms == [True]
+
+
+def test_web_watcher_coalesces_continuous_collector_generations(
+    tmp_path, monkeypatch
+) -> None:
+    generation = tmp_path / "market_generation.json"
+    snapshot = tmp_path / "api_discovery_latest.json"
+    monkeypatch.setattr(service, "MARKET_GENERATION_PATH", generation)
+    monkeypatch.setattr(service, "SNAPSHOT_PATH", snapshot)
+    invalidations = []
+    monkeypatch.setattr(
+        service, "_invalidate_market_price_caches", lambda: invalidations.append(True)
+    )
+    watcher = service.SharedArtifactWatcher(
+        threading.Event(),
+        initial_warm_delay_seconds=3600,
+        invalidation_interval_seconds=120,
+    )
+
+    generation.write_text("one", encoding="utf-8")
+    watcher.check_once()
+    generation.write_text("two-longer", encoding="utf-8")
+    watcher.check_once()
+    assert invalidations == [True]
+    assert watcher.invalidation_pending is True
+
+    watcher.last_invalidation_at -= 121
+    watcher.check_once()
+    assert invalidations == [True, True]
+    assert watcher.invalidation_pending is False
 
 
 def _write_live_books(path: Path, *, quote_ts_us: int) -> None:
