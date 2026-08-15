@@ -21,7 +21,7 @@ services:
       # moving continuously; anything untouched for five minutes leaves the
       # live board until it can be quoted again.
       SPREADBOARD_LIVE_MAX_AGE_MIN: "5"
-      SPREADBOARD_REFRESH_TIMEOUT_SECONDS: "2700"
+      SPREADBOARD_REFRESH_TIMEOUT_SECONDS: "3600"
       SPREADBOARD_FAST_QUOTE_SECONDS: "60"
       # The complete CEX catalogue is repriced independently in one bulk pass.
       # This exact-route worker spends 90 rows on the two rate-limited DEX lanes

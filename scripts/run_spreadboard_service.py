@@ -187,15 +187,29 @@ class RefreshLoop:
             "--ttl-s",
             "900",
         ]
+        staging_seed_signature = _artifact_signature(REFRESH_SNAPSHOT_PATH)
         result = _run_worker(
             command,
             timeout=float(os.environ.get("SPREADBOARD_REFRESH_TIMEOUT_SECONDS", "900")),
             env={**os.environ, "SPREADBOARD_OKX_DEX_BACKGROUND": "1"},
         )
+        partial_after_timeout = False
         if result.timed_out:
-            _log("refresh timeout")
-            return
-        if result.returncode != 0:
+            # The discovery runner atomically checkpoints after every completed
+            # source and retains the previous rows for sources it has not yet
+            # reached. A slow or unavailable venue must therefore not discard
+            # 45-60 minutes of fresh work and leave the public catalogue aging
+            # forever. Publish only when at least one checkpoint replaced the
+            # seed copy; an early timeout still leaves the last good snapshot.
+            partial_after_timeout = (
+                _artifact_signature(REFRESH_SNAPSHOT_PATH)
+                != staging_seed_signature
+            )
+            if not partial_after_timeout:
+                _log("refresh timeout before any source completed")
+                return
+            _log("refresh timeout; publishing completed-source partial")
+        if result.returncode != 0 and not partial_after_timeout:
             _log(f"refresh failed ({result.returncode}): {result.stderr[-500:]}")
             return
         # Every step below used to parse the 40MB snapshot here, in the web
@@ -217,8 +231,8 @@ class RefreshLoop:
         if published is None:
             return
         _log(
-            "refresh complete "
-            f"routes={published.get('routes')} "
+            ("refresh partial complete " if partial_after_timeout else "refresh complete ")
+            + f"routes={published.get('routes')} "
             f"history_inserted={published.get('history_inserted')} "
             f"funding={enriched.get('funding')} status={published.get('refresh_status')}"
         )

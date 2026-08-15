@@ -260,6 +260,24 @@ def test_production_compose_assigns_separate_roles_and_secret_sets() -> None:
     assert "ports:" not in collector
 
 
+def test_slow_discovery_publishes_completed_source_checkpoints() -> None:
+    source = inspect.getsource(service.RefreshLoop.refresh_once)
+
+    assert "staging_seed_signature" in source
+    assert "publishing completed-source partial" in source
+    timeout_guard = source.split("if result.timed_out:", 1)[1].split(
+        "if result.returncode != 0:", 1
+    )[0]
+    assert "_artifact_signature(REFRESH_SNAPSHOT_PATH)" in timeout_guard
+    assert "refresh timeout before any source completed" in timeout_guard
+
+
+def test_production_discovery_allows_full_broad_scan_window() -> None:
+    source = Path("compose.production.yml").read_text(encoding="utf-8")
+
+    assert 'SPREADBOARD_REFRESH_TIMEOUT_SECONDS: "3600"' in source
+
+
 def test_web_role_flushes_analytics_outside_request_threads() -> None:
     source = inspect.getsource(service.main)
     assert "accounts.PageViewWorker" in source
