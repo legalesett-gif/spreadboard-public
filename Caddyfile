@@ -23,6 +23,13 @@ www.spreadarbitrage.ink, spreadboard.178.128.126.204.sslip.io {
 	redir https://spreadarbitrage.ink{uri} permanent
 }
 
+# These names are still registrar-parked. Keeping the redirect ready here means
+# the owner only has to point the apex and www DNS records at this server;
+# Caddy will obtain their certificates and preserve every incoming path.
+spreadarbitrage.com, www.spreadarbitrage.com {
+	redir https://spreadarbitrage.ink{uri} permanent
+}
+
 http://178.128.126.204 {
 	redir https://spreadarbitrage.ink{uri} permanent
 }
