@@ -175,6 +175,7 @@ def test_collector_role_contains_no_subscriber_or_payment_workers() -> None:
     assert "RefreshLoop" in source
     assert "BulkQuoteLoop" in source
     assert "BulkFundingLoop" in source
+    assert "MarketEvidenceLoop" in source
     for forbidden in (
         "SpreadBoardServer",
         "crypto_watcher",
@@ -183,6 +184,34 @@ def test_collector_role_contains_no_subscriber_or_payment_workers() -> None:
         "PublicFeedWorker",
     ):
         assert forbidden not in source
+
+
+def test_web_warm_never_runs_slow_market_evidence_in_the_http_process() -> None:
+    source = inspect.getsource(service._warm_board_cache)
+    guard = source.split('if _service_role() != "web":', 1)
+    assert len(guard) == 2
+    before_guard, after_guard = guard
+    assert "_refresh_funding_windows()" not in before_guard
+    assert "_refresh_funding_windows()" in after_guard
+
+
+def test_market_evidence_is_an_isolated_low_priority_worker(monkeypatch) -> None:
+    seen = []
+    monkeypatch.setattr(
+        service,
+        "_run_worker",
+        lambda command, **kwargs: seen.append((command, kwargs))
+        or service.WorkerResult(0, '{"status":"ok"}\n', "", False),
+    )
+    loop = service.MarketEvidenceLoop(threading.Event())
+
+    loop._sweep_once()
+
+    command, options = seen[0]
+    assert any(str(item).endswith("market_evidence_worker.py") for item in command)
+    assert command[:3] == service._low_priority_prefix()
+    assert options["timeout"] == loop.TIMEOUT_SECONDS
+    assert Path("scripts/market_evidence_worker.py").exists()
 
 
 def test_production_compose_assigns_separate_roles_and_secret_sets() -> None:

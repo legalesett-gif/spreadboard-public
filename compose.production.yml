@@ -165,10 +165,10 @@ services:
     mem_limit: 3584m
     # The current Droplet has four vCPUs. This is a ceiling, not a reservation;
     # the higher CPU share below makes subscriber work win when both roles run.
-    cpus: 2.6
+    cpus: 3.6
     # Subscriber HTTP, payments and lifecycle work win scheduling contention
     # over background exchange collection.
-    cpu_shares: 1536
+    cpu_shares: 2048
     logging:
       driver: json-file
       options:
@@ -189,6 +189,9 @@ services:
       <<: *spreadboard_runtime_environment
       SPREADBOARD_SERVICE_ROLE: "collector"
       SPREADBOARD_DISABLE_LOCAL_CACHE_WARM: "1"
+      # Slow settled-history/radar publication runs in an isolated low-priority
+      # worker after startup, never in the HTTP process or collector parent.
+      SPREADBOARD_MARKET_EVIDENCE_INITIAL_DELAY_SECONDS: "900"
       # Structural discovery is deliberately broad and can span long venue/DEX
       # cycles. Live truth has separate 3-minute book/generation and 15-minute
       # DEX gates below; the structural universe must still advance within 72h.
@@ -210,8 +213,8 @@ services:
     cap_drop:
       - ALL
     mem_limit: 4g
-    cpus: 2.8
-    cpu_shares: 768
+    cpus: 2.0
+    cpu_shares: 256
     logging:
       driver: json-file
       options:

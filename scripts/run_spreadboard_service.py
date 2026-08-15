@@ -522,7 +522,8 @@ def _warm_telegram_payload_at_startup(board_path: Path) -> None:
             "telegram startup payload ready "
             f"in {time.monotonic() - started:.1f}s"
         )
-        _refresh_token_rankings(force=True)
+        if _service_role() != "web":
+            _refresh_token_rankings(force=True)
     except Exception as exc:  # noqa: BLE001 - the regular warmer retries later.
         _log(f"telegram startup payload skipped: {type(exc).__name__}: {exc}")
 
@@ -636,6 +637,7 @@ def _run_collector_service() -> int:
     refresh_loop = RefreshLoop(interval)
     bulk_quote_loop = BulkQuoteLoop(refresh_loop.stop_event)
     bulk_funding_loop = BulkFundingLoop(refresh_loop.stop_event)
+    market_evidence_loop = MarketEvidenceLoop(refresh_loop.stop_event)
 
     def stop_collector(_signum: int, _frame: Any) -> None:
         refresh_loop.stop_event.set()
@@ -645,6 +647,7 @@ def _run_collector_service() -> int:
     refresh_loop.start()
     bulk_quote_loop.start()
     bulk_funding_loop.start()
+    market_evidence_loop.start()
     MemoryWatchdog(refresh_loop.stop_event).start()
     _log("collector role started")
     try:
@@ -654,6 +657,7 @@ def _run_collector_service() -> int:
         refresh_loop.stop()
         bulk_quote_loop.join(timeout=5.0)
         bulk_funding_loop.join(timeout=5.0)
+        market_evidence_loop.join(timeout=5.0)
     return 0
 
 
@@ -1018,6 +1022,56 @@ class BulkFundingLoop(threading.Thread):
             _publish_shared_market_generation("bulk_funding")
 
 
+class MarketEvidenceLoop(threading.Thread):
+    """Publish slow funding windows outside the web and collector parents."""
+
+    TIMEOUT_SECONDS = max(
+        900.0,
+        float(os.environ.get("SPREADBOARD_MARKET_EVIDENCE_TIMEOUT_SECONDS", "3600")),
+    )
+    INTERVAL_SECONDS = max(
+        900.0,
+        float(os.environ.get("SPREADBOARD_MARKET_EVIDENCE_SECONDS", "10800")),
+    )
+    INITIAL_DELAY_SECONDS = max(
+        0.0,
+        float(
+            os.environ.get(
+                "SPREADBOARD_MARKET_EVIDENCE_INITIAL_DELAY_SECONDS", "900"
+            )
+        ),
+    )
+
+    def __init__(self, stop_event: threading.Event) -> None:
+        super().__init__(name="market-evidence", daemon=True)
+        self.stop_event = stop_event
+
+    def run(self) -> None:
+        if self.stop_event.wait(self.INITIAL_DELAY_SECONDS):
+            return
+        while not self.stop_event.is_set():
+            self._sweep_once()
+            self.stop_event.wait(self.INTERVAL_SECONDS)
+
+    def _sweep_once(self) -> None:
+        result = _run_worker(
+            [
+                *_low_priority_prefix(),
+                sys.executable,
+                str(Path(__file__).with_name("market_evidence_worker.py")),
+            ],
+            timeout=self.TIMEOUT_SECONDS,
+        )
+        if result.timed_out or result.returncode != 0:
+            _log(
+                "market evidence unavailable "
+                f"exit={result.returncode} {result.stderr[-300:]}"
+            )
+            return
+        summary = (result.stdout or result.stderr).strip().splitlines()
+        _log(summary[-1] if summary else "market evidence completed")
+
+
 def _invalidate_market_price_caches() -> None:
     """Drop grouped payloads after a worker writes newer books or deltas.
 
@@ -1160,8 +1214,9 @@ def _warm_board_cache(*, force: bool = False) -> None:
         _log(f"health warm skipped: {type(exc).__name__}: {exc}")
     _yield_to_requests()
     _log(f"board cache warmed {len(WARM_QUERIES)} views in {time.monotonic() - started:.1f}s")
-    _refresh_funding_windows()
-    _refresh_token_rankings()
+    if _service_role() != "web":
+        _refresh_token_rankings()
+        _refresh_funding_windows()
     # The generation this pass replaced is now unreferenced; give it back.
     _return_freed_memory()
 
