@@ -62,16 +62,63 @@ def _periods(tier: str) -> dict[int, int]:
     return dict(crypto_billing.TIER_PERIODS.get(tier) or {})
 
 
+def rehearsal_price_cents(tier: str, chat_id: int | None) -> int | None:
+    """A rehearsal price for named chats, valid only until a stated deadline.
+
+    Proving the payment path end to end needs a real transfer, and the list
+    price is a lot to spend on a button. The risk is not the discount but a
+    discount that outlives the rehearsal: this bot is public, so a forgotten
+    cheap tier is a permanent hole in the pricing.
+
+    Every branch therefore fails closed. No deadline, a deadline in the past,
+    an unreadable deadline, an empty chat list, a chat that was not named, or
+    the wrong tier all return None and the published price stands.
+    """
+    raw_cents = os.environ.get("SPREADBOARD_CHECKOUT_TEST_PRICE_CENTS", "").strip()
+    deadline = os.environ.get("SPREADBOARD_CHECKOUT_TEST_PRICE_UNTIL", "").strip()
+    chats = os.environ.get("SPREADBOARD_CHECKOUT_TEST_PRICE_CHATS", "").strip()
+    only_tier = (
+        os.environ.get("SPREADBOARD_CHECKOUT_TEST_PRICE_TIER", "").strip()
+        or "research_pro"
+    )
+    if not raw_cents or not deadline or not chats or chat_id is None:
+        return None
+    if str(tier) != only_tier:
+        return None
+    allowed = {part.strip() for part in chats.split(",") if part.strip()}
+    if str(int(chat_id)) not in allowed:
+        return None
+    try:
+        expires = datetime.fromisoformat(deadline)
+        cents = int(raw_cents)
+    except ValueError:
+        return None
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=UTC)
+    if cents <= 0 or expires <= datetime.now(tz=UTC):
+        return None
+    return cents
+
+
+def _priced_periods(tier: str, chat_id: int | None) -> dict[int, int]:
+    """What this chat will actually be charged, so the buttons cannot mislead."""
+    periods = _periods(tier)
+    override = rehearsal_price_cents(tier, chat_id)
+    if override is None:
+        return periods
+    return dict.fromkeys(periods, override)
+
+
 # --------------------------------------------------------------------------
 # Steps
 # --------------------------------------------------------------------------
 
 
-def tier_prompt() -> dict[str, Any]:
+def tier_prompt(chat_id: int | None = None) -> dict[str, Any]:
     """Both tiers are real choices: some buyers want the board, not the group."""
     rows = []
     for tier, label in TIER_LABELS.items():
-        cheapest = min(_periods(tier).values())
+        cheapest = min(_priced_periods(tier, chat_id).values())
         included = (
             "board + private channel" if tier == "research_pro" else "board only"
         )
@@ -93,8 +140,8 @@ def tier_prompt() -> dict[str, Any]:
     return {"text": text, "markup": {"inline_keyboard": rows}}
 
 
-def period_prompt(tier: str) -> dict[str, Any]:
-    periods = _periods(tier)
+def period_prompt(tier: str, chat_id: int | None = None) -> dict[str, Any]:
+    periods = _priced_periods(tier, chat_id)
     if not periods:
         raise CheckoutError("unknown_subscription_tier")
     rows = [
@@ -113,8 +160,8 @@ def period_prompt(tier: str) -> dict[str, Any]:
     }
 
 
-def email_prompt(tier: str, period_days: int) -> dict[str, Any]:
-    cents = _periods(tier)[period_days]
+def email_prompt(tier: str, period_days: int, chat_id: int | None = None) -> dict[str, Any]:
+    cents = _priced_periods(tier, chat_id)[period_days]
     return {
         "text": (
             f"{TIER_LABELS[tier]}, {period_days} days — {_money(cents)}\n\n"
@@ -126,8 +173,8 @@ def email_prompt(tier: str, period_days: int) -> dict[str, Any]:
     }
 
 
-def confirm_prompt(tier: str, period_days: int, email: str) -> dict[str, Any]:
-    cents = _periods(tier)[period_days]
+def confirm_prompt(tier: str, period_days: int, email: str, chat_id: int | None = None) -> dict[str, Any]:
+    cents = _priced_periods(tier, chat_id)[period_days]
     extra = (
         "\nIncludes the private subscriber channel."
         if tier == "research_pro"
@@ -184,14 +231,14 @@ def invoice_message(invoice: dict[str, Any]) -> dict[str, Any]:
 
 def begin(chat_id: int, *, db_path: Path | str) -> dict[str, Any]:
     accounts.save_checkout_session(chat_id, step="tier", db_path=db_path)
-    return tier_prompt()
+    return tier_prompt(chat_id)
 
 
 def choose_tier(chat_id: int, tier: str, *, db_path: Path | str) -> dict[str, Any]:
     if tier not in TIER_LABELS:
         raise CheckoutError("unknown_subscription_tier")
     accounts.save_checkout_session(chat_id, step="period", tier=tier, db_path=db_path)
-    return period_prompt(tier)
+    return period_prompt(tier, chat_id)
 
 
 def choose_period(chat_id: int, period_days: int, *, db_path: Path | str) -> dict[str, Any]:
@@ -204,7 +251,7 @@ def choose_period(chat_id: int, period_days: int, *, db_path: Path | str) -> dic
     accounts.save_checkout_session(
         chat_id, step="email", tier=tier, period_days=period_days, db_path=db_path
     )
-    return email_prompt(tier, period_days)
+    return email_prompt(tier, period_days, chat_id)
 
 
 def submit_email(chat_id: int, email: str, *, db_path: Path | str) -> dict[str, Any]:
@@ -225,7 +272,7 @@ def submit_email(chat_id: int, email: str, *, db_path: Path | str) -> dict[str, 
         email=clean,
         db_path=db_path,
     )
-    return confirm_prompt(str(session["tier"]), int(session["period_days"]), clean)
+    return confirm_prompt(str(session["tier"]), int(session["period_days"]), clean, chat_id)
 
 
 def confirm(chat_id: int, *, db_path: Path | str) -> dict[str, Any]:
@@ -272,7 +319,11 @@ def confirm(chat_id: int, *, db_path: Path | str) -> dict[str, Any]:
         db_path=db_path,
     )
     invoice = crypto_billing.create_invoice(
-        user_id, period_days, tier=tier, db_path=db_path
+        user_id,
+        period_days,
+        tier=tier,
+        list_amount_cents=rehearsal_price_cents(tier, chat_id),
+        db_path=db_path,
     )
     accounts.link_checkout_invoice(
         int(invoice["id"]),

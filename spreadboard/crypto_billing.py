@@ -224,6 +224,7 @@ def create_invoice(
     period_days: int,
     *,
     tier: str = "research_pro",
+    list_amount_cents: int | None = None,
     db_path=accounts.DEFAULT_DB_PATH,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -239,7 +240,13 @@ def create_invoice(
     moment = (now or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
     now_iso = accounts._utc_iso(moment)
     expires_iso = accounts._utc_iso(moment + timedelta(seconds=INVOICE_WINDOW_SECONDS))
-    list_amount = periods[period_days]
+    # Callers may substitute a price for a live rehearsal. The default is always
+    # the published ladder, so no caller that omits it can be cheapened.
+    list_amount = (
+        int(list_amount_cents)
+        if list_amount_cents is not None and int(list_amount_cents) > 0
+        else periods[period_days]
+    )
 
     connection = accounts._connect(db_path)
     try:
