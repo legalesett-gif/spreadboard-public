@@ -321,18 +321,19 @@ def handle_update(
             "$SIREN, /token SIREN, or @spreadarbitragesubscription_bot SIREN. "
             "Link your account on the website for /subscribe, /mysubscription and /access."
         )
-        if telegram_checkout.enabled() and accounts.user_for_telegram_chat(chat_id, db_path=db_path) is None:
-            # Someone arriving at the bot for the first time should be one tap
-            # from buying, not reading about a website they have not seen.
-            return _reply(
-                chat_id,
-                text,
-                markup={
-                    "inline_keyboard": [
-                        [{"text": "Subscribe", "callback_data": f"{telegram_checkout.CALLBACK_PREFIX}:restart"}]
-                    ]
-                },
+        if (
+            command == "/start"
+            and telegram_checkout.enabled()
+            and accounts.user_for_telegram_chat(chat_id, db_path=db_path) is None
+        ):
+            # A newcomer needs to know what is for sale, not how to query a
+            # forum they cannot enter yet. /help keeps the command reference.
+            step = telegram_checkout.welcome(
+                username=str(sender.get("username") or ""),
+                first_name=str(sender.get("first_name") or ""),
+                chat_id=chat_id,
             )
+            return _reply(chat_id, step["text"], markup=step["markup"])
         return _reply(chat_id, text, button=("Open SpreadBoard", f"{public_url}/telegram") if public_url else None)
 
     # Checkout is deliberately reachable before the account gate below: the

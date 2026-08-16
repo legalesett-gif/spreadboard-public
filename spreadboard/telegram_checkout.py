@@ -86,7 +86,9 @@ def rehearsal_price_cents(tier: str, chat_id: int | None) -> int | None:
     if str(tier) != only_tier:
         return None
     allowed = {part.strip() for part in chats.split(",") if part.strip()}
-    if str(int(chat_id)) not in allowed:
+    # "*" opens the price to every chat. It has to be typed explicitly: a blank
+    # or missing list stays nobody, so "everyone" can never happen by accident.
+    if "*" not in allowed and str(int(chat_id)) not in allowed:
         return None
     try:
         expires = datetime.fromisoformat(deadline)
@@ -138,6 +140,49 @@ def tier_prompt(chat_id: int | None = None) -> dict[str, Any]:
         "Payment is USDC or USDT on Arbitrum One. No card, no recurring charge."
     )
     return {"text": text, "markup": {"inline_keyboard": rows}}
+
+
+def welcome(
+    *,
+    username: str = "",
+    first_name: str = "",
+    chat_id: int | None = None,
+) -> dict[str, Any]:
+    """Greet a newcomer and say what is actually for sale.
+
+    Someone arriving here has usually never seen the product. The old reply
+    explained how to look a token up inside a subscriber forum they cannot
+    enter yet -- an answer to a question they had not asked.
+
+    Prices come from the same function that prices the invoice, so a welcome
+    can never quote a figure the checkout will not honour.
+    """
+    handle = f"@{username.lstrip('@')}" if username.strip() else (first_name.strip() or "there")
+    scanner = min(_priced_periods("scanner", chat_id).values())
+    research = min(_priced_periods("research_pro", chat_id).values())
+    text = (
+        f"Welcome, {handle}.\n\n"
+        "SpreadBoard finds cross-venue price and funding gaps that can actually "
+        "be executed — matched live order books, real deposit and withdrawal "
+        "rails, and settled funding rather than quoted funding.\n\n"
+        f"Scanner — from {_money(scanner)}\n"
+        "• the full live board, every route\n"
+        "• spread, funding, price and rail alerts\n\n"
+        f"Research Pro — from {_money(research)}\n"
+        "• everything in Scanner\n"
+        "• exact-size quoting from $10 to $100,000\n"
+        "• the private subscriber channel\n\n"
+        "Prepaid 30, 90 or 365 days in USDC or USDT on Arbitrum One. "
+        "No card and no recurring charge."
+    )
+    return {
+        "text": text,
+        "markup": {
+            "inline_keyboard": [
+                [{"text": "See plans", "callback_data": f"{CALLBACK_PREFIX}:restart"}]
+            ]
+        },
+    }
 
 
 def period_prompt(tier: str, chat_id: int | None = None) -> dict[str, Any]:
