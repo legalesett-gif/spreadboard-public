@@ -36,6 +36,7 @@ from spreadboard import (
     rail_watch,
     subscription_lifecycle,
     telegram_bot,
+    telegram_checkout,
     token_metadata,
     web_push,
 )  # noqa: E402
@@ -764,6 +765,10 @@ def main() -> int:
         accounts_path=server.accounts_path,
         poll_seconds=float(os.environ.get("SPREADBOARD_WEB_PUSH_SECONDS", "5")),
     )
+    checkout_notifier = telegram_checkout.Notifier(
+        accounts_path=server.accounts_path,
+        poll_seconds=float(os.environ.get("SPREADBOARD_TELEGRAM_CHECKOUT_SECONDS", "10")),
+    )
     server.web_push_worker = web_push_worker
     rail_reopen_worker = rail_watch.RailReopenWatcher(
         poll_seconds=float(os.environ.get("SPREADBOARD_RAIL_REOPEN_SECONDS", "300")),
@@ -820,6 +825,7 @@ def main() -> int:
     public_feed_worker.start()
     market_alert_worker.start()
     web_push_worker.start()
+    checkout_notifier.start()
     rail_reopen_worker.start()
     page_view_worker.start()
     _log(f"serving http://{host}:{port}")
@@ -832,6 +838,7 @@ def main() -> int:
         public_feed_worker.stop()
         market_alert_worker.stop()
         web_push_worker.stop()
+        checkout_notifier.stop()
         rail_reopen_worker.stop()
         page_view_worker.stop()
         if crypto_stop is not None:

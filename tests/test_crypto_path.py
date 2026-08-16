@@ -66,10 +66,20 @@ def test_telegram_subscribe_leads_with_crypto() -> None:
     from spreadboard import telegram_bot
 
     source = inspect.getsource(telegram_bot.handle_update)
-    subscribe = source.split('command == "/subscribe"', 1)[1][:1600]
+    # In-bot checkout now answers /subscribe first, so skip that branch and
+    # assert the ordering of what remains: crypto leads, Stripe is the
+    # fallback, and Stripe never becomes the headline.
+    subscribe = source.rsplit('command == "/subscribe"', 1)[1][:1600]
     assert "crypto_billing.status()" in subscribe
-    # Stripe stays as the fallback, not the headline.
     assert subscribe.index("crypto_billing") < subscribe.index("create_checkout_session")
+
+
+def test_in_bot_checkout_answers_subscribe_before_the_website_link() -> None:
+    """The whole point is that nobody is sent to the website to pay."""
+    from spreadboard import telegram_bot
+
+    source = inspect.getsource(telegram_bot.handle_update)
+    assert source.index("telegram_checkout.begin") < source.index("crypto_billing.status()")
 
 
 def test_only_the_exact_invoice_amount_is_credited() -> None:

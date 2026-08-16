@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
@@ -528,6 +528,34 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
         )
         connection.executescript(
             """
+            CREATE TABLE IF NOT EXISTS telegram_checkout_sessions (
+                chat_id INTEGER PRIMARY KEY,
+                step TEXT NOT NULL CHECK (step IN ('tier','period','email','confirm','invoice')),
+                tier TEXT CHECK (tier IN ('scanner','research_pro')),
+                period_days INTEGER,
+                email TEXT,
+                invoice_id INTEGER REFERENCES crypto_invoices(id) ON DELETE SET NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
+            -- Kept separate from the session because a session is replaced
+            -- whenever the buyer restarts, and the link from a paid invoice
+            -- back to the chat that must be told about it has to outlive that.
+            CREATE TABLE IF NOT EXISTS telegram_checkout_invoices (
+                invoice_id INTEGER PRIMARY KEY REFERENCES crypto_invoices(id) ON DELETE CASCADE,
+                chat_id INTEGER NOT NULL,
+                tier TEXT NOT NULL,
+                new_account INTEGER NOT NULL DEFAULT 0,
+                notified_at TEXT,
+                notify_attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS telegram_checkout_invoices_pending
+                ON telegram_checkout_invoices(notified_at, notify_attempts);
+            CREATE INDEX IF NOT EXISTS telegram_checkout_invoices_chat
+                ON telegram_checkout_invoices(chat_id);
             CREATE TABLE IF NOT EXISTS crypto_watcher_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 last_scanned_block INTEGER NOT NULL DEFAULT 0,
@@ -1847,6 +1875,222 @@ def apply_billing_event(
 #: and should not.
 INVITE_TOKEN_DAYS = 7
 RESET_TOKEN_HOURS = 2
+
+
+def bind_telegram_chat_direct(
+    user_id: int, chat_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> None:
+    """Link a chat to an account without a link token.
+
+    The token flow exists so a logged-in member can prove which chat is theirs.
+    A buyer who paid inside that same chat has already proved it: the invoice
+    was issued to them there. Any older claim on the chat is replaced, so a
+    resold or recycled Telegram account cannot keep reading someone else's
+    subscription.
+    """
+    now_iso = _utc_iso()
+    connection = _connect(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("DELETE FROM telegram_links WHERE chat_id = ?", (int(chat_id),))
+        connection.execute(
+            """
+            INSERT INTO telegram_links (user_id, chat_id, linked_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                chat_id = excluded.chat_id, updated_at = excluded.updated_at
+            """,
+            (int(user_id), int(chat_id), now_iso, now_iso),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+CHECKOUT_SESSION_MINUTES = 30
+MAX_OPEN_CHECKOUT_INVOICES_PER_CHAT = 3
+
+
+def get_checkout_session(
+    chat_id: int, *, db_path: Path | str = DEFAULT_DB_PATH, now: datetime | None = None
+) -> dict[str, Any] | None:
+    """The live checkout for this chat, or None once it has gone stale."""
+    moment = now or datetime.now(tz=UTC)
+    connection = _connect(db_path)
+    try:
+        row = connection.execute(
+            "SELECT * FROM telegram_checkout_sessions WHERE chat_id = ?", (int(chat_id),)
+        ).fetchone()
+        if row is None:
+            return None
+        expires = datetime.fromisoformat(str(row["expires_at"]))
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=UTC)
+        if expires <= moment:
+            return None
+        return dict(row)
+    finally:
+        connection.close()
+
+
+def save_checkout_session(
+    chat_id: int,
+    *,
+    step: str,
+    tier: str | None = None,
+    period_days: int | None = None,
+    email: str | None = None,
+    invoice_id: int | None = None,
+    db_path: Path | str = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    moment = now or datetime.now(tz=UTC)
+    now_iso = _utc_iso(moment)
+    expires_iso = _utc_iso(moment + timedelta(minutes=CHECKOUT_SESSION_MINUTES))
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """
+            INSERT INTO telegram_checkout_sessions (
+                chat_id, step, tier, period_days, email, invoice_id,
+                created_at, updated_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                step = excluded.step,
+                tier = excluded.tier,
+                period_days = excluded.period_days,
+                email = excluded.email,
+                invoice_id = excluded.invoice_id,
+                updated_at = excluded.updated_at,
+                expires_at = excluded.expires_at
+            """,
+            (
+                int(chat_id), step, tier, period_days, email, invoice_id,
+                now_iso, now_iso, expires_iso,
+            ),
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM telegram_checkout_sessions WHERE chat_id = ?", (int(chat_id),)
+        ).fetchone()
+        return dict(row)
+    finally:
+        connection.close()
+
+
+def clear_checkout_session(chat_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> None:
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            "DELETE FROM telegram_checkout_sessions WHERE chat_id = ?", (int(chat_id),)
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def link_checkout_invoice(
+    invoice_id: int,
+    *,
+    chat_id: int,
+    tier: str,
+    new_account: bool,
+    db_path: Path | str = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> None:
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """
+            INSERT INTO telegram_checkout_invoices (
+                invoice_id, chat_id, tier, new_account, created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(invoice_id) DO NOTHING
+            """,
+            (
+                int(invoice_id), int(chat_id), str(tier), int(bool(new_account)),
+                _utc_iso(now or datetime.now(tz=UTC)),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def open_checkout_invoices(
+    chat_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> list[dict[str, Any]]:
+    """Open invoices this chat is already holding an amount slot for.
+
+    The one-cent slots that keep concurrent invoices distinguishable are a
+    shared pool of a hundred. The website checkout sits behind a login; a bot
+    does not, so an uncapped bot could exhaust the pool and stop everyone
+    paying. Counted from the invoices themselves so it cannot drift.
+    """
+    connection = _connect(db_path)
+    try:
+        rows = connection.execute(
+            """
+            SELECT i.* FROM crypto_invoices i
+            JOIN telegram_checkout_invoices t ON t.invoice_id = i.id
+            WHERE t.chat_id = ? AND i.status = 'open'
+            ORDER BY i.created_at DESC
+            """,
+            (int(chat_id),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
+
+
+def pending_checkout_notifications(
+    *, db_path: Path | str = DEFAULT_DB_PATH, limit: int = 20, max_attempts: int = 6
+) -> list[dict[str, Any]]:
+    connection = _connect(db_path)
+    try:
+        rows = connection.execute(
+            """
+            SELECT t.*, i.user_id, i.period_days, i.subscription_tier, i.settled_at
+            FROM telegram_checkout_invoices t
+            JOIN crypto_invoices i ON i.id = t.invoice_id
+            WHERE i.status = 'paid'
+              AND t.notified_at IS NULL
+              AND t.notify_attempts < ?
+            ORDER BY i.settled_at
+            LIMIT ?
+            """,
+            (int(max_attempts), int(limit)),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
+
+
+def record_checkout_notification(
+    invoice_id: int,
+    *,
+    delivered: bool,
+    error: str = "",
+    db_path: Path | str = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> None:
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """
+            UPDATE telegram_checkout_invoices
+               SET notified_at = ?, notify_attempts = notify_attempts + 1, last_error = ?
+             WHERE invoice_id = ?
+            """,
+            (
+                _utc_iso(now or datetime.now(tz=UTC)) if delivered else None,
+                error[:200],
+                int(invoice_id),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def create_password_token(

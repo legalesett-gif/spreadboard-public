@@ -13,7 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from spreadboard import accounts, billing, crypto_billing, telegram_queries
+from spreadboard import accounts, billing, crypto_billing, telegram_checkout, telegram_queries
 
 
 class TelegramBotError(RuntimeError):
@@ -183,6 +183,12 @@ def _handle_callback(cb: dict[str, Any], *, db_path: Any, board_path: Any) -> di
     message = cb.get("message") if isinstance(cb.get("message"), dict) else {}
     chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
     chat_id = int(chat.get("id") or 0)
+    # Checkout runs in the buyer's private chat, so it is handled before the
+    # community gate below, which exists to keep view buttons inside the group.
+    if data.startswith(f"{telegram_checkout.CALLBACK_PREFIX}:") and telegram_checkout.enabled():
+        step = telegram_checkout.handle_callback(chat_id, data, db_path=db_path)
+        if step is not None:
+            return _reply(chat_id, step["text"], markup=step.get("markup"))
     community = accounts.telegram_community(db_path=db_path)
     if community is None or int(community["chat_id"]) != chat_id:
         return None
@@ -315,9 +321,37 @@ def handle_update(
             "$SIREN, /token SIREN, or @spreadarbitragesubscription_bot SIREN. "
             "Link your account on the website for /subscribe, /mysubscription and /access."
         )
+        if telegram_checkout.enabled() and accounts.user_for_telegram_chat(chat_id, db_path=db_path) is None:
+            # Someone arriving at the bot for the first time should be one tap
+            # from buying, not reading about a website they have not seen.
+            return _reply(
+                chat_id,
+                text,
+                markup={
+                    "inline_keyboard": [
+                        [{"text": "Subscribe", "callback_data": f"{telegram_checkout.CALLBACK_PREFIX}:restart"}]
+                    ]
+                },
+            )
         return _reply(chat_id, text, button=("Open SpreadBoard", f"{public_url}/telegram") if public_url else None)
+
+    # Checkout is deliberately reachable before the account gate below: the
+    # whole point is that a buyer with no account can complete a purchase.
+    if telegram_checkout.enabled():
+        if command == "/subscribe":
+            step = telegram_checkout.begin(chat_id, db_path=db_path)
+            return _reply(chat_id, step["text"], markup=step.get("markup"))
+        if not text.startswith("/") and telegram_checkout.awaiting_email(chat_id, db_path=db_path):
+            step = telegram_checkout.submit_email(chat_id, text, db_path=db_path)
+            return _reply(chat_id, step["text"], markup=step.get("markup"))
+
     user = accounts.user_for_telegram_chat(chat_id, db_path=db_path)
     if user is None:
+        if telegram_checkout.enabled():
+            return _reply(
+                chat_id,
+                "No subscription is linked to this chat yet. Send /subscribe to get one.",
+            )
         return _reply(chat_id, "Link this chat from Account settings in SpreadBoard first.")
     query = telegram_queries.parse_query(text, bot_username=config().bot_username)
     if query is not None:
@@ -605,6 +639,11 @@ class MembershipWorker:
         return {"checked": checked, "removed": removed, "errors": errors}
 
 
+def create_join_request_link(chat_id: int) -> str:
+    """Public name for the join-request link builder."""
+    return _create_join_request_link(chat_id)
+
+
 def _create_join_request_link(chat_id: int) -> str:
     result = _api_call(
         "createChatInviteLink",
@@ -698,12 +737,18 @@ def send_group_message(chat_id: str | int, text: str) -> dict[str, Any]:
     return _api_call("sendMessage", {"chat_id": chat_id, "text": text, "disable_web_page_preview": True})
 
 
-def send_direct_message(chat_id: int, text: str) -> dict[str, Any]:
+def send_direct_message(
+    chat_id: int, text: str, *, markup: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Send a service notice to one account-linked Telegram chat."""
-    return _api_call(
-        "sendMessage",
-        {"chat_id": int(chat_id), "text": str(text)[:4000], "disable_web_page_preview": True},
-    )
+    params: dict[str, Any] = {
+        "chat_id": int(chat_id),
+        "text": str(text)[:4000],
+        "disable_web_page_preview": True,
+    }
+    if markup:
+        params["reply_markup"] = markup
+    return _api_call("sendMessage", params)
 
 
 def parse_update(raw: bytes) -> dict[str, Any]:
