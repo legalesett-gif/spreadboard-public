@@ -556,6 +556,14 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 ON telegram_checkout_invoices(notified_at, notify_attempts);
             CREATE INDEX IF NOT EXISTS telegram_checkout_invoices_chat
                 ON telegram_checkout_invoices(chat_id);
+            -- Additive sibling of crypto_watcher_state, which is pinned to a
+            -- single row by CHECK (id = 1) and so cannot grow a chain column
+            -- without a table rebuild. The Arbitrum cursor keeps its old home.
+            CREATE TABLE IF NOT EXISTS crypto_chain_cursors (
+                chain TEXT PRIMARY KEY,
+                cursor_value INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS crypto_watcher_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 last_scanned_block INTEGER NOT NULL DEFAULT 0,
@@ -598,8 +606,14 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
         )
         _ensure_columns(
             connection,
+            "crypto_payments",
+            {"chain": "TEXT NOT NULL DEFAULT 'arbitrum'"},
+        )
+        _ensure_columns(
+            connection,
             "crypto_invoices",
             {
+                "chain": "TEXT NOT NULL DEFAULT 'arbitrum'",
                 "subscription_tier": "TEXT NOT NULL DEFAULT 'research_pro'",
                 "discount_cents": "INTEGER NOT NULL DEFAULT 0",
                 "affiliate_partner_id": "INTEGER",

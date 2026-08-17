@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import hashlib
 import os
 import sqlite3
 from typing import Any
@@ -38,6 +39,140 @@ TOKENS: dict[str, dict[str, Any]] = {
     "0xaf88d065e77c8cc2239327c5edb3a432268e5831": {"symbol": "USDC", "decimals": 6},
     "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9": {"symbol": "USDT", "decimals": 6},
 }
+
+
+@dataclass(frozen=True)
+class Chain:
+    """One settlement network and the exact tokens accepted on it.
+
+    Decimals live here rather than in a shared constant because they differ:
+    BSC's pegged USDT and USDC carry eighteen, Arbitrum's and Tron's carry six.
+    Reading a BSC transfer with a six-decimal assumption credits a payment a
+    trillion times over, so nothing downstream is allowed to assume a default.
+    """
+
+    key: str
+    name: str
+    kind: str  # "evm" or "tron"
+    chain_id: int | None
+    tokens: dict[str, dict[str, Any]]
+    address_env: str
+    rpc_env: str
+    confirmations: int
+    explorer: str
+
+
+CHAINS: dict[str, Chain] = {
+    "arbitrum": Chain(
+        key="arbitrum",
+        name="Arbitrum One",
+        kind="evm",
+        chain_id=42161,
+        tokens=TOKENS,
+        address_env="SPREADBOARD_CRYPTO_RECEIVING_ADDRESS",
+        rpc_env="SPREADBOARD_CRYPTO_RPC_URL",
+        confirmations=6,
+        explorer="https://arbiscan.io/tx/",
+    ),
+    "bsc": Chain(
+        key="bsc",
+        name="BNB Smart Chain",
+        kind="evm",
+        chain_id=56,
+        # Binance-Peg BSC-USD and USD Coin. Both are 18 decimals, unlike every
+        # other USDT/USDC deployment this product touches.
+        tokens={
+            "0x55d398326f99059ff775485246999027b3197955": {"symbol": "USDT", "decimals": 18},
+            "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d": {"symbol": "USDC", "decimals": 18},
+        },
+        address_env="SPREADBOARD_CRYPTO_BSC_RECEIVING_ADDRESS",
+        rpc_env="SPREADBOARD_CRYPTO_BSC_RPC_URL",
+        confirmations=15,
+        explorer="https://bscscan.com/tx/",
+    ),
+    "tron": Chain(
+        key="tron",
+        name="Tron (TRC20)",
+        kind="tron",
+        chain_id=None,
+        tokens={
+            "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t": {"symbol": "USDT", "decimals": 6},
+            "TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8": {"symbol": "USDC", "decimals": 6},
+        },
+        address_env="SPREADBOARD_CRYPTO_TRON_RECEIVING_ADDRESS",
+        rpc_env="SPREADBOARD_CRYPTO_TRON_API_URL",
+        confirmations=19,
+        explorer="https://tronscan.org/#/transaction/",
+    ),
+}
+DEFAULT_CHAIN = "arbitrum"
+_BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def cents_to_units(amount_cents: int, decimals: int) -> int:
+    """Cents to a token's smallest unit, at that token's own precision."""
+    if int(decimals) < 2:
+        raise CryptoBillingError("unsupported_token_decimals")
+    return int(amount_cents) * (10 ** (int(decimals) - 2))
+
+
+def token_for(contract: str, *, chain: str) -> dict[str, Any] | None:
+    """Look a token up on one chain only.
+
+    A contract address is only meaningful together with its network, and the
+    same string on a different chain is a different asset -- or a fake.
+    """
+    definition = CHAINS.get(str(chain))
+    if definition is None:
+        return None
+    if definition.kind == "evm":
+        return definition.tokens.get(str(contract).lower())
+    return definition.tokens.get(str(contract))
+
+
+def is_tron_address(value: str) -> bool:
+    """Base58check, mainnet prefix, correct checksum.
+
+    A single mistyped character is an unrecoverable payment, so the checksum is
+    verified rather than the shape trusted.
+    """
+    text = str(value or "").strip()
+    if len(text) != 34 or not text.startswith("T"):
+        return False
+    number = 0
+    for character in text:
+        index = _BASE58.find(character)
+        if index < 0:
+            return False
+        number = number * 58 + index
+    try:
+        raw = number.to_bytes(25, "big")
+    except OverflowError:
+        return False
+    payload, checksum = raw[:21], raw[21:]
+    if payload[0] != 0x41:
+        return False
+    digest = hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+    return checksum == digest
+
+
+def chain_address(chain: str) -> str:
+    definition = CHAINS.get(str(chain))
+    if definition is None:
+        return ""
+    value = os.environ.get(definition.address_env, "").strip()
+    if definition.kind == "tron":
+        return value if is_tron_address(value) else ""
+    return value.lower() if _is_address(value) else ""
+
+
+def enabled_chains() -> list[Chain]:
+    """Chains with a valid, correctly-formatted receiving address configured."""
+    return [
+        definition
+        for definition in CHAINS.values()
+        if chain_address(definition.key)
+    ]
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
 # period_days -> list price in cents. PERIODS remains the Research Pro alias for
@@ -146,7 +281,9 @@ def units_to_cents(raw_units: int, decimals: int) -> int:
     return int(raw_units) // (10 ** (decimals - 2))
 
 
-def payment_options(amount_cents: int, receiving_address: str) -> list[dict[str, Any]]:
+def payment_options(
+    amount_cents: int, receiving_address: str, *, chain: str = DEFAULT_CHAIN
+) -> list[dict[str, Any]]:
     """Return exact ERC-681 token transfers for a checkout amount.
 
     A generic ``ethereum:<receiver>`` URI asks compatible wallets to prepare a
@@ -156,22 +293,37 @@ def payment_options(amount_cents: int, receiving_address: str) -> list[dict[str,
     """
     if int(amount_cents) <= 0:
         raise CryptoBillingError("invalid_invoice_amount")
-    if not _is_address(receiving_address):
+    definition_for_check = CHAINS.get(str(chain)) or CHAINS[DEFAULT_CHAIN]
+    valid = (
+        is_tron_address(receiving_address)
+        if definition_for_check.kind == "tron"
+        else _is_address(receiving_address)
+    )
+    if not valid:
         raise CryptoBillingError("invalid_receiving_address")
 
+    definition = CHAINS.get(str(chain)) or CHAINS[DEFAULT_CHAIN]
     options = []
-    for contract, token in TOKENS.items():
+    for contract, token in definition.tokens.items():
         decimals = int(token["decimals"])
-        amount_raw = int(amount_cents) * (10 ** (decimals - 2))
+        amount_raw = cents_to_units(int(amount_cents), decimals)
+        if definition.kind == "evm":
+            # EIP-681. Tron has no equivalent standard, so a Tron option
+            # carries the address and amount for manual entry instead of a
+            # link that no wallet would open.
+            uri = (
+                f"ethereum:{contract}@{definition.chain_id}/transfer"
+                f"?address={receiving_address.lower()}&uint256={amount_raw}"
+            )
+        else:
+            uri = f"tron:{receiving_address}?token={contract}&amount={amount_raw}"
         options.append({
             "symbol": str(token["symbol"]),
             "contract_address": contract,
             "decimals": decimals,
             "amount_raw": str(amount_raw),
-            "wallet_uri": (
-                f"ethereum:{contract}@{CHAIN_ID}/transfer"
-                f"?address={receiving_address.lower()}&uint256={amount_raw}"
-            ),
+            "chain": definition.key,
+            "wallet_uri": uri,
         })
     return sorted(options, key=lambda option: option["symbol"])
 
@@ -402,11 +554,17 @@ def record_transfer(
     log_index: int,
     from_address: str,
     block_number: int,
+    chain: str = DEFAULT_CHAIN,
     db_path=accounts.DEFAULT_DB_PATH,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Apply one confirmed on-chain transfer. Idempotent per (tx_hash, log_index)."""
-    token = TOKENS.get(str(token_address).lower())
+    """Apply one confirmed on-chain transfer. Idempotent per (tx_hash, log_index).
+
+    The token is resolved against the chain it arrived on. The same contract
+    string on another network is a different asset, and matching by symbol
+    would accept anything that calls itself USDC.
+    """
+    token = token_for(token_address, chain=chain)
     if token is None:
         return {"resolution": "ignored", "reason": "token_not_allowlisted"}
 
@@ -414,7 +572,10 @@ def record_transfer(
     now_iso = accounts._utc_iso(moment)
     amount_cents = units_to_cents(raw_units, int(token["decimals"]))
     tx_hash = str(tx_hash).lower()
-    from_address = str(from_address).lower()
+    definition = CHAINS.get(str(chain)) or CHAINS[DEFAULT_CHAIN]
+    from_address = (
+        str(from_address) if definition.kind == "tron" else str(from_address).lower()
+    )
 
     connection = accounts._connect(db_path)
     try:
@@ -451,11 +612,11 @@ def record_transfer(
         if chosen is None:
             resolution = "ambiguous" if len(exact) > 1 else "unmatched"
             connection.execute(
-                "INSERT INTO crypto_payments (tx_hash, log_index, token, from_address, amount_cents, "
+                "INSERT INTO crypto_payments (chain, tx_hash, log_index, token, from_address, amount_cents, "
                 "block_number, invoice_id, resolution, note, observed_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
-                (tx_hash, log_index, token["symbol"], from_address, amount_cents,
-                 block_number, resolution, note, now_iso),
+                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+                (definition.key, tx_hash, log_index, token["symbol"], from_address,
+                 amount_cents, block_number, resolution, note, now_iso),
             )
             connection.commit()
             return {"resolution": resolution, "amount_cents": amount_cents, "note": note}
@@ -474,10 +635,10 @@ def record_transfer(
             (token["symbol"], tx_hash, from_address, amount_cents, block_number, now_iso, invoice_id),
         )
         connection.execute(
-            "INSERT INTO crypto_payments (tx_hash, log_index, token, from_address, amount_cents, "
+            "INSERT INTO crypto_payments (chain, tx_hash, log_index, token, from_address, amount_cents, "
             "block_number, invoice_id, resolution, note, observed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'settled', ?, ?)",
-            (tx_hash, log_index, token["symbol"], from_address, amount_cents,
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'settled', ?, ?)",
+            (definition.key, tx_hash, log_index, token["symbol"], from_address, amount_cents,
              block_number, invoice_id, note, now_iso),
         )
         connection.execute(
