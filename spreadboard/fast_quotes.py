@@ -360,6 +360,7 @@ class FastQuoteRefresher:
                 fields = _funding_fields(
                     rate,
                     interval_hours=interval or DEFAULT_FUNDING_INTERVAL_HOURS,
+                    interval_assumed=not interval,
                     next_funding_ms=item.get(str(spec.get("next_ms") or "")),
                 )
                 if fields:
@@ -436,6 +437,7 @@ class FastQuoteRefresher:
                 # publishes no interval, so DEXE kept a 1h interval from an old
                 # scan against an 8h rate and read 4.27%/day instead of 0.02%.
                 interval_hours=interval if interval else DEFAULT_FUNDING_INTERVAL_HOURS,
+                interval_assumed=not interval,
                 next_funding_ms=item.get("fundingTimestamp") or item.get("nextFundingTimestamp"),
             )
             if fields:
@@ -2645,9 +2647,17 @@ def _funding_fields(
     rate: Any,
     *,
     interval_hours: Any = None,
+    interval_assumed: bool | None = None,
     next_funding_ms: Any = None,
     next_funding_seconds: Any = None,
 ) -> dict[str, Any]:
+    """Shape one venue's funding print for the board.
+
+    `interval_assumed` carries provenance beside the number. Without it a
+    defaulted 8h and a schedule the venue published are indistinguishable
+    downstream, and the badge that warns a reader the carry is a guess cannot
+    be trusted either way.
+    """
     parsed = _optional_number(rate)
     if parsed is None:
         return {}
@@ -2659,6 +2669,8 @@ def _funding_fields(
     output = {"current_funding_pct": parsed * 100.0}
     if interval is not None:
         output["funding_interval_hours"] = interval
+        if interval_assumed is not None:
+            output["funding_interval_assumed"] = bool(interval_assumed)
     if next_ms is not None:
         output["next_funding_ts_us"] = int(next_ms * 1000)
     return output

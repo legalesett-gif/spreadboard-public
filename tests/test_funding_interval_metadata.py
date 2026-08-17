@@ -49,3 +49,31 @@ def test_an_impossible_schedule_is_refused_rather_than_trusted() -> None:
     assert _market_interval_hours({"info": {"fundInterval": "0"}}) is None
     assert _market_interval_hours({"info": {"fundInterval": ""}}) is None
     assert _market_interval_hours({"info": {"fundInterval": "abc"}}) is None
+
+
+# --------------------------------------------------------------------------
+# Saying which of the two it was
+# --------------------------------------------------------------------------
+
+
+def test_a_published_interval_is_not_labelled_an_assumption() -> None:
+    """The badge is the reader's only signal that a carry number is a guess.
+
+    Reading Bitget's real 4h schedule while still flagging it "assumed" trades
+    one wrong statement for another: the arithmetic becomes right and the
+    provenance becomes wrong.
+    """
+    from spreadboard.fast_quotes import _funding_fields
+
+    fields = _funding_fields(0.00005, interval_hours=4.0, interval_assumed=False)
+
+    assert fields["funding_interval_hours"] == 4.0
+    assert fields["funding_interval_assumed"] is False
+
+
+def test_a_defaulted_interval_is_still_labelled_an_assumption() -> None:
+    from spreadboard.fast_quotes import _funding_fields
+
+    fields = _funding_fields(0.00005, interval_hours=8.0, interval_assumed=True)
+
+    assert fields["funding_interval_assumed"] is True
