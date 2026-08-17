@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import gc
 import json
+import logging
 import os
 import re
 import statistics
@@ -27,6 +28,8 @@ from spreadboard import (
 from spreadarb.api_discovery.identity import WatchAsset, load_watchlist
 
 ROOT = Path(__file__).resolve().parents[1]
+LOGGER = logging.getLogger("spreadboard.api_spreads")
+
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEX_WATCHLIST_PATH = ROOT / "data" / "api_discovery_watchlist.json"
 DEFAULT_API_DISCOVERY_PATH = RUNTIME_DIR / "api_discovery_latest.json"
@@ -388,6 +391,7 @@ def load_spreads(
         if limit is not None
         else groups[normalized_offset:]
     )
+    attach_funding_history(visible_groups)
     visible_route_keys = {
         route["route_key"]
         for group in visible_groups
@@ -2585,6 +2589,46 @@ def _top_unique_groups(rows: list[SpreadTerminalRow], *, metric: str) -> list[di
         {key: value for key, value in group.items() if key != "routes"}
         for group in groups[:8]
     ]
+
+
+
+def attach_funding_history(
+    groups: list[dict[str, Any]],
+    *,
+    lookup: Any = None,
+) -> None:
+    """Add realised 1d/7d/30d carry to the rows a member can actually see.
+
+    The reference product shows these beside every pair, so a funding farm can
+    be judged without leaving the table. We computed the same windows and
+    surfaced them only on Rankings and the per-token view.
+
+    Only the visible slice is priced. Hundreds of hidden alternatives sit
+    behind each token and calculating windows for those is pure waste --
+    catalog_pairs already draws the line in the same place.
+
+    History is context, never a precondition: if the window cache cannot be
+    read the board still renders, simply without it.
+    """
+    if lookup is None:
+        from spreadboard import venue_funding_history
+
+        lookup = venue_funding_history.route_windows
+    for group in groups:
+        best = group.get("best_route")
+        if not isinstance(best, dict):
+            continue
+        try:
+            windows = lookup(best)
+        except Exception:
+            # Context must never break the board: a window cache that cannot
+            # be read costs the columns, not the table.
+            LOGGER.warning("funding window lookup failed", exc_info=True)
+            continue
+        if not windows:
+            continue
+        best["settled_funding_windows"] = windows
+        group["settled_funding_windows"] = windows
 
 
 def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
