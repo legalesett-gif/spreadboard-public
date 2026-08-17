@@ -140,6 +140,7 @@ def test_the_sweep_writes_every_good_book_to_the_store() -> None:
         store=_Store(),
         fetch_spot=lambda: SPOT_PAYLOAD,
         fetch_futures=lambda: FUTURES_PAYLOAD,
+        with_depth=False,  # depth is covered separately and must not hit the network
     )
 
     assert count == 4  # 2 good spot + 2 good futures
@@ -159,8 +160,151 @@ def test_one_failing_endpoint_does_not_lose_the_other() -> None:
         raise RuntimeError("ourbit futures down")
 
     count = ourbit_quotes.sweep(
-        store=_Store(), fetch_spot=lambda: SPOT_PAYLOAD, fetch_futures=boom
+        store=_Store(), fetch_spot=lambda: SPOT_PAYLOAD, fetch_futures=boom,
+        with_depth=False,
     )
 
     assert count == 2
     assert {b["market_type"] for b in written} == {"Spot"}
+
+
+# --------------------------------------------------------------------------
+# Real L2 depth, which the contract ticker cannot give
+# --------------------------------------------------------------------------
+
+DETAIL_PAYLOAD = {
+    "success": True,
+    "data": [
+        {"symbol": "UNITREE_USDT", "contractSize": 0.01},
+        {"symbol": "BTC_USDT", "contractSize": 0.0001},
+    ],
+}
+
+DEPTH_PAYLOAD = {
+    "success": True,
+    "data": {
+        "asks": [[97.39, 330, 1], [97.40, 1872, 1], [97.41, 486, 1]],
+        "bids": [[97.30, 500, 1], [97.29, 900, 1]],
+    },
+}
+
+
+def test_contract_sizes_are_read_in_one_call() -> None:
+    sizes = ourbit_quotes.contract_sizes(DETAIL_PAYLOAD)
+
+    assert sizes["UNITREE_USDT"] == 0.01
+    assert sizes["BTC_USDT"] == 0.0001
+
+
+def test_depth_levels_are_converted_from_contracts_to_base_units() -> None:
+    """330 contracts at 0.01 is 3.3 tokens, not 330. Getting this wrong
+    overstates liquidity a hundredfold."""
+    book = ourbit_quotes.depth_book("UNITREE_USDT", DEPTH_PAYLOAD, 0.01, now_us=1)
+
+    assert book["symbol"] == "UNITREE/USDT:USDT"
+    # 330 contracts x 0.01 lands on 3.3000000000000003 in binary floating point.
+    assert book["asks"][0][0] == 97.39
+    assert book["asks"][0][1] == pytest.approx(3.3)
+    assert book["bids"][0][1] == pytest.approx(5.0)
+
+
+def test_a_depth_book_keeps_every_level_it_was_given() -> None:
+    book = ourbit_quotes.depth_book("UNITREE_USDT", DEPTH_PAYLOAD, 0.01, now_us=1)
+
+    assert len(book["asks"]) == 3
+    assert len(book["bids"]) == 2
+
+
+def test_a_depth_book_is_marked_as_real_depth_not_a_ticker() -> None:
+    """This is the one Ourbit source that can honestly answer a size question."""
+    book = ourbit_quotes.depth_book("UNITREE_USDT", DEPTH_PAYLOAD, 0.01, now_us=1)
+
+    assert book["source"] == "public_rest_l2"
+
+
+def test_a_missing_contract_size_is_refused_rather_than_assumed_one() -> None:
+    """Assuming 1.0 would report 330 tokens where there are 3.3."""
+    assert ourbit_quotes.depth_book("UNITREE_USDT", DEPTH_PAYLOAD, None, now_us=1) is None
+
+
+def test_an_unsuccessful_depth_response_yields_nothing() -> None:
+    assert ourbit_quotes.depth_book(
+        "UNITREE_USDT", {"success": False, "data": {}}, 0.01, now_us=1
+    ) is None
+
+
+def test_depth_fetching_is_bounded_so_it_cannot_flood_the_venue() -> None:
+    """711 contracts must never mean 711 requests in one sweep."""
+    asked = []
+
+    def fake_depth(symbol):
+        asked.append(symbol)
+        return DEPTH_PAYLOAD
+
+    books = ourbit_quotes.depth_books(
+        ["A_USDT", "B_USDT", "C_USDT", "D_USDT"],
+        sizes={s: 0.01 for s in ("A_USDT", "B_USDT", "C_USDT", "D_USDT")},
+        fetch_depth=fake_depth,
+        limit=2,
+        now_us=1,
+    )
+
+    assert len(asked) == 2
+    assert len(books) == 2
+
+
+def test_one_failing_depth_call_does_not_abandon_the_rest() -> None:
+    def flaky(symbol):
+        if symbol == "A_USDT":
+            raise RuntimeError("timeout")
+        return DEPTH_PAYLOAD
+
+    books = ourbit_quotes.depth_books(
+        ["A_USDT", "B_USDT"],
+        sizes={"A_USDT": 0.01, "B_USDT": 0.01},
+        fetch_depth=flaky,
+        limit=5,
+        now_us=1,
+    )
+
+    assert len(books) == 1
+
+
+def test_successive_sweeps_cover_different_contracts() -> None:
+    """A fixed slice would refresh the same forty contracts for ever."""
+    ourbit_quotes._DEPTH_CURSOR["index"] = 0
+    symbols = [f"S{i}_USDT" for i in range(10)]
+
+    first = ourbit_quotes._depth_rotation(symbols, 4)
+    second = ourbit_quotes._depth_rotation(symbols, 4)
+
+    assert first == ["S0_USDT", "S1_USDT", "S2_USDT", "S3_USDT"]
+    assert second == ["S4_USDT", "S5_USDT", "S6_USDT", "S7_USDT"]
+    assert not set(first) & set(second)
+
+
+def test_the_rotation_wraps_without_losing_symbols() -> None:
+    ourbit_quotes._DEPTH_CURSOR["index"] = 0
+    symbols = [f"S{i}_USDT" for i in range(5)]
+
+    ourbit_quotes._depth_rotation(symbols, 4)
+    wrapped = ourbit_quotes._depth_rotation(symbols, 4)
+
+    assert len(wrapped) == 4
+    assert wrapped[0] == "S4_USDT"
+
+
+def test_depth_can_be_switched_off_without_losing_ticker_prices() -> None:
+    written = []
+
+    class _Store:
+        def put_many(self, books):
+            written.extend(books); return len(books)
+
+    count = ourbit_quotes.sweep(
+        store=_Store(), fetch_spot=lambda: SPOT_PAYLOAD,
+        fetch_futures=lambda: FUTURES_PAYLOAD, with_depth=False,
+    )
+
+    assert count == 4
+    assert all(b["source"] == "bulk_ticker" for b in written)

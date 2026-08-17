@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import urllib.request
 from collections.abc import Callable
@@ -28,6 +29,11 @@ LOGGER = logging.getLogger("spreadboard.ourbit")
 VENUE = "Ourbit"
 SPOT_TICKER_URL = "https://api.ourbit.com/api/v3/ticker/bookTicker"
 FUTURES_TICKER_URL = "https://futures.ourbit.com/api/v1/contract/ticker"
+FUTURES_DETAIL_URL = "https://futures.ourbit.com/api/v1/contract/detail"
+FUTURES_DEPTH_URL = "https://futures.ourbit.com/api/v1/contract/depth/{symbol}"
+#: One request per symbol, so this is bounded and rotated rather than a sweep
+#: over all 711 contracts. The box is CPU-tight; a flood helps nobody.
+DEPTH_SYMBOLS_PER_SWEEP = max(0, int(os.environ.get("SPREADBOARD_OURBIT_DEPTH_SYMBOLS", "40")))
 REQUEST_TIMEOUT_SECONDS = 20.0
 
 #: Longest first, so USDT is not matched inside a longer suffix.
@@ -140,6 +146,7 @@ def sweep(
     fetch_spot: Callable[[], Any] = fetch_spot,
     fetch_futures: Callable[[], Any] = fetch_futures,
     now_us: int | None = None,
+    with_depth: bool = True,
 ) -> int:
     """Write every priced Ourbit symbol into the live book store.
 
@@ -156,6 +163,16 @@ def sweep(
             # stops answering should be visible rather than merely absent.
             LOGGER.warning("ourbit endpoint failed", exc_info=True)
             continue
+    # Real L2 for a rotating slice of contracts. The ticker cannot size a
+    # trade at all, so without this every Ourbit futures leg stays depth
+    # unverified and its spread never forms.
+    if with_depth and DEPTH_SYMBOLS_PER_SWEEP:
+        try:
+            sizes = contract_sizes(fetch_detail())
+            symbols = _depth_rotation(sorted(sizes), DEPTH_SYMBOLS_PER_SWEEP)
+            books.extend(depth_books(symbols, sizes=sizes, now_us=stamp))
+        except Exception:
+            LOGGER.warning("ourbit depth sweep failed", exc_info=True)
     if not books:
         return 0
     put_many = getattr(store, "put_many", None)
@@ -168,3 +185,118 @@ def sweep(
             quote_ts_us=book["quote_ts_us"], source=book["source"],
         )
     return len(books)
+
+
+# ---------------------------------------------------------------------------
+# Real L2 depth
+# ---------------------------------------------------------------------------
+
+
+def contract_sizes(payload: Any) -> dict[str, float]:
+    """symbol -> contractSize, in one call for all 711 contracts.
+
+    Depth is quoted in contracts. 330 contracts of a 0.01 contract is 3.3
+    tokens, not 330: assuming 1.0 would overstate liquidity a hundredfold and
+    every size-gated decision downstream would inherit that.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        return {}
+    sizes = {}
+    for entry in rows:
+        if not isinstance(entry, dict):
+            continue
+        size = _float(entry.get("contractSize"))
+        symbol = str(entry.get("symbol") or "")
+        if symbol and size is not None:
+            sizes[symbol] = size
+    return sizes
+
+
+def _levels(raw: Any, contract_size: float) -> list[list[float]]:
+    levels = []
+    for entry in raw if isinstance(raw, list) else []:
+        if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+            continue
+        price = _float(entry[0])
+        contracts = _float(entry[1])
+        if price is None or contracts is None:
+            continue
+        levels.append([price, contracts * contract_size])
+    return levels
+
+
+def depth_book(
+    raw_symbol: str, payload: Any, contract_size: float | None, *, now_us: int
+) -> dict[str, Any] | None:
+    """One venue-native L2 book, the only Ourbit source that can size a trade."""
+    if contract_size is None or contract_size <= 0:
+        return None
+    if not isinstance(payload, dict) or payload.get("success") is False:
+        return None
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    symbol = futures_symbol(raw_symbol)
+    if symbol is None:
+        return None
+    bids = _levels(data.get("bids"), contract_size)
+    asks = _levels(data.get("asks"), contract_size)
+    if not bids or not asks:
+        return None
+    return {
+        "venue": VENUE,
+        "market_type": "Futures",
+        "symbol": symbol,
+        "bids": bids,
+        "asks": asks,
+        "quote_ts_us": now_us,
+        # Genuine multi-level depth, unlike the ticker-derived single level.
+        "source": "public_rest_l2",
+    }
+
+
+def fetch_detail() -> Any:
+    return _http_json(FUTURES_DETAIL_URL)
+
+
+def fetch_depth(raw_symbol: str) -> Any:
+    return _http_json(FUTURES_DEPTH_URL.format(symbol=raw_symbol))
+
+
+def depth_books(
+    raw_symbols: list[str],
+    *,
+    sizes: dict[str, float],
+    fetch_depth: Callable[[str], Any] = fetch_depth,
+    limit: int = DEPTH_SYMBOLS_PER_SWEEP,
+    now_us: int | None = None,
+) -> list[dict[str, Any]]:
+    """Depth for a bounded slice of symbols; one dead call cannot stop the rest."""
+    stamp = now_us if now_us is not None else int(time.time() * 1_000_000)
+    books = []
+    for raw in list(raw_symbols)[: max(0, int(limit))]:
+        try:
+            book = depth_book(raw, fetch_depth(raw), sizes.get(raw), now_us=stamp)
+        except Exception:
+            LOGGER.warning("ourbit depth failed for %s", raw, exc_info=True)
+            continue
+        if book is not None:
+            books.append(book)
+    return books
+
+
+#: Where the last depth slice stopped, so successive sweeps cover different
+#: contracts instead of refreshing the same forty for ever.
+_DEPTH_CURSOR = {"index": 0}
+
+
+def _depth_rotation(symbols: list[str], count: int) -> list[str]:
+    if not symbols or count <= 0:
+        return []
+    start = _DEPTH_CURSOR["index"] % len(symbols)
+    _DEPTH_CURSOR["index"] = (start + count) % len(symbols)
+    doubled = symbols + symbols
+    return doubled[start : start + count]
