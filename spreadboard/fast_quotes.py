@@ -191,6 +191,45 @@ NATIVE_FUNDING_SOURCES: dict[str, dict[str, Any]] = {
 }
 
 
+
+#: Keys under a market's `info` where venues publish their funding schedule.
+#: Bitget uses `fundInterval` and its bulk funding response omits the interval
+#: entirely, so without this its 4h contracts inherit the 8h default and every
+#: carry number they feed is exactly half the truth.
+_MARKET_INTERVAL_KEYS: tuple[str, ...] = (
+    "fundInterval",
+    "fundingIntervalHours",
+    "fundingIntervalHour",
+    "funding_interval_hours",
+    "fundingInterval",
+)
+
+
+def _market_interval_hours(market: Any) -> float | None:
+    """The funding schedule a market publishes about itself, in hours.
+
+    Returns None when the venue says nothing usable, so the caller falls back
+    to the default and keeps flagging the value as assumed. Validation is
+    shared with every other interval the board handles, which is what refuses
+    a 24h "perpetual" rather than annualising from it.
+    """
+
+    if not isinstance(market, dict):
+        return None
+    info = market.get("info")
+    if not isinstance(info, dict):
+        return None
+    from spreadboard import funding_interval as _funding_interval
+
+    for key in _MARKET_INTERVAL_KEYS:
+        if key not in info:
+            continue
+        hours = _funding_interval.normalise(info.get(key))
+        if hours is not None:
+            return hours
+    return None
+
+
 class FastQuoteRefresher:
     def __init__(self) -> None:
         self._clients: dict[tuple[str, str], Any] = {}
@@ -383,9 +422,14 @@ class FastQuoteRefresher:
             interval = item.get("interval")
             if isinstance(interval, str) and interval.casefold().endswith("h"):
                 interval = interval[:-1]
-            if not interval and interval_overrides:
+            if not interval:
                 market = (getattr(client, "markets", {}) or {}).get(str(item["symbol"])) or {}
-                interval = interval_overrides.get(str(market.get("id") or "").upper())
+                # The venue's own metadata before any venue-specific override:
+                # Bitget publishes a per-contract schedule here and omits it
+                # from the bulk funding payload entirely.
+                interval = _market_interval_hours(market)
+                if not interval and interval_overrides:
+                    interval = interval_overrides.get(str(market.get("id") or "").upper())
             fields = _funding_fields(
                 item.get("fundingRate"),
                 # Never leave a fresh rate sitting on a stale interval. WhiteBIT
