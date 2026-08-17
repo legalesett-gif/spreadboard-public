@@ -449,6 +449,10 @@ def replace_payload(payload: dict[str, Any]) -> dict[str, Any]:
     catalog_pairs.clear_cache()
     global WARM_QUERY, _WARM_QUERY_UPDATED_AT
     with _WARM_QUERY_LOCK:
+        # An empty generation is installed like any other: the board can
+        # legitimately hold nothing, and serving a stale answer instead would
+        # be a worse lie than an honest gap. `payload_status().ready` is what
+        # keeps an empty snapshot from being answered as if it were data.
         WARM_QUERY = payload
         _WARM_QUERY_UPDATED_AT = time.time()
     return payload
@@ -519,7 +523,11 @@ def client_visible_payload() -> dict[str, Any]:
 def payload_status(*, now: float | None = None) -> dict[str, Any]:
     moment = time.time() if now is None else float(now)
     with _WARM_QUERY_LOCK:
-        ready = bool(WARM_QUERY)
+        # A payload dict with zero groups is still truthy. Treating that as
+        # ready let the gate through during the ~150s a deploy takes to warm,
+        # and every token then answered "no parsed routes right now" -- which
+        # a member reads as "not listed" rather than "not loaded yet".
+        ready = bool(WARM_QUERY.get("groups"))
         updated_at = _WARM_QUERY_UPDATED_AT
         groups = WARM_QUERY.get("groups") or []
         token_count = len(groups)
@@ -961,7 +969,16 @@ def _render_leaderboard(
         )
     if not rows:
         return f"<b>{escape(heading)}</b>\nNothing qualifies right now."
-    rows = sorted(rows, key=ranker, reverse=True)[:limit]
+    # One token, one row. The same asset routed through near-identical venue
+    # pairs otherwise fills the whole answer -- live /top spent seven of eight
+    # rows on two tokens -- and a leaderboard is for breadth.
+    rows = sorted(rows, key=ranker, reverse=True)
+    best_per_token: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        token = str(row.get("token") or "?").upper()
+        if token not in best_per_token:
+            best_per_token[token] = row
+    rows = list(best_per_token.values())[:limit]
 
     lines: list[tuple[str, ...]] = []
     for row in rows:

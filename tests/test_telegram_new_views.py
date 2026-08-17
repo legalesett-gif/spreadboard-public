@@ -221,3 +221,47 @@ def test_status_reports_snapshot_freshness(monkeypatch) -> None:
     body = _render("status")
 
     assert "token" in body.casefold()
+
+
+def test_a_leaderboard_shows_each_token_once(monkeypatch) -> None:
+    """Eight rows is the whole answer, so one token must not eat four of them.
+
+    Live /top returned BULLA three times and ANSEM four times: the same asset
+    via near-identical routes. That is one opportunity wearing seven rows while
+    the rest of the board goes unseen.
+    """
+    payload = {
+        "groups": [
+            {
+                "token": "SAME",
+                "routes": [
+                    {"token": "SAME", "long_venue": "A", "short_venue": "B",
+                     "long_market_type": "Spot", "short_market_type": "Futures",
+                     "executable_spread_pct": 9.0, "depth_weighted_spread_pct": None,
+                     "funding_daily_pct": 0.1},
+                    {"token": "SAME", "long_venue": "A", "short_venue": "C",
+                     "long_market_type": "Spot", "short_market_type": "Futures",
+                     "executable_spread_pct": 8.0, "depth_weighted_spread_pct": None,
+                     "funding_daily_pct": 0.09},
+                ],
+            },
+            {
+                "token": "OTHER",
+                "routes": [
+                    {"token": "OTHER", "long_venue": "D", "short_venue": "E",
+                     "long_market_type": "Spot", "short_market_type": "Futures",
+                     "executable_spread_pct": 5.0, "depth_weighted_spread_pct": None,
+                     "funding_daily_pct": 0.05},
+                ],
+            },
+        ]
+    }
+    monkeypatch.setattr(telegram_queries, "client_visible_payload", lambda: payload)
+
+    body = _render("top")
+
+    assert body.count("SAME") == 1, "the same token took more than one row"
+    assert "OTHER" in body
+    # It must keep the best of the duplicates, not an arbitrary one.
+    assert "+9.00%" in body
+    assert "+8.00%" not in body
