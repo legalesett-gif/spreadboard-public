@@ -41,7 +41,7 @@ from spreadboard import (
 
 
 MAX_PRICE_RATIO = 3.0
-TARGET_NOTIONAL_USD = float(os.environ.get("SPREADBOARD_LIVE_BOOK_NOTIONAL_USD", "50"))
+TARGET_NOTIONAL_USD = float(os.environ.get("SPREADBOARD_LIVE_BOOK_NOTIONAL_USD", "500"))
 MAX_BOOK_AGE_SECONDS = max(
     30.0, float(os.environ.get("SPREADBOARD_CATALOG_BOOK_AGE_SECONDS", "180"))
 )

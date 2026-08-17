@@ -453,7 +453,7 @@ def test_member_size_quote_reports_requested_depth_and_directional_dex_cost() ->
     assert payload["legs"]["short"]["matched_vwap"] == pytest.approx(1.015)
     assert payload["dex_evidence"][0]["contract"] == "0xabc"
     assert payload["dex_evidence"][0]["mev_protection"] == "not_enabled_quote_only"
-    assert "isolated from the standard $50 rankings" in " ".join(payload["limitations"])
+    assert f"isolated from the standard {server.PROBE_LABEL} rankings" in " ".join(payload["limitations"])
 
 
 def test_member_size_quote_cache_single_flights_identical_route_and_size(monkeypatch) -> None:
@@ -485,10 +485,10 @@ def test_member_size_quote_ui_requotes_without_changing_canonical_board() -> Non
 
     assert "Quote this route at your intended size" in html
     assert "/api/size-quote/" in html
-    assert "has not changed the $50 rankings or chart history" in html
+    assert "has not changed the board rankings or chart history" in html
     assert "no order, transfer or wallet action is sent" in html
     assert "Quote current books at this size" in calculator
-    assert "standardized $50 matched quote" in calculator
+    assert f"standardized {server.PROBE_LABEL} matched quote" in calculator
     assert "/api/size-quote/" in calculator
     assert ".pair-cockpit {{ display: grid; gap: 14px; min-width: 0; max-width: 100%;" in stylesheet
     assert ".pair-page, .pair-cockpit, .pair-cockpit-head, .pair-cockpit-grid" in stylesheet

@@ -2258,7 +2258,7 @@ def test_native_spot_and_futures_routes_sample_inside_web_process() -> None:
 def test_live_chart_surface_explains_series_and_streams_exact_route() -> None:
     html = server.render_live_spread_chart(_route()["route_key"], [], "1h")
 
-    assert "$50 VWAP" in html
+    assert f"{server.PROBE_LABEL} VWAP" in html
     assert "In % · open" in html
     assert "Out % · close" in html
     assert "?live=1&amp;" not in html

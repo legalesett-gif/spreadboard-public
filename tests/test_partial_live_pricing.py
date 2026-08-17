@@ -24,7 +24,9 @@ def _route(**overrides) -> dict:
         "short_bid": 1.10,
         "funding_daily_pct": 0.2,
         "age_min": 0.1,
-        "depth_usd": 50.0,
+        # The stored depth a prior scan verified. Tied to the probe so the
+        # fixture keeps representing "already verified at the current size".
+        "depth_usd": api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD,
         "depth_unverified": False,
     }
     route.update(overrides)
@@ -35,8 +37,13 @@ class _Book:
     """A live book as api_spreads reads it: bids, asks and a quote timestamp."""
 
     def __init__(self, bid: float, ask: float) -> None:
-        self.bids = [[bid, 100.0]]
-        self.asks = [[ask, 100.0]]
+        # Sized from the probe rather than a literal: a fixture holding $100 of
+        # depth silently stops proving anything the moment the probe is raised
+        # past it, and the failure looks like a pricing bug rather than a
+        # too-small book.
+        size = api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD * 2.0
+        self.bids = [[bid, size / bid]]
+        self.asks = [[ask, size / ask]]
         self.quote_ts_us = 1_700_000_100_000_000
 
 

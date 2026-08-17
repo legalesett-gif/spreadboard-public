@@ -612,7 +612,7 @@ LIVE_BOOK_MAX_AGE_SECONDS = max(
     float(os.environ.get("SPREADBOARD_LIVE_BOOK_AGE_SECONDS", "90")),
 )
 LIVE_BOOK_TARGET_NOTIONAL_USD = float(
-    os.environ.get("SPREADBOARD_LIVE_BOOK_NOTIONAL_USD", "50")
+    os.environ.get("SPREADBOARD_LIVE_BOOK_NOTIONAL_USD", "500")
 )
 
 

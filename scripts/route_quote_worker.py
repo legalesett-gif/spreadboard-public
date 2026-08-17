@@ -29,7 +29,7 @@ def main() -> int:
     try:
         result = refresher.quote_route(
             row,
-            target_notional_usd=float(os.environ.get("SPREADBOARD_CHART_NOTIONAL_USD", "50")),
+            target_notional_usd=float(os.environ.get("SPREADBOARD_CHART_NOTIONAL_USD", "500")),
         )
     finally:
         refresher.close()

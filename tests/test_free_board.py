@@ -106,7 +106,7 @@ def test_the_visible_rows_are_the_same_component_a_member_sees(
 
     assert 'class="token-route-group"' in html
     assert "Best pair" in html
-    assert "$50 VWAP" in html
+    assert f"{server.PROBE_LABEL} VWAP" in html
     assert "Best-route funding" in html
 
 

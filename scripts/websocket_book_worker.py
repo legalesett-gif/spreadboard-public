@@ -34,6 +34,15 @@ FAST_QUOTE_PATH = RUNTIME_DIR / "api_discovery_fast_quotes.json"
 ACCOUNTS_PATH = RUNTIME_DIR / "spreadboard_accounts.sqlite3"
 MAX_SUBSCRIPTIONS = max(20, int(os.environ.get("SPREADBOARD_WS_BOOKS", "160")))
 RECONCILE_SECONDS = max(3.0, float(os.environ.get("SPREADBOARD_WS_RECONCILE_SECONDS", "10")))
+#: Floor on how often the subscription set is recomputed. Selection walks ten
+#: board lanes over a 62.7MB snapshot and measured 158 SECONDS in production,
+#: while the files it keys on (the fast-quote file, the accounts WAL) change
+#: every few minutes, so the mtime check alone re-selected almost every tick.
+#: The routes worth streaming do not turn over in ten seconds; this does.
+DESIRED_REFRESH_SECONDS = max(
+    RECONCILE_SECONDS,
+    float(os.environ.get("SPREADBOARD_WS_SELECT_SECONDS", "300")),
+)
 WRITE_INTERVAL_SECONDS = max(0.1, float(os.environ.get("SPREADBOARD_WS_WRITE_SECONDS", "0.25")))
 
 LegKey = tuple[str, str, str]
@@ -105,10 +114,12 @@ class BookWorker:
         #: Legs a venue refuses to serve without credentials. Kept out of the
         #: reconcile so they are not resubscribed every ten seconds.
         self._unavailable: set[LegKey] = set()
+        #: Monotonic stamp of the last selection, for the refresh floor.
+        self._desired_computed_at: float = -DESIRED_REFRESH_SECONDS
 
     async def run(self) -> None:
         while not self.stop.is_set():
-            desired = self._desired_legs_cached() - self._unavailable
+            desired = (await self._desired_legs_cached()) - self._unavailable
             for key in set(self.tasks) - desired:
                 self.tasks.pop(key).cancel()
             for key in desired - set(self.tasks):
@@ -140,15 +151,28 @@ class BookWorker:
             return False
         return True
 
-    def _desired_legs_cached(self) -> set[LegKey]:
-        """Re-read the subscription list only when the snapshot actually changes.
+    async def _desired_legs_cached(self) -> set[LegKey]:
+        """Re-read the subscription list rarely, and never on the event loop.
 
-        This ran every reconcile tick, parsing the whole snapshot each time. Once
-        the board grew that meant re-parsing 77MB every ten seconds -- seconds of
-        CPU and hundreds of megabytes of allocation per cycle -- and the worker
-        spent all its time doing that instead of streaming. The feed went silent
-        for thirteen minutes while the file kept being re-read.
+        Keying on file mtimes was not enough of a brake. Selection walks ten
+        board lanes across a 62.7MB snapshot -- measured at 158 seconds -- while
+        the fast-quote file and the accounts WAL it stats change every few
+        minutes, so the signature differed on nearly every tick.
+
+        Worse, it ran inline. For those 158 seconds no `watch_order_book`
+        coroutine could be scheduled at all, so the worker streamed only in the
+        gaps between selections: 96 legs wanted, 17 books written, and the few
+        that landed belonged to venues carrying one or two legs. It also
+        allocated a fresh parse of that snapshot each pass, which is what drove
+        the collector cgroup to its memory ceiling.
+
+        A time floor bounds how often the cost is paid, and a worker thread
+        keeps the sockets ticking while it is paid.
         """
+        now = time.monotonic()
+        if self._desired and (now - self._desired_computed_at) < DESIRED_REFRESH_SECONDS:
+            return self._desired
+
         def stamp(path: Path) -> int | None:
             try:
                 return path.stat().st_mtime_ns
@@ -162,8 +186,11 @@ class BookWorker:
             stamp(ACCOUNTS_PATH),
             stamp(accounts_wal),
         )
-        if signature != self._desired_signature:
-            self._desired = _desired_legs(
+        self._desired_computed_at = now
+        if signature != self._desired_signature or not self._desired:
+            # Off the event loop: the sockets keep streaming while this runs.
+            self._desired = await asyncio.to_thread(
+                _desired_legs,
                 SNAPSHOT_PATH,
                 limit=MAX_SUBSCRIPTIONS,
                 accounts_path=ACCOUNTS_PATH,

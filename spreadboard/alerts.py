@@ -888,7 +888,10 @@ def _quote_custom_alert_route(route: dict[str, Any]) -> dict[str, Any] | None:
     if native:
         refresher = FastQuoteRefresher()
         try:
-            result = refresher.quote_route(route, target_notional_usd=50.0)
+            result = refresher.quote_route(
+                route,
+                target_notional_usd=api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD,
+            )
         except Exception:  # noqa: BLE001 - one route must not stop every user's alerts.
             return None
         finally:

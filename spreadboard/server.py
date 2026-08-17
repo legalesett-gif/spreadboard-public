@@ -142,10 +142,15 @@ _CHART_SAMPLE_SLOTS = threading.BoundedSemaphore(
     max(1, int(os.environ.get("SPREADBOARD_CHART_SAMPLE_CONCURRENCY", "2")))
 )
 # Member-requested size quotes are deliberately isolated from the canonical
-# $50 scanner and chart history.  A short shared cache and single-flight keep
+# canonical scanner and chart history.  A short shared cache and single-flight keep
 # several members checking the same route/size from multiplying exchange and
 # DEX-provider calls, while the bounded slot count protects the resident board
 # workers from an interactive quote burst.
+#: How the probe size is written wherever the board explains itself. Derived so
+#: raising the probe cannot leave "$50" behind in copy that then contradicts the
+#: number the depth gate actually used.
+PROBE_LABEL = f"${api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD:,.0f}"
+
 _SIZE_QUOTE_LOCK = threading.Lock()
 _SIZE_QUOTE_CACHE: dict[tuple[str, float], tuple[float, dict[str, Any]]] = {}
 _SIZE_QUOTE_INFLIGHT: dict[tuple[str, float], threading.Event] = {}
@@ -4091,7 +4096,7 @@ def api_size_quote(
 ) -> dict[str, Any]:
     """Reprice one canonical route at a member's intended one-leg notional.
 
-    The result is intentionally not written to the $50 board or its history:
+    The result is intentionally not written to the canonical board or its history:
     mixing several private notionals into one ranked time series would make the
     public spread history internally inconsistent.  Authentication and active
     subscription gates are applied by the request handler before this runs.
@@ -4328,7 +4333,7 @@ def _member_size_quote_payload(
         },
         "limitations": [
             "This quote proves only the requested one-leg notional and is not an order.",
-            "It is isolated from the standard $50 rankings and history.",
+            f"It is isolated from the standard {PROBE_LABEL} rankings and history.",
             "Gas, price impact and MEV fields remain unknown when the quote provider does not report them.",
             "A transfer status or timing observation is not a guarantee of exchange crediting.",
         ],
@@ -4727,7 +4732,10 @@ def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
 
             refresher = FastQuoteRefresher()
             try:
-                worker = refresher.quote_route(row, target_notional_usd=50.0)
+                worker = refresher.quote_route(
+                    row,
+                    target_notional_usd=api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD,
+                )
             finally:
                 refresher.close()
             worker_exit_code = 0 if worker.get("status") == "ok" else 1
@@ -4755,7 +4763,10 @@ def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
                 "inserted": inserted,
                 "row": quoted_row,
                 "quote_ts_us": quoted_row.get("quote_ts_us"),
-                "target_notional_usd": worker.get("target_notional_usd") or 50.0,
+                "target_notional_usd": (
+                    worker.get("target_notional_usd")
+                    or api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD
+                ),
                 "duration_ms": round((time.monotonic() - started) * 1000),
             }
             if persistence is not None:
@@ -4907,7 +4918,7 @@ def _current_history_point(row: dict[str, Any]) -> dict[str, Any]:
             else None
         ),
         "sample_source": "current_board_snapshot",
-        "target_notional_usd": 50.0,
+        "target_notional_usd": api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD,
     }
 
 
@@ -5503,7 +5514,7 @@ def render_markets_page(
         render_market_metric(
             "Largest matched edge",
             fmt_pct(summary.get("max_depth_weighted_spread_pct")),
-            "$50 VWAP",
+            f"{PROBE_LABEL} VWAP",
             live_hook="live-max-spread",
         )
     }
@@ -6153,11 +6164,11 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         else group.get("best_edge_pct")
     ) if spread_current else None
     spread_note = (
-        f"$50 VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book"
+        f"{PROBE_LABEL} VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book"
         if matched is not None
         else f"{fmt_pct(best.get('executable_spread_pct'))} top book · depth not measured"
         if catalog_coverage
-        else f"matched $50 VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book"
+        else f"matched {PROBE_LABEL} VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book"
     ) if spread_current else "waiting for a two-leg matched quote"
     return f"""
     <details class="token-route-group" id="token-{h(group.get("token"))}"
@@ -6287,7 +6298,7 @@ def render_rankings_page(query: dict[str, list[str]]) -> str:
         </div>
       </header>
       <section class="ranking-explainer">
-        <article><span>Spread now</span><strong>Matched $50 VWAP</strong><p>Price dislocation on the best currently visible route. It does not claim convergence.</p></article>
+        <article><span>Spread now</span><strong>Matched {PROBE_LABEL} VWAP</strong><p>Price dislocation on the best currently visible route. It does not claim convergence.</p></article>
         <article><span>Funding now</span><strong>Projected or settled 24h</strong><p>Positive paired carry the displayed long-short direction receives. Current and historical figures stay labelled.</p></article>
         <article><span>Settled windows</span><strong>Venue payment history</strong><p>Actual public settlement events over 24h, 7d, and 30d. A dash means insufficient exact-symbol history.</p></article>
         <article><span>Pair coverage</span><strong>Complete catalogue capacity</strong><p>All exact spot, futures, and verified DEX market combinations known for the token, independent of the live top-route quota.</p></article>
@@ -6387,7 +6398,7 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         else row.get("executable_spread_pct")
     ) if spread_current else None
     spread_detail = (
-        f'{"$50 VWAP · " if row.get("depth_weighted_spread_pct") is not None else ""}'
+        f'{PROBE_LABEL + " VWAP · " if row.get("depth_weighted_spread_pct") is not None else ""}'
         f'{fmt_pct(row.get("executable_spread_pct"))} top book'
         f'{" · depth not measured" if row.get("depth_unverified") else ""}'
         if spread_current
@@ -6763,7 +6774,7 @@ def render_net_edge_dialog() -> str:
         </div>
         <div class="net-edge-requote">
           <button type="button" data-net-requote>Quote current books at this size</button>
-          <span data-net-quote-state>The opening basis currently uses the standardized $50 matched quote.</span>
+          <span data-net-quote-state>The opening basis currently uses the standardized {PROBE_LABEL} matched quote.</span>
         </div>
         <section class="net-edge-results" aria-live="polite">
           <article><span>Opening basis</span><strong data-net-opening>—</strong></article>
@@ -6828,7 +6839,7 @@ NET_EDGE_SCRIPT = r"""
       state.textContent = `Using exact $${route.exact_quote_notional.toLocaleString()} matched spread ${route.exact_matched_edge_pct >= 0 ? '+' : ''}${route.exact_matched_edge_pct.toFixed(3)}%${gas}.`;
       calculate();
     } catch (error) {
-      state.textContent = `Exact-size quote unavailable: ${String(error.message || error).replaceAll('_', ' ')}. The calculator still uses the standardized $50 quote.`;
+      state.textContent = `Exact-size quote unavailable: ${String(error.message || error).replaceAll('_', ' ')}. The calculator still uses the standardized {PROBE_LABEL} quote.`;
       route.exact_quote_notional = null; route.exact_matched_edge_pct = null; calculate();
     } finally { button.disabled = false; }
   }
@@ -6839,7 +6850,7 @@ NET_EDGE_SCRIPT = r"""
     route.board_matched_edge_pct = route.matched_edge_pct;
     route.exact_quote_notional = null;
     route.exact_matched_edge_pct = null;
-    dialog.querySelector('[data-net-quote-state]').textContent = 'The opening basis currently uses the standardized $50 matched quote.';
+    dialog.querySelector('[data-net-quote-state]').textContent = 'The opening basis currently uses the standardized {PROBE_LABEL} matched quote.';
     dialog.querySelector('[data-net-route]').textContent = `${route.token || 'Route'} · matched edge ${Number(route.matched_edge_pct || 0).toFixed(3)}%`;
     calculate();
     if (typeof dialog.showModal === 'function') dialog.showModal();
@@ -7121,7 +7132,7 @@ def rail_text(value: Any) -> str:
 def render_market_lane(title: str, rows: list[dict[str, Any]], kind: str) -> str:
     return f"""
     <section class="market-side-panel">
-      <div class="panel-head flat"><div><h2>{h(title)}</h2><p>{"Unique assets ranked by matched $50 VWAP edge" if kind == "edge" else "Unique assets ranked by paired carry"}</p></div></div>
+      <div class="panel-head flat"><div><h2>{h(title)}</h2><p>{"Unique assets ranked by matched " + PROBE_LABEL + " VWAP edge" if kind == "edge" else "Unique assets ranked by paired carry"}</p></div></div>
       <div class="market-mini-list">
         {"".join(render_market_mini(row, kind) for row in rows[:8]) or '<p class="watch-empty">No rows in this lane.</p>'}
       </div>
@@ -7769,7 +7780,7 @@ def render_funding_page(
         render_market_metric(
             "Largest matched basis",
             fmt_pct(summary.get("max_depth_weighted_spread_pct")),
-            "$50 VWAP",
+            f"{PROBE_LABEL} VWAP",
             live_hook="live-max-spread",
         )
     }
@@ -8226,7 +8237,7 @@ def render_pair_size_quote_panel(row: dict[str, Any]) -> str:
         <div>
           <span class="page-kicker">Matched-size check</span>
           <h2>Quote this route at your intended size</h2>
-          <p>The board stays standardized at $50. This read-only check walks the current books or requests a fresh directional DEX quote for your chosen one-leg notional.</p>
+          <p>The board stays standardized at {PROBE_LABEL}. This read-only check walks the current books or requests a fresh directional DEX quote for your chosen one-leg notional.</p>
         </div>
         <span class="read-only-pill">Isolated quote</span>
       </div>
@@ -8240,7 +8251,7 @@ def render_pair_size_quote_panel(row: dict[str, Any]) -> str:
         </div>
         <button class="primary" type="submit" data-size-submit>Quote exact size</button>
       </form>
-      <p class="size-quote-state" data-size-state>Not quoted yet. The figures elsewhere on this page remain the canonical $50 comparison.</p>
+      <p class="size-quote-state" data-size-state>Not quoted yet. The figures elsewhere on this page remain the canonical {PROBE_LABEL} comparison.</p>
       <div class="size-quote-results" data-size-results hidden aria-live="polite">
         <article><span>Top book spread</span><strong data-size-top>—</strong><em>best visible prices</em></article>
         <article><span>Matched spread</span><strong data-size-matched>—</strong><em data-size-matched-note>at requested size</em></article>
@@ -8294,10 +8305,10 @@ def render_pair_size_quote_panel(row: dict[str, Any]) -> str:
           root.querySelector('[data-size-dex]').textContent = dex.length ? dex.map(item => `${{item.side}} · chain ${{item.chain || '?'}} · ${{item.contract || 'identity missing'}} · impact ${{pct(item.price_impact_pct)}} · gas ${{money(item.gas_estimate_usd)}} · MEV ${{item.mev_protection || 'unknown'}}`).join(' | ') : 'No DEX leg on this route';
           const transfer = data.transfer_evidence || {{}};
           root.querySelector('[data-size-transfer]').textContent = transfer.required ? `required · deliverability ${{transfer.deliverable === true ? 'verified now' : transfer.deliverable === false ? 'blocked now' : 'unknown'}} · observed timing ${{numeric(transfer.observed_seconds) ? `${{Number(transfer.observed_seconds).toFixed(0)}}s` : 'unavailable'}}` : 'not required by the current route evidence';
-          state.textContent = `Exact $${{Number(data.target_notional_usd).toLocaleString()}} quote received. It has not changed the $50 rankings or chart history.`;
+          state.textContent = `Exact $${{Number(data.target_notional_usd).toLocaleString()}} quote received. It has not changed the board rankings or chart history.`;
           results.hidden = false; evidence.hidden = false;
         }} catch (error) {{
-          state.textContent = `Exact-size quote unavailable: ${{String(error.message || error).replaceAll('_', ' ')}}. Try again; the canonical $50 board remains unchanged.`;
+          state.textContent = `Exact-size quote unavailable: ${{String(error.message || error).replaceAll('_', ' ')}}. Try again; the canonical {PROBE_LABEL} board remains unchanged.`;
         }} finally {{ submit.disabled = false; }}
       }});
     }})();
@@ -8892,7 +8903,7 @@ def render_live_spread_chart(
     <div class="live-spread-chart" data-live-spread-chart>
       <div class="live-chart-legend" aria-label="Chart series">
         <button class="entry active" type="button" data-series-toggle="entry"><i></i>In % · open <strong data-latest-entry>—</strong></button>
-        <button class="matched" type="button" data-series-toggle="matched"><i></i>$50 VWAP <strong data-latest-matched>—</strong></button>
+        <button class="matched" type="button" data-series-toggle="matched"><i></i>{PROBE_LABEL} VWAP <strong data-latest-matched>—</strong></button>
         <button class="exit active" type="button" data-series-toggle="exit"><i></i>Out % · close <strong data-latest-exit>—</strong></button>
         <span class="funding-a"><i></i>Long fund <strong data-latest-long-funding>—</strong></span>
         <span class="funding-b"><i></i>Short fund <strong data-latest-short-funding>—</strong></span>
@@ -9021,7 +9032,7 @@ def render_live_spread_chart(
           }},
         );
         chartSeries.entry = addLine(colors.matched, 'In % · open', 3);
-        chartSeries.matched = addLine('#4f8cff', '$50 VWAP', 1);
+        chartSeries.matched = addLine('#4f8cff', '{PROBE_LABEL} VWAP', 1);
         chartSeries.exit = addLine(colors.exit, 'Out % · close', 2);
         chartSeries.longFunding = addLine('#1ebf8f', 'Long funding', 2);
         chartSeries.shortFunding = addLine('#ff7a82', 'Short funding', 2);
@@ -9131,7 +9142,7 @@ def render_live_spread_chart(
         tooltip.innerHTML = `
           <time>${{timeLabel(row.ts, true)}}</time>
           <span>In % · open<strong>${{pct(row.entry)}}</strong></span>
-          <span>$50 VWAP<strong>${{pct(row.matched)}}</strong></span>
+          <span>{PROBE_LABEL} VWAP<strong>${{pct(row.matched)}}</strong></span>
           <span>Out % · close<strong>${{pct(row.exit)}}</strong></span>
           <span>Long funding<strong>${{pct(row.longFunding)}}</strong></span>
           <span>Short funding<strong>${{pct(row.shortFunding)}}</strong></span>`;
@@ -9177,7 +9188,7 @@ def render_live_spread_chart(
         root.querySelector('[data-latest-exit]').textContent = pct(latest.exit);
         root.querySelector('[data-latest-long-funding]').textContent = pct(latest.longFunding);
         root.querySelector('[data-latest-short-funding]').textContent = pct(latest.shortFunding);
-        if (headline) headline.textContent = `In % ${{pct(latest.entry)}} · $50 VWAP ${{pct(latest.matched)}}`;
+        if (headline) headline.textContent = `In % ${{pct(latest.entry)}} · {PROBE_LABEL} VWAP ${{pct(latest.matched)}}`;
         for (const side of ['long', 'short']) {{
           const funding = latest[`${{side}}Funding`];
           const interval = latest[`${{side}}Interval`];
@@ -11123,7 +11134,7 @@ def render_guide_page() -> str:
             "Arbitrage",
             "/arbitrage",
             "Start here for price gaps. Pick the route type, compare the matched-size spread, inspect both books, fees, rails and token identity, then open the exact pair page.",
-            "A large headline is a lead, not a fill. The $50 matched VWAP is evidence for that size only.",
+            f"A large headline is a lead, not a fill. The {PROBE_LABEL} matched VWAP is evidence for that size only.",
         ),
         (
             "funding",
@@ -11214,7 +11225,7 @@ def render_guide_page() -> str:
           <li><b>Edge %</b> -- how far apart the two prices are right now. Bigger is better, but see the warnings below.</li>
           <li><b>Funding</b> -- a fee paid every few hours between longs and shorts. A positive number on your route means you get paid while you wait. This is often worth more than the gap itself.</li>
           <li><b>APR</b> -- what that funding works out to per year if it stayed the same. It will not stay the same, so treat it as a hint, not a promise.</li>
-          <li><b>24h volume</b> -- what the thinner leg of the route trades in a day. A big edge on a market that trades almost nothing is not a real opportunity. It is not order-book depth: the scan only probes $50, so treat it as a size sanity check, not a fill guarantee.</li>
+          <li><b>24h volume</b> -- what the thinner leg of the route trades in a day. A big edge on a market that trades almost nothing is not a real opportunity. It is not order-book depth: the scan only probes {PROBE_LABEL}, so treat it as a size sanity check, not a fill guarantee.</li>
           <li><b>Age</b> -- how old the quote is. Older quotes are less reliable.</li>
           <li><b>D / W</b> -- whether deposits and withdrawals are open. <b>SHUT</b> means you cannot move the coin, which kills any trade that needs a transfer.</li>
           <li><b>?</b> -- we have not confirmed that both venues list the same underlying token. Check the contract yourself before trusting the number.</li>
@@ -11607,9 +11618,9 @@ def render_account_page(
         {render_account_kpi("Open-position PnL", fmt_signed_money(summary.get("open_position_pnl_usd")), "mark movement + settled funding - fees")}
         {render_account_kpi("Open settled funding", fmt_signed_money(summary.get("open_position_funding_usd")), "private exchange ledger")}
         {render_account_kpi("Open return", fmt_signed_pct(summary.get("open_position_return_pct"), digits=2), "on allocated capital")}
-        {render_account_kpi("Capital deployed", fmt_money(summary.get("deployed_capital_usd")), "committed across open positions")}
-        {render_account_kpi("Notional controlled", fmt_money(summary.get("deployed_notional_usd")), "larger leg per position, not the sum")}
-        {render_account_kpi("Return on deployed capital", fmt_signed_pct(summary.get("open_return_on_capital_pct"), digits=2), "what the money at work is earning")}
+        {render_account_kpi("Capital committed", fmt_money(summary.get("deployed_capital_usd")), "both funded legs, long cost + short margin")}
+        {render_account_kpi("Matched notional", fmt_money(summary.get("deployed_notional_usd")), "hedged size per side, one leg")}
+        {render_account_kpi("Return on capital", fmt_signed_pct(summary.get("open_return_on_capital_pct"), digits=2), "earned on every dollar tied up")}
       </section>
       <nav class="account-tabs" aria-label="Account sections"><button class="active" data-account-tab="positions">Positions</button><button data-account-tab="alerts">Alerts <i>{h(len([item for item in notifications if not item.get("read_at")]))}</i></button><button data-account-tab="settings">Settings</button>{'<button data-account-tab="members">Members</button>' if user.can_manage_members else ""}</nav>
       <section data-account-panel="positions">
@@ -11723,13 +11734,14 @@ def render_position_card(item: dict[str, Any]) -> str:
         <span>Transfer costs<strong>{fmt_signed_money(-float(item.get("transfer_costs_usd") or 0.0))}</strong></span>
         <span>Slippage evidence · in fills<strong>{fmt_money(item.get("slippage_costs_usd"))}</strong></span>
         <span>Projected funding / 24h<strong>{fmt_signed_pct(item.get("current_net_funding_24h_pct"), digits=4)}</strong></span>
-        <span>Return<strong>{fmt_signed_pct(item.get("return_pct"), digits=2)}</strong></span>
+        <span>Capital committed<strong>{fmt_money(item.get("capital_committed_usd"))}</strong></span>
+        <span>Return on capital<strong class="{spread_class(item.get("return_on_capital_pct"))}">{fmt_signed_pct(item.get("return_on_capital_pct"), digits=2)}</strong></span>
         <span>{spread_label}<strong>{fmt_signed_pct(item.get("current_marked_spread_pct"), digits=3)}</strong></span>
         <span>Entry spread<strong>{fmt_signed_pct(item.get("entry_spread_pct"), digits=3)}</strong></span>
       </div>
       <p class="position-funding-source">{h(movement_note)}<br>{h(funding_note)}</p>
       {render_position_research_note(item)}
-      <div class="position-legs"><div><span>Long</span><strong>{h(item.get("long_venue"))} · {h(item.get("long_quantity"))}</strong><em>{fmt_price(item.get("long_entry_price"))} → {fmt_price(item.get("long_mark_price"))} · {h(position_mark_basis_label(item.get("long_mark_basis")))}</em><em>Funding {fmt_signed_pct(long_funding.get("rate_pct"), digits=4)} / {h(long_funding.get("interval_hours") or "—")}h</em></div><div><span>Short</span><strong>{h(item.get("short_venue"))} · {h(item.get("short_quantity"))}</strong><em>{fmt_price(item.get("short_entry_price"))} → {fmt_price(item.get("short_mark_price"))} · {h(position_mark_basis_label(item.get("short_mark_basis")))}</em><em>Funding {fmt_signed_pct(short_funding.get("rate_pct"), digits=4)} / {h(short_funding.get("interval_hours") or "—")}h</em></div></div>
+      <div class="position-legs"><div><span>Long</span><strong>{h(item.get("long_venue"))} · {h(item.get("long_quantity"))}</strong><em>Notional {fmt_money(item.get("long_notional_usd"))}</em><em>{fmt_price(item.get("long_entry_price"))} → {fmt_price(item.get("long_mark_price"))} · {h(position_mark_basis_label(item.get("long_mark_basis")))}</em><em>Funding {fmt_signed_pct(long_funding.get("rate_pct"), digits=4)} / {h(long_funding.get("interval_hours") or "—")}h</em></div><div><span>Short</span><strong>{h(item.get("short_venue"))} · {h(item.get("short_quantity"))}</strong><em>Notional {fmt_money(item.get("short_notional_usd"))}</em><em>{fmt_price(item.get("short_entry_price"))} → {fmt_price(item.get("short_mark_price"))} · {h(position_mark_basis_label(item.get("short_mark_basis")))}</em><em>Funding {fmt_signed_pct(short_funding.get("rate_pct"), digits=4)} / {h(short_funding.get("interval_hours") or "—")}h</em></div></div>
       <footer><span>Opened {h(item.get("opened_at"))}</span><div>{render_position_rules(item.get("alert_rules") or [])}<button type="button" data-position-edit>Edit position</button><button type="button" data-position-action="alert">Add alert</button>{'<button type="button" data-position-action="close">Close position</button>' if item.get("status") == "open" else ""}<button class="danger" type="button" data-position-action="delete">Delete entry</button><a href="/charts?{h(chart_query)}">Chart since entry</a></div></footer>
     </article>"""
 

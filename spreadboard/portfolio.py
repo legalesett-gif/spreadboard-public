@@ -226,6 +226,7 @@ def _hydrate_position(
         quote_status = "refreshing"
     else:
         quote_status = "unavailable"
+    _capital = capital_metrics({**position, "total_pnl_usd": total_pnl})
     result = dict(position)
     result.update(
         {
@@ -291,12 +292,11 @@ def _hydrate_position(
             # estimate. New UI/API consumers should use the explicit key.
             "current_exit_spread_pct": marked_spread,
             "current_marked_spread_pct": marked_spread,
-            "return_pct": (
-                total_pnl / float(position["capital_usd"]) * 100.0
-                if total_pnl is not None and _number(position.get("capital_usd"))
-                else None
-            ),
-            **capital_metrics({**position, "total_pnl_usd": total_pnl}),
+            # Measured against both funded legs. This divided by the raw
+            # `capital_usd` column, which the position form labels "per leg",
+            # so every return on the page read about twice its true size.
+            "return_pct": _capital.get("return_on_capital_pct"),
+            **_capital,
         }
     )
     return result
@@ -910,26 +910,39 @@ def capital_metrics(position: dict[str, Any]) -> dict[str, Any]:
         else None
     )
     sides = [value for value in (long_usd, short_usd) if value is not None]
-    notional = max(sides) if sides else None
+    # Only the smaller leg is hedged. Whatever the larger one carries beyond it
+    # is naked exposure, and calling that "farm size" hides a directional bet.
+    matched = min(sides) if sides else None
+    unhedged = (max(sides) - min(sides)) if len(sides) == 2 else None
 
-    capital = _number(position.get("capital_usd"))
-    capital = capital if capital and capital > 0 else None
+    # The operator's own per-leg figure. Kept, but never used as the position
+    # total: the column is labelled "Allocated capital per leg" in the form.
+    allocated_per_leg = _number(position.get("capital_usd"))
+    allocated_per_leg = (
+        allocated_per_leg if allocated_per_leg and allocated_per_leg > 0 else None
+    )
+
+    # Both legs are funded, so both legs are capital. Fills are the truth when
+    # present; the per-leg allocation doubled is the fallback when they are not.
+    if sides:
+        committed = sum(sides)
+    elif allocated_per_leg is not None:
+        committed = allocated_per_leg * 2.0
+    else:
+        committed = None
+    committed = committed if committed and committed > 0 else None
+
     pnl = _number(position.get("total_pnl_usd"))
     return {
         "long_notional_usd": long_usd,
         "short_notional_usd": short_usd,
-        "notional_usd": notional,
-        "capital_usd": capital,
-        # How hard the committed money is working. None rather than 1.0 when
-        # capital is unknown: "unlevered" and "unrecorded" are different facts.
-        "capital_efficiency_x": (
-            round(notional / capital, 4)
-            if notional is not None and capital is not None
-            else None
-        ),
+        "matched_notional_usd": matched,
+        "unhedged_notional_usd": unhedged,
+        "capital_committed_usd": committed,
+        "allocated_capital_per_leg_usd": allocated_per_leg,
         "return_on_capital_pct": (
-            round(pnl / capital * 100.0, 4)
-            if pnl is not None and capital is not None
+            round(pnl / committed * 100.0, 4)
+            if pnl is not None and committed is not None
             else None
         ),
     }
@@ -951,8 +964,8 @@ def deployed_capital_summary(positions: list[dict[str, Any]]) -> dict[str, Any]:
     pnl_known = True
     for item in open_positions:
         metrics = capital_metrics(item)
-        deployed += float(metrics["capital_usd"] or 0.0)
-        notional += float(metrics["notional_usd"] or 0.0)
+        deployed += float(metrics["capital_committed_usd"] or 0.0)
+        notional += float(metrics["matched_notional_usd"] or 0.0)
         value = _number(item.get("total_pnl_usd"))
         if value is None:
             pnl_known = False
@@ -961,9 +974,6 @@ def deployed_capital_summary(positions: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "deployed_capital_usd": round(deployed, 4),
         "deployed_notional_usd": round(notional, 4),
-        "portfolio_efficiency_x": (
-            round(notional / deployed, 4) if deployed > 0 else None
-        ),
         "open_return_on_capital_pct": (
             round(pnl_total / deployed * 100.0, 4)
             if deployed > 0 and pnl_known
