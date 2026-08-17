@@ -86,6 +86,9 @@ def portfolio_snapshot(
             _evaluate_position_alerts(user.id, item, accounts_path=accounts_path)
     notifications = accounts.list_notifications(user.id, db_path=accounts_path)
     totals = _portfolio_totals(hydrated, user.monthly_capital_usd)
+    # What the money currently at work is earning, kept separate from the
+    # monthly figure: one asks how the month went, the other what is deployed.
+    totals.update(deployed_capital_summary(hydrated))
     return {
         "ok": True,
         "generated_at": datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -293,6 +296,7 @@ def _hydrate_position(
                 if total_pnl is not None and _number(position.get("capital_usd"))
                 else None
             ),
+            **capital_metrics({**position, "total_pnl_usd": total_pnl}),
         }
     )
     return result
@@ -880,3 +884,89 @@ def _number(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def capital_metrics(position: dict[str, Any]) -> dict[str, Any]:
+    """Notional controlled, capital committed, and the return on that capital.
+
+    Notional and capital are deliberately distinct. A delta-neutral pair run at
+    2x controls twice the notional its capital would suggest, and reporting one
+    as the other overstates efficiency exactly where a farm looks most
+    attractive.
+
+    The position notional is the larger leg rather than the sum: a hedged pair
+    is one position expressed twice, and adding the legs double counts it.
+    """
+    long_usd = (
+        float(position["long_quantity"]) * float(position["long_entry_price"])
+        if _number(position.get("long_quantity")) is not None
+        and _number(position.get("long_entry_price")) is not None
+        else None
+    )
+    short_usd = (
+        float(position["short_quantity"]) * float(position["short_entry_price"])
+        if _number(position.get("short_quantity")) is not None
+        and _number(position.get("short_entry_price")) is not None
+        else None
+    )
+    sides = [value for value in (long_usd, short_usd) if value is not None]
+    notional = max(sides) if sides else None
+
+    capital = _number(position.get("capital_usd"))
+    capital = capital if capital and capital > 0 else None
+    pnl = _number(position.get("total_pnl_usd"))
+    return {
+        "long_notional_usd": long_usd,
+        "short_notional_usd": short_usd,
+        "notional_usd": notional,
+        "capital_usd": capital,
+        # How hard the committed money is working. None rather than 1.0 when
+        # capital is unknown: "unlevered" and "unrecorded" are different facts.
+        "capital_efficiency_x": (
+            round(notional / capital, 4)
+            if notional is not None and capital is not None
+            else None
+        ),
+        "return_on_capital_pct": (
+            round(pnl / capital * 100.0, 4)
+            if pnl is not None and capital is not None
+            else None
+        ),
+    }
+
+
+def deployed_capital_summary(positions: list[dict[str, Any]]) -> dict[str, Any]:
+    """What the money currently at work is earning, across everything open.
+
+    Closed positions returned their capital, so they are excluded: including
+    them answers "how did the month go", which the monthly figure already
+    covers, rather than "what is deployed right now actually returning".
+    """
+    open_positions = [
+        item for item in positions if str(item.get("status") or "open") == "open"
+    ]
+    deployed = 0.0
+    notional = 0.0
+    pnl_total = 0.0
+    pnl_known = True
+    for item in open_positions:
+        metrics = capital_metrics(item)
+        deployed += float(metrics["capital_usd"] or 0.0)
+        notional += float(metrics["notional_usd"] or 0.0)
+        value = _number(item.get("total_pnl_usd"))
+        if value is None:
+            pnl_known = False
+        else:
+            pnl_total += float(value)
+    return {
+        "deployed_capital_usd": round(deployed, 4),
+        "deployed_notional_usd": round(notional, 4),
+        "portfolio_efficiency_x": (
+            round(notional / deployed, 4) if deployed > 0 else None
+        ),
+        "open_return_on_capital_pct": (
+            round(pnl_total / deployed * 100.0, 4)
+            if deployed > 0 and pnl_known
+            else None
+        ),
+    }

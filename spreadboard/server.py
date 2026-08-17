@@ -11607,6 +11607,9 @@ def render_account_page(
         {render_account_kpi("Open-position PnL", fmt_signed_money(summary.get("open_position_pnl_usd")), "mark movement + settled funding - fees")}
         {render_account_kpi("Open settled funding", fmt_signed_money(summary.get("open_position_funding_usd")), "private exchange ledger")}
         {render_account_kpi("Open return", fmt_signed_pct(summary.get("open_position_return_pct"), digits=2), "on allocated capital")}
+        {render_account_kpi("Capital deployed", fmt_money(summary.get("deployed_capital_usd")), "committed across open positions")}
+        {render_account_kpi("Notional controlled", fmt_money(summary.get("deployed_notional_usd")), "larger leg per position, not the sum")}
+        {render_account_kpi("Return on deployed capital", fmt_signed_pct(summary.get("open_return_on_capital_pct"), digits=2), "what the money at work is earning")}
       </section>
       <nav class="account-tabs" aria-label="Account sections"><button class="active" data-account-tab="positions">Positions</button><button data-account-tab="alerts">Alerts <i>{h(len([item for item in notifications if not item.get("read_at")]))}</i></button><button data-account-tab="settings">Settings</button>{'<button data-account-tab="members">Members</button>' if user.can_manage_members else ""}</nav>
       <section data-account-panel="positions">
