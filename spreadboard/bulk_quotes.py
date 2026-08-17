@@ -470,11 +470,15 @@ def _ourbit_depth_priority() -> list[str]:
     try:
         from spreadboard import api_spreads
 
-        data = api_spreads.load_spreads(limit=250)
+        # The whole board, not its first page. Sourcing priority from the top
+        # 250 meant a token ranked below that could never receive depth, and
+        # without depth its spread cannot form -- so it could never rank higher
+        # either. UNITREE sat in exactly that loop.
+        data = api_spreads.load_spreads(limit=None)
     except Exception:  # noqa: BLE001 - priority is an optimisation, never a requirement
         return []
     tokens: list[str] = []
-    for group in (data.get("groups") or [])[:250]:
+    for group in data.get("groups") or []:
         token = str(group.get("token") or "").strip().upper()
         if token and token not in tokens:
             tokens.append(token)

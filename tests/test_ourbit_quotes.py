@@ -366,3 +366,15 @@ def test_the_board_priority_never_breaks_the_sweep(monkeypatch) -> None:
         bulk_quotes, "api_spreads", None, raising=False
     )
     assert isinstance(bulk_quotes._ourbit_depth_priority(), list)
+
+
+def test_depth_priority_covers_the_whole_board_not_just_page_one() -> None:
+    """A token below the first page could never earn depth, and without depth
+    its spread never forms, so it could never climb. UNITREE sat in that loop."""
+    import inspect
+
+    from spreadboard import bulk_quotes
+
+    source = inspect.getsource(bulk_quotes._ourbit_depth_priority)
+    assert "limit=None" in source
+    assert "[:250]" not in source
