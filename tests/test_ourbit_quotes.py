@@ -395,3 +395,63 @@ def test_priority_itself_rotates_so_no_priority_symbol_starves() -> None:
     seen = set(first) | set(second) | set(third)
     assert len(seen) == 30, "each sweep must reach different priority symbols"
     assert not set(first) & set(second)
+
+
+# --------------------------------------------------------------------------
+# A one-level ticker must never overwrite a fifty-level book
+# --------------------------------------------------------------------------
+
+
+def test_ticker_books_do_not_overwrite_symbols_that_have_live_depth() -> None:
+    """live_books is keyed venue|market_type|symbol, so the ticker sweep and the
+    depth sweep write the SAME row. Depth covers 25 symbols a pass out of 711,
+    so the next ticker pass was flattening every book outside that slice back to
+    one level. public_rest_l2 could never grow past the last slice fetched."""
+    written = []
+
+    class _Store:
+        def put_many(self, books):
+            written.extend(books); return len(books)
+
+    count = ourbit_quotes.sweep(
+        store=_Store(),
+        fetch_spot=lambda: SPOT_PAYLOAD,
+        fetch_futures=lambda: FUTURES_PAYLOAD,
+        with_depth=False,
+        protected_symbols={"UNITREE/USDT:USDT"},
+    )
+
+    symbols = {b["symbol"] for b in written}
+    assert "UNITREE/USDT:USDT" not in symbols, "depth was clobbered by a ticker"
+    assert "BTC/USDT:USDT" in symbols, "unprotected symbols must still refresh"
+    assert count == len(written)
+
+
+def test_protection_only_covers_futures_not_spot() -> None:
+    """Spot tickers carry real sizes and are the only source for spot."""
+    written = []
+
+    class _Store:
+        def put_many(self, books):
+            written.extend(books); return len(books)
+
+    ourbit_quotes.sweep(
+        store=_Store(), fetch_spot=lambda: SPOT_PAYLOAD,
+        fetch_futures=lambda: FUTURES_PAYLOAD, with_depth=False,
+        protected_symbols={"BTC/USDT"},
+    )
+
+    assert "BTC/USDT" in {b["symbol"] for b in written}
+
+
+def test_the_store_reports_which_symbols_already_hold_depth() -> None:
+    class _Conn:
+        def execute(self, *_a):
+            return [("Ourbit|Futures|UNITREE/USDT:USDT",)]
+
+    class _Store:
+        path = ":memory:"
+        _conn = _Conn()
+
+    found = ourbit_quotes.symbols_with_live_depth(_Store(), max_age_seconds=600)
+    assert "UNITREE/USDT:USDT" in found

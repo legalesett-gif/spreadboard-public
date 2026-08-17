@@ -148,6 +148,7 @@ def sweep(
     now_us: int | None = None,
     with_depth: bool = True,
     depth_priority: list[str] | None = None,
+    protected_symbols: set[str] | None = None,
 ) -> int:
     """Write every priced Ourbit symbol into the live book store.
 
@@ -156,9 +157,18 @@ def sweep(
     """
     stamp = now_us if now_us is not None else int(time.time() * 1_000_000)
     books: list[dict[str, Any]] = []
+    # live_books is keyed venue|market_type|symbol, so a ticker book and a depth
+    # book for the same contract are the SAME row. Depth reaches only a slice
+    # of 711 contracts per pass, so an unguarded ticker pass flattened every
+    # book outside that slice straight back to one level.
+    guarded = {str(s) for s in (protected_symbols or set())}
     for fetch, build in ((fetch_spot, spot_books), (fetch_futures, futures_books)):
         try:
-            books.extend(build(fetch(), now_us=stamp))
+            produced = build(fetch(), now_us=stamp)
+            books.extend(
+                book for book in produced
+                if not (book["market_type"] == "Futures" and book["symbol"] in guarded)
+            )
         except Exception:
             # One endpoint must not stop the sweep, but a venue that quietly
             # stops answering should be visible rather than merely absent.
@@ -341,3 +351,23 @@ def _depth_rotation(symbols: list[str], count: int) -> list[str]:
     _DEPTH_CURSOR["index"] = (start + count) % len(symbols)
     doubled = symbols + symbols
     return doubled[start : start + count]
+
+
+def symbols_with_live_depth(store: Any, *, max_age_seconds: float = 900.0) -> set[str]:
+    """Ourbit futures symbols already holding a recent venue-native L2 book.
+
+    Read straight from the store so protection survives across sweeps, not just
+    within one: the clobbering that made depth look uncollectable happened
+    between passes, never inside them.
+    """
+    cutoff = int((time.time() - max_age_seconds) * 1_000_000)
+    try:
+        rows = store._conn.execute(
+            "SELECT cache_key FROM live_books WHERE venue = ? AND source = ? "
+            "AND quote_ts_us > ?",
+            (VENUE, "public_rest_l2", cutoff),
+        )
+        return {str(row[0]).split("|")[-1] for row in rows}
+    except Exception:  # noqa: BLE001 - protection is best effort, never fatal
+        LOGGER.warning("could not read existing ourbit depth", exc_info=True)
+        return set()

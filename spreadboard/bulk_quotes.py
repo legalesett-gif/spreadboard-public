@@ -243,7 +243,9 @@ def sweep(
     if venues is None:
         try:
             written += ourbit_quotes.sweep(
-                store=target, depth_priority=_ourbit_depth_priority()
+                store=target,
+                depth_priority=_ourbit_depth_priority(),
+                protected_symbols=ourbit_quotes.symbols_with_live_depth(target),
             )
             covered += 1
         except Exception:
