@@ -217,7 +217,13 @@ services:
     cap_drop:
       - ALL
     mem_limit: 4g
-    cpus: 2.0
+    # Measured pinned at exactly 199.98% against the old 2.0 ceiling while the
+    # websocket book worker wrote nothing for seventeen minutes: subscriptions
+    # were timing out inside load_markets because there was no CPU left to
+    # finish them. This is a ceiling, not a reservation, and the low share
+    # below is what keeps it honest -- collector may use whatever the Droplet
+    # is not using, and yields 8:1 to subscriber HTTP the moment app wants it.
+    cpus: 3.2
     cpu_shares: 256
     logging:
       driver: json-file
