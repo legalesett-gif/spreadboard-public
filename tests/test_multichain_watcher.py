@@ -336,3 +336,13 @@ def test_a_failing_scan_never_advances_the_cursor_past_unread_blocks(db, monkeyp
         crypto_watcher.scan_evm("bsc", db_path=db, rpc_call=rpc)
 
     assert accounts.chain_cursor("bsc", db_path=db) == 0
+
+
+def test_a_quiet_tron_window_still_advances_the_cursor(db) -> None:
+    """Otherwise a chain with no traffic re-reads the same six hours forever."""
+    def http_get(_url):
+        return {"data": []}
+
+    crypto_watcher.scan_tron(db_path=db, http_get=http_get)
+
+    assert accounts.chain_cursor("tron", db_path=db) > 0

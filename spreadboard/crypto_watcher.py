@@ -433,7 +433,8 @@ def scan_tron(
     if not address or not base:
         return {"ok": False, "reason": "not_configured"}
 
-    cursor = accounts.chain_cursor("tron", db_path=db_path)
+    stored = accounts.chain_cursor("tron", db_path=db_path)
+    cursor = stored
     if cursor <= 0:
         cursor = max(0, int(time.time() * 1000) - TRON_FIRST_RUN_LOOKBACK_MS)
 
@@ -474,7 +475,10 @@ def scan_tron(
         except Exception:
             LOGGER.exception("failed to apply tron transfer")
 
-    if newest > cursor:
+    # Persist even when the window was empty. Comparing only against the
+    # in-memory cursor meant a chain with no traffic never wrote one, and so
+    # re-read the same six-hour window on every single poll, forever.
+    if newest > stored:
         accounts.set_chain_cursor("tron", newest, db_path=db_path)
     return {
         "ok": True, "chain": "tron", "scanned": len(entries),
