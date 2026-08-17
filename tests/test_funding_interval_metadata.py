@@ -77,3 +77,61 @@ def test_a_defaulted_interval_is_still_labelled_an_assumption() -> None:
     fields = _funding_fields(0.00005, interval_hours=8.0, interval_assumed=True)
 
     assert fields["funding_interval_assumed"] is True
+
+
+# --------------------------------------------------------------------------
+# Carrying the provenance the whole way to the row
+# --------------------------------------------------------------------------
+
+
+def test_the_bulk_cache_keeps_the_provenance_beside_the_interval() -> None:
+    """Dropped here, the flag can never reach the board however it is set."""
+    from spreadboard import bulk_quotes
+
+    entry = bulk_quotes._funding_entry(
+        {
+            "current_funding_pct": 0.005,
+            "funding_interval_hours": 4.0,
+            "funding_interval_assumed": False,
+        }
+    )
+
+    assert entry["interval_hours"] == 4.0
+    assert entry["interval_assumed"] is False
+
+
+def test_the_sweep_updates_the_flag_with_the_interval_it_applies() -> None:
+    """A published 4h schedule must clear a stale assumed flag from the scan.
+
+    The sweep wrote the corrected interval onto the leg but left the old flag
+    untouched, so 385 Bitget legs carried the right number still labelled a
+    guess.
+    """
+    from spreadboard import api_spreads
+
+    raw = {
+        "long_market_type": "Futures",
+        "long_venue": "Bitget",
+        "notes": {
+            "route_inputs": {
+                "long": {
+                    "symbol": "0G/USDT:USDT",
+                    "funding_interval_hours": 8.0,
+                    "funding_interval_assumed": True,
+                }
+            }
+        },
+    }
+    legs = {
+        "Bitget|0G/USDT:USDT": {
+            "rate_pct": 0.005,
+            "interval_hours": 4.0,
+            "interval_assumed": False,
+        }
+    }
+
+    updated = api_spreads._apply_live_funding(raw, legs=legs)
+    leg = updated["notes"]["route_inputs"]["long"]
+
+    assert leg["funding_interval_hours"] == 4.0
+    assert leg["funding_interval_assumed"] is False

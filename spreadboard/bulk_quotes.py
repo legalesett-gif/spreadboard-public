@@ -385,13 +385,7 @@ def sweep_funding(
                 continue
             covered += 1
             for symbol, fields in venue_rates.items():
-                entry: dict[str, Any] = {}
-                if fields.get("current_funding_pct") is not None:
-                    entry["rate_pct"] = fields["current_funding_pct"]
-                if fields.get("funding_interval_hours") is not None:
-                    entry["interval_hours"] = fields["funding_interval_hours"]
-                if fields.get("next_funding_ts_us") is not None:
-                    entry["next_funding_ts_us"] = fields["next_funding_ts_us"]
+                entry = _funding_entry(fields)
                 if entry:
                     key = f"{venue}|{symbol}"
                     rates[key] = entry
@@ -427,6 +421,27 @@ def sweep_funding(
 
 
 _FUNDING_CACHE: dict[str, Any] = {"stamp": None, "legs": {}}
+
+
+def _funding_entry(fields: dict[str, Any]) -> dict[str, Any]:
+    """One venue's funding print as the cache stores it.
+
+    The interval's provenance travels with it. Dropped here, a schedule the
+    venue published is indistinguishable from the 8h default by the time it
+    reaches a row, and the badge that warns a reader the carry is a guess
+    cannot be set correctly either way.
+    """
+
+    entry: dict[str, Any] = {}
+    if fields.get("current_funding_pct") is not None:
+        entry["rate_pct"] = fields["current_funding_pct"]
+    if fields.get("funding_interval_hours") is not None:
+        entry["interval_hours"] = fields["funding_interval_hours"]
+        if fields.get("funding_interval_assumed") is not None:
+            entry["interval_assumed"] = bool(fields["funding_interval_assumed"])
+    if fields.get("next_funding_ts_us") is not None:
+        entry["next_funding_ts_us"] = fields["next_funding_ts_us"]
+    return entry
 
 
 def load_funding(*, cache_path: Path | str = FUNDING_CACHE_PATH) -> dict[str, dict[str, Any]]:

@@ -1422,6 +1422,11 @@ def _apply_live_funding(
             snapped = _fi.normalise(entry["interval_hours"])
             if snapped is not None:
                 leg["funding_interval_hours"] = snapped
+                # The flag must move with the value. Leaving the scan's stale
+                # "assumed" in place kept 385 Bitget legs carrying a published
+                # 4h schedule still labelled a guess.
+                if entry.get("interval_assumed") is not None:
+                    leg["funding_interval_assumed"] = bool(entry["interval_assumed"])
         if entry.get("next_funding_ts_us") is not None:
             leg["next_funding_ts_us"] = entry["next_funding_ts_us"]
         # The sweep gives a current rate and an interval for nearly every
