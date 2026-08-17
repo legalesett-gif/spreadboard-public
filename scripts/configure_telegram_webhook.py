@@ -94,15 +94,26 @@ def main() -> int:
         "setMyDescription",
         {
             "description": (
-                "Link your SpreadBoard account, manage membership, and request "
-                "access to the subscriber community. Payments stay on secure checkout pages."
+                "Live spreads, funding and depth from SpreadBoard, answered in "
+                "chat.\n\n"
+                "Ask by token: GUA/ for the spread, GUA/f funding, GUA/d depth, "
+                "GUA/t transfer rails, GUA/c 5000 to size a position.\n"
+                "Ask the board: /top widest now, /deep only what proved the "
+                "probe size, /carry best paired carry. /help shows everything.\n\n"
+                "Also here to link your account, manage membership and request "
+                "subscriber access. Payments stay on secure checkout pages."
             )
         },
     )
     telegram_call(
         token,
         "setMyShortDescription",
-        {"short_description": "SpreadBoard membership and subscriber access."},
+        {
+            "short_description": (
+                "Live spreads, funding and depth in chat. Type GUA/ or /top. "
+                "Membership and subscriber access too."
+            )
+        },
     )
     print("Telegram webhook, command menus, and profile text configured successfully")
     return 0
