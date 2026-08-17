@@ -1,0 +1,50 @@
+{
+  "revision": "039650d",
+  "results": [
+    {
+      "viewport": "desktop",
+      "status": 200,
+      "finalUrl": "https://spreadarbitrage.ink/watchlist",
+      "browserErrors": [],
+      "screenshot": "output/playwright/2026-08-11-production-039650d-dual-scores/desktop-watchlist.png",
+      "title": "Watchlist - SpreadBoard",
+      "h1": "Your market radar",
+      "cards": 2,
+      "hasFundingOpportunity": true,
+      "hasSpreadOpportunity": true,
+      "hasFundingRoute": true,
+      "hasSpreadRoute": true,
+      "hasResearchScore": false,
+      "invalidText": [],
+      "bodyOverflowPx": 0,
+      "clipped": [],
+      "cardHeadings": [
+        "ESPORTS",
+        "GUA"
+      ]
+    },
+    {
+      "viewport": "mobile",
+      "status": 200,
+      "finalUrl": "https://spreadarbitrage.ink/watchlist",
+      "browserErrors": [],
+      "screenshot": "output/playwright/2026-08-11-production-039650d-dual-scores/mobile-watchlist.png",
+      "title": "Watchlist - SpreadBoard",
+      "h1": "Your market radar",
+      "cards": 2,
+      "hasFundingOpportunity": true,
+      "hasSpreadOpportunity": true,
+      "hasFundingRoute": true,
+      "hasSpreadRoute": true,
+      "hasResearchScore": false,
+      "invalidText": [],
+      "bodyOverflowPx": 0,
+      "clipped": [],
+      "cardHeadings": [
+        "ESPORTS",
+        "GUA"
+      ]
+    }
+  ],
+  "failures": []
+}

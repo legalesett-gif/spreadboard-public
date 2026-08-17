@@ -1,0 +1,353 @@
+### Page
+- Page URL: https://spreadarbitrage.ink/account
+- Page Title: My portfolio - SpreadBoard
+### Snapshot
+```yaml
+- generic [active] [ref=f2e1]:
+  - banner [ref=f2e2]:
+    - generic [ref=f2e3]:
+      - link "SpreadBoard" [ref=f2e4] [cursor=pointer]:
+        - /url: /
+      - button "Toggle light and dark mode" [ref=f2e8] [cursor=pointer]:
+        - generic [ref=f2e10]: Light
+    - navigation "Mobile primary navigation" [ref=f2e12]:
+      - link "Arbitrage" [ref=f2e13] [cursor=pointer]:
+        - /url: /
+      - link "Funding" [ref=f2e14] [cursor=pointer]:
+        - /url: /funding
+      - link "Fair price" [ref=f2e15] [cursor=pointer]:
+        - /url: /fair
+      - link "Charts" [ref=f2e16] [cursor=pointer]:
+        - /url: /charts
+      - link "Intel" [ref=f2e17] [cursor=pointer]:
+        - /url: /intel
+      - link "Watchlist" [ref=f2e18] [cursor=pointer]:
+        - /url: /watchlist
+      - link "Portfolio" [ref=f2e19] [cursor=pointer]:
+        - /url: /account
+      - link "Membership" [ref=f2e20] [cursor=pointer]:
+        - /url: /pricing
+    - navigation "Mobile community navigation" [ref=f2e21]:
+      - link "Alerts" [ref=f2e22] [cursor=pointer]:
+        - /url: /alerts
+      - link "Signals" [ref=f2e23] [cursor=pointer]:
+        - /url: /signals
+      - link "Triage" [ref=f2e24] [cursor=pointer]:
+        - /url: /triage
+      - link "Playbook" [ref=f2e25] [cursor=pointer]:
+        - /url: /playbook
+      - link "Community" [ref=f2e26] [cursor=pointer]:
+        - /url: /community
+  - main [ref=f2e27]:
+    - generic [ref=f2e28]:
+      - generic [ref=f2e29]:
+        - generic [ref=f2e30]:
+          - text: Private workspace
+          - heading "Alex" [level=1] [ref=f2e31]
+        - generic [ref=f2e32]:
+          - generic [ref=f2e33]: Membership
+          - strong [ref=f2e34]: Research Pro
+          - emphasis [ref=f2e35]: active · No expiry
+      - generic [ref=f2e36]:
+        - article [ref=f2e37]:
+          - generic [ref=f2e38]: Open positions
+          - strong [ref=f2e39]: "3"
+          - emphasis [ref=f2e40]: actively marked
+        - article [ref=f2e41]:
+          - generic [ref=f2e42]: Open-position PnL
+          - strong [ref=f2e43]: "-11.29 USD"
+          - emphasis [ref=f2e44]: movement + settled funding - fees
+        - article [ref=f2e45]:
+          - generic [ref=f2e46]: Open settled funding
+          - strong [ref=f2e47]: +42.56 USD
+          - emphasis [ref=f2e48]: private exchange ledger
+        - article [ref=f2e49]:
+          - generic [ref=f2e50]: Open return
+          - strong [ref=f2e51]: "-0.11%"
+          - emphasis [ref=f2e52]: on allocated capital
+      - navigation "Account sections" [ref=f2e53]:
+        - button "Positions" [ref=f2e54] [cursor=pointer]
+        - button "Alerts 0" [ref=f2e55] [cursor=pointer]
+        - button "Settings" [ref=f2e56] [cursor=pointer]
+        - button "Members" [ref=f2e57] [cursor=pointer]
+      - generic [ref=f2e58]:
+        - generic [ref=f2e59]:
+          - generic [ref=f2e60]:
+            - heading "Position journal" [level=2] [ref=f2e61]
+            - paragraph [ref=f2e62]: Saved fills can be corrected at any time. Current books mark movement PnL; only exact settled exchange cashflows enter funding PnL.
+          - button "Add position" [ref=f2e63] [cursor=pointer]
+        - generic [ref=f2e64]:
+          - article [ref=f2e65]:
+            - generic [ref=f2e66]:
+              - generic [ref=f2e67]:
+                - generic [ref=f2e68]: BTW
+                - strong [ref=f2e69]: Mexc → Aster
+                - emphasis [ref=f2e70]: Spot / Futures
+              - generic [ref=f2e71]:
+                - generic [ref=f2e72]: open
+                - strong [ref=f2e73]: Live exact prices
+            - generic [ref=f2e74]:
+              - generic [ref=f2e75]:
+                - text: Total PnL
+                - strong [ref=f2e76]: "-14.08 USD"
+              - generic [ref=f2e77]:
+                - text: Movement PnL
+                - strong [ref=f2e78]: "-19.17 USD"
+              - generic [ref=f2e79]:
+                - text: Settled funding
+                - strong [ref=f2e80]: +5.09 USD
+              - generic [ref=f2e81]:
+                - text: Fees
+                - strong [ref=f2e82]: "-0.00 USD"
+              - generic [ref=f2e83]:
+                - text: Projected funding / 24h
+                - strong [ref=f2e84]: +0.0881%
+              - generic [ref=f2e85]:
+                - text: Return
+                - strong [ref=f2e86]: "-0.52%"
+              - generic [ref=f2e87]:
+                - text: Exit spread
+                - strong [ref=f2e88]: "-0.975%"
+              - generic [ref=f2e89]:
+                - text: Entry spread
+                - strong [ref=f2e90]: +0.442%
+            - paragraph [ref=f2e91]: Movement uses full-size CEX book VWAP for the saved quantities; future exit trading fees and gas are not deducted until recorded.Exact private exchange ledger · 9 settlements · synced 2026-08-12T08:31:42.648284Z
+            - generic [ref=f2e92]:
+              - generic [ref=f2e93]:
+                - generic [ref=f2e94]: Long
+                - strong [ref=f2e95]: Mexc · 13530.0
+                - emphasis [ref=f2e96]: $0.20173164 → $0.23437032
+                - emphasis [ref=f2e97]: Funding — / —h
+              - generic [ref=f2e98]:
+                - generic [ref=f2e99]: Short
+                - strong [ref=f2e100]: Aster · 13530.0
+                - emphasis [ref=f2e101]: $0.20262273 → $0.23667845
+                - emphasis [ref=f2e102]: Funding +0.0294% / 8.0h
+            - generic [ref=f2e103]:
+              - generic [ref=f2e104]: Opened 2026-08-11T23:19:58Z
+              - generic [ref=f2e105]:
+                - generic [ref=f2e106]: 0 alerts
+                - button "Edit position" [ref=f2e107] [cursor=pointer]
+                - button "Add alert" [ref=f2e108] [cursor=pointer]
+                - button "Close position" [ref=f2e109] [cursor=pointer]
+                - link "Chart since entry" [ref=f2e110] [cursor=pointer]:
+                  - /url: /charts?route_key=CUSTOM%3AeyJsb25nIjp7Im1hcmtldF90eXBlIjoiU3BvdCIsInN5bWJvbCI6IkJUVy9VU0RUIiwidmVudWUiOiJNZXhjIn0sImxvbmdfbXVsdGlwbGllciI6MS4wLCJzaG9ydCI6eyJtYXJrZXRfdHlwZSI6IkZ1dHVyZXMiLCJzeW1ib2wiOiJCVFcvVVNEVDpVU0RUIiwidmVudWUiOiJBc3RlciJ9LCJzaG9ydF9tdWx0aXBsaWVyIjoxLjAsInRva2VuIjoiQlRXIn0&window=position&opened_at=2026-08-11T23%3A19%3A58Z
+          - article [ref=f2e111]:
+            - generic [ref=f2e112]:
+              - generic [ref=f2e113]:
+                - generic [ref=f2e114]: GUA
+                - strong [ref=f2e115]: Mexc → Gate
+                - emphasis [ref=f2e116]: Spot / Futures
+              - generic [ref=f2e117]:
+                - generic [ref=f2e118]: open
+                - strong [ref=f2e119]: Live exact prices
+            - generic [ref=f2e120]:
+              - generic [ref=f2e121]:
+                - text: Total PnL
+                - strong [ref=f2e122]: +31.85 USD
+              - generic [ref=f2e123]:
+                - text: Movement PnL
+                - strong [ref=f2e124]: +22.47 USD
+              - generic [ref=f2e125]:
+                - text: Settled funding
+                - strong [ref=f2e126]: +9.73 USD
+              - generic [ref=f2e127]:
+                - text: Fees
+                - strong [ref=f2e128]: "-0.35 USD"
+              - generic [ref=f2e129]:
+                - text: Projected funding / 24h
+                - strong [ref=f2e130]: +0.8568%
+              - generic [ref=f2e131]:
+                - text: Return
+                - strong [ref=f2e132]: +2.12%
+              - generic [ref=f2e133]:
+                - text: Exit spread
+                - strong [ref=f2e134]: "-1.528%"
+              - generic [ref=f2e135]:
+                - text: Entry spread
+                - strong [ref=f2e136]: +2.736%
+            - paragraph [ref=f2e137]: Movement uses full-size CEX book VWAP for the saved quantities; future exit trading fees and gas are not deducted until recorded.Exact private exchange ledger · 11 settlements · synced 2026-08-12T08:31:42.648284Z
+            - generic [ref=f2e138]:
+              - generic [ref=f2e139]:
+                - generic [ref=f2e140]: Long
+                - strong [ref=f2e141]: Mexc · 26020.9
+                - emphasis [ref=f2e142]: $0.05779 → $0.04624149
+                - emphasis [ref=f2e143]: Funding — / —h
+              - generic [ref=f2e144]:
+                - generic [ref=f2e145]: Short
+                - strong [ref=f2e146]: Gate · 26020.0
+                - emphasis [ref=f2e147]: $0.05937126 → $0.0469588
+                - emphasis [ref=f2e148]: Funding +0.1428% / 4.0h
+            - generic [ref=f2e149]:
+              - generic [ref=f2e150]: Opened 2026-08-10T13:29:46Z
+              - generic [ref=f2e151]:
+                - generic [ref=f2e152]: 0 alerts
+                - button "Edit position" [ref=f2e153] [cursor=pointer]
+                - button "Add alert" [ref=f2e154] [cursor=pointer]
+                - button "Close position" [ref=f2e155] [cursor=pointer]
+                - link "Chart since entry" [ref=f2e156] [cursor=pointer]:
+                  - /url: /charts?route_key=CUSTOM%3AeyJsb25nIjp7Im1hcmtldF90eXBlIjoiU3BvdCIsInN5bWJvbCI6IkdVQS9VU0RUIiwidmVudWUiOiJNZXhjIn0sImxvbmdfbXVsdGlwbGllciI6MS4wLCJzaG9ydCI6eyJtYXJrZXRfdHlwZSI6IkZ1dHVyZXMiLCJzeW1ib2wiOiJHVUEvVVNEVDpVU0RUIiwidmVudWUiOiJHYXRlIn0sInNob3J0X211bHRpcGxpZXIiOjEuMCwidG9rZW4iOiJHVUEifQ&window=position&opened_at=2026-08-10T13%3A29%3A46Z
+          - article [ref=f2e157]:
+            - generic [ref=f2e158]:
+              - generic [ref=f2e159]:
+                - generic [ref=f2e160]: ESPORTS
+                - strong [ref=f2e161]: OKX DEX 56 → Gate
+                - emphasis [ref=f2e162]: DEX / Futures
+              - generic [ref=f2e163]:
+                - generic [ref=f2e164]: open
+                - strong [ref=f2e165]: Live exact prices
+            - generic [ref=f2e166]:
+              - generic [ref=f2e167]:
+                - text: Total PnL
+                - strong [ref=f2e168]: "-29.06 USD"
+              - generic [ref=f2e169]:
+                - text: Movement PnL
+                - strong [ref=f2e170]: "-49.37 USD"
+              - generic [ref=f2e171]:
+                - text: Settled funding
+                - strong [ref=f2e172]: +27.74 USD
+              - generic [ref=f2e173]:
+                - text: Fees
+                - strong [ref=f2e174]: "-7.44 USD"
+              - generic [ref=f2e175]:
+                - text: Projected funding / 24h
+                - strong [ref=f2e176]: +0.2322%
+              - generic [ref=f2e177]:
+                - text: Return
+                - strong [ref=f2e178]: "-1.05%"
+              - generic [ref=f2e179]:
+                - text: Exit spread
+                - strong [ref=f2e180]: "-2.724%"
+              - generic [ref=f2e181]:
+                - text: Entry spread
+                - strong [ref=f2e182]: +0.404%
+            - paragraph [ref=f2e183]: Movement uses full-size DEX sell quote + CEX book VWAP for the saved quantities; future exit trading fees and gas are not deducted until recorded.Exact private exchange ledger · 21 settlements · synced 2026-08-12T08:31:42.648284Z
+            - generic [ref=f2e184]:
+              - generic [ref=f2e185]:
+                - generic [ref=f2e186]: Long
+                - strong [ref=f2e187]: OKX DEX 56 · 147464.9138652446
+                - emphasis [ref=f2e188]: $0.0186348 → $0.01458335
+                - emphasis [ref=f2e189]: Funding — / —h
+              - generic [ref=f2e190]:
+                - generic [ref=f2e191]: Short
+                - strong [ref=f2e192]: Gate · 147400.0
+                - emphasis [ref=f2e193]: $0.01871 → $0.01499168
+                - emphasis [ref=f2e194]: Funding +0.0387% / 4.0h
+            - generic [ref=f2e195]:
+              - generic [ref=f2e196]: Opened 2026-08-08T21:37:49.680Z
+              - generic [ref=f2e197]:
+                - generic [ref=f2e198]: 0 alerts
+                - button "Edit position" [ref=f2e199] [cursor=pointer]
+                - button "Add alert" [ref=f2e200] [cursor=pointer]
+                - button "Close position" [ref=f2e201] [cursor=pointer]
+                - link "Chart since entry" [ref=f2e202] [cursor=pointer]:
+                  - /url: /charts?route_key=CUSTOM%3AeyJsb25nIjp7ImRleF9jaGFpbiI6IjU2IiwiZGV4X2NvbnRyYWN0IjoiMHhmMzllNGIyMWM4NGU3MzdkZjA4ZTJjM2IzMjU0MWQ4NTZmNTA4ZTQ4IiwibWFya2V0X3R5cGUiOiJTcG90Iiwic3ltYm9sIjoiRVNQT1JUUyIsInZlbnVlIjoiT0tYIERFWCA1NiJ9LCJsb25nX211bHRpcGxpZXIiOjEuMCwic2hvcnQiOnsibWFya2V0X3R5cGUiOiJGdXR1cmVzIiwic3ltYm9sIjoiRVNQT1JUUy9VU0RUOlVTRFQiLCJ2ZW51ZSI6IkdhdGUifSwic2hvcnRfbXVsdGlwbGllciI6MS4wLCJ0b2tlbiI6IkVTUE9SVFMifQ&window=position&opened_at=2026-08-08T21%3A37%3A49.680Z
+          - article [ref=f2e203]:
+            - generic [ref=f2e204]:
+              - generic [ref=f2e205]:
+                - generic [ref=f2e206]: VANRY
+                - strong [ref=f2e207]: Gate → Gate
+                - emphasis [ref=f2e208]: Spot / Futures
+              - generic [ref=f2e209]:
+                - generic [ref=f2e210]: closed
+                - strong [ref=f2e211]: Closed · stored exits
+            - generic [ref=f2e212]:
+              - generic [ref=f2e213]:
+                - text: Total PnL
+                - strong [ref=f2e214]: —
+              - generic [ref=f2e215]:
+                - text: Movement PnL
+                - strong [ref=f2e216]: +1.11 USD
+              - generic [ref=f2e217]:
+                - text: Settled funding
+                - strong [ref=f2e218]: —
+              - generic [ref=f2e219]:
+                - text: Fees
+                - strong [ref=f2e220]: "-0.00 USD"
+              - generic [ref=f2e221]:
+                - text: Projected funding / 24h
+                - strong [ref=f2e222]: —
+              - generic [ref=f2e223]:
+                - text: Return
+                - strong [ref=f2e224]: —
+              - generic [ref=f2e225]:
+                - text: Exit spread
+                - strong [ref=f2e226]: +0.000%
+              - generic [ref=f2e227]:
+                - text: Entry spread
+                - strong [ref=f2e228]: +59.582%
+            - paragraph [ref=f2e229]: Movement uses the stored exit fills.Funding ledger is not connected; total PnL is withheld rather than assuming funding is zero.
+            - generic [ref=f2e230]:
+              - generic [ref=f2e231]:
+                - generic [ref=f2e232]: Long
+                - strong [ref=f2e233]: Gate · 1000.0
+                - emphasis [ref=f2e234]: $0.00176 → $1.0000
+                - emphasis [ref=f2e235]: Funding — / —h
+              - generic [ref=f2e236]:
+                - generic [ref=f2e237]: Short
+                - strong [ref=f2e238]: Gate · 1000.0
+                - emphasis [ref=f2e239]: $0.00287 → $1.0000
+                - emphasis [ref=f2e240]: Funding — / —h
+            - generic [ref=f2e241]:
+              - generic [ref=f2e242]: Opened 2026-08-10T23:51:08.063282Z
+              - generic [ref=f2e243]:
+                - generic [ref=f2e244]: 0 alerts
+                - button "Edit position" [ref=f2e245] [cursor=pointer]
+                - button "Add alert" [ref=f2e246] [cursor=pointer]
+                - link "Chart since entry" [ref=f2e247] [cursor=pointer]:
+                  - /url: /charts?route_key=VANRY%7CGate%7CSpot%7CGate%7CFutures&window=position&opened_at=2026-08-10T23%3A51%3A08.063282Z
+          - article [ref=f2e248]:
+            - generic [ref=f2e249]:
+              - generic [ref=f2e250]:
+                - generic [ref=f2e251]: GUA
+                - strong [ref=f2e252]: Mexc → Binance
+                - emphasis [ref=f2e253]: Spot / Futures
+              - generic [ref=f2e254]:
+                - generic [ref=f2e255]: closed
+                - strong [ref=f2e256]: Closed · stored exits
+            - generic [ref=f2e257]:
+              - generic [ref=f2e258]:
+                - text: Total PnL
+                - strong [ref=f2e259]: "-0.01 USD"
+              - generic [ref=f2e260]:
+                - text: Movement PnL
+                - strong [ref=f2e261]: "-0.01 USD"
+              - generic [ref=f2e262]:
+                - text: Settled funding
+                - strong [ref=f2e263]: +0.00 USD
+              - generic [ref=f2e264]:
+                - text: Fees
+                - strong [ref=f2e265]: "-0.00 USD"
+              - generic [ref=f2e266]:
+                - text: Projected funding / 24h
+                - strong [ref=f2e267]: +0.0150%
+              - generic [ref=f2e268]:
+                - text: Return
+                - strong [ref=f2e269]: —
+              - generic [ref=f2e270]:
+                - text: Exit spread
+                - strong [ref=f2e271]: +0.000%
+              - generic [ref=f2e272]:
+                - text: Entry spread
+                - strong [ref=f2e273]: "-0.093%"
+            - paragraph [ref=f2e274]: Movement uses the stored exit fills.Exact private exchange ledger · 0 settlements · synced 2026-08-12T08:31:42.648284Z
+            - generic [ref=f2e275]:
+              - generic [ref=f2e276]:
+                - generic [ref=f2e277]: Long
+                - strong [ref=f2e278]: Mexc · 256.0
+                - emphasis [ref=f2e279]: $0.05312 → $1.0000
+                - emphasis [ref=f2e280]: Funding — / —h
+              - generic [ref=f2e281]:
+                - generic [ref=f2e282]: Short
+                - strong [ref=f2e283]: Binance · 256.0
+                - emphasis [ref=f2e284]: $0.05308 → $1.0000
+                - emphasis [ref=f2e285]: Funding +0.0050% / 8.0h
+            - generic [ref=f2e286]:
+              - generic [ref=f2e287]: Opened 2026-08-10T22:00:38.283476Z
+              - generic [ref=f2e288]:
+                - generic [ref=f2e289]: 0 alerts
+                - button "Edit position" [ref=f2e290] [cursor=pointer]
+                - button "Add alert" [ref=f2e291] [cursor=pointer]
+                - link "Chart since entry" [ref=f2e292] [cursor=pointer]:
+                  - /url: /charts?route_key=CUSTOM%3AeyJsb25nIjp7Im1hcmtldF90eXBlIjoiU3BvdCIsInN5bWJvbCI6IkdVQS9VU0RUIiwidmVudWUiOiJNZXhjIn0sImxvbmdfbXVsdGlwbGllciI6MS4wLCJzaG9ydCI6eyJtYXJrZXRfdHlwZSI6IkZ1dHVyZXMiLCJzeW1ib2wiOiJHVUEvVVNEVDpVU0RUIiwidmVudWUiOiJCaW5hbmNlIn0sInNob3J0X211bHRpcGxpZXIiOjEuMCwidG9rZW4iOiJHVUEifQ&window=position&opened_at=2026-08-10T22%3A00%3A38.283476Z
+```

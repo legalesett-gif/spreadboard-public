@@ -1,0 +1,27 @@
+
+== FUTURES-FUTURES ==
+   TOKEN         OURS/24h  REAL/24h     DELTA  ROUTE
+   TUT            10.6566   10.6692    -0.013  HTX -> Kucoin Futures  OK
+   龙虾              2.6125    0.0150    +2.597  HTX -> Gate  MEASURED
+   SSPC            1.4912    2.5338    -1.043  Bybit -> Bitget  MEASURED
+   NEIRO           1.2913   -7.2156    +8.507  Binance -> Kraken Futures  MEASURED
+   VANRY           0.9785    1.1058    -0.127  Gate -> Mexc  OK
+
+== FUTURES-SPOT ==
+   TOKEN         OURS/24h  REAL/24h     DELTA  ROUTE
+   TUT            10.6770   10.6842    -0.007  Phemex -> Kucoin Futures  OK
+   BLUAI           0.3805    0.2215    +0.159  Bitget -> Binance  MEASURED
+   BTR             0.3392    0.7017    -0.363  Bitget -> Bybit  MEASURED
+   TSTBSC          0.1190    0.0300    +0.089  Gate -> Kucoin Futures  OK
+   JIMOTHY         0.1069    0.1200    -0.013  Mexc -> Mexc  OK
+
+== FUTURES-DEX ==
+   TOKEN         OURS/24h  REAL/24h     DELTA  ROUTE
+   PTB             0.8019    0.7933    +0.009  OKX DEX 56 -> Bybit  OK
+   ESPORTS         0.7038    0.7038    +0.000  OKX DEX 56 -> Mexc  OK
+   4               0.4236    0.4236    +0.000  OKX DEX 56 -> Mexc  OK
+   IDOL            0.1882    0.3078    -0.120  OKX DEX 56 -> Mexc  OK
+   ANSEM           0.1200    0.1200    +0.000  OKX DEX 501 -> Mexc  OK
+
+matched 10, mismatched 0, measured-vs-forecast 5, unverifiable 0
+agreement on comparable rows: 100%

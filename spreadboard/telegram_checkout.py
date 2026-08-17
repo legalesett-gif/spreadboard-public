@@ -560,7 +560,7 @@ def deliver_one(item: dict[str, Any], *, db_path: Path | str) -> dict[str, Any]:
     base = _public_url()
     link = f"{base}/set-password?token={token}"
 
-    mailer.send_subscription_notice(
+    message_id = mailer.send_subscription_notice(
         recipient=user.email,
         display_name=user.display_name,
         subject="Your SpreadBoard access is ready",
@@ -597,7 +597,12 @@ def deliver_one(item: dict[str, Any], *, db_path: Path | str) -> dict[str, Any]:
             ),
         ]
         telegram_bot.send_direct_message(chat_id, "\n".join(lines))
-    return {"invoice_id": invoice_id, "delivered": True}
+    return {
+        "invoice_id": invoice_id,
+        "delivered": True,
+        "email_message_id": message_id or "",
+        "email_recipient": user.email,
+    }
 
 
 def _channel_markup(
@@ -667,9 +672,13 @@ class Notifier:
         delivered = failed = 0
         for item in pending:
             try:
-                deliver_one(item, db_path=self.accounts_path)
+                outcome = deliver_one(item, db_path=self.accounts_path)
                 accounts.record_checkout_notification(
-                    int(item["invoice_id"]), delivered=True, db_path=self.accounts_path
+                    int(item["invoice_id"]),
+                    delivered=True,
+                    email_message_id=str(outcome.get("email_message_id") or ""),
+                    email_recipient=str(outcome.get("email_recipient") or ""),
+                    db_path=self.accounts_path,
                 )
                 delivered += 1
             except Exception as exc:  # noqa: BLE001 - one bad row must not stall the rest.

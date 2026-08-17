@@ -617,6 +617,11 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
         )
         _ensure_columns(
             connection,
+            "telegram_checkout_invoices",
+            {"email_message_id": "TEXT NOT NULL DEFAULT ''", "email_recipient": "TEXT NOT NULL DEFAULT ''"},
+        )
+        _ensure_columns(
+            connection,
             "crypto_payments",
             {"chain": "TEXT NOT NULL DEFAULT 'arbitrum'"},
         )
@@ -2198,6 +2203,8 @@ def record_checkout_notification(
     *,
     delivered: bool,
     error: str = "",
+    email_message_id: str = "",
+    email_recipient: str = "",
     db_path: Path | str = DEFAULT_DB_PATH,
     now: datetime | None = None,
 ) -> None:
@@ -2206,12 +2213,16 @@ def record_checkout_notification(
         connection.execute(
             """
             UPDATE telegram_checkout_invoices
-               SET notified_at = ?, notify_attempts = notify_attempts + 1, last_error = ?
+               SET notified_at = ?, notify_attempts = notify_attempts + 1, last_error = ?,
+                   email_message_id = CASE WHEN ? != '' THEN ? ELSE email_message_id END,
+                   email_recipient = CASE WHEN ? != '' THEN ? ELSE email_recipient END
              WHERE invoice_id = ?
             """,
             (
                 _utc_iso(now or datetime.now(tz=UTC)) if delivered else None,
                 error[:200],
+                str(email_message_id), str(email_message_id),
+                str(email_recipient), str(email_recipient),
                 int(invoice_id),
             ),
         )

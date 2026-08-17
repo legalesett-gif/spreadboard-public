@@ -369,3 +369,99 @@ def test_buying_works_with_outbound_posting_disabled(db, monkeypatch) -> None:
     reply = _walk_to_invoice(db)
 
     assert RECEIVER in reply["text"]
+
+
+def test_the_email_message_id_is_kept_as_delivery_evidence(db, monkeypatch) -> None:
+    """"It wasn't sent" was unanswerable: success recorded nothing to check."""
+    monkeypatch.setattr(
+        telegram_checkout.mailer,
+        "send_subscription_notice",
+        lambda **kwargs: "resend-abc-123",
+    )
+    monkeypatch.setattr(telegram_bot, "send_direct_message", lambda *a, **k: None)
+
+    _walk_to_invoice(db, tier="scanner", email="evidence@example.test")
+    _pay(db, crypto_billing.get_invoice(1, db_path=db), tx="0xevid")
+    telegram_checkout.Notifier(accounts_path=db).check_once()
+
+    connection = accounts._connect(db)
+    try:
+        row = connection.execute(
+            "SELECT email_message_id, email_recipient FROM telegram_checkout_invoices "
+            "WHERE invoice_id = 1"
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row["email_message_id"] == "resend-abc-123"
+    assert row["email_recipient"] == "evidence@example.test"
+
+
+# --------------------------------------------------------------------------
+# Nothing is confirmed until the full amount has actually arrived
+# --------------------------------------------------------------------------
+
+
+def test_an_underpayment_grants_nothing_and_confirms_nothing(db, monkeypatch) -> None:
+    """A cent short is not a purchase. No access, no email, no Telegram message."""
+    mails, chats = [], []
+    monkeypatch.setattr(
+        telegram_checkout.mailer, "send_subscription_notice",
+        lambda **kwargs: mails.append(kwargs) or "id",
+    )
+    monkeypatch.setattr(telegram_bot, "send_direct_message", lambda *a, **k: chats.append(a))
+
+    _walk_to_invoice(db, tier="scanner", email="short@example.test")
+    invoice = crypto_billing.get_invoice(1, db_path=db)
+    short = dict(invoice)
+    short["amount_cents"] = int(invoice["amount_cents"]) - 1
+    assert _pay(db, short, tx="0xshort")["resolution"] != "settled"
+
+    summary = telegram_checkout.Notifier(accounts_path=db).check_once()
+
+    assert summary["delivered"] == 0
+    assert mails == [] and chats == []
+    assert crypto_billing.get_invoice(1, db_path=db)["status"] == "open"
+    user = accounts.get_user_object(
+        accounts.user_id_for_email("short@example.test", db_path=db), db_path=db
+    )
+    assert not user.subscription_active
+
+
+def test_an_overpayment_is_parked_rather_than_guessed_into_a_tier(db, monkeypatch) -> None:
+    mails = []
+    monkeypatch.setattr(
+        telegram_checkout.mailer, "send_subscription_notice",
+        lambda **kwargs: mails.append(kwargs) or "id",
+    )
+    monkeypatch.setattr(telegram_bot, "send_direct_message", lambda *a, **k: None)
+
+    _walk_to_invoice(db, tier="scanner", email="over@example.test")
+    invoice = crypto_billing.get_invoice(1, db_path=db)
+    over = dict(invoice)
+    over["amount_cents"] = int(invoice["amount_cents"]) + 100
+    assert _pay(db, over, tx="0xover")["resolution"] != "settled"
+
+    telegram_checkout.Notifier(accounts_path=db).check_once()
+
+    assert mails == []
+    assert crypto_billing.get_invoice(1, db_path=db)["status"] == "open"
+
+
+def test_the_exact_amount_is_what_confirms(db, monkeypatch) -> None:
+    """The positive control for the two above."""
+    mails = []
+    monkeypatch.setattr(
+        telegram_checkout.mailer, "send_subscription_notice",
+        lambda **kwargs: mails.append(kwargs) or "id",
+    )
+    monkeypatch.setattr(telegram_bot, "send_direct_message", lambda *a, **k: None)
+
+    _walk_to_invoice(db, tier="scanner", email="exact@example.test")
+    assert _pay(db, crypto_billing.get_invoice(1, db_path=db), tx="0xexact")["resolution"] == "settled"
+    telegram_checkout.Notifier(accounts_path=db).check_once()
+
+    assert len(mails) == 1
+    user = accounts.get_user_object(
+        accounts.user_id_for_email("exact@example.test", db_path=db), db_path=db
+    )
+    assert user.subscription_active

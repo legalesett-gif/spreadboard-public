@@ -1,0 +1,105 @@
+{
+  "checks": {
+    "desktopPricing": {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "overflowX": false,
+      "title": "Membership - SpreadBoard"
+    },
+    "desktopTelegram": {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "overflowX": false,
+      "title": "Telegram - SpreadBoard"
+    },
+    "desktopAdmin": {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "overflowX": false,
+      "title": "My portfolio - SpreadBoard"
+    },
+    "adminIdentity": {
+      "status": 200,
+      "email": "admin@example.test",
+      "role": "admin",
+      "active": true
+    },
+    "desktopInvoice": {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "overflowX": false,
+      "title": "Membership - SpreadBoard"
+    },
+    "usdc": {
+      "amount": "49.00 USDC · scanner",
+      "contract": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+      "wallet": "ethereum:0xaf88d065e77c8cc2239327c5edb3a432268e5831@42161/transfer?address=0xe45cedb238f0a90f111a283eb5f67f7e4d80b937&uint256=49000000",
+      "qr": "/api/billing/crypto/qr/1?token=USDC",
+      "tokenButtons": [
+        "Pay with USDC",
+        "Pay with USDT"
+      ]
+    },
+    "usdt": {
+      "amount": "49.00 USDT · scanner",
+      "contract": "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
+      "wallet": "ethereum:0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9@42161/transfer?address=0xe45cedb238f0a90f111a283eb5f67f7e4d80b937&uint256=49000000",
+      "qr": "/api/billing/crypto/qr/1?token=USDT"
+    },
+    "mobilePricing": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "overflowX": false,
+      "title": "Membership - SpreadBoard"
+    },
+    "mobileInvoice": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "overflowX": false,
+      "title": "Membership - SpreadBoard"
+    }
+  },
+  "qrResponses": [
+    {
+      "url": "http://127.0.0.1:8309/api/billing/crypto/qr/1?token=USDC",
+      "status": 200,
+      "type": "image/svg+xml; charset=utf-8"
+    },
+    {
+      "url": "http://127.0.0.1:8309/api/billing/crypto/qr/1?token=USDT",
+      "status": 200,
+      "type": "image/svg+xml; charset=utf-8"
+    },
+    {
+      "url": "http://127.0.0.1:8309/api/billing/crypto/qr/2?token=USDC",
+      "status": 200,
+      "type": "image/svg+xml; charset=utf-8"
+    }
+  ],
+  "consoleErrors": [],
+  "pageErrors": []
+}

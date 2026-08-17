@@ -1,0 +1,224 @@
+{
+  "base_url": "https://spreadarbitrage.ink",
+  "failed_routes": 1,
+  "generated_at": "2026-08-06T23:16:29.914947+00:00",
+  "passed_routes": 11,
+  "requested_routes": 12,
+  "routes": [
+    {
+      "age_seconds": 6.213970184326172,
+      "errors": [],
+      "first_last_quote_ts_us": 1786057976012529,
+      "lane": "FUTURES",
+      "last_quote_ts_us": 1786058058820648,
+      "ok": true,
+      "route_key": "SKYAI|Gate|Futures|Ourbit|Futures",
+      "sample_status": "ok",
+      "token": "SKYAI",
+      "window_counts": {
+        "1h": 61,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 6.013988971710205,
+      "errors": [],
+      "first_last_quote_ts_us": 1786058001300487,
+      "lane": "FUTURES",
+      "last_quote_ts_us": 1786058091828181,
+      "ok": true,
+      "route_key": "ANTHROPIC|Ourbit|Futures|Bitget|Futures",
+      "sample_status": "ok",
+      "token": "ANTHROPIC",
+      "window_counts": {
+        "1h": 59,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 4.368077039718628,
+      "errors": [],
+      "first_last_quote_ts_us": 1786058022133538,
+      "lane": "FUTURES",
+      "last_quote_ts_us": 1786058142232840,
+      "ok": true,
+      "route_key": "UNITREE|Ourbit|Futures|Gate|Futures",
+      "sample_status": "ok",
+      "token": "UNITREE",
+      "window_counts": {
+        "1h": 60,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 5.0004565715789795,
+      "errors": [],
+      "first_last_quote_ts_us": 1786057985923557,
+      "lane": "FUTURES-SPOT-PAIR",
+      "last_quote_ts_us": 1786058057503207,
+      "ok": true,
+      "route_key": "VANRY|Mexc|Spot|XT|Futures",
+      "sample_status": "ok",
+      "token": "VANRY",
+      "window_counts": {
+        "1h": 64,
+        "1m": 1,
+        "30m": 3,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 6.376589059829712,
+      "errors": [],
+      "first_last_quote_ts_us": 1786058007000173,
+      "lane": "FUTURES-SPOT-PAIR",
+      "last_quote_ts_us": 1786058099824314,
+      "ok": true,
+      "route_key": "CC|HTX|Spot|Ourbit|Futures",
+      "sample_status": "ok",
+      "token": "CC",
+      "window_counts": {
+        "1h": 60,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 4.3005547523498535,
+      "errors": [],
+      "first_last_quote_ts_us": 1786058026607080,
+      "lane": "FUTURES-SPOT-PAIR",
+      "last_quote_ts_us": 1786058145100333,
+      "ok": true,
+      "route_key": "CSPR|HTX|Spot|Mexc|Futures",
+      "sample_status": "ok",
+      "token": "CSPR",
+      "window_counts": {
+        "1h": 64,
+        "1m": 1,
+        "30m": 3,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 6.743762969970703,
+      "errors": [],
+      "first_last_quote_ts_us": 1786057991706626,
+      "lane": "SPOT",
+      "last_quote_ts_us": 1786058071102776,
+      "ok": true,
+      "route_key": "FIS|Coinbase|Spot|Gate|Spot",
+      "sample_status": "ok",
+      "token": "FIS",
+      "window_counts": {
+        "1h": 8,
+        "1m": 1,
+        "30m": 4,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 7.104349613189697,
+      "errors": [],
+      "first_last_quote_ts_us": 1786058010902417,
+      "lane": "SPOT",
+      "last_quote_ts_us": 1786058113142091,
+      "ok": true,
+      "route_key": "BONK|Bingx|Spot|Kraken|Spot",
+      "sample_status": "ok",
+      "token": "BONK",
+      "window_counts": {
+        "1h": 60,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 8.88225531578064,
+      "errors": [],
+      "first_last_quote_ts_us": 1786058032333347,
+      "lane": "SPOT",
+      "last_quote_ts_us": 1786058153237603,
+      "ok": true,
+      "route_key": "RXD|XT|Spot|Mexc|Spot",
+      "sample_status": "ok",
+      "token": "RXD",
+      "window_counts": {
+        "1h": 60,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": null,
+      "errors": [
+        "history_empty",
+        "sampler_unavailable",
+        "timestamp_did_not_advance",
+        "latest_sample_too_old:None",
+        "open_inputs_missing",
+        "out_inputs_missing",
+        "matched_inputs_missing"
+      ],
+      "first_last_quote_ts_us": 0,
+      "lane": "DEX-FUTURES",
+      "last_quote_ts_us": 0,
+      "ok": false,
+      "route_key": "ASTEROID|OKX DEX 1|Spot|Mexc|Futures",
+      "sample_status": "unavailable",
+      "token": "ASTEROID",
+      "window_counts": {
+        "1h": 0,
+        "1m": 0,
+        "30m": 0,
+        "5m": 0
+      }
+    },
+    {
+      "age_seconds": 11.613029956817627,
+      "errors": [],
+      "first_last_quote_ts_us": 1786058018399534,
+      "lane": "DEX-FUTURES",
+      "last_quote_ts_us": 1786058121821029,
+      "ok": true,
+      "route_key": "TLM|OKX DEX 56|Spot|Ourbit|Futures",
+      "sample_status": "ok",
+      "token": "TLM",
+      "window_counts": {
+        "1h": 2,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 12.80949354171753,
+      "errors": [],
+      "first_last_quote_ts_us": 1786058047913852,
+      "lane": "DEX-FUTURES",
+      "last_quote_ts_us": 1786058166220380,
+      "ok": true,
+      "route_key": "ON|OKX DEX 56|Spot|Mexc|Futures",
+      "sample_status": "ok",
+      "token": "ON",
+      "window_counts": {
+        "1h": 4,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    }
+  ],
+  "schema": "spreadboard.live_chart_audit.v1",
+  "selected_routes": 12,
+  "selection": "round_robin_top_ranked_groups_across_primary_lanes"
+}

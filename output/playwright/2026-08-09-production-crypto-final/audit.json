@@ -1,0 +1,173 @@
+{
+  "checks": {
+    "loginPageStatus": 200,
+    "session": {
+      "status": 200,
+      "email": "admin@spreadboard.local",
+      "role": "admin",
+      "active": true,
+      "tier": "research_pro"
+    },
+    "pricingStatus": 200,
+    "desktopPricing": {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "overflowX": false,
+      "title": "Membership - SpreadBoard",
+      "heading": "Every spread, live."
+    },
+    "pricingCopy": {
+      "cryptoFirst": true,
+      "noAutoRenewal": true,
+      "onboarding": true
+    },
+    "telegramStatus": 200,
+    "desktopTelegram": {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "overflowX": false,
+      "title": "Telegram - SpreadBoard",
+      "heading": "Research alerts that open into evidence"
+    },
+    "telegramCopy": {
+      "privateForumConnected": true,
+      "publicBroadcastOptional": true,
+      "directTop": true
+    },
+    "accountStatus": 200,
+    "desktopAccount": {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "overflowX": false,
+      "title": "My portfolio - SpreadBoard",
+      "heading": "Alex"
+    },
+    "marketsStatus": 200,
+    "desktopMarkets": {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "overflowX": false,
+      "title": "Markets - SpreadBoard",
+      "heading": "One asset, every live route"
+    },
+    "usd1Visible": true,
+    "scannerSubscriptionStatus": 200,
+    "desktopInvoice": {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "overflowX": false,
+      "title": "Membership - SpreadBoard",
+      "heading": "Your membership"
+    },
+    "usdc": {
+      "amount": "49.00 USDC · scanner",
+      "contract": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+      "wallet": "ethereum:0xaf88d065e77c8cc2239327c5edb3a432268e5831@42161/transfer?address=0xe45cedb238f0a90f111a283eb5f67f7e4d80b937&uint256=49000000",
+      "qr": "/api/billing/crypto/qr/4?token=USDC"
+    },
+    "usdt": {
+      "amount": "49.00 USDT · scanner",
+      "contract": "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
+      "wallet": "ethereum:0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9@42161/transfer?address=0xe45cedb238f0a90f111a283eb5f67f7e4d80b937&uint256=49000000",
+      "qr": "/api/billing/crypto/qr/4?token=USDT"
+    },
+    "mobilePricingStatus": 200,
+    "mobilePricing": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "overflowX": false,
+      "title": "Membership - SpreadBoard",
+      "heading": "Every spread, live."
+    },
+    "mobileTelegramStatus": 200,
+    "mobileTelegram": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "overflowX": false,
+      "title": "Telegram - SpreadBoard",
+      "heading": "Research alerts that open into evidence"
+    },
+    "researchSubscriptionStatus": 200,
+    "mobileInvoice": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "overflowX": false,
+      "title": "Membership - SpreadBoard",
+      "heading": "Your membership"
+    },
+    "research": {
+      "amount": "180.00 USDC · research pro",
+      "contract": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+      "wallet": "ethereum:0xaf88d065e77c8cc2239327c5edb3a432268e5831@42161/transfer?address=0xe45cedb238f0a90f111a283eb5f67f7e4d80b937&uint256=180000000",
+      "qr": "/api/billing/crypto/qr/5?token=USDC"
+    },
+    "mobileMarketsStatus": 200,
+    "mobileMarkets": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "overflowX": false,
+      "title": "Markets - SpreadBoard",
+      "heading": "One asset, every live route"
+    }
+  },
+  "invoiceIds": [
+    4,
+    5
+  ],
+  "qrResponses": [
+    {
+      "url": "https://spreadarbitrage.ink/api/billing/crypto/qr/4?token=USDC",
+      "status": 200,
+      "type": "image/svg+xml; charset=utf-8"
+    },
+    {
+      "url": "https://spreadarbitrage.ink/api/billing/crypto/qr/4?token=USDT",
+      "status": 200,
+      "type": "image/svg+xml; charset=utf-8"
+    },
+    {
+      "url": "https://spreadarbitrage.ink/api/billing/crypto/qr/5?token=USDC",
+      "status": 200,
+      "type": "image/svg+xml; charset=utf-8"
+    }
+  ],
+  "consoleErrors": [],
+  "pageErrors": [],
+  "failedResponses": []
+}

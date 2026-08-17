@@ -1,0 +1,49 @@
+{
+  "mode": "production",
+  "generatedAt": "2026-08-11T22:22:54.860Z",
+  "results": [
+    {
+      "viewport": "desktop",
+      "name": "watchlist",
+      "url": "https://spreadarbitrage.ink/watchlist",
+      "finalUrl": "https://spreadarbitrage.ink/watchlist",
+      "status": 200,
+      "elapsedMs": 3293,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": {
+        "marginPlannerVisible": true,
+        "marginVerdict": "Within entered stress",
+        "transientCopyVisible": true
+      },
+      "screenshot": "output/playwright/2026-08-11-production-e233396-final/desktop-watchlist.png",
+      "title": "Watchlist - SpreadBoard",
+      "h1": "Your market radar",
+      "bodyChars": 2828,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    },
+    {
+      "viewport": "mobile",
+      "name": "watchlist",
+      "url": "https://spreadarbitrage.ink/watchlist",
+      "finalUrl": "https://spreadarbitrage.ink/watchlist",
+      "status": 200,
+      "elapsedMs": 1549,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": {
+        "marginPlannerVisible": true,
+        "marginVerdict": "Within entered stress",
+        "transientCopyVisible": true
+      },
+      "screenshot": "output/playwright/2026-08-11-production-e233396-final/mobile-watchlist.png",
+      "title": "Watchlist - SpreadBoard",
+      "h1": "Your market radar",
+      "bodyChars": 2837,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    }
+  ],
+  "failures": []
+}

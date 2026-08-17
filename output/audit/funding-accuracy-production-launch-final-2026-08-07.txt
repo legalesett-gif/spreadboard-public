@@ -1,0 +1,57 @@
+
+== FUTURES-FUTURES ==
+   TOKEN         OURS/24h  REAL/24h     DELTA  ROUTE
+   KIOXIA          1.5398    1.4732    +0.067  HTX -> Gate  OK
+   HFT             1.5179    1.9677    -0.450  Bybit -> Binance  OK
+   SKHYNIX         0.3194    0.3151    +0.004  XT -> Gate  OK
+   FLEX            0.2027    0.0090    +0.194  Binance -> Gate  MEASURED
+   COHR            0.1183    0.1183    +0.000  HTX -> Binance  OK
+   WAXP            0.0720    0.0741    -0.002  WhiteBIT -> Bybit  OK
+   QUID            0.0600    0.0600    +0.000  Mexc -> Bingx  OK
+   DRV             0.0483    0.0483    +0.000  Bingx -> Mexc  OK
+   ALAB            0.0300    0.0300    +0.000  Phemex -> Gate  OK
+   AVGO            0.0300    0.0300    +0.000  XT -> Gate  OK
+   AXTI            0.0300    0.0300    +0.000  Bitget -> Gate  OK
+   KORU            0.0300    0.0300    +0.000  Mexc -> Gate  OK
+   TENCENT         0.0300    0.0300    +0.000  Binance -> Gate  OK
+   IBM             0.0300    0.0300    +0.000  HTX -> Gate  OK
+   BMNR            0.0300    0.0300    +0.000  HTX -> Gate  OK
+
+== FUTURES-SPOT ==
+   TOKEN         OURS/24h  REAL/24h     DELTA  ROUTE
+   HFT             1.0578    1.0526    +0.005  Bingx -> Binance  OK
+   ACX             0.2556    0.2589    -0.003  Bitget -> Bitget  OK
+   PLAY            0.2166    0.2220    -0.005  Mexc -> Mexc  OK
+   BLUAI           0.1710    0.1782    -0.007  Bingx -> Bingx  OK
+   US              0.1650    0.1695    -0.004  Bitget -> Bitget  OK
+   BTR             0.1127    0.1102    +0.002  Bitget -> XT  OK
+   AIN             0.1125    0.1120    +0.000  Bitget -> XT  OK
+   FF              0.0798    0.0795    +0.000  Bitget -> Bitget  OK
+   YOM             0.0769    0.0876    -0.011  Mexc -> Mexc  OK
+   Q               0.0672    0.0711    -0.004  Bitget -> Bitget  OK
+   EDEN            0.0504    0.0504    +0.000  Bitget -> XT  OK
+   BTW             0.0483    0.0480    +0.000  Bitget -> Bitget  OK
+   CLANKER         0.0477    0.0456    +0.002  Bitget -> Bitget  OK
+   BAS             0.0374    0.0150    +0.022  Mexc -> XT  OK
+   ERA             0.0300    0.0037    +0.026  HTX -> WhiteBIT  OK
+
+== FUTURES-DEX ==
+   TOKEN         OURS/24h  REAL/24h     DELTA  ROUTE
+   SIREN           0.8208    0.8334    -0.013  OKX DEX 56 -> Mexc  OK
+   ESPORTS         0.3366    0.3396    -0.003  OKX DEX 56 -> Mexc  OK
+   IDOL            0.2586    0.2556    +0.003  OKX DEX 56 -> Mexc  OK
+   TLM             0.0300    0.0300    +0.000  OKX DEX 56 -> Gate  OK
+   RLC             0.0300   -0.0222    +0.052  OKX DEX 1 -> Gate  OK
+   NMR             0.0300    0.0150    +0.015  OKX DEX 1 -> WhiteBIT  OK
+   LDO             0.0300    0.0300    +0.000  OKX DEX 1 -> OKX  OK
+   ONE             0.0300    0.0300    +0.000  OKX DEX 56 -> Mexc  OK
+   ME              0.0300    0.0300    -0.000  OKX DEX 501 -> Kucoin Futures  OK
+   EIGEN           0.0300    0.0300    +0.000  OKX DEX 1 -> OKX  OK
+   RSR             0.0300    0.0300    +0.000  OKX DEX 1 -> Mexc  OK
+   ETH             0.0300    0.0300    +0.000  OKX DEX 1 -> WhiteBIT  OK
+   AERO            0.0300    0.0300    +0.000  OKX DEX 8453 -> OKX  OK
+   SUPER           0.0150    0.0150    +0.000  OKX DEX 1 -> Phemex  OK
+   ORCA            0.0150    0.0150    +0.000  OKX DEX 501 -> WhiteBIT  OK
+
+matched 44, mismatched 0, measured-vs-forecast 1, unverifiable 0
+agreement on comparable rows: 100%

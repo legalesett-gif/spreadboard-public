@@ -1,0 +1,71 @@
+{
+  "results": [
+    {
+      "viewport": "desktop",
+      "status": 200,
+      "errors": [],
+      "state": {
+        "h1": "Alex",
+        "dialogOpen": true,
+        "researchVisible": true,
+        "controls": {
+          "research_matched_notional_usd": true,
+          "research_costs_complete": true,
+          "research_cost_consent": true,
+          "transfer_chain": true,
+          "transfer_contract": true,
+          "transfer_started_at": true,
+          "transfer_credited_at": true,
+          "research_transfer_consent": true
+        },
+        "costConsentDefault": false,
+        "transferConsentDefault": false,
+        "privacyLink": "/privacy",
+        "saveReachable": true,
+        "bodyOverflowPx": 0
+      },
+      "screenshot": "output/playwright/2026-08-14-a7efccd-research-evidence/desktop-account-research.png"
+    },
+    {
+      "viewport": "mobile",
+      "status": 200,
+      "errors": [],
+      "state": {
+        "h1": "Alex",
+        "dialogOpen": true,
+        "researchVisible": true,
+        "controls": {
+          "research_matched_notional_usd": true,
+          "research_costs_complete": true,
+          "research_cost_consent": true,
+          "transfer_chain": true,
+          "transfer_contract": true,
+          "transfer_started_at": true,
+          "transfer_credited_at": true,
+          "research_transfer_consent": true
+        },
+        "costConsentDefault": false,
+        "transferConsentDefault": false,
+        "privacyLink": "/privacy",
+        "saveReachable": true,
+        "bodyOverflowPx": 0
+      },
+      "screenshot": "output/playwright/2026-08-14-a7efccd-research-evidence/mobile-account-research.png"
+    },
+    {
+      "pathname": "/methodology",
+      "status": 200,
+      "errors": [],
+      "hasOptInCopy": true,
+      "bodyOverflowPx": 0
+    },
+    {
+      "pathname": "/privacy",
+      "status": 200,
+      "errors": [],
+      "hasOptInCopy": true,
+      "bodyOverflowPx": 0
+    }
+  ],
+  "failures": []
+}

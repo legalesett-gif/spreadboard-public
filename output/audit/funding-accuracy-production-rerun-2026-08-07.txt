@@ -1,0 +1,27 @@
+
+== FUTURES-FUTURES ==
+   TOKEN         OURS/24h  REAL/24h     DELTA  ROUTE
+   HFT             1.5179    1.0031    +0.515  Bybit -> Binance  MEASURED
+   KORU            0.5236    0.1308    +0.393  Phemex -> Gate  MISMATCH
+   SPX             0.4834   -0.2599    +0.743  Gate -> Kraken Futures  MEASURED
+   MIRA            0.2160    0.2130    +0.003  Mexc -> WhiteBIT  OK
+   COHR            0.2035    0.2038    -0.000  HTX -> Binance  OK
+
+== FUTURES-SPOT ==
+   TOKEN         OURS/24h  REAL/24h     DELTA  ROUTE
+   SPX             0.4996   -0.2299    +0.730  Kraken -> Kraken Futures  MEASURED
+   HFT             0.4022    0.4355    -0.033  Bingx -> Binance  OK
+   PLAY            0.2016    0.2010    +0.001  Mexc -> Mexc  OK
+   BLUAI           0.1896    0.1935    -0.004  Bingx -> Bingx  OK
+   CSPR            0.1200    0.1200    +0.000  HTX -> Mexc  OK
+
+== FUTURES-DEX ==
+   TOKEN         OURS/24h  REAL/24h     DELTA  ROUTE
+   SIREN           0.6174    0.6240    -0.007  OKX DEX 56 -> Mexc  OK
+   ESPORTS         0.3972    0.4026    -0.005  OKX DEX 56 -> Mexc  OK
+   IDOL            0.2604    0.2694    -0.009  OKX DEX 56 -> Mexc  OK
+   JTO             0.0352    0.0352    +0.000  OKX DEX 501 -> Kraken Futures  OK
+   JASMY           0.0308    0.0308    -0.000  OKX DEX 1 -> Kraken Futures  OK
+
+matched 11, mismatched 1, measured-vs-forecast 3, unverifiable 0
+agreement on comparable rows: 92%

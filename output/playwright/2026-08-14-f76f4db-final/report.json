@@ -1,0 +1,139 @@
+{
+  "mode": "production",
+  "generatedAt": "2026-08-14T13:35:42.602Z",
+  "results": [
+    {
+      "viewport": "desktop",
+      "name": "charts",
+      "url": "https://spreadarbitrage.ink/charts",
+      "finalUrl": "https://spreadarbitrage.ink/charts",
+      "status": 200,
+      "elapsedMs": 2424,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": {
+        "token": "GUA",
+        "dexLongAvailable": true,
+        "futureShortAvailable": true,
+        "routeReady": true
+      },
+      "screenshot": "output/playwright/2026-08-14-f76f4db-final/desktop-charts.png",
+      "title": "Charts - SpreadBoard",
+      "h1": "Build a spread chart",
+      "bodyChars": 1485,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    },
+    {
+      "viewport": "desktop",
+      "name": "watchlist",
+      "url": "https://spreadarbitrage.ink/watchlist",
+      "finalUrl": "https://spreadarbitrage.ink/watchlist",
+      "status": 200,
+      "elapsedMs": 3578,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": {
+        "marginPlannerVisible": true,
+        "marginVerdict": "Within entered stress",
+        "transientCopyVisible": true
+      },
+      "screenshot": "output/playwright/2026-08-14-f76f4db-final/desktop-watchlist.png",
+      "title": "Watchlist - SpreadBoard",
+      "h1": "Your market radar",
+      "bodyChars": 5693,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    },
+    {
+      "viewport": "desktop",
+      "name": "account",
+      "url": "https://spreadarbitrage.ink/account",
+      "finalUrl": "https://spreadarbitrage.ink/account",
+      "status": 200,
+      "elapsedMs": 3932,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": {
+        "token": "GUA",
+        "dexLongAvailable": true,
+        "individualMarketCount": 12,
+        "modalScrollable": true,
+        "saveButtonReachable": true
+      },
+      "screenshot": "output/playwright/2026-08-14-f76f4db-final/desktop-account.png",
+      "title": "My portfolio - SpreadBoard",
+      "h1": "Alex",
+      "bodyChars": 6841,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    },
+    {
+      "viewport": "mobile",
+      "name": "charts",
+      "url": "https://spreadarbitrage.ink/charts",
+      "finalUrl": "https://spreadarbitrage.ink/charts",
+      "status": 200,
+      "elapsedMs": 2370,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": {
+        "token": "GUA",
+        "dexLongAvailable": true,
+        "futureShortAvailable": true,
+        "routeReady": true
+      },
+      "screenshot": "output/playwright/2026-08-14-f76f4db-final/mobile-charts.png",
+      "title": "Charts - SpreadBoard",
+      "h1": "Build a spread chart",
+      "bodyChars": 1501,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    },
+    {
+      "viewport": "mobile",
+      "name": "watchlist",
+      "url": "https://spreadarbitrage.ink/watchlist",
+      "finalUrl": "https://spreadarbitrage.ink/watchlist",
+      "status": 200,
+      "elapsedMs": 1845,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": {
+        "marginPlannerVisible": true,
+        "marginVerdict": "Within entered stress",
+        "transientCopyVisible": true
+      },
+      "screenshot": "output/playwright/2026-08-14-f76f4db-final/mobile-watchlist.png",
+      "title": "Watchlist - SpreadBoard",
+      "h1": "Your market radar",
+      "bodyChars": 5709,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    },
+    {
+      "viewport": "mobile",
+      "name": "account",
+      "url": "https://spreadarbitrage.ink/account",
+      "finalUrl": "https://spreadarbitrage.ink/account",
+      "status": 200,
+      "elapsedMs": 3201,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": {
+        "token": "GUA",
+        "dexLongAvailable": true,
+        "individualMarketCount": 12,
+        "modalScrollable": true,
+        "saveButtonReachable": true
+      },
+      "screenshot": "output/playwright/2026-08-14-f76f4db-final/mobile-account.png",
+      "title": "My portfolio - SpreadBoard",
+      "h1": "Alex",
+      "bodyChars": 6857,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    }
+  ],
+  "failures": []
+}

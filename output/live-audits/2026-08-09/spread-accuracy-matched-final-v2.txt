@@ -1,0 +1,14 @@
+
+== FUTURES ==
+   TOKEN         OURS $50  LIVE $50    DELTA  ROUTE
+   ANTHROPIC        3.470     3.470   -0.000  Binance -> Bitget  OK
+
+== FUTURES-SPOT ==
+   TOKEN         OURS $50  LIVE $50    DELTA  ROUTE
+   TUT              3.637     3.987   -0.350  Phemex -> Kucoin Futures  OK
+
+== SPOT ==
+   TOKEN         OURS $50  LIVE $50    DELTA  ROUTE
+   WKC              4.743     4.690   +0.054  Gate -> Mexc  OK
+
+matched 3, mismatched 0, unverifiable 0

@@ -1,0 +1,78 @@
+{
+  "revision": "f424a22",
+  "api": {
+    "ok": true,
+    "mode": "isolated_member_size_quote",
+    "route_key": "BOME|OKX DEX 501|Spot|Hyperliquid|Futures",
+    "token": "BOME",
+    "target_notional_usd": 500,
+    "depth_proven_at_target": true,
+    "dex_evidence_count": 1,
+    "quote_age_seconds": 0.7854628562927246,
+    "matched_spread_present": true
+  },
+  "desktop": {
+    "overflow_px": 0,
+    "panel_visible": true,
+    "results_visible": true,
+    "dex_text": "buy · chain 501 · ukHH6c7mMyiWCf1b9pnWe25TSpkDDt3H5pQZgZ74J82 · impact -0.030% · gas $0.00 · MEV not_enabled_quote_only",
+    "state": "Exact $500 quote received. It has not changed the $50 rankings or chart history."
+  },
+  "mobile": {
+    "overflow_px": 0,
+    "overflowers": [
+      {
+        "tag": "NAV",
+        "className": "mobile-primary-nav",
+        "width": 390,
+        "left": 0,
+        "right": 390,
+        "scrollWidth": 608
+      },
+      {
+        "tag": "A",
+        "className": "",
+        "width": 70,
+        "left": 378,
+        "right": 447,
+        "scrollWidth": 70
+      },
+      {
+        "tag": "A",
+        "className": "",
+        "width": 66,
+        "left": 447,
+        "right": 513,
+        "scrollWidth": 66
+      },
+      {
+        "tag": "A",
+        "className": "",
+        "width": 87,
+        "left": 513,
+        "right": 600,
+        "scrollWidth": 87
+      },
+      {
+        "tag": "NAV",
+        "className": "pair-anchors",
+        "width": 334,
+        "left": 28,
+        "right": 362,
+        "scrollWidth": 402
+      },
+      {
+        "tag": "A",
+        "className": "",
+        "width": 95,
+        "left": 336,
+        "right": 430,
+        "scrollWidth": 95
+      }
+    ],
+    "panel_visible": true,
+    "results_visible": true,
+    "state": "Exact $500 quote received. It has not changed the $50 rankings or chart history."
+  },
+  "errors": []
+}

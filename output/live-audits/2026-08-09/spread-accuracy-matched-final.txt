@@ -1,0 +1,14 @@
+
+== FUTURES ==
+   TOKEN         OURS $50  LIVE $50    DELTA  ROUTE
+   ANTHROPIC        3.470       n/a        -  Binance -> Bitget
+
+== FUTURES-SPOT ==
+   TOKEN         OURS $50  LIVE $50    DELTA  ROUTE
+   ZEC              3.853       n/a        -  HTX -> Bingx
+
+== SPOT ==
+   TOKEN         OURS $50  LIVE $50    DELTA  ROUTE
+   ATH              0.904       n/a        -  Bybit -> HTX
+
+matched 0, mismatched 0, unverifiable 3

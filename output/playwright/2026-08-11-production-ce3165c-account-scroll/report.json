@@ -1,0 +1,53 @@
+{
+  "mode": "production",
+  "generatedAt": "2026-08-11T02:41:14.253Z",
+  "results": [
+    {
+      "viewport": "desktop",
+      "name": "account",
+      "url": "https://spreadarbitrage.ink/account",
+      "finalUrl": "https://spreadarbitrage.ink/account",
+      "status": 200,
+      "elapsedMs": 14502,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": {
+        "token": "GUA",
+        "dexLongAvailable": true,
+        "individualMarketCount": 12,
+        "modalScrollable": true,
+        "saveButtonReachable": true
+      },
+      "screenshot": "output/playwright/2026-08-11-production-ce3165c-account-scroll/desktop-account.png",
+      "title": "My portfolio - SpreadBoard",
+      "h1": "Codex visual audit",
+      "bodyChars": 3916,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    },
+    {
+      "viewport": "mobile",
+      "name": "account",
+      "url": "https://spreadarbitrage.ink/account",
+      "finalUrl": "https://spreadarbitrage.ink/account",
+      "status": 200,
+      "elapsedMs": 10753,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": {
+        "token": "GUA",
+        "dexLongAvailable": false,
+        "individualMarketCount": 0,
+        "modalScrollable": true,
+        "saveButtonReachable": true
+      },
+      "screenshot": "output/playwright/2026-08-11-production-ce3165c-account-scroll/mobile-account.png",
+      "title": "My portfolio - SpreadBoard",
+      "h1": "Codex visual audit",
+      "bodyChars": 1231,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    }
+  ],
+  "failures": []
+}

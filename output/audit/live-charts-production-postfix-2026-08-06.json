@@ -1,0 +1,220 @@
+{
+  "base_url": "https://spreadarbitrage.ink",
+  "failed_routes": 5,
+  "generated_at": "2026-08-06T22:45:39.017879+00:00",
+  "passed_routes": 7,
+  "requested_routes": 12,
+  "routes": [
+    {
+      "age_seconds": 11.871732473373413,
+      "errors": [
+        "short_current_funding_missing",
+        "short_funding_interval_missing"
+      ],
+      "first_last_quote_ts_us": 1786056123900743,
+      "lane": "FUTURES",
+      "last_quote_ts_us": 1786056210982114,
+      "ok": false,
+      "route_key": "COOKIE|Bybit|Futures|Ourbit|Futures",
+      "sample_status": "ok",
+      "token": "COOKIE",
+      "window_counts": {
+        "1h": 61,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 11.513333797454834,
+      "errors": [
+        "short_current_funding_missing",
+        "short_funding_interval_missing"
+      ],
+      "first_last_quote_ts_us": 1786056145702719,
+      "lane": "FUTURES",
+      "last_quote_ts_us": 1786056233874419,
+      "ok": false,
+      "route_key": "USELESS|Gate|Futures|Ourbit|Futures",
+      "sample_status": "ok",
+      "token": "USELESS",
+      "window_counts": {
+        "1h": 60,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 9.876169681549072,
+      "errors": [],
+      "first_last_quote_ts_us": 1786056172599867,
+      "lane": "FUTURES",
+      "last_quote_ts_us": 1786056271087543,
+      "ok": true,
+      "route_key": "BP|Kucoin Futures|Futures|Gate|Futures",
+      "sample_status": "ok",
+      "token": "BP",
+      "window_counts": {
+        "1h": 12,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 87.95245432853699,
+      "errors": [
+        "sampler_unavailable",
+        "timestamp_did_not_advance"
+      ],
+      "first_last_quote_ts_us": 1786056127802890,
+      "lane": "FUTURES-SPOT-PAIR",
+      "last_quote_ts_us": 1786056127802890,
+      "ok": false,
+      "route_key": "NIGHT|HTX|Spot|Bitget|Futures",
+      "sample_status": "unavailable",
+      "token": "NIGHT",
+      "window_counts": {
+        "1h": 64,
+        "1m": 0,
+        "30m": 3,
+        "5m": 1
+      }
+    },
+    {
+      "age_seconds": 8.282584428787231,
+      "errors": [
+        "short_current_funding_missing",
+        "short_funding_interval_missing"
+      ],
+      "first_last_quote_ts_us": 1786056153161001,
+      "lane": "FUTURES-SPOT-PAIR",
+      "last_quote_ts_us": 1786056240573337,
+      "ok": false,
+      "route_key": "USELESS|Gate|Spot|Ourbit|Futures",
+      "sample_status": "ok",
+      "token": "USELESS",
+      "window_counts": {
+        "1h": 60,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "errors": [
+        "HTTPError:HTTP Error 500: Internal Server Error"
+      ],
+      "lane": "FUTURES-SPOT-PAIR",
+      "ok": false,
+      "route_key": "BP|CoinEx|Spot|Gate|Futures",
+      "token": "BP"
+    },
+    {
+      "age_seconds": 6.941261291503906,
+      "errors": [],
+      "first_last_quote_ts_us": 1786056131770573,
+      "lane": "SPOT",
+      "last_quote_ts_us": 1786056211033741,
+      "ok": true,
+      "route_key": "PYR|Kucoin|Spot|Binance|Spot",
+      "sample_status": "ok",
+      "token": "PYR",
+      "window_counts": {
+        "1h": 60,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 8.971627473831177,
+      "errors": [],
+      "first_last_quote_ts_us": 1786055567754584,
+      "lane": "SPOT",
+      "last_quote_ts_us": 1786056252690163,
+      "ok": true,
+      "route_key": "WKC|Gate|Spot|Mexc|Spot",
+      "sample_status": "ok",
+      "token": "WKC",
+      "window_counts": {
+        "1h": 63,
+        "1m": 1,
+        "30m": 3,
+        "5m": 1
+      }
+    },
+    {
+      "age_seconds": 25.826045751571655,
+      "errors": [],
+      "first_last_quote_ts_us": 1786056189154455,
+      "lane": "SPOT",
+      "last_quote_ts_us": 1786056294630496,
+      "ok": true,
+      "route_key": "VANRY|Mexc|Spot|XT|Spot",
+      "sample_status": "ok",
+      "token": "VANRY",
+      "window_counts": {
+        "1h": 57,
+        "1m": 1,
+        "30m": 4,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 11.482019662857056,
+      "errors": [],
+      "first_last_quote_ts_us": 1786056139954505,
+      "lane": "DEX-FUTURES",
+      "last_quote_ts_us": 1786056227174743,
+      "ok": true,
+      "route_key": "ON|OKX DEX 56|Spot|Mexc|Futures",
+      "sample_status": "ok",
+      "token": "ON",
+      "window_counts": {
+        "1h": 2,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 11.740910291671753,
+      "errors": [],
+      "first_last_quote_ts_us": 1786056166685211,
+      "lane": "DEX-FUTURES",
+      "last_quote_ts_us": 1786056265054519,
+      "ok": true,
+      "route_key": "BANK|OKX DEX 56|Spot|Kucoin Futures|Futures",
+      "sample_status": "ok",
+      "token": "BANK",
+      "window_counts": {
+        "1h": 2,
+        "1m": 1,
+        "30m": 2,
+        "5m": 2
+      }
+    },
+    {
+      "age_seconds": 17.44529938697815,
+      "errors": [],
+      "first_last_quote_ts_us": 1786056198769126,
+      "lane": "DEX-FUTURES",
+      "last_quote_ts_us": 1786056311754407,
+      "ok": true,
+      "route_key": "TLM|OKX DEX 56|Spot|Mexc|Futures",
+      "sample_status": "ok",
+      "token": "TLM",
+      "window_counts": {
+        "1h": 5,
+        "1m": 1,
+        "30m": 3,
+        "5m": 2
+      }
+    }
+  ],
+  "schema": "spreadboard.live_chart_audit.v1",
+  "selected_routes": 12,
+  "selection": "round_robin_top_ranked_groups_across_primary_lanes"
+}

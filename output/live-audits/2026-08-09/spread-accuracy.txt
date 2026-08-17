@@ -1,0 +1,26 @@
+
+== FUTURES ==
+   TOKEN            OURS     REAL    DELTA  ROUTE
+   ANTHROPIC       3.448      n/a        -  Binance -> Bitget
+   TUT             3.281    2.600   +0.680  HTX -> Kucoin Futures  MISMATCH
+   ERA             2.582    2.597   -0.015  WhiteBIT -> Mexc  OK
+   ANSEM           2.347      n/a        -  Aster -> Mexc
+   SSPC            2.157    2.539   -0.382  Bitget -> Bybit  OK
+
+== FUTURES-SPOT ==
+   TOKEN            OURS     REAL    DELTA  ROUTE
+   ZEC             3.919    3.875   +0.044  HTX -> Bingx  OK
+   TUT             3.823    2.409   +1.415  Phemex -> Kucoin Futures  MISMATCH
+   RVN             2.629   22.544  -19.915  HTX -> Bybit  MISMATCH
+   CATE            1.211    2.885   -1.674  Mexc -> Mexc  MISMATCH
+   BLESS           0.179    0.208   -0.029  Bitget -> XT  OK
+
+== SPOT ==
+   TOKEN            OURS     REAL    DELTA  ROUTE
+   WKC             4.564    4.971   -0.407  Gate -> Mexc  OK
+   ATH             1.371    1.126   +0.245  Bybit -> HTX  OK
+   DAG             0.979    0.747   +0.232  Gate -> Kraken  OK
+   IMU             0.721   -0.500   +1.221  Coinbase -> Gate  MISMATCH
+   WAXL            0.459    0.459   +0.000  HTX -> Coinbase  OK
+
+matched 8, mismatched 5, unverifiable 2

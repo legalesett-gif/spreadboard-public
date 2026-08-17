@@ -1,0 +1,34 @@
+[
+  {
+    "name": "desktop",
+    "selection": {
+      "ready": true,
+      "long": "OKX DEX 56 · Spot · GUA",
+      "short": "Aster · Futures · GUA/USDT:USDT"
+    },
+    "state": {
+      "heading": "SPREAD CHART\nGUA\nOKX DEX 56 DEX → Aster Futures · normalized 1:1\n1M\n5M\n30M\n1H\n4H\n12H\n1D\n3D\n7D\n30D",
+      "legend": "In % · open\n-0.114%\n$50 VWAP\n-0.114%\nOut % · close\n+0.000%\nLong fund\n+0.000%\nShort fund\n+0.001%",
+      "observations": "0 observations · 0% window coverage · no candle history exists for a DEX leg, so this chart builds live as you watch",
+      "canvasCount": 11,
+      "bodyOverflowPx": 0
+    },
+    "errors": []
+  },
+  {
+    "name": "mobile",
+    "selection": {
+      "ready": true,
+      "long": "OKX DEX 56 · Spot · GUA",
+      "short": "Aster · Futures · GUA/USDT:USDT"
+    },
+    "state": {
+      "heading": "SPREAD CHART\nGUA\nOKX DEX 56 DEX → Aster Futures · normalized 1:1\n1M\n5M\n30M\n1H\n4H\n12H\n1D\n3D\n7D\n30D",
+      "legend": "In % · open\n-0.114%\n$50 VWAP\n-0.114%\nOut % · close\n+0.000%\nLong fund\n+0.000%\nShort fund\n+0.001%",
+      "observations": "1 observations · 0% window coverage · no candle history exists for a DEX leg, so this chart builds live as you watch",
+      "canvasCount": 11,
+      "bodyOverflowPx": 0
+    },
+    "errors": []
+  }
+]

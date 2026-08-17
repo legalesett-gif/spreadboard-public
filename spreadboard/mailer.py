@@ -75,8 +75,14 @@ def status() -> dict[str, object]:
     }
 
 
-def _send_text(*, settings: MailConfig, recipient: str, subject: str, body: str) -> None:
-    """Deliver through HTTPS when configured, with SMTP as the portable fallback."""
+def _send_text(*, settings: MailConfig, recipient: str, subject: str, body: str) -> str:
+    """Deliver through HTTPS when configured, with SMTP as the portable fallback.
+
+    Returns the provider's message id where there is one. Discarding it left no
+    way to answer "was this actually sent?" after the fact -- the only evidence
+    was that nothing raised, which is exactly what a silently-filtered email
+    looks like too.
+    """
     if settings.resend_api_key:
         payload = json.dumps(
             {
@@ -99,7 +105,15 @@ def _send_text(*, settings: MailConfig, recipient: str, subject: str, body: str)
         with urlopen(request, timeout=10) as response:
             if not 200 <= int(response.status) < 300:
                 raise RuntimeError("email_delivery_failed")
-        return
+            # The id is evidence, not a precondition: a response we cannot
+            # parse must never turn a delivered email into a failed one.
+            reader = getattr(response, "read", None)
+            if reader is None:
+                return ""
+            try:
+                return str((json.loads(reader().decode("utf-8")) or {}).get("id") or "")
+            except (AttributeError, ValueError, UnicodeDecodeError):
+                return ""
 
     message = EmailMessage()
     message["Subject"] = subject
@@ -119,6 +133,7 @@ def _send_text(*, settings: MailConfig, recipient: str, subject: str, body: str)
         if settings.username:
             client.login(settings.username, settings.password)
         client.send_message(message)
+    return ""
 
 
 def send_password_reset(*, recipient: str, display_name: str, reset_url: str) -> None:
@@ -143,7 +158,7 @@ def send_password_reset(*, recipient: str, display_name: str, reset_url: str) ->
 
 def send_subscription_notice(
     *, recipient: str, display_name: str, subject: str, body: str, action_url: str
-) -> None:
+) -> str:
     """Send one non-marketing membership lifecycle notice."""
     settings = config()
     if not settings.configured:
@@ -155,7 +170,7 @@ def send_subscription_notice(
         f"Manage your membership:\n{action_url}\n\n"
         "This is a service notice about your prepaid SpreadBoard access.\n"
     )
-    _send_text(
+    return _send_text(
         settings=settings,
         recipient=recipient,
         subject=str(subject or "SpreadBoard membership update")[:180],

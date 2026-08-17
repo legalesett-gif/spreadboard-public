@@ -1,0 +1,170 @@
+{
+  "generated_at": "2026-08-13",
+  "results": [
+    {
+      "viewport": "desktop",
+      "name": "markets",
+      "status": 200,
+      "final": "https://spreadarbitrage.ink/markets",
+      "errors": [],
+      "state": {},
+      "screenshot": "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/output/playwright/2026-08-13-c54f48f-alex-final/desktop-markets.png",
+      "title": "Markets - SpreadBoard",
+      "h1": "One asset, every live route",
+      "overflow": 0,
+      "invalid": [],
+      "chars": 7783
+    },
+    {
+      "viewport": "desktop",
+      "name": "funding",
+      "status": 200,
+      "final": "https://spreadarbitrage.ink/funding",
+      "errors": [],
+      "state": {},
+      "screenshot": "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/output/playwright/2026-08-13-c54f48f-alex-final/desktop-funding.png",
+      "title": "Funding - SpreadBoard",
+      "h1": "Paired carry farms",
+      "overflow": 0,
+      "invalid": [],
+      "chars": 5664
+    },
+    {
+      "viewport": "desktop",
+      "name": "rankings",
+      "status": 200,
+      "final": "https://spreadarbitrage.ink/rankings",
+      "errors": [],
+      "state": {
+        "rows": 100,
+        "has1d": false,
+        "has7d": false,
+        "has30d": false
+      },
+      "screenshot": "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/output/playwright/2026-08-13-c54f48f-alex-final/desktop-rankings.png",
+      "title": "Token Rankings - SpreadBoard",
+      "h1": "Individual token leaderboard",
+      "overflow": 0,
+      "invalid": [],
+      "chars": 18341
+    },
+    {
+      "viewport": "desktop",
+      "name": "charts",
+      "status": 200,
+      "final": "https://spreadarbitrage.ink/charts",
+      "errors": [],
+      "state": {
+        "dex": true,
+        "futures": true,
+        "ready": true
+      },
+      "screenshot": "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/output/playwright/2026-08-13-c54f48f-alex-final/desktop-charts.png",
+      "title": "Charts - SpreadBoard",
+      "h1": "Build a spread chart",
+      "overflow": 0,
+      "invalid": [],
+      "chars": 1485
+    },
+    {
+      "viewport": "desktop",
+      "name": "account",
+      "status": 200,
+      "final": "https://spreadarbitrage.ink/account",
+      "errors": [],
+      "state": {
+        "edit": true,
+        "delete": true
+      },
+      "screenshot": "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/output/playwright/2026-08-13-c54f48f-alex-final/desktop-account.png",
+      "title": "My portfolio - SpreadBoard",
+      "h1": "Alex",
+      "overflow": 0,
+      "invalid": [],
+      "chars": 3150
+    },
+    {
+      "viewport": "mobile",
+      "name": "markets",
+      "status": 200,
+      "final": "https://spreadarbitrage.ink/markets",
+      "errors": [],
+      "state": {},
+      "screenshot": "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/output/playwright/2026-08-13-c54f48f-alex-final/mobile-markets.png",
+      "title": "Markets - SpreadBoard",
+      "h1": "One asset, every live route",
+      "overflow": 0,
+      "invalid": [],
+      "chars": 7664
+    },
+    {
+      "viewport": "mobile",
+      "name": "funding",
+      "status": 200,
+      "final": "https://spreadarbitrage.ink/funding",
+      "errors": [],
+      "state": {},
+      "screenshot": "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/output/playwright/2026-08-13-c54f48f-alex-final/mobile-funding.png",
+      "title": "Funding - SpreadBoard",
+      "h1": "Paired carry farms",
+      "overflow": 0,
+      "invalid": [],
+      "chars": 5509
+    },
+    {
+      "viewport": "mobile",
+      "name": "rankings",
+      "status": 200,
+      "final": "https://spreadarbitrage.ink/rankings",
+      "errors": [],
+      "state": {
+        "rows": 100,
+        "has1d": false,
+        "has7d": false,
+        "has30d": false
+      },
+      "screenshot": "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/output/playwright/2026-08-13-c54f48f-alex-final/mobile-rankings.png",
+      "title": "Token Rankings - SpreadBoard",
+      "h1": "Individual token leaderboard",
+      "overflow": 0,
+      "invalid": [],
+      "chars": 18198
+    },
+    {
+      "viewport": "mobile",
+      "name": "charts",
+      "status": 200,
+      "final": "https://spreadarbitrage.ink/charts",
+      "errors": [],
+      "state": {
+        "dex": true,
+        "futures": true,
+        "ready": true
+      },
+      "screenshot": "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/output/playwright/2026-08-13-c54f48f-alex-final/mobile-charts.png",
+      "title": "Charts - SpreadBoard",
+      "h1": "Build a spread chart",
+      "overflow": 0,
+      "invalid": [],
+      "chars": 1409
+    },
+    {
+      "viewport": "mobile",
+      "name": "account",
+      "status": 200,
+      "final": "https://spreadarbitrage.ink/account",
+      "errors": [],
+      "state": {
+        "edit": true,
+        "delete": true
+      },
+      "screenshot": "/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-public-release-clean/output/playwright/2026-08-13-c54f48f-alex-final/mobile-account.png",
+      "title": "My portfolio - SpreadBoard",
+      "h1": "Alex",
+      "overflow": 0,
+      "invalid": [],
+      "chars": 3035
+    }
+  ],
+  "failures": []
+}

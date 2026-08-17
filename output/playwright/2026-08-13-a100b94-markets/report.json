@@ -1,0 +1,41 @@
+{
+  "mode": "production",
+  "generatedAt": "2026-08-13T21:37:10.162Z",
+  "results": [
+    {
+      "viewport": "desktop",
+      "name": "markets",
+      "url": "https://spreadarbitrage.ink/markets",
+      "finalUrl": "https://spreadarbitrage.ink/markets",
+      "status": 200,
+      "elapsedMs": 2770,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": null,
+      "screenshot": "output/playwright/2026-08-13-a100b94-markets/desktop-markets.png",
+      "title": "Markets - SpreadBoard",
+      "h1": "One asset, every live route",
+      "bodyChars": 7969,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    },
+    {
+      "viewport": "mobile",
+      "name": "markets",
+      "url": "https://spreadarbitrage.ink/markets",
+      "finalUrl": "https://spreadarbitrage.ink/markets",
+      "status": 200,
+      "elapsedMs": 2217,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": null,
+      "screenshot": "output/playwright/2026-08-13-a100b94-markets/mobile-markets.png",
+      "title": "Markets - SpreadBoard",
+      "h1": "One asset, every live route",
+      "bodyChars": 7967,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    }
+  ],
+  "failures": []
+}

@@ -1,0 +1,33 @@
+{
+  "results": [
+    {
+      "name": "desktop",
+      "loginStatus": 200,
+      "status": 200,
+      "finalUrl": "https://spreadarbitrage.ink/funding",
+      "errors": [],
+      "screenshot": "output/playwright/2026-08-11-production-63fbd8b-funding/desktop-funding.png",
+      "title": "Funding - SpreadBoard",
+      "h1": "Paired carry farms",
+      "coverageTextPresent": true,
+      "bodyOverflowPx": 0,
+      "coverageWithinViewport": true,
+      "coverageChars": 234
+    },
+    {
+      "name": "mobile",
+      "loginStatus": 200,
+      "status": 200,
+      "finalUrl": "https://spreadarbitrage.ink/funding",
+      "errors": [],
+      "screenshot": "output/playwright/2026-08-11-production-63fbd8b-funding/mobile-funding.png",
+      "title": "Funding - SpreadBoard",
+      "h1": "Paired carry farms",
+      "coverageTextPresent": true,
+      "bodyOverflowPx": 0,
+      "coverageWithinViewport": true,
+      "coverageChars": 234
+    }
+  ],
+  "failures": []
+}

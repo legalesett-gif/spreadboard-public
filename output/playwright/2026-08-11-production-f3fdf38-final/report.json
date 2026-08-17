@@ -1,0 +1,34 @@
+{
+  "revision": "f3fdf38",
+  "results": [
+    {
+      "viewport": "desktop",
+      "status": 200,
+      "errors": [],
+      "screenshot": "output/playwright/2026-08-11-production-f3fdf38-final/desktop-watchlist.png",
+      "cards": 2,
+      "hasFunding": true,
+      "hasSpread": true,
+      "evidenceConfidence": true,
+      "oldScore": false,
+      "duplicateDex": false,
+      "invalid": [],
+      "overflow": 0
+    },
+    {
+      "viewport": "mobile",
+      "status": 200,
+      "errors": [],
+      "screenshot": "output/playwright/2026-08-11-production-f3fdf38-final/mobile-watchlist.png",
+      "cards": 2,
+      "hasFunding": true,
+      "hasSpread": true,
+      "evidenceConfidence": true,
+      "oldScore": false,
+      "duplicateDex": false,
+      "invalid": [],
+      "overflow": 0
+    }
+  ],
+  "failures": []
+}

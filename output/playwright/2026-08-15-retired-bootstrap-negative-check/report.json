@@ -1,0 +1,80 @@
+{
+  "mode": "production",
+  "generatedAt": "2026-08-14T23:26:38.021Z",
+  "results": [
+    {
+      "viewport": "desktop",
+      "name": "markets",
+      "url": "https://spreadarbitrage.ink/markets",
+      "finalUrl": "https://spreadarbitrage.ink/api/session",
+      "status": null,
+      "elapsedMs": 0,
+      "navigationError": "AuthenticationError:active subscription required",
+      "browserErrors": [],
+      "interactiveState": null,
+      "screenshot": null,
+      "title": "",
+      "h1": "",
+      "bodyChars": 0,
+      "invalidText": [],
+      "bodyOverflowPx": 0,
+      "unexpectedRedirect": false
+    },
+    {
+      "viewport": "mobile",
+      "name": "markets",
+      "url": "https://spreadarbitrage.ink/markets",
+      "finalUrl": "https://spreadarbitrage.ink/api/session",
+      "status": null,
+      "elapsedMs": 0,
+      "navigationError": "AuthenticationError:active subscription required",
+      "browserErrors": [],
+      "interactiveState": null,
+      "screenshot": null,
+      "title": "",
+      "h1": "",
+      "bodyChars": 0,
+      "invalidText": [],
+      "bodyOverflowPx": 0,
+      "unexpectedRedirect": false
+    }
+  ],
+  "failures": [
+    {
+      "viewport": "desktop",
+      "name": "markets",
+      "url": "https://spreadarbitrage.ink/markets",
+      "finalUrl": "https://spreadarbitrage.ink/api/session",
+      "status": null,
+      "elapsedMs": 0,
+      "navigationError": "AuthenticationError:active subscription required",
+      "browserErrors": [],
+      "interactiveState": null,
+      "screenshot": null,
+      "title": "",
+      "h1": "",
+      "bodyChars": 0,
+      "invalidText": [],
+      "bodyOverflowPx": 0,
+      "unexpectedRedirect": false
+    },
+    {
+      "viewport": "mobile",
+      "name": "markets",
+      "url": "https://spreadarbitrage.ink/markets",
+      "finalUrl": "https://spreadarbitrage.ink/api/session",
+      "status": null,
+      "elapsedMs": 0,
+      "navigationError": "AuthenticationError:active subscription required",
+      "browserErrors": [],
+      "interactiveState": null,
+      "screenshot": null,
+      "title": "",
+      "h1": "",
+      "bodyChars": 0,
+      "invalidText": [],
+      "bodyOverflowPx": 0,
+      "unexpectedRedirect": false
+    }
+  ]
+}
