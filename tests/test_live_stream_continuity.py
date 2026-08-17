@@ -1,0 +1,138 @@
+"""The feed must never be weaker than the page it is correcting.
+
+The board renders `depth_weighted_spread_pct` when a route can prove the probe
+size and falls back to `executable_spread_pct` when it cannot, labelling which
+one it showed. The stream carried only the first of those, so any route that
+could not prove depth streamed null -- and the client wrote "—" over a number
+the server had just rendered correctly.
+
+Raising the probe from $50 to $500 made that constant instead of occasional:
+every route's stored `depth_usd` was stamped 50.0 by earlier scans, so
+`prior_depth_verified` (which compares it against the current probe) went false
+almost everywhere and the fallback inside `live_route_updates_for` stopped
+firing. The board filled with dashes within seconds of loading, which reads as
+"needs a refresh".
+
+Two invariants keep it fed:
+  * the stream sends the same value the page would render, and
+  * a null update never erases a number already on screen.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from spreadboard import api_spreads, live_book_cache
+
+
+class _Book:
+    """A real two-sided ladder, deliberately too thin for the probe."""
+
+    def __init__(self, price: float) -> None:
+        # A tenth of the probe: enough to price the top of book, not enough to
+        # walk a matched VWAP at the target size.
+        size = api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD * 0.1
+        self.bids = [[price, size / price]]
+        self.asks = [[price * 1.01, size / (price * 1.01)]]
+        self.quote_ts_us = 1_700_000_100_000_000
+
+
+def _route(**overrides) -> dict:
+    route = {
+        "route_key": "T|Gate|Spot|Bybit|Futures",
+        "long_venue": "Gate",
+        "long_market_type": "Spot",
+        "long_market_symbol": "T/USDT",
+        "short_venue": "Bybit",
+        "short_market_type": "Futures",
+        "short_market_symbol": "T/USDT:USDT",
+        "long_ask": 1.00,
+        "short_bid": 1.10,
+        "age_min": 0.1,
+        # Stamped by a scan taken when the probe was $50, which is exactly the
+        # state every stored route was in when the probe was raised.
+        "depth_usd": 50.0,
+        "depth_unverified": False,
+    }
+    route.update(overrides)
+    return route
+
+
+def _books(monkeypatch: pytest.MonkeyPatch) -> None:
+    long_key = live_book_cache.cache_key("Gate", "Spot", "T/USDT")
+    short_key = live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT")
+    monkeypatch.setattr(
+        live_book_cache,
+        "load_live_books_by_keys",
+        lambda *_a, **_k: {long_key: _Book(1.00), short_key: _Book(1.10)},
+    )
+
+
+def test_a_book_too_thin_for_the_probe_still_streams_its_top_of_book(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The regression: this streamed None and blanked a live row."""
+    _books(monkeypatch)
+
+    priced = api_spreads.live_prices_for([_route()])
+    spread, _funding = priced["T|Gate|Spot|Bybit|Futures"]
+
+    assert spread is not None, "a live two-sided book must always produce a number"
+
+
+def test_the_streamed_number_matches_what_the_page_renders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same precedence as `displayed_edge`: matched first, else top of book."""
+    _books(monkeypatch)
+
+    updates = api_spreads.live_route_updates_for([_route()])
+    spread, _funding, _ts = updates["T|Gate|Spot|Bybit|Futures"]
+
+    # Long book asks at 1.01, short book bids at 1.10: the top-of-book edge the
+    # page would render for this route once matched depth is unavailable.
+    expected = (1.10 / 1.01 - 1.0) * 100.0
+
+    assert spread == pytest.approx(expected)
+
+
+def test_a_proven_route_still_reports_its_matched_vwap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fallback must not shadow a genuine depth measurement."""
+
+    class _DeepBook(_Book):
+        def __init__(self, price: float) -> None:
+            super().__init__(price)
+            size = api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD * 5.0
+            self.bids = [[price, size / price]]
+            self.asks = [[price * 1.01, size / (price * 1.01)]]
+
+    long_key = live_book_cache.cache_key("Gate", "Spot", "T/USDT")
+    short_key = live_book_cache.cache_key("Bybit", "Futures", "T/USDT:USDT")
+    monkeypatch.setattr(
+        live_book_cache,
+        "load_live_books_by_keys",
+        lambda *_a, **_k: {long_key: _DeepBook(1.00), short_key: _DeepBook(1.10)},
+    )
+
+    priced = api_spreads.live_prices_for([_route()])
+    spread, _funding = priced["T|Gate|Spot|Bybit|Futures"]
+
+    assert spread is not None
+
+
+def test_the_client_never_overwrites_a_number_with_a_dash() -> None:
+    """A null update must leave the last good value alone.
+
+    Funding already worked this way; the spread branch did not, so one null
+    tick replaced a real number with "—" until the member reloaded.
+    """
+    import inspect
+
+    from spreadboard import server
+
+    source = inspect.getsource(server.render_board_stream_script)
+    assert 'const next = text || "—";' not in source, (
+        "a null spread still erases the rendered value"
+    )

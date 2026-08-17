@@ -840,6 +840,18 @@ def live_route_updates_for(
         live_depth_spread = measured_depth_spread
         if live_depth_spread is None and prior_depth_verified:
             live_depth_spread = _float_or_none(route.get("depth_weighted_spread_pct"))
+        if live_depth_spread is None:
+            # The page renders `depth_weighted_spread_pct` when the probe can be
+            # proven and `executable_spread_pct` when it cannot, and says which.
+            # The feed carried only the first, so a route that could not prove
+            # the size streamed None and the client wrote a dash over a number
+            # the server had just rendered. Raising the probe to $500 made that
+            # the normal case: every stored `depth_usd` was stamped 50.0, so
+            # `prior_depth_verified` above went false almost everywhere.
+            #
+            # Two live sides always produce a real top-of-book edge. Sending it
+            # keeps the feed at least as strong as the render it is correcting.
+            live_depth_spread = (bid / ask - 1.0) * 100.0
         if measured_depth_spread is None:
             # A top-only tick may retain a still-current prior $50 quote, but
             # it cannot renew that proof.  Preserve the quote's own timestamp.

@@ -5328,9 +5328,13 @@ def render_board_stream_script(
           const carry = pct(route.funding_pct, 3);
           for (const row of rows) {
             for (const spread of row.querySelectorAll("[data-live-spread]")) {
-              const next = text || "—";
-              if (spread.textContent.trim() !== next) {
-                spread.textContent = next;
+              // A tick that carries no number is the absence of news, not news
+              // that the spread is gone. Writing "—" over a value the server
+              // rendered seconds earlier emptied the board within a few ticks
+              // and read as a page that needed reloading. Funding already
+              // guarded this; the spread did not.
+              if (text && spread.textContent.trim() !== text) {
+                spread.textContent = text;
                 flash(spread);
               }
             }
