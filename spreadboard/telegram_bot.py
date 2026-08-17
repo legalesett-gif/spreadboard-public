@@ -188,7 +188,7 @@ def _handle_callback(cb: dict[str, Any], *, db_path: Any, board_path: Any) -> di
     if data.startswith(f"{telegram_checkout.CALLBACK_PREFIX}:") and telegram_checkout.enabled():
         step = telegram_checkout.handle_callback(chat_id, data, db_path=db_path)
         if step is not None:
-            return _reply(chat_id, step["text"], markup=step.get("markup"))
+            return _reply(chat_id, step["text"], markup=step.get("markup"), html=bool(step.get("html")))
     community = accounts.telegram_community(db_path=db_path)
     if community is None or int(community["chat_id"]) != chat_id:
         return None
@@ -341,10 +341,10 @@ def handle_update(
     if telegram_checkout.enabled():
         if command == "/subscribe":
             step = telegram_checkout.begin(chat_id, db_path=db_path)
-            return _reply(chat_id, step["text"], markup=step.get("markup"))
+            return _reply(chat_id, step["text"], markup=step.get("markup"), html=bool(step.get("html")))
         if not text.startswith("/") and telegram_checkout.awaiting_email(chat_id, db_path=db_path):
             step = telegram_checkout.submit_email(chat_id, text, db_path=db_path)
-            return _reply(chat_id, step["text"], markup=step.get("markup"))
+            return _reply(chat_id, step["text"], markup=step.get("markup"), html=bool(step.get("html")))
 
     user = accounts.user_for_telegram_chat(chat_id, db_path=db_path)
     if user is None:

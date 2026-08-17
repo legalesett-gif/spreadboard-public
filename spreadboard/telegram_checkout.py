@@ -246,16 +246,40 @@ def confirm_prompt(tier: str, period_days: int, email: str, chat_id: int | None 
 
 
 def invoice_message(invoice: dict[str, Any]) -> dict[str, Any]:
-    amount = _money(int(invoice["amount_cents"]))
+    """Two values the buyer must reproduce exactly, each one tap away.
+
+    Telegram copies the contents of a <code> block to the clipboard when it is
+    tapped, so the amount and the address each get a line of their own and are
+    never retyped. The amount is deliberately bare -- pasting "$149.00" into a
+    wallet's amount field fails, "149.00" does not.
+    """
+    cents = int(invoice["amount_cents"])
+    bare_amount = f"{cents / 100:.2f}"
+    address = str(invoice["receiving_address"])
+    tokens = " or ".join(invoice.get("tokens") or ["USDC", "USDT"])
+    confirmations = crypto_billing.config().confirmations
+    text = (
+        "<b>Almost there — two things to copy.</b>\n\n"
+        # The figure appears twice on purpose: with the currency so a human
+        # reads it correctly, and bare so it can be pasted into a wallet's
+        # amount field, which rejects a leading symbol.
+        f"<b>1.</b> Send exactly {_money(cents)} — tap to copy:\n"
+        f"<code>{bare_amount}</code>\n\n"
+        f"<b>2.</b> To this address on <b>{crypto_billing.CHAIN_NAME}</b> "
+        "(tap to copy):\n"
+        f"<code>{address}</code>\n\n"
+        f"<b>{tokens} only.</b> Another token, or the same address on another "
+        "network, cannot be credited and cannot be recovered.\n\n"
+        "The amount is how we recognise your payment, so it has to match to "
+        "the cent. Sending a rounded figure leaves it unmatched until an "
+        "admin sorts it out.\n\n"
+        f"You will get a message here automatically after {confirmations} "
+        "confirmations, usually a couple of minutes. This invoice expires in "
+        "60 minutes."
+    )
     return {
-        "text": (
-            f"Send exactly {amount} in USDC or USDT on Arbitrum One to:\n\n"
-            f"{invoice['receiving_address']}\n\n"
-            f"The amount is what identifies your payment — send it exactly, to "
-            f"the cent. Credited after {crypto_billing.config().confirmations} "
-            "confirmations, usually a couple of minutes.\n\n"
-            "This invoice expires in 60 minutes."
-        ),
+        "text": text,
+        "html": True,
         "markup": {
             "inline_keyboard": [
                 [
