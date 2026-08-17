@@ -308,3 +308,61 @@ def test_depth_can_be_switched_off_without_losing_ticker_prices() -> None:
 
     assert count == 4
     assert all(b["source"] == "bulk_ticker" for b in written)
+
+
+# --------------------------------------------------------------------------
+# Depth goes where it is seen
+# --------------------------------------------------------------------------
+
+
+def test_priority_symbols_are_fetched_before_the_rotation() -> None:
+    """Alphabetical order left UNITREE waiting ~28 sweeps for depth it needed
+    to form a spread at all. Tokens visible on the board come first."""
+    ourbit_quotes._DEPTH_CURSOR["index"] = 0
+    every = [f"S{i}_USDT" for i in range(20)] + ["UNITREE_USDT"]
+
+    picked = ourbit_quotes.depth_order(
+        every, priority=["UNITREE_USDT", "S5_USDT"], count=4
+    )
+
+    assert picked[:2] == ["UNITREE_USDT", "S5_USDT"]
+    assert len(picked) == 4
+
+
+def test_a_priority_symbol_is_not_fetched_twice_in_one_sweep() -> None:
+    ourbit_quotes._DEPTH_CURSOR["index"] = 0
+    every = ["A_USDT", "B_USDT", "C_USDT"]
+
+    picked = ourbit_quotes.depth_order(every, priority=["A_USDT"], count=3)
+
+    assert len(picked) == len(set(picked))
+
+
+def test_priority_symbols_unknown_to_the_venue_are_ignored() -> None:
+    ourbit_quotes._DEPTH_CURSOR["index"] = 0
+    every = ["A_USDT", "B_USDT"]
+
+    picked = ourbit_quotes.depth_order(every, priority=["NOTLISTED_USDT"], count=2)
+
+    assert "NOTLISTED_USDT" not in picked
+
+
+def test_the_rotation_still_advances_so_nothing_starves() -> None:
+    """Priority must not pin the sweep to the same few for ever."""
+    ourbit_quotes._DEPTH_CURSOR["index"] = 0
+    every = [f"S{i}_USDT" for i in range(10)]
+
+    first = ourbit_quotes.depth_order(every, priority=["S0_USDT"], count=3)
+    second = ourbit_quotes.depth_order(every, priority=["S0_USDT"], count=3)
+
+    assert first != second
+
+
+def test_the_board_priority_never_breaks_the_sweep(monkeypatch) -> None:
+    """Priority is an optimisation; a board that will not load must not stop depth."""
+    from spreadboard import bulk_quotes
+
+    monkeypatch.setattr(
+        bulk_quotes, "api_spreads", None, raising=False
+    )
+    assert isinstance(bulk_quotes._ourbit_depth_priority(), list)

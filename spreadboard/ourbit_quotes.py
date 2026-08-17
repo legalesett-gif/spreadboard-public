@@ -147,6 +147,7 @@ def sweep(
     fetch_futures: Callable[[], Any] = fetch_futures,
     now_us: int | None = None,
     with_depth: bool = True,
+    depth_priority: list[str] | None = None,
 ) -> int:
     """Write every priced Ourbit symbol into the live book store.
 
@@ -169,7 +170,11 @@ def sweep(
     if with_depth and DEPTH_SYMBOLS_PER_SWEEP:
         try:
             sizes = contract_sizes(fetch_detail())
-            symbols = _depth_rotation(sorted(sizes), DEPTH_SYMBOLS_PER_SWEEP)
+            symbols = depth_order(
+                sorted(sizes),
+                priority=list(depth_priority or []),
+                count=DEPTH_SYMBOLS_PER_SWEEP,
+            )
             books.extend(depth_books(symbols, sizes=sizes, now_us=stamp))
         except Exception:
             LOGGER.warning("ourbit depth sweep failed", exc_info=True)
@@ -291,6 +296,31 @@ def depth_books(
 #: Where the last depth slice stopped, so successive sweeps cover different
 #: contracts instead of refreshing the same forty for ever.
 _DEPTH_CURSOR = {"index": 0}
+
+
+def depth_order(
+    symbols: list[str], *, priority: list[str] | None = None, count: int
+) -> list[str]:
+    """Which contracts to fetch depth for this sweep, most useful first.
+
+    Alphabetical rotation alone left tokens waiting most of a cycle for the
+    depth they need to form a spread at all -- UNITREE sat at 0.000% for want
+    of a size. Symbols the board is actually showing come first; the rotation
+    then fills the remainder so nothing starves.
+    """
+    listed = set(symbols)
+    ordered: list[str] = []
+    for raw in priority or []:
+        if raw in listed and raw not in ordered:
+            ordered.append(raw)
+        if len(ordered) >= count:
+            return ordered[:count]
+    for raw in _depth_rotation(symbols, count):
+        if raw not in ordered:
+            ordered.append(raw)
+        if len(ordered) >= count:
+            break
+    return ordered[:count]
 
 
 def _depth_rotation(symbols: list[str], count: int) -> list[str]:

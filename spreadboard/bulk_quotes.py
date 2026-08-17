@@ -242,7 +242,9 @@ def sweep(
     # costing us whole routes.
     if venues is None:
         try:
-            written += ourbit_quotes.sweep(store=target)
+            written += ourbit_quotes.sweep(
+                store=target, depth_priority=_ourbit_depth_priority()
+            )
             covered += 1
         except Exception:
             LOGGER.warning("ourbit native sweep failed", exc_info=True)
@@ -456,3 +458,24 @@ def _iso_timestamp(value: Any) -> float | None:
         return datetime.fromisoformat(str(value or "").replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
+
+
+def _ourbit_depth_priority() -> list[str]:
+    """Ourbit contracts the board is actually showing, most prominent first.
+
+    Depth is the scarce resource here -- one request per contract on a box with
+    no CPU to spare -- so it should land on the tokens a subscriber can see
+    rather than on whatever happens to sort first alphabetically.
+    """
+    try:
+        from spreadboard import api_spreads
+
+        data = api_spreads.load_spreads(limit=250)
+    except Exception:  # noqa: BLE001 - priority is an optimisation, never a requirement
+        return []
+    tokens: list[str] = []
+    for group in (data.get("groups") or [])[:250]:
+        token = str(group.get("token") or "").strip().upper()
+        if token and token not in tokens:
+            tokens.append(token)
+    return [f"{token}_USDT" for token in tokens]
