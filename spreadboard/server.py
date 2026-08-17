@@ -361,6 +361,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             "/forgot-password",
             "/status",
             "/account",
+            "/portfolio",
             "/markets",
             "/rankings",
             "/intel",
@@ -454,7 +455,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._send_html(render_legal_page("affiliate"))
             elif parsed.path == "/subscription":
                 self._send_html(render_subscription_page(query))
-            elif parsed.path == "/account":
+            elif parsed.path in {"/account", "/portfolio"}:
+                # The product, the navigation and the operator all call this
+                # surface "Portfolio", so /portfolio must not 404. Both paths
+                # render the same page rather than redirecting, so an existing
+                # /account link keeps working and neither name is second class.
                 self._send_html(
                     render_account_page(self.server.board_path, self.server.accounts_path)
                 )
@@ -1561,6 +1566,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         subscription_paths = {
             "/subscription",
             "/account",
+            "/portfolio",
             "/profile",
             "/partner",
             "/api/session",
@@ -15687,19 +15693,21 @@ _MEMBER_NAV: tuple[tuple[str, str, str], ...] = (
     ("rankings", "/rankings", "Rankings"),
     ("fair", "/fair", "Fair price"),
     ("charts", "/charts", "Charts"),
-    ("intel", "/intel", "Intel"),
+    # Intel is built but carries no data yet (empty hot symbols, funding watch
+    # and question patterns). An empty tab reads as breakage to a subscriber,
+    # so it stays reachable by direct link and out of the navigation until the
+    # community feed populates it.
     ("watchlist", "/watchlist", "Watchlist"),
     ("profile", "/account", "Portfolio"),
     ("pricing", "/pricing", "Membership"),
 )
 
 
+# Signals, Triage and Community are shells awaiting their data sources; they
+# remain routable for continued work but are not advertised to subscribers.
 _MOBILE_SECONDARY_NAV: tuple[tuple[str, str, str], ...] = (
     ("alerts", "/alerts", "Alerts"),
-    ("signals", "/signals", "Signals"),
-    ("triage", "/triage", "Triage"),
     ("playbook", "/playbook", "Playbook"),
-    ("community", "/community", "Community"),
 )
 
 

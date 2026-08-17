@@ -237,11 +237,17 @@ def test_the_visitor_nav_only_offers_pages_a_visitor_can_open() -> None:
     assert "/free" in hrefs
 
 
-def test_the_member_nav_is_unchanged() -> None:
+def test_the_member_nav_still_carries_every_working_surface() -> None:
+    """Adding the free board must not disturb the member navigation.
+
+    /intel was deliberately withdrawn once it was found to be an empty shell --
+    see test_navigation_surface -- so it is no longer expected here.
+    """
     nav = server.render_primary_nav("markets", signed_in=True)
 
-    for href in ("/funding", "/charts", "/intel", "/watchlist", "/account", "/pricing"):
+    for href in ("/funding", "/charts", "/watchlist", "/account", "/pricing"):
         assert f'href="{href}"' in nav
+    assert 'href="/intel"' not in nav, "an empty surface must not return to the nav"
     assert urlparse("/").path == "/"
     assert 'href="/"' in nav
 
