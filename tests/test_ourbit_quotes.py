@@ -378,3 +378,20 @@ def test_depth_priority_covers_the_whole_board_not_just_page_one() -> None:
     source = inspect.getsource(bulk_quotes._ourbit_depth_priority)
     assert "limit=None" in source
     assert "[:250]" not in source
+
+
+def test_priority_itself_rotates_so_no_priority_symbol_starves() -> None:
+    """Taking the first N of a 250-long priority list starves everything past
+    position N for ever. UNITREE was priority #100-odd and never fetched."""
+    ourbit_quotes._DEPTH_CURSOR["index"] = 0
+    ourbit_quotes._PRIORITY_CURSOR["index"] = 0
+    every = [f"P{i}_USDT" for i in range(100)]
+    priority = list(every)
+
+    first = ourbit_quotes.depth_order(every, priority=priority, count=10)
+    second = ourbit_quotes.depth_order(every, priority=priority, count=10)
+    third = ourbit_quotes.depth_order(every, priority=priority, count=10)
+
+    seen = set(first) | set(second) | set(third)
+    assert len(seen) == 30, "each sweep must reach different priority symbols"
+    assert not set(first) & set(second)

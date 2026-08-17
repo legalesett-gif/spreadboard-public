@@ -297,6 +297,10 @@ def depth_books(
 #: contracts instead of refreshing the same forty for ever.
 _DEPTH_CURSOR = {"index": 0}
 
+#: Independent cursor for the priority list, so a long board rotates through
+#: it rather than re-fetching its first page for ever.
+_PRIORITY_CURSOR = {"index": 0}
+
 
 def depth_order(
     symbols: list[str], *, priority: list[str] | None = None, count: int
@@ -310,9 +314,16 @@ def depth_order(
     """
     listed = set(symbols)
     ordered: list[str] = []
-    for raw in priority or []:
-        if raw in listed and raw not in ordered:
-            ordered.append(raw)
+    # The priority list rotates too. Always taking its first N starved every
+    # symbol past position N: UNITREE was on the board, was in the list, and
+    # was still never fetched, so its spread could never form.
+    wanted = [raw for raw in (priority or []) if raw in listed]
+    if wanted:
+        start = _PRIORITY_CURSOR["index"] % len(wanted)
+        _PRIORITY_CURSOR["index"] = (start + count) % len(wanted)
+        for raw in (wanted + wanted)[start : start + count]:
+            if raw not in ordered:
+                ordered.append(raw)
         if len(ordered) >= count:
             return ordered[:count]
     for raw in _depth_rotation(symbols, count):
