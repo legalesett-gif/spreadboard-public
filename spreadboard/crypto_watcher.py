@@ -275,6 +275,68 @@ def watchable_chains() -> list[Any]:
     ]
 
 
+def _chain_transfers_to_us(
+    call: Callable[[str, list[Any]], Any],
+    definition: Any,
+    address: str,
+    rpc_url: str,
+    from_block: int,
+    to_block: int,
+) -> list[dict[str, Any]]:
+    """Confirmed stablecoin transfers to us, by whichever route the node serves.
+
+    Every free BSC endpoint refuses a filtered ``eth_getLogs`` outright -- not
+    merely over a wide range, but at any range -- so a log scan is not a
+    portable way to read an EVM chain. Alchemy's asset-transfers index is asked
+    first wherever it is available, exactly as the Arbitrum scanner does, and
+    ``eth_getLogs`` remains the fallback for nodes that do serve it.
+    """
+    tokens = list(definition.tokens.keys())
+    if "alchemy" in str(rpc_url).casefold():
+        try:
+            payload = call(
+                "alchemy_getAssetTransfers",
+                [{
+                    "fromBlock": hex(from_block),
+                    "toBlock": hex(to_block),
+                    "toAddress": address,
+                    "contractAddresses": tokens,
+                    "category": ["erc20"],
+                    "excludeZeroValue": True,
+                    "maxCount": "0x3e8",
+                }],
+            ) or {}
+            return [
+                {
+                    "address": (item.get("rawContract") or {}).get("address"),
+                    "data": (item.get("rawContract") or {}).get("value"),
+                    "transactionHash": item.get("hash"),
+                    "logIndex": "0x0",
+                    "blockNumber": item.get("blockNum"),
+                    "topics": [
+                        crypto_billing.TRANSFER_TOPIC,
+                        _topic_address(str(item.get("from") or "0x" + "0" * 40)),
+                        _topic_address(address),
+                    ],
+                }
+                for item in (payload.get("transfers") or [])
+            ]
+        except Exception:  # noqa: BLE001 - fall back rather than stall the cursor
+            LOGGER.warning(
+                "%s asset-transfers unavailable; falling back to eth_getLogs",
+                definition.key,
+            )
+    return call(
+        "eth_getLogs",
+        [{
+            "fromBlock": hex(from_block),
+            "toBlock": hex(to_block),
+            "address": tokens,
+            "topics": [crypto_billing.TRANSFER_TOPIC, None, _topic_address(address)],
+        }],
+    ) or []
+
+
 def scan_evm(
     chain: str,
     *,
@@ -308,19 +370,7 @@ def scan_evm(
 
     from_block = cursor + 1
     to_block = min(safe_head, from_block + MAX_BLOCK_SPAN - 1)
-    logs = call(
-        "eth_getLogs",
-        [{
-            "fromBlock": hex(from_block),
-            "toBlock": hex(to_block),
-            "address": list(definition.tokens.keys()),
-            "topics": [
-                crypto_billing.TRANSFER_TOPIC,
-                None,
-                _topic_address(address),
-            ],
-        }],
-    ) or []
+    logs = _chain_transfers_to_us(call, definition, address, rpc_url, from_block, to_block)
 
     results = []
     for entry in logs:

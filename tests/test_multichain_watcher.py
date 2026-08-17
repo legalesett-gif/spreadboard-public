@@ -260,3 +260,79 @@ def test_one_dead_chain_does_not_stop_the_others(db, monkeypatch) -> None:
 
     assert any(s.get("chain") == "bsc" and s["ok"] for s in summaries)
     assert any(s.get("chain") == "tron" and not s["ok"] for s in summaries)
+
+
+# --------------------------------------------------------------------------
+# Regression: a real BSC payment went uncredited
+# --------------------------------------------------------------------------
+
+
+def test_bsc_reads_the_asset_transfer_index_not_a_log_scan(db, monkeypatch) -> None:
+    """Every free BSC endpoint refuses eth_getLogs, at any range.
+
+    A customer paid 5 USDT on BSC and nothing happened: the scan raised
+    `-32005 limit exceeded` on every poll, so the cursor was never written and
+    the transfer was never seen. eth_blockNumber worked, which is why the chain
+    looked reachable. Alchemy is asked for its transfer index first.
+    """
+    monkeypatch.setenv("SPREADBOARD_CRYPTO_BSC_RPC_URL", "https://bnb-mainnet.g.alchemy.com/v2/k")
+    invoice = _member(db, 500)
+    used = []
+
+    def rpc(_url, method, params):
+        used.append(method)
+        if method == "eth_blockNumber":
+            return hex(1_000)
+        if method == "eth_getLogs":
+            raise RuntimeError("rpc_error: {'code': -32005, 'message': 'limit exceeded'}")
+        return {"transfers": [{
+            "hash": "0xafdfca4e",
+            "blockNum": "0x1",
+            "from": "0xf91b40449b41c50072d41427ee1add3f7e5dcb5e",
+            "rawContract": {"address": BSC_USDT, "value": hex(5 * 10**18)},
+        }]}
+
+    result = crypto_watcher.scan_evm("bsc", db_path=db, rpc_call=rpc)
+
+    assert "alchemy_getAssetTransfers" in used
+    assert "eth_getLogs" not in used, "the index must be preferred, not a fallback here"
+    assert result["results"][0]["resolution"] == "settled"
+    assert result["results"][0]["amount_cents"] == 500
+    assert crypto_billing.get_invoice(invoice["id"], db_path=db)["status"] == "paid"
+
+
+def test_a_log_scan_still_works_where_the_node_serves_it(db, monkeypatch) -> None:
+    monkeypatch.setenv("SPREADBOARD_CRYPTO_BSC_RPC_URL", "https://bsc-dataseed.binance.org")
+    _member(db, 500)
+
+    def rpc(_url, method, _params):
+        if method == "eth_blockNumber":
+            return hex(1_000)
+        assert method == "eth_getLogs"
+        return [{
+            "address": BSC_USDT,
+            "data": hex(5 * 10**18),
+            "transactionHash": "0xlogscan",
+            "logIndex": "0x0",
+            "blockNumber": "0x1",
+            "topics": ["t", "0x" + "0" * 24 + "11" * 20, "0x" + "0" * 24 + ARB[2:]],
+        }]
+
+    result = crypto_watcher.scan_evm("bsc", db_path=db, rpc_call=rpc)
+
+    assert result["results"][0]["resolution"] == "settled"
+
+
+def test_a_failing_scan_never_advances_the_cursor_past_unread_blocks(db, monkeypatch) -> None:
+    """Skipping ahead after an error would silently lose a payment forever."""
+    monkeypatch.setenv("SPREADBOARD_CRYPTO_BSC_RPC_URL", "https://bsc-dataseed.binance.org")
+
+    def rpc(_url, method, _params):
+        if method == "eth_blockNumber":
+            return hex(50_000)
+        raise RuntimeError("rpc_error: {'code': -32005, 'message': 'limit exceeded'}")
+
+    with pytest.raises(RuntimeError):
+        crypto_watcher.scan_evm("bsc", db_path=db, rpc_call=rpc)
+
+    assert accounts.chain_cursor("bsc", db_path=db) == 0
