@@ -162,3 +162,54 @@ def test_the_operator_is_not_told_twice_for_the_same_outage(db, monkeypatch) -> 
         crypto_watcher.scan_all(db_path=db)
 
     assert len(alerts) == 1, "an outage is one alert, not one per poll"
+
+
+# --------------------------------------------------------------------------
+# A throttle is not an outage
+# --------------------------------------------------------------------------
+
+
+def test_a_tron_throttle_is_retried_not_reported_as_a_failure(monkeypatch) -> None:
+    """Three transient 429s would otherwise withdraw Tron from checkout."""
+    from urllib.error import HTTPError
+
+    calls = []
+    monkeypatch.setattr(crypto_watcher.time, "sleep", lambda _s: None)
+
+    class _Response:
+        def read(self):
+            return b'{"data": []}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    def flaky(_request, timeout=None):
+        calls.append(1)
+        if len(calls) < 3:
+            raise HTTPError("u", 429, "Too Many Requests", {}, None)
+        return _Response()
+
+    monkeypatch.setattr(crypto_watcher.urllib.request, "urlopen", flaky)
+
+    assert crypto_watcher._default_http_get("https://example.invalid/x") == {"data": []}
+    assert len(calls) == 3
+
+
+def test_a_non_throttle_error_is_not_retried(monkeypatch) -> None:
+    """Only a throttle means "come back shortly"; a 500 is a real fault."""
+    from urllib.error import HTTPError
+
+    calls = []
+
+    def broken(_request, timeout=None):
+        calls.append(1)
+        raise HTTPError("u", 500, "Server Error", {}, None)
+
+    monkeypatch.setattr(crypto_watcher.urllib.request, "urlopen", broken)
+
+    with pytest.raises(HTTPError):
+        crypto_watcher._default_http_get("https://example.invalid/x")
+    assert len(calls) == 1

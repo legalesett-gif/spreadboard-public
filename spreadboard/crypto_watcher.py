@@ -17,6 +17,7 @@ import time
 from datetime import UTC, datetime
 from typing import Any, Callable
 import urllib.request
+from urllib.error import HTTPError
 
 from . import accounts, crypto_billing
 
@@ -406,15 +407,40 @@ def scan_evm(
     }
 
 
+TRON_THROTTLE_RETRIES = 3
+TRON_THROTTLE_BACKOFF_SECONDS = 4.0
+
+
 def _default_http_get(url: str) -> Any:
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    """Read TronGrid, riding out a throttle rather than reporting a failure.
+
+    Without an API key TronGrid rate-limits by IP, and a throttle is a "come
+    back shortly", not a broken chain. Left unhandled, three transient 429s in
+    a row would trip the health gate and withdraw Tron from checkout for
+    everyone -- a self-inflicted outage. Retries stay bounded so a scan cannot
+    hang the watcher loop.
+    """
     import os
 
     key = os.environ.get("SPREADBOARD_CRYPTO_TRON_API_KEY", "").strip()
-    if key:
-        request.add_header("TRON-PRO-API-KEY", key)
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return json.loads(response.read().decode("utf-8"))
+    last: Exception | None = None
+    for attempt in range(TRON_THROTTLE_RETRIES):
+        request = urllib.request.Request(url, headers={"Accept": "application/json"})
+        if key:
+            request.add_header("TRON-PRO-API-KEY", key)
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            last = exc
+            if exc.code != 429:
+                raise
+            LOGGER.warning(
+                "tron throttled (429); backing off %.0fs",
+                TRON_THROTTLE_BACKOFF_SECONDS * (attempt + 1),
+            )
+            time.sleep(TRON_THROTTLE_BACKOFF_SECONDS * (attempt + 1))
+    raise last if last is not None else RuntimeError("tron_request_failed")
 
 
 def scan_tron(
