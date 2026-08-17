@@ -245,7 +245,13 @@ def sweep(
             written += ourbit_quotes.sweep(
                 store=target,
                 depth_priority=_ourbit_depth_priority(),
-                protected_symbols=ourbit_quotes.symbols_with_live_depth(target),
+                # Protection is DISABLED: skipping ticker refreshes starved the
+                # protected symbols, because depth reaches 25 of 711 contracts a
+                # pass and cannot refresh them faster than they go stale. A
+                # one-level book that is current beats a fifty-level book that
+                # is not, so the ticker keeps every symbol alive until depth
+                # coverage is dense enough to carry them on its own.
+                protected_symbols=None,
             )
             covered += 1
         except Exception:
