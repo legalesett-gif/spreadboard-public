@@ -217,13 +217,20 @@ services:
     cap_drop:
       - ALL
     mem_limit: 4g
-    # Measured pinned at exactly 199.98% against the old 2.0 ceiling while the
-    # websocket book worker wrote nothing for seventeen minutes: subscriptions
-    # were timing out inside load_markets because there was no CPU left to
-    # finish them. This is a ceiling, not a reservation, and the low share
-    # below is what keeps it honest -- collector may use whatever the Droplet
-    # is not using, and yields 8:1 to subscriber HTTP the moment app wants it.
-    cpus: 3.2
+    # This service is memory-bound, not CPU-bound, and the two are coupled:
+    # cores it does not have to wait for become concurrent work in flight, and
+    # concurrent work here is held in RAM. Measured on the four-vCPU Droplet --
+    #   cpus 2.0 -> 2.4GiB steady
+    #   cpus 3.2 -> 3.98GiB of a 4GiB cap, anon (not page cache), with
+    #               memory.events max=1827, i.e. allocation stalling against
+    #               the limit 1827 times with almost no file cache to reclaim
+    # It had not been OOM-killed yet, but only because reclaim was still just
+    # winning, and the earlier OOM here took every scan down with it.
+    #
+    # 2.4 is the largest ceiling this container can carry inside 4GiB. Going
+    # higher needs more RAM, not more cores, and the host has none to give:
+    # the mem_limits already sum above its 8GB. A bigger Droplet is the unlock.
+    cpus: 2.4
     cpu_shares: 256
     logging:
       driver: json-file

@@ -74,9 +74,18 @@ def test_no_service_ceiling_exceeds_the_host() -> None:
         assert float(service["cpus"]) <= HOST_VCPUS, f"{name} exceeds {HOST_VCPUS} vCPUs"
 
 
-def test_the_collector_can_use_the_idle_droplet() -> None:
-    """It saturated a 2.0 ceiling and starved its own websocket subscriptions."""
-    assert float(SERVICES["collector"]["cpus"]) >= 3.0
+def test_the_collector_ceiling_stays_inside_its_memory_budget() -> None:
+    """The collector is memory-bound, and CPU buys memory it does not have.
+
+    A 2.0 ceiling starved its websocket subscriptions, so it must exceed that.
+    But at 3.2 the cgroup sat at 3.98GiB of anonymous memory against a 4GiB cap
+    and stalled against that limit 1827 times. Raising this past 2.4 without
+    also raising mem_limit -- which the 8GB host cannot fund -- walks back into
+    the OOM that previously killed every scan.
+    """
+    cpus = float(SERVICES["collector"]["cpus"])
+    assert cpus > 2.0, "2.0 starved the websocket book worker"
+    assert cpus <= 2.4, "above 2.4 the collector exhausts its 4GiB budget"
 
 
 def test_subscriber_http_still_outranks_background_collection() -> None:
