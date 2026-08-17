@@ -186,7 +186,7 @@ def scan_once(
                     entry.get("transactionHash"),
                     outcome.get("note"),
                 )
-        except Exception:  # noqa: BLE001 - one bad log must not stall the cursor
+        except Exception:
             LOGGER.exception("failed to apply transfer log %s", entry.get("transactionHash"))
 
     set_cursor(to_block, db_path=db_path)
@@ -207,11 +207,15 @@ def run_forever(*, db_path=accounts.DEFAULT_DB_PATH, stop: threading.Event | Non
     if not settings.configured:
         LOGGER.info("crypto watcher idle: receiving address or RPC URL not configured")
         return
-    LOGGER.info("crypto watcher started (%s confirmations)", settings.confirmations)
+    LOGGER.info(
+        "crypto watcher started: %s",
+        ", ".join(f"{c.name} ({c.confirmations} conf)" for c in watchable_chains())
+        or "no chain configured",
+    )
     while not (stop and stop.is_set()):
         try:
-            scan_once(db_path=db_path)
-        except Exception:  # noqa: BLE001 - a dead RPC must never kill the app
+            scan_all(db_path=db_path)
+        except Exception:
             LOGGER.exception("crypto watcher scan failed; will retry")
         if stop:
             stop.wait(settings.poll_seconds)
@@ -230,3 +234,220 @@ def start_background(*, db_path=accounts.DEFAULT_DB_PATH) -> threading.Event | N
     )
     thread.start()
     return stop
+
+
+# ---------------------------------------------------------------------------
+# Multi-chain watching
+# ---------------------------------------------------------------------------
+
+# Public endpoints so a chain works the moment its address is configured. Both
+# are overridable for a paid provider with better rate limits.
+DEFAULT_RPC_URLS = {
+    "bsc": "https://bsc-dataseed.binance.org",
+    "tron": "https://api.trongrid.io",
+}
+TRON_FIRST_RUN_LOOKBACK_MS = 6 * 60 * 60 * 1000
+
+
+def chain_rpc_url(chain: str) -> str:
+    definition = crypto_billing.CHAINS.get(str(chain))
+    if definition is None:
+        return ""
+    import os
+
+    return (
+        os.environ.get(definition.rpc_env, "").strip()
+        or DEFAULT_RPC_URLS.get(str(chain), "")
+    )
+
+
+def watchable_chains() -> list[Any]:
+    """Chains with both a valid receiving address and somewhere to read from.
+
+    A chain missing either cannot detect a payment, and a chain that cannot
+    detect a payment must never be offered: it would take the money and grant
+    nothing.
+    """
+    return [
+        definition
+        for definition in crypto_billing.enabled_chains()
+        if chain_rpc_url(definition.key)
+    ]
+
+
+def scan_evm(
+    chain: str,
+    *,
+    db_path=accounts.DEFAULT_DB_PATH,
+    rpc_call: Callable[[str, str, list[Any]], Any] | None = None,
+) -> dict[str, Any]:
+    """Scan one confirmed block range on any EVM chain."""
+    definition = crypto_billing.CHAINS.get(str(chain))
+    if definition is None or definition.kind != "evm":
+        return {"ok": False, "reason": "not_an_evm_chain"}
+    address = crypto_billing.chain_address(definition.key)
+    rpc_url = chain_rpc_url(definition.key)
+    if not address or not rpc_url:
+        return {"ok": False, "reason": "not_configured"}
+
+    transport = rpc_call or _default_rpc_call
+
+    def call(method: str, params: list[Any]) -> Any:
+        return transport(rpc_url, method, params)
+
+    head = int(str(call("eth_blockNumber", [])), 16)
+    safe_head = head - definition.confirmations
+    if safe_head <= 0:
+        return {"ok": True, "scanned": 0, "reason": "chain_too_short"}
+
+    cursor = accounts.chain_cursor(definition.key, db_path=db_path)
+    if cursor <= 0:
+        cursor = max(0, safe_head - FIRST_RUN_LOOKBACK)
+    if cursor >= safe_head:
+        return {"ok": True, "scanned": 0, "results": [], "cursor": cursor}
+
+    from_block = cursor + 1
+    to_block = min(safe_head, from_block + MAX_BLOCK_SPAN - 1)
+    logs = call(
+        "eth_getLogs",
+        [{
+            "fromBlock": hex(from_block),
+            "toBlock": hex(to_block),
+            "address": list(definition.tokens.keys()),
+            "topics": [
+                crypto_billing.TRANSFER_TOPIC,
+                None,
+                _topic_address(address),
+            ],
+        }],
+    ) or []
+
+    results = []
+    for entry in logs:
+        try:
+            topics = entry.get("topics") or []
+            if len(topics) < 3:
+                continue
+            outcome = crypto_billing.record_transfer(
+                token_address=str(entry.get("address")),
+                raw_units=int(str(entry.get("data") or "0x0"), 16),
+                tx_hash=str(entry.get("transactionHash")),
+                log_index=int(str(entry.get("logIndex") or "0x0"), 16),
+                from_address=_address_from_topic(topics[1]),
+                block_number=int(str(entry.get("blockNumber") or "0x0"), 16),
+                chain=definition.key,
+                db_path=db_path,
+            )
+            results.append(outcome)
+            if outcome.get("resolution") in {"unmatched", "ambiguous"}:
+                LOGGER.warning(
+                    "%s payment needs review: %s %s",
+                    definition.key, entry.get("transactionHash"), outcome.get("note"),
+                )
+        except Exception:
+            LOGGER.exception("failed to apply %s log", definition.key)
+
+    accounts.set_chain_cursor(definition.key, to_block, db_path=db_path)
+    return {
+        "ok": True, "chain": definition.key, "from_block": from_block,
+        "to_block": to_block, "scanned": to_block - from_block + 1,
+        "results": results, "cursor": to_block,
+    }
+
+
+def _default_http_get(url: str) -> Any:
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    import os
+
+    key = os.environ.get("SPREADBOARD_CRYPTO_TRON_API_KEY", "").strip()
+    if key:
+        request.add_header("TRON-PRO-API-KEY", key)
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def scan_tron(
+    *,
+    db_path=accounts.DEFAULT_DB_PATH,
+    http_get: Callable[[str], Any] | None = None,
+) -> dict[str, Any]:
+    """Poll TronGrid for confirmed TRC20 transfers to the receiving address.
+
+    Tron has no log-scanning equivalent, so this reads the account's own
+    confirmed TRC20 history and advances a millisecond timestamp cursor.
+    ``only_confirmed`` is what keeps a reorg from crediting anyone.
+    """
+    definition = crypto_billing.CHAINS["tron"]
+    address = crypto_billing.chain_address("tron")
+    base = chain_rpc_url("tron")
+    if not address or not base:
+        return {"ok": False, "reason": "not_configured"}
+
+    cursor = accounts.chain_cursor("tron", db_path=db_path)
+    if cursor <= 0:
+        cursor = max(0, int(time.time() * 1000) - TRON_FIRST_RUN_LOOKBACK_MS)
+
+    url = (
+        f"{base.rstrip('/')}/v1/accounts/{address}/transactions/trc20"
+        f"?only_confirmed=true&only_to=true&limit=50&order_by=block_timestamp,asc"
+        f"&min_timestamp={cursor + 1}"
+    )
+    payload = (http_get or _default_http_get)(url) or {}
+    entries = payload.get("data") or []
+
+    results, newest = [], cursor
+    for entry in entries:
+        try:
+            stamp = int(entry.get("block_timestamp") or 0)
+            newest = max(newest, stamp)
+            if str(entry.get("to") or "") != address:
+                continue
+            token_info = entry.get("token_info") or {}
+            outcome = crypto_billing.record_transfer(
+                token_address=str(token_info.get("address") or ""),
+                raw_units=int(str(entry.get("value") or "0")),
+                tx_hash=str(entry.get("transaction_id") or ""),
+                log_index=0,
+                from_address=str(entry.get("from") or ""),
+                # Tron reports a timestamp rather than a height here; the
+                # cursor is the timestamp, so store it for provenance.
+                block_number=stamp,
+                chain="tron",
+                db_path=db_path,
+            )
+            results.append(outcome)
+            if outcome.get("resolution") in {"unmatched", "ambiguous"}:
+                LOGGER.warning(
+                    "tron payment needs review: %s %s",
+                    entry.get("transaction_id"), outcome.get("note"),
+                )
+        except Exception:
+            LOGGER.exception("failed to apply tron transfer")
+
+    if newest > cursor:
+        accounts.set_chain_cursor("tron", newest, db_path=db_path)
+    return {
+        "ok": True, "chain": "tron", "scanned": len(entries),
+        "results": results, "cursor": newest,
+        "confirmations": definition.confirmations,
+    }
+
+
+def scan_all(*, db_path=accounts.DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+    """One pass over every chain that can actually be watched."""
+    summaries = []
+    for definition in watchable_chains():
+        try:
+            if definition.kind == "tron":
+                summaries.append(scan_tron(db_path=db_path))
+            elif definition.key == crypto_billing.DEFAULT_CHAIN:
+                # Arbitrum keeps its original cursor row and code path so an
+                # existing deployment does not rescan or skip on upgrade.
+                summaries.append(scan_once(db_path=db_path))
+            else:
+                summaries.append(scan_evm(definition.key, db_path=db_path))
+        except Exception:
+            LOGGER.exception("scan failed for %s", definition.key)
+            summaries.append({"ok": False, "chain": definition.key})
+    crypto_billing.expire_stale_invoices(db_path=db_path)
+    return summaries

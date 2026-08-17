@@ -102,6 +102,26 @@ def rehearsal_price_cents(tier: str, chat_id: int | None) -> int | None:
     return cents
 
 
+def _network_list() -> str:
+    names = [chain.name for chain in _payable_chains()]
+    if not names:
+        return "Arbitrum One"
+    if len(names) == 1:
+        return names[0]
+    return ", ".join(names[:-1]) + " or " + names[-1]
+
+
+def _payable_chains() -> list[Any]:
+    """Only networks whose payments we can actually observe.
+
+    A chain with a receiving address but no watcher would take the money and
+    grant nothing, so the watcher is part of the definition of "payable".
+    """
+    from spreadboard import crypto_watcher
+
+    return crypto_watcher.watchable_chains()
+
+
 def _priced_periods(tier: str, chat_id: int | None) -> dict[int, int]:
     """What this chat will actually be charged, so the buttons cannot mislead."""
     periods = _periods(tier)
@@ -137,7 +157,7 @@ def tier_prompt(chat_id: int | None = None) -> dict[str, Any]:
         "Scanner — the full web board and alerts.\n"
         "Research Pro — everything in Scanner, plus the private subscriber "
         "channel and exact-size research quoting.\n\n"
-        "Payment is USDC or USDT on Arbitrum One. No card, no recurring charge."
+        "Pay in USDC or USDT — " + _network_list() + ". No card, no recurring charge."
     )
     return {"text": text, "markup": {"inline_keyboard": rows}}
 
@@ -172,7 +192,7 @@ def welcome(
         "• everything in Scanner\n"
         "• exact-size quoting from $10 to $100,000\n"
         "• the private subscriber channel\n\n"
-        "Prepaid 30, 90 or 365 days in USDC or USDT on Arbitrum One. "
+        "Prepaid 30, 90 or 365 days in USDC or USDT — " + _network_list() + ". "
         "No card and no recurring charge."
     )
     return {
@@ -229,15 +249,18 @@ def confirm_prompt(tier: str, period_days: int, email: str, chat_id: int | None 
         "text": (
             f"{TIER_LABELS[tier]} · {period_days} days · {_money(cents)}\n"
             f"Account email: {email}{extra}\n\n"
+            "Choose the network you want to pay on. Same price on all of them "
+            "— pick whichever your wallet already holds USDT or USDC on.\n\n"
             f"By continuing you accept the terms: {_terms_url()}"
         ),
         "markup": {
             "inline_keyboard": [
-                [
-                    {
-                        "text": "Agree and get payment details",
-                        "callback_data": f"{CALLBACK_PREFIX}:confirm",
-                    }
+                *[
+                    [{
+                        "text": f"Pay on {chain.name}",
+                        "callback_data": f"{CALLBACK_PREFIX}:pay:{chain.key}",
+                    }]
+                    for chain in _payable_chains()
                 ],
                 [{"text": "← Start over", "callback_data": f"{CALLBACK_PREFIX}:restart"}],
             ]
@@ -257,7 +280,10 @@ def invoice_message(invoice: dict[str, Any]) -> dict[str, Any]:
     bare_amount = f"{cents / 100:.2f}"
     address = str(invoice["receiving_address"])
     tokens = " or ".join(invoice.get("tokens") or ["USDC", "USDT"])
-    confirmations = crypto_billing.config().confirmations
+    network = str(invoice.get("chain") or crypto_billing.CHAIN_NAME)
+    confirmations = int(
+        invoice.get("confirmations") or crypto_billing.config().confirmations
+    )
     text = (
         "<b>Almost there — two things to copy.</b>\n\n"
         # The figure appears twice on purpose: with the currency so a human
@@ -265,7 +291,7 @@ def invoice_message(invoice: dict[str, Any]) -> dict[str, Any]:
         # amount field, which rejects a leading symbol.
         f"<b>1.</b> Send exactly {_money(cents)} — tap to copy:\n"
         f"<code>{bare_amount}</code>\n\n"
-        f"<b>2.</b> To this address on <b>{crypto_billing.CHAIN_NAME}</b> "
+        f"<b>2.</b> To this address on <b>{network}</b> "
         "(tap to copy):\n"
         f"<code>{address}</code>\n\n"
         f"<b>{tokens} only.</b> Another token, or the same address on another "
@@ -344,7 +370,7 @@ def submit_email(chat_id: int, email: str, *, db_path: Path | str) -> dict[str, 
     return confirm_prompt(str(session["tier"]), int(session["period_days"]), clean, chat_id)
 
 
-def confirm(chat_id: int, *, db_path: Path | str) -> dict[str, Any]:
+def confirm(chat_id: int, *, chain: str = crypto_billing.DEFAULT_CHAIN, db_path: Path | str) -> dict[str, Any]:
     """Record consent, provision the account, and issue the invoice."""
     session = accounts.get_checkout_session(chat_id, db_path=db_path)
     if session is None or session.get("step") != "confirm":
@@ -391,6 +417,7 @@ def confirm(chat_id: int, *, db_path: Path | str) -> dict[str, Any]:
         user_id,
         period_days,
         tier=tier,
+        chain=chain,
         list_amount_cents=rehearsal_price_cents(tier, chat_id),
         db_path=db_path,
     )
@@ -454,6 +481,8 @@ def handle_callback(chat_id: int, data: str, *, db_path: Path | str) -> dict[str
             return choose_period(chat_id, int(parts[2]), db_path=db_path)
         if action == "confirm":
             return confirm(chat_id, db_path=db_path)
+        if action == "pay" and len(parts) > 2:
+            return confirm(chat_id, chain=parts[2], db_path=db_path)
         if action == "status":
             return status(chat_id, db_path=db_path)
         if action == "restart":

@@ -1891,6 +1891,37 @@ INVITE_TOKEN_DAYS = 7
 RESET_TOKEN_HOURS = 2
 
 
+def chain_cursor(chain: str, *, db_path: Path | str = DEFAULT_DB_PATH) -> int:
+    connection = _connect(db_path)
+    try:
+        row = connection.execute(
+            "SELECT cursor_value FROM crypto_chain_cursors WHERE chain = ?", (str(chain),)
+        ).fetchone()
+        return int(row["cursor_value"]) if row is not None else 0
+    finally:
+        connection.close()
+
+
+def set_chain_cursor(
+    chain: str, value: int, *, db_path: Path | str = DEFAULT_DB_PATH
+) -> None:
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """
+            INSERT INTO crypto_chain_cursors (chain, cursor_value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(chain) DO UPDATE SET
+                cursor_value = excluded.cursor_value,
+                updated_at = excluded.updated_at
+            """,
+            (str(chain), int(value), _utc_iso()),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def bind_telegram_chat_direct(
     user_id: int, chat_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
 ) -> None:

@@ -376,6 +376,7 @@ def create_invoice(
     period_days: int,
     *,
     tier: str = "research_pro",
+    chain: str = DEFAULT_CHAIN,
     list_amount_cents: int | None = None,
     db_path=accounts.DEFAULT_DB_PATH,
     now: datetime | None = None,
@@ -459,11 +460,11 @@ def create_invoice(
         taken = [int(row["expected_amount_cents"]) for row in open_rows]
         slot, expected = _allocate_amount(taken, discounted_amount)
         cursor = connection.execute(
-            "INSERT INTO crypto_invoices (user_id, period_days, subscription_tier, list_amount_cents, "
+            "INSERT INTO crypto_invoices (user_id, period_days, subscription_tier, chain, list_amount_cents, "
             "discount_cents, affiliate_partner_id, slot_index, expected_amount_cents, status, created_at, expires_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
             (
-                user_id, period_days, tier, list_amount, discount,
+                user_id, period_days, tier, str(chain), list_amount, discount,
                 offer["partner_id"], slot, expected, now_iso, expires_iso,
             ),
         )
@@ -478,6 +479,12 @@ def create_invoice(
 
 def _invoice_dict(row: sqlite3.Row) -> dict[str, Any]:
     settings = config()
+    keys = set(row.keys())
+    chain_key = str(row["chain"]) if "chain" in keys and row["chain"] else DEFAULT_CHAIN
+    definition = CHAINS.get(chain_key) or CHAINS[DEFAULT_CHAIN]
+    # Each chain has its own receiving address; falling back to the Arbitrum
+    # one would print a correct-looking address on the wrong network.
+    address = chain_address(definition.key) or settings.receiving_address
     amount_cents = int(row["expected_amount_cents"])
     discount_cents = int(row["discount_cents"] or 0)
     return {
@@ -496,11 +503,17 @@ def _invoice_dict(row: sqlite3.Row) -> dict[str, Any]:
         "affiliate_partner_id": row["affiliate_partner_id"],
         "slot_index": int(row["slot_index"]),
         "tolerance_display": f"{TOLERANCE_CENTS / 100:.2f}",
-        "receiving_address": settings.receiving_address,
-        "chain": CHAIN_NAME,
-        "chain_id": CHAIN_ID,
-        "tokens": sorted(token["symbol"] for token in TOKENS.values()),
-        "payment_options": payment_options(amount_cents, settings.receiving_address),
+        "receiving_address": address,
+        "chain": definition.name,
+        "chain_key": definition.key,
+        "chain_id": definition.chain_id,
+        "confirmations": definition.confirmations,
+        "tokens": sorted(token["symbol"] for token in definition.tokens.values()),
+        "payment_options": (
+            payment_options(amount_cents, address, chain=definition.key)
+            if address
+            else []
+        ),
         "created_at": str(row["created_at"]),
         "expires_at": str(row["expires_at"]),
         "settled_at": row["settled_at"],
