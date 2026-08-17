@@ -31,6 +31,9 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setenv("SPREADBOARD_FIELD_ENCRYPTION_KEY", Fernet.generate_key().decode())
     path = tmp_path / "accounts.sqlite3"
     accounts.initialize(path)
+    # A live deployment has at least one chain whose watcher is working;
+    # checkout deliberately offers nothing until one has proven itself.
+    accounts.record_chain_scan("arbitrum", ok=True, db_path=path)
     return path
 
 

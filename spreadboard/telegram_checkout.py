@@ -102,8 +102,8 @@ def rehearsal_price_cents(tier: str, chat_id: int | None) -> int | None:
     return cents
 
 
-def _network_list() -> str:
-    names = [chain.name for chain in _payable_chains()]
+def _network_list(db_path: Path | str | None = None) -> str:
+    names = [chain.name for chain in _payable_chains(db_path)]
     if not names:
         return "Arbitrum One"
     if len(names) == 1:
@@ -111,7 +111,7 @@ def _network_list() -> str:
     return ", ".join(names[:-1]) + " or " + names[-1]
 
 
-def _payable_chains() -> list[Any]:
+def _payable_chains(db_path: Path | str | None = None) -> list[Any]:
     """Only networks whose payments we can actually observe.
 
     A chain with a receiving address but no watcher would take the money and
@@ -119,7 +119,9 @@ def _payable_chains() -> list[Any]:
     """
     from spreadboard import crypto_watcher
 
-    return crypto_watcher.watchable_chains()
+    # Health-gated, not merely configured: BSC was configured and reachable
+    # while every scan was failing, and checkout kept offering it.
+    return crypto_watcher.payable_chains(db_path=db_path or accounts.DEFAULT_DB_PATH)
 
 
 def _priced_periods(tier: str, chat_id: int | None) -> dict[int, int]:
@@ -238,8 +240,29 @@ def email_prompt(tier: str, period_days: int, chat_id: int | None = None) -> dic
     }
 
 
-def confirm_prompt(tier: str, period_days: int, email: str, chat_id: int | None = None) -> dict[str, Any]:
+def confirm_prompt(
+    tier: str,
+    period_days: int,
+    email: str,
+    chat_id: int | None = None,
+    db_path: Path | str | None = None,
+) -> dict[str, Any]:
     cents = _priced_periods(tier, chat_id)[period_days]
+    if not _payable_chains(db_path):
+        # Better to say so than to show a screen with nothing to tap, and far
+        # better than taking a payment on a network nobody is watching.
+        return {
+            "text": (
+                "Payments are temporarily unavailable while we re-establish a "
+                "connection to the payment networks. Nothing has been charged. "
+                "Please try again shortly — your plan choice is saved."
+            ),
+            "markup": {
+                "inline_keyboard": [
+                    [{"text": "Try again", "callback_data": f"{CALLBACK_PREFIX}:restart"}]
+                ]
+            },
+        }
     extra = (
         "\nIncludes the private subscriber channel."
         if tier == "research_pro"
@@ -260,7 +283,7 @@ def confirm_prompt(tier: str, period_days: int, email: str, chat_id: int | None 
                         "text": f"Pay on {chain.name}",
                         "callback_data": f"{CALLBACK_PREFIX}:pay:{chain.key}",
                     }]
-                    for chain in _payable_chains()
+                    for chain in _payable_chains(db_path)
                 ],
                 [{"text": "← Start over", "callback_data": f"{CALLBACK_PREFIX}:restart"}],
             ]
@@ -367,7 +390,9 @@ def submit_email(chat_id: int, email: str, *, db_path: Path | str) -> dict[str, 
         email=clean,
         db_path=db_path,
     )
-    return confirm_prompt(str(session["tier"]), int(session["period_days"]), clean, chat_id)
+    return confirm_prompt(
+        str(session["tier"]), int(session["period_days"]), clean, chat_id, db_path
+    )
 
 
 def confirm(chat_id: int, *, chain: str = crypto_billing.DEFAULT_CHAIN, db_path: Path | str) -> dict[str, Any]:

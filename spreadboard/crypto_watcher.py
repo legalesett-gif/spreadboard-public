@@ -14,6 +14,7 @@ import json
 import logging
 import threading
 import time
+from datetime import UTC, datetime
 from typing import Any, Callable
 import urllib.request
 
@@ -487,21 +488,98 @@ def scan_tron(
     }
 
 
+SCAN_STALE_SECONDS = 15 * 60
+ALERT_AFTER_FAILURES = 3
+
+
+def chain_is_healthy(chain: str, *, db_path=accounts.DEFAULT_DB_PATH) -> bool:
+    """Has this chain been read successfully recently enough to trust?
+
+    Never scanned is not the same as scanning fine, so an unproven chain is
+    unhealthy rather than assumed good.
+    """
+    health = accounts.chain_health(chain, db_path=db_path)
+    stamp = health.get("last_ok_at")
+    if not stamp:
+        return False
+    try:
+        last = datetime.fromisoformat(str(stamp))
+    except ValueError:
+        return False
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=UTC)
+    return (datetime.now(tz=UTC) - last).total_seconds() <= SCAN_STALE_SECONDS
+
+
+def payable_chains(*, db_path=accounts.DEFAULT_DB_PATH) -> list[Any]:
+    """Networks a customer may safely be offered.
+
+    Configured and reachable is not enough. BSC was both while every scan was
+    failing, so checkout kept taking payments nobody could see. A network is
+    only offered while its watcher is demonstrably working.
+    """
+    return [
+        definition
+        for definition in watchable_chains()
+        if chain_is_healthy(definition.key, db_path=db_path)
+    ]
+
+
+def _alert_operator(message: str, *, db_path=accounts.DEFAULT_DB_PATH) -> None:
+    """Tell a human. A silent outage is the whole problem being solved here."""
+    LOGGER.error("%s", message)
+    try:
+        from spreadboard import telegram_bot
+
+        for candidate in accounts.telegram_membership_candidates(db_path=db_path):
+            user = accounts.get_user_object(int(candidate["user_id"]), db_path=db_path)
+            if user is not None and user.is_admin:
+                telegram_bot.send_direct_message(
+                    int(candidate["telegram_user_id"]), message
+                )
+    except Exception:  # noqa: BLE001 - alerting must never break the watcher
+        LOGGER.exception("could not deliver chain health alert")
+
+
+def _maybe_alert(definition: Any, *, db_path=accounts.DEFAULT_DB_PATH) -> None:
+    health = accounts.chain_health(definition.key, db_path=db_path)
+    failures = int(health.get("consecutive_failures") or 0)
+    if failures < ALERT_AFTER_FAILURES or health.get("alerted_at"):
+        return
+    _alert_operator(
+        f"{definition.name} payments are NOT being watched. "
+        f"{failures} consecutive scan failures. Last error: "
+        f"{health.get('last_error') or 'unknown'}. "
+        "This network is withdrawn from checkout until it recovers.",
+        db_path=db_path,
+    )
+    accounts.mark_chain_alerted(definition.key, db_path=db_path)
+
+
 def scan_all(*, db_path=accounts.DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     """One pass over every chain that can actually be watched."""
     summaries = []
     for definition in watchable_chains():
         try:
             if definition.kind == "tron":
-                summaries.append(scan_tron(db_path=db_path))
+                summary = scan_tron(db_path=db_path)
             elif definition.key == crypto_billing.DEFAULT_CHAIN:
                 # Arbitrum keeps its original cursor row and code path so an
                 # existing deployment does not rescan or skip on upgrade.
-                summaries.append(scan_once(db_path=db_path))
+                summary = scan_once(db_path=db_path)
             else:
-                summaries.append(scan_evm(definition.key, db_path=db_path))
-        except Exception:
+                summary = scan_evm(definition.key, db_path=db_path)
+            summaries.append(summary)
+            accounts.record_chain_scan(
+                definition.key, ok=bool(summary.get("ok", True)), db_path=db_path
+            )
+        except Exception as exc:  # noqa: BLE001 - one dead chain must not stop the others
             LOGGER.exception("scan failed for %s", definition.key)
             summaries.append({"ok": False, "chain": definition.key})
+            accounts.record_chain_scan(
+                definition.key, ok=False,
+                error=f"{type(exc).__name__}: {exc}", db_path=db_path,
+            )
+        _maybe_alert(definition, db_path=db_path)
     crypto_billing.expire_stale_invoices(db_path=db_path)
     return summaries

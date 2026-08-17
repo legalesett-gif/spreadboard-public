@@ -564,6 +564,17 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 cursor_value INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
             );
+            -- Proof that a chain is actually being watched. Without this a
+            -- scan can fail on every poll for hours while checkout keeps
+            -- offering the network, which is how a payment goes uncredited.
+            CREATE TABLE IF NOT EXISTS crypto_chain_health (
+                chain TEXT PRIMARY KEY,
+                last_ok_at TEXT,
+                last_error TEXT NOT NULL DEFAULT '',
+                consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                alerted_at TEXT,
+                updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS crypto_watcher_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 last_scanned_block INTEGER NOT NULL DEFAULT 0,
@@ -1889,6 +1900,77 @@ def apply_billing_event(
 #: and should not.
 INVITE_TOKEN_DAYS = 7
 RESET_TOKEN_HOURS = 2
+
+
+def chain_health(chain: str, *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
+    unproven = {
+        "chain": str(chain), "last_ok_at": None, "last_error": "",
+        "consecutive_failures": 0, "alerted_at": None,
+    }
+    connection = _connect(db_path)
+    try:
+        try:
+            row = connection.execute(
+                "SELECT * FROM crypto_chain_health WHERE chain = ?", (str(chain),)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # A database predating this table is simply unproven, which is the
+            # safe reading. Health must never be the thing that breaks checkout.
+            return unproven
+        if row is None:
+            return unproven
+        return dict(row)
+    finally:
+        connection.close()
+
+
+def record_chain_scan(
+    chain: str,
+    *,
+    ok: bool,
+    error: str = "",
+    db_path: Path | str = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> None:
+    """Remember whether this chain could actually be read just now."""
+    stamp = _utc_iso(now or datetime.now(tz=UTC))
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """
+            INSERT INTO crypto_chain_health (
+                chain, last_ok_at, last_error, consecutive_failures, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(chain) DO UPDATE SET
+                last_ok_at = CASE WHEN ? THEN excluded.last_ok_at ELSE crypto_chain_health.last_ok_at END,
+                last_error = excluded.last_error,
+                consecutive_failures = CASE
+                    WHEN ? THEN 0 ELSE crypto_chain_health.consecutive_failures + 1 END,
+                alerted_at = CASE WHEN ? THEN NULL ELSE crypto_chain_health.alerted_at END,
+                updated_at = excluded.updated_at
+            """,
+            (
+                str(chain), stamp if ok else None, "" if ok else str(error)[:300],
+                0 if ok else 1, stamp, bool(ok), bool(ok), bool(ok),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def mark_chain_alerted(
+    chain: str, *, db_path: Path | str = DEFAULT_DB_PATH, now: datetime | None = None
+) -> None:
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            "UPDATE crypto_chain_health SET alerted_at = ? WHERE chain = ?",
+            (_utc_iso(now or datetime.now(tz=UTC)), str(chain)),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def chain_cursor(chain: str, *, db_path: Path | str = DEFAULT_DB_PATH) -> int:
