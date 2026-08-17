@@ -21,13 +21,16 @@ from __future__ import annotations
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import time
 from typing import Any
 
-from spreadboard import fair_price, live_book_cache
+from spreadboard import fair_price, live_book_cache, ourbit_quotes
 from spreadboard.fast_quotes import VENUE_IDS
+
+LOGGER = logging.getLogger("spreadboard.bulk_quotes")
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", "data"))
 
@@ -233,6 +236,16 @@ def sweep(
     written = 0
     covered = 0
     fair_price_rows: list[dict[str, Any]] = []
+    # Ourbit has no CCXT adapter, so it is absent from VENUE_IDS and would
+    # never be priced by the rotation below. It is swept natively first, on its
+    # own budget, so a slow rotation cannot starve the venue whose absence was
+    # costing us whole routes.
+    if venues is None:
+        try:
+            written += ourbit_quotes.sweep(store=target)
+            covered += 1
+        except Exception:
+            LOGGER.warning("ourbit native sweep failed", exc_info=True)
     ordered = venues if venues is not None else sorted(VENUE_IDS)
     start = _load_cursor(len(ordered))
     rotation = ordered[start:] + ordered[:start]
