@@ -368,6 +368,8 @@ def symbols_with_live_depth(store: Any, *, max_age_seconds: float = 900.0) -> se
             (VENUE, "public_rest_l2", cutoff),
         )
         return {str(row[0]).split("|")[-1] for row in rows}
-    except Exception:  # noqa: BLE001 - protection is best effort, never fatal
+    except Exception:
+        # Protection is best effort: failing to read it costs depth freshness,
+        # never the sweep itself.
         LOGGER.warning("could not read existing ourbit depth", exc_info=True)
         return set()
