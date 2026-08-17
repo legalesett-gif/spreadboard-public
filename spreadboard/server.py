@@ -3344,7 +3344,7 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
         market = api_spreads.load_spreads(
             board_path=board_path,
             include_stale=False,
-            include_unverified=False,
+            include_unverified=True,
             limit=None,
             sort_by="edge",
             direction="desc",
@@ -3634,7 +3634,7 @@ def api_position_suggestions(
             board_path=board_path,
             q=requested or None,
             include_stale=False,
-            include_unverified=False,
+            include_unverified=True,
             limit=None,
             sort_by="edge",
             direction="desc",

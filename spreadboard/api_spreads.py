@@ -159,7 +159,15 @@ def load_spreads(
     funding_only: bool = False,
     include_stale: bool = False,
     require_deliverable: bool = False,
-    include_unverified: bool = False,
+    # A route we cannot depth-verify was hidden outright, so UNITREE carried
+    # 24 real routes -- Gate->Hyperliquid at 4.40%, Mexc->Ourbit at 2.65% --
+    # and displayed 0.000%. Ourbit and Mexc futures tickers publish no
+    # top-of-book size, so nothing CAN verify them and they could never appear.
+    # Hiding a dislocation is only defensible if the alternative is presenting
+    # it as executable; it is not, because the Depth cell states "unverified"
+    # per row. Mirage-guarded and price-implausible routes stay hidden: those
+    # are known-false, not merely unmeasured.
+    include_unverified: bool = True,
     max_age_min: float | None = DEFAULT_MAX_AGE_MIN,
     sort_by: str = "edge",
     direction: str = "desc",
