@@ -6605,6 +6605,22 @@ FILTER_PRESET_SCRIPT = r"""
 """
 
 
+
+def render_carry_windows(row: dict[str, Any]) -> str:
+    """Realised 1d/7d/30d carry cells for one route.
+
+    An unknown window renders as a dash, never as zero: "no settlement history
+    yet" and "carry was flat" are opposite conclusions for anyone sizing a farm.
+    """
+    windows = row.get("settled_funding_windows") or {}
+    cells = []
+    for key in ("1d", "7d", "30d"):
+        value = _float_or_none(windows.get(key))
+        shown = fmt_signed_pct(value, digits=3) if value is not None else "&mdash;"
+        cells.append(f'<td data-label="{key}"><strong>{shown}</strong></td>')
+    return "".join(cells)
+
+
 def render_pro_market_table(rows: list[dict[str, Any]]) -> str:
     def render_row(row: dict[str, Any]) -> str:
         spread_current = api_spreads.spread_quote_current(row)
@@ -6628,6 +6644,7 @@ def render_pro_market_table(rows: list[dict[str, Any]]) -> str:
           <td data-label="Sell"><strong>{h(row.get("short_venue"))}</strong><small>{h(leg_market_label(row.get("short_venue"), row.get("short_market_type")))} · {fmt_price(row.get("short_price"))}</small></td>
           <td data-label="Matched edge"><strong class="{spread_class(matched)}">{fmt_pct(matched)}</strong><small>{h(top_book)}</small></td>
           <td data-label="Funding 24h"><strong>{fmt_signed_pct(funding_24h_value(row), digits=3)}</strong><small>{h(funding_cadence_pair(row))}</small>{render_persistence_badge(row)}</td>
+          {render_carry_windows(row)}
           <td data-label="Depth"><strong>{fmt_money(row.get("depth_usd"))}</strong><small>{"matched" if not row.get("depth_unverified") else "unverified"}</small></td>
           <td data-label="Rail">{render_market_dw(row)}</td>
           <td data-label="Actions" class="pro-actions">{actions}<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a><a href="/charts?route_key={h(board.route_key_url(str(row.get("route_key") or "")))}">Chart</a></td>
@@ -6643,7 +6660,7 @@ def render_pro_market_table(rows: list[dict[str, Any]]) -> str:
     <div class="pro-market-wrap" role="region" aria-label="Pro Table" tabindex="0">
       <table class="pro-market-table">
         <caption>Pro Table · matched executable route evidence</caption>
-        <thead><tr><th>Asset</th><th>Market evidence</th><th>Buy</th><th>Sell</th><th>Matched edge</th><th>Funding 24h</th><th>Depth</th><th>Rail</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Asset</th><th>Market evidence</th><th>Buy</th><th>Sell</th><th>Matched edge</th><th>Funding 24h</th><th>1d</th><th>7d</th><th>30d</th><th>Depth</th><th>Rail</th><th>Actions</th></tr></thead>
         <tbody>{body}</tbody>
       </table>
     </div>
