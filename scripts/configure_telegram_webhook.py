@@ -55,6 +55,12 @@ def main() -> int:
                 {"command": "funding", "description": "Funding rate and APR per route"},
                 {"command": "radar", "description": "Retained 24h / 7d / 30d funding leaders"},
                 {"command": "transfer", "description": "Deposit / withdrawal rails per venue"},
+                {"command": "deep", "description": "Only routes that proved the probe size"},
+                {"command": "carry", "description": "Best paired carry per day"},
+                {"command": "depth", "description": "Can you get size in at the probe"},
+                {"command": "calc", "description": "Split capital across both legs"},
+                {"command": "help", "description": "Every shortcut, e.g. GUA/f"},
+                {"command": "status", "description": "How fresh the data is"},
             ],
         },
     )
@@ -63,13 +69,23 @@ def main() -> int:
         "setMyCommands",
         {
             "scope": {"type": "all_group_chats"},
+            # Order is the order Telegram shows when a member types "/", so the
+            # question people actually arrive with goes first. This menu IS the
+            # discovery surface: a command absent from it may as well not exist.
             "commands": [
-                {"command": "setupgroup", "description": "Connect this subscriber group"},
-                {"command": "token", "description": "Spread view for a token"},
+                {"command": "top", "description": "Widest spreads right now"},
+                {"command": "deep", "description": "Only routes that proved the probe size"},
+                {"command": "carry", "description": "Best paired carry per day"},
+                {"command": "radar", "description": "Retained 24h / 7d / 30d funding leaders"},
                 {"command": "spread", "description": "Spread across all parsed venues"},
                 {"command": "funding", "description": "Funding rate and APR per route"},
-                {"command": "radar", "description": "Retained 24h / 7d / 30d funding leaders"},
-                {"command": "transfer", "description": "Deposit / withdrawal rails per venue"}
+                {"command": "depth", "description": "Can you get size in at the probe"},
+                {"command": "transfer", "description": "Deposit / withdrawal rails per venue"},
+                {"command": "calc", "description": "Split capital across both legs"},
+                {"command": "token", "description": "Spread view for a token"},
+                {"command": "help", "description": "Every shortcut, e.g. GUA/f"},
+                {"command": "status", "description": "How fresh the data is"},
+                {"command": "setupgroup", "description": "Connect this subscriber group"},
             ],
         },
     )

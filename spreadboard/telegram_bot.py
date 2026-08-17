@@ -144,19 +144,26 @@ def _handle_group_query(
         return None
     if board_path is None:
         return _reply(chat_id, "The live scanner is warming. Try again shortly.", thread_id=thread_id)
-    if not telegram_queries.payload_status()["ready"]:
+    if (
+        query.kind not in {"help", "status"}
+        and not telegram_queries.payload_status()["ready"]
+    ):
         return _reply(
             chat_id,
-            "The live Telegram snapshot is warming. Try again shortly.",
+            "The live Telegram snapshot is warming. Try again shortly. "
+            "<code>/status</code> shows how far along it is.",
+            html=True,
             thread_id=thread_id,
         )
     if not telegram_queries.allow(chat_id, query):
+        subject = f"${query.symbol} {query.kind}" if query.symbol else f"/{query.kind}"
         return _reply(
             chat_id,
-            f"I answered ${query.symbol} {query.kind} less than a minute ago. Tap the previous result or try again shortly.",
+            f"I answered {subject} less than a minute ago. Tap the previous result or try again shortly.",
             thread_id=thread_id,
         )
-    _record_token_attention(query, source="subscriber_forum")
+    if query.symbol:
+        _record_token_attention(query, source="subscriber_forum")
     try:
         body = telegram_queries.render(
             query, board_path=board_path, public_url=public_url

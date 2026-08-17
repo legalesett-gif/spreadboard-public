@@ -49,8 +49,57 @@ COMMANDS = {
     "/transfer": "transfer",
     "/token": "spread",
     "/radar": "radar",
+    "/depth": "depth",
+    "/calc": "calc",
+    # Board-wide, no token needed.
+    "/top": "top",
+    "/carry": "carry",
+    "/deep": "deep",
+    "/help": "help",
+    "/status": "status",
 }
-VIEW_LABELS = {"spread": "Spread", "funding": "Funding", "transfer": "Deposits / Withdrawals"}
+
+#: Commands that answer about the whole board rather than one token.
+BOARDWIDE = {"top", "carry", "deep", "help", "status"}
+
+#: What can follow ``TOKEN/``. Single letters matter: this gets typed on a
+#: phone in the middle of a conversation, and ``GUA/f`` is a third of the
+#: keystrokes of ``/funding GUA``.
+ASPECTS = {
+    "": "spread", "s": "spread", "spread": "spread", "basis": "spread",
+    "f": "funding", "funding": "funding", "carry": "funding",
+    "d": "depth", "depth": "depth", "size": "depth", "liquidity": "depth",
+    "t": "transfer", "transfer": "transfer", "rails": "transfer",
+    "deposit": "transfer", "withdraw": "transfer",
+    "c": "calc", "calc": "calc", "plan": "calc",
+    "r": "radar", "radar": "radar",
+    "?": "help", "h": "help", "help": "help",
+}
+
+#: ``TOKEN/aspect`` -- the token-first form. Anchored at the start of the
+#: message on purpose. Mid-sentence matching would answer "what about GUA/f",
+#: and with privacy mode off the bot sees every message in the group, so the
+#: cost of a loose pattern is a bot that interrupts conversations.
+SLASH_QUERY = re.compile(
+    rf"^([^\W_][\w.-]{{0,{MAX_SYMBOL_LENGTH - 1}}})/([A-Za-z?]*)(?:\s+(.*))?$",
+    re.UNICODE,
+)
+
+#: Refused before the pattern is even tried. A pasted link is the common one.
+URL_MARKERS = (
+    "://", "www.",
+    ".com/", ".io/", ".ink/", ".org/", ".net/", ".xyz/", ".app/", ".dev/",
+    ".co/", ".ai/", ".fi/", ".exchange/", ".finance/", ".t.me/", "t.me/",
+)
+#: The views a member can tap between under any token answer. Depth belongs
+#: here because "can I actually get size in" is the question that decides
+#: whether a wide spread is worth anything.
+VIEW_LABELS = {
+    "spread": "Spread",
+    "funding": "Funding",
+    "depth": "Depth",
+    "transfer": "Deposits / Withdrawals",
+}
 # Bare intent words, accepted alongside a cashtag ("$SIREN funding").
 KIND_WORDS = {"spread": "spread", "funding": "funding", "transfer": "transfer",
               "rails": "transfer", "deposit": "transfer", "withdraw": "transfer"}
@@ -60,6 +109,9 @@ KIND_WORDS = {"spread": "spread", "funding": "funding", "transfer": "transfer",
 class Query:
     kind: str
     symbol: str
+    #: Free text after the aspect, currently the capital for a sizing request.
+    #: Part of the cooldown key: $1,000 and $50,000 are different questions.
+    arg: str = ""
 
 
 _LAST_ANSWERED: dict[tuple[int, str, str], float] = {}
@@ -71,6 +123,30 @@ def parse_query(text: str, *, bot_username: str = "") -> Query | None:
     raw = str(text or "").strip()
     if not raw:
         return None
+
+    # A link contains a slash and a dot and would otherwise look exactly like
+    # ``TOKEN/aspect``. Refuse the whole message rather than try to pick it out.
+    lowered = raw.casefold()
+    if not any(marker in lowered for marker in URL_MARKERS):
+        slash = SLASH_QUERY.match(raw)
+        if slash:
+            symbol_text, aspect_text, argument = slash.groups()
+            aspect = ASPECTS.get((aspect_text or "").casefold())
+            # An unknown aspect is left alone. That single rule is what keeps
+            # "and/or", "n/a" and "3/4" out: none of those trail an aspect we
+            # know, and a date's "12/05" has digits where letters must be.
+            # A bare "TOKEN/" has to be the entire message. Without this,
+            # "w/ the short leg on Gate" is a lookup for token W -- the English
+            # abbreviation for "with" is the exact shape of this syntax.
+            bare_with_trailing = not aspect_text and bool(str(argument or "").strip())
+            if aspect is not None and not bare_with_trailing:
+                symbol = _normalise(symbol_text)
+                if symbol:
+                    return Query(
+                        kind=aspect,
+                        symbol=symbol,
+                        arg=str(argument or "").strip(),
+                    )
 
     # A Telegram mention is itself an explicit trigger. Privacy-mode messages
     # such as ``@spreadarbitragesubscription_bot SIREN`` reach the bot, but used
@@ -98,6 +174,10 @@ def parse_query(text: str, *, bot_username: str = "") -> Query | None:
             return Query(kind=kind or "spread", symbol=symbol)
 
     head = words[0] if words else ""
+    # "/top", "/help", "/status" and friends describe the board, not a token.
+    if head in COMMANDS and COMMANDS[head] in BOARDWIDE:
+        _, _, rest = raw.partition(" ")
+        return Query(kind=COMMANDS[head], symbol="", arg=rest.strip())
     if head in COMMANDS:
         _, _, rest = raw.partition(" ")
         symbol = rest.strip().lstrip("$").split(" ")[0] if rest.strip() else ""
@@ -108,7 +188,11 @@ def parse_query(text: str, *, bot_username: str = "") -> Query | None:
             return Query(kind="radar", symbol="")
         if not symbol:
             return None
-        return Query(kind=COMMANDS[head], symbol=_normalise(symbol))
+        remainder = rest.strip()
+        _, _, after = remainder.partition(" ")
+        return Query(
+            kind=COMMANDS[head], symbol=_normalise(symbol), arg=after.strip()
+        )
     if mentioned:
         candidates = re.findall(
             rf"\b[\w.-]{{1,{MAX_SYMBOL_LENGTH}}}\b", raw, re.UNICODE
@@ -141,7 +225,7 @@ def _normalise(symbol: str) -> str:
 def allow(chat_id: int, query: Query, *, now: float | None = None) -> bool:
     """Rate limit identical questions so a busy group stays readable."""
     moment = time.time() if now is None else now
-    key = (int(chat_id), query.symbol, query.kind)
+    key = (int(chat_id), query.symbol, query.kind, query.arg)
     with _LOCK:
         last = _LAST_ANSWERED.get(key, 0.0)
         if moment - last < COOLDOWN_SECONDS:
@@ -170,6 +254,25 @@ def _usd(value: Any) -> str:
     if amount >= 1_000:
         return f"${amount / 1_000:.0f}K"
     return f"${amount:.0f}"
+
+
+def _money(value: Any) -> str:
+    """Exact dollars. `_usd` abbreviates, which is right for a board column and
+    wrong for a figure someone is about to size a position from: "$2K" hides
+    the difference between $2,000 and $2,499."""
+    if value is None:
+        return "--"
+    amount = float(value)
+    if amount != 0 and abs(amount) < 100:
+        return f"${amount:,.2f}"
+    return f"${amount:,.0f}"
+
+
+def _number(value: Any) -> float | None:
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _route(row: dict[str, Any]) -> str:
@@ -598,10 +701,17 @@ def keyboard(query: Query, *, public_url: str = "") -> dict[str, Any]:
     equivalent is to offer the other views right under the answer.
     """
     others = [(kind, label) for kind, label in VIEW_LABELS.items() if kind != query.kind]
-    rows = [] if query.kind == "radar" else [[
+    buttons = [
         {"text": label, "callback_data": f"v:{kind}:{query.symbol}"[:64]}
         for kind, label in others
-    ]]
+    ]
+    # Two per row: four buttons on one row truncate to initials on a phone.
+    rows = (
+        []
+        if query.kind in {"radar", "top", "carry", "deep", "help", "status"}
+        or not query.symbol
+        else [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
+    )
     if public_url:
         destination = (
             "/funding?rank=1d"
@@ -649,6 +759,12 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
     """Build the HTML reply for a token lookup."""
     if query.kind == "radar":
         return _render_radar(public_url=public_url)
+    if query.kind in {"top", "carry", "deep"}:
+        return _render_leaderboard(query.kind, public_url=public_url)
+    if query.kind == "help":
+        return _render_help(query.symbol, public_url=public_url)
+    if query.kind == "status":
+        return _render_status(public_url=public_url)
     # Normalise here too, not only in parse_query, so render() is safe for any
     # caller and the symbol can never carry markup into an HTML-parsed message.
     symbol = _normalise(query.symbol)
@@ -658,6 +774,10 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
         rows = funding_rows
     elif query.kind == "spread":
         rows = [row for row in rows if _current_basis(row) is not None]
+    if query.kind == "depth":
+        return _render_depth(symbol, rows, public_url=public_url)
+    if query.kind == "calc":
+        return _render_calc(symbol, rows, query.arg, public_url=public_url)
     radar_rows = _radar_rows(symbol) if query.kind in {"spread", "funding"} else []
     if not rows:
         if funding_rows and query.kind == "spread":
@@ -753,4 +873,238 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
         "\n<i>? = token identity unverified on that route. Research data, not advice.</i>"
         f"{radar}"
         f"{link}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Board-wide answers and sizing
+# ---------------------------------------------------------------------------
+
+
+#: How people write money. "5k" and "$5,000" are the same request.
+def parse_capital(text: str) -> float | None:
+    """Read a capital figure the way a member would type it, or None."""
+    raw = str(text or "").strip().lower().replace(",", "").replace("$", "").replace("_", "")
+    if not raw:
+        return None
+    multiplier = 1.0
+    if raw.endswith("k"):
+        multiplier, raw = 1_000.0, raw[:-1]
+    elif raw.endswith("m"):
+        multiplier, raw = 1_000_000.0, raw[:-1]
+    try:
+        value = float(raw) * multiplier
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _all_routes() -> list[dict[str, Any]]:
+    payload = client_visible_payload()
+    return [
+        route
+        for group in payload.get("groups") or []
+        for route in group.get("routes") or []
+        if isinstance(route, dict)
+    ]
+
+
+def _proved_depth(row: dict[str, Any]) -> bool:
+    """Whether this route walked a real ladder at the board's probe size."""
+    return row.get("depth_weighted_spread_pct") is not None
+
+
+def _spread_of(row: dict[str, Any]) -> float:
+    for key in ("depth_weighted_spread_pct", "executable_spread_pct"):
+        value = row.get(key)
+        try:
+            if value is not None:
+                return float(value)
+        except (TypeError, ValueError):
+            continue
+    return float("-inf")
+
+
+def _link(public_url: str, path: str, label: str) -> str:
+    if not public_url:
+        return ""
+    return f'\n\n<a href="{escape(public_url.rstrip("/"))}{path}">{escape(label)}</a>'
+
+
+def _render_leaderboard(
+    kind: str, *, public_url: str = "", limit: int = MAX_ROWS
+) -> str:
+    """The three "show me the board" answers, which differ only in ranking."""
+    rows = _all_routes()
+    if not rows:
+        return (
+            "The live snapshot is still warming. Try again in a minute."
+        )
+    if kind == "deep":
+        rows = [row for row in rows if _proved_depth(row)]
+        heading = f"Proven at {_probe_label()} — these walked a real ladder"
+        ranker = _spread_of
+        note = "Every row here filled the board's probe size. Re-check the book before sending."
+    elif kind == "carry":
+        rows = [row for row in rows if row.get("funding_daily_pct") is not None]
+        heading = "Best paired carry right now"
+        def ranker(row: dict[str, Any]) -> float:
+            return abs(float(row.get("funding_daily_pct") or 0.0))
+
+        note = "Carry is what the pair pays per day. It is not the entry edge."
+    else:
+        heading = "Widest spreads right now"
+        ranker = _spread_of
+        note = (
+            f"A wide number is a lead, not a fill. Rows marked <b>unproven</b> "
+            f"did not fill {_probe_label()} — check depth before sizing."
+        )
+    if not rows:
+        return f"<b>{escape(heading)}</b>\nNothing qualifies right now."
+    rows = sorted(rows, key=ranker, reverse=True)[:limit]
+
+    lines: list[tuple[str, ...]] = []
+    for row in rows:
+        token = str(row.get("token") or "?").upper()
+        if kind == "carry":
+            lines.append((token, _pct(row.get("funding_daily_pct"), 3), _pct(row.get("funding_apr_pct"), 0)))
+        else:
+            flag = "" if _proved_depth(row) else " *"
+            lines.append((token + flag, _pct(_spread_of(row), 2), _route(row)))
+    header = ("TOKEN", "PER DAY", "APR") if kind == "carry" else ("TOKEN", "SPREAD", "ROUTE")
+    widths = (12, 9, 8) if kind == "carry" else (12, 9, 22)
+    table = _table(header, widths, lines)
+    star = "" if kind != "top" or all(_proved_depth(row) for row in rows) else "\n<i>* depth unproven at the probe size.</i>"
+    destination = "/funding?rank=1d" if kind == "carry" else "/markets"
+    return (
+        f"<b>{escape(heading)}</b>\n{table}{star}\n\n<i>{note}</i>"
+        f"{_link(public_url, destination, 'Open the full board')}"
+    )
+
+
+def _probe_label() -> str:
+    from . import api_spreads
+
+    return f"${api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD:,.0f}"
+
+
+def _render_depth(symbol: str, rows: list[dict[str, Any]], *, public_url: str = "") -> str:
+    """Can this actually be entered, and at what size."""
+    probe = _probe_label()
+    if not rows:
+        return (
+            f"<b>{escape(symbol)} · depth</b>\nNo client-visible route right now."
+        )
+    proved = [row for row in rows if _proved_depth(row)]
+    if not proved:
+        best = max(rows, key=_spread_of)
+        return (
+            f"<b>{escape(symbol)} · depth</b>\n"
+            f"No route proved {probe}. The book was too thin to walk at that size, "
+            "so the spread shown on the board is top-of-book only.\n\n"
+            f"Widest top-of-book: <b>{_pct(best.get('executable_spread_pct'), 2)}</b> on {escape(_route(best))}\n\n"
+            "<i>Treat it as a lead. Size down, or check the ladder yourself before sending.</i>"
+            + _link(public_url, f"/markets?q={escape(symbol)}&view=table", "Open on SpreadBoard")
+        )
+    table = _table(
+        ("ROUTE", "MATCHED", "TOP"), (22, 9, 8),
+        [
+            (_route(row), _pct(row.get("depth_weighted_spread_pct"), 2),
+             _pct(row.get("executable_spread_pct"), 2))
+            for row in sorted(proved, key=_spread_of, reverse=True)[:MAX_ROWS]
+        ],
+    )
+    return (
+        f"<b>{escape(symbol)} · depth proven at {probe}</b>\n{table}\n\n"
+        f"<i>MATCHED walked the ladder to {probe}. TOP is best bid/ask only, so it is "
+        "the more optimistic of the two.</i>"
+        + _link(public_url, f"/markets?q={escape(symbol)}&view=table", "Open on SpreadBoard")
+    )
+
+
+def _render_calc(
+    symbol: str, rows: list[dict[str, Any]], capital_text: str, *, public_url: str = ""
+) -> str:
+    """Turn a capital figure into per-leg size and what the carry pays.
+
+    Both legs are funded, so capital splits in half. Quoting a per-day figure
+    against the full capital -- rather than one leg's notional -- is the error
+    that overstated every return on the portfolio page.
+    """
+    capital = parse_capital(capital_text)
+    if capital is None:
+        return (
+            f"<b>{escape(symbol)} · sizing</b>\n"
+            f"Tell me the capital and I will split it: <code>{escape(symbol)}/calc 5000</code>\n\n"
+            "<i>Both legs get funded, so the capital you commit is about twice "
+            "one leg's notional.</i>"
+        )
+    if not rows:
+        return (
+            f"<b>{escape(symbol)} · sizing</b>\nNo client-visible route right now."
+        )
+    best = max(rows, key=lambda row: abs(float(row.get("funding_daily_pct") or 0.0)))
+    per_leg = capital / 2.0
+    daily_pct = _number(best.get("funding_daily_pct"))
+    lines = [
+        f"Capital committed  <b>{_money(capital)}</b>",
+        f"Per leg (1x)       <b>{_money(per_leg)}</b> long + <b>{_money(per_leg)}</b> short",
+    ]
+    if daily_pct is not None:
+        per_day = per_leg * float(daily_pct) / 100.0
+        lines.append(f"Carry              <b>{_money(per_day)}</b>/day at {_pct(daily_pct, 3)}")
+        lines.append(f"                   {_money(per_day * 30)}/30d · {_pct(best.get('funding_apr_pct'), 1)} APR")
+    entry = best.get("depth_weighted_spread_pct")
+    if entry is not None:
+        lines.append(f"Entry basis        {_pct(entry, 2)} matched at {_probe_label()}")
+    body = "\n".join(lines)
+    return (
+        f"<b>{escape(symbol)} · sizing {_money(capital)}</b>\n"
+        f"{escape(_route(best))}\n\n<pre>{body}</pre>\n"
+        "<i>Carry is charged on notional, so it is quoted against one leg. "
+        "Funding rates move; this is the current rate, not a promise.</i>"
+        + _link(public_url, f"/markets?q={escape(symbol)}&view=table", "Open on SpreadBoard")
+    )
+
+
+def _render_help(symbol: str = "", *, public_url: str = "") -> str:
+    """Everything the bot answers, written as things you would actually type."""
+    example = escape(symbol.upper()) if symbol else "GUA"
+    return (
+        "<b>Ask me anything on the board — no need to tag me.</b>\n\n"
+        f"<b>Token first</b> (fastest on a phone)\n"
+        f"<code>{example}/</code>          spread and best route\n"
+        f"<code>{example}/f</code>         funding — what the pair pays per day\n"
+        f"<code>{example}/d</code>         depth — can you actually get size in\n"
+        f"<code>{example}/t</code>         transfer rails — deposits and withdrawals\n"
+        f"<code>{example}/c 5000</code>    sizing — splits capital across both legs\n"
+        f"<code>{example}/?</code>         this help, for that token\n\n"
+        "<b>Whole board</b>\n"
+        "<code>/top</code>       widest spreads right now\n"
+        "<code>/deep</code>      only routes that proved the probe size\n"
+        "<code>/carry</code>     best paired carry per day\n"
+        "<code>/radar</code>     historical funding leaders\n"
+        "<code>/status</code>    how fresh the data is\n\n"
+        f"<code>${example}</code> still works, and so does <code>/spread {example}</code>.\n\n"
+        "<i>Spread is the entry edge. Carry is what the pair pays while you hold. "
+        f"Depth means the book actually filled {_probe_label()} — without it a wide "
+        "number is only a lead.</i>"
+        + _link(public_url, "/markets", "Open the board")
+    )
+
+
+def _render_status(*, public_url: str = "") -> str:
+    snapshot = payload_status()
+    age = snapshot.get("age_seconds")
+    age_text = "unknown" if age is None else f"{float(age):.0f}s ago"
+    state = "live" if snapshot.get("ready") else "warming"
+    return (
+        "<b>Data status</b>\n"
+        f"<pre>Snapshot   {state}\n"
+        f"Updated    {age_text}\n"
+        f"Tokens     {snapshot.get('token_count')}\n"
+        f"Routes     {snapshot.get('route_count')}\n"
+        f"Funding    {snapshot.get('funding_token_count')} tokens</pre>\n"
+        f"<i>Probe size {_probe_label()}. Numbers here are the same ones the website shows.</i>"
+        + _link(public_url, "/status", "Open status")
     )
