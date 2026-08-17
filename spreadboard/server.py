@@ -5350,8 +5350,11 @@ def render_board_stream_script(
         if (stamp) stamp.textContent = "live";
         const maxSpread = document.querySelector("[data-live-max-spread]");
         if (maxSpread) {
-          const next = pct(payload.max_spread_pct, 1) || "—";
-          if (maxSpread.textContent.trim() !== next) {
+          // Same rule as the rows: no number in this tick is the absence of
+          // news. Blanking the headline made the whole board look broken even
+          // while every row underneath it was still correct.
+          const next = pct(payload.max_spread_pct, 1);
+          if (next && maxSpread.textContent.trim() !== next) {
             maxSpread.textContent = next;
             flash(maxSpread);
           }

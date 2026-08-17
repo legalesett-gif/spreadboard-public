@@ -136,3 +136,17 @@ def test_the_client_never_overwrites_a_number_with_a_dash() -> None:
     assert 'const next = text || "—";' not in source, (
         "a null spread still erases the rendered value"
     )
+
+
+def test_the_headline_is_not_blanked_by_a_tick_without_a_number() -> None:
+    """The KPI above the board follows the same rule as the rows.
+
+    Blanking it made the entire board read as broken even while every row
+    underneath was still showing a correct, current number.
+    """
+    import inspect
+
+    from spreadboard import server
+
+    source = inspect.getsource(server.render_board_stream_script)
+    assert 'pct(payload.max_spread_pct, 1) || "—"' not in source
