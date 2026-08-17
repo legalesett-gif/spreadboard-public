@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from scripts import backup_spreadboard
 
 
@@ -57,3 +59,37 @@ def test_stage_snapshot_keeps_databases_that_exceed_the_size_cap(tmp_path, monke
     assert archive.relative_to(source) not in copied
     with sqlite3.connect(target / "market_history.sqlite3") as connection:
         assert connection.execute("SELECT COUNT(*) FROM route_points").fetchone()[0] == 64
+
+
+# --------------------------------------------------------------------------
+# Backend-appropriate configuration
+# --------------------------------------------------------------------------
+
+
+def test_an_s3_repository_still_demands_its_credentials(monkeypatch) -> None:
+    monkeypatch.setenv("RESTIC_REPOSITORY", "s3:https://x.r2.cloudflarestorage.com/b")
+    monkeypatch.setenv("RESTIC_PASSWORD_FILE", "/tmp/pw")
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="backup_configuration_missing"):
+        backup_spreadboard._require_restic_configuration()
+
+
+def test_an_rclone_repository_does_not_need_aws_keys(monkeypatch) -> None:
+    """rclone carries its own credentials; demanding AWS keys blocks it entirely."""
+    monkeypatch.setenv("RESTIC_REPOSITORY", "rclone:gdrive:spreadboard-backup")
+    monkeypatch.setenv("RESTIC_PASSWORD_FILE", "/tmp/pw")
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+
+    backup_spreadboard._require_restic_configuration()
+
+
+def test_every_backend_still_needs_a_repository_and_a_password(monkeypatch) -> None:
+    """The password is what makes the snapshot ciphertext; never optional."""
+    monkeypatch.setenv("RESTIC_REPOSITORY", "rclone:gdrive:spreadboard-backup")
+    monkeypatch.delenv("RESTIC_PASSWORD_FILE", raising=False)
+
+    with pytest.raises(RuntimeError, match="backup_configuration_missing"):
+        backup_spreadboard._require_restic_configuration()

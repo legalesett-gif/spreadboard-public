@@ -127,7 +127,16 @@ def _excluded(path: Path, root: Path) -> bool:
 
 
 def _require_restic_configuration() -> None:
-    required = ("RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+    """Demand what this backend actually uses, and nothing more.
+
+    The repository and its password are universal: without the password the
+    snapshot is not ciphertext. AWS keys belong to S3-compatible backends only.
+    Requiring them unconditionally made every other backend unreachable --
+    including rclone, which carries its own credentials.
+    """
+    required = ["RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE"]
+    if os.environ.get("RESTIC_REPOSITORY", "").strip().startswith("s3:"):
+        required += ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
         raise RuntimeError("backup_configuration_missing:" + ",".join(missing))
