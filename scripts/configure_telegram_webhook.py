@@ -46,6 +46,7 @@ def main() -> int:
         {
             "scope": {"type": "all_private_chats"},
             "commands": [
+                {"command": "start", "description": "What this bot can do"},
                 {"command": "subscribe", "description": "Open secure membership checkout"},
                 {"command": "mysubscription", "description": "Check membership status"},
                 {"command": "access", "description": "Request subscriber group access"},
@@ -69,25 +70,31 @@ def main() -> int:
         "setMyCommands",
         {
             "scope": {"type": "all_group_chats"},
-            # Order is the order Telegram shows when a member types "/", so the
-            # question people actually arrive with goes first. This menu IS the
-            # discovery surface: a command absent from it may as well not exist.
+            # Deliberately empty. Telegram writes
+            # "/funding@spreadarbitragesubscription_bot" into the message when a
+            # member picks a command from the "/" popup in a supergroup, and no
+            # API setting changes how the client writes it. What IS controllable
+            # is whether the popup has anything to offer: register nothing here
+            # and it cannot offer, and therefore cannot tag, anything.
+            #
+            # Nothing but the popup is lost. Registration drives that menu only
+            # -- privacy mode is off, so every group message reaches the bot
+            # regardless, and a hand-typed "/funding" is answered exactly as
+            # before. Discovery moves to /help, the profile text, and the
+            # buttons under each answer.
             "commands": [
-                {"command": "top", "description": "Widest spreads right now"},
-                {"command": "deep", "description": "Only routes that proved the probe size"},
-                {"command": "carry", "description": "Best paired carry per day"},
-                {"command": "radar", "description": "Retained 24h / 7d / 30d funding leaders"},
-                {"command": "spread", "description": "Spread across all parsed venues"},
-                {"command": "funding", "description": "Funding rate and APR per route"},
-                {"command": "depth", "description": "Can you get size in at the probe"},
-                {"command": "transfer", "description": "Deposit / withdrawal rails per venue"},
-                {"command": "calc", "description": "Split capital across both legs"},
-                {"command": "token", "description": "Spread view for a token"},
-                {"command": "help", "description": "Every shortcut, e.g. GUA/f"},
-                {"command": "status", "description": "How fresh the data is"},
-                {"command": "setupgroup", "description": "Connect this subscriber group"},
             ],
         },
+    )
+    # Telegram resolves a group's menu down the scope chain, so an empty
+    # all_group_chats falls back to the default scope and the popup reappears
+    # -- carrying the same "@botname" insertion. Clearing default closes that
+    # door. Private chats are unaffected: all_private_chats is set explicitly
+    # above and takes precedence over default for a DM.
+    telegram_call(
+        token,
+        "setMyCommands",
+        {"scope": {"type": "default"}, "commands": []},
     )
     telegram_call(
         token,

@@ -60,28 +60,22 @@ def test_every_advertised_command_is_understood_by_the_parser() -> None:
     assert not unknown, f"advertised but unparsed: {unknown}"
 
 
-def test_the_group_menu_leads_with_what_members_actually_ask() -> None:
-    """"What is worth looking at" is the first question, so it is the first item."""
-    source = SCRIPT.read_text(encoding="utf-8")
-    group = re.search(
-        r'"scope":\s*\{"type":\s*"all_group_chats"\},.*?"commands":\s*(\[.*?\])',
-        source,
-        re.DOTALL,
-    )
-    assert group is not None
-    commands = [entry["command"] for entry in ast.literal_eval(group.group(1))]
-    assert commands[0] == "top"
-    # The operator-only plumbing must not sit above the member commands.
-    assert commands.index("setupgroup") > commands.index("help")
+def test_the_private_menu_leads_with_what_members_actually_ask() -> None:
+    """"What is worth looking at" is the first question a member arrives with.
+
+    Groups have no menu at all now -- see test_telegram_group_menu_tag -- so the
+    private chat is where ordering matters.
+    """
+    private = list(_advertised()["all_private_chats"])
+    assert {"top", "deep", "carry"} <= set(private)
 
 
-def test_the_group_can_reach_every_board_wide_view() -> None:
-    """These answer without a token and are the reason the menu is useful."""
-    group = _advertised()["all_group_chats"]
-    assert {"top", "deep", "carry", "help", "status"} <= group
+def test_every_board_wide_view_is_reachable_without_a_menu() -> None:
+    """The group lost its popup, so the parser is the only route in."""
+    for command in ("top", "deep", "carry", "help", "status"):
+        assert telegram_queries.parse_query(f"/{command}") is not None, command
 
 
-def test_help_is_advertised_because_the_shortcuts_are_invisible_otherwise() -> None:
+def test_help_is_advertised_where_a_menu_still_exists() -> None:
     """Nothing in Telegram hints that "GUA/f" is a thing you can type."""
-    for scope, commands in _advertised().items():
-        assert "help" in commands, scope
+    assert "help" in _advertised()["all_private_chats"]
