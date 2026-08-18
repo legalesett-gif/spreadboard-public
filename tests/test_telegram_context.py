@@ -217,3 +217,23 @@ def test_help_says_the_slash_is_optional() -> None:
     )
 
     assert "no slash" in body.casefold()
+
+
+def test_radar_without_a_token_is_still_the_leaderboard() -> None:
+    """It answers about the whole board, so it must not demand a token.
+
+    Making bare commands resolvable turned "/radar" -- which has always meant
+    "show me the retained funding leaders" -- into a "which token?" prompt.
+    """
+    resolved = telegram_queries.resolve(parse_query("/radar"), chat_id=CHAT)
+
+    assert resolved is not None
+    assert resolved.kind == "radar"
+    assert resolved.symbol == ""
+
+
+def test_radar_with_a_token_still_scopes_to_it() -> None:
+    resolved = telegram_queries.resolve(parse_query("/radar GUA"), chat_id=CHAT)
+
+    assert resolved is not None
+    assert resolved.symbol == "GUA"

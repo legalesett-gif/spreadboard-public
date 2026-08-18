@@ -1248,7 +1248,10 @@ def resolve(
     """
     if query is None:
         return None
-    if query.symbol or query.kind in BOARDWIDE:
+    # "radar" is both: with a token it scopes to that token, without one it is
+    # the retained-leaders board. Demanding a token for the bare form turned a
+    # working command into a "which token?" prompt.
+    if query.symbol or query.kind in BOARDWIDE or query.kind == "radar":
         return query
     remembered = recall_token(chat_id, now=now)
     if not remembered:
