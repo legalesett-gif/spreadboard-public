@@ -129,12 +129,25 @@ def test_recognised_triggers(text, kind, symbol):
         "I paid $4 today",                # numeric token syntax only wins alone
         "good morning everyone",
         "SKY is the limit",
-        "/spread",                        # command with no token
         "https://example.com/$FOO",       # no leading whitespace boundary
     ],
 )
 def test_ordinary_chat_is_not_a_query(text):
     assert telegram_queries.parse_query(text) is None
+
+
+def test_a_command_without_a_token_waits_for_one_rather_than_vanishing():
+    """Telegram's popup replaces the compose box, so the token never arrives.
+
+    A member types "ESports", opens the popup with "/f" and picks "/funding";
+    what is sent is the bare word. Treating that as ordinary chat -- which this
+    file used to -- is why the bot answered nothing at all.
+    """
+    query = telegram_queries.parse_query("/spread")
+
+    assert query is not None
+    assert query.kind == "spread"
+    assert query.symbol == ""
 
 
 def test_radar_command_needs_no_token():

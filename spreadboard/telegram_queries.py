@@ -173,6 +173,26 @@ def parse_query(text: str, *, bot_username: str = "") -> Query | None:
         if not symbol.isdigit() or raw == f"${symbol}":
             return Query(kind=kind or "spread", symbol=symbol)
 
+    # No slash at all: "esports funding". The "/" popup is what pastes
+    # "@spreadarbitragesubscription_bot" into a supergroup message, and no
+    # server setting can stop it, so the way to avoid the tag is to make the
+    # slash unnecessary. Exactly two words, one of which must be a token the
+    # board is actually carrying -- otherwise every sentence ending in "depth"
+    # becomes a lookup.
+    plain = raw.split()
+    if len(plain) == 2 or (len(plain) == 3 and plain[1].casefold() in ASPECTS):
+        first, second = plain[0].lstrip("$"), plain[1]
+        for token_text, aspect_text in ((first, second), (second, first)):
+            aspect = ASPECTS.get(aspect_text.casefold())
+            if aspect is None or not aspect_text:
+                continue
+            if is_known_token(token_text):
+                return Query(
+                    kind=aspect,
+                    symbol=_normalise(token_text),
+                    arg=plain[2] if len(plain) == 3 else "",
+                )
+
     head = words[0] if words else ""
     # "/top", "/help", "/status" and friends describe the board, not a token.
     if head in COMMANDS and COMMANDS[head] in BOARDWIDE:
@@ -187,7 +207,11 @@ def parse_query(text: str, *, bot_username: str = "") -> Query | None:
         if not symbol and COMMANDS[head] == "radar":
             return Query(kind="radar", symbol="")
         if not symbol:
-            return None
+            # A token-taking command with no token is not nothing: Telegram's
+            # popup replaces the compose box, so "ESports" + pick "/funding"
+            # arrives here as a bare "/funding". Hand it back with an empty
+            # symbol so `resolve` can supply what the chat was discussing.
+            return Query(kind=COMMANDS[head], symbol="")
         remainder = rest.strip()
         _, _, after = remainder.partition(" ")
         return Query(
@@ -1124,4 +1148,100 @@ def _render_status(*, public_url: str = "") -> str:
         f"Funding    {snapshot.get('funding_token_count')} tokens</pre>\n"
         f"<i>Probe size {_probe_label()}. Numbers here are the same ones the website shows.</i>"
         + _link(public_url, "/status", "Open status")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Remembering what the chat is talking about
+# ---------------------------------------------------------------------------
+
+#: How long a chat's last token stays the implied subject. Long enough to type
+#: a follow-up, short enough that tomorrow's "/funding" is not answered with
+#: yesterday's token.
+CONTEXT_TTL_SECONDS = 600.0
+
+_CHAT_TOKEN: dict[int, tuple[str, float]] = {}
+_CONTEXT_LOCK = threading.Lock()
+
+
+def remember_token(chat_id: int, symbol: str, *, now: float | None = None) -> None:
+    """Record the token a chat is currently discussing."""
+    token = _normalise(symbol)
+    if not token:
+        return
+    with _CONTEXT_LOCK:
+        _CHAT_TOKEN[int(chat_id)] = (token, time.time() if now is None else float(now))
+
+
+def recall_token(chat_id: int, *, now: float | None = None) -> str:
+    """The token this chat last discussed, if it is still recent."""
+    moment = time.time() if now is None else float(now)
+    with _CONTEXT_LOCK:
+        entry = _CHAT_TOKEN.get(int(chat_id))
+    if not entry:
+        return ""
+    token, stamp = entry
+    return token if moment - stamp <= CONTEXT_TTL_SECONDS else ""
+
+
+def reset_context() -> None:
+    with _CONTEXT_LOCK:
+        _CHAT_TOKEN.clear()
+
+
+def known_tokens() -> set[str]:
+    """Every token the board is currently carrying."""
+    payload = client_visible_payload()
+    return {
+        str(group.get("token") or "").upper()
+        for group in payload.get("groups") or []
+        if group.get("token")
+    }
+
+
+def is_known_token(symbol: str) -> bool:
+    return _normalise(symbol) in known_tokens()
+
+
+def note_message(chat_id: int, text: str, *, now: float | None = None) -> None:
+    """Set the chat's subject when a message is exactly one listed token.
+
+    Deliberately narrow. Scraping tokens out of ordinary sentences would mean
+    "the funding on BTW looked good" silently redirects the next bare command,
+    and the member would have no idea why they got the wrong asset.
+    """
+    raw = str(text or "").strip().lstrip("$")
+    if not raw or " " in raw:
+        return
+    if is_known_token(raw):
+        remember_token(chat_id, raw, now=now)
+
+
+def resolve(
+    query: Query | None, *, chat_id: int, now: float | None = None
+) -> Query | None:
+    """Fill in a token the member did not repeat.
+
+    Telegram's command popup replaces the whole compose box, so a member who
+    types "ESports" and then picks "/funding" actually sends the single word
+    "/funding". The token is not missing because they forgot it; it is missing
+    because the client threw it away.
+    """
+    if query is None:
+        return None
+    if query.symbol or query.kind in BOARDWIDE:
+        return query
+    remembered = recall_token(chat_id, now=now)
+    if not remembered:
+        return None
+    return Query(kind=query.kind, symbol=remembered, arg=query.arg)
+
+
+def needs_token_prompt(query: Query) -> str:
+    """What to say when a command arrived with no token and no context."""
+    label = VIEW_LABELS.get(query.kind, query.kind).lower()
+    return (
+        f"Which token? Send <code>ESPORTS/{query.kind[0]}</code> for {label}, "
+        f"or just <code>ESPORTS {query.kind}</code> — no slash needed.\n\n"
+        "Tap one below, or <code>/top</code> for what is widest right now."
     )

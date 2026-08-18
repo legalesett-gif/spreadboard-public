@@ -141,7 +141,29 @@ def _handle_group_query(
         )
     query = telegram_queries.parse_query(text, bot_username=config().bot_username)
     if query is None:
+        # Not a question, but it may name the token the next one is about:
+        # "ESports" then "/funding" is the flow Telegram's popup forces.
+        telegram_queries.note_message(chat_id, text)
         return None
+    # Telegram's command popup replaces the compose box, so the token the
+    # member typed first never arrives. Supply the chat's current subject.
+    resolved = telegram_queries.resolve(query, chat_id=chat_id)
+    if resolved is None:
+        return _reply(
+            chat_id,
+            telegram_queries.needs_token_prompt(query),
+            html=True,
+            thread_id=thread_id,
+            markup=telegram_queries.suggestion_keyboard(
+                telegram_queries.suggestions("", board_path=board_path)[:6],
+                public_url=public_url,
+            )
+            if board_path is not None
+            else None,
+        )
+    query = resolved
+    if query.symbol:
+        telegram_queries.remember_token(chat_id, query.symbol)
     if board_path is None:
         return _reply(chat_id, "The live scanner is warming. Try again shortly.", thread_id=thread_id)
     if (
