@@ -44,6 +44,8 @@ from spreadboard.server import SpreadBoardHandler, SpreadBoardServer  # noqa: E4
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 SNAPSHOT_PATH = RUNTIME_DIR / "api_discovery_latest.json"
+#: The compact per-cycle quote delta, beside the discovery snapshot.
+FAST_QUOTE_PATH = RUNTIME_DIR / "api_discovery_fast_quotes.json"
 REFRESH_SNAPSHOT_PATH = RUNTIME_DIR / "api_discovery_refresh.json"
 GENERATED_IDENTITY_PATH = RUNTIME_DIR / "api_discovery_identity_registry.generated.json"
 MARKET_GENERATION_PATH = RUNTIME_DIR / "market_generation.json"
@@ -288,7 +290,15 @@ class RefreshLoop:
             # 14-contract DEX half from rotating before the previous half
             # expired. The scheduled discovery/funding-history pipeline still
             # records broad history; the compact delta publishes immediately.
-            _log(f"fast quotes {summary} history_inserted=deferred")
+            #
+            # The delta itself is a different matter, and leaving it unrecorded
+            # is what made the charts jagged: points were written only when the
+            # discovery snapshot published, so samples on a charted route sat a
+            # median of 17.7 minutes apart and a one-hour window came back
+            # empty. A couple of hundred repriced routes is cheap to store and
+            # is exactly the set anyone charts.
+            inserted = market_history.record_fast_quotes(FAST_QUOTE_PATH)
+            _log(f"fast quotes {summary} history_inserted={inserted}")
             if summary.get("updated_routes"):
                 _publish_shared_market_generation("fast_quotes")
                 _invalidate_market_price_caches()

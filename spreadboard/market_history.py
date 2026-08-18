@@ -156,6 +156,56 @@ def record_route(
     )
 
 
+def record_fast_quotes(
+    delta_path: Path | str,
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+    sample_source: str = "fast_quote_cycle",
+) -> int:
+    """Record the routes the fast-quote cycle just repriced.
+
+    Chart resolution is decided here. Points used to be written only when the
+    discovery snapshot published -- roughly hourly -- so consecutive samples on
+    a charted route sat a median of 17.7 minutes apart, a one-hour window came
+    back empty, and the line drawn between those points looked like violent
+    spikes that the market never made.
+
+    The cycle already reprices a couple of hundred selected routes every few
+    minutes, which is exactly the set anyone charts. Recording the full 25k-row
+    snapshot here stays off the table: it cost 45-60 seconds and starved the
+    DEX rotation, which is why this path was left deferred in the first place.
+
+    Never raises. It runs on the quote path and must not be able to stop a
+    cycle.
+    """
+
+    try:
+        payload = json.loads(Path(delta_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    rows = payload.get("rows") if isinstance(payload, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return 0
+    # A point with no spread draws nothing and still costs a row.
+    priced = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and _float_or_none(row.get("executable_spread_pct")) is not None
+    ]
+    if not priced:
+        return 0
+    try:
+        return record_snapshot(
+            {"api_discovered_rows": priced},
+            db_path=db_path,
+            sample_source=sample_source,
+            prune=False,
+        )
+    except Exception:  # noqa: BLE001 - history is never worth a failed cycle.
+        return 0
+
+
 def record_research_routes_hourly(
     rows: Sequence[dict[str, Any]],
     *,
