@@ -192,3 +192,28 @@ def test_a_bare_command_with_no_context_is_answerable_rather_than_silent() -> No
     prompt = telegram_queries.needs_token_prompt(Query(kind="funding", symbol=""))
     assert "funding" in prompt.casefold()
     assert "/" in prompt
+
+
+def test_help_illustrates_with_a_token_that_is_actually_on_the_board() -> None:
+    """A fixed example reads as the only thing that works.
+
+    Every one of the board's tokens answers these, but help that always says
+    "GUA/" invites exactly the conclusion that GUA is special.
+    """
+    body = telegram_queries.render(
+        Query(kind="help", symbol=""), board_path="", public_url=""
+    )
+
+    assert "GUA/" not in body or "ESPORTS/" in body
+    # Whatever it picked must be a real listed token, not a placeholder.
+    shown = {token for token in telegram_queries.known_tokens() if f"{token}/" in body}
+    assert shown, "help showed no live token as its example"
+
+
+def test_help_says_the_slash_is_optional() -> None:
+    """The tag the operator dislikes only appears via the "/" popup."""
+    body = telegram_queries.render(
+        Query(kind="help", symbol=""), board_path="", public_url=""
+    )
+
+    assert "no slash" in body.casefold()

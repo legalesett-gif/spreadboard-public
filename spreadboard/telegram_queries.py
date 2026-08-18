@@ -1110,7 +1110,20 @@ def _render_calc(
 
 def _render_help(symbol: str = "", *, public_url: str = "") -> str:
     """Everything the bot answers, written as things you would actually type."""
-    example = escape(symbol.upper()) if symbol else "GUA"
+    # A fixed example reads as the only token that works, which is exactly the
+    # conclusion the operator drew. Show something currently on the board.
+    if symbol:
+        example = escape(symbol.upper())
+    else:
+        leaders = sorted(
+            (
+                group
+                for group in (client_visible_payload().get("groups") or [])
+                if group.get("token")
+            ),
+            key=lambda group: -(float(group.get("best_edge_pct") or 0.0)),
+        )
+        example = escape(str(leaders[0]["token"]).upper()) if leaders else "ESPORTS"
     return (
         "<b>Ask me anything on the board — no need to tag me.</b>\n\n"
         f"<b>Token first</b> (fastest on a phone)\n"
@@ -1126,7 +1139,13 @@ def _render_help(symbol: str = "", *, public_url: str = "") -> str:
         "<code>/carry</code>     best paired carry per day\n"
         "<code>/radar</code>     historical funding leaders\n"
         "<code>/status</code>    how fresh the data is\n\n"
-        f"<code>${example}</code> still works, and so does <code>/spread {example}</code>.\n\n"
+        f"<b>Or no slash at all</b>\n"
+        f"<code>{example} funding</code>  ·  <code>{example} depth</code>  ·  "
+        f"<code>{example} calc 5000</code>\n"
+        f"Either word order. Typing a token on its own also sets the subject, so "
+        f"a following <code>/funding</code> knows what you meant.\n\n"
+        f"<code>${example}</code> still works, and so does <code>/spread {example}</code>.\n"
+        f"Every token on the board answers these, not just this one.\n\n"
         "<i>Spread is the entry edge. Carry is what the pair pays while you hold. "
         f"Depth means the book actually filled {_probe_label()} — without it a wide "
         "number is only a lead.</i>"
