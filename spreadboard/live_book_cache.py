@@ -166,11 +166,16 @@ class LiveBookStore:
         if row is None:
             return None
         try:
-            bids = _levels(json.loads(row[1]))
-            asks = _levels(json.loads(row[2]))
+            bids = _levels(json.loads(row[1]), side="bid")
+            asks = _levels(json.loads(row[2]), side="ask")
         except (TypeError, ValueError, json.JSONDecodeError):
             return None
         if not bids or not asks:
+            return None
+        if not book_is_sane(bids, asks):
+            # Crossed after sorting means the levels are not what they claim to
+            # be. Dropping the book falls back to the venue's bulk ticker, which
+            # is a worse price but a real one.
             return None
         return CachedBook(
             bids=sorted(bids, key=lambda item: item[0], reverse=True),
@@ -199,11 +204,13 @@ class LiveBookStore:
         books: dict[str, CachedBook] = {}
         for key, quote_ts_us, bids_json, asks_json, source in rows:
             try:
-                bids = _levels(json.loads(bids_json))
-                asks = _levels(json.loads(asks_json))
+                bids = _levels(json.loads(bids_json), side="bid")
+                asks = _levels(json.loads(asks_json), side="ask")
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
             if not bids or not asks:
+                continue
+            if not book_is_sane(bids, asks):
                 continue
             books[str(key)] = CachedBook(
                 bids=sorted(bids, key=lambda item: item[0], reverse=True),
@@ -245,11 +252,13 @@ class LiveBookStore:
         books: dict[str, CachedBook] = {}
         for key, quote_ts_us, bids_json, asks_json, source in rows:
             try:
-                bids = _levels(json.loads(bids_json))
-                asks = _levels(json.loads(asks_json))
+                bids = _levels(json.loads(bids_json), side="bid")
+                asks = _levels(json.loads(asks_json), side="ask")
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
             if not bids or not asks:
+                continue
+            if not book_is_sane(bids, asks):
                 continue
             books[str(key)] = CachedBook(
                 bids=sorted(bids, key=lambda item: item[0], reverse=True),
@@ -328,7 +337,28 @@ def load_live_books_by_keys(
     return store.get_many(keys, max_age_seconds=max_age_seconds)
 
 
-def _levels(value: Any) -> list[list[float]]:
+def book_is_sane(bids: list[list[float]], asks: list[list[float]]) -> bool:
+    """Whether a book can exist in a real market.
+
+    A best bid above the best ask is a standing arbitrage nobody left on the
+    table; it means the levels are not what we think they are. MEXC's websocket
+    books for ANSEM read bid 0.31008 against ask 0.24539 while the exchange
+    quoted 0.25338/0.25416, and the board published the difference as a 30%
+    opportunity.
+
+    Equality is allowed: a locked market is unusual, not impossible. One-sided
+    books are allowed too -- thin is not the same as wrong.
+    """
+
+    if not bids or not asks:
+        return True
+    try:
+        return float(bids[0][0]) <= float(asks[0][0])
+    except (TypeError, ValueError, IndexError):
+        return False
+
+
+def _levels(value: Any, *, side: str = "bid") -> list[list[float]]:
     output: list[list[float]] = []
     for item in value or []:
         if not isinstance(item, (list, tuple)) or len(item) < 2:
@@ -350,4 +380,7 @@ def _levels(value: Any) -> list[list[float]]:
         # so the row remains explicitly `depth_unverified`.
         if price > 0 and amount >= 0:
             output.append([price, amount])
+    # `_book_side` reads levels[0] as the top of book, so the order the venue
+    # happened to send them in decides the price. Sort rather than trust it.
+    output.sort(key=lambda level: level[0], reverse=(side != "ask"))
     return output

@@ -81,7 +81,12 @@ _MARKET_CACHE_TTL_SECONDS = max(
 )
 #: Each payload is fully materialised and large, so the count is bounded to keep
 #: a 4GB box off its limit -- an earlier unbounded version left it with 156MB.
-_MARKET_CACHE_MAX_ENTRIES = max(4, int(os.environ.get("SPREADBOARD_MARKET_CACHE_ENTRIES", "14")))
+#: Must hold every warmed view plus the free board and the member default. At
+#: 14 it held fewer entries than the warmer produced, so the lanes evicted each
+#: other and whichever one a member opened had no copy to fall back on -- which
+#: is the "Spread refreshing" state. A lane payload is ~1.5MB of JSON; only the
+#: two 500-row views are large, so the extra headroom is cheap.
+_MARKET_CACHE_MAX_ENTRIES = max(4, int(os.environ.get("SPREADBOARD_MARKET_CACHE_ENTRIES", "32")))
 _MARKET_CACHE_LOCK = threading.Lock()
 _MARKET_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 #: The same payloads indexed by query alone. The full cache key includes the
@@ -92,8 +97,17 @@ _MARKET_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 #: stale with it, because the stream re-prices what is on screen every three
 #: seconds; only the grouping is a little behind.
 _MARKET_STALE_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+#: A stale copy is the only thing standing between a member and the "Spread
+#: refreshing" page, so it has to outlive the gap between warms. The web
+#: process warms when the discovery snapshot changes -- there is no periodic
+#: timer -- and that was observed about once an hour, against 1800s of
+#: retention. For roughly half of every hour every lane had nothing to fall
+#: back on. Three hours gives that cadence real margin.
+#:
+#: Serving it is safe: the stream re-prices what is on screen within seconds,
+#: so the copy supplies structure, not prices.
 _MARKET_STALE_MAX_SECONDS = max(
-    60.0, float(os.environ.get("SPREADBOARD_MARKET_STALE_SECONDS", "1800"))
+    60.0, float(os.environ.get("SPREADBOARD_MARKET_STALE_SECONDS", "10800"))
 )
 _MARKET_CACHE_INFLIGHT: dict[tuple[Any, ...], threading.Event] = {}
 
