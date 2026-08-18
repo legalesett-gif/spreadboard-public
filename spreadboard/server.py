@@ -152,8 +152,16 @@ _CHART_SAMPLE_LOCK = threading.Lock()
 _CHART_SAMPLE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CHART_SAMPLE_INFLIGHT: dict[str, threading.Event] = {}
 _CHART_SAMPLE_BACKGROUND: set[str] = set()
+#: These samples are I/O-bound -- almost all of the ~19s a DEX quote takes is
+#: spent waiting on the provider -- so two slots served no CPU purpose and just
+#: made one member's chart block another's.
 _CHART_SAMPLE_SLOTS = threading.BoundedSemaphore(
-    max(1, int(os.environ.get("SPREADBOARD_CHART_SAMPLE_CONCURRENCY", "2")))
+    max(1, int(os.environ.get("SPREADBOARD_CHART_SAMPLE_CONCURRENCY", "6")))
+)
+#: Long enough for a slot to free up behind a slow on-chain quote, short enough
+#: that a browser poll is not left hanging.
+_CHART_SAMPLE_SLOT_WAIT_SECONDS = max(
+    1.5, float(os.environ.get("SPREADBOARD_CHART_SAMPLE_SLOT_WAIT_SECONDS", "8"))
 )
 # Member-requested size quotes are deliberately isolated from the canonical
 # canonical scanner and chart history.  A short shared cache and single-flight keep
@@ -4795,10 +4803,17 @@ def _refresh_chart_route(row: dict[str, Any]) -> dict[str, Any]:
         return {**(cached[1] if cached else {"status": "timeout"}), "cached": True}
 
     result: dict[str, Any]
-    if not _CHART_SAMPLE_SLOTS.acquire(timeout=1.5):
+    # A DEX sample takes ~19s because the on-chain quote is slow, so waiting a
+    # moment for a slot is the normal case rather than an error.
+    if not _CHART_SAMPLE_SLOTS.acquire(timeout=_CHART_SAMPLE_SLOT_WAIT_SECONDS):
         result = {"status": "busy", "error": "chart_sampler_capacity"}
         with _CHART_SAMPLE_LOCK:
-            _CHART_SAMPLE_CACHE[route_key] = (time.monotonic(), result)
+            # Deliberately NOT cached. Failing to start work is not an
+            # observation, and the scheduler serves a cached entry without
+            # re-attempting for the whole sample interval -- so caching this
+            # made one unlucky poll suppress the next several. That is what
+            # left DEX charts on "Collecting the first exact-route observation"
+            # while the UI reported the sampler unavailable.
             event = _CHART_SAMPLE_INFLIGHT.pop(route_key, None)
             if event is not None:
                 event.set()
@@ -9031,9 +9046,14 @@ def render_live_spread_chart(
       const chartSeries = {{}};
       let latestRows = [];
       let historyRows = [];
-      const pct = (value) => Number.isFinite(Number(value))
-        ? `${{Number(value) >= 0 ? '+' : ''}}${{Number(value).toFixed(3)}}%`
-        : '—';
+      // `Number(null)` is 0 and 0 is finite, so converting before testing made
+      // every unmeasured reading print as a confident +0.000%. On a spread that
+      // is the worst available lie: 0.000% is what a converged trade looks
+      // like, so an unmeasured VWAP read as "the edge is gone".
+      const pct = (value) => (value === null || value === undefined || value === ''
+        || !Number.isFinite(Number(value)))
+        ? '—'
+        : `${{Number(value) >= 0 ? '+' : ''}}${{Number(value).toFixed(3)}}%`;
       const num = (value) => value === null || value === undefined || value === ''
         ? null
         : (Number.isFinite(Number(value)) ? Number(value) : null);
