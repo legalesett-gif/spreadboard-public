@@ -80,7 +80,10 @@ def test_the_subscription_page_keeps_its_consent_and_checkout() -> None:
 
     assert "data-subscription-consent" in html
     assert "statutory cancellation right" in html
-    assert 'href="/terms"' in html and 'href="/refunds"' in html
+    # The operator asked for the policy references off the site (2026-08-19).
+    # The consent gate itself stays: it is what records that the buyer asked for
+    # immediate access, which is the part that actually matters at checkout.
+    assert 'href="/terms"' not in html and 'href="/refunds"' not in html
     assert "data-billing-error" in html
     assert "account-session" in html
 

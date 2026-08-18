@@ -5565,14 +5565,13 @@ def render_markets_page(
         </div>
       </header>
     """
-    if not source_ready:
-        body = f"""
-        <section class="markets-page terminal-page" data-refresh="{refresh_seconds}" data-refresh-force="1">
-          {heading}
-          {render_market_reconnecting(api_health_data, query, refresh_seconds)}
-        </section>
-        """
-        return shell("Markets - SpreadBoard", "markets", body)
+    # No takeover when the snapshot is behind. Prices arrive over the stream and
+    # stay current independently of the discovery scan's age, so replacing every
+    # row with a "Restoring live prices" panel threw away good data and reloaded
+    # the page every five seconds -- for every member, in every timezone, until a
+    # background scan happened to land. The header already says "Reconnecting"
+    # and carries the age; that is the honest signal, and the board keeps
+    # showing what it has while the feed corrects it.
 
     market_results = (
         render_pro_market_table(data.get("rows") or [])
@@ -6129,42 +6128,6 @@ def render_set_password_page(query: dict[str, list[str]], accounts_path: Path) -
     }})();
     </script>""",
     )
-
-
-def render_market_reconnecting(
-    health: dict[str, Any],
-    query: dict[str, list[str]],
-    refresh_seconds: int,
-) -> str:
-    params = urlencode(_query_with(query, offset=None))
-    retry_href = "/markets" + (f"?{params}" if params else "")
-    row_count = health.get("row_count")
-    last_snapshot = (
-        f"{int(row_count):,} routes" if isinstance(row_count, (int, float)) else "Not available"
-    )
-    return f"""
-    <section class="market-reconnect" aria-live="polite">
-      <div class="market-reconnect-panel">
-        <div class="market-reconnect-head">
-          <span class="market-reconnect-dot" aria-hidden="true"></span>
-          <div>
-            <span>Market refresh</span>
-            <h2>Restoring live prices</h2>
-          </div>
-        </div>
-        <p>The latest API snapshot is no longer current. Previous routes are kept off the live board while a fresh public-market cycle completes.</p>
-        <div class="market-reconnect-stats">
-          <article><span>Last snapshot</span><strong>{h(last_snapshot)}</strong></article>
-          <article><span>Last update</span><strong>{fmt_age(health.get("age_min"))}</strong></article>
-          <article><span>Automatic check</span><strong>{h(refresh_seconds)} seconds</strong></article>
-        </div>
-        <div class="market-reconnect-actions">
-          <a class="sheet-button primary" href="{h(retry_href)}">Check now</a>
-          <span>Live assets appear as soon as the next cycle is published.</span>
-        </div>
-      </div>
-    </section>
-    """
 
 
 def render_live_market_empty(health: dict[str, Any]) -> str:
@@ -10816,7 +10779,7 @@ def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
       <section class="pricing-block"><h2>What you get &mdash; and how to start</h2><div class="pricing-steps"><article><b>01</b><h3>Create your account</h3><p>Compare the free proof pages first, then sign in to choose Scanner or Research Pro.</p></article><article><b>02</b><h3>Pay the exact crypto invoice</h3><p>Select USDC or USDT on Arbitrum, scan the token-specific QR, and send the exact amount shown.</p></article><article><b>03</b><h3>Open your exact tier</h3><p>The invoice activates only the tier printed on it. Research Pro also unlocks the private Telegram forum.</p></article></div></section>
       <section class="pricing-block"><h2>Research Pro prepaid terms</h2>{render_membership_terms(tier="research_pro")}<p class="pricing-note">Each amount is billed once in crypto. Access lapses unless you create and pay a new invoice.</p></section>
       <section class="pricing-block"><h2>Why membership</h2><div class="reason-grid">{render_membership_reasons()}</div></section>
-      <p class="pricing-note">Public market data, not investment advice. Every route carries execution risk. See the <a href="/terms">Terms</a> and <a href="/refunds">Refund Policy</a>.</p>
+      <p class="pricing-note">Public market data, not investment advice. Every route carries execution risk.</p>
     </section>
     """
     return shell("Membership - SpreadBoard", "pricing", body)
@@ -11102,9 +11065,8 @@ def render_subscription_page(query: dict[str, list[str]] | None = None) -> str:
         </div>
         <ul class="tick-list">{render_membership_ticks(requested_tier)}</ul>
         <label class="subscription-consent"><input type="checkbox" data-subscription-consent>
-          <span>I accept the <a href="/terms" target="_blank">Terms</a> and
-          <a href="/refunds" target="_blank">Refund Policy</a>, request immediate access, and
-          acknowledge that the statutory cancellation right may be affected once digital access
+          <span>I request immediate access and acknowledge that the
+          statutory cancellation right may be affected once digital access
           begins.</span></label>
         <div class="sub-actions">{action}<a class="sheet-button" href="/account">Open account</a></div>
         <p role="alert" data-billing-error></p>
@@ -11372,7 +11334,7 @@ def render_guide_page() -> str:
       </article>
 
       <p class="pricing-disclaimer">Questions? Ask in the subscriber group.
-      <a href="/markets">Open the board</a> &middot; <a href="/pricing">Membership</a> &middot; <a href="/terms">Terms</a></p>
+      <a href="/markets">Open the board</a> &middot; <a href="/pricing">Membership</a></p>
     </section>
     <style>
     .guide-page{{max-width:980px;margin:0 auto;padding:0 18px 48px}}
@@ -11563,7 +11525,7 @@ def render_legal_page(page: str) -> str:
     <section class="legal-page">
       <header><span class="page-kicker">SpreadBoard</span><h1>{h(title)}</h1><p>{h(intro)}</p></header>
       <main>{"".join(f"<section><h2>{h(heading)}</h2><p>{h(copy)}</p></section>" for heading, copy in sections)}</main>
-      <nav><a href="/pricing">Membership</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/refunds">Refunds</a><a href="/affiliate-terms">Affiliate terms</a></nav>
+      <nav><a href="/pricing">Membership</a></nav>
     </section>
     """
     return shell(f"{title} - SpreadBoard", "pricing", body)
@@ -11662,7 +11624,7 @@ def render_partner_page(
       </section>
       <section class="partner-panel"><div class="account-panel-head"><div><h2>Commission ledger</h2><p>One immutable earning per settled crypto invoice. Invoice-identification cents are not commissionable revenue.</p></div></div><div class="partner-table-wrap"><table class="partner-table"><thead><tr><th>Invoice</th><th>Tier</th><th>Term</th><th>Net revenue</th><th>Your 50%</th><th>Status</th><th>Earned</th></tr></thead><tbody>{"".join(commission_rows) or '<tr><td colspan="7">No paid referred subscriptions yet.</td></tr>'}</tbody></table></div></section>
       <section class="partner-panel"><div class="account-panel-head"><div><h2>Payout history</h2><p>Payouts are processed weekly after the hold period.</p></div></div><div class="partner-table-wrap"><table class="partner-table"><thead><tr><th>Batch</th><th>Amount</th><th>Method</th><th>Status</th><th>Created</th><th>Reference</th></tr></thead><tbody>{"".join(payout_rows) or '<tr><td colspan="6">No payout batches yet.</td></tr>'}</tbody></table></div></section>
-      <section class="partner-panel partner-terms"><h2>Program rules</h2><p>Attribution is fixed when the referred person registers. Commission is 50% of subscription revenue actually collected after the first-month discount, for every settled renewal attributed to you. Refunds, reversals, fraud, self-referrals, duplicate accounts, or misleading promotions may be voided before payout. For YouTube, say and show near the start, and repeat immediately before the link in the description: “AD — paid affiliate promotion. I receive a commission if you subscribe through this link.” You must not promise returns. See the <a href="/affiliate-terms">Affiliate Terms</a>.</p></section>
+      <section class="partner-panel partner-terms"><h2>Program rules</h2><p>Attribution is fixed when the referred person registers. Commission is 50% of subscription revenue actually collected after the first-month discount, for every settled renewal attributed to you. Refunds, reversals, fraud, self-referrals, duplicate accounts, or misleading promotions may be voided before payout. For YouTube, say and show near the start, and repeat immediately before the link in the description: “AD — paid affiliate promotion. I receive a commission if you subscribe through this link.” You must not promise returns.</p></section>
     </section>
     <script type="application/json" id="partner-session">{json_script_data({"csrf_token": user.csrf_token})}</script>
     <script>
@@ -12107,7 +12069,7 @@ def render_position_dialog() -> str:
 
 
 def _render_position_edit_dialog_base() -> str:
-    return """<dialog class="account-dialog" data-position-edit-dialog><form method="dialog"><header><div><span>Position journal</span><h2>Correct position details</h2></div><button type="button" data-dialog-cancel aria-label="Close">×</button></header><div class="position-form-grid"><label><span>Token</span><input name="token" autocomplete="off" required></label><label><span>Journal status</span><select name="status"><option value="open">Open</option><option value="closed">Closed</option></select><em>Reopening only corrects this journal. It never sends an exchange order.</em></label><label><span>Allocated capital per leg, USD</span><input name="capital_usd" type="number" min="0" step="0.01"><em>Optional return denominator. This does not change either live venue.</em></label><label><span>Long venue</span><input name="long_venue" required></label><label><span>Long market</span><select name="long_market_type"><option>Spot</option><option>DEX</option><option>Futures</option></select></label><label><span>Long symbol</span><input name="long_symbol" placeholder="COTI/USDT"></label><label><span>Long quantity</span><input name="long_quantity" type="number" min="0" step="any" required></label><label><span>Long entry</span><input name="long_entry_price" type="number" min="0" step="any" required></label><label><span>Short venue</span><input name="short_venue" required></label><label><span>Short market</span><select name="short_market_type"><option>Futures</option><option>Spot</option><option>DEX</option></select></label><label><span>Short symbol</span><input name="short_symbol" placeholder="COTI/USDT:USDT"></label><label><span>Short quantity</span><input name="short_quantity" type="number" min="0" step="any" required></label><label><span>Short entry</span><input name="short_entry_price" type="number" min="0" step="any" required></label><label><span>Entry fees, USD</span><input name="entry_fees_usd" type="number" min="0" step="any"></label><label><span>Borrow costs paid, USD</span><input name="borrow_costs_usd" type="number" min="0" step="any"></label><label><span>Gas costs paid, USD</span><input name="gas_costs_usd" type="number" min="0" step="any"></label><label><span>Transfer costs paid, USD</span><input name="transfer_costs_usd" type="number" min="0" step="any"></label><label><span>Measured slippage, USD</span><input name="slippage_costs_usd" type="number" min="0" step="any"><em>Validation evidence only. Actual fills already include slippage, so it is not deducted twice.</em></label><label><span>Opened at</span><input name="opened_at" type="datetime-local" required><em>Shown in your browser's local time and saved as UTC.</em></label><label data-closed-correction><span>Closed at</span><input name="closed_at" type="datetime-local"><em>Shown locally and saved as UTC.</em></label><label data-closed-correction><span>Long exit fill</span><input name="long_exit_price" type="number" min="0" step="any"></label><label data-closed-correction><span>Short exit fill</span><input name="short_exit_price" type="number" min="0" step="any"></label><label data-closed-correction><span>Exit fees, USD</span><input name="exit_fees_usd" type="number" min="0" step="any"></label><fieldset class="wide research-contribution" data-research-contribution hidden><legend>Optional anonymous research evidence</legend><p>For a completed position only. SpreadBoard sends no account, user, wallet, fill, size or event timestamp to calibration. It retains only the route-level median percentage and sample count.</p><label><span>Matched one-leg notional, USD</span><input name="research_matched_notional_usd" type="number" min="0" step="any"><em>The exact unlevered notional used to make the two legs comparable; this is used only as the private denominator.</em></label><label class="check-field"><input name="research_costs_complete" type="checkbox"><span>I confirm every entry/exit fee, borrow, gas, transfer and measured slippage value above is final, including genuine zeros.</span></label><label class="check-field"><input name="research_cost_consent" type="checkbox"><span>Contribute the anonymous lifecycle-cost percentage to future route calibration.</span></label><label><span>DEX chain</span><input name="transfer_chain" placeholder="e.g. Base"><em>Required for DEX contributions.</em></label><label><span>Exact token contract</span><input name="transfer_contract" autocomplete="off"><em>Required for DEX contributions so a different token identity can never inherit this evidence.</em></label><label><span>Transfer submitted</span><input name="transfer_started_at" type="datetime-local"></label><label><span>Exchange credited</span><input name="transfer_credited_at" type="datetime-local"></label><label class="check-field wide"><input name="research_transfer_consent" type="checkbox"><span>Contribute the anonymous successful-transfer duration. This never overrides current deposit/withdraw availability.</span></label><p class="wide">Consent version portfolio_research_v1. Uncheck either contribution and save to stop future captures. See the <a href="/privacy" target="_blank" rel="noopener">Privacy Notice</a>.</p></fieldset><label class="wide"><span>Notes</span><textarea name="notes" rows="3"></textarea></label></div><footer><button type="button" data-dialog-cancel>Cancel</button><button class="primary" type="submit" value="default">Save corrections</button></footer><p role="alert" data-form-error></p></form></dialog>"""
+    return """<dialog class="account-dialog" data-position-edit-dialog><form method="dialog"><header><div><span>Position journal</span><h2>Correct position details</h2></div><button type="button" data-dialog-cancel aria-label="Close">×</button></header><div class="position-form-grid"><label><span>Token</span><input name="token" autocomplete="off" required></label><label><span>Journal status</span><select name="status"><option value="open">Open</option><option value="closed">Closed</option></select><em>Reopening only corrects this journal. It never sends an exchange order.</em></label><label><span>Allocated capital per leg, USD</span><input name="capital_usd" type="number" min="0" step="0.01"><em>Optional return denominator. This does not change either live venue.</em></label><label><span>Long venue</span><input name="long_venue" required></label><label><span>Long market</span><select name="long_market_type"><option>Spot</option><option>DEX</option><option>Futures</option></select></label><label><span>Long symbol</span><input name="long_symbol" placeholder="COTI/USDT"></label><label><span>Long quantity</span><input name="long_quantity" type="number" min="0" step="any" required></label><label><span>Long entry</span><input name="long_entry_price" type="number" min="0" step="any" required></label><label><span>Short venue</span><input name="short_venue" required></label><label><span>Short market</span><select name="short_market_type"><option>Futures</option><option>Spot</option><option>DEX</option></select></label><label><span>Short symbol</span><input name="short_symbol" placeholder="COTI/USDT:USDT"></label><label><span>Short quantity</span><input name="short_quantity" type="number" min="0" step="any" required></label><label><span>Short entry</span><input name="short_entry_price" type="number" min="0" step="any" required></label><label><span>Entry fees, USD</span><input name="entry_fees_usd" type="number" min="0" step="any"></label><label><span>Borrow costs paid, USD</span><input name="borrow_costs_usd" type="number" min="0" step="any"></label><label><span>Gas costs paid, USD</span><input name="gas_costs_usd" type="number" min="0" step="any"></label><label><span>Transfer costs paid, USD</span><input name="transfer_costs_usd" type="number" min="0" step="any"></label><label><span>Measured slippage, USD</span><input name="slippage_costs_usd" type="number" min="0" step="any"><em>Validation evidence only. Actual fills already include slippage, so it is not deducted twice.</em></label><label><span>Opened at</span><input name="opened_at" type="datetime-local" required><em>Shown in your browser's local time and saved as UTC.</em></label><label data-closed-correction><span>Closed at</span><input name="closed_at" type="datetime-local"><em>Shown locally and saved as UTC.</em></label><label data-closed-correction><span>Long exit fill</span><input name="long_exit_price" type="number" min="0" step="any"></label><label data-closed-correction><span>Short exit fill</span><input name="short_exit_price" type="number" min="0" step="any"></label><label data-closed-correction><span>Exit fees, USD</span><input name="exit_fees_usd" type="number" min="0" step="any"></label><fieldset class="wide research-contribution" data-research-contribution hidden><legend>Optional anonymous research evidence</legend><p>For a completed position only. SpreadBoard sends no account, user, wallet, fill, size or event timestamp to calibration. It retains only the route-level median percentage and sample count.</p><label><span>Matched one-leg notional, USD</span><input name="research_matched_notional_usd" type="number" min="0" step="any"><em>The exact unlevered notional used to make the two legs comparable; this is used only as the private denominator.</em></label><label class="check-field"><input name="research_costs_complete" type="checkbox"><span>I confirm every entry/exit fee, borrow, gas, transfer and measured slippage value above is final, including genuine zeros.</span></label><label class="check-field"><input name="research_cost_consent" type="checkbox"><span>Contribute the anonymous lifecycle-cost percentage to future route calibration.</span></label><label><span>DEX chain</span><input name="transfer_chain" placeholder="e.g. Base"><em>Required for DEX contributions.</em></label><label><span>Exact token contract</span><input name="transfer_contract" autocomplete="off"><em>Required for DEX contributions so a different token identity can never inherit this evidence.</em></label><label><span>Transfer submitted</span><input name="transfer_started_at" type="datetime-local"></label><label><span>Exchange credited</span><input name="transfer_credited_at" type="datetime-local"></label><label class="check-field wide"><input name="research_transfer_consent" type="checkbox"><span>Contribute the anonymous successful-transfer duration. This never overrides current deposit/withdraw availability.</span></label><p class="wide">Consent version portfolio_research_v1. Uncheck either contribution and save to stop future captures.</p></fieldset><label class="wide"><span>Notes</span><textarea name="notes" rows="3"></textarea></label></div><footer><button type="button" data-dialog-cancel>Cancel</button><button class="primary" type="submit" value="default">Save corrections</button></footer><p role="alert" data-form-error></p></form></dialog>"""
 
 
 def render_position_edit_dialog() -> str:
@@ -12149,6 +12111,28 @@ def render_account_script() -> str:
   const root=document.querySelector('[data-account-page]'); if(!root) return;
   const {csrf_token:csrf,user_id:sessionUserId}=JSON.parse(document.getElementById('account-session').textContent||'{}');
   const positionData=JSON.parse(document.getElementById('portfolio-position-data')?.textContent||'{}');
+  // Re-render only what changed, by asking the server for this same page and
+  // swapping the panels out of the parsed response. Every mutation used to end
+  // in location.reload(), so correcting a few fills meant a full document
+  // reload per save and the scroll position was lost each time. Reusing the
+  // server's own markup avoids duplicating the card renderer in JS.
+  let positionState=positionData;
+  async function refreshAccountView(){
+    const response=await fetch(location.href,{headers:{'X-Requested-With':'fetch'}});
+    if(!response.ok)return;
+    const parsed=new DOMParser().parseFromString(await response.text(),'text/html');
+    for(const selector of ['[data-account-panel="positions"]','.account-kpis','[data-account-panel="alerts"]']){
+      const next=parsed.querySelector(selector),current=root.querySelector(selector);
+      if(next&&current)current.replaceWith(next);
+    }
+    // The edit dialog fills itself from this map, so a swapped panel with a
+    // stale map would prefill the previous values.
+    const data=parsed.getElementById('portfolio-position-data');
+    if(data){document.getElementById('portfolio-position-data').textContent=data.textContent;
+      positionState=JSON.parse(data.textContent||'{}');
+      for(const key of Object.keys(positionData))delete positionData[key];
+      Object.assign(positionData,positionState);}
+  }
   const request=async(url,body)=>{const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw new Error(data.error||'Request failed');return data;};
   const utcToLocalInput=value=>{if(!value)return '';const date=new Date(value);if(Number.isNaN(date.getTime()))return '';const local=new Date(date.getTime()-date.getTimezoneOffset()*60000);return local.toISOString().slice(0,16);};
   const payloadFromForm=form=>{const payload=Object.fromEntries(new FormData(form));form.querySelectorAll('input[type="checkbox"][name]').forEach(field=>payload[field.name]=field.checked);for(const field of ['opened_at','closed_at','transfer_started_at','transfer_credited_at']){if(payload[field])payload[field]=new Date(payload[field]).toISOString();}return payload;};
@@ -12165,17 +12149,17 @@ def render_account_script() -> str:
   routeSelect?.addEventListener('change',()=>{if(routeSelect.value==='')return;const route=suggestedRoutes[Number(routeSelect.value)];if(!route)return;for(const [name,key] of Object.entries({token:'token',route_key:'route_key',entry_spread_pct:'entry_spread_pct',long_venue:'long_venue',long_market_type:'long_market_type',long_symbol:'long_symbol',long_entry_price:'long_entry_price',short_venue:'short_venue',short_market_type:'short_market_type',short_symbol:'short_symbol',short_entry_price:'short_entry_price'})){positionForm.elements[name].value=route[key]??'';}const age=Number(route.age_min);positionForm.querySelector('[data-position-suggestion-note]').textContent=Number.isFinite(age)?`Suggested from live public books · ${age.toFixed(1)} min old. Replace prices with your actual fills.`:'Pair from the full chart catalogue. Enter your actual fills and quantity; no live entry is assumed.';});
   const applyCatalogLeg=(side,select)=>{if(!select||select.value==='')return;const leg=catalogLegs[Number(select.value)];if(!leg)return;positionForm.elements[`${side}_venue`].value=leg.venue||'';positionForm.elements[`${side}_market_type`].value=String(leg.venue||'').toLowerCase().includes('dex')?'DEX':leg.market_type||'';positionForm.elements[`${side}_symbol`].value=leg.symbol||'';positionForm.elements.route_key.value='';positionForm.elements.entry_spread_pct.value='';};
   longLegSelect?.addEventListener('change',()=>applyCatalogLeg('long',longLegSelect));shortLegSelect?.addEventListener('change',()=>applyCatalogLeg('short',shortLegSelect));
-  positionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;try{await request('/api/positions',payloadFromForm(form));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
+  positionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;try{await request('/api/positions',payloadFromForm(form));dialog.close();await refreshAccountView();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   const editDialog=root.querySelector('[data-position-edit-dialog]'),editForm=editDialog?.querySelector('form');let editPosition=null;
   const syncClosedCorrectionFields=()=>{if(!editForm)return;const closed=editForm.elements.status?.value==='closed';editForm.querySelectorAll('[data-closed-correction]').forEach(label=>{label.hidden=!closed;const field=label.querySelector('input');if(field){field.disabled=!closed;field.required=closed&&field.name!=='exit_fees_usd';}});const research=editForm.querySelector('[data-research-contribution]');if(research){research.hidden=!closed;research.querySelectorAll('input').forEach(field=>field.disabled=!closed);}};
   editForm?.elements.status?.addEventListener('change',syncClosedCorrectionFields);
   const openPositionEditor=(positionId,closing=false)=>{editPosition=positionId;const item=positionData[editPosition];if(!item||!editForm)return;editForm.reset();for(const [name,value] of Object.entries(item)){const field=editForm.elements[name];if(!field)continue;if(field.type==='checkbox')field.checked=Boolean(Number(value));else field.value=['opened_at','closed_at','transfer_started_at','transfer_credited_at'].includes(name)?utcToLocalInput(value):(value??'');}if(closing){editForm.elements.status.value='closed';editForm.elements.closed_at.value=utcToLocalInput(new Date().toISOString());}syncClosedCorrectionFields();editDialog.querySelector('h2').textContent=closing?'Record completed journal position':'Correct position details';editForm.querySelector('button[type="submit"]').textContent=closing?'Save completed journal entry':'Save corrections';editForm.querySelector('[data-form-error]').textContent='';editDialog.showModal();};
   root.addEventListener('click',event=>{const button=event.target.closest('[data-position-edit]');if(!button)return;openPositionEditor(button.closest('[data-position-id]')?.dataset.positionId);});
-  editForm?.addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;try{await request(`/api/positions/${editPosition}/edit`,payloadFromForm(form));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
+  editForm?.addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;try{await request(`/api/positions/${editPosition}/edit`,payloadFromForm(form));editDialog.close();await refreshAccountView();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   const actionDialog=root.querySelector('[data-action-dialog]');let actionPosition=null;let actionType='';
   const fields={alert:'<label><span>Metric</span><select name="metric"><option value="exit_spread_pct">Current marked spread %</option><option value="open_spread_pct">Enterable spread %</option><option value="pnl_usd">Total PnL USD</option><option value="funding_usd">Settled funding USD</option></select></label><label><span>Condition</span><select name="operator"><option value="lte">At or below</option><option value="gte">At or above</option></select></label><label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>'};
   root.addEventListener('click',event=>{const button=event.target.closest('[data-position-action]');if(!button)return;actionPosition=button.closest('[data-position-id]').dataset.positionId;actionType=button.dataset.positionAction;if(actionType==='close'){openPositionEditor(actionPosition,true);return;}const token=positionData[actionPosition]?.token||'';actionDialog.querySelector('[data-action-title]').textContent={alert:'Create alert rule',delete:'Delete journal entry'}[actionType];actionDialog.querySelector('[data-action-fields]').innerHTML=actionType==='delete'?`<div class="delete-warning"><strong>This permanently deletes only the SpreadBoard journal entry.</strong><p>It will also remove its saved alerts, notifications and imported funding rows. It will not close or change either exchange position.</p></div><label><span>Type ${escapeHtml(token)} to confirm</span><input name="confirm_token" autocomplete="off" required></label>`:fields[actionType];const submit=actionDialog.querySelector('button[type="submit"]');submit.textContent=actionType==='delete'?'Delete entry':'Save';submit.classList.toggle('danger',actionType==='delete');actionDialog.showModal();});
-  actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={alert:'alerts',delete:'delete'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));location.reload();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
+  actionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;const suffix={alert:'alerts',delete:'delete'}[actionType];try{await request(`/api/positions/${actionPosition}/${suffix}`,Object.fromEntries(new FormData(form)));actionDialog.close();await refreshAccountView();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   root.querySelector('[data-account-settings]')?.addEventListener('submit',async event=>{event.preventDefault();await request('/api/account-settings',Object.fromEntries(new FormData(event.currentTarget)));location.reload();});
   const exchangeRoot=root.querySelector('[data-exchange-accounting]'),exchangeForm=exchangeRoot?.querySelector('[data-exchange-connection-form]'),exchangeStatus=exchangeForm?.querySelector('[data-exchange-status]'),exchangeCatalog=JSON.parse(root.querySelector('[data-exchange-catalog]')?.textContent||'[]');
   const accountingPublicKey=JSON.parse(root.querySelector('[data-accounting-public-key]')?.textContent||'""');
