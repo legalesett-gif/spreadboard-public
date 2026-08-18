@@ -65,37 +65,21 @@ def main() -> int:
             ],
         },
     )
-    telegram_call(
-        token,
-        "setMyCommands",
-        {
-            "scope": {"type": "all_group_chats"},
-            # Deliberately empty. Telegram writes
-            # "/funding@spreadarbitragesubscription_bot" into the message when a
-            # member picks a command from the "/" popup in a supergroup, and no
-            # API setting changes how the client writes it. What IS controllable
-            # is whether the popup has anything to offer: register nothing here
-            # and it cannot offer, and therefore cannot tag, anything.
-            #
-            # Nothing but the popup is lost. Registration drives that menu only
-            # -- privacy mode is off, so every group message reaches the bot
-            # regardless, and a hand-typed "/funding" is answered exactly as
-            # before. Discovery moves to /help, the profile text, and the
-            # buttons under each answer.
-            "commands": [
-            ],
-        },
-    )
-    # Telegram resolves a group's menu down the scope chain, so an empty
-    # all_group_chats falls back to the default scope and the popup reappears
-    # -- carrying the same "@botname" insertion. Clearing default closes that
-    # door. Private chats are unaffected: all_private_chats is set explicitly
-    # above and takes precedence over default for a DM.
-    telegram_call(
-        token,
-        "setMyCommands",
-        {"scope": {"type": "default"}, "commands": []},
-    )
+    # Telegram writes "/funding@spreadarbitragesubscription_bot" into the
+    # message when a member picks a command from the "/" popup in a supergroup,
+    # and no API setting changes how the client writes it. What IS controllable
+    # is whether the popup has anything to offer.
+    #
+    # setMyCommands with an empty list does NOT remove a scope -- the old list
+    # survives it. deleteMyCommands is the removal. Both scopes must go:
+    # Telegram resolves a group's menu down the chain, so clearing only
+    # all_group_chats falls back to default and the popup returns.
+    #
+    # Nothing but the popup is lost. Registration drives that menu alone --
+    # privacy mode is off, so every group message reaches the bot regardless
+    # and a hand-typed "/funding" is answered exactly as before.
+    telegram_call(token, "deleteMyCommands", {"scope": {"type": "all_group_chats"}})
+    telegram_call(token, "deleteMyCommands", {"scope": {"type": "default"}})
     telegram_call(
         token,
         "setMyDescription",

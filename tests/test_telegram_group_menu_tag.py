@@ -32,13 +32,31 @@ def _commands(scope: str) -> list[str]:
         source,
         re.DOTALL,
     )
-    assert match is not None, f"no {scope} registration found"
+    if match is None:
+        return []
     return [entry["command"] for entry in ast.literal_eval(match.group(1))]
 
 
-def test_the_group_menu_is_empty_so_nothing_can_be_tagged() -> None:
+def _deleted(scope: str) -> bool:
+    """Whether the script actually REMOVES this scope's menu.
+
+    setMyCommands with an empty list leaves the previous list in place -- the
+    live bot still listed all thirteen group commands after exactly that call.
+    deleteMyCommands is the only thing that removes them.
+    """
+    source = SCRIPT.read_text(encoding="utf-8")
+    return bool(
+        re.search(
+            rf'deleteMyCommands",\s*\{{"scope":\s*\{{"type":\s*"{scope}"\}}\}}',
+            source,
+        )
+    )
+
+
+def test_the_group_menu_is_removed_so_nothing_can_be_tagged() -> None:
     """The popup is the only thing that writes "@botname" into a message."""
     assert _commands("all_group_chats") == []
+    assert _deleted("all_group_chats"), "an empty list does not remove a menu"
 
 
 def test_private_chats_keep_their_menu() -> None:
@@ -80,13 +98,7 @@ def test_the_default_scope_is_cleared_too() -> None:
     the default scope would put the popup -- and its "@botname" insertion --
     straight back into the group.
     """
-    source = SCRIPT.read_text(encoding="utf-8")
-    match = re.search(
-        r'"scope":\s*\{"type":\s*"default"\},\s*"commands":\s*(\[\s*\])',
-        source,
-        re.DOTALL,
-    )
-    assert match is not None, "default scope still carries commands"
+    assert _deleted("default"), "default scope menu is not removed"
 
 
 def test_start_survives_the_default_clear() -> None:

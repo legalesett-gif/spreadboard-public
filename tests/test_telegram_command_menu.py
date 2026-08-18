@@ -38,10 +38,11 @@ def _advertised() -> dict[str, set[str]]:
     return out
 
 
-def test_both_scopes_are_registered() -> None:
+def test_private_chats_are_the_only_scope_with_a_menu() -> None:
+    """Groups have theirs removed on purpose: the popup is what tags the bot."""
     scopes = _advertised()
-    assert "all_group_chats" in scopes
     assert "all_private_chats" in scopes
+    assert "all_group_chats" not in scopes
 
 
 def test_every_advertised_command_is_understood_by_the_parser() -> None:
