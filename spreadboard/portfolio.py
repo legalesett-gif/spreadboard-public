@@ -200,9 +200,15 @@ def _hydrate_position(
     # measured amount as model-validation evidence, but never deduct it again.
     other_costs = borrow_costs + gas_costs + transfer_costs
     total_costs = fees + other_costs
+    # Funding may legitimately be unimportable -- a hand-journaled position has
+    # no exchange connection to read settlements from. The price result never
+    # is: it follows from the entry and exit fills the member typed in. Nulling
+    # the whole total because funding was missing meant closing a position
+    # produced no PnL at all and nothing reached the portfolio total.
+    funding_known = bool(settled_funding.get("known")) and funding_usd is not None
     total_pnl = (
-        price_pnl + funding_usd - total_costs
-        if price_pnl is not None and funding_usd is not None and settled_funding.get("known")
+        price_pnl + (funding_usd if funding_known else 0.0) - total_costs
+        if price_pnl is not None
         else None
     )
     long_ask = _number(movement_quote.get("long_entry"))
@@ -271,7 +277,10 @@ def _hydrate_position(
             "short_price_pnl_usd": short_pnl,
             "price_pnl_usd": price_pnl,
             "funding_income_usd": funding_usd,
-            "funding_known": bool(settled_funding.get("known")),
+            "funding_known": funding_known,
+            # A number without its caveat is the worse bug: the card and the
+            # summary both need to say the total is price-only.
+            "total_pnl_excludes_funding": total_pnl is not None and not funding_known,
             "funding_source": settled_funding.get("source"),
             "funding_sync_status": settled_funding.get("status"),
             "funding_event_count": settled_funding.get("event_count"),

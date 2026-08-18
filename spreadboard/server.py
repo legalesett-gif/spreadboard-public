@@ -11792,9 +11792,9 @@ def render_position_card(item: dict[str, Any]) -> str:
     <article class="position-card" data-position-id="{h(item.get("id"))}" data-market-status="{h(quote_status)}">
       <header><div><span class="position-token">{h(item.get("token"))}</span><strong>{h(item.get("long_venue"))} → {h(item.get("short_venue"))}</strong><em>{h(item.get("long_market_type"))} / {h(item.get("short_market_type"))}</em></div><div class="position-status {status_class}"><span>{h(item.get("status"))}</span><strong>{market_label}</strong></div></header>
       <div class="position-metrics">
-        <span>Total PnL<strong class="{spread_class(item.get("total_pnl_usd"))}">{fmt_signed_money(item.get("total_pnl_usd"))}</strong></span>
+        <span>Total PnL<strong class="{spread_class(item.get("total_pnl_usd"))}">{fmt_signed_money(item.get("total_pnl_usd"))}</strong>{"<em>price and fees only · funding not imported</em>" if item.get("total_pnl_excludes_funding") else ""}</span>
         <span>Mark movement<strong>{fmt_signed_money(item.get("price_pnl_usd"))}</strong></span>
-        <span>Settled funding<strong>{fmt_signed_money(item.get("funding_income_usd"))}</strong></span>
+        <span>Settled funding<strong>{fmt_signed_money(item.get("funding_income_usd")) if item.get("funding_known") else "not imported"}</strong></span>
         <span>Actual fees<strong>{fmt_signed_money(-float(item.get("fees_usd") or 0.0))}</strong></span>
         <span>Borrow costs<strong>{fmt_signed_money(-float(item.get("borrow_costs_usd") or 0.0))}</strong></span>
         <span>Gas costs<strong>{fmt_signed_money(-float(item.get("gas_costs_usd") or 0.0))}</strong></span>
