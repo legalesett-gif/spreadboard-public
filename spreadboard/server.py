@@ -4492,6 +4492,10 @@ def _merge_history_rows(
     """Merge proxy and exact samples without sacrificing full-window coverage."""
     bucket_us = max(0, int(bucket_seconds)) * 1_000_000
     merged: dict[int, dict[str, Any]] = {}
+    #: Exact samples grouped per bucket, so the bucket can keep its median
+    #: rather than whichever reading happened to arrive last. One crossed-book
+    #: print landing at the end of a bucket otherwise became the whole bucket.
+    buckets: dict[int, list[dict[str, Any]]] = {}
 
     def add(rows: list[dict[str, Any]], *, exact: bool) -> None:
         for row in rows:
@@ -4499,6 +4503,9 @@ def _merge_history_rows(
             if timestamp < since_us:
                 continue
             key = timestamp // bucket_us if bucket_us else timestamp
+            if exact and bucket_us:
+                buckets.setdefault(key, []).append(row)
+                continue
             current = merged.get(key)
             current_exact = bool(
                 current and current.get("sample_source") != "historical_ohlcv_close_proxy"
@@ -4512,8 +4519,65 @@ def _merge_history_rows(
 
     add(proxy_rows, exact=False)
     add(exact_rows, exact=True)
+    for key, samples in buckets.items():
+        priced = [
+            row for row in samples
+            if _float_or_none(row.get("executable_spread_pct")) is not None
+        ]
+        chosen = sorted(
+            priced or samples,
+            key=lambda row: (
+                _float_or_none(row.get("executable_spread_pct")) or 0.0,
+                int(row.get("quote_ts_us") or 0),
+            ),
+        )[len(priced or samples) // 2]
+        merged[key] = chosen
     rows = sorted(merged.values(), key=lambda item: int(item.get("quote_ts_us") or 0))
+    rows = _reject_wild_samples(rows)
     return historical_spreads.evenly_sample(rows, max_points=max_points)
+
+
+#: How far a sample may sit from the series' own centre before it is treated as
+#: a measurement artifact rather than a price. Measured in median absolute
+#: deviations so a route that genuinely lives near 96% is judged on its own
+#: scale. Deliberately permissive: this is here to remove readings that cannot
+#: have happened, not to smooth away real movement.
+_SAMPLE_OUTLIER_MADS = float(os.environ.get("SPREADBOARD_CHART_OUTLIER_MADS", "8"))
+#: Below this, there is no reliable centre to measure against.
+_SAMPLE_OUTLIER_MIN_POINTS = 12
+
+
+def _reject_wild_samples(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop readings absurdly far from the rest of the series.
+
+    Production history jumps 11 and 48 percentage points between consecutive
+    samples because crossed order books were recorded as observations. The
+    book guard stops new ones, but millions of rows were already written and
+    the chart still has to be readable.
+
+    Nothing is invented or averaged: points are only ever removed.
+    """
+
+    values = [
+        value
+        for value in (_float_or_none(row.get("executable_spread_pct")) for row in rows)
+        if value is not None
+    ]
+    if len(values) < _SAMPLE_OUTLIER_MIN_POINTS:
+        return rows
+    ordered = sorted(values)
+    middle = ordered[len(ordered) // 2]
+    deviations = sorted(abs(value - middle) for value in values)
+    mad = deviations[len(deviations) // 2]
+    if mad <= 0:
+        return rows
+    allowed = _SAMPLE_OUTLIER_MADS * mad
+    return [
+        row
+        for row in rows
+        if (_float_or_none(row.get("executable_spread_pct")) is None)
+        or abs(float(row["executable_spread_pct"]) - middle) <= allowed
+    ]
 
 
 def _chart_stream_payload(route_key: str, board_path: Path, hours: float) -> dict[str, Any]:
