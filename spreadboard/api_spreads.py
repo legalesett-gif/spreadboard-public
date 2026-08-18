@@ -2689,7 +2689,25 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
             and spread_leader_ready(row)
             and tokenized_route_rankable(row)
         ]
-        best = max(tradeable_rows or token_rows, key=_entrance_spread)
+        if tradeable_rows:
+            best = max(tradeable_rows, key=_entrance_spread)
+        else:
+            # Nothing survived the filters, so the fallback is "widest raw" --
+            # and on seven live groups that was a DEX route whose on-chain quote
+            # had gone stale, so the token displayed "waiting for a two-leg
+            # matched quote" while holding 14 to 28 routes quoted right then.
+            # Prefer one that can actually be priced: a headline nobody can read
+            # is worse than a smaller number somebody can.
+            quotable = [
+                row
+                for row in token_rows
+                if spread_quote_current(row)
+                and (
+                    _float_or_none(row.depth_weighted_spread_pct) is not None
+                    or _float_or_none(row.executable_spread_pct) is not None
+                )
+            ]
+            best = max(quotable or token_rows, key=_entrance_spread)
         funding_rows = [
             row
             for row in token_rows
