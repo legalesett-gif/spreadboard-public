@@ -26,7 +26,14 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from . import api_spreads, catalog_pairs, funding_radar, research_score, token_rankings
+from . import (
+    api_spreads,
+    catalog_pairs,
+    chart_catalog,
+    funding_radar,
+    research_score,
+    token_rankings,
+)
 
 MAX_ROWS = 8
 COOLDOWN_SECONDS = 60.0
@@ -1208,14 +1215,40 @@ def reset_context() -> None:
         _CHAT_TOKEN.clear()
 
 
+_CATALOG_TOKENS: dict[str, Any] = {"key": None, "tokens": frozenset()}
+
+
 def known_tokens() -> set[str]:
-    """Every token the board is currently carrying."""
-    payload = client_visible_payload()
-    return {
+    """Every token the bot can actually answer about.
+
+    Not just the snapshot. That is installed from the website's default view,
+    which is capped at 500 groups, while the board carries over a thousand
+    tokens -- and `_rows_for` reaches all of them through the pair catalogue.
+    Gating on the snapshot alone made "funding CHZ" silent while "CHZ/d"
+    answered, which is the kind of inconsistency nobody can be expected to
+    predict.
+
+    The catalogue half is cached against the catalogue's own identity, so this
+    stays cheap enough for a webhook.
+    """
+    tokens = {
         str(group.get("token") or "").upper()
-        for group in payload.get("groups") or []
+        for group in client_visible_payload().get("groups") or []
         if group.get("token")
     }
+    try:
+        catalog = chart_catalog.load()
+    except Exception:  # noqa: BLE001 - a lookup must never break the webhook.
+        return tokens
+    key = f"{catalog.get('generated_at')}|{catalog.get('count')}"
+    if _CATALOG_TOKENS["key"] != key:
+        _CATALOG_TOKENS["tokens"] = frozenset(
+            str(market.get("token") or "").upper()
+            for market in catalog.get("markets") or []
+            if market.get("token")
+        )
+        _CATALOG_TOKENS["key"] = key
+    return tokens | set(_CATALOG_TOKENS["tokens"])
 
 
 def is_known_token(symbol: str) -> bool:

@@ -237,3 +237,41 @@ def test_radar_with_a_token_still_scopes_to_it() -> None:
 
     assert resolved is not None
     assert resolved.symbol == "GUA"
+
+
+def test_known_tokens_covers_the_catalogue_not_just_the_snapshot(monkeypatch) -> None:
+    """The snapshot is capped at 500; the board carries over a thousand.
+
+    "funding CHZ" was silent while "CHZ/d" answered, because the two-word form
+    gated on the snapshot and the lookup reached the catalogue.
+    """
+    monkeypatch.setattr(
+        telegram_queries.chart_catalog,
+        "load",
+        lambda *_a, **_k: {
+            "generated_at": "x", "count": 2,
+            "markets": [{"token": "CHZ"}, {"token": "ONLYCATALOG"}],
+        },
+    )
+    telegram_queries._CATALOG_TOKENS["key"] = None
+
+    tokens = telegram_queries.known_tokens()
+
+    assert "ESPORTS" in tokens          # from the snapshot
+    assert "CHZ" in tokens              # catalogue only
+    assert "ONLYCATALOG" in tokens
+
+
+def test_a_catalogue_only_token_answers_the_no_slash_form(monkeypatch) -> None:
+    monkeypatch.setattr(
+        telegram_queries.chart_catalog,
+        "load",
+        lambda *_a, **_k: {"generated_at": "y", "count": 1, "markets": [{"token": "CHZ"}]},
+    )
+    telegram_queries._CATALOG_TOKENS["key"] = None
+
+    query = telegram_queries.resolve(parse_query("funding CHZ"), chat_id=CHAT)
+
+    assert query is not None
+    assert query.symbol == "CHZ"
+    assert query.kind == "funding"
