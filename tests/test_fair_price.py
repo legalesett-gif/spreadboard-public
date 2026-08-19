@@ -140,3 +140,74 @@ def test_the_page_says_so_when_nothing_is_flagged(monkeypatch) -> None:
     html = server.render_fair_price_page()
 
     assert "No contract is far enough" in html
+
+
+# --------------------------------------------------------------------------
+# Venues that quote volume in the base asset
+# --------------------------------------------------------------------------
+#
+# Kraken Futures reports ``baseVolume`` and leaves ``quoteVolume`` empty. Reading
+# only ``quoteVolume`` made volume unknown for every one of its contracts, and
+# the floor was written as "reject when we know it is thin" -- so an unknown
+# volume sailed straight through. 50 of the 66 rows on the live page were
+# Kraken Futures admitted this way, including the widest gap on the board:
+# DEGEN at +13.18% on $71 of 24h volume, against a $25,000 floor.
+#
+# That is precisely the market the page tells you to reject -- one small trade
+# distorts Last, and the gap is the distortion, not an opportunity.
+
+
+def test_volume_is_read_from_base_volume_when_the_venue_quotes_it_that_way() -> None:
+    """79,873 contracts at $0.0008938 is $71 of turnover, not an unknown."""
+    row = fair_price.deviation(
+        "Kraken Futures",
+        "DEGEN/USD:USD",
+        {"last": 0.0008938, "baseVolume": 79_873.0, "info": {"markPrice": 0.0010289}},
+    )
+
+    assert row is None, "a $71 market must not reach the board"
+
+
+def test_a_base_volume_venue_still_qualifies_when_it_is_genuinely_liquid() -> None:
+    """The fix must not simply exclude Kraken Futures wholesale."""
+    row = fair_price.deviation(
+        "Kraken Futures",
+        "BIG/USD:USD",
+        {"last": 2.0, "baseVolume": 500_000.0, "info": {"markPrice": 2.1}},
+    )
+
+    assert row is not None
+    assert row["volume_24h_usd"] == pytest.approx(1_000_000.0)
+
+
+def test_quote_volume_still_wins_when_the_venue_reports_both() -> None:
+    row = fair_price.deviation(
+        "Mexc",
+        "AAA/USDT:USDT",
+        {
+            "last": 100.0,
+            "quoteVolume": 900_000.0,
+            "baseVolume": 3.0,
+            "info": {"fairPrice": 110.0},
+        },
+    )
+
+    assert row is not None
+    assert row["volume_24h_usd"] == pytest.approx(900_000.0)
+
+
+def test_an_unmeasurable_volume_is_rejected_rather_than_admitted(monkeypatch) -> None:
+    """The floor is a proof requirement, not a courtesy.
+
+    Letting an unknown through put the thinnest markets on the board at rank 1,
+    which is the exact failure the floor exists to prevent.
+    """
+    monkeypatch.setattr(fair_price, "MIN_VOLUME_USD", 25_000.0)
+
+    row = fair_price.deviation(
+        "Kraken Futures",
+        "AAA/USD:USD",
+        {"last": 100.0, "info": {"markPrice": 110.0}},
+    )
+
+    assert row is None

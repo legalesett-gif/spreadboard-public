@@ -51,6 +51,22 @@ def _number(value: Any) -> float | None:
     return number if number > 0 else None
 
 
+def _turnover_usd(ticker: dict[str, Any], last: float | None) -> float | None:
+    """24h turnover in quote currency, however the venue chose to report it.
+
+    Kraken Futures fills ``baseVolume`` and leaves ``quoteVolume`` empty, so
+    reading only the latter made turnover unknown for every one of its
+    contracts -- and an unknown used to skip the floor entirely.
+    """
+    quote_volume = _number(ticker.get("quoteVolume"))
+    if quote_volume is not None:
+        return quote_volume
+    base_volume = _number(ticker.get("baseVolume"))
+    if base_volume is not None and last is not None:
+        return base_volume * last
+    return None
+
+
 def fair_price_of(ticker: dict[str, Any]) -> tuple[float | None, str | None]:
     """The venue's own fair price for this contract, and what it called it."""
     info = ticker.get("info")
@@ -79,8 +95,10 @@ def deviation(
     deviation_pct = (fair - last) / fair * 100.0
     if abs(deviation_pct) < MIN_DEVIATION_PCT:
         return None
-    volume = _number(ticker.get("quoteVolume"))
-    if volume is not None and volume < MIN_VOLUME_USD:
+    volume = _turnover_usd(ticker, last)
+    # A volume we cannot measure has not cleared the floor. Admitting it put the
+    # thinnest contracts on the board at rank 1 -- DEGEN led at +13.18% on $71.
+    if volume is None or volume < MIN_VOLUME_USD:
         return None
     return {
         "venue": venue,
