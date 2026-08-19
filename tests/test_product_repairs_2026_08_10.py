@@ -321,10 +321,10 @@ def test_product_guide_and_fair_price_explain_every_major_tool() -> None:
 
 
 def test_long_telegram_bot_handle_can_wrap_on_mobile() -> None:
-    css = server.shell("Test", "telegram", "")
-    assert ".telegram-command-grid article { min-width:0;" in css
-    assert ".telegram-command-grid code {" in css
-    assert "overflow-wrap:anywhere" in css
+    assert "/assets/app.css" in server.shell("Test", "telegram", "")
+    assert ".telegram-command-grid article { min-width:0;" in server.APP_CSS
+    assert ".telegram-command-grid code {" in server.APP_CSS
+    assert "overflow-wrap:anywhere" in server.APP_CSS
 
 
 def test_telegram_link_uses_same_tab_and_has_confirmation_fallback(tmp_path: Path) -> None:
@@ -490,7 +490,7 @@ def test_member_size_quote_ui_requotes_without_changing_canonical_board() -> Non
     assert "Quote current books at this size" in calculator
     assert f"standardized {server.PROBE_LABEL} matched quote" in calculator
     assert "/api/size-quote/" in calculator
-    assert ".pair-cockpit {{ display: grid; gap: 14px; min-width: 0; max-width: 100%;" in stylesheet
+    assert ".pair-cockpit { display: grid; gap: 14px; min-width: 0; max-width: 100%;" in server.APP_CSS
     assert ".pair-page, .pair-cockpit, .pair-cockpit-head, .pair-cockpit-grid" in stylesheet
 
 

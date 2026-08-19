@@ -703,13 +703,15 @@ def test_missing_bot_attention_cannot_render_legacy_community_rows(tmp_path, mon
 
 def test_watchlist_and_intel_hide_internal_source_cards_and_follow_dark_theme() -> None:
     assert 'if (card.key === "source_freshness") continue;' in server.WATCHLIST_SCRIPT
-    html = server.shell("Intel", "intel", '<section class="intel-page"></section>')
+    assert "/assets/app.css" in server.shell(
+        "Intel", "intel", '<section class="intel-page"></section>'
+    )
     assert (
         ".intel-section, .change-digest, .side-card, .hot-card, .reality-card, .feed-card { background: var(--terminal-panel)"
-        in html
+        in server.APP_CSS
     )
-    assert ".change-counts article { display: grid;" in html
-    assert "background: var(--terminal-row); border: 1px solid var(--terminal-line)" in html
+    assert ".change-counts article { display: grid;" in server.APP_CSS
+    assert "background: var(--terminal-row); border: 1px solid var(--terminal-line)" in server.APP_CSS
 
 
 def test_watchlist_does_not_claim_saved_account_is_empty_while_hydrating() -> None:

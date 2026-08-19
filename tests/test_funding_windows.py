@@ -155,11 +155,14 @@ def test_realised_windows_have_three_cells_and_an_explicit_summary_column() -> N
 
     page = server.shell("Funding", "funding", "")
 
-    assert "grid-template-columns: repeat(3,minmax(0,1fr))" in page
+    assert "grid-template-columns: repeat(3,minmax(0,1fr))" in server.APP_CSS
     assert (
         "grid-template-columns: minmax(150px,1.3fr) minmax(140px,1.15fr) "
         "minmax(82px,.62fr) minmax(82px,.68fr) minmax(76px,.58fr) "
         "minmax(174px,1.05fr) 46px 24px"
-    ) in page
-    assert ".funding-realised { grid-column: 1 / -1; }" in page
-    assert ".funding-realised .funding-window strong { overflow: visible; text-overflow: clip; }" in page
+    ) in server.APP_CSS
+    assert ".funding-realised { grid-column: 1 / -1; }" in server.APP_CSS
+    assert (
+        ".funding-realised .funding-window strong { overflow: visible; text-overflow: clip; }"
+    ) in server.APP_CSS
+    assert "/assets/app.css" in page

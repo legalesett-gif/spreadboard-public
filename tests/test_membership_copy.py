@@ -174,7 +174,9 @@ def test_the_watchlist_follows_the_theme_and_is_legible() -> None:
     finally:
         accounts.set_current_user(None)
 
-    rules = re.findall(r"(\.watch[a-z-]*[^{]*\{[^}]*\})", html)
+    # The stylesheet is linked rather than inlined now, so the rules live there.
+    assert "/assets/app.css" in html
+    rules = re.findall(r"(\.watch[a-z-]*[^{]*\{[^}]*\})", server.APP_CSS)
     assert rules, "no watchlist rules rendered"
 
     hardcoded = [r for r in rules if re.search(r"#[0-9a-fA-F]{3,6}\b", r) or ": white" in r]

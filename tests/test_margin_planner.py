@@ -71,7 +71,7 @@ def test_watchlist_exposes_private_transient_margin_form() -> None:
     assert "Exact maintenance margin" in page
     assert "Inputs are calculated transiently and are not stored" in page
     assert "/api/margin-plan" in page
-    assert ".margin-plan-form [hidden] { display:none !important; }" in page
+    assert ".margin-plan-form [hidden] { display:none !important; }" in server.APP_CSS
 
 
 def test_margin_endpoint_requires_login_and_csrf(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

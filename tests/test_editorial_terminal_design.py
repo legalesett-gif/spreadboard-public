@@ -28,11 +28,13 @@ def _market_payload() -> dict:
 def test_shell_contains_the_reconciled_editorial_terminal_system() -> None:
     html = server.shell("Design check", "markets", "<p>content</p>")
 
-    assert "Editorial market-terminal refresh" in html
-    assert "--terminal-bg:#07110f" in html
-    assert ".brand-mark::before,.brand-mark::after { display:none; }" in html
-    assert ".token-route-ledger-head,.funding-ledger-head" in html
-    assert "border-radius:0" in html
+    assert "Editorial market-terminal refresh" in server.APP_CSS
+    assert "--terminal-bg:#07110f" in server.APP_CSS
+    assert ".brand-mark::before,.brand-mark::after { display:none; }" in server.APP_CSS
+    assert ".token-route-ledger-head,.funding-ledger-head" in server.APP_CSS
+    assert "border-radius:0" in server.APP_CSS
+    # The page must actually load that stylesheet.
+    assert "/assets/app.css" in html
 
 
 def test_markets_and_funding_have_explicit_ledger_headers(monkeypatch) -> None:

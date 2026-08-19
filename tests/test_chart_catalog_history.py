@@ -165,8 +165,9 @@ def test_chart_page_prefills_token_when_persisted_catalog_has_no_tokens_key(
 
 def test_funding_history_dialog_overrides_global_table_minimum_width() -> None:
     html = server.shell("Charts", "charts", "")
+    assert "/assets/app.css" in html
 
-    assert ".funding-history-dialog table { width: 100%; min-width: 0;" in html
+    assert ".funding-history-dialog table { width: 100%; min-width: 0;" in server.APP_CSS
 
 
 def test_historical_spread_aligns_matching_candles_only() -> None:
