@@ -6226,13 +6226,26 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         if catalog_coverage
         else group.get("best_edge_pct")
     ) if spread_current else None
+    if spread_value is None:
+        # Same obligation as the detail rows: a headline that publishes both
+        # leg prices must publish their ratio. Three live groups read "waiting
+        # for a two-leg matched quote" while the route beneath them was showing
+        # both of its prices. The note below still says the quote is refreshing.
+        long_price = _float_or_none(best.get("long_price"))
+        short_price = _float_or_none(best.get("short_price"))
+        if long_price and short_price and long_price > 0:
+            spread_value = (short_price / long_price - 1.0) * 100.0
     spread_note = (
         f"{PROBE_LABEL} VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book"
         if matched is not None
         else f"{fmt_pct(best.get('executable_spread_pct'))} top book · depth not measured"
         if catalog_coverage
         else f"matched {PROBE_LABEL} VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book"
-    ) if spread_current else "waiting for a two-leg matched quote"
+    ) if spread_current else (
+        "from both leg prices · quote refreshing"
+        if spread_value is not None
+        else "waiting for a two-leg matched quote"
+    )
     return f"""
     <details class="token-route-group" id="token-{h(group.get("token"))}"
              data-route-key="{h(best.get("route_key") or "")}">
@@ -6455,11 +6468,21 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         if shown_funding is not None
         else "history unavailable"
     )
+    # A stale row used to discard everything: its stored spread AND the ratio of
+    # the two leg prices it prints immediately to the left. So the board showed
+    #   $0.136375 -> $0.1362   —   refreshing both legs
+    # withholding a number whose inputs were already on screen. The caveat sits
+    # beside the value, so showing it misleads nobody about how current it is.
     displayed_edge = (
         row.get("depth_weighted_spread_pct")
         if row.get("depth_weighted_spread_pct") is not None
         else row.get("executable_spread_pct")
-    ) if spread_current else None
+    )
+    if displayed_edge is None:
+        long_price = _float_or_none(row.get("long_price"))
+        short_price = _float_or_none(row.get("short_price"))
+        if long_price and short_price and long_price > 0:
+            displayed_edge = (short_price / long_price - 1.0) * 100.0
     spread_detail = (
         f'{PROBE_LABEL + " VWAP · " if row.get("depth_weighted_spread_pct") is not None else ""}'
         f'{fmt_pct(row.get("executable_spread_pct"))} top book'
