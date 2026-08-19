@@ -89,3 +89,25 @@ def test_the_kpi_discloses_that_a_total_is_partial() -> None:
     source = inspect.getsource(server.render_account_page)
     assert "unpriced_positions" in source
     assert "not priced yet" in source
+
+
+def test_open_settled_funding_sums_what_is_known() -> None:
+    """Same all-or-nothing rule, same fix: one unknown must not erase the rest."""
+    totals = portfolio._portfolio_totals(_live_shape(), None)
+
+    assert totals["open_position_funding_usd"] is not None
+    assert abs(totals["open_position_funding_usd"] - 98.84) < 1e-9
+
+
+def test_return_on_capital_survives_an_unpriced_position() -> None:
+    rows = [
+        {"status": "open", "total_pnl_usd": 80.41,
+         "long_quantity": 100.0, "long_entry_price": 2.0,
+         "short_quantity": 100.0, "short_entry_price": 2.0},
+        {"status": "open", "total_pnl_usd": None,
+         "long_quantity": 100.0, "long_entry_price": 2.0,
+         "short_quantity": 100.0, "short_entry_price": 2.0},
+    ]
+    summary = portfolio.deployed_capital_summary(rows)
+
+    assert summary["open_return_on_capital_pct"] is not None

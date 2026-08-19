@@ -687,11 +687,9 @@ def _portfolio_totals(
         for item in open_positions
         if item.get("funding_income_usd") is not None and item.get("funding_known")
     ]
-    open_funding = (
-        sum(open_funding_values)
-        if len(open_funding_values) == len(open_positions)
-        else None
-    )
+    # Same rule as the totals above: sum what the exchange ledger actually
+    # returned rather than blanking the row because one position has no import.
+    open_funding = sum(open_funding_values) if open_funding_values else None
     realized_values = [
         float(item["total_pnl_usd"])
         for item in closed_positions
@@ -977,22 +975,25 @@ def deployed_capital_summary(positions: list[dict[str, Any]]) -> dict[str, Any]:
     deployed = 0.0
     notional = 0.0
     pnl_total = 0.0
-    pnl_known = True
+    priced_capital = 0.0
     for item in open_positions:
         metrics = capital_metrics(item)
-        deployed += float(metrics["capital_committed_usd"] or 0.0)
+        committed = float(metrics["capital_committed_usd"] or 0.0)
+        deployed += committed
         notional += float(metrics["matched_notional_usd"] or 0.0)
         value = _number(item.get("total_pnl_usd"))
-        if value is None:
-            pnl_known = False
-        else:
+        if value is not None:
             pnl_total += float(value)
+            priced_capital += committed
     return {
         "deployed_capital_usd": round(deployed, 4),
         "deployed_notional_usd": round(notional, 4),
+        # Quoted on the capital of the positions that could be priced. Requiring
+        # every position to be priceable blanked the figure whenever a single
+        # leg was unquotable.
         "open_return_on_capital_pct": (
-            round(pnl_total / deployed * 100.0, 4)
-            if deployed > 0 and pnl_known
+            round(pnl_total / priced_capital * 100.0, 4)
+            if priced_capital > 0
             else None
         ),
     }
