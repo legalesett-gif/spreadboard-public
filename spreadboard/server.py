@@ -7949,7 +7949,7 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
         <div><span>Best farm</span><strong>{h(best.get("long_venue"))} → {h(best.get("short_venue"))}</strong></div>
         <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
         <div><span>Payouts</span><strong>{h(funding_cadence_pair(best))}</strong></div>
-        <div><span>{"Last basis" if historical else "Entry basis" if basis_current else "Basis refreshing"}</span><strong data-live-spread>{fmt_pct(best.get("executable_spread_pct") if historical or basis_current else None)}</strong></div>
+        <div><span>{"Last basis" if historical else "Entry basis" if basis_current else "Basis refreshing"}</span><strong data-live-spread>{fmt_pct(best.get("executable_spread_pct"))}</strong></div>
         <div class="funding-realised"><span>Realised</span>{render_funding_windows(best, best.get("route_key"))}</div>
         <div><span>Pairs</span><strong>{h(group.get("route_count") or 0)}</strong></div>
         <span class="funding-chevron" aria-hidden="true">⌄</span>
@@ -7997,7 +7997,7 @@ def render_funding_pair(row: dict[str, Any]) -> str:
       <div><span>Long</span>{render_exchange_link(row, "long", include_market_type=True)}{long_funding}</div>
       <div><span>Short</span>{render_exchange_link(row, "short", include_market_type=True)}{short_funding}</div>
       <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)} · {h(funding_cadence_pair(row))}</em></div>
-      <div><span>{"Last basis / VWAP" if historical else "Basis / VWAP" if basis_current else "Basis refreshing"}</span><strong data-live-spread>{fmt_pct(row.get("executable_spread_pct") if historical or basis_current else None)}</strong><em>{fmt_pct(row.get("depth_weighted_spread_pct") if historical or basis_current else None)}</em></div>
+      <div><span>{"Last basis / VWAP" if historical else "Basis / VWAP" if basis_current else "Basis refreshing"}</span><strong data-live-spread>{fmt_pct(row.get("executable_spread_pct"))}</strong><em>{fmt_pct(row.get("depth_weighted_spread_pct"))}</em></div>
       <div><span>{"Last seen" if historical else "Updated"}</span><strong>{fmt_age(row.get("radar_last_seen_age_min") if historical else row.get("age_min"))}</strong></div>
       <div class="route-actions">{"" if historical else render_alert_draft_button(row, alert_type="funding", compact=True)}{"" if historical else f'<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a>'}<a href="/charts?route_key={h(board.route_key_url(str(row.get("route_key") or "")))}">Chart</a></div>
     </article>
