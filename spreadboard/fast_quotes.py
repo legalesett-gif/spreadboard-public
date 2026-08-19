@@ -856,16 +856,22 @@ class FastQuoteRefresher:
             long_quote["ask"] * long_multiplier,
             short_quote["bid"] * short_multiplier,
         )
-        depth = spread_pct(
-            long_quote["ask_vwap"] * long_multiplier,
-            short_quote["bid_vwap"] * short_multiplier,
+        long_ask_vwap = long_quote.get("ask_vwap")
+        short_bid_vwap = short_quote.get("bid_vwap")
+        depth = (
+            spread_pct(long_ask_vwap * long_multiplier, short_bid_vwap * short_multiplier)
+            if long_ask_vwap is not None and short_bid_vwap is not None
+            else None
         )
-        if executable is None or depth is None:
+        # A route whose depth is unproven is already ordinary everywhere else:
+        # /top labels it unproven and /deep excludes it. Refusing to record the
+        # observation at all is what left the chart empty.
+        if executable is None:
             return {
                 "status": "unavailable",
                 "error": "exact_route_target_depth_unavailable",
             }
-        if _is_dex_route(quoted) and max(executable, depth) > 90.0:
+        if _is_dex_route(quoted) and max(v for v in (executable, depth) if v is not None) > 90.0:
             return {
                 "status": "unavailable",
                 "error": "exact_route_spread_out_of_bounds",
@@ -1077,7 +1083,12 @@ class FastQuoteRefresher:
                 )
             bid_vwap = depth_weighted_price(bids, target_notional_usd, contract_size=contract_size)
             ask_vwap = depth_weighted_price(asks, target_notional_usd, contract_size=contract_size)
-            if not bids or not asks or bid_vwap is None or ask_vwap is None:
+            # Top of book does not depend on the probe. Mexc BTW/USDC held
+            # $148k of asks against $199 of bids, and requiring BOTH sides to
+            # fill $500 threw the whole leg away -- so the chart drew nothing
+            # and the page read "Stream sampler unavailable". An unproven side
+            # reports no VWAP; only an absent book is a missing leg.
+            if not bids or not asks:
                 cache[key] = None
                 self._record_leg_failure(key, "cex_target_depth_unavailable")
                 return None

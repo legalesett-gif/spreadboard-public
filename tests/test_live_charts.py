@@ -2608,3 +2608,93 @@ def test_no_ratio_leaves_the_price_alone(monkeypatch) -> None:
         "long_market_symbol": "A/USDC:USDC",
     }
     assert live._leg_detail_from_board(row, side="long")["price"] == pytest.approx(100.0)
+
+
+# --------------------------------------------------------------------------
+# A thin reverse side must not erase a leg the chart can price
+# --------------------------------------------------------------------------
+#
+# Live BTW: Mexc spot BTW/USDC held $148,486 of asks and $199 of bids. The
+# route buys that leg, and the $500 probe is amply covered in the direction
+# actually traded -- but depth_weighted_price returned None for the bid side,
+# and the leg was discarded whole. quote_route then reported
+# "exact_route_order_book_unavailable", the chart drew nothing, and the page
+# read "Stream sampler unavailable".
+#
+# The DEX leg (Aster) quoted perfectly throughout. The failure was the CEX leg,
+# and it only appeared when the probe was raised from $50 to $500.
+#
+# Top of book does not depend on the probe. "$500 VWAP" is a separate series
+# from "In %"/"Out %" and the chart already renders it empty, so an unproven
+# depth must leave the VWAP blank rather than delete the whole observation.
+
+
+def _thin_bid_book() -> tuple[list[list[float]], list[list[float]]]:
+    """$199 of bids, $148k of asks -- the live Mexc BTW/USDC shape."""
+    return ([[0.40, 500.0]], [[0.41212, 19.32], [0.4204, 350000.0]])
+
+
+def test_a_leg_keeps_its_top_of_book_when_only_the_probe_is_unproven(monkeypatch) -> None:
+    row = {
+        "token": "BTW",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "long_market_symbol": "BTW/USDC",
+    }
+    refresher = FastQuoteRefresher()
+    monkeypatch.setattr(fast_quotes.live_book_cache, "load_live_book", lambda *_a, **_k: None)
+    monkeypatch.setattr(fast_quotes, "_native_order_book", lambda *_a, **_k: _thin_bid_book())
+
+    quote = refresher._leg_quote(
+        row, "long", target_notional_usd=500.0, cache={}, include_funding=False
+    )
+
+    assert quote is not None, "a $148k ask side was thrown away over a thin bid side"
+    assert quote["bid"] == pytest.approx(0.40)
+    assert quote["ask"] == pytest.approx(0.41212)
+    # The side that cannot fill $500 reports no VWAP rather than a fabricated one.
+    assert quote["bid_vwap"] is None
+    assert quote["ask_vwap"] is not None
+
+
+def test_an_empty_book_is_still_refused(monkeypatch) -> None:
+    """Relaxing the probe must not let a leg with no book through."""
+    row = {
+        "token": "BTW",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "long_market_symbol": "BTW/USDC",
+    }
+    refresher = FastQuoteRefresher()
+    monkeypatch.setattr(fast_quotes.live_book_cache, "load_live_book", lambda *_a, **_k: None)
+    monkeypatch.setattr(fast_quotes, "_native_order_book", lambda *_a, **_k: ([], []))
+
+    assert refresher._leg_quote(
+        row, "long", target_notional_usd=500.0, cache={}, include_funding=False
+    ) is None
+
+
+def test_the_chart_samples_the_route_with_depth_left_unproven(monkeypatch) -> None:
+    """The observation the chart was missing entirely.
+
+    executable_spread_pct comes from top of book and is knowable; the depth
+    spread is not. A route in exactly that state is already normal elsewhere --
+    /top labels it "unproven" and /deep excludes it -- so the sampler must
+    record it rather than refuse the whole route.
+    """
+    row = {
+        "token": "BTW",
+        "long_venue": "Mexc", "long_market_type": "Spot", "long_market_symbol": "BTW/USDC",
+        "short_venue": "Aster", "short_market_type": "Futures",
+        "short_market_symbol": "BTW/USDT:USDT",
+    }
+    monkeypatch.setattr(fast_quotes.live_book_cache, "load_live_book", lambda *_a, **_k: None)
+    monkeypatch.setattr(fast_quotes, "_native_order_book", lambda *_a, **_k: _thin_bid_book())
+    refresher = FastQuoteRefresher()
+
+    result = refresher.quote_route(row, target_notional_usd=500.0)
+
+    assert result["status"] == "ok", result.get("error")
+    quoted = result["row"]
+    assert quoted.get("executable_spread_pct") is not None
+    assert quoted.get("depth_weighted_spread_pct") is None
