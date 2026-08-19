@@ -11704,6 +11704,8 @@ def render_account_page(
         <div class="account-membership"><span>Membership</span><strong>{h(PLAN_CATALOG.get(user.entitlement_tier, PLAN_CATALOG["free"])["name"])}</strong><em>{h(user.subscription_status)} · {h(user.subscription_expires_at or "No expiry")}</em></div>
       </header>
       <section class="account-kpis">
+        {render_account_kpi("Total PnL", fmt_signed_money(summary.get("price_and_funding_pnl_usd")), "every position, open and closed")}
+        {render_account_kpi("Realised PnL", fmt_signed_money(summary.get("realized_pnl_usd")), "closed positions")}
         {render_account_kpi("Open positions", summary.get("open_positions"), "actively marked")}
         {render_account_kpi("Open-position PnL", fmt_signed_money(summary.get("open_position_pnl_usd")), "mark movement + settled funding - fees")}
         {render_account_kpi("Open settled funding", fmt_signed_money(summary.get("open_position_funding_usd")), "private exchange ledger")}
@@ -12172,7 +12174,7 @@ def render_account_script() -> str:
   routeSelect?.addEventListener('change',()=>{if(routeSelect.value==='')return;const route=suggestedRoutes[Number(routeSelect.value)];if(!route)return;for(const [name,key] of Object.entries({token:'token',route_key:'route_key',entry_spread_pct:'entry_spread_pct',long_venue:'long_venue',long_market_type:'long_market_type',long_symbol:'long_symbol',long_entry_price:'long_entry_price',short_venue:'short_venue',short_market_type:'short_market_type',short_symbol:'short_symbol',short_entry_price:'short_entry_price'})){positionForm.elements[name].value=route[key]??'';}const age=Number(route.age_min);positionForm.querySelector('[data-position-suggestion-note]').textContent=Number.isFinite(age)?`Suggested from live public books · ${age.toFixed(1)} min old. Replace prices with your actual fills.`:'Pair from the full chart catalogue. Enter your actual fills and quantity; no live entry is assumed.';});
   const applyCatalogLeg=(side,select)=>{if(!select||select.value==='')return;const leg=catalogLegs[Number(select.value)];if(!leg)return;positionForm.elements[`${side}_venue`].value=leg.venue||'';positionForm.elements[`${side}_market_type`].value=String(leg.venue||'').toLowerCase().includes('dex')?'DEX':leg.market_type||'';positionForm.elements[`${side}_symbol`].value=leg.symbol||'';positionForm.elements.route_key.value='';positionForm.elements.entry_spread_pct.value='';};
   longLegSelect?.addEventListener('change',()=>applyCatalogLeg('long',longLegSelect));shortLegSelect?.addEventListener('change',()=>applyCatalogLeg('short',shortLegSelect));
-  positionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;try{await request('/api/positions',payloadFromForm(form));dialog.close();await refreshAccountView();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
+  positionDialog?.querySelector('form').addEventListener('submit',async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();const form=event.currentTarget;try{await request('/api/positions',payloadFromForm(form));positionDialog.close();await refreshAccountView();}catch(error){form.querySelector('[data-form-error]').textContent=error.message;}});
   const editDialog=root.querySelector('[data-position-edit-dialog]'),editForm=editDialog?.querySelector('form');let editPosition=null;
   const syncClosedCorrectionFields=()=>{if(!editForm)return;const closed=editForm.elements.status?.value==='closed';editForm.querySelectorAll('[data-closed-correction]').forEach(label=>{label.hidden=!closed;const field=label.querySelector('input');if(field){field.disabled=!closed;field.required=closed&&field.name!=='exit_fees_usd';}});const research=editForm.querySelector('[data-research-contribution]');if(research){research.hidden=!closed;research.querySelectorAll('input').forEach(field=>field.disabled=!closed);}};
   editForm?.elements.status?.addEventListener('change',syncClosedCorrectionFields);
@@ -15545,14 +15547,32 @@ def render_auto_refresh_script() -> str:
     render();
   });
 
+  async function refreshInPlace() {
+    try {
+      const response = await fetch(location.href, { headers: { "X-Requested-With": "fetch" } });
+      if (!response.ok) return;
+      const parsed = new DOMParser().parseFromString(await response.text(), "text/html");
+      const next = parsed.querySelector("[data-refresh]");
+      const current = document.querySelector("[data-refresh]");
+      if (next && current) current.replaceWith(next);
+    } catch (error) {
+      // A failed refresh is a missed tick, not a reason to disturb the page.
+    }
+  }
+
   render();
   setInterval(() => {
     if (paused || document.hidden || editableActive()) return;
     remaining -= 1;
     if (remaining <= 0) {
       label.textContent = "Refreshing";
-      sessionStorage.setItem(scrollKey, String(window.scrollY || 0));
-      location.reload();
+      remaining = seconds;
+      // In place, never a reload. These pages are not all stream-fed so they
+      // do need re-fetching, but replacing the document under someone reading
+      // a table -- every 120s on rankings and signals, 180s on intel and
+      // triage -- is what the operator meant by "no reloads on any page".
+      // Swapping the parsed content keeps scroll position and open UI intact.
+      refreshInPlace().finally(render);
       return;
     }
     render();
