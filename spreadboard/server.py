@@ -6424,7 +6424,10 @@ def render_rankings_page(query: dict[str, list[str]]) -> str:
 def render_token_ranking_row(index: int, row: dict[str, Any]) -> str:
     spread_route = row.get("best_spread_route") or {}
     spread_current = api_spreads.spread_quote_current(spread_route)
-    spread_value = row.get("best_spread_pct") if spread_current else None
+    # Show the spread the row already carries; the "refreshing both legs"
+    # caption below it is what says the quote is not current. Nulling it
+    # left the leaderboard's main column empty on its top rows.
+    spread_value = row.get("best_spread_pct")
     funding_route = row.get("best_funding_route") or {}
     windows = row.get("settled_windows") or {}
     route = funding_route or spread_route
