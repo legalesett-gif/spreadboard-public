@@ -702,9 +702,15 @@ def _portfolio_totals(
         for item in open_positions
         if item.get("total_pnl_usd") is not None
     ]
-    realized = sum(realized_values) if len(realized_values) == len(closed_positions) else None
-    unrealized = sum(unrealized_values) if len(unrealized_values) == len(open_positions) else None
-    total = sum(known) if len(known) == len(positions) else None
+    # Sum what is priceable rather than discarding the book because one leg is
+    # not. Written all-or-nothing, a single unpriced position erased everything:
+    # the live account showed "Total PnL —" beside "Realised PnL +44.12 USD",
+    # with ESPORTS +80.41 and the closed BTW +44.12 both perfectly known.
+    # `unpriced_positions` keeps the figure honest about what it leaves out.
+    realized = sum(realized_values) if realized_values else None
+    unrealized = sum(unrealized_values) if unrealized_values else None
+    total = sum(known) if known else None
+    unpriced = len(positions) - len(known)
     configured_capital = _number(monthly_capital)
     tracked_capital = sum(
         float(item.get("capital_usd") or 0.0)
@@ -719,6 +725,7 @@ def _portfolio_totals(
         "closed_positions": len(closed_positions),
         "tracked_positions": len(positions),
         "price_and_funding_pnl_usd": total,
+        "unpriced_positions": unpriced,
         "realized_pnl_usd": realized,
         "unrealized_pnl_usd": unrealized,
         "open_position_pnl_usd": unrealized,

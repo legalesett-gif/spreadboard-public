@@ -11715,7 +11715,7 @@ def render_account_page(
         <div class="account-membership"><span>Membership</span><strong>{h(PLAN_CATALOG.get(user.entitlement_tier, PLAN_CATALOG["free"])["name"])}</strong><em>{h(user.subscription_status)} · {h(user.subscription_expires_at or "No expiry")}</em></div>
       </header>
       <section class="account-kpis">
-        {render_account_kpi("Total PnL", fmt_signed_money(summary.get("price_and_funding_pnl_usd")), "every position, open and closed")}
+        {render_account_kpi("Total PnL", fmt_signed_money(summary.get("price_and_funding_pnl_usd")), ("every position, open and closed" if not summary.get("unpriced_positions") else f'{summary.get("unpriced_positions")} position(s) not priced yet, excluded'))}
         {render_account_kpi("Realised PnL", fmt_signed_money(summary.get("realized_pnl_usd")), "closed positions")}
         {render_account_kpi("Open positions", summary.get("open_positions"), "actively marked")}
         {render_account_kpi("Open-position PnL", fmt_signed_money(summary.get("open_position_pnl_usd")), "mark movement + settled funding - fees")}
