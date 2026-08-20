@@ -536,16 +536,13 @@ def test_price_worker_invalidates_grouped_market_payloads() -> None:
 
     api_spreads._RESULT_CACHE.clear()
     server._MARKET_CACHE.clear()
-    server._MARKET_STALE_CACHE.clear()
     api_spreads._RESULT_CACHE[("test",)] = (0, 0.0, {"old": True})
     server._MARKET_CACHE[("test",)] = (0.0, {"old": True})
-    server._MARKET_STALE_CACHE[("test",)] = (0.0, {"old": True})
 
     service._invalidate_market_price_caches()
 
     assert api_spreads._RESULT_CACHE == {}
     assert server._MARKET_CACHE == {}
-    assert server._MARKET_STALE_CACHE == {("test",): (0.0, {"old": True})}
 
 
 def test_visual_audit_rejects_entitlement_redirects() -> None:
@@ -3506,6 +3503,44 @@ def test_freshness_keeps_timestamped_matched_depth_despite_fast_top_only_flag(
     assert payload["groups"][0]["best_edge_pct"] == pytest.approx(1.05)
 
 
+def test_filtered_empty_lane_never_borrows_a_global_headline_edge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A zero-row DEX lane cannot advertise a CEX edge in its KPI.
+
+    Headline side lists are deliberately market-wide, but the summary tape is
+    the selected result set. The freshness overlay used the global shortlist
+    to overwrite the correctly-null filtered summary.
+    """
+    global_route = {
+        "route_key": "GUA|Gate|Futures|Mexc|Futures",
+        "quote_ts_us": 9_000_000,
+        "depth_weighted_spread_pct": 3.4,
+        "depth_unverified": False,
+    }
+    payload = {
+        "filters": {"kind": "DEX-SPOT", "sort": "edge", "direction": "desc"},
+        "groups": [],
+        "rows": [],
+        "top_edges": [
+            {
+                "token": "GUA",
+                "best_route": global_route,
+                "best_edge_pct": 3.4,
+            }
+        ],
+        "top_funding": [],
+        "summary": {"matching_rows": 0, "max_depth_weighted_spread_pct": None},
+    }
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(server.api_spreads, "quote_age_min", lambda _row: 0.0)
+
+    server._apply_spread_freshness(payload)
+
+    assert payload["summary"]["max_depth_weighted_spread_pct"] is None
+    assert payload["summary"]["max_executable_spread_pct"] is None
+
+
 def test_freshness_reprices_cached_routes_and_repairs_headline_panel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3618,9 +3653,14 @@ def test_the_stream_reports_only_what_changed(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(server, "api_market_spreads", market)
     monkeypatch.setattr(
         server.api_spreads,
-        "live_prices_for",
-        lambda routes: {
-            row["route_key"]: (row["executable_spread_pct"], row["funding_daily_pct"])
+        "live_route_updates_for",
+        lambda routes, **_kwargs: {
+            row["route_key"]: (
+                row["executable_spread_pct"],
+                row["funding_daily_pct"],
+                None,
+                "top_book",
+            )
             for row in routes
         },
     )

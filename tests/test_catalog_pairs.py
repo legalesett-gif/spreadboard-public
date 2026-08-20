@@ -80,6 +80,61 @@ def test_complete_pairs_use_warm_exact_symbols_and_keep_spread_and_funding_separ
     assert farm["route_key"].startswith("CUSTOM:")
 
 
+def test_spot_spot_catalogue_does_not_invent_zero_funding_or_a_funding_leader(
+    monkeypatch,
+) -> None:
+    """Production LUNC changed from no futures funding to ``0.000%`` only
+    after the 25-token page expanded it from the warm catalogue. Spot legs do
+    not settle perpetual funding, so zero is a fabricated measurement here,
+    not a real rate and not a candidate for Top Funding Pairs.
+    """
+
+    catalog = {
+        "generated_at": "now",
+        "markets": [
+            {
+                "token": "LUNC",
+                "venue": "HTX",
+                "market_type": "Spot",
+                "symbol": "LUNC/USDT",
+                "quote": "USDT",
+            },
+            {
+                "token": "LUNC",
+                "venue": "Bybit",
+                "market_type": "Spot",
+                "symbol": "LUNC/USDT",
+                "quote": "USDT",
+            },
+        ],
+    }
+    books = {
+        ("HTX", "Spot", "LUNC/USDT"): _book(0.00006, 0.000061),
+        ("Bybit", "Spot", "LUNC/USDT"): _book(0.000063, 0.000064),
+    }
+    monkeypatch.setattr(catalog_pairs.chart_catalog, "load", lambda: catalog)
+    monkeypatch.setattr(
+        catalog_pairs.live_book_cache,
+        "load_live_book",
+        lambda venue, market_type, symbol, **_kwargs: books.get(
+            (venue, market_type, symbol)
+        ),
+    )
+    monkeypatch.setattr(catalog_pairs.bulk_quotes, "load_funding", dict)
+    monkeypatch.setattr(catalog_pairs.public_rails, "load_public_rails", dict)
+
+    payload = catalog_pairs.for_token("LUNC", use_cache=False)
+    route = payload["routes"][0]
+    grouped = catalog_pairs.group(payload)
+
+    assert route["route_kind"] == "SPOT"
+    assert route["funding_projected_24h_pct"] is None
+    assert route["funding_daily_pct"] is None
+    assert grouped["best_funding_route"] is None
+    assert grouped["best_funding_24h_pct"] is None
+    assert grouped["best_funding_24h_basis"] is None
+
+
 def test_incomplete_depth_is_top_book_not_fabricated_vwap(monkeypatch) -> None:
     catalog = _catalog()
     catalog["markets"] = catalog["markets"][:2]
@@ -239,6 +294,49 @@ def test_current_dex_rows_merge_with_complete_cex_pairs() -> None:
     assert [row["route_key"] for row in merged["routes"]] == ["dex", "cex"]
 
 
+def test_catalogue_merge_deduplicates_the_same_exact_legs_across_key_formats() -> None:
+    catalogue = {
+        "ok": True,
+        "token": "GUA",
+        "routes": [
+            {
+                "route_key": "CUSTOM:catalogue-key",
+                "route_kind": "FUTURES",
+                "long_venue": "Mexc",
+                "long_market_type": "Futures",
+                "long_market_symbol": "GUA/USDT:USDT",
+                "short_venue": "Gate",
+                "short_market_type": "Futures",
+                "short_market_symbol": "GUA/USDT:USDT",
+                "depth_weighted_spread_pct": 0.8,
+                "funding_24h_pct": None,
+            }
+        ],
+    }
+    scanner = {
+        "route_key": "GUA|Mexc|Futures|Gate|Futures",
+        "route_kind": "FUTURES",
+        "long_venue": "Mexc",
+        "long_market_type": "Futures",
+        "long_market_symbol": "GUA/USDT:USDT",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        "short_market_symbol": "GUA/USDT:USDT",
+        "depth_weighted_spread_pct": 0.7,
+        "funding_24h_pct": 0.41,
+        "settled_funding_windows": {"1d": 0.41, "7d": 1.2, "30d": None},
+    }
+
+    merged = catalog_pairs.with_routes(catalogue, [scanner])
+
+    assert merged["route_count"] == 1
+    assert len(merged["routes"]) == 1
+    assert merged["routes"][0]["route_key"] == "CUSTOM:catalogue-key"
+    assert merged["routes"][0]["depth_weighted_spread_pct"] == 0.8
+    assert merged["routes"][0]["funding_24h_pct"] == 0.41
+    assert merged["routes"][0]["settled_funding_windows"]["7d"] == 1.2
+
+
 def test_spread_and_funding_catalogue_filters_are_economically_independent(monkeypatch) -> None:
     monkeypatch.setattr(
         catalog_pairs.venue_funding_history,
@@ -360,11 +458,19 @@ def test_visible_board_group_expands_beyond_scanner_quota(monkeypatch) -> None:
 
     spread = server._expand_visible_catalog_groups(data, {})
     funding = server._expand_visible_catalog_groups(data, {"funding_only": ["1"]})
+    strong_funding = server._expand_visible_catalog_groups(
+        data,
+        {"funding_only": ["1"], "min_abs_funding_24h_pct": ["0.5"]},
+    )
 
     assert spread["groups"][0]["route_count"] == 2
     assert {row["route_key"] for row in spread["groups"][0]["routes"]} == {"Gate", "Bybit"}
     assert funding["groups"][0]["route_count"] == 2
     assert {row["route_key"] for row in funding["groups"][0]["routes"]} == {"Gate", "Aster"}
+    assert strong_funding["groups"][0]["route_count"] == 1
+    assert [row["route_key"] for row in strong_funding["groups"][0]["routes"]] == [
+        "Aster"
+    ]
 
 
 def test_catalogue_overlay_cannot_bypass_unsupported_valuation_filter(monkeypatch) -> None:

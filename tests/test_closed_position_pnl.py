@@ -116,3 +116,22 @@ def test_the_card_does_not_print_a_funding_figure_it_does_not_have() -> None:
     })
 
     assert "not imported" in html
+
+
+def test_the_card_does_not_claim_a_visible_partial_total_is_withheld() -> None:
+    """The funding note must agree with the price-only total shown above it."""
+    from spreadboard import server
+
+    html = server.render_position_card({
+        "id": 1, "token": "ESPORTS", "status": "open",
+        "long_venue": "Mexc", "short_venue": "Gate",
+        "long_market_type": "Spot", "short_market_type": "Futures",
+        "total_pnl_usd": 10.80, "price_pnl_usd": 15.0,
+        "funding_known": False, "funding_income_usd": None,
+        "total_pnl_excludes_funding": True,
+        "funding_sync_status": "not_connected",
+        "opened_at": "2026-08-01T00:00:00Z",
+    })
+
+    assert "shown Total PnL excludes settled funding" in html
+    assert "total PnL is withheld" not in html

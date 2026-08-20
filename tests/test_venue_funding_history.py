@@ -75,6 +75,29 @@ def test_a_spot_leg_contributes_zero_not_unknown(monkeypatch) -> None:
     assert vfh.route_windows(route) == {"1d": 0.5, "7d": 2.0, "30d": 8.0}
 
 
+def test_two_spot_legs_have_no_settled_funding_window(monkeypatch) -> None:
+    """Production LUNC rendered 0.000% for 1d, 7d and 30d because both
+    non-funding legs contributed zero. Spot-Spot has no perpetual settlement
+    to measure, so every window is not applicable rather than a realised zero.
+    """
+
+    monkeypatch.setattr(vfh, "load", dict)
+    route = {
+        "long_venue": "HTX",
+        "long_market_type": "Spot",
+        "long_market_symbol": "LUNC/USDT",
+        "short_venue": "Bybit",
+        "short_market_type": "Spot",
+        "short_market_symbol": "LUNC/USDT",
+    }
+
+    assert vfh.route_windows(route) == {
+        "1d": None,
+        "7d": None,
+        "30d": None,
+    }
+
+
 def test_net_is_short_minus_long(monkeypatch) -> None:
     monkeypatch.setattr(
         vfh,

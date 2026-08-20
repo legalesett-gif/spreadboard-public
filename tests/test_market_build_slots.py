@@ -22,13 +22,12 @@ from spreadboard import server
 
 @pytest.fixture(autouse=True)
 def _clear_cache() -> None:
-    """Both stores, or one test is served the previous test's stale payload."""
+    """Every test starts without a current payload or in-flight marker."""
 
     def wipe() -> None:
         with server._MARKET_CACHE_LOCK:
             server._MARKET_CACHE.clear()
             server._MARKET_CACHE_INFLIGHT.clear()
-            server._MARKET_STALE_CACHE.clear()
 
     wipe()
     yield
@@ -94,10 +93,10 @@ def test_the_slot_is_released_when_a_build_raises(monkeypatch: pytest.MonkeyPatc
             server._MARKET_BUILD_SLOTS.release()
 
 
-def test_a_queued_reader_is_served_rather_than_left_waiting(
+def test_a_queued_reader_gets_warming_instead_of_an_old_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A view built before must answer from the previous copy under load."""
+    """Capacity pressure cannot justify publishing an old matched spread."""
     calls: list[int] = []
 
     def load(**kwargs: object) -> dict[str, object]:
@@ -105,6 +104,7 @@ def test_a_queued_reader_is_served_rather_than_left_waiting(
         return {"rows": [{"route_key": "A|B|C"}], "ok": True}
 
     monkeypatch.setattr(server.api_spreads, "load_spreads", load)
+    monkeypatch.setattr(server, "_MARKET_BUILD_SLOT_WAIT_SECONDS", 0.01)
     board = Path("data/spreadboard.json")
 
     first = server.api_market_spreads(board, {"kind": ["FUTURES"]})
@@ -116,7 +116,7 @@ def test_a_queued_reader_is_served_rather_than_left_waiting(
         assert server._MARKET_BUILD_SLOTS.acquire(timeout=1.0)
         held.append(True)
     try:
-        # Expire the fresh entry so it has to fall back to the stale copy.
+        # Expire the only current entry while no build slot is available.
         with server._MARKET_CACHE_LOCK:
             for key, (_stamp, payload) in list(server._MARKET_CACHE.items()):
                 server._MARKET_CACHE[key] = (time.monotonic() - 10_000, payload)
@@ -125,8 +125,9 @@ def test_a_queued_reader_is_served_rather_than_left_waiting(
         for _ in held:
             server._MARKET_BUILD_SLOTS.release()
 
-    assert served is not None
-    assert "rows" in served
+    assert served.get("ok") is False
+    assert served.get("status") == "warming"
+    assert len(calls) == 1
 
 
 def test_the_limit_is_configurable_and_at_least_one() -> None:
@@ -134,7 +135,7 @@ def test_the_limit_is_configurable_and_at_least_one() -> None:
 
 
 def test_production_serialises_full_market_view_builds() -> None:
-    """Stale views remain available, so parallel full builds only add stalls."""
+    """Parallel full builds add stalls and can exhaust the app container."""
     import re
 
     compose = (Path(__file__).resolve().parents[1] / "compose.production.yml").read_text()

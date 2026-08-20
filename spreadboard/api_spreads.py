@@ -739,9 +739,119 @@ def _stream_funding_daily(
     return daily["short"] - daily["long"]
 
 
+_FAST_ROUTE_UPDATE_LOCK = Lock()
+_FAST_ROUTE_UPDATE_CACHE: dict[str, Any] = {
+    "key": None,
+    "exact": {},
+    "simple": {},
+}
+
+
+def _fast_route_identity(row: dict[str, Any]) -> tuple[str, ...]:
+    return (
+        str(row.get("token") or "").upper(),
+        str(row.get("long_venue") or ""),
+        str(row.get("long_market_type") or ""),
+        str(row.get("long_market_symbol") or ""),
+        str(row.get("short_venue") or ""),
+        str(row.get("short_market_type") or ""),
+        str(row.get("short_market_symbol") or ""),
+    )
+
+
+def _fast_quote_updates_for(
+    routes: list[dict[str, Any]],
+) -> dict[str, tuple[Any, ...]]:
+    """Current compact-worker quotes for exact routes outside resident books.
+
+    The expanded catalogue is deliberately broader than the websocket set.
+    Without this second current source, those extra pairs retained whatever
+    matched spread their structural page generation happened to carry.
+    """
+    if not routes:
+        return {}
+    path = _fast_quote_delta_path(DEFAULT_API_DISCOVERY_PATH)
+    key = (str(path), _mtime_ns(path))
+    with _FAST_ROUTE_UPDATE_LOCK:
+        if _FAST_ROUTE_UPDATE_CACHE.get("key") == key:
+            exact = _FAST_ROUTE_UPDATE_CACHE["exact"]
+            simple = _FAST_ROUTE_UPDATE_CACHE["simple"]
+        else:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                payload = {}
+            exact: dict[tuple[str, ...], tuple[Any, ...]] = {}
+            simple_candidates: dict[tuple[str, ...], list[tuple[Any, ...]]] = {}
+            now = time.time()
+            for item in payload.get("rows") or []:
+                if not isinstance(item, dict):
+                    continue
+                raw = _project_route_funding(_mirror_if_spot_sale_required(item))
+                notes = raw.get("notes") if isinstance(raw.get("notes"), dict) else {}
+                inputs = (
+                    notes.get("route_inputs")
+                    if isinstance(notes.get("route_inputs"), dict)
+                    else {}
+                )
+                long_input = inputs.get("long") if isinstance(inputs.get("long"), dict) else {}
+                short_input = (
+                    inputs.get("short") if isinstance(inputs.get("short"), dict) else {}
+                )
+                identity = (
+                    str(raw.get("token") or "").upper(),
+                    str(raw.get("long_venue") or ""),
+                    str(raw.get("long_market_type") or ""),
+                    str(long_input.get("symbol") or ""),
+                    str(raw.get("short_venue") or ""),
+                    str(raw.get("short_market_type") or ""),
+                    str(short_input.get("symbol") or ""),
+                )
+                quote_ts_us = _int_or_none(raw.get("quote_ts_us"))
+                if quote_ts_us is None:
+                    continue
+                age_seconds = max(0.0, now - quote_ts_us / 1_000_000)
+                if age_seconds > LIVE_BOOK_MAX_AGE_SECONDS:
+                    continue
+                matched = _float_or_none(raw.get("depth_weighted_spread_pct"))
+                top = _float_or_none(raw.get("executable_spread_pct"))
+                spread = matched if matched is not None else top
+                update = (
+                    spread,
+                    _float_or_none(raw.get("funding_daily_pct")),
+                    quote_ts_us,
+                    "matched_vwap" if matched is not None else "top_book" if top is not None else None,
+                )
+                current = exact.get(identity)
+                if current is None or int(current[2] or 0) <= quote_ts_us:
+                    exact[identity] = update
+                simple_key = identity[:3] + identity[4:6]
+                simple_candidates.setdefault(simple_key, []).append(update)
+            simple = {
+                candidate_key: updates[0]
+                for candidate_key, updates in simple_candidates.items()
+                if len(updates) == 1
+            }
+            _FAST_ROUTE_UPDATE_CACHE.update(
+                {"key": key, "exact": exact, "simple": simple}
+            )
+    updates: dict[str, tuple[Any, ...]] = {}
+    for route in routes:
+        identity = _fast_route_identity(route)
+        update = exact.get(identity)
+        if update is None:
+            update = simple.get(identity[:3] + identity[4:6])
+        if update is not None and route.get("route_key"):
+            updates[str(route["route_key"])] = update
+    return updates
+
+
 def live_route_updates_for(
-    routes: list[dict[str, Any]], *, include_funding: bool = True
-) -> dict[str, tuple[float | None, float | None, int | None]]:
+    routes: list[dict[str, Any]],
+    *,
+    include_funding: bool = True,
+    include_basis: bool = False,
+) -> dict[str, tuple[Any, ...]]:
     """Spread, carry and quote time straight from the current book store.
 
     The push path must not go through the grouped board's cache: a cached price
@@ -774,7 +884,7 @@ def live_route_updates_for(
         wanted_keys,
         max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS,
     )
-    out: dict[str, tuple[float | None, float | None, int | None]] = {}
+    out: dict[str, tuple[Any, ...]] = {}
     funding_legs = bulk_quotes.load_funding() if include_funding else {}
     for route in routes:
         long_book = books.get(
@@ -801,7 +911,8 @@ def live_route_updates_for(
         funding_daily = _stream_funding_daily(route, funding_legs) if include_funding else None
         if not price_is_live:
             if funding_daily is not None:
-                out[str(route["route_key"])] = (None, funding_daily, None)
+                update = (None, funding_daily, None, None)
+                out[str(route["route_key"])] = update if include_basis else update[:3]
             continue
         prior_depth_verified = (
             not bool(route.get("depth_unverified"))
@@ -838,8 +949,11 @@ def live_route_updates_for(
         # None here was what made DEX cards and valid bulk routes disappear as
         # soon as the browser stream attached.
         live_depth_spread = measured_depth_spread
+        spread_basis = "matched_vwap" if measured_depth_spread is not None else None
         if live_depth_spread is None and prior_depth_verified:
             live_depth_spread = _float_or_none(route.get("depth_weighted_spread_pct"))
+            if live_depth_spread is not None:
+                spread_basis = "retained_matched_vwap"
         if live_depth_spread is None:
             # The page renders `depth_weighted_spread_pct` when the probe can be
             # proven and `executable_spread_pct` when it cannot, and says which.
@@ -852,6 +966,7 @@ def live_route_updates_for(
             # Two live sides always produce a real top-of-book edge. Sending it
             # keeps the feed at least as strong as the render it is correcting.
             live_depth_spread = (bid / ask - 1.0) * 100.0
+            spread_basis = "top_book"
         if measured_depth_spread is None:
             # A top-only tick may retain a still-current prior $50 quote, but
             # it cannot renew that proof.  Preserve the quote's own timestamp.
@@ -869,7 +984,7 @@ def live_route_updates_for(
                 if stored_ts:
                     stamps.append(stored_ts)
             quote_ts_us = min(stamps) if stamps else None
-        out[str(route["route_key"])] = (
+        update = (
             live_depth_spread,
             (
                 funding_daily
@@ -879,7 +994,25 @@ def live_route_updates_for(
             if include_funding
             else None,
             quote_ts_us,
+            spread_basis,
         )
+        out[str(route["route_key"])] = update if include_basis else update[:3]
+    # A complete fast-quote cycle covers routes that are intentionally outside
+    # the resident websocket set. Prefer a two-book live update when present;
+    # otherwise use the exact current compact-worker route instead of retaining
+    # an older structural/group value on screen.
+    for route_key, fast in _fast_quote_updates_for(routes).items():
+        existing = out.get(route_key)
+        if existing is None:
+            out[route_key] = fast if include_basis else fast[:3]
+            continue
+        spread = existing[0] if existing[0] is not None else fast[0]
+        funding = existing[1] if existing[1] is not None else fast[1]
+        timestamp = existing[2] if existing[0] is not None else fast[2]
+        existing_basis = existing[3] if include_basis and len(existing) > 3 else None
+        basis = existing_basis if existing[0] is not None else fast[3]
+        merged = (spread, funding, timestamp, basis)
+        out[route_key] = merged if include_basis else merged[:3]
     return out
 
 

@@ -538,8 +538,15 @@ def route_windows(route: dict[str, Any]) -> dict[str, float | None]:
     A spot leg pays no funding, so it contributes zero rather than unknown --
     the pair is still fully determined by its futures leg.
     """
-    legs = load()
     net: dict[str, float | None] = {f"{days}d": None for days in WINDOW_DAYS}
+    has_futures_leg = any(
+        str(route.get(f"{side}_market_type") or "").casefold() == "futures"
+        and "dex" not in str(route.get(f"{side}_venue") or "").casefold()
+        for side in ("long", "short")
+    )
+    if not has_futures_leg:
+        return net
+    legs = load()
     sides: dict[str, dict[str, float | None] | None] = {}
     for side in ("long", "short"):
         venue = str(route.get(f"{side}_venue") or "")

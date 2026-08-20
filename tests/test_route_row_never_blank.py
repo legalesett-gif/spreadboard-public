@@ -57,6 +57,7 @@ def test_a_current_row_prefers_its_measured_spread() -> None:
 
     assert "1.2%" in html
     assert "refreshing both legs" not in html
+    assert "data-live-spread-basis" in html
 
 
 def test_a_stale_row_prefers_its_stored_spread_over_the_derived_one() -> None:
@@ -79,6 +80,25 @@ def test_a_zero_price_is_not_divided_by() -> None:
     html = server.render_market_group_route(_row(long_price=0.0, short_price=0.5))
 
     assert "—" in html
+
+
+def test_spot_legs_do_not_render_fabricated_zero_funding_rates() -> None:
+    """The complete catalogue encodes a Spot leg's neutral contribution as
+    zero for mixed-route arithmetic. That internal identity must not be shown
+    as if the Spot market actually settled a 0.0000% perpetual funding rate.
+    """
+
+    html = server.render_market_group_route(
+        _row(
+            long_market_type="Spot",
+            short_market_type="Spot",
+            long_funding_pct=0.0,
+            short_funding_pct=0.0,
+        )
+    )
+
+    assert "n/a / n/a" in html
+    assert "+0.0000% / +0.0000%" not in html
 
 
 # --------------------------------------------------------------------------

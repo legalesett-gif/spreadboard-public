@@ -81,34 +81,12 @@ _MARKET_CACHE_TTL_SECONDS = max(
 )
 #: Each payload is fully materialised and large, so the count is bounded to keep
 #: a 4GB box off its limit -- an earlier unbounded version left it with 156MB.
-#: Must hold every warmed view plus the free board and the member default. At
-#: 14 it held fewer entries than the warmer produced, so the lanes evicted each
-#: other and whichever one a member opened had no copy to fall back on -- which
-#: is the "Spread refreshing" state. A lane payload is ~1.5MB of JSON; only the
-#: two 500-row views are large, so the extra headroom is cheap.
+#: Must hold every warmed view plus the free board and the member default. A
+#: lane payload is ~1.5MB of JSON; only the two 500-row views are large, so the
+#: extra headroom is cheap.
 _MARKET_CACHE_MAX_ENTRIES = max(4, int(os.environ.get("SPREADBOARD_MARKET_CACHE_ENTRIES", "32")))
 _MARKET_CACHE_LOCK = threading.Lock()
 _MARKET_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
-#: The same payloads indexed by query alone. The full cache key includes the
-#: snapshot's file signature, and the funding sweep rewrites that snapshot every
-#: couple of minutes, so every view is invalidated together far more often than
-#: the discovery scan runs. Serving the previous payload while the new one
-#: builds is what keeps the board from going cold each time -- prices are not
-#: stale with it, because the stream re-prices what is on screen every three
-#: seconds; only the grouping is a little behind.
-_MARKET_STALE_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
-#: A stale copy is the only thing standing between a member and the "Spread
-#: refreshing" page, so it has to outlive the gap between warms. The web
-#: process warms when the discovery snapshot changes -- there is no periodic
-#: timer -- and that was observed about once an hour, against 1800s of
-#: retention. For roughly half of every hour every lane had nothing to fall
-#: back on. Three hours gives that cadence real margin.
-#:
-#: Serving it is safe: the stream re-prices what is on screen within seconds,
-#: so the copy supplies structure, not prices.
-_MARKET_STALE_MAX_SECONDS = max(
-    60.0, float(os.environ.get("SPREADBOARD_MARKET_STALE_SECONDS", "10800"))
-)
 _MARKET_CACHE_INFLIGHT: dict[tuple[Any, ...], threading.Event] = {}
 
 
@@ -1959,9 +1937,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 previous = rows
                 if changed:
                     current_spreads = [
-                        spread
-                        for spread, _funding in rows.values()
-                        if _float_or_none(spread) is not None
+                        values[0]
+                        for values in rows.values()
+                        if _float_or_none(values[0]) is not None
                     ]
                     payload = {
                         "updated_at": datetime.now(tz=timezone.utc)
@@ -1975,7 +1953,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         # board until the next structural page reload.
                         "max_spread_pct": max(current_spreads, default=None),
                         "routes": [
-                            {"route_key": key, "spread_pct": value[0], "funding_pct": value[1]}
+                            {
+                                "route_key": key,
+                                "spread_pct": value[0],
+                                "funding_pct": value[1],
+                                "spread_basis": value[2] if len(value) > 2 else None,
+                            }
                             for key, value in changed.items()
                         ],
                     }
@@ -2092,8 +2075,6 @@ def _legacy_board_snapshot(
 def api_market_spreads(
     board_path: Path,
     query: dict[str, list[str]] | None = None,
-    *,
-    allow_stale: bool = True,
 ) -> dict[str, Any]:
     query = query or {}
     limit = max(
@@ -2124,16 +2105,10 @@ def api_market_spreads(
             # build its own copy -- that is what turned one slow build into
             # forty concurrent ones, threads 14 -> 40 and the process
             # 0.5GB -> 4.2GB until the kernel killed the container.
-            #
-            # But it must not WAIT for that build either when it already has a
-            # perfectly good previous copy. Checking stale only after the wait
-            # expired put a 25s pause in front of every page served while the
-            # warmer held the build: /free measured 26s three times running with
-            # the answer sitting in the stale cache the whole time.
-            stale = _market_cache_stale_get(cache_key) if allow_stale else None
-            if stale is not None:
-                return _sync_telegram_client_universe(stale)
-            # Nothing to serve yet, so waiting is the only option.
+            # It may wait for that one current generation, but it must never
+            # answer with a query-only copy from an older snapshot. Expanded
+            # routes outside the websocket set proved that "structural" stale
+            # data can carry a materially wrong matched spread.
             deadline = time.monotonic() + _MARKET_BUILD_WAIT_SECONDS
             while not inflight.wait(timeout=1.0) and time.monotonic() < deadline:
                 cached = _market_cache_get(cache_key)
@@ -2142,35 +2117,17 @@ def api_market_spreads(
             cached = _market_cache_get(cache_key)
             if cached is not None:
                 return _sync_telegram_client_universe(cached)
-            stale = _market_cache_stale_get(cache_key) if allow_stale else None
-            if stale is not None:
-                return _sync_telegram_client_universe(stale)
             # The owner is still building. Say so rather than start a second
             # copy of the same work.
             return _market_warming_payload()
-        # The snapshot moved under us. Serve what we built for this same view a
-        # moment ago and let the refresh finish behind the request, rather than
-        # holding a page open for a full rebuild.
-        stale = _market_cache_stale_get(cache_key) if allow_stale else None
-        if stale is not None:
-            threading.Thread(
-                target=_rebuild_market_cache,
-                args=(board_path, dict(query), cache_key),
-                daemon=True,
-            ).start()
-            return _sync_telegram_client_universe(stale)
 
     acquired = _MARKET_BUILD_SLOTS.acquire(timeout=_MARKET_BUILD_SLOT_WAIT_SECONDS)
     if not acquired:
-        # Every slot is busy. Anything we can serve beats piling on another
-        # full build, which is what exhausted the container. A no_cache caller
-        # has nothing to fall back on and is an explicit internal request, so
-        # it proceeds unslotted rather than being told the board is warming.
+        # Every slot is busy. Do not pile on another full build and do not serve
+        # an older generation. A no_cache caller is an explicit internal
+        # request, so it proceeds unslotted.
         if cache_key is not None:
-            stale = _market_cache_stale_get(cache_key) if allow_stale else None
             _market_cache_finish(cache_key, None)
-            if stale is not None:
-                return _sync_telegram_client_universe(stale)
             return _market_warming_payload()
     try:
         min_funding_24h = _query_float(query, "min_abs_funding_24h_pct")
@@ -2276,31 +2233,47 @@ def _expand_visible_catalog_groups(
         if not payload:
             expanded_groups.append(scanner_group)
             continue
-        selected = catalog_pairs.filtered(
-            payload,
-            kind=_query_first(query, "kind"),
-            exchange=_query_first(query, "exchange"),
-            quote=_query_first(query, "quote"),
-            funding_only=funding_only,
-            min_spread_pct=_query_float(query, "min_spread_pct"),
-            min_abs_funding_24h_pct=_query_float(
+        filter_options = {
+            "kind": _query_first(query, "kind"),
+            "exchange": _query_first(query, "exchange"),
+            "quote": _query_first(query, "quote"),
+            "funding_only": funding_only,
+            "min_spread_pct": _query_float(query, "min_spread_pct"),
+            "min_abs_funding_24h_pct": _query_float(
                 query, "min_abs_funding_24h_pct"
             ),
-            min_abs_funding_apr_pct=_query_float(
+            "min_abs_funding_apr_pct": _query_float(
                 query, "min_abs_funding_apr_pct"
             ),
+        }
+        selected = catalog_pairs.filtered(
+            payload,
+            **filter_options,
             limit=CATALOG_ROUTES_PER_VISIBLE_TOKEN,
         )
-        if not selected.get("routes"):
-            expanded_groups.append(scanner_group)
+        # The bounded scanner group was selected at token level and can still
+        # contain sibling routes that do not meet a route-level funding or
+        # spread floor.  Reapply the exact same economics before preserving its
+        # DEX and adapter-only rows; merging it raw silently defeated the UI.
+        scanner_selected = catalog_pairs.filtered(
+            {
+                "token": token,
+                "routes": list(scanner_group.get("routes") or []),
+            },
+            **filter_options,
+            limit=None,
+        )
+        if not selected.get("routes") and not scanner_selected.get("routes"):
             continue
+        if not selected.get("routes"):
+            selected = scanner_selected
 
         # Preserve current DEX routes and any scanner-only adapter evidence.
         # Catalogue rows take precedence for duplicate CEX identities because
         # they were rebuilt together from the newest shared book generation.
         merged = catalog_pairs.with_routes(
             selected,
-            list(scanner_group.get("routes") or []),
+            list(scanner_selected.get("routes") or []),
             limit=None,
         )
         routes = list(merged.get("routes") or [])
@@ -2638,39 +2611,59 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
         visit_route(route)
     summary = payload.get("summary")
     if isinstance(summary, dict):
-        current_edges = [
-            _float_or_none(group.get("best_edge_pct"))
-            for group in [*(payload.get("top_edges") or []), *(payload.get("groups") or [])]
-        ]
-        summary["max_depth_weighted_spread_pct"] = max(
-            (value for value in current_edges if value is not None),
-            default=None,
+        result_filter_keys = (
+            "q",
+            "exchange",
+            "kind",
+            "min_spread_pct",
+            "min_abs_funding_24h_pct",
+            "min_abs_funding_apr_pct",
+            "quote",
+            "min_volume_24h_usd",
+            "min_market_cap_usd",
+            "max_market_cap_usd",
+            "min_fdv_usd",
+            "max_fdv_usd",
+            "max_listing_age_days",
+            "persistence",
+            "asset_class",
+            "funding_only",
         )
-        summary["max_executable_spread_pct"] = summary["max_depth_weighted_spread_pct"]
+        result_filtered = any(
+            filters.get(key) not in (None, "", False) for key in result_filter_keys
+        )
+        matching_tokens = int(summary.get("matching_tokens") or 0)
+        returned_tokens = int(summary.get("returned_tokens") or 0)
+        filtered_result_complete = (
+            int(summary.get("matching_rows") or 0) == 0
+            or matching_tokens == returned_tokens
+        )
+        # The side shortlists are deliberately market-wide. They can repair an
+        # unfiltered headline, but they must never leak a CEX edge into a zero-
+        # row DEX KPI (or any other filtered result). When the whole filtered
+        # token set is present, its groups are enough to refresh the summary;
+        # for a paginated filtered set, retain the server-computed full-set max.
+        if not result_filtered or filtered_result_complete:
+            headline_groups = (
+                payload.get("groups") or []
+                if result_filtered
+                else [*(payload.get("top_edges") or []), *(payload.get("groups") or [])]
+            )
+            current_edges = [
+                _float_or_none(group.get("best_edge_pct")) for group in headline_groups
+            ]
+            summary["max_depth_weighted_spread_pct"] = max(
+                (value for value in current_edges if value is not None),
+                default=None,
+            )
+            summary["max_executable_spread_pct"] = summary[
+                "max_depth_weighted_spread_pct"
+            ]
     # `groups` is already the requested page, so its membership cannot be
     # repaired without rebuilding the cached query. Keeping the valid rows
     # first within that page is still essential, while the background cache
     # refresh restores exact global pagination from the same current snapshot.
     return payload
-
-
-def _rebuild_market_cache(
-    board_path: Path, query: dict[str, list[str]], cache_key: tuple[Any, ...]
-) -> None:
-    """Refresh a view behind the request that was served the previous payload."""
-    # The request that served the stale payload registered the in-flight marker
-    # and then returned, so nobody is holding it. Release it here or the rebuild
-    # blocks on its own gate for the full wait before doing anything.
-    with _MARKET_CACHE_LOCK:
-        waiting = _MARKET_CACHE_INFLIGHT.pop(cache_key, None)
-    if waiting is not None:
-        waiting.set()
-    try:
-        # allow_stale=False so this actually rebuilds and stores, instead of
-        # being handed back the very payload it was started to replace.
-        api_market_spreads(board_path, query, allow_stale=False)
-    except Exception:  # noqa: BLE001 - the stale payload is already serving.
-        pass
 
 
 def api_alert_context(
@@ -2762,29 +2755,10 @@ def _market_cache_get(cache_key: tuple[Any, ...]) -> dict[str, Any] | None:
     return None
 
 
-def _market_stale_key(cache_key: tuple[Any, ...]) -> tuple[Any, ...]:
-    """The cache key without the snapshot signatures -- query and board only."""
-    return (cache_key[0], cache_key[-1])
-
-
-def _market_cache_stale_get(cache_key: tuple[Any, ...]) -> dict[str, Any] | None:
-    """The last payload built for this query, whatever snapshot produced it."""
-    now = time.monotonic()
-    with _MARKET_CACHE_LOCK:
-        cached = _MARKET_STALE_CACHE.get(_market_stale_key(cache_key))
-        if cached and now - cached[0] <= _MARKET_STALE_MAX_SECONDS:
-            return cached[1]
-    return None
-
-
 def _market_cache_finish(cache_key: tuple[Any, ...], data: dict[str, Any] | None) -> None:
     with _MARKET_CACHE_LOCK:
         if data is not None:
             _MARKET_CACHE[cache_key] = (time.monotonic(), data)
-            _MARKET_STALE_CACHE[_market_stale_key(cache_key)] = (time.monotonic(), data)
-            if len(_MARKET_STALE_CACHE) > _MARKET_CACHE_MAX_ENTRIES:
-                oldest = min(_MARKET_STALE_CACHE, key=lambda key: _MARKET_STALE_CACHE[key][0])
-                _MARKET_STALE_CACHE.pop(oldest, None)
             if len(_MARKET_CACHE) > _MARKET_CACHE_MAX_ENTRIES:
                 oldest = min(_MARKET_CACHE, key=lambda key: _MARKET_CACHE[key][0])
                 _MARKET_CACHE.pop(oldest, None)
@@ -4300,7 +4274,10 @@ def _member_size_quote_payload(
             "market_type": market_type,
             "symbol": row.get(f"{side}_market_symbol") or leg.get("symbol"),
             "opening_price": _float_or_none(leg.get(opening_field)),
-            "matched_vwap": first_float(leg.get(vwap_field), leg.get(opening_field)),
+            # Top-of-book is not proof that the requested notional fills.  The
+            # exact-size UI must never relabel an opening bid/ask as a matched
+            # VWAP when the directional book ran out first.
+            "matched_vwap": _float_or_none(leg.get(vwap_field)),
             "bid": _float_or_none(leg.get("bid")),
             "ask": _float_or_none(leg.get("ask")),
             "bid_vwap": _float_or_none(leg.get("bid_vwap")),
@@ -4331,6 +4308,7 @@ def _member_size_quote_payload(
             )
     quote_ts_us = min(quote_timestamps) if quote_timestamps else None
     matched = _float_or_none(row.get("depth_weighted_spread_pct"))
+    depth_proven = matched is not None
     total_gas = sum(dex_gas_values) if dex_leg_count and len(dex_gas_values) == dex_leg_count else None
     gas_adjusted = (
         matched - total_gas / target_notional_usd * 100.0
@@ -4338,12 +4316,13 @@ def _member_size_quote_payload(
         else None
     )
     return {
-        "ok": True,
+        "ok": depth_proven,
+        "error": None if depth_proven else "exact_route_target_depth_unavailable",
         "mode": "isolated_member_size_quote",
         "route_key": row.get("route_key"),
         "token": row.get("token") or row.get("symbol"),
         "target_notional_usd": target_notional_usd,
-        "depth_proven_at_target": True,
+        "depth_proven_at_target": depth_proven,
         "top_book_spread_pct": _float_or_none(row.get("executable_spread_pct")),
         "matched_spread_pct": matched,
         "estimated_opening_gas_usd": total_gas,
@@ -5431,7 +5410,15 @@ def render_board_stream_script(
           const text = pct(route.spread_pct, 2);
           const carry = pct(route.funding_pct, 3);
           for (const row of rows) {
-            for (const spread of row.querySelectorAll("[data-live-spread]")) {
+            // The outer group and its leader row intentionally share a route
+            // key.  Querying through the whole <details> subtree made one
+            // leader tick overwrite every expanded route beneath it.  The
+            // group owns only its direct summary; child rows are independently
+            // matched and updated by their own exact route keys.
+            const liveScope = row.matches("details")
+              ? (row.querySelector(":scope > summary") || row)
+              : row;
+            for (const spread of liveScope.querySelectorAll("[data-live-spread]")) {
               // A tick that carries no number is the absence of news, not news
               // that the spread is gone. Writing "—" over a value the server
               // rendered seconds earlier emptied the board within a few ticks
@@ -5442,7 +5429,19 @@ def render_board_stream_script(
                 flash(spread);
               }
             }
-            for (const funding of row.querySelectorAll("[data-live-funding]")) {
+            const basisText = route.spread_basis === "top_book"
+              ? "top book · depth not measured"
+              : route.spread_basis === "retained_matched_vwap"
+              ? "__PROBE__ VWAP · retained matched quote"
+              : route.spread_basis === "matched_vwap"
+              ? "__PROBE__ VWAP"
+              : null;
+            if (basisText) {
+              for (const basis of liveScope.querySelectorAll("[data-live-spread-basis]")) {
+                if (basis.textContent.trim() !== basisText) basis.textContent = basisText;
+              }
+            }
+            for (const funding of liveScope.querySelectorAll("[data-live-funding]")) {
               if (carry && funding.textContent.trim() !== carry) {
                 funding.textContent = carry;
                 flash(funding);
@@ -5465,14 +5464,14 @@ def render_board_stream_script(
         }
       });
     })();
-    </script>""".replace("__SUFFIX__", suffix).replace("__ENDPOINT__", endpoint)
+    </script>""".replace("__SUFFIX__", suffix).replace("__ENDPOINT__", endpoint).replace("__PROBE__", PROBE_LABEL)
 
 
 #: One computation of live prices, shared by every open stream. Re-pricing per
 #: connection would multiply the cost by the number of readers, which is what
 #: kept the tick at three seconds; sharing it makes the cadence independent of
 #: how many people are watching.
-_LIVE_TICK: dict[tuple[Any, ...], tuple[float, dict[str, tuple[Any, Any]]]] = {}
+_LIVE_TICK: dict[tuple[Any, ...], tuple[float, dict[str, tuple[Any, ...]]]] = {}
 _LIVE_TICK_LOCK = threading.Lock()
 #: The book writer flushes every 0.25s, so there is nothing to gain below that.
 LIVE_TICK_SECONDS = max(0.2, float(os.environ.get("SPREADBOARD_LIVE_TICK_SECONDS", "0.5")))
@@ -5480,7 +5479,7 @@ LIVE_TICK_SECONDS = max(0.2, float(os.environ.get("SPREADBOARD_LIVE_TICK_SECONDS
 
 def _shared_stream_rows(
     board_path: Path, query: dict[str, list[str]]
-) -> dict[str, tuple[Any, Any]]:
+) -> dict[str, tuple[Any, ...]]:
     """Current prices for a lane, computed once however many streams want them."""
     key = (
         str(board_path),
@@ -5500,7 +5499,7 @@ def _shared_stream_rows(
     return rows
 
 
-def _board_stream_rows(board_path: Path, query: dict[str, list[str]]) -> dict[str, tuple[Any, Any]]:
+def _board_stream_rows(board_path: Path, query: dict[str, list[str]]) -> dict[str, tuple[Any, ...]]:
     """Current spread and funding per route, for the lane the member is viewing.
 
     The grouped board is cached because building it is expensive, so prices in it
@@ -5519,11 +5518,13 @@ def _board_stream_rows(board_path: Path, query: dict[str, list[str]]) -> dict[st
         for route in group.get("routes") or []
         if isinstance(route, dict) and route.get("route_key")
     ]
-    live = api_spreads.live_prices_for(routes)
-    rows: dict[str, tuple[Any, Any]] = {}
+    live = api_spreads.live_route_updates_for(routes, include_basis=True)
+    rows: dict[str, tuple[Any, ...]] = {}
     for route in routes:
         key = str(route["route_key"])
-        spread, funding = live.get(key, (None, None))
+        spread, funding, _quote_ts_us, spread_basis = live.get(
+            key, (None, None, None, None)
+        )
         # The websocket cache is an acceleration lane, not the source of truth
         # for whether an exact bulk/DEX quote still exists. On restart (and on
         # venues without a resident websocket) live_prices_for deliberately
@@ -5534,9 +5535,14 @@ def _board_stream_rows(board_path: Path, query: dict[str, list[str]]) -> dict[st
             spread = _float_or_none(route.get("depth_weighted_spread_pct"))
             if spread is None:
                 spread = _float_or_none(route.get("executable_spread_pct"))
+                if spread is not None:
+                    spread_basis = "top_book"
+            else:
+                spread_basis = "retained_matched_vwap"
         rows[key] = (
             spread,
             funding if funding is not None else route.get("funding_daily_pct"),
+            spread_basis,
         )
     return rows
 
@@ -5558,6 +5564,25 @@ def render_markets_page(
     pagination = data.get("pagination") or {}
     pro_view = (_query_first(query, "view") or "grouped") == "table"
     source_ready = data.get("ok") and api_health_data.get("status") == "fresh"
+    market_wide_sidebar = _query_bool(query, "funding_only") or any(
+        _query_first(query, key)
+        for key in (
+            "kind",
+            "q",
+            "exchange",
+            "asset_class",
+            "min_spread_pct",
+            "min_abs_funding_24h_pct",
+            "quote",
+            "min_volume_24h_usd",
+            "min_market_cap_usd",
+            "max_market_cap_usd",
+            "min_fdv_usd",
+            "max_fdv_usd",
+            "max_listing_age_days",
+            "persistence",
+        )
+    )
     # Prices arrive over the stream, so a reload is only needed to pick up
     # structural changes -- a token entering or leaving the board. Reloading the
     # page every 30s on top of the push just made the board flicker.
@@ -5590,7 +5615,9 @@ def render_markets_page(
         else '<div class="token-group-list">'
         + (
             "".join(render_market_token_group(group) for group in groups)
-            or render_live_market_empty(api_health_data)
+            or render_market_lane_empty(
+                str(_query_first(query, "kind") or "").upper(), api_health_data
+            )
         )
         + "</div>"
     )
@@ -5637,7 +5664,7 @@ def render_markets_page(
             signed_in=user is not None,
         )
     }
-      <section class="market-layout terminal-layout grouped-layout">
+      <section class="market-layout terminal-layout grouped-layout {"pro-table-layout" if pro_view else ""}">
         <main class="market-main">
           <div class="panel-head flat token-board-title">
             <div>
@@ -5656,11 +5683,11 @@ def render_markets_page(
           {market_results}
           {render_market_pagination(query, pagination)}
           {render_board_stream_script(query)}
-          <script>document.querySelector('[data-share-market]')?.addEventListener('click',async event=>{{try{{await navigator.clipboard.writeText(location.href);event.currentTarget.textContent='Link copied';}}catch(error){{event.currentTarget.textContent='Copy unavailable';}}}});</script>
+          <script>document.addEventListener('click',async event=>{{const button=event.target.closest('[data-share-market]');if(!button)return;try{{await navigator.clipboard.writeText(location.href);button.textContent='Link copied';}}catch(error){{button.textContent='Copy unavailable';}}}});</script>
         </main>
         <aside class="market-side">
-          {render_market_lane("Top Arbitrage Edges", data.get("top_edges") or [], "edge")}
-          {render_market_lane("Top Funding Pairs", data.get("top_funding") or [], "funding")}
+          {render_market_lane("Top Arbitrage Edges", data.get("top_edges") or [], "edge", market_wide=market_wide_sidebar)}
+          {render_market_lane("Top Funding Pairs", data.get("top_funding") or [], "funding", market_wide=market_wide_sidebar)}
           <section class="market-side-panel chart-purpose">
             <div class="panel-head flat"><div><h2>Why Charts</h2><p>See whether an edge is persistent, converging, or a single print.</p></div></div>
             <a class="side-chart-link" href="/charts">Open spread history <span aria-hidden="true">→</span></a>
@@ -6154,6 +6181,64 @@ def render_live_market_empty(health: dict[str, Any]) -> str:
     """
 
 
+def render_market_lane_empty(selected_kind: str, health: dict[str, Any]) -> str:
+    """Distinguish a genuinely empty DEX lane from an unavailable provider.
+
+    The canonical CEX snapshot can be fresh while its nested DEX source failed
+    every chain. Calling that state "no matching routes" turns missing evidence
+    into a market conclusion, exactly when members most need the distinction.
+    """
+
+    kind = str(selected_kind or "").upper()
+    if kind not in {"DEX-FUTURES", "DEX-SPOT"}:
+        return render_live_market_empty(health)
+    source = health.get("dex_spot_source") or {}
+    status = str(source.get("status") or "absent")
+    rows = int(_float_or_none(source.get("rows")) or 0)
+    blockers = [str(item) for item in source.get("blockers") or []]
+    errors = [str(item) for item in source.get("errors") or []]
+    lane = "Futures-DEX" if kind == "DEX-FUTURES" else "Spot-DEX"
+
+    if rows == 0 and (errors or status == "partial"):
+        rejected = any(
+            phrase in error.casefold()
+            for error in errors
+            for phrase in ("no access", "access rejected", "ip validation")
+        )
+        title = (
+            "OKX DEX provider access was rejected"
+            if rejected
+            else "OKX DEX returned no verified quotes"
+        )
+        return f"""
+    <article class="live-market-empty dex-source-failure">
+      <strong>{h(title)}</strong>
+      <p>The latest cycle returned zero verified DEX quotes. This is not evidence that no DEX routes exist; the {h(lane)} lane is unavailable until exact-chain quotes resume.</p>
+      <span>DEX source degraded · CEX lanes remain live</span>
+    </article>
+    """
+    if "api_credentials_missing" in blockers or status in {"skipped", "absent"}:
+        return f"""
+    <article class="live-market-empty dex-source-failure">
+      <strong>OKX DEX feed is temporarily unavailable</strong>
+      <p>No {h(lane)} market conclusion is shown without verified exact-chain quotes.</p>
+      <span>DEX source reconnecting · CEX lanes remain live</span>
+    </article>
+    """
+    if status == "ok":
+        return (
+            '<p class="empty market-empty">OKX DEX quoting completed, but no verified '
+            f"{h(lane)} route matched these filters this cycle.</p>"
+        )
+    return f"""
+    <article class="live-market-empty dex-source-failure">
+      <strong>OKX DEX quoting is unavailable</strong>
+      <p>No {h(lane)} market conclusion is shown until verified exact-chain quotes resume.</p>
+      <span>Source status: {h(status)}</span>
+    </article>
+    """
+
+
 def render_funding_farm_empty(selected_farm: str, health: dict[str, Any]) -> str:
     """Explain an empty farm tab instead of rendering a blank list.
 
@@ -6164,29 +6249,7 @@ def render_funding_farm_empty(selected_farm: str, health: dict[str, Any]) -> str
 
     if selected_farm != "futures-dex":
         return render_live_market_empty(health)
-    source = health.get("dex_spot_source") or {}
-    status = str(source.get("status") or "absent")
-    blockers = [str(item) for item in source.get("blockers") or []]
-    if status in {"ok", "partial"}:
-        return (
-            '<p class="empty market-empty">OKX DEX quoting ran but no DEX route matched a '
-            "futures leg this cycle.</p>"
-        )
-    if "api_credentials_missing" in blockers or status in {"skipped", "absent"}:
-        return """
-    <article class="live-market-empty">
-      <strong>OKX DEX feed is temporarily unavailable</strong>
-      <p>Exact-chain DEX routes will return automatically when verified quotes resume.</p>
-      <span>Source status: reconnecting</span>
-    </article>
-    """
-    return f"""
-    <article class="live-market-empty">
-      <strong>OKX DEX quoting is unavailable</strong>
-      <p>{h("; ".join(blockers) or "The DEX quote source did not return rows this cycle.")}</p>
-      <span>Source status: {h(status)}</span>
-    </article>
-    """
+    return render_market_lane_empty("DEX-FUTURES", health)
 
 
 def render_market_token_group(group: dict[str, Any]) -> str:
@@ -6273,7 +6336,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         <div class="group-number">
           <span>{h(spread_heading)}</span>
           <strong class="{spread_class(spread_value)}" data-live-spread>{fmt_pct(spread_value)}</strong>
-          <em>{h(spread_note)}</em>
+          <em data-live-spread-basis>{h(spread_note)}</em>
         </div>
         <div class="group-number">
           <span>Best-route funding</span>
@@ -6504,6 +6567,12 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         if spread_current
         else "refreshing both legs"
     )
+    leg_funding_rates = " / ".join(
+        "n/a"
+        if str(row.get(f"{side}_market_type") or "").casefold() != "futures"
+        else fmt_signed_pct(row.get(f"{side}_funding_pct"), digits=4)
+        for side in ("long", "short")
+    )
     return f"""
     <article class="route-detail-row" data-route-key="{h(row.get("route_key") or "")}">
       <div class="route-leg buy">
@@ -6517,12 +6586,12 @@ def render_market_group_route(row: dict[str, Any]) -> str:
       </div>
       <div class="route-edge">
         <strong class="{spread_class(displayed_edge)}" data-live-spread>{fmt_pct(displayed_edge)}</strong>
-        <span>{h(spread_detail)}</span>
+        <span data-live-spread-basis>{h(spread_detail)}</span>
       </div>
       <div class="route-funding">
         <strong data-live-funding>{fmt_signed_pct(shown_funding, digits=3) if shown_funding is not None else "—"}</strong>
         <b>{h(funding_basis)} · {h(funding_economic_label(shown_funding, row))}</b>
-        <span>{fmt_signed_pct(row.get("long_funding_pct"), digits=4)} / {fmt_signed_pct(row.get("short_funding_pct"), digits=4)}</span>
+        <span>{leg_funding_rates}</span>
         <em>{h(funding_cadence_pair(row))}</em>
       </div>
       <div class="route-rails">{render_market_dw(row)}{render_market_event_badges(row)}{render_tokenized_guard_badge(row)}</div>
@@ -6614,9 +6683,9 @@ def render_market_filter_bar(
           {"".join(render_market_tab(label, _query_with(query, asset_class=value or None, offset=None), selected_asset_class == value, sum(int(item or 0) for item in asset_counts.values()) if not value else asset_counts.get(value, 0)) for value, label in (("", "All assets"), ("crypto", "Crypto"), ("tokenized", "Tokenized assets")))}
         </div>
       </div>
-      <form class="market-filter-form" method="get" action="/markets">
+      <form class="market-filter-form" data-refresh-preserve="markets-filters" method="get" action="/markets">
         <label><span>Token</span><input name="q" value="{h(_query_first(query, "q") or "")}" placeholder="SIREN, VANRY, GUA"></label>
-        <label><span>Exchanges</span><select name="exchange">
+        <label><span>Exchanges</span><select name="exchange" data-refresh-options>
           <option value="">All exchanges</option>
           {"".join(f'<option value="{h(item)}" {"selected" if item == exchange else ""}>{h(item)}</option>' for item in exchange_options)}
         </select></label>
@@ -6674,7 +6743,7 @@ def render_filter_preset_panel(presets: list[dict[str, Any]], *, signed_in: bool
         or "<em data-preset-empty>No saved presets yet</em>"
     )
     return f"""
-      <div class="filter-preset-row" data-filter-presets>
+      <div class="filter-preset-row" data-filter-presets data-refresh-preserve="markets-presets">
         <span>Presets</span><div class="filter-preset-list">{chips}</div>
         <form class="filter-preset-save" data-preset-form>
           <input name="name" maxlength="60" placeholder="Name current filters" aria-label="Preset name" required>
@@ -6692,24 +6761,61 @@ FILTER_PRESET_SCRIPT = r"""
   if (!root) return;
   const csrf = document.querySelector('[data-logout]')?.dataset.csrf || '';
   const status = root.querySelector('[data-preset-status]');
+  const list = root.querySelector('.filter-preset-list');
   const request = async (path, body) => {
     const response = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, body:JSON.stringify(body)});
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Preset request failed');
     return data;
   };
+  const addPresetChip = preset => {
+    if (!list || !preset || !Number.isFinite(Number(preset.id))) return;
+    list.querySelector('[data-preset-empty]')?.remove();
+    list.querySelector(`[data-preset-delete="${Number(preset.id)}"]`)?.closest('.filter-preset-chip')?.remove();
+    const chip = document.createElement('span');
+    chip.className = 'filter-preset-chip';
+    const link = document.createElement('a');
+    const encoded = new URLSearchParams(preset.query || {}).toString();
+    link.href = encoded ? `/markets?${encoded}` : '/markets';
+    link.textContent = String(preset.name || 'Saved preset');
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.dataset.presetDelete = String(preset.id);
+    remove.setAttribute('aria-label', `Delete ${link.textContent}`);
+    remove.textContent = '×';
+    chip.append(link, remove);
+    list.prepend(chip);
+  };
+  const showEmptyIfNeeded = () => {
+    if (!list || list.querySelector('.filter-preset-chip')) return;
+    const empty = document.createElement('em');
+    empty.dataset.presetEmpty = '';
+    empty.textContent = 'No saved presets yet';
+    list.append(empty);
+  };
   root.querySelector('[data-preset-form]')?.addEventListener('submit', async event => {
     event.preventDefault();
-    const name = new FormData(event.currentTarget).get('name');
+    const form = event.currentTarget;
+    const name = new FormData(form).get('name');
     const query = Object.fromEntries(new URLSearchParams(location.search));
     delete query.offset; delete query.limit;
-    try { await request('/api/filter-presets', {name, query}); location.reload(); }
+    try {
+      const data = await request('/api/filter-presets', {name, query});
+      addPresetChip(data.preset);
+      form.reset();
+      status.textContent = 'Preset saved.';
+    }
     catch (error) { status.textContent = error.message; }
   });
   root.addEventListener('click', async event => {
     const button = event.target.closest('[data-preset-delete]');
     if (!button) return;
-    try { await request('/api/filter-presets/delete', {id:Number(button.dataset.presetDelete)}); button.closest('.filter-preset-chip')?.remove(); }
+    try {
+      await request('/api/filter-presets/delete', {id:Number(button.dataset.presetDelete)});
+      button.closest('.filter-preset-chip')?.remove();
+      showEmptyIfNeeded();
+      status.textContent = 'Preset deleted.';
+    }
     catch (error) { status.textContent = error.message; }
   });
 })();
@@ -6753,8 +6859,8 @@ def render_pro_market_table(rows: list[dict[str, Any]]) -> str:
           <td data-label="Market evidence">{render_route_market_metadata(row)}</td>
           <td data-label="Buy"><strong>{h(row.get("long_venue"))}</strong><small>{h(leg_market_label(row.get("long_venue"), row.get("long_market_type")))} · {fmt_price(row.get("long_price"))}</small></td>
           <td data-label="Sell"><strong>{h(row.get("short_venue"))}</strong><small>{h(leg_market_label(row.get("short_venue"), row.get("short_market_type")))} · {fmt_price(row.get("short_price"))}</small></td>
-          <td data-label="Matched edge"><strong class="{spread_class(matched)}">{fmt_pct(matched)}</strong><small>{h(top_book)}</small></td>
-          <td data-label="Funding 24h"><strong>{fmt_signed_pct(funding_24h_value(row), digits=3)}</strong><small>{h(funding_cadence_pair(row))}</small>{render_persistence_badge(row)}</td>
+          <td data-label="Matched edge"><strong class="{spread_class(matched)}" data-live-spread>{fmt_pct(matched)}</strong><small data-live-spread-basis>{h(top_book)}</small></td>
+          <td data-label="Funding 24h"><strong>{fmt_signed_pct(funding_24h_value(row), digits=3)}</strong><small>{h(funding_24h_basis(row))} · {h(funding_cadence_pair(row))}</small>{render_persistence_badge(row)}</td>
           {render_carry_windows(row)}
           <td data-label="Depth"><strong>{fmt_money(row.get("depth_usd"))}</strong><small>{"matched" if not row.get("depth_unverified") else "unverified"}</small></td>
           <td data-label="Rail">{render_market_dw(row)}</td>
@@ -6850,6 +6956,10 @@ def render_net_edge_button(row: dict[str, Any]) -> str:
         "route_key": row.get("route_key"),
         "matched_edge_pct": _float_or_none(row.get("depth_weighted_spread_pct")),
         "current_funding_24h_pct": funding_24h_value(row),
+        "has_futures_leg": any(
+            str(row.get(f"{side}_market_type") or "").casefold() == "futures"
+            for side in ("long", "short")
+        ),
         "windows": windows,
     }
     return (
@@ -6860,8 +6970,9 @@ def render_net_edge_button(row: dict[str, Any]) -> str:
 
 
 def render_net_edge_dialog() -> str:
+    net_edge_script = NET_EDGE_SCRIPT.replace("{PROBE_LABEL}", PROBE_LABEL)
     return f"""
-    <dialog class="net-edge-dialog" id="netEdgeDialog" aria-labelledby="netEdgeTitle">
+    <dialog class="net-edge-dialog" id="netEdgeDialog" aria-labelledby="netEdgeTitle" data-refresh-preserve="markets-net-edge">
       <form method="dialog" class="net-edge-card">
         <header><div><span>Route economics</span><h2 id="netEdgeTitle">Net edge calculator</h2></div><button value="cancel" aria-label="Close calculator">×</button></header>
         <p data-net-route>Choose a route from the board.</p>
@@ -6880,14 +6991,14 @@ def render_net_edge_dialog() -> str:
           <article><span>Opening basis</span><strong data-net-opening>—</strong></article>
           <article><span>Funding</span><strong data-net-funding>—</strong></article>
           <article><span>Round-trip costs</span><strong data-net-costs>—</strong></article>
-          <article class="total"><span>Estimated net</span><strong data-net-total>—</strong></article>
+          <article class="total"><span data-net-total-label>Estimated net</span><strong data-net-total>—</strong></article>
           <article><span>Break-even</span><strong data-net-breakeven>—</strong></article>
           <article><span>Funding source</span><strong data-net-source>—</strong></article>
         </section>
         <p class="net-edge-note">Scenario estimate only. Unknown venue tiers, borrow costs, conversion, tax and market movement are not silently assumed.</p>
       </form>
     </dialog>
-    <script>{NET_EDGE_SCRIPT}</script>
+    <script>{net_edge_script}</script>
     """
 
 
@@ -6895,31 +7006,40 @@ NET_EDGE_SCRIPT = r"""
 (() => {
   const dialog = document.getElementById('netEdgeDialog');
   if (!dialog) return;
+  const form = dialog.querySelector('form');
   let route = null;
   const money = value => Number.isFinite(value) ? `${value >= 0 ? '+' : '-'}$${Math.abs(value).toFixed(2)}` : '—';
-  const number = name => Number(dialog.elements[name]?.value || 0);
+  const number = name => Number(form?.elements[name]?.value || 0);
   function calculate() {
     if (!route) return;
     const notional = Math.max(0, number('notional'));
     const days = Math.max(1, number('days'));
-    const exactApplies = Number(route.exact_quote_notional) === notional && Number.isFinite(Number(route.exact_matched_edge_pct));
-    const openingPct = exactApplies ? Number(route.exact_matched_edge_pct) : Number(route.board_matched_edge_pct || 0);
+    const exactQuoteAvailable = route.exact_quote_notional !== null && route.exact_quote_notional !== undefined && route.exact_quote_notional !== '' && Number.isFinite(Number(route.exact_quote_notional));
+    const exactEdgeAvailable = route.exact_matched_edge_pct !== null && route.exact_matched_edge_pct !== undefined && route.exact_matched_edge_pct !== '' && Number.isFinite(Number(route.exact_matched_edge_pct));
+    const exactApplies = exactQuoteAvailable && exactEdgeAvailable && Number(route.exact_quote_notional) === notional;
+    const boardAvailable = route.board_matched_edge_pct !== null && route.board_matched_edge_pct !== undefined && route.board_matched_edge_pct !== '' && Number.isFinite(Number(route.board_matched_edge_pct));
+    const openingPct = exactApplies ? Number(route.exact_matched_edge_pct) : (boardAvailable ? Number(route.board_matched_edge_pct) : NaN);
     const opening = notional * openingPct / 100;
     const fee = notional * Math.max(0, number('fee_pct')) / 100 * 4;
     const slippage = notional * Math.max(0, number('exit_slippage_pct')) / 100;
     const costs = fee + slippage + Math.max(0, number('transfer_usd'));
     const exact = route.windows?.[`${days}d`];
-    const daily = Number(route.current_funding_24h_pct);
-    const funding = Number.isFinite(Number(exact)) ? notional * Number(exact) / 100 : (Number.isFinite(daily) ? notional * daily * days / 100 : NaN);
-    const net = opening + funding - costs;
+    const exactAvailable = exact !== null && exact !== undefined && exact !== '' && Number.isFinite(Number(exact));
+    const dailyAvailable = route.current_funding_24h_pct !== null && route.current_funding_24h_pct !== undefined && route.current_funding_24h_pct !== '' && Number.isFinite(Number(route.current_funding_24h_pct));
+    const daily = dailyAvailable ? Number(route.current_funding_24h_pct) : NaN;
+    const fundingNotApplicable = route.has_futures_leg === false;
+    const funding = exactAvailable ? notional * Number(exact) / 100 : (Number.isFinite(daily) ? notional * daily * days / 100 : (fundingNotApplicable ? 0 : NaN));
+    const fundingKnown = Number.isFinite(funding);
+    const net = opening + (fundingKnown ? funding : 0) - costs;
     const dailyUsd = Number.isFinite(funding) ? funding / days : NaN;
     const breakEven = dailyUsd > 0 ? Math.max(0, (costs - opening) / dailyUsd) : NaN;
     dialog.querySelector('[data-net-opening]').textContent = money(opening);
     dialog.querySelector('[data-net-funding]').textContent = money(funding);
     dialog.querySelector('[data-net-costs]').textContent = money(-costs);
     dialog.querySelector('[data-net-total]').textContent = money(net);
-    dialog.querySelector('[data-net-breakeven]').textContent = Number.isFinite(breakEven) ? `${breakEven.toFixed(1)} days` : 'Not reached';
-    dialog.querySelector('[data-net-source]').textContent = Number.isFinite(Number(exact)) ? `Settled ${days}d` : (Number.isFinite(daily) ? 'Current rate projection' : 'Funding unavailable');
+    dialog.querySelector('[data-net-total-label]').textContent = fundingKnown ? 'Estimated net' : 'Net before funding';
+    dialog.querySelector('[data-net-breakeven]').textContent = !fundingKnown ? 'Funding unknown' : (fundingNotApplicable ? 'Not applicable' : (Number.isFinite(breakEven) ? `${breakEven.toFixed(1)} days` : 'Not reached'));
+    dialog.querySelector('[data-net-source]').textContent = exactAvailable ? `Settled ${days}d` : (Number.isFinite(daily) ? 'Current rate projection' : (fundingNotApplicable ? 'Not applicable · no futures leg' : 'Funding unavailable'));
   }
   async function quoteExact() {
     if (!route || !route.route_key) return;
@@ -6932,6 +7052,8 @@ NET_EDGE_SCRIPT = r"""
       const response = await fetch(`/api/size-quote/${encodeURIComponent(route.route_key)}?notional_usd=${encodeURIComponent(notional)}`, {credentials:'same-origin', cache:'no-store'});
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      const matchedAvailable = data.matched_spread_pct !== null && data.matched_spread_pct !== undefined && data.matched_spread_pct !== '' && Number.isFinite(Number(data.matched_spread_pct));
+      if (!matchedAvailable) throw new Error('exact_route_target_depth_unavailable');
       route.exact_quote_notional = Number(data.target_notional_usd);
       route.exact_matched_edge_pct = Number(data.matched_spread_pct);
       const gasAvailable = data.estimated_opening_gas_usd !== null && data.estimated_opening_gas_usd !== undefined && data.estimated_opening_gas_usd !== '' && Number.isFinite(Number(data.estimated_opening_gas_usd));
@@ -6951,7 +7073,8 @@ NET_EDGE_SCRIPT = r"""
     route.exact_quote_notional = null;
     route.exact_matched_edge_pct = null;
     dialog.querySelector('[data-net-quote-state]').textContent = 'The opening basis currently uses the standardized {PROBE_LABEL} matched quote.';
-    dialog.querySelector('[data-net-route]').textContent = `${route.token || 'Route'} · matched edge ${Number(route.matched_edge_pct || 0).toFixed(3)}%`;
+    const matchedAvailable = route.matched_edge_pct !== null && route.matched_edge_pct !== undefined && route.matched_edge_pct !== '' && Number.isFinite(Number(route.matched_edge_pct));
+    dialog.querySelector('[data-net-route]').textContent = matchedAvailable ? `${route.token || 'Route'} · matched edge ${Number(route.matched_edge_pct).toFixed(3)}%` : `${route.token || 'Route'} · matched edge unavailable at the standardized size`;
     calculate();
     if (typeof dialog.showModal === 'function') dialog.showModal();
   });
@@ -7179,7 +7302,18 @@ def leg_pays_funding(row: dict[str, Any], side: str) -> bool:
 
 
 def funding_24h_value(row: dict[str, Any]) -> float | None:
-    return _float_or_none(row.get("funding_24h_pct"))
+    settled = _float_or_none(row.get("funding_24h_pct"))
+    if settled is not None:
+        return settled
+    return _float_or_none(row.get("funding_projected_24h_pct"))
+
+
+def funding_24h_basis(row: dict[str, Any]) -> str:
+    if _float_or_none(row.get("funding_24h_pct")) is not None:
+        return "settled 24h"
+    if _float_or_none(row.get("funding_projected_24h_pct")) is not None:
+        return "24h at current rate"
+    return "funding unavailable"
 
 
 def funding_economic_label(value: Any, row: dict[str, Any]) -> str:
@@ -7229,10 +7363,24 @@ def rail_text(value: Any) -> str:
     return "Not reported"
 
 
-def render_market_lane(title: str, rows: list[dict[str, Any]], kind: str) -> str:
+def render_market_lane(
+    title: str,
+    rows: list[dict[str, Any]],
+    kind: str,
+    *,
+    market_wide: bool = False,
+) -> str:
+    shown_title = title.replace("Top ", "Market-wide ", 1) if market_wide else title
+    description = (
+        "Unique assets ranked by matched " + PROBE_LABEL + " VWAP edge"
+        if kind == "edge"
+        else "Unique assets ranked by paired carry"
+    )
+    if market_wide:
+        description = "Across all current lanes · " + description.casefold()
     return f"""
     <section class="market-side-panel">
-      <div class="panel-head flat"><div><h2>{h(title)}</h2><p>{"Unique assets ranked by matched " + PROBE_LABEL + " VWAP edge" if kind == "edge" else "Unique assets ranked by paired carry"}</p></div></div>
+      <div class="panel-head flat"><div><h2>{h(shown_title)}</h2><p>{h(description)}</p></div></div>
       <div class="market-mini-list">
         {"".join(render_market_mini(row, kind) for row in rows[:8]) or '<p class="watch-empty">No rows in this lane.</p>'}
       </div>
@@ -8392,6 +8540,7 @@ def render_pair_size_quote_panel(row: dict[str, Any]) -> str:
           const response = await fetch(endpoint, {{credentials:'same-origin', cache:'no-store'}});
           const data = await response.json();
           if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${{response.status}}`);
+          if (data.depth_proven_at_target !== true || !numeric(data.matched_spread_pct)) throw new Error('exact_route_target_depth_unavailable');
           root.querySelector('[data-size-top]').textContent = pct(data.top_book_spread_pct);
           root.querySelector('[data-size-matched]').textContent = pct(data.matched_spread_pct);
           root.querySelector('[data-size-matched-note]').textContent = `$${{Number(data.target_notional_usd).toLocaleString()}} fully matched`;
@@ -11915,6 +12064,12 @@ def position_funding_note(item: dict[str, Any]) -> str:
         return "No futures leg: settled funding is not applicable."
     if status == "legacy_manual":
         return "Legacy manually recorded funding is included; connect an exchange ledger for automatic updates."
+    if item.get("total_pnl_excludes_funding"):
+        if status == "position_changed":
+            return "Position inputs changed; shown Total PnL excludes settled funding until the private ledger refreshes."
+        if status == "stale":
+            return "Funding ledger is stale; shown Total PnL excludes settled funding rather than treating old cashflows as current."
+        return "Funding ledger is not connected; shown Total PnL excludes settled funding rather than assuming it is zero."
     if status == "position_changed":
         return "Position inputs changed; total PnL is withheld until the funding ledger refreshes."
     if status == "stale":
@@ -15516,7 +15671,11 @@ def render_auto_refresh_script() -> str:
 (() => {
   const root = document.querySelector("[data-refresh]");
   if (!root) return;
-  const seconds = Math.max(3, Number.parseInt(root.dataset.refresh || "30", 10) || 30);
+  const refreshSeconds = element => Math.max(
+    3,
+    Number.parseInt(element?.dataset.refresh || "30", 10) || 30,
+  );
+  let seconds = refreshSeconds(root);
   const forceRunning = root.dataset.refreshForce === "1";
   const pauseKey = "spreadboard.autoRefreshPaused";
   const scrollKey = `spreadboard.scroll:${location.pathname}${location.search}`;
@@ -15539,6 +15698,7 @@ def render_auto_refresh_script() -> str:
   const toggle = pill.querySelector("#autoRefreshToggle");
   let remaining = seconds;
   let paused = forceRunning ? false : localStorage.getItem(pauseKey) === "1";
+  let refreshPending = false;
 
   function editableActive() {
     const active = document.activeElement;
@@ -15562,17 +15722,63 @@ def render_auto_refresh_script() -> str:
   });
 
   async function refreshInPlace() {
+    if (refreshPending) return;
+    refreshPending = true;
     try {
       const response = await fetch(location.href, { headers: { "X-Requested-With": "fetch" } });
       if (!response.ok) return;
       const parsed = new DOMParser().parseFromString(await response.text(), "text/html");
       const next = parsed.querySelector("[data-refresh]");
       const current = document.querySelector("[data-refresh]");
-      if (next && current) current.replaceWith(next);
+      if (next && current) {
+        // DOMParser-created scripts are intentionally inert. Replacing a live
+        // form or dialog with its parsed twin would therefore leave controls
+        // that look normal but have no event handlers. Pages mark stable
+        // interactive islands explicitly; transplanting the already-live node
+        // also preserves unsaved input and an open dialog. Market rows and
+        // other server-rendered evidence still update around those islands.
+        for (const currentIsland of current.querySelectorAll("[data-refresh-preserve]")) {
+          const key = currentIsland.dataset.refreshPreserve;
+          if (!key || currentIsland.parentElement?.closest("[data-refresh-preserve]")) continue;
+          const nextIsland = [...next.querySelectorAll("[data-refresh-preserve]")]
+            .find(candidate => candidate.dataset.refreshPreserve === key);
+          if (nextIsland) {
+            // A reconnecting market shell can know no exchange options yet.
+            // Preserve the member's live form, but merge server-discovered
+            // choices into marked selects so that recovery does not leave an
+            // empty control in front of a populated route table.
+            for (const incomingSelect of nextIsland.querySelectorAll("select[data-refresh-options]")) {
+              const existingSelect = [...currentIsland.querySelectorAll("select[data-refresh-options]")]
+                .find(candidate => candidate.name === incomingSelect.name);
+              if (!existingSelect) continue;
+              const existingValues = new Set([...existingSelect.options].map(option => option.value));
+              for (const option of incomingSelect.options) {
+                if (existingValues.has(option.value)) continue;
+                existingSelect.append(option.cloneNode(true));
+                existingValues.add(option.value);
+              }
+            }
+            nextIsland.replaceWith(currentIsland);
+          }
+        }
+        current.replaceWith(next);
+        // A board opened during a reconnect starts at five seconds.  Once the
+        // fetched shell says it is live, adopt its five-minute structural
+        // cadence; retaining the startup interval rebuilt the full page twelve
+        // times a minute even though SSE already streamed every price.
+        seconds = refreshSeconds(next);
+        remaining = seconds;
+      }
     } catch (error) {
       // A failed refresh is a missed tick, not a reason to disturb the page.
+    } finally {
+      refreshPending = false;
     }
   }
+
+  // A deterministic hook lets diagnostics exercise the exact production
+  // refresh path without waiting for the five-minute structural cadence.
+  document.addEventListener("spreadboard:refresh-now", refreshInPlace);
 
   render();
   setInterval(() => {
@@ -16203,11 +16409,11 @@ main { max-width: none; margin: 0; padding: 32px 24px 0; }
 .pro-market-table th { position:sticky; top:0; z-index:1; padding:9px 10px; background:var(--terminal-shell); color:var(--terminal-shell-text); text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.05em; white-space:nowrap; }
 .pro-market-table td { padding:10px; border-top:1px solid var(--terminal-line); vertical-align:middle; font-variant-numeric:tabular-nums; }
 .pro-market-table tbody tr:hover { background:var(--terminal-row-hover); }
-.pro-market-table td > strong, .pro-market-table td > small { display:block; white-space:nowrap; }
-.pro-market-table td > small { margin-top:3px; color:var(--terminal-muted); font-size:10px; }
+.pro-market-table td > strong { display:block; white-space:nowrap; }
+.pro-market-table td > small { display:block; margin-top:3px; color:var(--terminal-muted); font-size:10px; line-height:1.25; white-space:normal; }
 .pro-token { color:var(--terminal-text); font-size:14px; font-weight:950; text-decoration:none; }
-.pro-actions { white-space:nowrap; }
-.pro-actions > * { margin-right:6px; }
+.pro-actions { min-width:118px; white-space:normal; }
+.pro-actions > * { margin:0 4px 4px 0; }
 .pro-actions a { color:var(--terminal-accent); font-weight:850; text-decoration:none; }
 .persistence-badge { display:inline-flex; width:max-content; margin-top:5px; padding:2px 6px; border-radius:999px; font-size:9px; font-weight:900; background:var(--terminal-panel-2); color:var(--terminal-muted); }
 .persistence-badge.persistent { background:var(--terminal-accent-soft); color:var(--accent-ink); }
@@ -18035,6 +18241,8 @@ main { padding:22px 24px 56px; }
 .advanced-market-filters,.filter-preset-chip,.filter-preset-save input { border-radius:2px; background:transparent; }
 
 .terminal-layout { grid-template-columns:minmax(0,1fr) 290px; gap:22px; }
+.pro-table-layout { grid-template-columns:minmax(0,1fr); }
+.pro-table-layout .market-side { grid-template-columns:repeat(3,minmax(0,1fr)); gap:22px; border-top:1px solid var(--terminal-line); }
 .market-main,.market-side { gap:0; }
 .panel-head.flat { padding:16px 0 10px; border-bottom:1px solid var(--terminal-line); }
 .panel-head h2,.token-board-title h2,.terminal-table-title h2 { font-size:15px; font-weight:650; letter-spacing:-.01em; }
@@ -18160,6 +18368,7 @@ main { padding:22px 24px 56px; }
   .terminal-live-box strong { font-size:16px; }
   .terminal-kpi,.terminal-kpis article,.terminal-tape article { min-height:64px; padding:9px 10px; }
   .terminal-layout { grid-template-columns:1fr; gap:20px; }
+  .pro-table-layout .market-side { grid-template-columns:1fr; gap:0; }
   .token-route-ledger-head,.funding-ledger-head { display:none; }
   .token-route-summary > .best-route > span,.token-route-summary > .group-number > span,.token-route-summary > .group-routes > span,
   .funding-token-group > summary > div:not(.asset-identity) > span:first-child,

@@ -20,6 +20,8 @@ Two invariants keep it fed:
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from spreadboard import api_spreads, live_book_cache
@@ -96,6 +98,21 @@ def test_the_streamed_number_matches_what_the_page_renders(
     assert spread == pytest.approx(expected)
 
 
+def test_a_thin_live_tick_identifies_itself_as_top_book(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The number is useful and must remain visible, but it cannot retain a
+    matched-VWAP label when the current ladders do not fill the probe size.
+    """
+    _books(monkeypatch)
+
+    update = api_spreads.live_route_updates_for([_route()], include_basis=True)[
+        "T|Gate|Spot|Bybit|Futures"
+    ]
+
+    assert update[3] == "top_book"
+
+
 def test_a_proven_route_still_reports_its_matched_vwap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -150,3 +167,66 @@ def test_the_headline_is_not_blanked_by_a_tick_without_a_number() -> None:
 
     source = inspect.getsource(server.render_board_stream_script)
     assert 'pct(payload.max_spread_pct, 1) || "—"' not in source
+
+
+def test_fast_quote_delta_corrects_an_expanded_route_without_resident_books(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Expanded catalogue pairs are broader than the websocket subscription.
+
+    OPENAI Bitget->Phemex retained the group's old +4.69% in production while
+    the current fast quote was +0.56%.  The push path must use that current
+    exact-leg delta when neither book happens to be resident.
+    """
+    snapshot = tmp_path / "api_discovery_latest.json"
+    snapshot.write_text("{}")
+    delta = tmp_path / "api_discovery_fast_quotes.json"
+    delta.write_text(
+        json.dumps(
+            {
+                "updated_at": "2026-08-20T23:22:25Z",
+                "rows": [
+                    {
+                        "token": "OPENAI",
+                        "long_venue": "Bitget",
+                        "long_market_type": "Futures",
+                        "short_venue": "Phemex",
+                        "short_market_type": "Futures",
+                        "depth_weighted_spread_pct": 0.5568672572,
+                        "funding_daily_pct": 0.015,
+                        "quote_ts_us": 1_787_268_022_495_800,
+                        "notes": {
+                            "route_inputs": {
+                                "long": {"symbol": "OPENAI/USDT:USDT"},
+                                "short": {"symbol": "OPENAI/USDT:USDT"},
+                            }
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(api_spreads, "DEFAULT_API_DISCOVERY_PATH", snapshot)
+    monkeypatch.setattr(api_spreads.time, "time", lambda: 1_787_268_032.0)
+
+    def no_resident_books(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(live_book_cache, "load_live_books_by_keys", no_resident_books)
+    monkeypatch.setattr("spreadboard.bulk_quotes.load_funding", dict)
+    route = {
+        "route_key": "CUSTOM:openai-bitget-phemex",
+        "token": "OPENAI",
+        "long_venue": "Bitget",
+        "long_market_type": "Futures",
+        "long_market_symbol": "OPENAI/USDT:USDT",
+        "short_venue": "Phemex",
+        "short_market_type": "Futures",
+        "short_market_symbol": "OPENAI/USDT:USDT",
+    }
+
+    update = api_spreads.live_route_updates_for([route], include_basis=True)[route["route_key"]]
+
+    assert update[0] == pytest.approx(0.5568672572)
+    assert update[1] == pytest.approx(0.015)
+    assert update[3] == "matched_vwap"

@@ -476,7 +476,7 @@ def group(payload: dict[str, Any]) -> dict[str, Any]:
     funding_route = (
         max(funding_routes, key=lambda row: float(row["funding_projected_24h_pct"]))
         if funding_routes
-        else spread_route
+        else None
     )
     venues = sorted(
         {
@@ -505,8 +505,14 @@ def group(payload: dict[str, Any]) -> dict[str, Any]:
             _spread_rank(spread_route) if current_spread_routes else None
         ),
         "best_route": spread_route,
-        "best_funding_24h_pct": funding_route.get("funding_projected_24h_pct"),
-        "best_funding_24h_basis": "current_rate_projection",
+        "best_funding_24h_pct": (
+            funding_route.get("funding_projected_24h_pct")
+            if funding_route is not None
+            else None
+        ),
+        "best_funding_24h_basis": (
+            "current_rate_projection" if funding_route is not None else None
+        ),
         "best_funding_route": funding_route,
         "age_min": age,
         "href": f"/token/{payload.get('token')}",
@@ -520,23 +526,24 @@ def with_routes(
     """Merge current identity-aware DEX rows into a complete CEX pair payload."""
 
     routes: list[dict[str, Any]] = []
-    seen: set[tuple[Any, ...]] = set()
+    seen: dict[tuple[Any, ...], int] = {}
     for row in [*(payload.get("routes") or []), *extra_routes]:
         if not isinstance(row, dict):
             continue
-        identity = (
-            row.get("route_key"),
-            row.get("long_venue"),
-            row.get("long_market_type"),
-            row.get("long_market_symbol"),
-            row.get("short_venue"),
-            row.get("short_market_type"),
-            row.get("short_market_symbol"),
-        )
+        identity = _merge_route_identity(row)
         if identity in seen:
+            existing = routes[seen[identity]]
+            # The warm catalogue owns the current exact-book economics. The
+            # bounded scanner can still carry evidence the catalogue does not,
+            # notably settled 1d/7d/30d windows and provider metadata. Fill
+            # only missing fields so that evidence survives without replacing
+            # the fresher matched quote or the canonical chart route.
+            for key, value in row.items():
+                if key not in existing or existing.get(key) is None:
+                    existing[key] = value
             continue
-        seen.add(identity)
-        routes.append(row)
+        seen[identity] = len(routes)
+        routes.append(dict(row))
     routes.sort(
         key=lambda row: (
             _spread_rank(row),
@@ -561,6 +568,37 @@ def with_routes(
         }
     )
     return result
+
+
+def _merge_route_identity(row: dict[str, Any]) -> tuple[Any, ...]:
+    """Exact economic leg identity, independent of route-key serialization."""
+
+    route_key = str(row.get("route_key") or "")
+
+    def leg(side: str) -> tuple[Any, ...]:
+        venue = str(row.get(f"{side}_venue") or "").casefold()
+        market_type = str(row.get(f"{side}_market_type") or "").casefold()
+        symbol = str(row.get(f"{side}_market_symbol") or "").upper()
+        if symbol:
+            locator: tuple[Any, ...] = ("symbol", symbol)
+        elif "dex" in venue:
+            locator = (
+                "contract",
+                str(row.get("dex_chain") or "").casefold(),
+                str(row.get("dex_contract") or "").casefold(),
+            )
+        else:
+            # Incomplete identities must never collapse merely because both
+            # omitted a symbol; fall back to their own route key.
+            locator = ("route", route_key, side)
+        return venue, market_type, *locator
+
+    return (
+        str(row.get("token") or "").upper(),
+        row.get("route_kind"),
+        leg("long"),
+        leg("short"),
+    )
 
 
 def all_token_summaries(
@@ -900,6 +938,12 @@ def _net_daily(
     long_funding: dict[str, Any],
     short_funding: dict[str, Any],
 ) -> float | None:
+    # Spot legs contribute zero to a real futures farm, but a Spot-Spot route
+    # has no perpetual-funding mechanism at all. Returning 0.0 for that case
+    # fabricated a funding measurement and promoted Spot-Spot leaders into the
+    # board's Top Funding Pairs lane.
+    if long_leg.market_type != "Futures" and short_leg.market_type != "Futures":
+        return None
     long_daily = _leg_daily(long_leg, long_funding)
     short_daily = _leg_daily(short_leg, short_funding)
     if long_daily is None or short_daily is None:

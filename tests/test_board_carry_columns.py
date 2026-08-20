@@ -64,3 +64,20 @@ def test_every_row_has_one_cell_per_header() -> None:
     cells = table.count("<td ")
 
     assert headers == cells, f"{headers} headers but {cells} cells"
+
+
+def test_pro_table_spread_and_basis_are_connected_to_the_live_stream() -> None:
+    """The page says it streams order books, but Pro Table used to omit the
+    hooks that its grouped view exposes, leaving every table edge frozen.
+    """
+    row = dict(
+        ROW,
+        age_min=0.1,
+        depth_weighted_spread_pct=1.25,
+        executable_spread_pct=1.4,
+    )
+
+    table = server.render_pro_market_table([row])
+
+    assert "data-live-spread" in table
+    assert "data-live-spread-basis" in table

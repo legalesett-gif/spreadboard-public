@@ -348,7 +348,7 @@ def test_the_warm_set_fits_the_board_cache_without_evicting_itself() -> None:
     # The warm pass must not evict its own earlier entries.
     assert entries > len(WARM_QUERIES)
     # ...and the tail stays bounded. The bound is applied twice, to
-    # _MARKET_CACHE and to the stale-while-revalidate copy behind it.
+    # the one bounded current-generation _MARKET_CACHE.
     assert entries <= 24
 
 

@@ -49,10 +49,10 @@ services:
       SPREADBOARD_FAST_QUOTE_WORKERS: "6"
       SPREADBOARD_DEX_QUOTE_CHUNK_SIZE: "8"
       SPREADBOARD_FAST_QUOTE_TIMEOUT_SECONDS: "300"
-      # Heavy structural view generation runs in the background and the web
-      # server serves the preceding complete structure with live price pushes
-      # meanwhile. Rebuilding all eleven views every five minutes saturated
-      # both CPUs and made health/page requests wait 50-78 seconds.
+      # Heavy structural view generation runs in the background. A response is
+      # served only from the current snapshot signature; live price pushes keep
+      # that same generation moving between builds. Rebuilding all eleven views
+      # every five minutes saturated both CPUs and made requests wait 50-78s.
       SPREADBOARD_WARM_INTERVAL_SECONDS: "900"
       SPREADBOARD_TOKEN_RANKING_SECONDS: "120"
       # Live books still overlay every response immediately. Rebuilding the
@@ -72,8 +72,7 @@ services:
       # view at limit=500 is +83MB, while every lane query after them adds
       # 0-8MB because they share the parsed snapshot. The bound exists to stop
       # ordinary traffic evicting what the warmer just built and to cap the
-      # tail -- it is applied twice, to _MARKET_CACHE and to the
-      # stale-while-revalidate copy behind it.
+      # tail while retaining every routinely warmed current-generation view.
       # The warmer builds 11 views; 20 left ~9 tail entries churning on a box
       # whose ceiling is 6g and which peaked at 5.1g. This is the code default
       # and still holds every warmed view resident.
@@ -81,7 +80,7 @@ services:
       # Each structural build materialises the full live universe. Production
       # stack traces showed two at once while the cgroup was throttled, causing
       # intermittent page stalls and a rising memory tail. The previous
-      # complete view remains available through stale-while-revalidate.
+      # a second full build cannot overlap the first.
       SPREADBOARD_MARKET_BUILD_SLOTS: "1"
       # Live collectors keep the strict quote cadence but yield CPU to HTTP and
       # the one admitted structural build when the four-vCPU host is busy.

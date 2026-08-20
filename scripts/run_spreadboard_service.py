@@ -1149,10 +1149,6 @@ def _invalidate_market_price_caches() -> None:
         api_spreads._RESULT_CACHE.clear()
     with server_module._MARKET_CACHE_LOCK:
         server_module._MARKET_CACHE.clear()
-        # Preserve the previous structural generation.  Every visible price is
-        # replaced by the live stream within seconds, while deleting this copy
-        # made /free and the first member page wait 15-30 seconds for a rebuild
-        # after every bulk quote pass and look completely unavailable.
 
 
 def _board_path() -> Path:
@@ -1613,7 +1609,6 @@ class MemoryWatchdog(threading.Thread):
                 _log(
                     "memory "
                     f"market={len(server_module._MARKET_CACHE)} "
-                    f"stale={len(server_module._MARKET_STALE_CACHE)} "
                     f"result={len(api_spreads._RESULT_CACHE)} "
                     f"tick={len(server_module._LIVE_TICK)} "
                     f"threads={threading.active_count()}"

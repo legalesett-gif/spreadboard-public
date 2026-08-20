@@ -456,6 +456,43 @@ def test_member_size_quote_reports_requested_depth_and_directional_dex_cost() ->
     assert f"isolated from the standard {server.PROBE_LABEL} rankings" in " ".join(payload["limitations"])
 
 
+def test_member_size_quote_rejects_a_missing_directional_vwap() -> None:
+    """An exact-size quote is not proven when the route's required sell-side
+    bid VWAP is missing.  Production previously returned ``ok: true`` and
+    ``depth_proven_at_target: true`` while ``matched_spread_pct`` was null.
+    """
+
+    row = {
+        "route_key": "OSMO|Mexc|Spot|Kucoin|Spot",
+        "token": "OSMO",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "long_market_symbol": "OSMO/USDT",
+        "short_venue": "Kucoin",
+        "short_market_type": "Spot",
+        "short_market_symbol": "OSMO/USDT",
+        "executable_spread_pct": -0.9,
+        "depth_weighted_spread_pct": None,
+        "notes": {
+            "route_inputs": {
+                "long": {"ask": 0.04098, "ask_vwap": 0.04369},
+                "short": {"bid": 0.0406, "bid_vwap": None},
+            }
+        },
+    }
+
+    payload = server._member_size_quote_payload(
+        row, target_notional_usd=1000, duration_ms=1200
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"] == "exact_route_target_depth_unavailable"
+    assert payload["depth_proven_at_target"] is False
+    assert payload["matched_spread_pct"] is None
+    assert payload["legs"]["long"]["matched_vwap"] == pytest.approx(0.04369)
+    assert payload["legs"]["short"]["matched_vwap"] is None
+
+
 def test_member_size_quote_cache_single_flights_identical_route_and_size(monkeypatch) -> None:
     calls: list[float] = []
 
@@ -490,6 +527,8 @@ def test_member_size_quote_ui_requotes_without_changing_canonical_board() -> Non
     assert "Quote current books at this size" in calculator
     assert f"standardized {server.PROBE_LABEL} matched quote" in calculator
     assert "/api/size-quote/" in calculator
+    assert "data.depth_proven_at_target !== true" in html
+    assert "!numeric(data.matched_spread_pct)" in html
     assert ".pair-cockpit { display: grid; gap: 14px; min-width: 0; max-width: 100%;" in server.APP_CSS
     assert ".pair-page, .pair-cockpit, .pair-cockpit-head, .pair-cockpit-grid" in stylesheet
 

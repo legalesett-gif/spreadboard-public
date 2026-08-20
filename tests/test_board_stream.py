@@ -46,7 +46,13 @@ def test_board_stream_emits_a_board_event(
     )
     monkeypatch.setattr(
         "spreadboard.server._board_stream_rows",
-        lambda board_path, query: {"BINANCE:spot:BTC/USDT>OKX:swap:BTC/USDT:USDT": (1.25, 0.031)},
+        lambda board_path, query: {
+            "BINANCE:spot:BTC/USDT>OKX:swap:BTC/USDT:USDT": (
+                1.25,
+                0.031,
+                "top_book",
+            )
+        },
     )
 
     server = _serve(tmp_path)
@@ -73,6 +79,7 @@ def test_board_stream_emits_a_board_event(
         route = payload["routes"][0]
         assert route["spread_pct"] == 1.25
         assert route["funding_pct"] == 0.031
+        assert route["spread_basis"] == "top_book"
     finally:
         connection.close()
         server.shutdown()
@@ -121,4 +128,37 @@ def test_stream_does_not_erase_a_current_quote_when_fast_books_are_absent(
 
     rows = server._board_stream_rows(tmp_path / "board.jsonl", {})
 
-    assert rows[route["route_key"]] == (1.125, 0.4)
+    assert rows[route["route_key"]] == (1.125, 0.4, "retained_matched_vwap")
+
+
+def test_stream_updates_the_label_when_a_live_tick_is_only_top_book() -> None:
+    """Production WKC changed the main number over SSE but left the adjacent
+    ``$500 VWAP`` label behind. A current top-book tick must change both so the
+    page never presents an unmeasured edge as matched-size evidence.
+    """
+
+    from spreadboard import server
+
+    source = server.render_board_stream_script({})
+
+    assert "route.spread_basis" in source
+    assert "[data-live-spread-basis]" in source
+
+
+def test_group_leader_tick_does_not_overwrite_expanded_route_rows() -> None:
+    """A group and its best child intentionally share one route key.
+
+    The updater used ``row.querySelectorAll`` on the outer ``details`` node,
+    which replaced every expanded child's spread with the leader's value.  A
+    group match must be scoped to its direct summary; each child is updated by
+    its own independent ``data-route-key`` match.
+    """
+    from spreadboard import server
+
+    source = server.render_board_stream_script({})
+
+    assert 'row.matches("details")' in source
+    assert 'row.querySelector(":scope > summary")' in source
+    assert 'const liveScope = ' in source
+    assert 'liveScope.querySelectorAll("[data-live-spread]")' in source
+    assert 'liveScope.querySelectorAll("[data-live-funding]")' in source
