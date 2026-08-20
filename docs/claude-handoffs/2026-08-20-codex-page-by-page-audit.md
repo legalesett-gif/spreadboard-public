@@ -54,8 +54,9 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
 
 ### Current deployment and verification
 
-- Local checkpoint commit is `6c81241` on branch `codex/crypto-billing`; the
-  production `.deployed_revision` marker is synchronized to this commit.
+- The code and handoff are checkpointed on branch `codex/crypto-billing`.
+  Confirm the exact immutable hash with `git log -1 --oneline`; the production
+  `.deployed_revision` marker was synchronized after the checkpoint.
 - Production `app-app-1` and `app-collector-1` are healthy. Local, host, app
   and collector `spreadboard/server.py` SHA-256 are identical:
   `daba71e8434a7780aadea78d645a939a32051695e4fe715aed5e18deb9c7adf7`.
