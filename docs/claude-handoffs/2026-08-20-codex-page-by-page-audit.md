@@ -117,6 +117,13 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `33f5410`; after repair an exact thin reverse-book fixture retains the needed
   ask-side quote when the unused bid VWAP is null, and the live BTW chart
   streams exact entry, `$500` matched and exit values with a clean console.
+- `/learn` is now fully audited. Its old cards misnamed the canonical collector
+  as local, blurred funding carry with spread convergence, omitted Spot-Spot
+  execution friction, and overstated the read-only boundary. Seven precise
+  evidence cards now cover route direction, separate opportunities,
+  volatility/margin limits, freshness, DEX provider/identity truth and the
+  exchange-trading boundary. Methodology, Status and Guide actions, both
+  themes and both viewports pass; the final odd card spans the desktop grid.
 
 ### Current deployment and verification
 
@@ -132,7 +139,8 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
-- Full suite: **1,475 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Latest audited-page code commits: **`c8a2ad5`** and **`b908165`** for Learn.
+- Full suite: **1,478 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -144,8 +152,8 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `/profile` position and settings evidence is under
   `output/playwright/2026-08-21-page-audit/`. The same directory now contains
   `/intel` desktop/mobile light/dark evidence and the final non-overlapping
-  mobile capture, plus `/triage`, `/signals` and `/community` before/final
-  desktop/mobile light/dark evidence.
+  mobile capture, plus `/triage`, `/signals`, `/community` and `/learn`
+  before/final desktop/mobile light/dark evidence.
 
 ### Fresh ML gate — do not train or activate
 
@@ -168,9 +176,9 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/learn`.
+1. Continue §8 with the remaining static routes, starting at `/proof`.
 2. Then complete
-   `/proof`, `/executor`, `/status`, `/telegram`, `/guide`,
+   `/executor`, `/status`, `/telegram`, `/guide`,
    `/methodology`, `/pricing`, `/subscription`, `/partner`, `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
