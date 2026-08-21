@@ -748,6 +748,108 @@ def test_community_cards_use_shared_theme_surfaces() -> None:
     assert "color: var(--terminal-text);" in community_css
 
 
+def test_community_populated_fixture_keeps_source_values_and_safe_links(monkeypatch) -> None:
+    """A stale production feed must not leave populated renderers untested."""
+
+    monkeypatch.setattr(
+        server,
+        "api_community",
+        lambda *_args, **_kwargs: {
+            "filters": {"window_hours": 12},
+            "source_freshness": {
+                "telegram_events": {"status": "fresh", "age_min": 0.5},
+                "board": {"status": "fresh", "age_min": 0.2},
+            },
+            "community_insights": {
+                "scoreboard": {
+                    "status": "fresh",
+                    "top_positive": [
+                        {"symbol": "WIN", "reported_pnl": 12.5, "sentiment": "reported win"}
+                    ],
+                    "net_negative": [
+                        {"symbol": "LOSS", "reported_pnl": -4.25, "sentiment": "distrust"}
+                    ],
+                },
+                "call_ledger": [
+                    {
+                        "symbol": "LEDGER",
+                        "status": "inspect_route",
+                        "href": "/token/LEDGER",
+                        "signals_href": "/signals?symbol=LEDGER",
+                        "latest_call": {"first_line": "Exact call evidence"},
+                        "latest_result": {"first_line": "Exact result evidence"},
+                        "badges": ["source supplied"],
+                        "route_status": "current",
+                        "spread_pct": 1.25,
+                        "funding_apr_pct": 36.5,
+                        "freshness": "fresh",
+                        "next_action": "inspect route",
+                        "call_count": 2,
+                        "result_count": 1,
+                        "close_count": 0,
+                    }
+                ],
+                "discussion": [
+                    {
+                        "symbol": "DISCUSS",
+                        "message_count": 3,
+                        "reason": "Repeated exact-route question",
+                        "call_count": 2,
+                        "result_count": 1,
+                        "route_status": "current",
+                        "next_action": "inspect route",
+                    }
+                ],
+                "calls": [
+                    {
+                        "symbol": "A/B?",
+                        "first_line": "Privacy-safe call line",
+                        "spread_pct": 0.75,
+                        "age_min": 2,
+                    }
+                ],
+                "results": [
+                    {
+                        "symbol": "RESULT",
+                        "first_line": "Privacy-safe result line",
+                        "funding_delta_pct": -0.125,
+                        "age_min": 4,
+                    }
+                ],
+                "question_patterns": [
+                    {
+                        "category": "Funding persistence",
+                        "count": 3,
+                        "examples": [{"first_line": "Does it persist?"}],
+                    }
+                ],
+                "brief_excerpt": ["Source-supplied brief line"],
+            },
+        },
+    )
+
+    html = server.render_community_page(Path("/missing.json"), {}, {})
+
+    for expected in (
+        "WIN",
+        "+12.50",
+        "LOSS",
+        "-4.25",
+        "Exact call evidence",
+        "Exact result evidence",
+        "1.2%",
+        "Repeated exact-route question",
+        "Privacy-safe call line",
+        "Privacy-safe result line",
+        "Funding persistence",
+        "Does it persist?",
+        "Source-supplied brief line",
+    ):
+        assert expected in html
+    assert 'href="/token/A%2FB%3F"' in html
+    assert 'href="/community?window_hours=12" aria-current="page"' in html
+
+
 def test_signals_renders_the_real_subscriber_lookup_lane_and_selected_window(
     monkeypatch,
 ) -> None:

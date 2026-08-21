@@ -18698,7 +18698,7 @@ def fmt_signed_money(value: Any) -> str:
 
 def fmt_signed_number(value: Any) -> str:
     number = _float_or_none(value)
-    return ABSENT if number is None else f"{number:+,.0f}"
+    return ABSENT if number is None else f"{number:+,.2f}"
 
 
 def fmt_price(value: Any) -> str:
