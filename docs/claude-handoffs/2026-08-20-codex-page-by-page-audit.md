@@ -141,6 +141,12 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   and withdrawal permissions, order capabilities and any handoff remain
   forbidden. A web-process private-key mount changes the verdict to an explicit
   boundary violation instead of preserving a false safety claim.
+- `/status` is now fully audited. It no longer hides the rejected OKX DEX
+  source behind an all-operational headline, and now includes separate CEX and
+  DEX health plus funding history, subscriber lifecycle and isolated read-only
+  accounting. Telegram requires both the bot and private community destination;
+  transient DEX failures are not mislabeled as access blocks. All ten cards,
+  both footer actions, both themes and both viewports pass production checks.
 
 ### Current deployment and verification
 
@@ -152,14 +158,18 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `spreadboard/portfolio.py` SHA-256 remains
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
-- Latest deployed audited-page code commit: **`3b63e56`** for Executor. Run
+- Latest deployed audited-page code commit: **`0081631`** for Status. Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
-- Production's code marker is **`3b63e56ccf6a680f77b6023dc6c8050553aa618f`**.
+- Production's code marker is **`00816316a98637784a853367751670bcd6e98210`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
-- Full suite: **1,478 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Current `server.py` SHA-256 is
+  **`9b28eaabc06872f6ec3d31de9408c6d68a86b89ad67413c068e8d04c0f1358d3`**;
+  current `intel.py` SHA-256 remains
+  **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
+- Full suite: **1,481 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -172,7 +182,7 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `output/playwright/2026-08-21-page-audit/`. The same directory now contains
   `/intel` desktop/mobile light/dark evidence and the final non-overlapping
   mobile capture, plus `/triage`, `/signals`, `/community`, `/learn`, `/proof`
-  and `/executor` before/final desktop/mobile light/dark evidence.
+  `/executor` and `/status` before/final desktop/mobile light/dark evidence.
 
 ### Fresh ML gate — do not train or activate
 
@@ -195,8 +205,8 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/status`.
-2. Then complete `/telegram`, `/guide`,
+1. Continue §8 with the remaining static routes, starting at `/telegram`.
+2. Then complete `/guide`,
    `/methodology`, `/pricing`, `/subscription`, `/partner`, `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
