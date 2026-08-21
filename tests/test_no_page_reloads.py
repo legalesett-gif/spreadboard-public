@@ -88,9 +88,86 @@ def test_the_refresh_keeps_the_position_data_in_step() -> None:
 def test_scroll_position_is_not_thrown_away() -> None:
     source = _account_script()
 
-    assert "location.reload()" not in source.split("refreshAccountView")[0][-400:] or True
-    # The specific regression: a mutation handler calling reload.
-    assert "payloadFromForm(form));location.reload()" not in source
+    assert "location.reload()" not in source
+    assert "window.location.reload()" not in source
+
+
+def test_every_account_mutation_has_an_in_place_refresh_path() -> None:
+    """Settings, notifications, Telegram and exchange credentials are account UI too.
+
+    Position edits had been corrected, but the remaining actions still tore
+    down the document.  Keep a single server-rendered partial-refresh path and
+    stable delegated controls for nodes that the refresh replaces.
+    """
+
+    source = _account_script()
+
+    assert "refreshAccountView" in source
+    assert "refreshAccountSetting" in source
+    for selector in (
+        "[data-position-new]",
+        "[data-notifications-read]",
+        "[data-telegram-action]",
+    ):
+        assert f"event.target.closest('{selector}')" in source
+    assert "window.spreadboardRefreshAccountView=refreshAccountView" in source
+
+
+def test_overlapping_account_refreshes_cannot_restore_an_older_snapshot() -> None:
+    """The listed-market probe can finish after a user mutation refresh.
+
+    Only the newest request may replace account panels; otherwise an older GET
+    can visually undo a just-saved correction even though the database is right.
+    """
+
+    source = _account_script()
+
+    assert "accountRefreshVersion" in source
+    assert "requestVersion!==accountRefreshVersion" in source
+    assert "data-account-live-status" in source
+
+
+def test_async_notification_buttons_keep_a_stable_button_reference() -> None:
+    """DOM event.currentTarget is cleared as soon as an async listener yields."""
+
+    source = _account_script()
+    pushover = source.split("[data-pushover-test]", 1)[1].split(
+        "const webPush", 1
+    )[0]
+    browser_push = source.split("[data-web-push-enable]", 1)[1].split(
+        "[data-web-push-disable]", 1
+    )[0]
+
+    for handler in (pushover, browser_push):
+        assert "const button=event.currentTarget" in handler
+        assert "finally{button.disabled=false;}" in handler
+        assert "finally{event.currentTarget.disabled=false;}" not in handler
+    assert "pushover_user_not_configured" in source
+
+
+def test_listed_market_recovery_refreshes_the_account_in_place() -> None:
+    source = server.render_portfolio_market_refresh_script(
+        [
+            {
+                "id": 7,
+                "status": "open",
+                "market_listing_status": "listed",
+                "quote_status": "refreshing",
+            }
+        ]
+    )
+
+    assert "location.reload()" not in source
+    assert "spreadboardRefreshAccountView" in source
+
+
+def test_position_delete_confirmation_error_is_human_readable() -> None:
+    """A typo at a destructive confirmation must not expose an API code."""
+
+    source = _account_script()
+
+    assert "position_delete_confirmation_mismatch" in source
+    assert "The confirmation did not match" in source
 
 
 # --------------------------------------------------------------------------

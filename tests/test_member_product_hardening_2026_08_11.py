@@ -62,6 +62,12 @@ def test_pushover_save_validates_and_clears_inactive_device(tmp_path, monkeypatc
     assert accounts.notification_credentials(user["id"], db_path=db_path)["user_key"] == "K" * 30
 
 
+def test_disabled_pushover_save_does_not_claim_active_devices() -> None:
+    script = server.render_account_script()
+
+    assert "Pushover delivery is disabled." in script
+
+
 def test_portfolio_funding_is_exact_leg_data_even_when_route_is_not_ranked(
     tmp_path, monkeypatch
 ) -> None:

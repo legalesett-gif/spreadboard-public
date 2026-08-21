@@ -69,6 +69,21 @@ def test_web_push_worker_delivers_only_notifications_created_after_subscription(
     assert accounts.pending_web_push_deliveries(db_path=db_path) == []
 
 
+def test_browser_test_requires_an_account_owned_subscription(tmp_path, monkeypatch):
+    monkeypatch.delenv("SPREADBOARD_ADMIN_EMAIL", raising=False)
+    db_path = tmp_path / "accounts.sqlite3"
+    accounts.initialize(db_path)
+    user = _user(db_path)
+
+    with pytest.raises(ValueError, match="web_push_subscription_required"):
+        server.queue_web_push_test(user["id"], accounts_path=db_path)
+
+    assert accounts.list_notifications(user["id"], db_path=db_path) == []
+    assert "Enable Web Push on this browser before queuing a test." in (
+        server.render_account_script()
+    )
+
+
 def test_market_events_validate_sources_and_add_live_rail_blocks(tmp_path):
     path = tmp_path / "events.json"
     path.write_text(

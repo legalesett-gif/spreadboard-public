@@ -17,6 +17,8 @@ partial.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from spreadboard import portfolio
 
 
@@ -69,6 +71,52 @@ def test_nothing_priceable_still_reports_nothing() -> None:
 
     assert totals["price_and_funding_pnl_usd"] is None
     assert totals["unpriced_positions"] == 1
+
+
+def test_an_empty_book_reports_exact_zero_cash_totals() -> None:
+    """Production Codex Audit had no positions, not an unpriceable position.
+
+    The account showed eight dashes even though an empty sum is exactly zero.
+    Keep returns unknown because there is no capital denominator, but do not
+    withhold cash totals that are mathematically known.
+    """
+
+    totals = portfolio._portfolio_totals([], None)
+
+    assert totals["price_and_funding_pnl_usd"] == 0.0
+    assert totals["realized_pnl_usd"] == 0.0
+    assert totals["unrealized_pnl_usd"] == 0.0
+    assert totals["open_position_pnl_usd"] == 0.0
+    assert totals["funding_income_usd"] == 0.0
+    assert totals["open_position_funding_usd"] == 0.0
+    assert totals["monthly_return_pct"] is None
+    assert totals["open_position_return_pct"] is None
+
+
+def test_empty_snapshot_keeps_known_zero_deployed_capital(monkeypatch, tmp_path) -> None:
+    """The no-position fast path must expose the same capital fields as all others."""
+
+    user = SimpleNamespace(
+        id=7,
+        monthly_capital_usd=None,
+        public_dict=lambda: {"id": 7},
+    )
+    monkeypatch.setattr(portfolio.accounts, "list_positions", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        portfolio.accounts,
+        "list_notifications",
+        lambda *_args, **_kwargs: [],
+    )
+
+    snapshot = portfolio.portfolio_snapshot(
+        user,
+        board_path=tmp_path / "board.jsonl",
+        accounts_path=tmp_path / "accounts.sqlite3",
+    )
+
+    assert snapshot["summary"]["deployed_capital_usd"] == 0.0
+    assert snapshot["summary"]["deployed_notional_usd"] == 0.0
+    assert snapshot["summary"]["open_return_on_capital_pct"] is None
 
 
 def test_a_fully_priced_book_reports_no_exclusions() -> None:

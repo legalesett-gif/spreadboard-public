@@ -182,6 +182,22 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         assert response.status == 400
         assert json.loads(response.read())["error"] == "invalid_csrf_token"
 
+        connection.request(
+            "POST",
+            "/api/account-settings",
+            body=json.dumps({"display_name": "Admin", "monthly_capital_usd": ""}),
+            headers={
+                "Cookie": cookie,
+                "Content-Type": "application/json",
+                "X-CSRF-Token": login["csrf_token"],
+            },
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        settings_payload = json.loads(response.read())
+        assert settings_payload["user"]["display_name"] == "Admin"
+        assert settings_payload["user"]["monthly_capital_usd"] is None
+
         payload = {
             "token": "BTC",
             "long_venue": "Binance",

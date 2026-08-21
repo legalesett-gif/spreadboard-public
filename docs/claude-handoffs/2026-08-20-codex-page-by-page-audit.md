@@ -56,6 +56,17 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   component onto terminal theme tokens. Production desktop/mobile light/dark
   screenshots, computed contrast, source/API truth, every unique content link,
   Pause/Resume, theme control, console and network checks now pass.
+- `/profile` is now fully audited. Known empty-book money totals are exact
+  zeroes, all account mutations refresh in place without losing document
+  state, overlapping refreshes are newest-wins, Pushover and Web Push feedback
+  is truthful, and delete-confirmation errors are human-readable. A disposable
+  GUA position exercised create/edit/alerts/close validation/chart/delete and
+  DEX catalogue coverage; the position, alert rules, test notification,
+  Telegram link token and all other audit artifacts were then proven absent.
+- A live-test mistake is documented rather than hidden: the first settings
+  response patch called `.public_dict()` on a dict and returned `500`. It was
+  immediately hotfixed, covered by an endpoint-level test, redeployed and
+  reverified with a reversible display-name save and no document reload.
 
 ### Current deployment and verification
 
@@ -63,25 +74,28 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   Confirm the exact immutable hash with `git log -1 --oneline`; the production
   `.deployed_revision` marker was synchronized after the checkpoint.
 - Production `app-app-1` and `app-collector-1` are healthy. Local, host, app
-  and collector `spreadboard/server.py` SHA-256 are identical:
-  `daba71e8434a7780aadea78d645a939a32051695e4fe715aed5e18deb9c7adf7`.
-- Full suite: **1,451 passed**, one pre-existing unknown `asyncio_mode` warning.
+  and collector SHA-256 are identical: `spreadboard/server.py`
+  `7bebcd5e55e82bfca93a8dcd2fd48d4361a51a5d3456ba9dfa834ae59d3b4d9d`
+  and `spreadboard/portfolio.py`
+  `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`.
+- Full suite: **1,460 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
   for repeated 25-group API requests. The first default `/markets` generation
   after restart took 15.5s; this is a real remaining cold-start UX issue, not
   permission to restore stale serving.
-- Screenshots added:
-  `arbitrage-{desktop,mobile}-{light,dark}.png` plus the final Markets Pro Table
-  files under `output/playwright/2026-08-20-page-audit/`.
+- Screenshots added: `arbitrage-{desktop,mobile}-{light,dark}.png` plus the
+  final Markets Pro Table files under `output/playwright/2026-08-20-page-audit/`;
+  `/profile` position and settings evidence is under
+  `output/playwright/2026-08-21-page-audit/`.
 
 ### Fresh ML gate — do not train or activate
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 23,331 observations, 16,017
-labeled 24h outcomes, 1,734 routes and 6.25 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 23,540 observations, 16,128
+labeled 24h outcomes, 1,746 routes and 6.29 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
 6.25/30 days; no candidate exists, activation is false and the deterministic
@@ -97,8 +111,8 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/profile`.
-2. Then complete `/intel`, `/triage`, `/signals`, `/community`,
+1. Continue §8 with the remaining static routes, starting at `/intel`.
+2. Then complete `/triage`, `/signals`, `/community`,
    `/learn`, `/proof`, `/executor`, `/status`, `/telegram`, `/guide`,
    `/methodology`, `/pricing`, `/subscription`, `/partner`, `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/

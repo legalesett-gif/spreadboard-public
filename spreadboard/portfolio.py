@@ -50,11 +50,13 @@ def portfolio_snapshot(
     positions = accounts.list_positions(user.id, db_path=accounts_path)
     if not positions:
         notifications = accounts.list_notifications(user.id, db_path=accounts_path)
+        totals = _portfolio_totals([], user.monthly_capital_usd)
+        totals.update(deployed_capital_summary([]))
         return {
             "ok": True,
             "generated_at": datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z"),
             "user": user.public_dict(),
-            "summary": _portfolio_totals([], user.monthly_capital_usd),
+            "summary": totals,
             "positions": [],
             "notifications": notifications,
         }
@@ -689,7 +691,13 @@ def _portfolio_totals(
     ]
     # Same rule as the totals above: sum what the exchange ledger actually
     # returned rather than blanking the row because one position has no import.
-    open_funding = sum(open_funding_values) if open_funding_values else None
+    open_funding = (
+        sum(open_funding_values)
+        if open_funding_values
+        else 0.0
+        if not open_positions
+        else None
+    )
     realized_values = [
         float(item["total_pnl_usd"])
         for item in closed_positions
@@ -705,9 +713,11 @@ def _portfolio_totals(
     # the live account showed "Total PnL —" beside "Realised PnL +44.12 USD",
     # with ESPORTS +80.41 and the closed BTW +44.12 both perfectly known.
     # `unpriced_positions` keeps the figure honest about what it leaves out.
-    realized = sum(realized_values) if realized_values else None
-    unrealized = sum(unrealized_values) if unrealized_values else None
-    total = sum(known) if known else None
+    realized = sum(realized_values) if realized_values else 0.0 if not closed_positions else None
+    unrealized = (
+        sum(unrealized_values) if unrealized_values else 0.0 if not open_positions else None
+    )
+    total = sum(known) if known else 0.0 if not positions else None
     unpriced = len(positions) - len(known)
     configured_capital = _number(monthly_capital)
     tracked_capital = sum(
