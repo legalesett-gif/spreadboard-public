@@ -252,4 +252,10 @@ def test_public_methodology_and_proof_label_evidence_honestly() -> None:
     assert "Latest verified checkpoint" not in proof
     assert '<a href="/api/health">Machine-readable live health →</a>' in proof
     assert '<details class="archive-audit">' in proof
+    assert ".audit-caveat" in server.APP_CSS
+    assert ".audit-caveat {" in server.APP_CSS
+    assert "color:var(--terminal-text);" in server.APP_CSS.split(".audit-caveat {", 1)[1].split(
+        "}", 1
+    )[0]
+    assert ".archive-audit summary span { color:var(--terminal-text); }" in server.APP_CSS
     assert "guaranteed" not in (methodology + proof).lower()

@@ -16605,10 +16605,10 @@ main { max-width: none; margin: 0; padding: 32px 24px 0; }
 .evidence-labels p { margin:7px 0 0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }
 .audit-scoreboard strong { display:block; font-size:28px; color:var(--terminal-accent); }
 .audit-scoreboard span { color:var(--terminal-muted); font-size:11px; }
-.audit-caveat { margin:0; padding:12px 14px; border-left:3px solid var(--terminal-warning); background:var(--terminal-warning-soft); color:var(--terminal-muted); font-size:12px; line-height:1.5; }
+.audit-caveat { margin:0; padding:12px 14px; border-left:3px solid var(--terminal-warning); background:var(--terminal-warning-soft); color:var(--terminal-text); font-size:12px; line-height:1.5; }
 .archive-audit { border-block:1px solid var(--terminal-line); }
 .archive-audit summary { display:flex; justify-content:space-between; gap:16px; padding:14px 2px; color:var(--terminal-text); cursor:pointer; font-size:12px; }
-.archive-audit summary span { color:var(--terminal-muted); }
+.archive-audit summary span { color:var(--terminal-text); }
 .archive-audit > p { margin:0 0 12px; color:var(--terminal-muted); font-size:11px; line-height:1.5; }
 .archive-audit .audit-scoreboard { margin-bottom:14px; }
 .example-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
