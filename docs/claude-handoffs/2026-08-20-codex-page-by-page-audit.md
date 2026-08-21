@@ -67,6 +67,15 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   response patch called `.public_dict()` on a dict and returned `500`. It was
   immediately hotfixed, covered by an endpoint-level test, redeployed and
   reverified with a reversible display-name save and no document reload.
+- `/intel` is now fully audited. The page had ignored the always-on subscriber
+  webhook and instead depended on an empty Mac/Telethon bridge file, linked the
+  wrong bot, cached through new lookups for up to 15 minutes, overflowed to
+  470px at a 375px viewport, and let the fixed refresh pill cover its mobile
+  empty state. It now reads the privacy-safe server-side subscriber-attention
+  feed, invalidates on new events, uses the configured subscription-bot link
+  and copy, wraps long identifiers, and places the refresh control after page
+  content on mobile. The current empty state is honest: the real feed is stale,
+  and no Telegram message was fabricated to populate it.
 
 ### Current deployment and verification
 
@@ -78,7 +87,12 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `7bebcd5e55e82bfca93a8dcd2fd48d4361a51a5d3456ba9dfa834ae59d3b4d9d`
   and `spreadboard/portfolio.py`
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`.
-- Full suite: **1,460 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Intel source commit: **`037c738`**. Production source, persisted host, app
+  and collector are identical: `spreadboard/server.py`
+  `8b9856920e46c3c46d4495c10e6b087540e63aa12df86efe59aa65d3b84d6eb6`
+  and `spreadboard/intel.py`
+  `4238f0102adbd0c0ec3fb26b9a9ae3aee6d3867b4423dd8835441fb58c9cf8f2`.
+- Full suite: **1,463 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -88,7 +102,9 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
 - Screenshots added: `arbitrage-{desktop,mobile}-{light,dark}.png` plus the
   final Markets Pro Table files under `output/playwright/2026-08-20-page-audit/`;
   `/profile` position and settings evidence is under
-  `output/playwright/2026-08-21-page-audit/`.
+  `output/playwright/2026-08-21-page-audit/`. The same directory now contains
+  `/intel` desktop/mobile light/dark evidence and the final non-overlapping
+  mobile capture.
 
 ### Fresh ML gate — do not train or activate
 
@@ -111,8 +127,8 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/intel`.
-2. Then complete `/triage`, `/signals`, `/community`,
+1. Continue §8 with the remaining static routes, starting at `/triage`.
+2. Then complete `/signals`, `/community`,
    `/learn`, `/proof`, `/executor`, `/status`, `/telegram`, `/guide`,
    `/methodology`, `/pricing`, `/subscription`, `/partner`, `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/
