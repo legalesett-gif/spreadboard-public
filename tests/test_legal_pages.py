@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -78,3 +79,47 @@ def test_legal_support_url_rejects_ambiguous_https_configuration(
 
     assert f'href="{unsafe_url}"' not in html
     assert unsafe_url in html
+
+
+def test_authenticated_legal_shell_finishes_and_verifies_logout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Redirecting at fetch headers aborted the JSON body and hid logout errors."""
+
+    user = SimpleNamespace(
+        display_name="Audit",
+        is_admin=True,
+        csrf_token="csrf",
+        entitlement_tier="research_pro",
+    )
+    monkeypatch.setattr(server.accounts, "current_user", lambda: user)
+
+    html = server.render_legal_page("terms")
+
+    assert 'class="logout-status" role="status" aria-live="polite"' in html
+    assert "const response=await fetch('/api/logout'" in html
+    assert "const payload=await response.json().catch(()=>({}));" in html
+    assert "if(!response.ok||payload.ok!==true)" in html
+    assert "Sign out failed. Try again." in html
+
+
+def test_authenticated_mobile_keeps_a_bounded_logout_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phones had no sign-out control, and a stalled request disabled it forever."""
+
+    user = SimpleNamespace(
+        display_name="Audit",
+        is_admin=True,
+        csrf_token="csrf",
+        entitlement_tier="research_pro",
+    )
+    monkeypatch.setattr(server.accounts, "current_user", lambda: user)
+
+    html = server.render_legal_page("terms")
+
+    assert ".account-chip,.logout-status { display:none; }" in server.APP_CSS
+    assert ".account-chip,.logout-status,.logout-button { display:none; }" not in server.APP_CSS
+    assert "const controller=new AbortController()" in html
+    assert "signal:controller.signal" in html
+    assert "setTimeout(()=>controller.abort(),15000)" in html
