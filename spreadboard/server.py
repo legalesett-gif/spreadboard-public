@@ -12473,6 +12473,46 @@ def render_guide_page() -> str:
     )
 
 
+_LEGAL_CONTACT_HEADINGS = {
+    "Contact",
+    "Your choices",
+    "How to request",
+    "Contact and version",
+}
+
+
+def _legal_contact_copy(copy: str, support: str, support_url: str) -> str:
+    """Link only validated contact configuration inside otherwise escaped copy."""
+
+    rendered = h(copy)
+    if re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", support):
+        label = h(support)
+        rendered = rendered.replace(
+            label,
+            f'<a href="mailto:{label}">{label}</a>',
+        )
+    parsed_support = urlparse(support_url)
+    ambiguous_url = any(character.isspace() or character == "\\" for character in support_url)
+    try:
+        support_hostname = parsed_support.hostname
+    except ValueError:
+        support_hostname = None
+    if (
+        parsed_support.scheme == "https"
+        and parsed_support.netloc
+        and support_hostname
+        and parsed_support.username is None
+        and parsed_support.password is None
+        and not ambiguous_url
+    ):
+        label = h(support_url)
+        rendered = rendered.replace(
+            label,
+            f'<a href="{label}" target="_blank" rel="noopener noreferrer">{label}</a>',
+        )
+    return rendered
+
+
 def render_legal_page(page: str) -> str:
     support = os.environ.get("SPREADBOARD_SUPPORT_EMAIL", "support@spreadarbitrage.ink")
     support_url = os.environ.get(
@@ -12634,10 +12674,20 @@ def render_legal_page(page: str) -> str:
         ),
     }
     title, intro, sections = pages.get(page, pages["terms"])
+    section_html = []
+    for heading, copy in sections:
+        is_contact = heading in _LEGAL_CONTACT_HEADINGS
+        rendered_copy = (
+            _legal_contact_copy(copy, support, support_url) if is_contact else h(copy)
+        )
+        paragraph_class = ' class="legal-contact"' if is_contact else ""
+        section_html.append(
+            f"<section><h2>{h(heading)}</h2><p{paragraph_class}>{rendered_copy}</p></section>"
+        )
     body = f"""
     <section class="legal-page">
       <header><span class="page-kicker">SpreadBoard</span><h1>{h(title)}</h1><p>{h(intro)}</p></header>
-      <main>{"".join(f"<section><h2>{h(heading)}</h2><p>{h(copy)}</p></section>" for heading, copy in sections)}</main>
+      <div class="legal-sections">{"".join(section_html)}</div>
       <nav><a href="/pricing">Membership</a></nav>
     </section>
     """
@@ -19096,15 +19146,29 @@ pre { background: var(--dark); color: white; padding: 14px; border-radius: 8px; 
 .subscription-consent { display:flex; align-items:flex-start; gap:9px; max-width:720px; color:var(--terminal-muted); font-size:12px; line-height:1.45; }
 .subscription-consent input { width:auto; margin-top:2px; accent-color:var(--accent); }
 .subscription-consent a { color:var(--accent); text-decoration:underline; }
-.legal-page { width:min(900px,calc(100% - 32px)); margin:38px auto 72px; }
+.legal-page {
+  --legal-muted:#596a64;
+  --legal-link:#08796d;
+  width:min(900px,calc(100% - 32px));
+  margin:38px auto 72px;
+}
+:root[data-theme="dark"] .legal-page {
+  --legal-muted:var(--terminal-muted);
+  --legal-link:var(--terminal-accent);
+}
 .legal-page>header { padding:30px 0 24px; border-bottom:1px solid var(--terminal-line); }
 .legal-page h1 { margin:6px 0 10px; font-size:40px; }
-.legal-page>header p,.legal-page main p { color:var(--terminal-muted); line-height:1.65; }
-.legal-page main section { padding:22px 0; border-bottom:1px solid var(--terminal-line); }
-.legal-page main h2 { margin:0 0 8px; font-size:18px; }
-.legal-page main p { margin:0; }
+.legal-page>header p,.legal-sections p { color:var(--legal-muted); line-height:1.65; }
+.legal-sections section { padding:22px 0; border-bottom:1px solid var(--terminal-line); }
+.legal-sections h2 { margin:0 0 8px; font-size:18px; }
+.legal-sections p { margin:0; }
 .legal-page nav { display:flex; flex-wrap:wrap; gap:16px; padding-top:20px; }
-.legal-page nav a { color:var(--accent); font-weight:800; }
+.legal-page nav a,.legal-contact a {
+  color:var(--legal-link);
+  font-weight:800;
+  text-decoration:underline;
+  text-underline-offset:3px;
+}
 .account-kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border:1px solid var(--terminal-line); margin:20px 0; background:var(--terminal-panel); }
 .account-kpis article { min-width:0; padding:16px; display:grid; gap:5px; border-right:1px solid var(--terminal-line); }
 .account-kpis article:last-child { border-right:0; } .account-kpis span,.account-kpis em { color:var(--terminal-muted); font-size:12px; font-style:normal; } .account-kpis strong { font-size:23px; }
