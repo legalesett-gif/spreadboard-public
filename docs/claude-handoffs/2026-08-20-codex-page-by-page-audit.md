@@ -244,6 +244,18 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   states pass; one disposable member proved both success paths and was removed
   with all three sessions. The destination exposed a separate 423px no-script
   mobile overflow on `/account`; fix that during the scheduled Account audit.
+- `/register` now uses an explicit POST form and same-origin HTML boundary, so
+  no-JavaScript registration cannot place the name, email or password in the
+  URL. User creation, referral attribution and the first session are one
+  `BEGIN IMMEDIATE` transaction; a forced downstream failure proves all three
+  roll back together, and referral click tokens are single-use. Duplicate and
+  unexpected failures are generic, field sizes are bounded, the real client IP
+  is privacy-hashed, and active/inactive authenticated visitors are redirected
+  to the correct owned destination. Production desktop/mobile light/dark,
+  native validation, every visible link, theme persistence, JavaScript and
+  no-JavaScript creation, origin rejection and inactive/active redirects pass.
+  Both exact disposable users and all three sessions were deleted; no
+  attribution survived and SQLite quick/foreign-key checks pass.
 
 ### Current deployment and verification
 
@@ -256,28 +268,28 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
 - Latest deployed code commit:
-  **`65d95c3e3b272d53b42b1f426209f9cdca81f9dd`** for the completed Login audit.
+  **`08f626e39c427b520b6a75bfd25d456be369fa52`** for the completed Registration audit.
   Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
 - Production's code marker is
-  **`65d95c3e3b272d53b42b1f426209f9cdca81f9dd`**.
+  **`08f626e39c427b520b6a75bfd25d456be369fa52`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Current `server.py` SHA-256 is
-  **`4f5e42ed00f446e14ebc0fa9c867af4a664f6ffb50915c6bc0954673b0e2dcd8`**;
+  **`b5d89d93c5afbe2e53d3f09553054cafd8ab61ab5d6586bf0ae52a473c4037ce`**;
   current `accounts.py` SHA-256 is
-  **`d30d108c97d1f041ac4187d2aeead9c8754bdb8998e5d753fee4f2da423df248`**;
+  **`afab0a70ceb6ddd5c852bd435dcd703e9268bf1d85d720b10c1e4a6e505c5845`**;
   current `mailer.py` SHA-256 is
   **`01cdd5267d62f1266a2ba2bcf1cad818c8ca563c226648b4cb974b30c27bb379`**;
   current `affiliates.py` SHA-256 is
-  **`ea6f0d7bb54c4f80ddbf6dabb3d10b3fd63cb9e1643de261c62b757ecedb81fe`**;
+  **`38a8b3fb9f9c42b33bbfbac023d46d6cf615fe667239a858ed9d3bab79ff9102`**;
   current `telegram_bot.py` SHA-256 is
   **`4a597b5dda93aaac4fbfdbe73b5dd5184323b7ee30e1bb482414f33b0f8c87c7`**;
   current `intel.py` SHA-256 remains
   **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
-- Full suite: **1,545 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,552 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 530 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -303,17 +315,28 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `forgot-password-*-final.png` and
   `status-email-recovery-mobile-targeted-final.png`. Login desktop/mobile
   light/dark and no-JavaScript error evidence is under `login-*-final.png`.
+  Registration desktop/mobile light/dark and the no-JavaScript success
+  destination are under `register-*-final.png`.
+
+- One deployment error occurred and is preserved as an operational warning.
+  A large chained SCP reached the tool boundary, leaving the staged and then
+  installed `server.py` at zero bytes; app and collector briefly restart-looped
+  on the missing handler. The committed server was immediately re-uploaded,
+  its exact byte size and SHA-256 were verified before installation, both
+  services returned healthy, and the whole-package verifier now proves 51/51
+  persisted-host/app/collector files. Never install a transferred production
+  file until the remote size and digest match the committed local source.
 
 ### Fresh ML gate — do not train or activate
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 27,228 observations, 18,231
-labeled 24h outcomes, 1,909 routes and 7.08 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 27,434 observations, 18,392
+labeled 24h outcomes, 1,916 routes and 7.12 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
-7.08/30 days; no candidate exists, activation is false and the deterministic
-fallback remains active. The v5 observation store itself spans about 8.5 days;
+7.12/30 days; no candidate exists, activation is false and the deterministic
+fallback remains active. The v5 observation store itself spans about 8.62 days;
 only the labeled span is allowed to satisfy activation. Do not mix the 5,832
 v4 rows or weaken these gates.
 
@@ -328,7 +351,7 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 ### Resume exactly here
 
 1. Continue §8 with auth and legal routes in this order:
-   `/register`, `/set-password`, `/terms`,
+   `/set-password`, `/terms`,
    `/privacy`, `/refunds`, `/affiliate-terms`.
 2. Then complete the `/account` alias and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
