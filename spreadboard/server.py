@@ -12475,7 +12475,11 @@ def render_guide_page() -> str:
 
 _LEGAL_CONTACT_HEADINGS = {
     "Contact",
+    "Who is responsible",
     "Your choices",
+    "Your privacy rights",
+    "Right to object and withdraw",
+    "Complaints and contact",
     "How to request",
     "Contact and version",
 }
@@ -12518,6 +12522,17 @@ def render_legal_page(page: str) -> str:
     support_url = os.environ.get(
         "SPREADBOARD_SUPPORT_URL",
         "https://t.me/spreadarbitragesubscription_bot",
+    )
+    controller_name = " ".join(
+        os.environ.get("SPREADBOARD_DATA_CONTROLLER_NAME", "SpreadBoard").split()
+    )[:200] or "SpreadBoard"
+    controller_address = " ".join(
+        os.environ.get("SPREADBOARD_DATA_CONTROLLER_ADDRESS", "").split()
+    )[:300]
+    controller = (
+        f"{controller_name}, at {controller_address}"
+        if controller_address
+        else controller_name
     )
     pages = {
         "terms": (
@@ -12567,16 +12582,24 @@ def render_legal_page(page: str) -> str:
             "What SpreadBoard stores and why.",
             [
                 (
+                    "Who is responsible",
+                    f"The data controller for this service is {controller}. Questions about personal data can be sent to {support} or through {support_url}. Version {TERMS_VERSION}.",
+                ),
+                (
                     "Account data",
-                    "We store your name, email address, password hash, subscription state, linked Telegram identifier, settings, alerts, and journal entries to operate your account.",
+                    "We store your name, email address, password hash, subscription state, linked Telegram identifier, settings, alerts, watchlist, saved filters and charts, and journal entries to operate your account.",
                 ),
                 (
                     "Payments",
                     "Crypto checkout is watch-only. SpreadBoard stores the invoice amount, selected access period, receiving address, token and chain details, status, and matching public transaction hash. It never stores a wallet private key or seed phrase.",
                 ),
                 (
+                    "How and why we use data",
+                    "We use account, subscription, payment, security, and support data to create and protect accounts, provide requested membership, match payments, deliver enabled features, answer support requests, prevent misuse, and keep accounting records. Where applicable, the bases are performance of our contract; legitimate interests in service security, fraud prevention, support, and reliability; consent for optional anonymous research contributions; and legal obligations for accounting or disputes.",
+                ),
+                (
                     "Notifications",
-                    "Pushover user keys are encrypted at rest. Telegram and Pushover identifiers are used only to deliver the features you enable.",
+                    "Pushover user keys are encrypted at rest. Telegram and Pushover identifiers are used only to deliver the features you enable. For optional browser alerts, the Web Push subscription endpoint, browser public-key material, and user-agent label are stored so alerts can reach that browser; SpreadBoard never stores a browser private key.",
                 ),
                 (
                     "Exchange credentials",
@@ -12595,12 +12618,32 @@ def render_legal_page(page: str) -> str:
                     "When you open a partner link, a first-party referral cookie stores an opaque token for up to 90 days. If you register while it is valid, we keep the partner, click, registration, invoice tier, settled amount, commission, and payout status needed to administer the offer and prevent fraud. Partners see aggregate visits and registrations plus invoice-level tier, amount, commission, and status; they do not receive your email address or wallet credentials.",
                 ),
                 (
-                    "Sharing and retention",
-                    "Data is shared only with providers needed to run the service, such as blockchain RPC, Telegram, Pushover, hosting, and market-data providers. We keep it only as long as needed for service, security, accounting, and legal obligations.",
+                    "Required and optional data",
+                    "A name, email address, and password are required to create an account; invoice and public payment identifiers are required if you buy access. Without them we cannot create, secure, or activate the requested account. Telegram, Pushover, Web Push, exchange accounting, affiliate attribution, the position journal, and anonymous research contribution are optional. Leaving them disconnected does not remove the core website access included in an active tier.",
                 ),
                 (
-                    "Your choices",
-                    f"You may request access, correction, deletion, or account closure through {support_url} or by contacting {support}. Some records may need to be retained for legal or fraud-prevention purposes.",
+                    "Sharing and international processing",
+                    "We share data only with providers needed for the selected feature: infrastructure hosting and encrypted backup, email delivery, Telegram, Pushover or Web Push delivery, blockchain RPC, and market-data providers. Some providers may process data in countries outside yours. Provider locations and the applicable transfer safeguards depend on the service used; you may request the current details through the contact methods below. SpreadBoard does not sell personal data.",
+                ),
+                (
+                    "Retention",
+                    "Account and feature data normally remains until account closure or deletion is completed. Expired session rows are removed during session maintenance, and the referral cookie lasts no more than 90 days. Invoice, public transaction, consent, affiliate, security, and service records are retained according to the needs of reconciliation, disputes, fraud prevention, accounting, and legal obligations. Deleted data may remain in encrypted backups until the configured snapshot-retention cycle expires.",
+                ),
+                (
+                    "Automated decisions",
+                    "SpreadBoard does not use solely automated processing or profiling to make decisions about you that have legal or similarly significant effects. Deterministic invoice matching and subscription activation follow the displayed amount, chain, token, and confirmation rules. Market research scores describe public-market routes, not people, and do not decide account access.",
+                ),
+                (
+                    "Your privacy rights",
+                    f"Depending on the applicable law and processing basis, you may request access, correction, deletion, restriction, or data portability through {support_url} or by contacting {support}. Some records may need to be retained for legal, accounting, dispute, or fraud-prevention purposes.",
+                ),
+                (
+                    "Right to object and withdraw",
+                    "You may have a right to object to processing based on legitimate interests. You can withdraw optional research contribution, disable a notification channel, or disconnect exchange accounting through the relevant account control at any time. This stops future optional processing but does not invalidate processing already completed lawfully.",
+                ),
+                (
+                    "Complaints and contact",
+                    f"Contact {support} or {support_url} first if you want us to investigate a privacy issue. Where data-protection law applies, you may also lodge a complaint with the supervisory authority responsible for the place where you live or work, or where the issue occurred.",
                 ),
             ],
         ),
@@ -19157,6 +19200,7 @@ pre { background: var(--dark); color: white; padding: 14px; border-radius: 8px; 
   --legal-link:var(--terminal-accent);
 }
 .legal-page>header { padding:30px 0 24px; border-bottom:1px solid var(--terminal-line); }
+.legal-page .page-kicker { color:var(--legal-link); }
 .legal-page h1 { margin:6px 0 10px; font-size:40px; }
 .legal-page>header p,.legal-sections p { color:var(--legal-muted); line-height:1.65; }
 .legal-sections section { padding:22px 0; border-bottom:1px solid var(--terminal-line); }

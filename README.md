@@ -22,6 +22,23 @@ SPREADBOARD_PUBLIC_MODE=1 uv run python scripts/run_spreadboard_service.py
 The service listens on `HOST` and `PORT`, refreshes every
 `SPREADBOARD_REFRESH_SECONDS`, and exposes health at `/api/health`.
 
+## Privacy Notice Controller Details
+
+Production must identify the real person or legal entity responsible for the
+service. Keep these public details in the production environment rather than
+hard-coding or guessing them in source:
+
+```bash
+SPREADBOARD_DATA_CONTROLLER_NAME='Full legal name or registered entity'
+SPREADBOARD_DATA_CONTROLLER_ADDRESS='Registered or service address'
+SPREADBOARD_SUPPORT_EMAIL='support@example.com'
+SPREADBOARD_SUPPORT_URL='https://t.me/example_support'
+```
+
+The controller name and address are intentionally public; secrets do not
+belong in these fields. Until the owner supplies them, the notice falls back to
+the SpreadBoard trading name and is not a complete legal-identity disclosure.
+
 ## Prepaid Crypto Billing
 
 Production access is prepaid in allowlisted USDC or USDT on Arbitrum One. The
