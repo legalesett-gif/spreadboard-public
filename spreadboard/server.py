@@ -12073,7 +12073,7 @@ def render_partner_page(
             <form class="partner-create-form" data-partner-create>
               <label><span>Channel / partner name</span><input name="display_name" required maxlength="100"></label>
               <label><span>Login email</span><input name="email" type="email" required autocomplete="email"></label>
-              <label><span>Custom link name (optional)</span><input name="slug" pattern="[a-z0-9][a-z0-9-]{{2,63}}" placeholder="Generated from channel name"></label>
+              <label><span>Custom link name (optional)</span><input name="slug" pattern="[a-z0-9](?:[a-z0-9]|-){{2,63}}" placeholder="Generated from channel name"></label>
               <button class="sheet-button primary" type="submit">Create cabinet &amp; links</button>
             </form>
             <div class="account-empty-panel" data-partner-invite hidden></div>

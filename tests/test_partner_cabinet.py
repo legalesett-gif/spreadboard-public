@@ -85,6 +85,16 @@ def test_async_partner_controls_keep_a_stable_element_reference(tmp_path) -> Non
 
     admin_script = server.render_partner_admin_script()
     partner_page = server.render_partner_page(user, db)
+    connection = accounts._connect(db)
+    connection.execute(
+        "UPDATE users SET role = 'admin', subscription_status = 'active' WHERE id = ?",
+        (partner_user,),
+    )
+    connection.commit()
+    connection.close()
+    admin_user = accounts.get_user_object(partner_user, db_path=db)
+    assert admin_user is not None
+    admin_page = server.render_partner_page(admin_user, db)
 
     assert "const form=event.currentTarget" in admin_script
     assert "form.reset()" in admin_script
@@ -92,6 +102,7 @@ def test_async_partner_controls_keep_a_stable_element_reference(tmp_path) -> Non
     assert "const button=event.currentTarget" in partner_page
     assert "button.textContent='Copied'" in partner_page
     assert "event.currentTarget.textContent='Copied'" not in partner_page
+    assert 'pattern="[a-z0-9](?:[a-z0-9]|-){2,63}"' in admin_page
 
 
 def test_partner_admin_never_turns_a_failed_load_into_no_partners() -> None:
