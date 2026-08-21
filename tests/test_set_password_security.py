@@ -90,16 +90,27 @@ def test_plain_html_password_setup_is_origin_bound_and_never_leaks_passwords(
     client = http.client.HTTPConnection("127.0.0.1", app.server_port, timeout=10)
     origin = f"http://127.0.0.1:{app.server_port}"
 
-    def post(payload: dict[str, str], request_origin: str) -> tuple[int, str, dict]:
+    def post(
+        payload: dict[str, str],
+        request_origin: str,
+        *,
+        fetch_site: str = "",
+        fetch_mode: str = "",
+    ) -> tuple[int, str, dict]:
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "text/html",
+            "Origin": request_origin,
+        }
+        if fetch_site:
+            headers["Sec-Fetch-Site"] = fetch_site
+        if fetch_mode:
+            headers["Sec-Fetch-Mode"] = fetch_mode
         client.request(
             "POST",
             "/api/set-password",
             body=urlencode(payload),
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "text/html",
-                "Origin": request_origin,
-            },
+            headers=headers,
         )
         response = client.getresponse()
         raw = response.read()
@@ -118,8 +129,23 @@ def test_plain_html_password_setup_is_origin_bound_and_never_leaks_passwords(
         assert location == ""
         assert accounts.password_token_status(token, db_path=db_path) is not None
 
+        status, location, body = post(
+            payload,
+            "null",
+            fetch_site="cross-site",
+            fetch_mode="navigate",
+        )
+        assert (status, body) == (403, {"ok": False, "error": "invalid_request_origin"})
+        assert location == ""
+        assert accounts.password_token_status(token, db_path=db_path) is not None
+
         mismatch = {**payload, "confirm": "a-different-password"}
-        status, location, body = post(mismatch, origin)
+        status, location, body = post(
+            mismatch,
+            "null",
+            fetch_site="same-origin",
+            fetch_mode="navigate",
+        )
         assert status == 303
         assert body == {}
         mismatch_query = parse_qs(urlparse(location).query)

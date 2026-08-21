@@ -2187,10 +2187,21 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         """Reject cross-site auth forms while preserving same-origin no-JS use."""
         origin = self.headers.get("Origin", "").strip()
         host = self.headers.get("Host", "").strip().casefold()
-        if not origin or not host:
+        if not host:
             return False
-        parsed = urlparse(origin)
-        return parsed.scheme in {"http", "https"} and parsed.netloc.casefold() == host
+        if origin and origin.casefold() != "null":
+            parsed = urlparse(origin)
+            return parsed.scheme in {"http", "https"} and parsed.netloc.casefold() == host
+        # Script-disabled Chromium sends ``Origin: null`` for a normal form
+        # navigation. Referrer fallback is unavailable by design because auth
+        # pages use ``no-referrer`` to keep one-time credentials out of logs.
+        # Fetch Metadata is browser-controlled, so accept only an exact
+        # same-origin top-level navigation; cross-site/null submissions remain
+        # denied and older clients without either proof fail closed.
+        return (
+            self.headers.get("Sec-Fetch-Site", "").strip().casefold() == "same-origin"
+            and self.headers.get("Sec-Fetch-Mode", "").strip().casefold() == "navigate"
+        )
 
     def _read_payload(self) -> dict[str, Any]:
         raw = self._read_raw_body() or b"{}"
