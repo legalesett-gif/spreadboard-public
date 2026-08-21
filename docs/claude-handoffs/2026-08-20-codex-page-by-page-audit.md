@@ -167,6 +167,14 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   volatility/adverse-basis reserve evidence, exact identity, inventory and the
   `$500 matched VWAP` boundary. Both auth states, all four viewport/theme
   captures, all nine jumps and all ten product destinations pass.
+- `/methodology` is now fully audited. Its headline spread formula wrongly used
+  midpoint even though the live route engine divides by the buy VWAP. A named
+  production ZIL HTX Spot → Gate Futures row proved the mismatch. The page now
+  uses `(sell VWAP ÷ buy VWAP − 1) × 100`, binds its copy to the exact `$500`
+  server probe, and distinguishes unresolved matched depth from a separately
+  labelled top-book reference. Fresh ZIL values reconciled exactly; all seven
+  jumps, public/authenticated destinations, four viewport/theme states,
+  contrast, landmarks, console and network checks pass.
 
 ### Current deployment and verification
 
@@ -178,20 +186,20 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `spreadboard/portfolio.py` SHA-256 remains
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
-- Latest deployed audited-page code commit: **`19e1a47`** for Guide. Run
+- Latest deployed audited-page code commit: **`18f9f2c`** for Methodology. Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
-- Production's code marker is **`19e1a47692396aa1b54c6445184c14ff637bc8ea`**.
+- Production's code marker is **`18f9f2c4bcc7c8050eb5905f6e43fbd7d9e680d0`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Current `server.py` SHA-256 is
-  **`aea20b415cdaeeb80985cb1232cadd8c9e522b3b148334fef975e606ff3ad9d6`**;
+  **`076c5672c52bac75e567691529f5956639b0f4937c4bfbb8d12705b592b3f97f`**;
   current `telegram_bot.py` SHA-256 is
   **`4a597b5dda93aaac4fbfdbe73b5dd5184323b7ee30e1bb482414f33b0f8c87c7`**;
   current `intel.py` SHA-256 remains
   **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
-- Full suite: **1,489 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,490 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -205,18 +213,21 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `/intel` desktop/mobile light/dark evidence and the final non-overlapping
   mobile capture, plus `/triage`, `/signals`, `/community`, `/learn`, `/proof`
   `/executor`, `/status`, `/telegram` and `/guide` before/final
+  desktop/mobile light/dark evidence, plus `/methodology` before/final
   desktop/mobile light/dark evidence.
 
 ### Fresh ML gate — do not train or activate
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 25,990 observations, 17,568
-labeled 24h outcomes, 1,846 routes and 6.83 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 26,171 observations, 17,677
+labeled 24h outcomes, 1,858 routes and 6.88 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
-6.83/30 days; no candidate exists, activation is false and the deterministic
-fallback remains active. Do not mix the 5,832 v4 rows or weaken these gates.
+6.88/30 days; no candidate exists, activation is false and the deterministic
+fallback remains active. The v5 observation store itself spans 8.375 days;
+only the labeled span is allowed to satisfy activation. Do not mix the 5,832
+v4 rows or weaken these gates.
 
 ### External live failure still open
 
@@ -228,7 +239,7 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/methodology`.
+1. Continue §8 with the remaining static routes, starting at `/pricing`.
 2. Then complete `/pricing`, `/subscription`, `/partner`,
    `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/
