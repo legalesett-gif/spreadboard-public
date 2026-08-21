@@ -526,7 +526,10 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         accounts.set_current_user(getattr(self, "current_user", None))
         try:
             if parsed.path == "/login":
-                self._send_html(render_login_page(query))
+                if self.current_user is not None:
+                    self._redirect(_safe_local_path(_query_first(query, "next"), "/account"))
+                else:
+                    self._send_html(render_login_page(query))
             elif parsed.path == "/register":
                 self._send_html(render_register_page())
             elif parsed.path == "/forgot-password":
@@ -1875,15 +1878,28 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
 
     def _handle_login(self) -> None:
         payload = self._read_payload()
+        form_request = "application/json" not in self.headers.get("Content-Type", "")
+        next_path = _safe_local_path(str(payload.get("next") or ""), "/account")
+        if form_request and not self._same_origin_form_post():
+            self._send_json(
+                {"ok": False, "error": "invalid_request_origin"},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
         key = self._client_ip()
         now = time.monotonic()
         with self._login_attempts_lock:
             recent = [item for item in self._login_attempts.get(key, []) if now - item < 900]
             if len(recent) >= 10:
-                self._send_json(
-                    {"ok": False, "error": "too_many_login_attempts"},
-                    status=HTTPStatus.TOO_MANY_REQUESTS,
-                )
+                if form_request:
+                    self._redirect(
+                        "/login?" + urlencode({"next": next_path, "error": "rate"})
+                    )
+                else:
+                    self._send_json(
+                        {"ok": False, "error": "too_many_login_attempts"},
+                        status=HTTPStatus.TOO_MANY_REQUESTS,
+                    )
                 return
             self._login_attempts[key] = recent
         try:
@@ -1898,23 +1914,35 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             with self._login_attempts_lock:
                 self._login_attempts.setdefault(key, []).append(now)
             time.sleep(0.25)
-            self._send_json(
-                {"ok": False, "error": "invalid_credentials"}, status=HTTPStatus.UNAUTHORIZED
-            )
+            if form_request:
+                self._redirect(
+                    "/login?" + urlencode({"next": next_path, "error": "invalid"})
+                )
+            else:
+                self._send_json(
+                    {"ok": False, "error": "invalid_credentials"},
+                    status=HTTPStatus.UNAUTHORIZED,
+                )
             return
         with self._login_attempts_lock:
             self._login_attempts.pop(key, None)
+        destination = (
+            "/partner"
+            if (
+                not user.subscription_active
+                and affiliates.partner_for_user(user.id, db_path=self.server.accounts_path)
+            )
+            else next_path
+        )
+        if form_request:
+            self._redirect(destination, session_token=token)
+            return
         self._send_json(
             {
                 "ok": True,
                 "user": user.public_dict(),
                 "csrf_token": user.csrf_token,
-                "next": "/partner"
-                if (
-                    not user.subscription_active
-                    and affiliates.partner_for_user(user.id, db_path=self.server.accounts_path)
-                )
-                else None,
+                "next": destination,
             },
             session_token=token,
         )
@@ -1996,6 +2024,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         morsel = cookie.get(name)
         return morsel.value if morsel is not None else ""
 
+    def _same_origin_form_post(self) -> bool:
+        """Reject cross-site login forms while preserving same-origin no-JS use."""
+        origin = self.headers.get("Origin", "").strip()
+        host = self.headers.get("Host", "").strip().casefold()
+        if not origin or not host:
+            return False
+        parsed = urlparse(origin)
+        return parsed.scheme in {"http", "https"} and parsed.netloc.casefold() == host
+
     def _read_payload(self) -> dict[str, Any]:
         raw = self._read_raw_body() or b"{}"
         if "application/json" in self.headers.get("Content-Type", ""):
@@ -2013,7 +2050,13 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             raise ValueError("request_body_too_large")
         return self.rfile.read(declared) if declared else b""
 
-    def _redirect(self, location: str, *, referral_token: str | None = None) -> None:
+    def _redirect(
+        self,
+        location: str,
+        *,
+        referral_token: str | None = None,
+        session_token: str | None = None,
+    ) -> None:
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_header("Location", location)
         self.send_header("Cache-Control", "no-store")
@@ -2021,6 +2064,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             self.send_header(
                 "Set-Cookie",
                 f"{affiliates.REFERRAL_COOKIE}={referral_token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={affiliates.DEFAULT_ATTRIBUTION_DAYS * 86400}",
+            )
+        if session_token:
+            self.send_header(
+                "Set-Cookie",
+                f"{accounts.SESSION_COOKIE}={session_token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={accounts.SESSION_DAYS * 86400}",
             )
         self._send_security_headers()
         self.send_header("Content-Length", "0")
@@ -10949,41 +10997,64 @@ def queue_web_push_test(
     )
 
 
+def _safe_local_path(value: str | None, default: str = "/") -> str:
+    """Return one unambiguous same-site path suitable for redirects and HTML."""
+    candidate = str(value or "").strip()
+    if not candidate:
+        return default
+    if len(candidate) > 500 or not candidate.startswith("/") or candidate.startswith("//"):
+        return default
+    if "\\" in candidate or any(ord(character) < 32 or ord(character) == 127 for character in candidate):
+        return default
+    if any(character in candidate for character in '<>"\''):
+        return default
+    parsed = urlparse(candidate)
+    if parsed.scheme or parsed.netloc:
+        return default
+    return candidate
+
+
 def render_login_page(query: dict[str, list[str]]) -> str:
-    next_path = _query_first(query, "next") or "/"
-    if not next_path.startswith("/") or next_path.startswith("//"):
-        next_path = "/"
+    next_path = _safe_local_path(_query_first(query, "next"), "/account")
+    error_message = {
+        "invalid": "Email or password is incorrect.",
+        "rate": "Too many attempts. Try again later.",
+    }.get(_query_first(query, "error") or "", "")
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in - SpreadBoard</title>
+<script>
+(() => {{
+  try {{
+    const saved=localStorage.getItem('spreadboard.theme.v1');
+    document.documentElement.dataset.theme=saved==='dark'||saved==='light'
+      ? saved
+      : (matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  }} catch(error) {{ document.documentElement.dataset.theme='light'; }}
+}})();
+</script>
 <style>
-:root {{ color-scheme: dark; --bg:#07110f; --panel:#101d1a; --line:#29443d; --ink:#edf8f4; --muted:#9bb1aa; --accent:#38d4bd; --danger:#ff8695; }}
-* {{ box-sizing:border-box; }} body {{ margin:0; min-height:100vh; background:var(--bg); color:var(--ink); font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; display:grid; place-items:center; padding:24px; }}
-.login-shell {{ width:min(420px,100%); }} .login-brand {{ display:flex; align-items:center; gap:12px; margin-bottom:28px; font-size:24px; font-weight:800; }}
-.login-mark {{ width:26px; height:26px; border-radius:50%; background:var(--accent); border:3px solid #dffff8; box-shadow:12px 9px 0 -5px #7fdccf; }}
-.login-panel {{ border:1px solid var(--line); background:var(--panel); padding:28px; border-radius:8px; }} h1 {{ margin:0 0 8px; font-size:28px; letter-spacing:0; }} p {{ color:var(--muted); margin:0 0 24px; line-height:1.5; }}
-label {{ display:grid; gap:7px; margin:0 0 16px; color:var(--muted); font-size:12px; font-weight:800; text-transform:uppercase; }} input {{ width:100%; min-height:46px; border:1px solid var(--line); background:#081310; color:var(--ink); border-radius:5px; padding:0 13px; font:inherit; }} input:focus {{ outline:2px solid var(--accent); outline-offset:1px; }}
-button {{ width:100%; min-height:46px; border:0; border-radius:5px; background:var(--accent); color:#052c26; font:inherit; font-weight:900; cursor:pointer; }} button:disabled {{ opacity:.55; cursor:wait; }}
-.login-error {{ min-height:20px; margin:14px 0 0; color:var(--danger); font-size:13px; }} .login-note {{ margin-top:18px; color:var(--muted); font-size:12px; text-align:center; }} .login-note a {{ color:var(--accent); font-weight:800; }}
-.login-shell {{ width:min(376px,100%); }}
-.login-brand {{ gap:9px;margin-bottom:24px;font-size:15px;font-weight:650; }}
-.login-mark {{ width:10px;height:10px;border:0;border-radius:50%;background:var(--accent);box-shadow:none; }}
-.login-panel {{ padding:24px 0;border-width:1px 0;border-radius:0;background:transparent; }}
-h1 {{ font-size:27px;font-weight:650;letter-spacing:-.03em; }}
-p {{ font-size:12.5px; }}
-label {{ font-size:9px;font-weight:700;letter-spacing:.08em; }}
-input {{ min-height:42px;border-radius:2px;background:#0b1714; }}
-button {{ min-height:42px;border-radius:2px;font-weight:700; }}
-.login-note {{ font-size:11px;line-height:1.5; }}
+:root {{ color-scheme:light;--bg:#f1f5f3;--panel:#ffffff;--field:#f8fbfa;--line:#cbd9d4;--ink:#13201d;--muted:#60736c;--accent:#0f766e;--button-ink:#ffffff;--danger:#b4233a;--toggle:#ffffff; }}
+:root[data-theme="dark"] {{ color-scheme:dark;--bg:#07110f;--panel:#101d1a;--field:#0b1714;--line:#29443d;--ink:#edf8f4;--muted:#9bb1aa;--accent:#38d4bd;--button-ink:#052c26;--danger:#ff8695;--toggle:#101d1a; }}
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}}.login-shell{{width:min(376px,100%)}}.login-brand{{display:flex;align-items:center;gap:9px;margin-bottom:24px;font-size:15px;font-weight:650}}.login-mark{{width:10px;height:10px;border:0;border-radius:50%;background:var(--accent);box-shadow:none}}.login-panel{{padding:24px 0;border:1px solid var(--line);border-width:1px 0;border-radius:0;background:transparent}}h1{{margin:0 0 8px;font-size:27px;font-weight:650;letter-spacing:-.03em}}p{{color:var(--muted);margin:0 0 24px;line-height:1.5;font-size:12.5px}}label{{display:grid;gap:7px;margin:0 0 16px;color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}}input{{width:100%;min-height:42px;border:1px solid var(--line);background:var(--field);color:var(--ink);border-radius:2px;padding:0 13px;font:inherit}}input:focus{{outline:2px solid var(--accent);outline-offset:1px}}.login-panel button{{width:100%;min-height:42px;border:0;border-radius:2px;background:var(--accent);color:var(--button-ink);font:inherit;font-weight:700;cursor:pointer}}button:disabled{{opacity:.55;cursor:wait}}.login-error{{min-height:20px;margin:14px 0 0;color:var(--danger);font-size:13px}}.login-note{{margin-top:18px;color:var(--muted);font-size:11px;line-height:1.5;text-align:center}}.login-note a{{color:var(--accent);font-weight:800}}
+.auth-theme-toggle{{position:fixed;top:18px;right:18px;display:inline-flex;align-items:center;gap:7px;width:auto;min-height:34px;padding:0 10px;border:1px solid var(--line);border-radius:3px;background:var(--toggle);color:var(--ink);font:inherit;font-size:11px;font-weight:700;cursor:pointer}}.theme-swatch{{width:13px;height:13px;border:1px solid var(--line);border-radius:50%;background:linear-gradient(90deg,var(--accent) 0 50%,var(--panel) 50% 100%)}}
+@media(max-width:560px){{.auth-theme-toggle{{top:12px;right:12px}}}}
 </style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div>
 <section class="login-panel"><h1>Welcome back</h1><p>Sign in to your private market workspace and position journal.</p>
-<form id="loginForm"><label>Email<input name="email" type="email" autocomplete="username" required autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">Sign in</button><div class="login-error" role="alert"></div></form></section>
+<form id="loginForm" action="/api/login" method="post"><input type="hidden" name="next" value="{h(next_path)}"><label>Email<input name="email" type="email" maxlength="254" autocomplete="username" inputmode="email" autocapitalize="none" spellcheck="false" required autofocus></label><label>Password<input name="password" type="password" maxlength="1024" autocomplete="current-password" required></label><button type="submit">Sign in</button><div class="login-error" role="alert" aria-live="polite">{h(error_message)}</div></form></section>
 <div class="login-note"><a href="/forgot-password">Forgot your password?</a><br><br>New here? <a href="/register">Create an account</a><br><br><a href="/pricing">See membership details</a> · secure, opaque session cookie</div></main>
+<button class="auth-theme-toggle" id="themeToggle" type="button" aria-label="Toggle light and dark mode" aria-pressed="false"><span class="theme-swatch" aria-hidden="true"></span><span data-theme-label>Theme</span></button>
 <script>
+(() => {{
+  const key='spreadboard.theme.v1',button=document.getElementById('themeToggle'),label=button.querySelector('[data-theme-label]');
+  const current=()=>document.documentElement.dataset.theme==='dark'?'dark':'light';
+  const apply=theme=>{{document.documentElement.dataset.theme=theme;try{{localStorage.setItem(key,theme);}}catch(error){{}}button.setAttribute('aria-pressed',theme==='dark'?'true':'false');label.textContent=theme==='dark'?'Dark':'Light';}};
+  apply(current());button.addEventListener('click',()=>apply(current()==='dark'?'light':'dark'));
+}})();
 document.getElementById('loginForm').addEventListener('submit', async (event) => {{
-  event.preventDefault(); const form=event.currentTarget; const button=form.querySelector('button'); const error=form.querySelector('.login-error'); button.disabled=true; error.textContent='';
-  try {{ const response=await fetch('/api/login',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(Object.fromEntries(new FormData(form)))}}); const data=await response.json(); if(!response.ok) throw new Error(data.error==='too_many_login_attempts'?'Too many attempts. Try again later.':'Email or password is incorrect.'); window.location.assign(data.next || {json.dumps(next_path)}); }}
-  catch(exc) {{ error.textContent=exc.message || 'Sign in failed.'; }} finally {{ button.disabled=false; }}
+  event.preventDefault();const form=event.currentTarget,button=form.querySelector('button[type="submit"]'),message=form.querySelector('.login-error');button.disabled=true;form.setAttribute('aria-busy','true');message.textContent='Signing in...';
+  try {{ const response=await fetch('/api/login',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(Object.fromEntries(new FormData(form)))}});const data=await response.json().catch(()=>({{}}));if(!response.ok)throw new Error(data.error==='too_many_login_attempts'?'Too many attempts. Try again later.':data.error==='invalid_credentials'?'Email or password is incorrect.':'Sign in is temporarily unavailable.');window.location.assign(data.next||form.elements.next.value||'/account'); }}
+  catch(exc) {{ message.textContent=exc.message||'Sign in is temporarily unavailable.';form.elements.password.value='';form.elements.password.focus(); }} finally {{ form.removeAttribute('aria-busy');button.disabled=false; }}
 }});
 </script></body></html>"""
 

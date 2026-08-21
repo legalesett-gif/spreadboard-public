@@ -26,6 +26,10 @@ SESSION_COOKIE = "spreadboard_session"
 SESSION_DAYS = 30
 SESSION_TOUCH_SECONDS = 300
 RESEARCH_CONSENT_VERSION = "portfolio_research_v2"
+_DUMMY_PASSWORD_HASH = (
+    "scrypt$16384$8$1$ee4d778639f9ef295c4174c09c88918b$"
+    "d562efac9d5c86fd732980ec5cbe806334eb3abd8483c9528d02b9a4fa6376ac"
+)
 _REQUEST_STATE = threading.local()
 _PAGE_VIEW_LOCK = threading.Lock()
 _PAGE_VIEW_PENDING: dict[tuple[str, str, str], int] = {}
@@ -769,12 +773,19 @@ def login(
     ip_address: str = "",
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> tuple[User, str]:
+    normalized_email = email.strip()
+    email_valid = bool(normalized_email) and len(normalized_email) <= 254
+    password_valid = bool(password) and len(password) <= 1024
     connection = _connect(db_path)
     try:
         row = connection.execute(
-            "SELECT * FROM users WHERE email = ? COLLATE NOCASE", (email.strip(),)
+            "SELECT * FROM users WHERE email = ? COLLATE NOCASE",
+            (normalized_email if email_valid else "__invalid_login__",),
         ).fetchone()
-        if row is None or not verify_password(password, str(row["password_hash"])):
+        encoded = str(row["password_hash"]) if row is not None else _DUMMY_PASSWORD_HASH
+        candidate = password if password_valid else "spreadboard-invalid-password-value"
+        password_matches = verify_password(candidate, encoded)
+        if row is None or not email_valid or not password_valid or not password_matches:
             raise ValueError("invalid_credentials")
         now = datetime.now(tz=timezone.utc)
         expires = now + timedelta(days=SESSION_DAYS)
