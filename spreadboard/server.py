@@ -5302,7 +5302,38 @@ def api_public_status(
     canonical = sources.get("canonical_api") or {}
     crypto = crypto_billing.status()
     telegram = telegram_bot.status()
+    funding = funding_history_health()
+    accounting = accounting_worker_status()
+    recovery = mailer.status()
     market_ok = bool(sources.get("ok"))
+    dex = canonical.get("dex_spot_source") or {}
+    dex_provider = str((dex.get("details") or {}).get("provider") or "DEX provider")
+    dex_status = str(dex.get("status") or "unknown")
+    dex_ok = dex_status in {"fresh", "ok", "operational"} and not dex.get("blockers")
+    dex_issue_text = " ".join(
+        str(item)
+        for item in [*(dex.get("errors") or []), *(dex.get("blockers") or [])]
+    ).lower()
+    dex_access_blocked = any(
+        marker in dex_issue_text
+        for marker in (
+            "no access",
+            "access denied",
+            "forbidden",
+            "not authorized",
+            "unauthorized",
+            "region",
+        )
+    )
+    funding_ok = str(funding.get("status") or "") == "operational"
+    accounting_ok = bool(
+        accounting.get("configured")
+        and accounting.get("running")
+        and accounting.get("read_only")
+    )
+    telegram_ok = bool(
+        telegram.get("configured") and telegram.get("community_configured")
+    )
     components = {
         "website": {"status": "operational"},
         "market_data": {
@@ -5311,6 +5342,29 @@ def api_public_status(
             "age_min": canonical.get("age_min"),
             "row_count": canonical.get("row_count"),
         },
+        "dex_quotes": {
+            "status": "operational" if dex_ok else "degraded",
+            "provider": dex_provider,
+            "row_count": int(dex.get("rows") or 0),
+            "detail": (
+                f"{dex_provider} quotes are current"
+                if dex_ok
+                else (
+                    f"{dex_provider} provider access is blocked; CEX market data remains live"
+                    if dex_access_blocked
+                    else f"{dex_provider} quote source is degraded; CEX market data remains live"
+                )
+            ),
+        },
+        "funding_history": {
+            "status": "operational" if funding_ok else "degraded",
+            "coverage_pct": funding.get("coverage_pct"),
+            "detail": (
+                f"{float(funding.get('coverage_pct') or 0):.1f}% source coverage"
+                if funding.get("coverage_pct") is not None
+                else "Funding-window collector health"
+            ),
+        },
         "crypto_checkout": {
             "status": "operational" if crypto.get("checkout_ready") else "setup_needed",
             "chain": crypto.get("chain"),
@@ -5318,25 +5372,42 @@ def api_public_status(
             "confirmations": crypto.get("confirmations"),
         },
         "telegram": {
-            "status": "operational" if telegram.get("configured") else "setup_needed",
+            "status": "operational" if telegram_ok else "setup_needed",
             "community": "operational" if telegram.get("community_configured") else "setup_needed",
         },
         "background_alerts": {
             "status": "operational"
             if position_alert_worker and position_alert_worker.running
-            else "degraded"
+            else "degraded",
+            "detail": "Personal position-alert worker",
         },
         "subscription_access": {
             "status": "operational"
             if subscription_lifecycle_worker and subscription_lifecycle_worker.running
-            else "degraded"
+            else "degraded",
+            "detail": "Subscriber access and expiry worker",
+        },
+        "private_accounting": {
+            "status": "operational" if accounting_ok else "degraded",
+            "read_only": bool(accounting.get("read_only")),
+            "detail": "Isolated read-only ledger worker",
         },
         "email_recovery": {
-            "status": "operational" if mailer.status()["configured"] else "setup_needed"
+            "status": "operational" if recovery["configured"] else "setup_needed",
+            "detail": "Password-recovery delivery",
         },
     }
+    component_statuses = {str(item.get("status") or "unknown") for item in components.values()}
+    overall_status = (
+        "operational"
+        if component_statuses == {"operational"}
+        else "degraded"
+        if "degraded" in component_statuses
+        else "setup_needed"
+    )
     return {
-        "ok": all(item.get("status") == "operational" for item in components.values()),
+        "ok": overall_status == "operational",
+        "overall_status": overall_status,
         "service": "SpreadBoard",
         "checked_at": datetime.now(tz=timezone.utc).isoformat(),
         "components": components,
@@ -10630,10 +10701,14 @@ def render_status_page(payload: dict[str, Any]) -> str:
     components = payload.get("components") or {}
     labels = {
         "website": "Website",
-        "market_data": "Market data",
+        "market_data": "CEX market data",
+        "dex_quotes": "DEX quotes",
+        "funding_history": "Funding history",
         "crypto_checkout": "Crypto checkout",
         "telegram": "Telegram",
         "background_alerts": "Background alerts",
+        "subscription_access": "Subscription access",
+        "private_accounting": "Read-only accounting",
         "email_recovery": "Email recovery",
     }
     cards = []
@@ -10654,7 +10729,7 @@ def render_status_page(payload: dict[str, Any]) -> str:
     for key, label in labels.items():
         item = components.get(key) or {}
         status = str(item.get("status") or "unknown")
-        detail = ""
+        detail = h(item.get("detail") or "Live service check")
         if key == "market_data":
             updated = h(compact_timestamp(item.get("updated_at")))
             row_count = item.get("row_count")
@@ -10669,8 +10744,35 @@ def render_status_page(payload: dict[str, Any]) -> str:
             detail = f"Private forum: {h(item.get('community') or 'unknown')}"
         cards.append(
             f'<article class="status-card {h(status)}"><span>{h(label)}</span>'
-            f"<strong>{h(label_text(status))}</strong><p>{detail or 'Live service check'}</p></article>"
+            f"<strong>{h(label_text(status))}</strong><p>{detail}</p></article>"
         )
+    component_statuses = {
+        str(item.get("status") or "unknown")
+        for item in components.values()
+        if isinstance(item, dict)
+    }
+    overall_status = str(payload.get("overall_status") or "")
+    if not overall_status:
+        overall_status = (
+            "operational"
+            if component_statuses == {"operational"}
+            else "degraded"
+            if "degraded" in component_statuses
+            else "setup_needed"
+        )
+    degraded_data_source = any(
+        str((components.get(key) or {}).get("status") or "unknown") == "degraded"
+        for key in ("market_data", "dex_quotes", "funding_history")
+    )
+    headline = {
+        "operational": "All monitored systems operational",
+        "degraded": (
+            "Core services live · data source degraded"
+            if degraded_data_source
+            else "Core services live · a monitored service is degraded"
+        ),
+        "setup_needed": "Core services live · setup items remain",
+    }.get(overall_status, "Service status partially unavailable")
     body = f"""
     <style>
       .public-status {{ max-width:1120px;margin:0 auto;padding:52px 24px 80px }}
@@ -10681,7 +10783,7 @@ def render_status_page(payload: dict[str, Any]) -> str:
       .status-card.operational {{ border-top:3px solid var(--green) }} .status-card.degraded,.status-card.setup_needed {{ border-top:3px solid var(--red) }}
       @media(max-width:760px) {{ .status-grid {{ grid-template-columns:1fr }} }}
     </style>
-    <section class="public-status"><header class="terminal-heading"><div><span class="page-kicker">Live service status</span><h1>{"All monitored systems operational" if payload.get("ok") else "Core service live · setup items remain"}</h1><p>This page reports current market-data, payment, alert, recovery and Telegram readiness without exposing account or infrastructure details.</p></div><div class="terminal-live-box {"live" if payload.get("ok") else "unavailable"}"><span>Checked now</span><strong>{h(checked_at)}</strong><em>UTC</em></div></header><div class="status-grid">{"".join(cards)}</div></section>
+    <section class="public-status"><header class="terminal-heading"><div><span class="page-kicker">Live service status</span><h1>{h(headline)}</h1><p>This page reports current CEX and DEX data, funding history, payment, alert, subscriber access, read-only accounting, recovery and Telegram readiness without exposing account or infrastructure details.</p></div><div class="terminal-live-box {"live" if overall_status == "operational" else "unavailable"}"><span>Checked now</span><strong>{h(checked_at)}</strong><em>UTC</em></div></header><div class="status-grid">{"".join(cards)}</div><footer class="research-footer"><a class="pricing-button primary" href="/api/status">Machine-readable status</a><a class="pricing-button" href="/proof">Release audits</a></footer></section>
     """
     return shell("Status - SpreadBoard", "status", body)
 

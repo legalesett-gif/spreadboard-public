@@ -9,6 +9,7 @@ the free stream into it.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
@@ -300,6 +301,134 @@ def test_status_page_handler_includes_subscription_lifecycle_health() -> None:
 
     assert "self.server.position_alert_worker" in status_branch
     assert "self.server.subscription_lifecycle_worker" in status_branch
+
+
+def test_status_discloses_partial_dex_and_every_running_customer_service(monkeypatch) -> None:
+    monkeypatch.setattr(
+        server,
+        "api_source_health",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "canonical_api": {
+                "status": "fresh",
+                "updated_at": "2026-08-21T13:00:00Z",
+                "age_min": 0.5,
+                "row_count": 23_696,
+                "dex_spot_source": {
+                    "status": "partial",
+                    "rows": 0,
+                    "details": {"provider": "OKX DEX"},
+                    "blockers": ["partial_source_errors"],
+                    "errors": ["catalogue:1:API key or regions have no access"],
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(
+        server.crypto_billing,
+        "status",
+        lambda: {"checkout_ready": True, "chain": "Arbitrum One", "tokens": ["USDT"]},
+    )
+    monkeypatch.setattr(
+        server.telegram_bot,
+        "status",
+        lambda: {"configured": True, "community_configured": True},
+    )
+    monkeypatch.setattr(server.mailer, "status", lambda: {"configured": True})
+    monkeypatch.setattr(
+        server,
+        "funding_history_health",
+        lambda: {"status": "operational", "coverage_pct": 100.0},
+    )
+    monkeypatch.setattr(
+        server,
+        "accounting_worker_status",
+        lambda: {"configured": True, "running": True, "read_only": True},
+    )
+
+    payload = server.api_public_status(
+        Path("board.json"),
+        {},
+        SimpleNamespace(running=True, poll_seconds=30),
+        SimpleNamespace(running=True, poll_seconds=900),
+    )
+
+    assert payload["ok"] is False
+    assert payload["overall_status"] == "degraded"
+    assert payload["components"]["market_data"]["status"] == "operational"
+    assert payload["components"]["dex_quotes"]["status"] == "degraded"
+    assert payload["components"]["subscription_access"]["status"] == "operational"
+    assert payload["components"]["funding_history"]["status"] == "operational"
+    assert payload["components"]["private_accounting"]["status"] == "operational"
+
+    page = server.render_status_page(payload)
+    assert "Core services live · data source degraded" in page
+    assert "DEX quotes" in page
+    assert "OKX DEX provider access is blocked; CEX market data remains live" in page
+    assert "Subscription access" in page
+    assert "Funding history" in page
+    assert "Read-only accounting" in page
+    assert 'href="/api/status"' in page
+
+
+def test_status_does_not_mislabel_a_transient_dex_partial_as_access_blocked(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        server,
+        "api_source_health",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "canonical_api": {
+                "dex_spot_source": {
+                    "status": "partial",
+                    "details": {"provider": "Example DEX"},
+                    "errors": ["quote timeout"],
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(server.crypto_billing, "status", lambda: {"checkout_ready": True})
+    monkeypatch.setattr(
+        server.telegram_bot,
+        "status",
+        lambda: {"configured": True, "community_configured": False},
+    )
+    monkeypatch.setattr(server.mailer, "status", lambda: {"configured": True})
+    monkeypatch.setattr(server, "funding_history_health", lambda: {"status": "operational"})
+    monkeypatch.setattr(
+        server,
+        "accounting_worker_status",
+        lambda: {"configured": True, "running": True, "read_only": True},
+    )
+
+    payload = server.api_public_status(
+        Path("board.json"),
+        {},
+        SimpleNamespace(running=True),
+        SimpleNamespace(running=True),
+    )
+
+    assert payload["components"]["dex_quotes"]["detail"] == (
+        "Example DEX quote source is degraded; CEX market data remains live"
+    )
+    assert payload["components"]["telegram"]["status"] == "setup_needed"
+
+
+def test_status_headline_names_a_non_data_degradation_honestly() -> None:
+    page = server.render_status_page(
+        {
+            "checked_at": "2026-08-21T13:00:00+00:00",
+            "overall_status": "degraded",
+            "components": {
+                "website": {"status": "operational"},
+                "background_alerts": {"status": "degraded"},
+            },
+        }
+    )
+
+    assert "Core services live · a monitored service is degraded" in page
+    assert "Core services live · data source degraded" not in page
 
 
 def test_warming_yields_between_builds_so_the_server_can_answer() -> None:
