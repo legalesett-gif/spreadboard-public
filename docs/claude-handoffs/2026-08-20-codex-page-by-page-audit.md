@@ -308,11 +308,11 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 27,060 observations, 18,097
-labeled 24h outcomes, 1,894 routes and 7.04 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 27,228 observations, 18,231
+labeled 24h outcomes, 1,909 routes and 7.08 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
-7.04/30 days; no candidate exists, activation is false and the deterministic
+7.08/30 days; no candidate exists, activation is false and the deterministic
 fallback remains active. The v5 observation store itself spans about 8.5 days;
 only the labeled span is allowed to satisfy activation. Do not mix the 5,832
 v4 rows or weaken these gates.
