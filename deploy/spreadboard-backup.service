@@ -8,6 +8,9 @@ ConditionPathExists=/opt/spreadboard/secrets/backup.env
 Type=oneshot
 EnvironmentFile=/opt/spreadboard/secrets/backup.env
 Environment=RESTIC_CACHE_DIR=/tmp/restic-cache
+# ProtectHome deliberately hides root's default rclone configuration. Keep the
+# production-only copy beside the other root-readable backup secrets instead.
+Environment=RCLONE_CONFIG=/opt/spreadboard/secrets/rclone.conf
 # Market history is the bulk of this snapshot and is raw SQLite pages, which
 # compress about threefold. restic 0.14+ initialises repository format 2, so a
 # repository created by this unit supports compression without any migration.
@@ -20,7 +23,11 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadOnlyPaths=/opt/spreadboard/runtime /opt/spreadboard/app
+# SQLite may create a transient -shm file even for a mode=ro connection to a
+# WAL database. Without this narrow exception the consistency-safe backup API
+# cannot open the live accounts database. The backup code never mutates rows.
+ReadWritePaths=/opt/spreadboard/runtime
+ReadOnlyPaths=/opt/spreadboard/app
 
 [Install]
 WantedBy=multi-user.target

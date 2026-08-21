@@ -36,7 +36,10 @@ def stage_snapshot(source: Path, target: Path) -> list[Path]:
         destination = target / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         if path.suffix.casefold() in DATABASE_SUFFIXES:
-            _backup_sqlite(path, destination)
+            try:
+                _backup_sqlite(path, destination)
+            except sqlite3.DatabaseError as exc:
+                raise RuntimeError(f"backup_sqlite_failed:{relative.as_posix()}") from exc
         else:
             shutil.copy2(path, destination)
         copied.append(relative)

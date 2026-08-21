@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
 from scripts import backup_spreadboard
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_stage_snapshot_uses_consistent_sqlite_copy_and_excludes_cache(tmp_path) -> None:
@@ -61,6 +64,18 @@ def test_stage_snapshot_keeps_databases_that_exceed_the_size_cap(tmp_path, monke
         assert connection.execute("SELECT COUNT(*) FROM route_points").fetchone()[0] == 64
 
 
+def test_stage_snapshot_names_a_database_that_cannot_be_copied(tmp_path) -> None:
+    source = tmp_path / "runtime"
+    source.mkdir()
+    broken = source / "broken.sqlite3"
+    broken.write_bytes(b"not a sqlite database")
+    target = tmp_path / "staged"
+    target.mkdir()
+
+    with pytest.raises(RuntimeError, match=r"backup_sqlite_failed:broken\.sqlite3"):
+        backup_spreadboard.stage_snapshot(source, target)
+
+
 # --------------------------------------------------------------------------
 # Backend-appropriate configuration
 # --------------------------------------------------------------------------
@@ -93,3 +108,13 @@ def test_every_backend_still_needs_a_repository_and_a_password(monkeypatch) -> N
 
     with pytest.raises(RuntimeError, match="backup_configuration_missing"):
         backup_spreadboard._require_restic_configuration()
+
+
+def test_hardened_backup_unit_does_not_depend_on_root_home_for_rclone() -> None:
+    unit = (ROOT / "deploy" / "spreadboard-backup.service").read_text(encoding="utf-8")
+
+    assert "ProtectHome=true" in unit
+    assert "RCLONE_CONFIG=/opt/spreadboard/secrets/rclone.conf" in unit
+    assert "ReadWritePaths=/opt/spreadboard/runtime" in unit
+    assert "ReadOnlyPaths=/opt/spreadboard/app" in unit
+    assert "ReadOnlyPaths=/opt/spreadboard/runtime" not in unit
