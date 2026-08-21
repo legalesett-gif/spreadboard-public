@@ -266,6 +266,14 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   Fetch Metadata proves a same-origin navigation, while cross-site/null remains
   denied. Complete valid/used/expired JavaScript and no-JavaScript lifecycles,
   desktop/mobile light/dark and exact cleanup pass.
+- `/terms` is now fully audited. The nested legal `<main>`, two sub-AA light
+  colors, inert contact details and ambiguous support-URL acceptance are fixed.
+  The shared authenticated shell also gained a verified, bounded logout flow:
+  it consumes the JSON response, requires `{ok:true}`, exposes retry feedback,
+  times out after 15 seconds and keeps a visible mobile sign-out control. The
+  final public/authenticated desktop/mobile light/dark matrix, all contacts and
+  destinations, and a live forced-failure/retry flow pass without document
+  overflow or an aborted logout body. Audit sessions were removed exactly.
 
 ### Current deployment and verification
 
@@ -278,17 +286,17 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
 - Latest deployed code commit:
-  **`3234edfa1e29eb14498ef7db9303459cbd9992d8`** for the completed Set Password audit.
+  **`cc7fe31ab9f8023ed860a7cb0ab0dc94588e5144`** for the completed Terms audit.
   Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
 - Production's code marker is
-  **`3234edfa1e29eb14498ef7db9303459cbd9992d8`**.
+  **`cc7fe31ab9f8023ed860a7cb0ab0dc94588e5144`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Current `server.py` SHA-256 is
-  **`938a658984a7f37f30d28bdec3404235012f92385aef2dd99fea642a5a24b8cf`**;
+  **`9c2b98e40435f95b3837c6fcb0568dee51d4c424c6d4ccd799325304802ed100`**;
   current `accounts.py` SHA-256 is
   **`5ba685d0cbf1100bcbad2c4b880905a70c77bd159118cd1f42bc44846ca0aa92`**;
   current `Caddyfile` SHA-256 is
@@ -301,7 +309,7 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   **`4a597b5dda93aaac4fbfdbe73b5dd5184323b7ee30e1bb482414f33b0f8c87c7`**;
   current `intel.py` SHA-256 remains
   **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
-- Full suite: **1,557 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,566 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 530 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -330,7 +338,9 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   Registration desktop/mobile light/dark and the no-JavaScript success
   destination are under `register-*-final.png`. Set Password valid/expired
   desktop/mobile light/dark, used-token and no-JavaScript evidence is under
-  `set-password-*-final.png`.
+  `set-password-*-final.png`. Terms public/authenticated desktop/mobile
+  light/dark and the mobile logout-failure notice are under
+  `terms-*-final.png` and `terms-mobile-auth-dark-logout-failure.png`.
 
 - One deployment error occurred and is preserved as an operational warning.
   A large chained SCP reached the tool boundary, leaving the staged and then
@@ -349,12 +359,12 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 27,523 observations, 18,396
-labeled 24h outcomes, 1,919 routes and 7.12 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 27,831 observations, 18,600
+labeled 24h outcomes, 1,928 routes and 7.21 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
-7.12/30 days; no candidate exists, activation is false and the deterministic
-fallback remains active. The v5 observation store itself spans about 8.62 days;
+7.21/30 days; no candidate exists, activation is false and the deterministic
+fallback remains active. The v5 observation store itself spans about 8.71 days;
 only the labeled span is allowed to satisfy activation. Do not mix the 5,832
 v4 rows or weaken these gates.
 
@@ -368,8 +378,8 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with legal routes in this order:
-   `/terms`, `/privacy`, `/refunds`, `/affiliate-terms`.
+1. Continue §8 with the remaining legal routes in this order:
+   `/privacy`, `/refunds`, `/affiliate-terms`.
 2. Then complete the `/account` alias and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
    test; exercise its controls under both themes and both viewports. Include
