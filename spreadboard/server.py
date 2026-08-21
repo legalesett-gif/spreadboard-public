@@ -417,7 +417,14 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     )
                 )
             elif parsed.path == "/pricing":
-                self._send_html(render_pricing_page(query))
+                pricing_query = query
+                if _query_first(query, "referred") == "1" and not affiliates.valid_click_token(
+                    self._cookie_value(affiliates.REFERRAL_COOKIE),
+                    db_path=self.server.accounts_path,
+                ):
+                    pricing_query = {key: list(values) for key, values in query.items()}
+                    pricing_query.pop("referred", None)
+                self._send_html(render_pricing_page(pricing_query))
             elif parsed.path.startswith("/r/"):
                 slug = parsed.path.removeprefix("/r/").strip("/")
                 existing_token = self._cookie_value(affiliates.REFERRAL_COOKIE)
