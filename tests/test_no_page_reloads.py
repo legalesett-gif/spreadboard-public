@@ -21,7 +21,9 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
-from spreadboard import server
+import pytest
+
+from spreadboard import accounts, server
 
 # --------------------------------------------------------------------------
 # The board is never taken over
@@ -188,9 +190,31 @@ def test_no_page_links_to_terms_privacy_or_refunds() -> None:
         assert href not in source, f"{href} is still linked from the UI"
 
 
-def test_the_checkout_consent_checkbox_survives() -> None:
+def test_the_checkout_consent_checkbox_survives(monkeypatch: pytest.MonkeyPatch) -> None:
     """Removing the links must not remove the payment consent gate itself."""
+    monkeypatch.setenv(
+        "SPREADBOARD_CRYPTO_RECEIVING_ADDRESS",
+        "0xe45cedb238f0a90f111a283eb5f67f7e4d80b937",
+    )
+    monkeypatch.setenv("SPREADBOARD_CRYPTO_RPC_URL", "https://example.invalid/rpc")
+    accounts.set_current_user(
+        accounts.User(
+            id=1,
+            email="buyer@example.test",
+            display_name="Buyer",
+            role="member",
+            subscription_status="inactive",
+            subscription_expires_at=None,
+            monthly_capital_usd=None,
+            subscription_tier="free",
+            billing_customer_id=None,
+            billing_subscription_id=None,
+            subscription_cancel_at_period_end=False,
+            csrf_token="csrf",
+        )
+    )
     source = server.render_subscription_page({})
+    accounts.set_current_user(None)
 
     assert "data-subscription-consent" in source
     assert "immediate access" in source

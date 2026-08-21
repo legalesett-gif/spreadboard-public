@@ -74,8 +74,31 @@ def test_every_term_is_offered_on_both_pages() -> None:
         assert term["label"] in subscription
 
 
-def test_the_subscription_page_keeps_its_consent_and_checkout() -> None:
+def test_the_subscription_page_keeps_its_consent_and_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Concise must not mean dropping what is legally required or functional."""
+    monkeypatch.setenv(
+        "SPREADBOARD_CRYPTO_RECEIVING_ADDRESS",
+        "0xe45cedb238f0a90f111a283eb5f67f7e4d80b937",
+    )
+    monkeypatch.setenv("SPREADBOARD_CRYPTO_RPC_URL", "https://example.invalid/rpc")
+    accounts.set_current_user(
+        accounts.User(
+            id=1,
+            email="buyer@example.test",
+            display_name="Buyer",
+            role="member",
+            subscription_status="inactive",
+            subscription_expires_at=None,
+            monthly_capital_usd=None,
+            subscription_tier="free",
+            billing_customer_id=None,
+            billing_subscription_id=None,
+            subscription_cancel_at_period_end=False,
+            csrf_token="csrf",
+        )
+    )
     html = server.render_subscription_page()
 
     assert "data-subscription-consent" in html
@@ -97,6 +120,7 @@ def test_directly_managed_access_is_not_described_as_auto_renewing() -> None:
         is_admin = False
         subscription_active = True
         subscription_status = "active"
+        subscription_tier = "research_pro"
         csrf_token = "csrf"
         subscription_expires_at = "2026-08-18T00:00:00+00:00"
         billing_customer_id = None
@@ -107,7 +131,8 @@ def test_directly_managed_access_is_not_described_as_auto_renewing() -> None:
     finally:
         accounts.set_current_user(None)
 
-    assert "Access is managed directly." in html
+    assert "Prepaid Research Pro access is active through 18 August 2026." in html
+    assert "Same-tier renewals extend your access from 18 August 2026." in html
     assert "Access until" in html
     assert "Renews automatically" not in html
     assert "Subscribe ·" not in html
@@ -116,7 +141,7 @@ def test_directly_managed_access_is_not_described_as_auto_renewing() -> None:
 def test_the_subscription_page_leads_with_the_plan_facts() -> None:
     html = server.render_subscription_page()
 
-    assert "Monthly price" in html
+    assert "30-day reference price" in html
     assert "Billing cycle" in html
     prose = _visible_prose(html)
     assert len(prose) <= 6, "\n".join(prose)

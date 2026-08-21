@@ -235,7 +235,7 @@ def test_subscription_page_offers_crypto_checkout(client):
     response = client.getresponse()
     page = response.read().decode()
     assert response.status == 200
-    assert "Pay with crypto" in page
+    assert "Pay for Research Pro with crypto" in page
     assert "Arbitrum One" in page
     assert "USDC" in page and "USDT" in page
     # all three prepaid periods must be offered

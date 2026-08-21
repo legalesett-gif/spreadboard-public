@@ -11163,31 +11163,32 @@ def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
     return shell("Membership - SpreadBoard", "pricing", body)
 
 
-def render_crypto_checkout_panel() -> str:
-    """Prepaid crypto checkout: pick a period, pay the exact amount, get access."""
+def render_crypto_checkout_panel(*, tier: str = "research_pro") -> str:
+    """Prepaid crypto checkout for one explicitly selected entitlement tier."""
     state = crypto_billing.status()
     if not state.get("checkout_ready"):
         return (
             '<section class="account-empty-panel"><strong>Crypto payment</strong>'
             "<p>Crypto checkout is being configured. No payment can be taken yet.</p></section>"
         )
-    periods = "".join(
-        f'<section class="crypto-tier-periods"><strong>{h(PLAN_CATALOG[tier]["name"])}</strong><div>'
+    selected_tier = tier if tier in {"scanner", "research_pro"} else "research_pro"
+    tier_state = (state.get("tiers") or {}).get(selected_tier) or {}
+    periods = (
+        f'<section class="crypto-tier-periods"><strong>{h(PLAN_CATALOG[selected_tier]["name"])}</strong><div>'
         + "".join(
-            f'<button class="sheet-button crypto-period" type="button" data-crypto-tier="{h(tier)}" data-crypto-period="{p["days"]}">'
+            f'<button class="sheet-button crypto-period" type="button" aria-pressed="false" '
+            f'data-crypto-tier="{h(selected_tier)}" data-crypto-period="{p["days"]}">'
             f'<span class="crypto-period-price">{h(p["label"])}</span>'
             f'<span class="crypto-period-days">{p["days"]} days</span></button>'
             for p in tier_state.get("periods", [])
         )
         + "</div></section>"
-        for tier, tier_state in (state.get("tiers") or {}).items()
-        if tier in {"scanner", "research_pro"}
     )
     tokens = " or ".join(state.get("tokens", []))
     return f"""
-    <section class="account-empty-panel crypto-checkout" data-crypto-checkout>
-      <strong>Pay with crypto</strong>
-      <p class="crypto-lede">Prepaid access on <b>{h(state.get("chain"))}</b> in <b>{h(tokens)}</b>.
+    <section class="account-empty-panel crypto-checkout" data-crypto-checkout data-crypto-checkout-tier="{h(selected_tier)}">
+      <strong>Pay for {h(PLAN_CATALOG[selected_tier]["name"])} with crypto</strong>
+      <p class="crypto-lede">Prepaid {h(PLAN_CATALOG[selected_tier]["name"])} access on <b>{h(state.get("chain"))}</b> in <b>{h(tokens)}</b>.
       There is no auto-renewal &mdash; access simply lapses at the end of the period. Same-tier
       renewals extend access; tier changes are available after the current prepaid term ends.</p>
       <div class="crypto-periods">{periods}</div>
@@ -11258,7 +11259,7 @@ def render_crypto_checkout_script() -> str:
   var statusEl=root.querySelector('[data-crypto-status]');
   var errEl=root.querySelector('[data-crypto-error]');
   var cdEl=root.querySelector('[data-crypto-countdown]');
-  var timer=null, poll=null, invoice=null, paymentOption=null;
+  var timer=null, poll=null, invoice=null, paymentOption=null, pollFailures=0;
 
   function csrf(){ try{ return JSON.parse(document.getElementById('account-session').textContent).csrf_token; }catch(e){ return null; } }
   function consent(){ var c=document.querySelector('[data-subscription-consent]'); return !!(c && c.checked); }
@@ -11306,22 +11307,33 @@ def render_crypto_checkout_script() -> str:
     if(poll) clearInterval(poll);
     poll=setInterval(function(){
       fetch('/api/billing/crypto/invoice/'+id,{credentials:'same-origin'})
-        .then(function(r){return r.json();})
+        .then(function(r){if(!r.ok)throw new Error('invoice_status_unavailable');return r.json();})
         .then(function(d){
-          if(!d || !d.invoice) return;
+          if(!d || !d.invoice) throw new Error('invoice_status_unavailable');
+          pollFailures=0;
           if(d.invoice.status==='paid'){
             clearInterval(poll); if(timer) clearInterval(timer);
             statusEl.textContent='Payment confirmed. Activating your access\u2026';
             setTimeout(function(){ location.href='/account'; },1500);
+          }else if(d.invoice.status==='expired'){
+            clearInterval(poll); if(timer) clearInterval(timer);
+            statusEl.textContent='This invoice expired. Choose a period to start again.';
+          }else{
+            statusEl.textContent='Waiting for payment\u2026 confirmed automatically once it lands.';
           }
-        }).catch(function(){});
+        }).catch(function(){
+          pollFailures+=1;
+          if(pollFailures>=3){
+            statusEl.textContent='Confirmation status is temporarily unavailable in this browser. Do not send another payment; refresh or check Portfolio.';
+          }
+        });
     },5000);
   }
 
   root.querySelectorAll('[data-crypto-period]').forEach(function(btn){
     btn.addEventListener('click',function(){
       errEl.textContent='';
-      if(!consent()){ errEl.textContent='Please accept the Terms and Refund Policy first.'; return; }
+      if(!consent()){ errEl.textContent='Please acknowledge immediate digital access before continuing.'; return; }
       root.querySelectorAll('[data-crypto-period]').forEach(function(b){ b.setAttribute('aria-pressed','false'); });
       btn.setAttribute('aria-pressed','true');
       fetch('/api/billing/crypto/invoice',{
@@ -11345,12 +11357,20 @@ def render_crypto_checkout_script() -> str:
   });
 
   root.querySelectorAll('[data-copy]').forEach(function(b){
-    b.addEventListener('click',function(){
+    b.addEventListener('click',async function(){
       if(!invoice) return;
       var values={amount:invoice.amount_display,address:invoice.receiving_address,contract:paymentOption&&paymentOption.contract_address};
       var v=values[b.dataset.copy]; if(!v) return;
-      navigator.clipboard&&navigator.clipboard.writeText(v);
-      var t=b.textContent; b.textContent='Copied'; setTimeout(function(){b.textContent=t;},1200);
+      var t=b.textContent;
+      try{
+        if(!navigator.clipboard||!navigator.clipboard.writeText) throw new Error('clipboard_unavailable');
+        await navigator.clipboard.writeText(v);
+        b.textContent='Copied';
+      }catch(_error){
+        b.textContent='Copy failed';
+        errEl.textContent='Copy was not completed. Select and copy the value manually.';
+      }
+      setTimeout(function(){b.textContent=t;},1200);
     });
   });
 })();
@@ -11373,54 +11393,139 @@ def fmt_renewal_date(value: Any) -> str:
 def render_subscription_page(query: dict[str, list[str]] | None = None) -> str:
     query = query or {}
     user = accounts.current_user()
-    billing_state = billing.status()
     active = bool(user and user.subscription_active)
     billing_managed = bool(user and user.billing_customer_id)
-    requested_tier = _query_first(query, "tier") or (
-        _user_entitlement_tier(user)
-        if user and _user_entitlement_tier(user) != "free"
-        else "research_pro"
+    is_admin = bool(user and user.is_admin)
+    stored_tier = str(getattr(user, "subscription_tier", "") or "")
+    current_tier = _user_entitlement_tier(user) if user else "free"
+    locked_tier = (
+        current_tier
+        if active
+        else stored_tier if billing_managed and stored_tier in {"scanner", "research_pro"} else ""
     )
+    requested_tier = locked_tier or _query_first(query, "tier") or "research_pro"
     if requested_tier not in {"scanner", "research_pro"}:
         requested_tier = "research_pro"
+    renews = fmt_renewal_date(getattr(user, "subscription_expires_at", None)) if user else "\u2014"
+    selected_plan = PLAN_CATALOG[requested_tier]
+
     if not user:
         action = '<a class="sheet-button primary" href="/login?next=/subscription">Sign in to subscribe</a>'
+    elif is_admin:
+        action = '<p class="pricing-note">Administrator access has no billing term.</p>'
     elif billing_managed:
         action = '<button class="sheet-button primary" type="button" data-billing-action="portal">Manage billing</button>'
     elif active:
-        action = '<p class="pricing-note">This access is managed directly. Contact support to change it.</p>'
-    else:
-        tier_state = (billing_state.get("tiers") or {}).get(requested_tier) or {}
         action = (
-            f'<button class="sheet-button primary" type="button" data-billing-action="checkout" data-billing-tier="{h(requested_tier)}">Subscribe to {h(PLAN_CATALOG[requested_tier]["name"])}</button>'
-            if tier_state.get("checkout_ready")
-            else '<p class="pricing-note">Crypto is the active payment method. Choose a prepaid term below.</p>'
+            f'<p class="pricing-note">Same-tier renewals extend your access from {h(renews)}. '
+            f'Tier changes become available after {h(renews)}.</p>'
         )
-    renews = fmt_renewal_date(getattr(user, "subscription_expires_at", None)) if user else "\u2014"
-    selected_plan = PLAN_CATALOG[requested_tier]
-    plan_choices = "".join(
-        f'<a class="sub-tier-choice {"selected" if tier == requested_tier else ""}" href="/subscription?tier={h(tier)}"><span>{h(plan["name"])}</span><strong>${h(plan["monthly"])}/30d</strong><em>{h(plan["tagline"])}</em></a>'
-        for tier, plan in PLAN_CATALOG.items()
-        if tier != "free"
+    else:
+        action = '<p class="pricing-note">Choose a prepaid crypto term below.</p>'
+
+    choices = []
+    tier_locked = bool(active or billing_managed or is_admin)
+    for tier, plan in PLAN_CATALOG.items():
+        if tier == "free":
+            continue
+        content = (
+            f'<span>{h(plan["name"])}</span><strong>${h(plan["monthly"])}/30d</strong>'
+            f'<em>{h(plan["tagline"])}</em>'
+        )
+        if tier_locked:
+            if tier == requested_tier:
+                choices.append(
+                    f'<div class="sub-tier-choice selected" aria-current="true">{content}</div>'
+                )
+            else:
+                available = f"Available after {renews}" if active and not is_admin else "Not available in this billing state"
+                choices.append(
+                    f'<div class="sub-tier-choice unavailable" aria-disabled="true">{content}'
+                    f'<small>{h(available)}</small></div>'
+                )
+        else:
+            choices.append(
+                f'<a class="sub-tier-choice {"selected" if tier == requested_tier else ""}" '
+                f'href="/subscription?tier={h(tier)}">{content}</a>'
+            )
+    plan_choices = "".join(choices)
+
+    if not user:
+        header_copy = "Sign in or create an account to activate market access."
+    elif is_admin:
+        header_copy = "Administrator access is active without a customer billing term."
+    elif billing_managed and active and user.subscription_cancel_at_period_end:
+        header_copy = f"Cancellation is scheduled; access continues until {renews}."
+    elif billing_managed and active:
+        header_copy = "Renews automatically. Cancel any time in the billing portal."
+    elif billing_managed:
+        header_copy = "Use the billing portal to restore or manage this billing account."
+    elif active:
+        header_copy = f"Prepaid {h(selected_plan['name'])} access is active through {h(renews)}."
+    else:
+        header_copy = "Your account is signed in; market access is not active yet."
+
+    if active:
+        if is_admin:
+            status_label, status_value = "Access", "No expiry"
+        elif billing_managed and not user.subscription_cancel_at_period_end:
+            status_label, status_value = "Next payment", renews
+        else:
+            status_label, status_value = "Access until", renews
+    else:
+        status_label, status_value = "Status", user.subscription_status if user else "inactive"
+    billing_cycle = (
+        "Recurring billing" if billing_managed else "No billing term" if is_admin else "Prepaid crypto"
+    )
+
+    show_crypto_checkout = bool(user and not is_admin and not billing_managed)
+    crypto_ready = bool(crypto_billing.status().get("checkout_ready"))
+    consent = (
+        '<label class="subscription-consent"><input type="checkbox" data-subscription-consent>'
+        '<span>I request immediate access and acknowledge that the statutory cancellation '
+        'right may be affected once digital access begins.</span></label>'
+        if show_crypto_checkout and crypto_ready
+        else ""
+    )
+    secondary_action = (
+        '<a class="sheet-button" href="/account">Open account</a>'
+        if user
+        else '<a class="sheet-button" href="/pricing">Compare plans</a>'
+    )
+    crypto_panel = (
+        render_crypto_checkout_panel(tier=requested_tier) if show_crypto_checkout else ""
+    )
+    crypto_script = render_crypto_checkout_script() if show_crypto_checkout else ""
+    billing_script = render_billing_script() if user and billing_managed else ""
+    longer_terms = (
+        f'<section class="sub-plan"><span class="sub-badge">{h(selected_plan["name"])} longer terms</span>'
+        f'{render_membership_terms(tier=requested_tier)}'
+        '<p class="pricing-note">Longer terms are prepaid in one payment.</p></section>'
+        if not billing_managed and not is_admin
+        else ""
     )
     body = f"""
     <style>
-      .sub-page {{ width:min(860px,calc(100% - 36px)); margin:32px auto 64px; display:grid; gap:22px; }}
+      .sub-page {{ --sub-muted:#596a64; width:min(860px,calc(100% - 36px)); margin:32px auto 64px; display:grid; gap:22px; }}
+      :root[data-theme="dark"] .sub-page {{ --sub-muted:var(--terminal-muted); }}
+      .sub-page .terminal-heading p {{ color:var(--sub-muted); }}
       .sub-plan {{ border:1px solid var(--terminal-line); background:var(--terminal-panel); padding:26px 28px; display:grid; gap:18px; }}
       .sub-badge {{ justify-self:start; padding:3px 10px; background:var(--accent); color:var(--accent-ink); font-size:10px; font-weight:900; text-transform:uppercase; letter-spacing:.06em; }}
       .sub-facts {{ display:grid; gap:8px; }}
       .sub-facts div {{ display:flex; justify-content:space-between; gap:14px; padding-bottom:8px; border-bottom:1px solid var(--terminal-line); }}
-      .sub-facts span {{ color:var(--terminal-muted); font-size:13px; }}
+      .sub-facts span {{ color:var(--sub-muted); font-size:13px; }}
       .sub-facts strong {{ font-size:15px; font-variant-numeric:tabular-nums; }}
       .sub-actions {{ display:flex; gap:8px; flex-wrap:wrap; }}
       .sub-tier-choices {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
       .sub-tier-choice {{ display:grid; gap:3px; padding:14px; border:1px solid var(--terminal-line); color:var(--terminal-text); text-decoration:none; }}
       .sub-tier-choice.selected {{ border-color:var(--accent); box-shadow:inset 3px 0 0 var(--accent); }}
+      .sub-tier-choice.unavailable {{ border-style:dashed; }}
       .sub-tier-choice strong {{ font-size:20px; }}
-      .sub-tier-choice em {{ color:var(--terminal-muted); font-size:11px; font-style:normal; }}
-      .subscription-consent {{ display:flex; gap:9px; align-items:flex-start; color:var(--terminal-muted); font-size:12px; line-height:1.45; }}
-      .pricing-note {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
+      .sub-tier-choice em,.sub-tier-choice small {{ color:var(--sub-muted); font-size:11px; font-style:normal; }}
+      .subscription-consent {{ display:flex; gap:9px; align-items:flex-start; color:var(--sub-muted); font-size:12px; line-height:1.45; }}
+      .pricing-note {{ margin:0; color:var(--sub-muted); font-size:12px; line-height:1.5; }}
       {MEMBERSHIP_STYLE}
+      .sub-page .term-rate em,.sub-page .term-total {{ color:var(--sub-muted); }}
       @media(max-width:650px) {{ .sub-tier-choices {{ grid-template-columns:1fr; }} }}
     </style>
     <section class="sub-page" data-account-page>
@@ -11428,39 +11533,32 @@ def render_subscription_page(query: dict[str, list[str]] | None = None) -> str:
         <div>
           <span class="page-kicker">Membership</span>
           <h1>{"Your membership" if active else "Activate membership"}</h1>
-          <p>{(("Renews automatically. Cancel any time." if billing_managed else "Access is managed directly.") if active else "Your account is signed in; market access is not active yet.") if user else "Sign in or create an account to activate market access."}</p>
+          <p>{header_copy}</p>
         </div>
       </header>
 
       <section class="sub-plan">
-        <span class="sub-badge">{"Current plan" if active and _user_entitlement_tier(user) == requested_tier else "Choose plan"}</span>
+        <span class="sub-badge">{"Current plan" if active else ("Billing plan" if billing_managed else "Choose plan")}</span>
         <div class="sub-tier-choices">{plan_choices}</div>
         <div class="sub-facts">
           <div><span>Selected tier</span><strong>{h(selected_plan["name"])}</strong></div>
-          <div><span>Monthly price (30 days)</span><strong>${selected_plan["monthly"]:,.2f}</strong></div>
-          <div><span>Billing cycle</span><strong>Prepaid crypto</strong></div>
-          <div><span>{("Next payment" if billing_managed else "Access until") if active else "Status"}</span><strong>{h(renews if active else (user.subscription_status if user else "inactive"))}</strong></div>
+          <div><span>30-day reference price</span><strong>${selected_plan["monthly"]:,.2f}</strong></div>
+          <div><span>Billing cycle</span><strong>{h(billing_cycle)}</strong></div>
+          <div><span>{h(status_label)}</span><strong>{h(status_value)}</strong></div>
         </div>
         <ul class="tick-list">{render_membership_ticks(requested_tier)}</ul>
-        <label class="subscription-consent"><input type="checkbox" data-subscription-consent>
-          <span>I request immediate access and acknowledge that the
-          statutory cancellation right may be affected once digital access
-          begins.</span></label>
-        <div class="sub-actions">{action}<a class="sheet-button" href="/account">Open account</a></div>
+        {consent}
+        <div class="sub-actions">{action}{secondary_action}</div>
         <p role="alert" data-billing-error></p>
       </section>
 
-      <section class="sub-plan">
-        <span class="sub-badge">{h(selected_plan["name"])} longer terms</span>
-        {render_membership_terms(tier=requested_tier)}
-        <p class="pricing-note">Longer terms are prepaid in one payment.</p>
-      </section>
+      {longer_terms}
 
-      {render_crypto_checkout_panel()}
+      {crypto_panel}
     </section>
     <script type="application/json" id="account-session">{json_script_data({"csrf_token": user.csrf_token if user else None})}</script>
-    {render_billing_script()}
-    {render_crypto_checkout_script()}
+    {billing_script}
+    {crypto_script}
     """
     return shell("Membership - SpreadBoard", "profile", body)
 
@@ -12449,7 +12547,7 @@ def render_billing_script() -> str:
   const session=JSON.parse(document.getElementById('account-session')?.textContent||'{}');
   document.querySelectorAll('[data-billing-action]').forEach(button=>button.addEventListener('click',async()=>{
     button.disabled=true;const error=document.querySelector('[data-billing-error]');if(error)error.textContent='';
-    try{const checkout=button.dataset.billingAction==='checkout';const consent=document.querySelector('[data-subscription-consent]');if(checkout&&!consent?.checked)throw new Error('Accept the terms and immediate-access acknowledgement before continuing.');const payload=checkout?{terms_accepted:true,immediate_access_consent:true,tier:button.dataset.billingTier||'research_pro'}:{};const response=await fetch(`/api/billing/${button.dataset.billingAction}`,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf_token},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok||!data.url)throw new Error(data.error||'Billing is temporarily unavailable.');location.assign(data.url);}catch(exc){if(error)error.textContent=exc.message||'Billing is temporarily unavailable.';button.disabled=false;}
+    try{const response=await fetch(`/api/billing/${button.dataset.billingAction}`,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf_token},body:'{}'});const data=await response.json();if(!response.ok||!data.url)throw new Error(data.error||'Billing is temporarily unavailable.');location.assign(data.url);}catch(exc){if(error)error.textContent=exc.message||'Billing is temporarily unavailable.';button.disabled=false;}
   }));
 })();
 </script>"""
