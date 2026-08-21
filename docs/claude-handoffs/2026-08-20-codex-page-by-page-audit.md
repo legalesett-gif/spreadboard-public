@@ -76,23 +76,29 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   and copy, wraps long identifiers, and places the refresh control after page
   content on mobile. The current empty state is honest: the real feed is stale,
   and no Telegram message was fabricated to populate it.
+- `/triage` is now fully audited. Its dark mode used white cards with pale text,
+  its nested `<main>` created invalid landmarks, its source copy still claimed
+  a local Telegram/file dependency, and the global fixed refresh control covered
+  queue cards on desktop. Triage now uses shared theme tokens, one main landmark,
+  and explicit always-on subscriber-source copy. The refresh control is in the
+  header's normal layout on every auto-refresh page, so it stays accessible
+  without covering data at desktop or mobile widths.
 
 ### Current deployment and verification
 
 - The code and handoff are checkpointed on branch `codex/crypto-billing`.
   Confirm the exact immutable hash with `git log -1 --oneline`; the production
   `.deployed_revision` marker was synchronized after the checkpoint.
-- Production `app-app-1` and `app-collector-1` are healthy. Local, host, app
-  and collector SHA-256 are identical: `spreadboard/server.py`
-  `7bebcd5e55e82bfca93a8dcd2fd48d4361a51a5d3456ba9dfa834ae59d3b4d9d`
-  and `spreadboard/portfolio.py`
-  `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`.
-- Intel source commit: **`037c738`**. Production source, persisted host, app
+- Production `app-app-1` and `app-collector-1` are healthy. The unchanged
+  `spreadboard/portfolio.py` SHA-256 remains
+  `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
+  current server and Intel hashes are below.
+- Latest source commit: **`2c286d8`**. Production source, persisted host, app
   and collector are identical: `spreadboard/server.py`
-  `8b9856920e46c3c46d4495c10e6b087540e63aa12df86efe59aa65d3b84d6eb6`
+  `3cbeb771304a8a7db71897b05b3e542a0eb15a4889b5f9a18f6a4efa2c3b9cd2`
   and `spreadboard/intel.py`
   `4238f0102adbd0c0ec3fb26b9a9ae3aee6d3867b4423dd8835441fb58c9cf8f2`.
-- Full suite: **1,463 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,465 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -104,7 +110,7 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `/profile` position and settings evidence is under
   `output/playwright/2026-08-21-page-audit/`. The same directory now contains
   `/intel` desktop/mobile light/dark evidence and the final non-overlapping
-  mobile capture.
+  mobile capture, plus `/triage` before/final desktop/mobile light/dark evidence.
 
 ### Fresh ML gate — do not train or activate
 
@@ -127,8 +133,8 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/triage`.
-2. Then complete `/signals`, `/community`,
+1. Continue §8 with the remaining static routes, starting at `/signals`.
+2. Then complete `/community`,
    `/learn`, `/proof`, `/executor`, `/status`, `/telegram`, `/guide`,
    `/methodology`, `/pricing`, `/subscription`, `/partner`, `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/
