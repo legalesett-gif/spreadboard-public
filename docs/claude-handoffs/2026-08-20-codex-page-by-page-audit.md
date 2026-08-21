@@ -102,22 +102,37 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   rounding of reported PnL; two decimals are now preserved. Genuine production
   call/result/question rows remain empty because the source is stale, not
   because synthetic evidence was inserted.
+- The revision marker was proven insufficient as deployment evidence. Despite
+  naming the current checkpoint, production still held older copies of
+  `fair_price.py`, `fast_quotes.py` and `venue_funding_history.py`. The three
+  modules were synchronized to the persisted host, web and collector, both
+  services were restarted healthy, and a new read-only release verifier now
+  compares every `spreadboard/**/*.py` file across all three production
+  targets. It passes with 51/51 files and no changed, missing or unexpected
+  modules.
+- The drift caused two real regressions. Fair Price again admitted unknown
+  Kraken Futures turnover: named ANTHROPICX showed `-32.06%` although its
+  current turnover was about `$42`. Production now renders 34 cards with zero
+  unknown/below-floor rows and no ANTHROPICX. The core quote path also lacked
+  `33f5410`; after repair an exact thin reverse-book fixture retains the needed
+  ask-side quote when the unused bid VWAP is null, and the live BTW chart
+  streams exact entry, `$500` matched and exit values with a clean console.
 
 ### Current deployment and verification
 
 - The code and handoff are checkpointed on branch `codex/crypto-billing`.
-  Confirm the exact immutable hash with `git log -1 --oneline`; the production
-  `.deployed_revision` marker was synchronized after the checkpoint.
+  Confirm the exact immutable hash with `git log -1 --oneline`; do not accept
+  the production `.deployed_revision` marker without the complete source-sync
+  verifier below.
 - Production `app-app-1` and `app-collector-1` are healthy. The unchanged
   `spreadboard/portfolio.py` SHA-256 remains
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
-- Latest source commit: **`4c1cca5`**. Production source, persisted host, app
-  and collector are identical: `spreadboard/server.py`
-  `8747b96c19b78e8c6e6393e73b66fed58a2852a70a47b63ad0aadfd5dd463235`
-  and `spreadboard/intel.py`
-  `9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`.
-- Full suite: **1,470 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Latest source-check commit: **`2ee93e8`**. Run
+  `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
+  result matched all 51 package modules on the persisted host, app and
+  collector with no drift.
+- Full suite: **1,475 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -136,11 +151,11 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 24,988 observations, 17,151
-labeled 24h outcomes, 1,821 routes and 6.67 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 25,197 observations, 17,227
+labeled 24h outcomes, 1,821 routes and 6.71 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
-6.67/30 days; no candidate exists, activation is false and the deterministic
+6.71/30 days; no candidate exists, activation is false and the deterministic
 fallback remains active. Do not mix the 5,832 v4 rows or weaken these gates.
 
 ### External live failure still open
@@ -220,6 +235,14 @@ ssh -i ~/.ssh/spreadboard_digitalocean root@178.128.126.204 '
 `docker cp` alone does **not** reload a running process. Deploy to **both**
 `app` and `collector` when the module is used by the scan (`fast_quotes.py`,
 `fair_price.py`, `bulk_quotes.py`, `api_spreads.py` all are).
+
+After every deployment, prove the entire running package instead of trusting
+the revision marker or a hand-picked file list:
+```bash
+.venv/bin/python scripts/verify_production_source_sync.py
+```
+The release is not synchronized unless the persisted host, `app-app-1` and
+`app-collector-1` all report no changed, missing or unexpected modules.
 
 The container has **no `curl`**. Use `docker exec -i app-app-1 /app/.venv/bin/python -` with a heredoc.
 
