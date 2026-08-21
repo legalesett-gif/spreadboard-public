@@ -282,7 +282,8 @@ def valid_click_token(
         return connection.execute(
             """SELECT 1 FROM affiliate_clicks c
                JOIN affiliate_partners p ON p.id = c.partner_id
-               WHERE c.token_hash = ? AND c.expires_at > ? AND p.status = 'active'""",
+               WHERE c.token_hash = ? AND c.expires_at > ?
+                 AND c.registered_user_id IS NULL AND p.status = 'active'""",
             (_token_hash(raw_token), accounts._utc_iso(_moment(now))),
         ).fetchone() is not None
     finally:
@@ -298,50 +299,70 @@ def attach_registration(
 ) -> dict[str, Any] | None:
     if not raw_token:
         return None
-    moment = _moment(now)
-    now_iso = accounts._utc_iso(moment)
     connection = accounts._connect(db_path)
     try:
         connection.execute("BEGIN IMMEDIATE")
-        existing = connection.execute(
-            "SELECT partner_id FROM affiliate_attributions WHERE user_id = ?", (int(user_id),)
-        ).fetchone()
-        if existing is not None:
-            connection.commit()
-            row = connection.execute(
-                "SELECT * FROM affiliate_partners WHERE id = ?", (existing["partner_id"],)
-            ).fetchone()
-            return _partner_dict(row) if row is not None else None
-        click = connection.execute(
-            """SELECT c.*, p.status AS partner_status
-               FROM affiliate_clicks c
-               JOIN affiliate_partners p ON p.id = c.partner_id
-               WHERE c.token_hash = ? AND c.expires_at > ?""",
-            (_token_hash(raw_token), now_iso),
-        ).fetchone()
-        if click is None or str(click["partner_status"]) != "active":
-            connection.commit()
-            return None
-        connection.execute(
-            """INSERT INTO affiliate_attributions (
-                   user_id, partner_id, click_id, attributed_at
-               ) VALUES (?, ?, ?, ?)""",
-            (int(user_id), int(click["partner_id"]), int(click["id"]), now_iso),
-        )
-        connection.execute(
-            """UPDATE affiliate_clicks
-               SET registered_user_id = COALESCE(registered_user_id, ?),
-                   registered_at = COALESCE(registered_at, ?)
-               WHERE id = ?""",
-            (int(user_id), now_iso, int(click["id"])),
+        partner = attach_registration_in_transaction(
+            connection,
+            int(user_id),
+            raw_token,
+            now=now,
         )
         connection.commit()
-        row = connection.execute(
-            "SELECT * FROM affiliate_partners WHERE id = ?", (click["partner_id"],)
-        ).fetchone()
-        return _partner_dict(row) if row is not None else None
+        return partner
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
+
+
+def attach_registration_in_transaction(
+    connection: sqlite3.Connection,
+    user_id: int,
+    raw_token: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """Attach one referral without committing the caller-owned transaction."""
+    if not raw_token:
+        return None
+    now_iso = accounts._utc_iso(_moment(now))
+    existing = connection.execute(
+        "SELECT partner_id FROM affiliate_attributions WHERE user_id = ?", (int(user_id),)
+    ).fetchone()
+    if existing is not None:
+        row = connection.execute(
+            "SELECT * FROM affiliate_partners WHERE id = ?", (existing["partner_id"],)
+        ).fetchone()
+        return _partner_dict(row) if row is not None else None
+    click = connection.execute(
+        """SELECT c.*, p.status AS partner_status
+           FROM affiliate_clicks c
+           JOIN affiliate_partners p ON p.id = c.partner_id
+           WHERE c.token_hash = ? AND c.expires_at > ?
+             AND c.registered_user_id IS NULL""",
+        (_token_hash(raw_token), now_iso),
+    ).fetchone()
+    if click is None or str(click["partner_status"]) != "active":
+        return None
+    connection.execute(
+        """INSERT INTO affiliate_attributions (
+               user_id, partner_id, click_id, attributed_at
+           ) VALUES (?, ?, ?, ?)""",
+        (int(user_id), int(click["partner_id"]), int(click["id"]), now_iso),
+    )
+    connection.execute(
+        """UPDATE affiliate_clicks
+           SET registered_user_id = COALESCE(registered_user_id, ?),
+               registered_at = COALESCE(registered_at, ?)
+           WHERE id = ?""",
+        (int(user_id), now_iso, int(click["id"])),
+    )
+    row = connection.execute(
+        "SELECT * FROM affiliate_partners WHERE id = ?", (click["partner_id"],)
+    ).fetchone()
+    return _partner_dict(row) if row is not None else None
 
 
 def invoice_offer(

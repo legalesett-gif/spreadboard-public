@@ -531,7 +531,18 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 else:
                     self._send_html(render_login_page(query))
             elif parsed.path == "/register":
-                self._send_html(render_register_page())
+                if self.current_user is None:
+                    self._send_html(render_register_page(query))
+                else:
+                    if self.current_user.subscription_active:
+                        destination = "/account"
+                    elif affiliates.partner_for_user(
+                        self.current_user.id, db_path=self.server.accounts_path
+                    ):
+                        destination = "/partner"
+                    else:
+                        destination = "/subscription"
+                    self._redirect(destination)
             elif parsed.path == "/forgot-password":
                 self._send_html(
                     render_forgot_password_page(
@@ -1830,7 +1841,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
 
     def _handle_password_reset_request(self) -> None:
         """Send a reset link without revealing whether an email is registered."""
-        form_request = "application/json" not in self.headers.get("Content-Type", "")
+        form_request = not self._is_json_request()
         if not mailer.status()["configured"]:
             self._send_json(
                 {"ok": False, "error": "recovery_delivery_unavailable"},
@@ -1878,7 +1889,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
 
     def _handle_login(self) -> None:
         payload = self._read_payload()
-        form_request = "application/json" not in self.headers.get("Content-Type", "")
+        form_request = not self._is_json_request()
         next_path = _safe_local_path(str(payload.get("next") or ""), "/account")
         if form_request and not self._same_origin_form_post():
             self._send_json(
@@ -1949,37 +1960,61 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
 
     def _handle_register(self) -> None:
         payload = self._read_payload()
-        key = "register:" + self._client_ip()
+        form_request = not self._is_json_request()
+        if form_request and not self._same_origin_form_post():
+            self._send_json(
+                {"ok": False, "error": "invalid_request_origin"},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
+        ip_address = self._client_ip()
+        key = "register:" + ip_address
         now = time.monotonic()
         with self._login_attempts_lock:
             recent = [item for item in self._login_attempts.get(key, []) if now - item < 3600]
             if len(recent) >= 10:
-                self._send_json(
-                    {"ok": False, "error": "too_many_registration_attempts"},
+                self._registration_error(
+                    "too_many_registration_attempts",
+                    form_request=form_request,
                     status=HTTPStatus.TOO_MANY_REQUESTS,
                 )
                 return
             self._login_attempts[key] = recent + [now]
-        created = accounts.create_user(
-            email=str(payload.get("email") or ""),
-            display_name=str(payload.get("display_name") or ""),
-            password=str(payload.get("password") or ""),
-            subscription_status="inactive",
-            subscription_days=1,
-            db_path=self.server.accounts_path,
-        )
-        affiliates.attach_registration(
-            int(created["id"]),
-            self._cookie_value(affiliates.REFERRAL_COOKIE),
-            db_path=self.server.accounts_path,
-        )
-        user, token = accounts.login(
-            str(payload.get("email") or ""),
-            str(payload.get("password") or ""),
-            user_agent=self.headers.get("User-Agent", ""),
-            ip_address=key,
-            db_path=self.server.accounts_path,
-        )
+        try:
+            user, token = accounts.register_user(
+                email=str(payload.get("email") or ""),
+                display_name=str(payload.get("display_name") or ""),
+                password=str(payload.get("password") or ""),
+                referral_token=self._cookie_value(affiliates.REFERRAL_COOKIE),
+                user_agent=self.headers.get("User-Agent", ""),
+                ip_address=ip_address,
+                db_path=self.server.accounts_path,
+            )
+        except ValueError as exc:
+            error = str(exc)
+            if error == "email_already_registered":
+                error = "registration_not_available"
+            self._registration_error(
+                error,
+                form_request=form_request,
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - return no database/provider detail publicly.
+            sys.stderr.write(f"spreadboard: registration_failed:{type(exc).__name__}\n")
+            self._registration_error(
+                "registration_temporarily_unavailable",
+                form_request=form_request,
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        if form_request:
+            self._redirect(
+                "/subscription",
+                session_token=token,
+                clear_referral=True,
+            )
+            return
         self._send_json(
             {
                 "ok": True,
@@ -1991,6 +2026,36 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             session_token=token,
             clear_referral=True,
         )
+
+    def _registration_error(
+        self,
+        error: str,
+        *,
+        form_request: bool,
+        status: HTTPStatus,
+    ) -> None:
+        if form_request:
+            code = {
+                "invalid_display_name": "name",
+                "invalid_email": "email",
+                "password_must_be_at_least_12_characters": "password",
+                "password_must_be_at_most_1024_characters": "password",
+                "too_many_registration_attempts": "rate",
+                "registration_not_available": "unavailable",
+                "registration_temporarily_unavailable": "unavailable",
+            }.get(error, "unavailable")
+            self._redirect("/register?" + urlencode({"error": code}))
+            return
+        public_error = error if error in {
+            "invalid_display_name",
+            "invalid_email",
+            "password_must_be_at_least_12_characters",
+            "password_must_be_at_most_1024_characters",
+            "too_many_registration_attempts",
+            "registration_not_available",
+            "registration_temporarily_unavailable",
+        } else "registration_not_available"
+        self._send_json({"ok": False, "error": public_error}, status=status)
 
     def _required_user(self) -> accounts.User:
         user = getattr(self, "current_user", None)
@@ -2025,7 +2090,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         return morsel.value if morsel is not None else ""
 
     def _same_origin_form_post(self) -> bool:
-        """Reject cross-site login forms while preserving same-origin no-JS use."""
+        """Reject cross-site auth forms while preserving same-origin no-JS use."""
         origin = self.headers.get("Origin", "").strip()
         host = self.headers.get("Host", "").strip().casefold()
         if not origin or not host:
@@ -2035,11 +2100,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
 
     def _read_payload(self) -> dict[str, Any]:
         raw = self._read_raw_body() or b"{}"
-        if "application/json" in self.headers.get("Content-Type", ""):
+        if self._is_json_request():
             value = json.loads(raw.decode("utf-8") or "{}")
             return value if isinstance(value, dict) else {}
         parsed = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
         return {key: values[0] if values else "" for key, values in parsed.items()}
+
+    def _is_json_request(self) -> bool:
+        media_type = self.headers.get("Content-Type", "").split(";", 1)[0]
+        return media_type.strip().casefold() == "application/json"
 
     def _read_raw_body(self) -> bytes:
         try:
@@ -2056,6 +2125,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
         *,
         referral_token: str | None = None,
         session_token: str | None = None,
+        clear_referral: bool = False,
     ) -> None:
         self.send_response(HTTPStatus.SEE_OTHER)
         self.send_header("Location", location)
@@ -2069,6 +2139,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             self.send_header(
                 "Set-Cookie",
                 f"{accounts.SESSION_COOKIE}={session_token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={accounts.SESSION_DAYS * 86400}",
+            )
+        if clear_referral:
+            self.send_header(
+                "Set-Cookie",
+                f"{affiliates.REFERRAL_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
             )
         self._send_security_headers()
         self.send_header("Content-Length", "0")
@@ -11204,16 +11279,50 @@ def render_status_page(payload: dict[str, Any]) -> str:
     return shell("Status - SpreadBoard", "status", body)
 
 
-def render_register_page() -> str:
-    return """<!doctype html>
+def render_register_page(query: dict[str, list[str]] | None = None) -> str:
+    error_message = {
+        "name": "Enter the name you want shown in your workspace.",
+        "email": "Enter a valid email address.",
+        "password": "Use a password between 12 and 1,024 characters.",
+        "rate": "Too many attempts. Try again later.",
+        "unavailable": (
+            "We could not create this account. If you may have registered already, "
+            "sign in or reset your password."
+        ),
+    }.get(_query_first(query or {}, "error") or "", "")
+    return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Create account - SpreadBoard</title>
+<script>
+(() => {{
+  try {{
+    const saved=localStorage.getItem('spreadboard.theme.v1');
+    document.documentElement.dataset.theme=saved==='dark'||saved==='light'
+      ? saved
+      : (matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  }} catch(error) {{ document.documentElement.dataset.theme='light'; }}
+}})();
+</script>
 <style>
-:root { color-scheme:dark;--bg:#07110f;--panel:#101d1a;--line:#29443d;--ink:#edf8f4;--muted:#9bb1aa;--accent:#38d4bd;--danger:#ff8695; }
-*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}.login-shell{width:min(440px,100%)}.login-brand{display:flex;align-items:center;gap:12px;margin-bottom:28px;font-size:24px;font-weight:800}.login-mark{width:26px;height:26px;border-radius:50%;background:var(--accent);border:3px solid #dffff8;box-shadow:12px 9px 0 -5px #7fdccf}.login-panel{border:1px solid var(--line);background:var(--panel);padding:28px;border-radius:8px}h1{margin:0 0 8px;font-size:28px}p{color:var(--muted);margin:0 0 24px;line-height:1.5}label{display:grid;gap:7px;margin:0 0 16px;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}input{width:100%;min-height:46px;border:1px solid var(--line);background:#081310;color:var(--ink);border-radius:5px;padding:0 13px;font:inherit}input:focus{outline:2px solid var(--accent);outline-offset:1px}button{width:100%;min-height:46px;border:0;border-radius:5px;background:var(--accent);color:#052c26;font:inherit;font-weight:900;cursor:pointer}button:disabled{opacity:.55;cursor:wait}.login-error{min-height:20px;margin:14px 0 0;color:var(--danger);font-size:13px}.login-note{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}.login-note a{color:var(--accent);font-weight:800}
-.login-shell{width:min(376px,100%)}.login-brand{gap:9px;margin-bottom:24px;font-size:15px;font-weight:650}.login-mark{width:10px;height:10px;border:0;border-radius:50%;background:var(--accent);box-shadow:none}.login-panel{padding:24px 0;border-width:1px 0;border-radius:0;background:transparent}h1{font-size:27px;font-weight:650;letter-spacing:-.03em}p{font-size:12.5px}label{font-size:9px;font-weight:700;letter-spacing:.08em}input{min-height:42px;border-radius:2px;background:#0b1714}button{min-height:42px;border-radius:2px;font-weight:700}.login-note{font-size:11px;line-height:1.5}
-</style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div><section class="login-panel"><h1>Create your account</h1><p>Set up your private workspace, then choose prepaid crypto access.</p><form id="registerForm"><label>Name<input name="display_name" maxlength="100" autocomplete="name" required autofocus></label><label>Email<input name="email" type="email" maxlength="254" autocomplete="email" required></label><label>Password<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><button type="submit">Continue</button><div class="login-error" role="alert"></div></form></section><div class="login-note">Already registered? <a href="/login">Sign in</a><br><br><a href="/pricing">See membership details</a></div></main>
-<script>document.getElementById('registerForm').addEventListener('submit',async(event)=>{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),error=form.querySelector('.login-error');button.disabled=true;error.textContent='';try{const response=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(form)))});const data=await response.json();if(!response.ok)throw new Error(({email_already_registered:'An account already exists for this email.',invalid_email:'Enter a valid email address.',password_must_be_at_least_12_characters:'Use at least 12 characters.',too_many_registration_attempts:'Too many attempts. Try again later.'})[data.error]||'Could not create the account.');location.assign(data.next||'/subscription')}catch(exc){error.textContent=exc.message||'Could not create the account.';button.disabled=false}});</script></body></html>"""
+:root {{ color-scheme:light;--bg:#f1f5f3;--panel:#ffffff;--field:#f8fbfa;--line:#cbd9d4;--ink:#13201d;--muted:#60736c;--accent:#0f766e;--button-ink:#ffffff;--danger:#b4233a;--toggle:#ffffff; }}
+:root[data-theme="dark"] {{ color-scheme:dark;--bg:#07110f;--panel:#101d1a;--field:#0b1714;--line:#29443d;--ink:#edf8f4;--muted:#9bb1aa;--accent:#38d4bd;--button-ink:#052c26;--danger:#ff8695;--toggle:#101d1a; }}
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}}.login-shell{{width:min(376px,100%)}}.login-brand{{display:flex;align-items:center;gap:9px;margin-bottom:24px;font-size:15px;font-weight:650}}.login-mark{{width:10px;height:10px;border:0;border-radius:50%;background:var(--accent);box-shadow:none}}.login-panel{{padding:24px 0;border:1px solid var(--line);border-width:1px 0;border-radius:0;background:transparent}}h1{{margin:0 0 8px;font-size:27px;font-weight:650;letter-spacing:-.03em}}p{{color:var(--muted);margin:0 0 24px;line-height:1.5;font-size:12.5px}}label{{display:grid;gap:7px;margin:0 0 16px;color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}}input{{width:100%;min-height:42px;border:1px solid var(--line);background:var(--field);color:var(--ink);border-radius:2px;padding:0 13px;font:inherit}}input:focus{{outline:2px solid var(--accent);outline-offset:1px}}.field-hint{{margin-top:-10px;margin-bottom:16px;color:var(--muted);font-size:11px}}.login-panel button{{width:100%;min-height:42px;border:0;border-radius:2px;background:var(--accent);color:var(--button-ink);font:inherit;font-weight:700;cursor:pointer}}button:disabled{{opacity:.55;cursor:wait}}.login-error{{min-height:20px;margin:14px 0 0;color:var(--danger);font-size:13px;line-height:1.45}}.login-note{{margin-top:18px;color:var(--muted);font-size:11px;line-height:1.5;text-align:center}}.login-note a{{color:var(--accent);font-weight:800}}
+.auth-theme-toggle{{position:fixed;top:18px;right:18px;display:inline-flex;align-items:center;gap:7px;width:auto;min-height:34px;padding:0 10px;border:1px solid var(--line);border-radius:3px;background:var(--toggle);color:var(--ink);font:inherit;font-size:11px;font-weight:700;cursor:pointer}}.theme-swatch{{width:13px;height:13px;border:1px solid var(--line);border-radius:50%;background:linear-gradient(90deg,var(--accent) 0 50%,var(--panel) 50% 100%)}}
+@media(max-width:560px){{.auth-theme-toggle{{top:12px;right:12px}}}}
+</style><noscript><style>.auth-theme-toggle{{display:none}}</style></noscript></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div><section class="login-panel"><h1>Create your account</h1><p>Set up your private workspace, then choose prepaid crypto access.</p><form id="registerForm" action="/api/register" method="post"><label>Name<input name="display_name" maxlength="100" autocomplete="name" required autofocus></label><label>Email<input name="email" type="email" maxlength="254" autocomplete="email" inputmode="email" autocapitalize="none" spellcheck="false" required></label><label>Password<input name="password" type="password" minlength="12" maxlength="1024" autocomplete="new-password" aria-describedby="passwordHint" required></label><div class="field-hint" id="passwordHint">At least 12 characters.</div><button type="submit">Continue</button><div class="login-error" role="alert" aria-live="polite">{h(error_message)}</div></form></section><div class="login-note">Already registered? <a href="/login">Sign in</a><br><br><a href="/forgot-password">Reset your password</a> · <a href="/pricing">See membership details</a></div></main>
+<button class="auth-theme-toggle" id="themeToggle" type="button" aria-label="Toggle light and dark mode" aria-pressed="false"><span class="theme-swatch" aria-hidden="true"></span><span data-theme-label>Theme</span></button>
+<script>
+(() => {{
+  const key='spreadboard.theme.v1',button=document.getElementById('themeToggle'),label=button.querySelector('[data-theme-label]');
+  const current=()=>document.documentElement.dataset.theme==='dark'?'dark':'light';
+  const apply=theme=>{{document.documentElement.dataset.theme=theme;try{{localStorage.setItem(key,theme);}}catch(error){{}}button.setAttribute('aria-pressed',theme==='dark'?'true':'false');label.textContent=theme==='dark'?'Dark':'Light';}};
+  apply(current());button.addEventListener('click',()=>apply(current()==='dark'?'light':'dark'));
+}})();
+document.getElementById('registerForm').addEventListener('submit',async(event)=>{{
+  event.preventDefault();const form=event.currentTarget,button=form.querySelector('button[type="submit"]'),message=form.querySelector('.login-error');let focusName='email';button.disabled=true;form.setAttribute('aria-busy','true');message.textContent='Creating your workspace...';
+  try{{const response=await fetch('/api/register',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(Object.fromEntries(new FormData(form)))}});const data=await response.json().catch(()=>({{}}));if(!response.ok){{focusName=data.error==='invalid_display_name'?'display_name':data.error==='password_must_be_at_least_12_characters'||data.error==='password_must_be_at_most_1024_characters'?'password':'email';throw new Error(({{invalid_display_name:'Enter the name you want shown in your workspace.',invalid_email:'Enter a valid email address.',password_must_be_at_least_12_characters:'Use at least 12 characters.',password_must_be_at_most_1024_characters:'Use no more than 1,024 characters.',registration_not_available:'We could not create this account. If you may have registered already, sign in or reset your password.',registration_temporarily_unavailable:'Registration is temporarily unavailable. Try again shortly.',too_many_registration_attempts:'Too many attempts. Try again later.'}})[data.error]||'Registration is temporarily unavailable. Try again shortly.')}}window.location.assign(data.next||'/subscription')}}catch(exc){{message.textContent=exc.message||'Registration is temporarily unavailable. Try again shortly.';form.elements.password.value='';(form.elements[focusName]||form.elements.email).focus()}}finally{{form.removeAttribute('aria-busy');button.disabled=false}}
+}});
+</script></body></html>"""
 
 
 #: What a membership actually includes, one line each. The pricing page had

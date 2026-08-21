@@ -742,6 +742,8 @@ def _bootstrap_admin(db_path: Path | str) -> None:
 def hash_password(password: str) -> str:
     if len(password) < 12:
         raise ValueError("password_must_be_at_least_12_characters")
+    if len(password) > 1024:
+        raise ValueError("password_must_be_at_most_1024_characters")
     salt = secrets.token_bytes(16)
     derived = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32)
     return f"scrypt$16384$8$1${salt.hex()}${derived.hex()}"
@@ -859,16 +861,13 @@ def logout(token: str, db_path: Path | str = DEFAULT_DB_PATH) -> None:
         connection.close()
 
 
-def create_user(
+def _new_user_fields(
     *,
     email: str,
     display_name: str,
-    password: str,
-    subscription_status: str = "trialing",
-    subscription_tier: str | None = None,
-    subscription_days: int = 30,
-    db_path: Path | str = DEFAULT_DB_PATH,
-) -> dict[str, Any]:
+    subscription_status: str,
+    subscription_tier: str | None,
+) -> tuple[str, str, str, str]:
     normalized_email = email.strip().casefold()
     if (
         len(normalized_email) > 254
@@ -888,6 +887,116 @@ def create_user(
     tier = str(subscription_tier or ("free" if status == "inactive" else "research_pro"))
     if tier not in {"free", "scanner", "research_pro"}:
         raise ValueError("invalid_subscription_tier")
+    return normalized_email, clean_name, status, tier
+
+
+def register_user(
+    *,
+    email: str,
+    display_name: str,
+    password: str,
+    referral_token: str = "",
+    user_agent: str = "",
+    ip_address: str = "",
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> tuple[User, str]:
+    """Atomically create an inactive member, referral attribution and session."""
+    from . import affiliates
+
+    normalized_email, clean_name, status, tier = _new_user_fields(
+        email=email,
+        display_name=display_name,
+        subscription_status="inactive",
+        subscription_tier="free",
+    )
+    password_hash = hash_password(password)
+    now = datetime.now(tz=UTC)
+    subscription_expires = now + timedelta(days=1)
+    session_expires = now + timedelta(days=SESSION_DAYS)
+    session_token = secrets.token_urlsafe(32)
+    csrf = secrets.token_urlsafe(24)
+    connection = _connect(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = connection.execute(
+                """
+                INSERT INTO users (
+                    email, display_name, password_hash, role, subscription_status,
+                    subscription_expires_at, subscription_tier, created_at, updated_at
+                ) VALUES (?, ?, ?, 'member', ?, ?, ?, ?, ?)
+                """,
+                (
+                    normalized_email,
+                    clean_name,
+                    password_hash,
+                    status,
+                    _utc_iso(subscription_expires),
+                    tier,
+                    _utc_iso(now),
+                    _utc_iso(now),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("email_already_registered") from exc
+        user_id = int(cursor.lastrowid)
+        affiliates.attach_registration_in_transaction(
+            connection,
+            user_id,
+            referral_token,
+            now=now,
+        )
+        connection.execute(
+            """
+            INSERT INTO sessions (
+                user_id, token_hash, csrf_token, created_at, expires_at,
+                last_seen_at, user_agent_hash, ip_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                _token_hash(session_token),
+                csrf,
+                _utc_iso(now),
+                _utc_iso(session_expires),
+                _utc_iso(now),
+                _privacy_hash(user_agent),
+                _privacy_hash(ip_address),
+            ),
+        )
+        connection.execute(
+            "UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?",
+            (_utc_iso(now), _utc_iso(now), user_id),
+        )
+        connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (_utc_iso(now),))
+        row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("registration_user_missing_after_insert")
+        connection.commit()
+        return _user_from_row(row, csrf_token=csrf), session_token
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def create_user(
+    *,
+    email: str,
+    display_name: str,
+    password: str,
+    subscription_status: str = "trialing",
+    subscription_tier: str | None = None,
+    subscription_days: int = 30,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    normalized_email, clean_name, status, tier = _new_user_fields(
+        email=email,
+        display_name=display_name,
+        subscription_status=subscription_status,
+        subscription_tier=subscription_tier,
+    )
     now = datetime.now(tz=timezone.utc)
     expires = now + timedelta(days=max(1, min(3660, int(subscription_days))))
     connection = _connect(db_path)
