@@ -93,6 +93,15 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   1h/6h/12h/48h controls with the selected window announced to assistive
   technology. The real source remains stale, so the production empty lanes
   were preserved rather than populated synthetically.
+- `/community` is now fully audited. Its scoreboard, ledger and discussion
+  cards were unreadable in dark mode, the page nested a second main landmark,
+  its source copy still described a retired local topic-brief pipeline, and the
+  API's evidence window had no visible selector. Shared theme tokens, one main
+  landmark, accurate privacy/source copy and 1h/6h/12h/48h selected controls are
+  deployed. A populated fixture additionally caught and fixed whole-unit
+  rounding of reported PnL; two decimals are now preserved. Genuine production
+  call/result/question rows remain empty because the source is stale, not
+  because synthetic evidence was inserted.
 
 ### Current deployment and verification
 
@@ -103,12 +112,12 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `spreadboard/portfolio.py` SHA-256 remains
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
-- Latest source commit: **`6092c88`**. Production source, persisted host, app
+- Latest source commit: **`4c1cca5`**. Production source, persisted host, app
   and collector are identical: `spreadboard/server.py`
-  `b07f528da55bfae8516622b4809351a6234ee0d2c327506609ff9dc8aeb18742`
+  `8747b96c19b78e8c6e6393e73b66fed58a2852a70a47b63ad0aadfd5dd463235`
   and `spreadboard/intel.py`
   `9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`.
-- Full suite: **1,467 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,470 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -120,15 +129,15 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `/profile` position and settings evidence is under
   `output/playwright/2026-08-21-page-audit/`. The same directory now contains
   `/intel` desktop/mobile light/dark evidence and the final non-overlapping
-  mobile capture, plus `/triage` and `/signals` before/final desktop/mobile
-  light/dark evidence.
+  mobile capture, plus `/triage`, `/signals` and `/community` before/final
+  desktop/mobile light/dark evidence.
 
 ### Fresh ML gate — do not train or activate
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 24,936 observations, 17,142
-labeled 24h outcomes, 1,819 routes and 6.67 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 24,988 observations, 17,151
+labeled 24h outcomes, 1,821 routes and 6.67 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
 6.67/30 days; no candidate exists, activation is false and the deterministic
@@ -138,15 +147,15 @@ fallback remains active. Do not mix the 5,832 v4 rows or weaken these gates.
 
 OKX DEX currently rejects catalogue access on chains 1, 56, 137, 42161 and
 8453 with an API-key/region entitlement error. Both verified DEX lanes remain
-zero after 1,011 under-covered completed cycles. Credentials are present; this
+zero after 1,034 under-covered completed cycles. Credentials are present; this
 needs provider/account entitlement repair and then sustained-cycle proof. Do
 not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/community`.
+1. Continue §8 with the remaining static routes, starting at `/learn`.
 2. Then complete
-   `/learn`, `/proof`, `/executor`, `/status`, `/telegram`, `/guide`,
+   `/proof`, `/executor`, `/status`, `/telegram`, `/guide`,
    `/methodology`, `/pricing`, `/subscription`, `/partner`, `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
