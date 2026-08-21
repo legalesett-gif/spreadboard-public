@@ -41,7 +41,7 @@ def test_exact_bot_bridge_keeps_only_anonymous_token_attention() -> None:
         assert forbidden not in serialized
 
 
-def test_external_exact_bot_events_feed_the_same_intel_surface(tmp_path, monkeypatch) -> None:
+def test_always_on_subscriber_bot_events_feed_the_intel_surface(tmp_path, monkeypatch) -> None:
     external = tmp_path / "external.jsonl"
     subscription = tmp_path / "subscription-bot.jsonl"
     external.write_text(
@@ -74,8 +74,8 @@ def test_external_exact_bot_events_feed_the_same_intel_surface(tmp_path, monkeyp
         digest_path=tmp_path / "digest.jsonl",
         now=1_786_446_300,
     )
-    assert payload["hot_symbols"][0]["symbol"] == "VANRY"
-    assert all(item["symbol"] != "SIREN" for item in payload["hot_symbols"])
+    assert payload["hot_symbols"][0]["symbol"] == "SIREN"
+    assert all(item["symbol"] != "VANRY" for item in payload["hot_symbols"])
     assert payload["source_freshness"]["telegram_events"]["status"] == "fresh"
 
 

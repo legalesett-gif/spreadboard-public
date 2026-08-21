@@ -3261,6 +3261,7 @@ def _intel_params(query: dict[str, list[str]]) -> dict[str, Any]:
 def _intel_cache_key(board_path: Path, params: dict[str, Any]) -> tuple[Any, ...]:
     return (
         str(board_path.resolve()),
+        _file_signature(intel.DEFAULT_EVENTS_PATH),
         round(float(params.get("window_hours") or intel.DEFAULT_WINDOW_HOURS), 4),
         str(params.get("kind") or ""),
         str(params.get("symbol") or ""),
@@ -7476,10 +7477,13 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
         {},
     )
     community_fresh = community_source.get("status") == "fresh"
+    bot_username = telegram_bot.config().bot_username or "spreadarbitragesubscription_bot"
+    bot_label = f"@{bot_username}"
+    bot_url = f"https://t.me/{quote(bot_username, safe='')}"
     source_notice = (
-        '<aside class="intel-source-notice live"><strong>Private research-bot attention is current</strong><p>Anonymous exact-token lookups sent to the private @SpreadArbitrageBot chat are joined to current routes and retained funding evidence. No chat ID, username, name, email, or message text is stored.</p></aside>'
+        f'<aside class="intel-source-notice live"><strong>Subscriber-bot attention is current</strong><p>Anonymous exact-token lookups sent to {h(bot_label)} in a linked private chat or the subscriber forum are joined to current routes and retained funding evidence. No chat ID, username, name, email, or message text is stored.</p></aside>'
         if community_fresh
-        else '<aside class="intel-source-notice stale"><strong>Waiting for the private research-bot bridge</strong><p>Use an exact token such as $GUA in the private @SpreadArbitrageBot chat. Intel records only the anonymous token and selected view; current routes, Funding, Charts and Watchlist remain authoritative.</p></aside>'
+        else f'<aside class="intel-source-notice stale"><strong>Waiting for a subscriber-bot lookup</strong><p>Use an exact token such as $GUA with {h(bot_label)} in your linked private chat or the subscriber forum. Intel records only the anonymous token and selected view; current routes, Funding, Charts and Watchlist remain authoritative.</p></aside>'
     )
     if not community_fresh:
         body = f"""
@@ -7499,10 +7503,10 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
           {render_intel_source_grid(source)}
           <section class="intel-section intel-empty-state">
             <span class="page-kicker">Ready when members ask</span>
-            <h2>Intel activates from the next @SpreadArbitrageBot lookup</h2>
-            <p>Send an exact token such as <strong>$GUA funding</strong> in the private @SpreadArbitrageBot chat. The token is matched to current routes, retained funding windows and charts without storing the sender or message text.</p>
+            <h2>Intel activates from the next subscriber-bot lookup</h2>
+            <p>Send an exact token such as <strong>$GUA funding</strong> to {h(bot_label)} in your linked private chat or the subscriber forum. The token is matched to current routes, retained funding windows and charts without storing the sender or message text.</p>
             <div class="intel-actions">
-              <a class="primary" href="https://t.me/SpreadArbitrageBot" target="_blank" rel="noopener">Open @SpreadArbitrageBot</a>
+              <a class="primary" href="{h(bot_url)}" target="_blank" rel="noopener">Open {h(bot_label)}</a>
               <a class="secondary" href="/funding">Browse Funding</a>
             </div>
           </section>
@@ -17074,7 +17078,8 @@ main { max-width: none; margin: 0; padding: 32px 24px 0; }
 .panel { margin-bottom: 14px; overflow: hidden; }
 .panel-head { padding: 14px; border-bottom: 1px solid #d0d0d0; }
 .panel-head.flat { padding: 0 0 10px; border: 0; }
-.intel-page { display: grid; gap: 16px; }
+.intel-page { display: grid; gap: 16px; min-width: 0; }
+.intel-page > * { min-width: 0; }
 .intel-hero { min-height: 128px; display: flex; justify-content: space-between; gap: 18px; align-items: flex-end; padding: 20px; background: var(--dark); color: white; border-radius: 10px; }
 .compact-hero { min-height: 112px; }
 .intel-hero h1 { margin: 4px 0 8px; max-width: 760px; font-size: 34px; line-height: 1.05; }
@@ -17083,6 +17088,7 @@ main { max-width: none; margin: 0; padding: 32px 24px 0; }
 .intel-source-notice.live { border-left-color:var(--terminal-accent); }
 .intel-source-notice.stale { border-left-color:var(--terminal-warning); }
 .intel-source-notice strong { display:block;margin-bottom:4px; } .intel-source-notice p { margin:0;color:var(--terminal-muted);line-height:1.5; }
+.intel-source-notice, .intel-empty-state, .intel-empty-state h2, .intel-empty-state p, .intel-empty-state a { overflow-wrap: anywhere; }
 .intel-empty-state { min-height:210px;display:grid;align-content:center;justify-items:start;gap:10px;padding:26px; }
 .intel-empty-state h2 { margin:0;color:var(--terminal-text);font-size:26px; }
 .intel-empty-state p { max-width:760px;margin:0;color:var(--terminal-muted);line-height:1.55; }
@@ -18001,7 +18007,7 @@ pre { background: var(--dark); color: white; padding: 14px; border-radius: 8px; 
   .facts { grid-template-columns: 1fr; }
   .pair-anchors { max-width: 100%; overflow-x: auto; flex-wrap: nowrap; }
   .price-pair { justify-content: flex-start; }
-  .auto-refresh-pill { right: 10px; bottom: 10px; max-width: calc(100vw - 20px); }
+  .auto-refresh-pill { position: static; margin: 10px 14px 14px auto; width: max-content; max-width: calc(100vw - 28px); }
 }
 @media (max-width: 560px) {
   .ranking-explainer, .ranking-filter { grid-template-columns: 1fr; }

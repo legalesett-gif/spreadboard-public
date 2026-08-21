@@ -594,11 +594,42 @@ def test_member_intel_uses_one_activation_state_until_bot_attention_is_fresh(mon
         },
     )
     html = server.render_intel_page(Path("/missing.json"), {}, {})
-    assert "Intel activates from the next @SpreadArbitrageBot lookup" in html
-    assert "https://t.me/SpreadArbitrageBot" in html
+    assert "Intel activates from the next subscriber-bot lookup" in html
+    assert "https://t.me/spreadarbitragesubscription_bot" in html
     assert "Latest Brief" not in html
     assert "What's Hot" not in html
     assert "Recent Feed" not in html
+
+
+def test_intel_cache_key_changes_with_always_on_bot_attention(tmp_path, monkeypatch) -> None:
+    events = tmp_path / "telegram_events.jsonl"
+    monkeypatch.setattr(intel, "DEFAULT_EVENTS_PATH", events)
+    params = {
+        "window_hours": 6,
+        "kind": None,
+        "symbol": None,
+        "topic": None,
+        "limit": 12,
+    }
+
+    before = server._intel_cache_key(tmp_path / "board.json", params)
+    events.write_text('{"received_at_us":1}\n')
+    after = server._intel_cache_key(tmp_path / "board.json", params)
+
+    assert before != after
+
+
+def test_intel_long_bot_username_cannot_force_mobile_overflow() -> None:
+    assert ".intel-page > * { min-width: 0; }" in server.APP_CSS
+    assert ".intel-source-notice, .intel-empty-state" in server.APP_CSS
+    assert "overflow-wrap: anywhere" in server.APP_CSS
+
+
+def test_mobile_auto_refresh_control_does_not_cover_page_content() -> None:
+    assert (
+        ".auto-refresh-pill { position: static; margin: 10px 14px 14px auto;"
+        in server.APP_CSS
+    )
 
 
 def test_priority_funding_legs_are_attempted_before_rotating_catalog(tmp_path, monkeypatch) -> None:
