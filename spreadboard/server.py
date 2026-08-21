@@ -11014,15 +11014,30 @@ def render_telegram_landing_page(board_path: Path) -> str:
     # Telegram receives a small, controlled HTML subset. The website preview
     # should show what a reader sees, not the transport markup itself.
     preview_text = html.unescape(re.sub(r"<[^>]*>", "", preview))
+    community_connected = bool(state.get("community_configured"))
     community_state = (
         "Private subscriber forum connected"
-        if state.get("community_configured")
+        if community_connected
         else "Private subscriber forum awaiting setup"
     )
     public_feed_state = (
         "Optional public broadcast connected"
         if state.get("public_feed_outbound_ready")
         else "Optional public broadcast not configured"
+    )
+    snapshot_ready = bool(state.get("query_snapshot_ready"))
+    snapshot_heading = (
+        "Latest completed /top snapshot"
+        if snapshot_ready
+        else "/top snapshot warming"
+    )
+    community_copy = (
+        "The private subscriber forum is a Research Pro entitlement and is connected."
+        if community_connected
+        else (
+            "The private subscriber forum is a Research Pro entitlement and is not "
+            "connected yet."
+        )
     )
     body = f"""
     <section class="telegram-page">
@@ -11034,13 +11049,13 @@ def render_telegram_landing_page(board_path: Path) -> str:
         <aside><span>{h(community_state)}</span><strong>/top</strong><em>works in a direct chat with the bot</em><span>{h(public_feed_state)}</span></aside>
       </header>
       <section class="telegram-flow">
-        <article><b>01</b><h2>Preview</h2><p>Use <code>/top</code> without linking an account. Every token opens the matching Pro Table filter.</p></article>
+        <article><b>01</b><h2>Preview</h2><p>Use <code>/top</code> without linking an account. It labels the age of its latest completed snapshot, and every token opens the matching Pro Table filter.</p></article>
         <article><b>02</b><h2>Link</h2><p>Create a one-time link in Portfolio settings. Telegram never receives your password or payment credentials.</p></article>
         <article><b>03</b><h2>Activate</h2><p>Use <code>/subscribe</code> for signed checkout. Research Pro members use <code>/access</code> for the private subscriber forum.</p></article>
       </section>
-      <section class="telegram-preview"><div><span>Sample digest</span><h2>What /top returns now</h2></div><pre>{h(preview_text)}</pre><p>The private subscriber forum is a Research Pro entitlement and is already connected. Scanner members retain website scanners and personal alerts but are not admitted to this group. A separate public broadcast channel remains optional.</p></section>
+      <section class="telegram-preview"><div><span>Sample digest</span><h2>{h(snapshot_heading)}</h2></div><pre>{h(preview_text)}</pre><p>{h(community_copy)} Scanner members retain website scanners and personal alerts but are not admitted to this group. A separate public broadcast channel remains optional.</p></section>
       <section class="telegram-command-grid">
-        <article><code>/top</code><span>Fresh public route preview</span></article><article><code>$SIREN</code><span>Exact-token lookup in the subscriber group</span></article><article><code>/token SIREN</code><span>The same exact-token lookup as a slash command</span></article><article><code>@{h(username or "spreadarbitragesubscription_bot")} SIREN</code><span>Tag the bot, then type any token</span></article><article><code>/funding SIREN</code><span>Paired funding view</span></article><article><code>/transfer SIREN</code><span>Deposit and withdrawal state</span></article>
+        <article><code>/top</code><span>Latest completed route preview with age</span></article><article><code>$SIREN</code><span>Exact-token lookup in the subscriber group</span></article><article><code>/token SIREN</code><span>The same exact-token lookup as a slash command</span></article><article><code>@{h(username or "spreadarbitragesubscription_bot")} SIREN</code><span>Tag the bot, then type any token</span></article><article><code>/funding SIREN</code><span>Paired funding view</span></article><article><code>/transfer SIREN</code><span>Deposit and withdrawal state</span></article>
       </section>
     </section>
     """

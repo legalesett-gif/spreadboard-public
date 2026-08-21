@@ -238,7 +238,15 @@ def test_telegram_landing_preview_shows_reader_text_not_transport_html(tmp_path,
     monkeypatch.setattr(
         server.telegram_bot,
         "status",
-        lambda: {"bot_username": None, "public_feed_outbound_ready": False},
+        lambda: {
+            "bot_username": None,
+            "community_configured": False,
+            "public_feed_outbound_ready": False,
+            "query_snapshot_ready": True,
+            "query_snapshot_age_seconds": 125.0,
+            "query_snapshot_token_count": 691,
+            "query_snapshot_route_count": 2_511,
+        },
     )
     monkeypatch.setattr(
         server.telegram_bot,
@@ -253,3 +261,60 @@ def test_telegram_landing_preview_shows_reader_text_not_transport_html(tmp_path,
     assert "$SIREN" in page
     assert "/token SIREN" in page
     assert "@spreadarbitragesubscription_bot SIREN" in page
+    assert "Latest completed /top snapshot" in page
+    assert "What /top returns now" not in page
+    assert "research pro entitlement and is not connected yet" in page.lower()
+    assert "already connected" not in page
+
+
+def test_telegram_landing_reports_connected_forum_from_runtime_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        server.telegram_bot,
+        "status",
+        lambda: {
+            "bot_username": "spreadarbitragesubscription_bot",
+            "community_configured": True,
+            "public_feed_outbound_ready": False,
+            "query_snapshot_ready": True,
+            "query_snapshot_age_seconds": 30.0,
+            "query_snapshot_token_count": 42,
+            "query_snapshot_route_count": 120,
+        },
+    )
+    monkeypatch.setattr(
+        server.telegram_bot,
+        "render_public_digest",
+        lambda **_kwargs: "SpreadBoard latest completed snapshot\nUpdated 30s ago",
+    )
+
+    page = server.render_telegram_landing_page(tmp_path / "board.jsonl")
+
+    assert "research pro entitlement and is connected" in page.lower()
+    assert "not connected yet" not in page
+
+
+def test_telegram_landing_names_a_warming_snapshot_honestly(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        server.telegram_bot,
+        "status",
+        lambda: {
+            "bot_username": "spreadarbitragesubscription_bot",
+            "community_configured": True,
+            "public_feed_outbound_ready": False,
+            "query_snapshot_ready": False,
+            "query_snapshot_age_seconds": None,
+            "query_snapshot_token_count": 0,
+            "query_snapshot_route_count": 0,
+        },
+    )
+    monkeypatch.setattr(
+        server.telegram_bot,
+        "render_public_digest",
+        lambda **_kwargs: "The Telegram snapshot is still warming.",
+    )
+
+    page = server.render_telegram_landing_page(tmp_path / "board.jsonl")
+
+    assert "/top snapshot warming" in page
+    assert "Latest completed /top snapshot" not in page
+    assert "What /top returns now" not in page

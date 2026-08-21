@@ -8,6 +8,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
+from html import escape as html_escape
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -486,22 +487,70 @@ def _record_token_attention(query: telegram_queries.Query, *, source: str) -> No
 
 
 def render_public_digest(*, board_path: Any, limit: int = 5) -> str:
-    """Small public research preview; no account data and no execution claims."""
+    """Small completed-snapshot preview; no account data or execution claims."""
     public_url = os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip().rstrip("/")
+    snapshot = telegram_queries.payload_status()
+    if not snapshot.get("ready"):
+        return (
+            "<b>SpreadBoard · Telegram snapshot warming</b>\n"
+            "The latest completed research snapshot is still warming. "
+            "Try /top again shortly; /status shows the snapshot progress.\n\n"
+            "<i>Public market research, not a trade signal. Recheck depth, identity, "
+            "fees and funding before acting.</i>"
+        )
     rows = telegram_queries.suggest("", board_path=board_path, limit=max(1, min(8, limit)))
-    lines = ["<b>SpreadBoard · live research preview</b>"]
+    lines = [
+        "<b>SpreadBoard · latest completed research snapshot</b>",
+        (
+            f"<i>Updated {_snapshot_age_label(snapshot.get('age_seconds'))} · "
+            f"{_snapshot_count_label(snapshot.get('token_count'), 'token')} · "
+            f"{_snapshot_count_label(snapshot.get('route_count'), 'route')}</i>"
+        ),
+    ]
     for index, item in enumerate(rows, 1):
         token = str(item.get("token") or "")
+        token_text = html_escape(token, quote=False)
         edge = item.get("best_edge_pct")
         value = f"{float(edge):+.2f}%" if edge is not None else "—"
-        venues = " / ".join(str(value) for value in (item.get("venues") or [])[:3])
-        link = f"{public_url}/markets?q={quote(token)}&view=table" if public_url else ""
-        title = f'<a href="{link}">{token}</a>' if link else token
-        lines.append(f"{index}. <b>{title}</b> · {value} · {int(item.get('route_count') or 0)} routes · {venues}")
+        venues = " / ".join(
+            html_escape(str(venue), quote=False)
+            for venue in (item.get("venues") or [])[:3]
+        )
+        link = (
+            f"{public_url}/markets?q={quote(token, safe='')}&view=table"
+            if public_url
+            else ""
+        )
+        title = f'<a href="{link}">{token_text}</a>' if link else token_text
+        route_count = _snapshot_count_label(item.get("route_count"), "route")
+        lines.append(f"{index}. <b>{title}</b> · {value} · {route_count} · {venues}")
     if not rows:
-        lines.append("No fresh routes matched the public safety filters.")
+        lines.append("No routes remain after the public safety filters in this completed snapshot.")
     lines.append("\n<i>Public market research, not a trade signal. Recheck depth, identity, fees and funding before acting.</i>")
     return "\n".join(lines)
+
+
+def _snapshot_age_label(value: Any) -> str:
+    """Compact, explicit age for a completed immutable Telegram snapshot."""
+    try:
+        seconds = max(0.0, float(value))
+    except (TypeError, ValueError):
+        return "at an unknown time"
+    if seconds < 60:
+        return f"{seconds:.0f}s ago"
+    if seconds < 3_600:
+        return f"{seconds / 60:.0f}m ago"
+    if seconds < 86_400:
+        return f"{seconds / 3_600:.1f}h ago"
+    return f"{seconds / 86_400:.1f}d ago"
+
+
+def _snapshot_count_label(value: Any, noun: str) -> str:
+    try:
+        count = max(0, int(value or 0))
+    except (TypeError, ValueError):
+        count = 0
+    return f"{count:,} {noun if count == 1 else noun + 's'}"
 
 
 class PublicFeedWorker:

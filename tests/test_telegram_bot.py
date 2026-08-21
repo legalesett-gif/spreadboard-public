@@ -208,12 +208,87 @@ def test_membership_worker_records_one_invalid_link_and_continues(tmp_path, monk
 
 def test_public_digest_has_deep_links_without_claiming_tradeability(monkeypatch) -> None:
     monkeypatch.setenv("SPREADBOARD_PUBLIC_URL", "https://spreadarbitrage.ink")
+    monkeypatch.setattr(
+        telegram_bot.telegram_queries,
+        "payload_status",
+        lambda: {
+            "ready": True,
+            "age_seconds": 125.0,
+            "token_count": 691,
+            "route_count": 2_511,
+        },
+    )
     monkeypatch.setattr(telegram_bot.telegram_queries, "suggest", lambda *_args, **_kwargs: [
         {"token": "SIREN", "best_edge_pct": 2.5, "route_count": 4, "venues": ["Gate", "OKX DEX"]}
     ])
     text = telegram_bot.render_public_digest(board_path="ignored")
     assert "SIREN" in text and "+2.50%" in text
     assert "view=table" in text and "research" in text.lower()
+    assert "latest completed research snapshot" in text.lower()
+    assert "Updated 2m ago · 691 tokens · 2,511 routes" in text
+
+
+def test_public_digest_reports_snapshot_warming_instead_of_no_routes(monkeypatch) -> None:
+    """A cold process has no market answer yet, not evidence of no opportunity."""
+    monkeypatch.setattr(
+        telegram_bot.telegram_queries,
+        "payload_status",
+        lambda: {
+            "ready": False,
+            "age_seconds": None,
+            "token_count": 0,
+            "route_count": 0,
+        },
+    )
+    monkeypatch.setattr(
+        telegram_bot.telegram_queries,
+        "suggest",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("a cold snapshot must not be queried")
+        ),
+    )
+
+    text = telegram_bot.render_public_digest(board_path="ignored")
+
+    assert "snapshot is still warming" in text.lower()
+    assert "try /top again shortly" in text.lower()
+    assert "no fresh routes matched" not in text.lower()
+
+
+def test_public_digest_escapes_upstream_labels_before_telegram_html(monkeypatch) -> None:
+    """Exchange metadata is display data, never trusted Telegram markup."""
+    monkeypatch.setenv("SPREADBOARD_PUBLIC_URL", "https://spreadarbitrage.ink")
+    monkeypatch.setattr(
+        telegram_bot.telegram_queries,
+        "payload_status",
+        lambda: {
+            "ready": True,
+            "age_seconds": 5.0,
+            "token_count": 1,
+            "route_count": 1,
+        },
+    )
+    monkeypatch.setattr(
+        telegram_bot.telegram_queries,
+        "suggest",
+        lambda *_args, **_kwargs: [
+            {
+                "token": '<b>SIREN & "friends"</b>',
+                "best_edge_pct": 1.0,
+                "route_count": "not-a-count",
+                "venues": ["Gate & Co", "<i>Not markup</i>"],
+            }
+        ],
+    )
+
+    text = telegram_bot.render_public_digest(board_path="ignored")
+
+    assert "Updated 5s ago · 1 token · 1 route" in text
+    assert "· 0 routes · Gate &amp; Co" in text
+    assert '&lt;b&gt;SIREN &amp; "friends"&lt;/b&gt;' in text
+    assert "Gate &amp; Co / &lt;i&gt;Not markup&lt;/i&gt;" in text
+    assert "<b><b>SIREN" not in text
+    assert "q=%3Cb%3ESIREN%20%26%20%22friends%22%3C%2Fb%3E" in text
 
 
 def test_top_command_is_available_before_account_linking(tmp_path, monkeypatch) -> None:
@@ -225,6 +300,32 @@ def test_top_command_is_available_before_account_linking(tmp_path, monkeypatch) 
         db_path=db_path, board_path="board",
     )
     assert response["text"] == "Top routes preview"
+
+
+def test_top_command_does_not_mislabel_a_cold_snapshot_as_no_routes(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = tmp_path / "accounts.sqlite3"
+    accounts.initialize(db_path)
+    monkeypatch.setattr(
+        telegram_bot.telegram_queries,
+        "payload_status",
+        lambda: {
+            "ready": False,
+            "age_seconds": None,
+            "token_count": 0,
+            "route_count": 0,
+        },
+    )
+
+    response = telegram_bot.handle_update(
+        {"message": {"chat": {"id": 88, "type": "private"}, "text": "/top"}},
+        db_path=db_path,
+        board_path="board",
+    )
+
+    assert "snapshot is still warming" in response["text"].lower()
+    assert "no fresh routes matched" not in response["text"].lower()
 
 
 def test_public_feed_worker_requires_an_explicit_chat(monkeypatch) -> None:
