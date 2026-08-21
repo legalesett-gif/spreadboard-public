@@ -83,3 +83,23 @@ def test_public_auth_and_membership_surfaces_use_the_flat_layout() -> None:
     assert ".pricing-tier" in pricing
     assert "background:transparent" in pricing
     assert "border-radius:2px" in pricing
+
+
+def test_playbook_cards_use_theme_tokens_instead_of_light_only_surfaces() -> None:
+    """Mobile dark mode made the playbook effectively unreadable in production.
+
+    The later editorial theme changes global text to pale colours, but these
+    older cards and their answer boxes kept hard-coded white backgrounds.  The
+    component must consume the same terminal surface/text tokens in both modes.
+    """
+
+    card_rule = server.APP_CSS.split(".playbook-card {", 1)[1].split("}", 1)[0]
+    answer_rule = server.APP_CSS.split(".playbook-answer {", 1)[1].split("}", 1)[0]
+
+    assert "background: var(--terminal-panel)" in card_rule
+    assert "border: 1px solid var(--terminal-line)" in card_rule
+    assert "color: var(--terminal-text)" in card_rule
+    assert "background: var(--terminal-row)" in answer_rule
+    assert "border: 1px solid var(--terminal-line)" in answer_rule
+    assert "color: var(--terminal-text)" in answer_rule
+    assert "background: white" not in answer_rule

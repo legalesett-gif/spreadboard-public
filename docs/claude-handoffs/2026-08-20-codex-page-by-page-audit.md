@@ -51,6 +51,11 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
 - DEX empty states now report the actual OKX provider rejection rather than
   claiming there are no routes. Filtered KPIs no longer inherit unrelated
   global values. Exact economic duplicates are deduplicated.
+- `/playbook` is now fully audited. Its hard-coded light card and answer
+  surfaces made dark mode unreadable; a failing-test-first change moved the
+  component onto terminal theme tokens. Production desktop/mobile light/dark
+  screenshots, computed contrast, source/API truth, every unique content link,
+  Pause/Resume, theme control, console and network checks now pass.
 
 ### Current deployment and verification
 
@@ -60,7 +65,7 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
 - Production `app-app-1` and `app-collector-1` are healthy. Local, host, app
   and collector `spreadboard/server.py` SHA-256 are identical:
   `daba71e8434a7780aadea78d645a939a32051695e4fe715aed5e18deb9c7adf7`.
-- Full suite: **1,450 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,451 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -75,25 +80,25 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 23,202 observations, 15,924
-labeled 24h outcomes, 1,733 routes and 6.21 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 23,331 observations, 16,017
+labeled 24h outcomes, 1,734 routes and 6.25 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
-6.21/30 days; no candidate exists, activation is false and the deterministic
+6.25/30 days; no candidate exists, activation is false and the deterministic
 fallback remains active. Do not mix the 5,832 v4 rows or weaken these gates.
 
 ### External live failure still open
 
 OKX DEX currently rejects catalogue access on chains 1, 56, 137, 42161 and
 8453 with an API-key/region entitlement error. Both verified DEX lanes remain
-zero after 425 under-covered completed cycles. Credentials are present; this
+zero after 445 under-covered completed cycles. Credentials are present; this
 needs provider/account entitlement repair and then sustained-cycle proof. Do
 not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/playbook`.
-2. Then complete `/profile`, `/intel`, `/triage`, `/signals`, `/community`,
+1. Continue §8 with the remaining static routes, starting at `/profile`.
+2. Then complete `/intel`, `/triage`, `/signals`, `/community`,
    `/learn`, `/proof`, `/executor`, `/status`, `/telegram`, `/guide`,
    `/methodology`, `/pricing`, `/subscription`, `/partner`, `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/

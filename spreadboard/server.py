@@ -17595,21 +17595,21 @@ body.alert-modal-open { overflow: hidden; }
 .playbook-note span { color: #b9c8c3; font-size: 11px; font-weight: 900; text-transform: uppercase; }
 .playbook-note strong { font-size: 14px; line-height: 1.25; }
 .playbook-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: stretch; }
-.playbook-card { display: grid; gap: 11px; padding: 14px; border-radius: 10px; background: #f7f7f7; border: 1px solid #d0d0d0; box-shadow: var(--shadow); min-width: 0; }
-.playbook-card.active { border-color: rgba(111,140,255,.45); background: #f5f7ff; }
+.playbook-card { display: grid; gap: 11px; padding: 14px; border-radius: 10px; background: var(--terminal-panel); border: 1px solid var(--terminal-line); color: var(--terminal-text); box-shadow: var(--shadow); min-width: 0; }
+.playbook-card.active { border-color: var(--terminal-accent); background: var(--terminal-accent-soft); }
 .playbook-card-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
 .playbook-card-head div { display: grid; gap: 4px; min-width: 0; }
-.playbook-card-head span { color: #666; font-size: 11px; font-weight: 900; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.playbook-card-head span { color: var(--terminal-muted); font-size: 11px; font-weight: 900; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .playbook-card-head h2 { margin: 0; font-size: 20px; line-height: 1.08; }
 .playbook-card-head strong { min-width: 34px; height: 34px; display: grid; place-items: center; border-radius: 7px; background: var(--accent-soft); color: var(--accent-ink); font-size: 17px; }
-.playbook-card p { margin: 0; color: #52635e; font-size: 13px; }
-.playbook-answer { padding: 10px; border-radius: 8px; background: white; border: 1px solid #d5dfdc; font-size: 13px; font-weight: 800; line-height: 1.35; }
-.playbook-steps { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: #52635e; font-size: 13px; }
+.playbook-card p { margin: 0; color: var(--terminal-muted); font-size: 13px; }
+.playbook-answer { padding: 10px; border-radius: 8px; background: var(--terminal-row); border: 1px solid var(--terminal-line); color: var(--terminal-text); font-size: 13px; font-weight: 800; line-height: 1.35; }
+.playbook-steps { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: var(--terminal-muted); font-size: 13px; }
 .playbook-links { display: flex; gap: 8px; flex-wrap: wrap; }
 .playbook-links a { display: inline-flex; align-items: center; min-height: 30px; padding: 0 9px; border-radius: 6px; background: var(--accent); color: var(--accent-ink); font-size: 12px; font-weight: 900; }
 .playbook-examples { display: grid; gap: 7px; margin-top: auto; }
-.playbook-examples span { display: grid; gap: 3px; padding-top: 8px; border-top: 1px solid #dedede; color: #666; font-size: 12px; overflow-wrap: anywhere; }
-.playbook-examples strong { color: var(--dark); }
+.playbook-examples span { display: grid; gap: 3px; padding-top: 8px; border-top: 1px solid var(--terminal-line); color: var(--terminal-muted); font-size: 12px; overflow-wrap: anywhere; }
+.playbook-examples strong { color: var(--terminal-text); }
 .playbook-guard { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; padding: 16px; border-radius: 10px; background: var(--dark); color: white; box-shadow: var(--shadow); }
 .playbook-guard h2 { margin: 2px 0 6px; }
 .playbook-guard p { margin: 0; max-width: 740px; color: #dce8e5; }
