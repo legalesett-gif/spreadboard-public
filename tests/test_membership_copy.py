@@ -44,7 +44,7 @@ def test_the_pricing_page_is_short() -> None:
 def test_the_pricing_page_still_says_the_essentials() -> None:
     html = server.render_pricing_page()
 
-    assert "Every spread, live." in html
+    assert "Current market evidence, clearly labelled." in html
     assert "What you get" in html
     assert "Why membership" in html
     # Every feature tick is present.

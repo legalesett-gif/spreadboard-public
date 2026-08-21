@@ -10804,13 +10804,13 @@ def render_register_page() -> str:
 #: fourteen paragraphs of prose and the reference product has seven ticks; a
 #: member deciding whether to pay reads the ticks.
 MEMBERSHIP_FEATURES = (
-    "Every venue we track \u2014 22 exchanges plus OKX DEX",
-    "Every lane: Futures-Futures, Futures-Spot, Spot-Spot, Spot-DEX, Futures-DEX",
-    "Live prices that move on screen",
+    "CEX coverage plus OKX DEX routes when provider and identity evidence pass",
+    "Route lanes for Futures-Futures, Futures-Spot, Spot-Spot, Spot-DEX and Futures-DEX",
+    "Current public-book prices with explicit freshness and depth status",
     "Spread, funding, token price and token funding alerts",
     "Convergence charts, custom pairs and saved charts",
     "Fair-price gaps: contracts trading away from their own venue's mark",
-    "Private Research Pro Telegram forum and priority support",
+    "Private Research Pro Telegram forum",
 )
 
 PLAN_CATALOG: dict[str, dict[str, Any]] = {
@@ -10844,9 +10844,9 @@ PLAN_CATALOG: dict[str, dict[str, Any]] = {
 
 #: Three reasons, one line each.
 MEMBERSHIP_REASONS = (
-    ("\u26a1", "Live, not polled", "Prices move as the books move."),
-    ("\u25f1", "Depth behind the number", "Matched-size VWAP beside top of book."),
-    ("\u2713", "Identity-checked routes", "Exact chain and contract, never ticker matching."),
+    ("F", "Freshness shown", "Source age is shown; gaps stay labelled."),
+    ("D", "Depth separated", f"{PROBE_LABEL} VWAP stays separate from top of book."),
+    ("I", "Identity status", "Known contracts shown; unknown stays marked."),
 )
 
 
@@ -11079,6 +11079,8 @@ def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
             action = '<a class="pricing-button" href="/free">Open free preview</a>'
         elif user and user.subscription_active and current == tier:
             action = '<a class="pricing-button primary" href="/">Open current plan</a>'
+        elif user and user.subscription_active:
+            action = '<a class="pricing-button" href="/subscription">Available after current term</a>'
         elif user:
             action = f'<a class="pricing-button primary" href="/subscription?tier={h(tier)}">Choose {h(plan["name"])}</a>'
         else:
@@ -11117,6 +11119,7 @@ def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
       .pricing-steps h3 {{ margin:8px 0 6px; font-size:17px; }}
       .pricing-steps p {{ margin:0; color:var(--terminal-muted); font-size:13px; line-height:1.5; }}
       .pricing-note {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
+      .pricing-term-heading {{ margin-top:24px !important; }}
       {MEMBERSHIP_STYLE}
       .pricing-page {{ width:min(1180px,calc(100% - 40px));margin-top:24px;gap:20px; }}
       .pricing-intro {{ padding:22px 0 26px;border-width:0 0 1px;background:transparent; }}
@@ -11140,10 +11143,10 @@ def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
     </style>
     <section class="pricing-page">
       {referral_banner}
-      <header class="pricing-intro"><span class="page-kicker">Membership</span><h1>Every spread, live.</h1><p>Start with proof, then pay once in USDC or USDT on Arbitrum for the access period you choose. No card, no automatic renewal. Scanner unlocks live discovery; Research Pro adds the full evidence and intelligence workspace.</p></header>
+      <header class="pricing-intro"><span class="page-kicker">Membership</span><h1>Current market evidence, clearly labelled.</h1><p>Start with proof, then pay once in USDC or USDT on Arbitrum. No card, no automatic renewal. Scanner unlocks discovery; Research Pro adds evidence. Coverage is source-dependent, and unavailable sources stay labelled.</p></header>
       <section class="pricing-tiers">{"".join(cards)}</section>
       <section class="pricing-block"><h2>What you get &mdash; and how to start</h2><div class="pricing-steps"><article><b>01</b><h3>Create your account</h3><p>Compare the free proof pages first, then sign in to choose Scanner or Research Pro.</p></article><article><b>02</b><h3>Pay the exact crypto invoice</h3><p>Select USDC or USDT on Arbitrum, scan the token-specific QR, and send the exact amount shown.</p></article><article><b>03</b><h3>Open your exact tier</h3><p>The invoice activates only the tier printed on it. Research Pro also unlocks the private Telegram forum.</p></article></div></section>
-      <section class="pricing-block"><h2>Research Pro prepaid terms</h2>{render_membership_terms(tier="research_pro")}<p class="pricing-note">Each amount is billed once in crypto. Access lapses unless you create and pay a new invoice.</p></section>
+      <section class="pricing-block"><h2>Scanner prepaid terms</h2>{render_membership_terms(tier="scanner")}<h2 class="pricing-term-heading">Research Pro prepaid terms</h2>{render_membership_terms(tier="research_pro")}<p class="pricing-note">Each amount is billed once in crypto. Access lapses unless you create and pay a new invoice.</p></section>
       <section class="pricing-block"><h2>Why membership</h2><div class="reason-grid">{render_membership_reasons()}</div></section>
       <p class="pricing-note">Public market data, not investment advice. Every route carries execution risk.</p>
     </section>
