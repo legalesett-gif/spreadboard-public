@@ -78,10 +78,9 @@ def status() -> dict[str, object]:
 def _send_text(*, settings: MailConfig, recipient: str, subject: str, body: str) -> str:
     """Deliver through HTTPS when configured, with SMTP as the portable fallback.
 
-    Returns the provider's message id where there is one. Discarding it left no
-    way to answer "was this actually sent?" after the fact -- the only evidence
-    was that nothing raised, which is exactly what a silently-filtered email
-    looks like too.
+    Returns the provider's message id where there is one.  The id proves that
+    the provider accepted the request; it does not prove final inbox delivery.
+    Discarding it left even that narrower claim dependent on "nothing raised".
     """
     if settings.resend_api_key:
         payload = json.dumps(
@@ -136,7 +135,7 @@ def _send_text(*, settings: MailConfig, recipient: str, subject: str, body: str)
     return ""
 
 
-def send_password_reset(*, recipient: str, display_name: str, reset_url: str) -> None:
+def send_password_reset(*, recipient: str, display_name: str, reset_url: str) -> str:
     settings = config()
     if not settings.configured:
         raise RuntimeError("email_delivery_not_configured")
@@ -148,7 +147,7 @@ def send_password_reset(*, recipient: str, display_name: str, reset_url: str) ->
         f"{reset_url}\n\n"
         "If you did not request this, ignore this email. Your current password remains unchanged.\n"
     )
-    _send_text(
+    return _send_text(
         settings=settings,
         recipient=recipient,
         subject="Reset your SpreadBoard password",

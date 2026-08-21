@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import hashlib
 import hmac
+import ipaddress
 import io
 import json
 import os
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -170,6 +172,13 @@ _PUBLIC_INTEL_FEED_URL = os.environ.get(
 )
 _PUBLIC_INTEL_FEED_CACHE: tuple[float, dict[str, Any]] | None = None
 TERMS_VERSION = "2026-08-12"
+PASSWORD_RESET_QUEUE_STALE_SECONDS = max(
+    60.0, float(os.environ.get("SPREADBOARD_PASSWORD_RESET_QUEUE_STALE_SECONDS", "300"))
+)
+PASSWORD_RESET_ACCEPTANCE_MAX_AGE_SECONDS = max(
+    86_400.0,
+    float(os.environ.get("SPREADBOARD_PASSWORD_RESET_ACCEPTANCE_MAX_AGE_SECONDS", "2592000")),
+)
 
 # Exact server-side Research Pro gates.  Navigation is presentation only; these
 # checks are the authority that prevents a Scanner account from opening the
@@ -322,6 +331,76 @@ PLAYBOOK_DEFS = [
 ]
 
 
+def _deliver_password_reset(email: str, *, accounts_path: Path) -> None:
+    """Resolve and deliver off-request, retaining no address in audit evidence."""
+    try:
+        user_id = accounts.user_id_for_email(email, db_path=accounts_path)
+        if user_id is None:
+            return
+        user = accounts.get_user_object(user_id, db_path=accounts_path)
+        if user is None:
+            return
+        delivery_id = accounts.queue_password_reset_delivery(
+            user.id,
+            provider=str(mailer.status().get("provider") or "unknown"),
+            db_path=accounts_path,
+        )
+        try:
+            token = accounts.create_password_token(
+                user.id, purpose="reset", db_path=accounts_path
+            )
+            base = (
+                os.environ.get("SPREADBOARD_PUBLIC_URL", "https://spreadarbitrage.ink")
+                .strip()
+                .rstrip("/")
+            )
+            message_id = mailer.send_password_reset(
+                recipient=user.email,
+                display_name=user.display_name,
+                reset_url=f"{base}/set-password?{urlencode({'token': token})}",
+            )
+        except Exception as exc:  # noqa: BLE001 - persist class only, never provider text.
+            accounts.finish_password_reset_delivery(
+                delivery_id,
+                delivered=False,
+                error_type=type(exc).__name__,
+                db_path=accounts_path,
+            )
+            return
+        accounts.finish_password_reset_delivery(
+            delivery_id,
+            delivered=True,
+            message_id=message_id,
+            db_path=accounts_path,
+        )
+    except Exception as exc:  # noqa: BLE001 - background failure cannot disclose an account.
+        sys.stderr.write(f"spreadboard: password_reset_worker:{type(exc).__name__}\n")
+
+
+def proxy_client_ip(peer_ip: str, forwarded_for: str) -> str:
+    """Use Caddy's last forwarded address only across a private proxy hop.
+
+    The app container is not published to the host; Caddy is its only public
+    caller.  Ignoring this header made every visitor share Caddy's container IP
+    and therefore one global auth/reset allowance.  A public direct peer never
+    gets to replace its address with a caller-controlled header.
+    """
+    peer_text = str(peer_ip or "unknown").strip() or "unknown"
+    try:
+        peer = ipaddress.ip_address(peer_text)
+    except ValueError:
+        return peer_text
+    if not (peer.is_private or peer.is_loopback):
+        return peer_text
+    candidates = [item.strip() for item in str(forwarded_for or "").split(",") if item.strip()]
+    for candidate in reversed(candidates):
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            continue
+    return peer_text
+
+
 class SpreadBoardServer(ThreadingHTTPServer):
     def __init__(
         self,
@@ -337,10 +416,57 @@ class SpreadBoardServer(ThreadingHTTPServer):
         self.config = config
         self.accounts_path = Path(accounts_path)
         accounts.initialize(self.accounts_path)
+        # Password-reset delivery is deliberately outside the request thread.
+        # Otherwise a registered address waits on the mail provider while an
+        # unknown address returns immediately, which is an account-enumeration
+        # timing signal.  The small bounded pool sits behind per-IP/per-email
+        # limits and cannot grow one thread per public request.  ThreadPool's
+        # own work queue is unbounded, so a separate semaphore caps running and
+        # queued work together.
+        try:
+            password_reset_workers = max(
+                1, min(8, int(os.environ.get("SPREADBOARD_PASSWORD_RESET_WORKERS", "2")))
+            )
+            password_reset_pending = max(
+                password_reset_workers,
+                min(
+                    256,
+                    int(os.environ.get("SPREADBOARD_PASSWORD_RESET_MAX_PENDING", "64")),
+                ),
+            )
+        except ValueError:
+            password_reset_workers, password_reset_pending = 2, 64
+        self.password_reset_executor = ThreadPoolExecutor(
+            max_workers=password_reset_workers,
+            thread_name_prefix="spreadboard-password-reset",
+        )
+        self.password_reset_slots = threading.BoundedSemaphore(password_reset_pending)
         self.alert_watcher: alerts.AlertWatcher | None = None
         self.position_alert_worker: Any = None
         self.subscription_lifecycle_worker: Any = None
         self.web_push_worker: Any = None
+
+    def server_close(self) -> None:
+        self.password_reset_executor.shutdown(wait=True, cancel_futures=False)
+        super().server_close()
+
+    def submit_password_reset(self, email: str) -> bool:
+        """Submit one reset job without allowing an unbounded pending queue."""
+        if not self.password_reset_slots.acquire(blocking=False):
+            return False
+
+        def deliver() -> None:
+            try:
+                _deliver_password_reset(email, accounts_path=self.accounts_path)
+            finally:
+                self.password_reset_slots.release()
+
+        try:
+            self.password_reset_executor.submit(deliver)
+        except RuntimeError:
+            self.password_reset_slots.release()
+            return False
+        return True
 
 
 class SpreadBoardHandler(BaseHTTPRequestHandler):
@@ -404,7 +530,12 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/register":
                 self._send_html(render_register_page())
             elif parsed.path == "/forgot-password":
-                self._send_html(render_forgot_password_page())
+                self._send_html(
+                    render_forgot_password_page(
+                        requested=_query_first(query, "requested") == "1",
+                        busy=_query_first(query, "busy") == "1",
+                    )
+                )
             elif parsed.path == "/status":
                 self._send_html(
                     render_status_page(
@@ -413,6 +544,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                             self.server.config,
                             self.server.position_alert_worker,
                             self.server.subscription_lifecycle_worker,
+                            accounts_path=self.server.accounts_path,
                         )
                     )
                 )
@@ -920,6 +1052,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         self.server.config,
                         self.server.position_alert_worker,
                         self.server.subscription_lifecycle_worker,
+                        accounts_path=self.server.accounts_path,
                     )
                 )
             elif parsed.path == "/api/executor-boundary":
@@ -1026,7 +1159,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     user.id,
                     terms_version=TERMS_VERSION,
                     immediate_access=True,
-                    ip_address=self.client_address[0] if self.client_address else "",
+                    ip_address=self._client_ip(),
                     user_agent=self.headers.get("User-Agent", ""),
                     db_path=self.server.accounts_path,
                 )
@@ -1048,7 +1181,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     user.id,
                     terms_version=TERMS_VERSION,
                     immediate_access=True,
-                    ip_address=self.client_address[0] if self.client_address else "",
+                    ip_address=self._client_ip(),
                     user_agent=self.headers.get("User-Agent", ""),
                     db_path=self.server.accounts_path,
                 )
@@ -1666,7 +1799,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
     def _handle_set_password(self) -> None:
         """Spend a one-time link. Rate limited like a login, for the same reason."""
         payload = self._read_payload()
-        key = self.client_address[0] if self.client_address else "unknown"
+        key = self._client_ip()
         now = time.monotonic()
         with self._login_attempts_lock:
             recent = [item for item in self._login_attempts.get(key, []) if now - item < 900]
@@ -1694,6 +1827,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
 
     def _handle_password_reset_request(self) -> None:
         """Send a reset link without revealing whether an email is registered."""
+        form_request = "application/json" not in self.headers.get("Content-Type", "")
         if not mailer.status()["configured"]:
             self._send_json(
                 {"ok": False, "error": "recovery_delivery_unavailable"},
@@ -1702,7 +1836,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             return
         payload = self._read_payload()
         email = str(payload.get("email") or "").strip().casefold()
-        ip = self.client_address[0] if self.client_address else "unknown"
+        if len(email) > 254:
+            email = ""
+        ip = self._client_ip()
         key = "reset:" + ip
         email_key = "reset-email:" + hashlib.sha256(email.encode("utf-8")).hexdigest()
         now = time.monotonic()
@@ -1712,35 +1848,26 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 item for item in self._login_attempts.get(email_key, []) if now - item < 3600
             ]
             if len(recent_ip) >= 10 or len(recent_email) >= 3:
-                self._send_json(
-                    {"ok": True, "message": "If that account exists, a reset link will be sent."},
-                    status=HTTPStatus.ACCEPTED,
-                )
+                self._password_reset_ack(form_request=form_request)
                 return
             self._login_attempts[key] = recent_ip + [now]
             self._login_attempts[email_key] = recent_email + [now]
-        user_id = accounts.user_id_for_email(email, db_path=self.server.accounts_path)
-        if user_id is not None:
-            user = accounts.get_user_object(user_id, db_path=self.server.accounts_path)
-            if user is not None:
-                token = accounts.create_password_token(
-                    user.id, purpose="reset", db_path=self.server.accounts_path
+        if not self.server.submit_password_reset(email):
+            if form_request:
+                self._redirect("/forgot-password?busy=1")
+            else:
+                self._send_json(
+                    {"ok": False, "error": "recovery_temporarily_busy"},
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
                 )
-                base = (
-                    os.environ.get("SPREADBOARD_PUBLIC_URL", "https://spreadarbitrage.ink")
-                    .strip()
-                    .rstrip("/")
-                )
-                try:
-                    mailer.send_password_reset(
-                        recipient=user.email,
-                        display_name=user.display_name,
-                        reset_url=f"{base}/set-password?{urlencode({'token': token})}",
-                    )
-                except Exception:
-                    # The public response stays identical: SMTP failures must
-                    # not become an account-enumeration side channel.
-                    pass
+            return
+        self._password_reset_ack(form_request=form_request)
+
+    def _password_reset_ack(self, *, form_request: bool) -> None:
+        """Return one account-agnostic acknowledgement in the requested format."""
+        if form_request:
+            self._redirect("/forgot-password?requested=1")
+            return
         self._send_json(
             {"ok": True, "message": "If that account exists, a reset link will be sent."},
             status=HTTPStatus.ACCEPTED,
@@ -1748,7 +1875,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
 
     def _handle_login(self) -> None:
         payload = self._read_payload()
-        key = self.client_address[0] if self.client_address else "unknown"
+        key = self._client_ip()
         now = time.monotonic()
         with self._login_attempts_lock:
             recent = [item for item in self._login_attempts.get(key, []) if now - item < 900]
@@ -1794,7 +1921,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
 
     def _handle_register(self) -> None:
         payload = self._read_payload()
-        key = "register:" + (self.client_address[0] if self.client_address else "unknown")
+        key = "register:" + self._client_ip()
         now = time.monotonic()
         with self._login_attempts_lock:
             recent = [item for item in self._login_attempts.get(key, []) if now - item < 3600]
@@ -1855,6 +1982,10 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
 
     def _session_token(self) -> str:
         return self._cookie_value(accounts.SESSION_COOKIE)
+
+    def _client_ip(self) -> str:
+        peer = self.client_address[0] if self.client_address else "unknown"
+        return proxy_client_ip(peer, self.headers.get("X-Forwarded-For", ""))
 
     def _cookie_value(self, name: str) -> str:
         cookie = SimpleCookie()
@@ -5329,11 +5460,80 @@ def funding_history_health() -> dict[str, Any]:
     return summary
 
 
+def password_recovery_status(accounts_path: Path | str | None = None) -> dict[str, Any]:
+    """Expose verified delivery health without recipient, token or provider id."""
+    mail_status = mailer.status()
+    configured = bool(mail_status.get("configured"))
+    if not configured:
+        return {
+            "status": "setup_needed",
+            "detail": "Password-recovery delivery is not configured",
+        }
+    evidence = (
+        accounts.password_reset_delivery_health(db_path=accounts_path)
+        if accounts_path is not None
+        else {"status": "unproven", "requested_at": None, "finished_at": None}
+    )
+    status = str(evidence.get("status") or "unproven")
+    configured_provider = str(mail_status.get("provider") or "")
+    evidence_provider = str(evidence.get("provider") or "")
+    if (
+        status != "unproven"
+        and configured_provider
+        and evidence_provider != configured_provider
+    ):
+        return {
+            "status": "setup_needed",
+            "detail": "Current password-recovery provider is unverified",
+        }
+    if status == "sent":
+        finished_at = evidence.get("finished_at")
+        finished = _iso_datetime(finished_at)
+        age_seconds = time.time() - finished.timestamp() if finished else None
+        if age_seconds is None or not 0 <= age_seconds <= PASSWORD_RESET_ACCEPTANCE_MAX_AGE_SECONDS:
+            return {
+                "status": "setup_needed",
+                "detail": "Latest password-recovery provider acceptance is stale",
+                "last_delivery_at": finished_at,
+            }
+        return {
+            "status": "operational",
+            "detail": "Password-recovery provider accepted the latest message",
+            "last_delivery_at": finished_at,
+        }
+    if status == "error":
+        return {
+            "status": "degraded",
+            "detail": "Latest password-recovery delivery failed",
+            "last_delivery_at": evidence.get("finished_at"),
+        }
+    if status == "queued":
+        requested_at = evidence.get("requested_at")
+        requested = _iso_datetime(requested_at)
+        age_seconds = time.time() - requested.timestamp() if requested else None
+        if age_seconds is None or age_seconds > PASSWORD_RESET_QUEUE_STALE_SECONDS:
+            return {
+                "status": "degraded",
+                "detail": "Latest password-recovery delivery stalled",
+                "last_attempt_at": requested_at,
+            }
+        return {
+            "status": "setup_needed",
+            "detail": "Password-recovery delivery verification is pending",
+            "last_attempt_at": requested_at,
+        }
+    return {
+        "status": "setup_needed",
+        "detail": "Password-recovery delivery is configured but unverified",
+    }
+
+
 def api_public_status(
     board_path: Path,
     config: dict[str, Any],
     position_alert_worker: Any = None,
     subscription_lifecycle_worker: Any = None,
+    accounts_path: Path | str | None = None,
 ) -> dict[str, Any]:
     """A public, secret-free operational summary for members and prospects."""
     sources = api_source_health(board_path, config)
@@ -5342,7 +5542,7 @@ def api_public_status(
     telegram = telegram_bot.status()
     funding = funding_history_health()
     accounting = accounting_worker_status()
-    recovery = mailer.status()
+    recovery = password_recovery_status(accounts_path)
     market_ok = bool(sources.get("ok"))
     dex = canonical.get("dex_spot_source") or {}
     dex_provider = str((dex.get("details") or {}).get("provider") or "DEX provider")
@@ -5430,10 +5630,7 @@ def api_public_status(
             "read_only": bool(accounting.get("read_only")),
             "detail": "Isolated read-only ledger worker",
         },
-        "email_recovery": {
-            "status": "operational" if recovery["configured"] else "setup_needed",
-            "detail": "Password-recovery delivery",
-        },
+        "email_recovery": recovery,
     }
     component_statuses = {str(item.get("status") or "unknown") for item in components.values()}
     overall_status = (
@@ -10791,24 +10988,54 @@ document.getElementById('loginForm').addEventListener('submit', async (event) =>
 </script></body></html>"""
 
 
-def render_forgot_password_page() -> str:
+def render_forgot_password_page(*, requested: bool = False, busy: bool = False) -> str:
     ready = bool(mailer.status()["configured"])
     disabled = "" if ready else " disabled"
     intro = (
         "Enter your account email. A single-use link will expire after two hours."
         if ready
-        else "Email recovery is temporarily unavailable. The owner must finish SMTP setup."
+        else "Email recovery is temporarily unavailable. Please try again later."
+    )
+    status_message = (
+        "Email recovery is busy. Please try again shortly."
+        if busy
+        else "If that account exists, a reset link has been sent."
+        if requested
+        else ""
     )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Reset password - SpreadBoard</title>
+<script>
+(() => {{
+  try {{
+    const saved=localStorage.getItem('spreadboard.theme.v1');
+    document.documentElement.dataset.theme=saved==='dark'||saved==='light'
+      ? saved
+      : (matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  }} catch(error) {{ document.documentElement.dataset.theme='light'; }}
+}})();
+</script>
 <style>
-:root {{ color-scheme:dark;--bg:#07110f;--panel:#101d1a;--line:#29443d;--ink:#edf8f4;--muted:#9bb1aa;--accent:#38d4bd;--danger:#ff8695; }}
-*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}}.login-shell{{width:min(440px,100%)}}.login-brand{{display:flex;align-items:center;gap:12px;margin-bottom:28px;font-size:24px;font-weight:800}}.login-mark{{width:26px;height:26px;border-radius:50%;background:var(--accent);border:3px solid #dffff8;box-shadow:12px 9px 0 -5px #7fdccf}}.login-panel{{border:1px solid var(--line);background:var(--panel);padding:28px;border-radius:8px}}h1{{margin:0 0 8px;font-size:28px}}p{{color:var(--muted);margin:0 0 24px;line-height:1.5}}label{{display:grid;gap:7px;margin:0 0 16px;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}}input{{width:100%;min-height:46px;border:1px solid var(--line);background:#081310;color:var(--ink);border-radius:5px;padding:0 13px;font:inherit}}input:focus{{outline:2px solid var(--accent);outline-offset:1px}}button{{width:100%;min-height:46px;border:0;border-radius:5px;background:var(--accent);color:#052c26;font:inherit;font-weight:900;cursor:pointer}}button:disabled{{opacity:.55;cursor:not-allowed}}.login-error{{min-height:20px;margin:14px 0 0;color:var(--muted);font-size:13px}}.login-note{{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}}.login-note a{{color:var(--accent);font-weight:800}}
+:root {{ color-scheme:light;--bg:#f1f5f3;--panel:#ffffff;--field:#f8fbfa;--line:#cbd9d4;--ink:#13201d;--muted:#60736c;--accent:#0f766e;--button-ink:#ffffff;--danger:#b4233a;--toggle:#ffffff; }}
+:root[data-theme="dark"] {{ color-scheme:dark;--bg:#07110f;--panel:#101d1a;--field:#0b1714;--line:#29443d;--ink:#edf8f4;--muted:#9bb1aa;--accent:#38d4bd;--button-ink:#052c26;--danger:#ff8695;--toggle:#101d1a; }}
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}}.login-shell{{width:min(440px,100%)}}.login-brand{{display:flex;align-items:center;gap:12px;margin-bottom:28px;font-size:24px;font-weight:800}}.login-mark{{width:26px;height:26px;border-radius:50%;background:var(--accent);border:3px solid var(--panel);box-shadow:12px 9px 0 -5px #7fdccf}}.login-panel{{border:1px solid var(--line);background:var(--panel);padding:28px;border-radius:8px}}h1{{margin:0 0 8px;font-size:28px}}p{{color:var(--muted);margin:0 0 24px;line-height:1.5}}label{{display:grid;gap:7px;margin:0 0 16px;color:var(--muted);font-size:12px;font-weight:800;text-transform:uppercase}}input{{width:100%;min-height:46px;border:1px solid var(--line);background:var(--field);color:var(--ink);border-radius:5px;padding:0 13px;font:inherit}}input:focus{{outline:2px solid var(--accent);outline-offset:1px}}.login-panel button{{width:100%;min-height:46px;border:0;border-radius:5px;background:var(--accent);color:var(--button-ink);font:inherit;font-weight:900;cursor:pointer}}button:disabled{{opacity:.55;cursor:not-allowed}}.login-error{{min-height:20px;margin:14px 0 0;color:var(--muted);font-size:13px}}.login-note{{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}}.login-note a{{color:var(--accent);font-weight:800}}
+.auth-theme-toggle{{position:fixed;top:18px;right:18px;display:inline-flex;align-items:center;gap:7px;width:auto;min-height:34px;padding:0 10px;border:1px solid var(--line);border-radius:3px;background:var(--toggle);color:var(--ink);font:inherit;font-size:11px;font-weight:700;cursor:pointer}}.theme-swatch{{width:13px;height:13px;border:1px solid var(--line);border-radius:50%;background:linear-gradient(90deg,var(--accent) 0 50%,var(--panel) 50% 100%)}}
 .login-shell{{width:min(376px,100%)}}.login-brand{{gap:9px;margin-bottom:24px;font-size:15px;font-weight:650}}.login-mark{{width:10px;height:10px;border:0;border-radius:50%;background:var(--accent);box-shadow:none}}.login-panel{{padding:24px 0;border-width:1px 0;border-radius:0;background:transparent}}h1{{font-size:27px;font-weight:650;letter-spacing:-.03em}}p{{font-size:12.5px}}label{{font-size:9px;font-weight:700;letter-spacing:.08em}}input{{min-height:42px;border-radius:2px;background:#0b1714}}button{{min-height:42px;border-radius:2px;font-weight:700}}.login-note{{font-size:11px;line-height:1.5}}
+:root:not([data-theme="dark"]) input{{background:var(--field)}}
+@media(max-width:560px){{.auth-theme-toggle{{top:12px;right:12px}}}}
 </style></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div>
-<section class="login-panel"><h1>Reset your password</h1><p>{h(intro)}</p><form id="resetForm"><label>Email<input name="email" type="email" autocomplete="email" required autofocus{disabled}></label><button type="submit"{disabled}>Send reset link</button><div class="login-error" role="status"></div></form></section><div class="login-note"><a href="/login">Back to sign in</a></div></main>
-<script>document.getElementById('resetForm').addEventListener('submit',async(event)=>{{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),message=form.querySelector('.login-error');button.disabled=true;message.textContent='Sending...';try{{const response=await fetch('/api/request-password-reset',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(Object.fromEntries(new FormData(form)))}});const data=await response.json();if(!response.ok)throw new Error(data.error==='recovery_delivery_unavailable'?'Email recovery is temporarily unavailable.':'The request could not be completed.');message.textContent='If that account exists, a reset link has been sent.';form.reset();}}catch(error){{message.textContent=error.message;button.disabled={str(not ready).lower()};}}}});</script></body></html>"""
+<section class="login-panel"><h1>Reset your password</h1><p>{h(intro)}</p><form id="resetForm" action="/api/request-password-reset" method="post"><label>Email<input name="email" type="email" maxlength="254" autocomplete="email" inputmode="email" required autofocus{disabled}></label><button type="submit"{disabled}>Send reset link</button><div class="login-error" role="status">{h(status_message)}</div></form></section><div class="login-note"><a href="/login">Back to sign in</a></div></main>
+<button class="auth-theme-toggle" id="themeToggle" type="button" aria-label="Toggle light and dark mode" aria-pressed="false"><span class="theme-swatch" aria-hidden="true"></span><span data-theme-label>Theme</span></button>
+<script>
+(() => {{
+  const key='spreadboard.theme.v1',button=document.getElementById('themeToggle'),label=button.querySelector('[data-theme-label]');
+  const current=()=>document.documentElement.dataset.theme==='dark'?'dark':'light';
+  const apply=theme=>{{document.documentElement.dataset.theme=theme;try{{localStorage.setItem(key,theme);}}catch(error){{}}button.setAttribute('aria-pressed',theme==='dark'?'true':'false');label.textContent=theme==='dark'?'Dark':'Light';}};
+  apply(current());button.addEventListener('click',()=>apply(current()==='dark'?'light':'dark'));
+}})();
+document.getElementById('resetForm').addEventListener('submit',async(event)=>{{event.preventDefault();const form=event.currentTarget,button=form.querySelector('button[type="submit"]'),message=form.querySelector('.login-error');button.disabled=true;form.setAttribute('aria-busy','true');message.textContent='Sending...';try{{const response=await fetch('/api/request-password-reset',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(Object.fromEntries(new FormData(form)))}});const data=await response.json();if(!response.ok)throw new Error(data.error==='recovery_delivery_unavailable'?'Email recovery is temporarily unavailable.':data.error==='recovery_temporarily_busy'?'Email recovery is busy. Please try again shortly.':'The request could not be completed.');message.textContent='If that account exists, a reset link has been sent.';form.reset();}}catch(error){{message.textContent=error.message;button.disabled={str(not ready).lower()};}}finally{{form.removeAttribute('aria-busy');}}}});
+</script></body></html>"""
 
 
 def render_status_page(payload: dict[str, Any]) -> str:
@@ -10856,6 +11083,10 @@ def render_status_page(payload: dict[str, Any]) -> str:
             detail = f"{h(item.get('chain') or 'Not configured')} · {h(', '.join(item.get('tokens') or []))}"
         elif key == "telegram":
             detail = f"Private forum: {h(item.get('community') or 'unknown')}"
+        elif key == "email_recovery":
+            evidence_at = item.get("last_delivery_at") or item.get("last_attempt_at")
+            if evidence_at:
+                detail = f"{detail} · {h(compact_timestamp(evidence_at))}"
         cards.append(
             f'<article class="status-card {h(status)}"><span>{h(label)}</span>'
             f"<strong>{h(label_text(status))}</strong><p>{detail}</p></article>"

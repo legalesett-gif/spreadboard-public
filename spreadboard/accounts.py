@@ -151,6 +151,18 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 expires_at TEXT NOT NULL,
                 used_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS password_reset_deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                provider TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('queued', 'sent', 'error')),
+                requested_at TEXT NOT NULL,
+                finished_at TEXT,
+                message_id TEXT NOT NULL DEFAULT '',
+                error_type TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_password_reset_deliveries_latest
+                ON password_reset_deliveries(id DESC);
             CREATE TABLE IF NOT EXISTS sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -2328,6 +2340,90 @@ def create_password_token(
     finally:
         connection.close()
     return token
+
+
+def queue_password_reset_delivery(
+    user_id: int,
+    *,
+    provider: str,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> int:
+    """Create privacy-safe evidence before an outbound reset email is attempted.
+
+    The recipient address and raw reset token are deliberately absent.  A user
+    id is enough for internal lifecycle ownership, while the public health view
+    exposes only the latest status and timestamp.
+    """
+    connection = _connect(db_path)
+    try:
+        cursor = connection.execute(
+            """INSERT INTO password_reset_deliveries (
+                   user_id, provider, status, requested_at
+               ) VALUES (?, ?, 'queued', ?)""",
+            (int(user_id), str(provider or "unknown")[:40], _utc_iso()),
+        )
+        connection.commit()
+        return int(cursor.lastrowid)
+    finally:
+        connection.close()
+
+
+def finish_password_reset_delivery(
+    delivery_id: int,
+    *,
+    delivered: bool,
+    message_id: str = "",
+    error_type: str = "",
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> None:
+    """Finish one reset-delivery attempt without persisting provider errors."""
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """UPDATE password_reset_deliveries
+                  SET status = ?, finished_at = ?, message_id = ?, error_type = ?
+                WHERE id = ?""",
+            (
+                "sent" if delivered else "error",
+                _utc_iso(),
+                str(message_id or "")[:200] if delivered else "",
+                "" if delivered else str(error_type or "delivery_error")[:80],
+                int(delivery_id),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def password_reset_delivery_health(
+    *, db_path: Path | str = DEFAULT_DB_PATH
+) -> dict[str, Any]:
+    """Return the latest secret-free reset-delivery evidence."""
+    connection = _connect(db_path)
+    try:
+        row = connection.execute(
+            """SELECT status, provider, requested_at, finished_at, error_type
+                 FROM password_reset_deliveries
+             ORDER BY id DESC LIMIT 1"""
+        ).fetchone()
+        if row is None:
+            return {
+                "status": "unproven",
+                "provider": "",
+                "requested_at": None,
+                "finished_at": None,
+                "error_type": "",
+            }
+        return {
+            "status": str(row["status"]),
+            "provider": str(row["provider"]),
+            "requested_at": row["requested_at"],
+            "finished_at": row["finished_at"],
+            "error_type": str(row["error_type"] or ""),
+        }
+    finally:
+        connection.close()
 
 
 def consume_password_token(
