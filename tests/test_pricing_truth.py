@@ -24,6 +24,13 @@ def test_pricing_names_evidence_limits_and_every_prepaid_tier() -> None:
     assert "$1,365 billed once" in html
 
 
+def test_light_pricing_copy_uses_a_contrast_safe_local_muted_colour() -> None:
+    html = server.render_pricing_page()
+
+    assert "--pricing-muted:#596a64" in html
+    assert ".pricing-page .reason p { color:var(--pricing-muted); }" in html
+
+
 def test_active_member_is_not_offered_an_impossible_mid_term_tier_change() -> None:
     class User:
         display_name = "Active member"

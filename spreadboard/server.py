@@ -11101,10 +11101,11 @@ def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
         )
     body = f"""
     <style>
-      .pricing-page {{ width:min(1120px,calc(100% - 36px)); margin:36px auto 72px; display:grid; gap:28px; }}
+      .pricing-page {{ --pricing-muted:#596a64; width:min(1120px,calc(100% - 36px)); margin:36px auto 72px; display:grid; gap:28px; }}
+      :root[data-theme="dark"] .pricing-page {{ --pricing-muted:var(--terminal-muted); }}
       .pricing-intro {{ padding:34px 32px; border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
       .pricing-intro h1 {{ margin:8px 0 10px; font-size:clamp(30px,4.4vw,48px); line-height:1.05; }}
-      .pricing-intro p {{ margin:0; color:var(--terminal-muted); font-size:16px; line-height:1.5; }}
+      .pricing-intro p {{ margin:0; color:var(--pricing-muted); font-size:16px; line-height:1.5; }}
       .referral-offer {{ display:grid;gap:4px;padding:15px 18px;border:1px solid var(--accent);background:rgba(56,212,189,.09); }}
       .referral-offer strong {{ color:var(--accent);font-size:15px; }}
       .referral-offer span {{ color:var(--terminal-text);font-size:13px;line-height:1.45; }}
@@ -11113,9 +11114,9 @@ def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
       .pricing-tier.featured {{ border-color:var(--accent); box-shadow:inset 0 3px 0 var(--accent); }}
       .pricing-tier > span {{ min-height:15px; color:var(--accent); font-size:10px; font-weight:900; text-transform:uppercase; }}
       .pricing-tier h2,.pricing-tier p {{ margin:0; }}
-      .pricing-tier p {{ min-height:40px; color:var(--terminal-muted); line-height:1.45; }}
+      .pricing-tier p {{ min-height:40px; color:var(--pricing-muted); line-height:1.45; }}
       .pricing-price strong {{ font-size:42px; line-height:1; }}
-      .pricing-price em {{ color:var(--terminal-muted); font-style:normal; }}
+      .pricing-price em {{ color:var(--pricing-muted); font-style:normal; }}
       .pricing-button {{ min-height:43px; padding:11px 16px; border:1px solid var(--terminal-line); color:var(--terminal-text); text-decoration:none; font-weight:900; display:inline-flex; justify-content:center; align-items:center; }}
       .pricing-button.primary {{ background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }}
       .pricing-block {{ padding:26px 28px; border:1px solid var(--terminal-line); background:var(--terminal-panel); }}
@@ -11124,10 +11125,11 @@ def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
       .pricing-steps article {{ padding:18px; border:1px solid var(--terminal-line); background:var(--terminal-row); }}
       .pricing-steps b {{ color:var(--accent); font-size:11px; }}
       .pricing-steps h3 {{ margin:8px 0 6px; font-size:17px; }}
-      .pricing-steps p {{ margin:0; color:var(--terminal-muted); font-size:13px; line-height:1.5; }}
-      .pricing-note {{ margin:0; color:var(--terminal-muted); font-size:12px; line-height:1.5; }}
+      .pricing-steps p {{ margin:0; color:var(--pricing-muted); font-size:13px; line-height:1.5; }}
+      .pricing-note {{ margin:0; color:var(--pricing-muted); font-size:12px; line-height:1.5; }}
       .pricing-term-heading {{ margin-top:24px !important; }}
       {MEMBERSHIP_STYLE}
+      .pricing-page .reason p {{ color:var(--pricing-muted); }}
       .pricing-page {{ width:min(1180px,calc(100% - 40px));margin-top:24px;gap:20px; }}
       .pricing-intro {{ padding:22px 0 26px;border-width:0 0 1px;background:transparent; }}
       .pricing-intro h1 {{ max-width:14ch;font-weight:650;letter-spacing:-.045em; }}
