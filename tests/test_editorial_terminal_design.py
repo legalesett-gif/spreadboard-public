@@ -61,6 +61,22 @@ def test_markets_and_funding_have_explicit_ledger_headers(monkeypatch) -> None:
     assert "Settled windows" in funding and "Entry basis" in funding
 
 
+def test_markets_use_the_shell_main_as_the_only_main_landmark(monkeypatch) -> None:
+    """The signed-in shell already owns the page's one main landmark.
+
+    A second nested ``main.market-main`` made both /markets and the legacy
+    /arbitrage route expose duplicate main navigation to assistive technology.
+    The inner market column is layout, not another document landmark.
+    """
+
+    monkeypatch.setattr(server, "api_market_spreads", lambda *_args, **_kwargs: _market_payload())
+
+    html = server.render_markets_page(Path("missing.jsonl"), {}, {})
+
+    assert html.count("<main") == 1
+    assert '<div class="market-main">' in html
+
+
 def test_chart_copy_names_the_two_directions_without_implying_an_exit_fill() -> None:
     html = server.render_live_spread_chart("GUA|Long|Short", [], "1h")
 

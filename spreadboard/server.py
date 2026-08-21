@@ -5738,7 +5738,7 @@ def render_markets_page(
         )
     }
       <section class="market-layout terminal-layout grouped-layout {"pro-table-layout" if pro_view else ""}">
-        <main class="market-main">
+        <div class="market-main">
           <div class="panel-head flat token-board-title">
             <div>
               <h2>{"Pro Table" if pro_view else "Live Assets"}</h2>
@@ -5757,7 +5757,7 @@ def render_markets_page(
           {render_market_pagination(query, pagination)}
           {render_board_stream_script(query)}
           <script>document.addEventListener('click',async event=>{{const button=event.target.closest('[data-share-market]');if(!button)return;try{{await navigator.clipboard.writeText(location.href);button.textContent='Link copied';}}catch(error){{button.textContent='Copy unavailable';}}}});</script>
-        </main>
+        </div>
         <aside class="market-side">
           {render_market_lane("Top Arbitrage Edges", data.get("top_edges") or [], "edge", market_wide=market_wide_sidebar)}
           {render_market_lane("Top Funding Pairs", data.get("top_funding") or [], "funding", market_wide=market_wide_sidebar)}
