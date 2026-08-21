@@ -11457,20 +11457,21 @@ GUIDE_LANES = [
     {
         "id": "futures-futures",
         "title": "Futures / Futures",
-        "one_line": "The same coin costs different amounts on two futures exchanges. You buy the cheap one and sell the expensive one at the same time.",
+        "one_line": "The same underlying asset has different futures prices on two venues. You open the long and short together only after normalising both contracts to the same underlying exposure.",
         "how": [
-            "Find a row on the <b>Futures-Futures</b> tab with an edge you are happy with.",
-            "On the cheaper exchange, open a <b>long</b> futures position.",
-            "On the more expensive exchange, open a <b>short</b> futures position of the <b>same size</b>.",
-            "You now own nothing on net. If the coin doubles or halves, you neither win nor lose from that.",
-            "You wait. The two prices drift back together. When the gap is near zero you close both legs and keep the difference.",
+            "Find a row on the <b>Futures-Futures</b> tab and verify the exact symbols, underlying asset and quote currency.",
+            "Read each contract size and multiplier. Equal contract counts are not necessarily equal exposure.",
+            "Open the cheaper contract <b>long</b> and the more expensive contract <b>short</b> with matched underlying exposure.",
+            "Monitor both venue marks, funding payments, margin reserves and hedge drift independently.",
+            "Close both legs under a written plan. Profit exists only if captured convergence and net funding exceed every fee and loss.",
         ],
-        "earn": "Two ways. The gap closing is one. <b>Funding</b> is the other: every few hours one side pays the other, and if your short is on the side that receives, you get paid just for holding.",
+        "earn": "Two separate theses can contribute: basis convergence captured between entry and exit, and <b>net funding</b> actually received while holding. The opening gap itself is not realised profit.",
         "watch": [
-            "<b>Both legs must be the same size.</b> If they are not, you are quietly betting on the price direction.",
-            "<b>Liquidation.</b> Use low leverage. A 1x position on each side is the safe default. High leverage can liquidate one leg and leave you exposed.",
+            "<b>Match underlying exposure.</b> Apply contract multipliers, scaling and quantity precision; otherwise the hedge carries direction risk.",
+            "<b>Each venue must carry its own collateral.</b> Profit on the other leg does not automatically protect a venue nearing liquidation.",
+            "<b>1x can still be liquidated.</b> Mark-price divergence, fees and an adverse basis move can exhaust one venue before the combined hedge recovers.",
             "<b>Funding can flip</b> and start costing you instead of paying you. Check the funding column, not just the spread.",
-            "<b>The gap can widen before it closes.</b> You need enough spare margin to sit through that.",
+            "<b>The gap can widen and may never converge on your timetable.</b> Size the reserve from liquidation distance, adverse basis history and leg volatility, not an APR headline.",
         ],
         "shot": "The Futures-Futures tab with a row expanded, showing both venues, the edge, and the funding column.",
     },
@@ -11479,16 +11480,17 @@ GUIDE_LANES = [
         "title": "Futures / Spot",
         "one_line": "The futures price and the ordinary (spot) price of the same coin have drifted apart. You buy the cheap side and sell the expensive side.",
         "how": [
-            "Find a row on the <b>Futures-Spot</b> tab.",
-            "If futures are more expensive: <b>buy the coin on spot</b> and <b>short the futures</b>, same size.",
-            "If spot is more expensive: the trade reverses, but that needs borrowing, so beginners should skip it.",
-            "Hold. Futures and spot always converge as the contract settles or funding drags them together.",
-            "Close both sides when the gap is gone.",
+            "Find a row on the <b>Futures-Spot</b> tab and confirm both legs refer to the same token or contract.",
+            "If futures are more expensive, buy spot and short futures with matched underlying exposure after the futures multiplier is applied.",
+            "If spot is more expensive, the reverse needs borrowable spot or pre-owned inventory. Beginners should treat an unproven short as blocked.",
+            "Track the futures mark, spot reference, funding and hedge quantity. Perpetual futures have no settlement date forcing the gap shut.",
+            "Close both sides under your plan; convergence is not guaranteed and partial convergence can be outweighed by funding, fees or slippage.",
         ],
-        "earn": "Mostly funding. When futures trade above spot, longs pay shorts, so your short leg collects a fee every few hours while you simply hold the coin. This is the calmest trade on the board and is often held for days.",
+        "earn": "Possible return comes from net funding that actually settles and basis convergence captured at exit. Either can be positive, negative or too small to cover costs.",
         "watch": [
             "<b>You actually own the coin</b> on the spot side. It must sit on that exchange.",
-            "<b>Same size on both sides</b>, or you are exposed to the price.",
+            "<b>Match underlying exposure</b> after contract multipliers and quantity precision, or you retain price direction risk.",
+            "<b>Fund the futures venue independently.</b> A rising spot asset can profit while its short futures leg is liquidated elsewhere.",
             "<b>Funding is not guaranteed.</b> It is reset every few hours and can turn negative.",
             "<b>Check the coin is the same coin.</b> Some exchanges list a different token under the same ticker.",
         ],
@@ -11507,8 +11509,8 @@ GUIDE_LANES = [
         ],
         "earn": "Only the price gap. There is no funding here.",
         "watch": [
-            "<b>This is the only trade where you are exposed while it happens.</b> The coin is in transit and the price can move against you.",
-            "<b>If withdrawals are shut, you cannot do this trade at all</b> -- your money is stuck on the cheap exchange. Our board marks a closed rail as <b>SHUT</b>.",
+            "<b>This transfer workflow leaves inventory unhedged in transit.</b> The price can move before the coin arrives. Pre-positioned inventory can support faster two-sided execution, but it uses more capital and needs rebalancing.",
+            "<b>If withdrawals are shut, this transfer workflow is blocked.</b> A closed rail is marked <b>SHUT</b>; pre-positioned inventory is a different setup and can still become trapped when rebalancing.",
             "<b>Withdrawal fees and network fees</b> come out of your profit. A 0.3% gap can easily be nothing after fees.",
             "<b>Wrong network = lost coins.</b> Always match the network on both sides.",
         ],
@@ -11517,19 +11519,22 @@ GUIDE_LANES = [
     {
         "id": "futures-dex",
         "title": "Futures / DEX",
-        "one_line": "The coin trades at one price on a decentralised exchange (on-chain) and another on a normal futures exchange. You take both sides.",
+        "one_line": "A spot token on-chain and a futures contract trade at different prices. The typical beginner route is long DEX spot and short futures, with exact identity and matched exposure proved first.",
         "how": [
             "Find a row on the <b>Futures-DEX</b> tab.",
-            "Buy the coin on the DEX with your own wallet, or sell it there if the DEX is the expensive side.",
-            "Take the opposite side as a futures position on the exchange, same size.",
-            "Hold, collect funding, and close both when the gap closes.",
+            "Verify the chain, token contract, pool and futures symbol. A ticker match alone is not identity proof.",
+            "For the typical beginner route, buy DEX spot and short futures with matched underlying exposure after applying the futures multiplier.",
+            "Selling spot on a DEX requires inventory. Without pre-owned or borrowed inventory, the DEX cannot be treated as the short leg.",
+            f"Check the {PROBE_LABEL} matched VWAP, pool depth, gas and price impact for the exact direction; it is evidence for that probe, not a guaranteed fill.",
+            "Keep wallet assets and futures collateral independently funded, then close both legs only under the written exit plan.",
         ],
-        "earn": "Funding is usually the main prize here, and it is often the largest on the board, because fewer people can be bothered with the on-chain leg.",
+        "earn": "Possible return comes from net funding that actually settles plus basis convergence captured at exit. Either thesis can reverse, and gas, price impact and transfer friction can consume both.",
         "watch": [
             "<b>Check the contract address</b>, not the name. Anyone can create a token called anything. Our board marks routes where we have not confirmed the token identity with a <b>?</b>.",
             "<b>Gas fees</b> are paid in the chain's own coin and come out of your profit.",
-            "<b>Slippage.</b> On-chain, a large order moves the price against you. The quoted price is for a small size.",
-            "<b>You need a wallet</b> and the coin must actually be withdrawable to it.",
+            f"<b>Slippage.</b> The displayed {PROBE_LABEL} matched VWAP does not prove your larger order or later exit price.",
+            "<b>You need a wallet and an exit path.</b> Confirm the exact token can be received, sold and transferred on the selected chain.",
+            "<b>Collateral is separate.</b> Wallet value cannot automatically rescue a futures account approaching liquidation.",
         ],
         "shot": "The Futures-DEX tab, plus a wallet swap screen showing the token contract address.",
     },
@@ -11587,8 +11592,8 @@ def render_guide_page() -> str:
             "charts",
             "Charts",
             "/charts",
-            "Choose any indexed token and exact long and short markets, including a DEX long against a futures short. Use several windows to see whether the gap usually converges or can stay wide.",
-            "Pin exact pairs you monitor. A chart shows observed quotes, not executable size or your personal fills.",
+            "Choose any indexed token and exact long and short markets, including a DEX long against a futures short. Use several windows to inspect persistence, widening and convergence evidence.",
+            f"Pin exact pairs you monitor. The displayed {PROBE_LABEL} matched VWAP is a research quote, not a guaranteed fill or your personal execution.",
         ),
         (
             "intel",
@@ -11643,13 +11648,14 @@ def render_guide_page() -> str:
 
       <article class="guide-lane">
         <h2>The idea in one paragraph</h2>
-        <p class="guide-lede">The same coin does not cost the same everywhere. SpreadBoard watches many
-        exchanges at once and shows you where the prices disagree. The trade is almost always the same
-        shape: <b>buy the cheap side and sell the expensive side at the same time, in the same size</b>.
-        Because you are long and short at once, it does not matter to you whether the coin goes up or
-        down. You are only betting that the two prices come back together -- which they almost always do.</p>
-        <p>That "same size, both directions" idea is called being <b>delta neutral</b>. It is the whole
-        game. If you remember one thing, remember that.</p>
+        <p class="guide-lede">The same asset can trade at different prices across venues and market types.
+        A common hedge buys the cheaper leg and shorts or sells the expensive leg with <b>matched
+        underlying exposure</b>. The trade has two separate theses: funding may remain favourable, and
+        the basis may converge enough to capture after costs. Either thesis can fail.</p>
+        <p><b>delta neutral is a target, not an automatic property of having two legs.</b> Normalise base
+        quantity after contract multipliers, token scaling and quote denomination, then monitor hedge
+        drift. The hedge reduces common direction risk; it does not remove mark divergence, liquidation,
+        funding, venue, identity or execution risk. Convergence is not guaranteed.</p>
       </article>
 
       <article class="guide-lane">
@@ -11657,7 +11663,7 @@ def render_guide_page() -> str:
         <ul class="guide-risks">
           <li><b>Edge %</b> -- how far apart the two prices are right now. Bigger is better, but see the warnings below.</li>
           <li><b>Funding</b> -- a fee paid every few hours between longs and shorts. A positive number on your route means you get paid while you wait. This is often worth more than the gap itself.</li>
-          <li><b>APR</b> -- what that funding works out to per year if it stayed the same. It will not stay the same, so treat it as a hint, not a promise.</li>
+          <li><b>APR</b> -- what that funding works out to per year if it stayed the same. It may change at the next settlement, so treat it as a rate snapshot, not a promise.</li>
           <li><b>24h volume</b> -- what the thinner leg of the route trades in a day. A big edge on a market that trades almost nothing is not a real opportunity. It is not order-book depth: the scan only probes {PROBE_LABEL}, so treat it as a size sanity check, not a fill guarantee.</li>
           <li><b>Age</b> -- how old the quote is. Older quotes are less reliable.</li>
           <li><b>D / W</b> -- whether deposits and withdrawals are open. <b>SHUT</b> means you cannot move the coin, which kills any trade that needs a transfer.</li>
@@ -11668,11 +11674,13 @@ def render_guide_page() -> str:
       <article class="guide-lane">
         <h2>Before your first trade</h2>
         <ol class="guide-steps">
-          <li><b>Start small.</b> Do the whole thing once with an amount you would not mind losing entirely. The goal of trade one is to learn the mechanics, not to make money.</li>
-          <li><b>Use 1x leverage.</b> No borrowing. It removes liquidation risk almost entirely.</li>
-          <li><b>Open both legs quickly.</b> The time between opening one and the other is the only moment you are truly exposed.</li>
-          <li><b>Write down your entry.</b> You need to know what the gap was when you entered to know when to exit.</li>
-          <li><b>Have a plan for the gap widening.</b> It often gets worse before it gets better. Decide in advance how much you can sit through.</li>
+          <li><b>Start small.</b> Do the whole workflow with an amount you can lose. Trade one is for learning identity, order, transfer and close mechanics.</li>
+          <li><b>Normalise both legs.</b> Match underlying exposure after contract multipliers and verify the exact token, chain and market symbols.</li>
+          <li><b>Use low leverage, but do not call 1x safe.</b> 1x can still be liquidated when one venue's mark or margin moves adversely.</li>
+          <li><b>Fund each venue separately.</b> Each venue must carry its own collateral plus a reserve; profit held elsewhere is not margin here.</li>
+          <li><b>Open both legs quickly.</b> The entry gap creates extra exposure, but route, funding, basis and liquidation risk continue after both are open.</li>
+          <li><b>Record the exact entry.</b> Save symbols, normalised quantities, fills, fees, funding and basis so exit PnL can be reconciled.</li>
+          <li><b>Stress the reserve.</b> Compare liquidation distance with observed adverse basis widening, leg volatility and fee/funding shocks. History is evidence, not a prediction.</li>
         </ol>
       </article>
 
@@ -11680,9 +11688,9 @@ def render_guide_page() -> str:
 
       <article class="guide-lane">
         <h2>Very large spreads</h2>
-        <p class="guide-lede">You will sometimes see edges of 20%, 50%, even over 100%. These are real and
-        they are shown deliberately -- some of the best opportunities on the board look like this, and they
-        can last only a minute or two.</p>
+        <p class="guide-lede">You will sometimes see raw observed price differences of 20%, 50%, even over
+        100%. They are shown deliberately as research leads, not proof that the same asset is tradeable at
+        both prices. A large row may be brief, thin, stale, identity-mismatched or impossible to execute.</p>
         <p>But a very large gap is also the shape a mistake makes. Before trading one, check three things:
         that <b>both venues list the same token</b> (watch for the <b>?</b> marker), that there is
         <b>real depth</b> behind the quote, and that you can actually <b>get in and out</b> -- deposits and
