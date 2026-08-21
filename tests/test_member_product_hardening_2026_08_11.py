@@ -684,6 +684,65 @@ def test_triage_names_the_always_on_subscriber_source_instead_of_a_local_file(
     assert "No local source detail" not in html
 
 
+def test_signals_renders_the_real_subscriber_lookup_lane_and_selected_window(
+    monkeypatch,
+) -> None:
+    """The always-on bot records chat_signal lookups, so Signals must not hide them.
+
+    Production had four legacy lanes for alert/close events which the current
+    privacy-safe webhook never writes. A genuine `$GUA funding` lookup could
+    therefore make Intel fresh while leaving Signals entirely empty.
+    """
+
+    monkeypatch.setattr(
+        server,
+        "api_signals",
+        lambda *_args, **_kwargs: {
+            "filters": {"window_hours": 6},
+            "source_freshness": {
+                "telegram_events": {"status": "fresh", "age_min": 2},
+                "board": {"status": "fresh", "age_min": 1},
+            },
+            "recent_events": {
+                "chat": [
+                    {
+                        "symbol": "GUA",
+                        "kind": "FUNDING",
+                        "event": "chat_signal",
+                        "first_line": "$GUA funding",
+                        "age_min": 2,
+                    }
+                ]
+            },
+            "community": {"calls": [], "results": []},
+            "question_patterns": [],
+        },
+    )
+
+    html = server.render_signals_page(Path("/missing.json"), {}, {})
+
+    assert "Subscriber Lookups" in html
+    assert 'href="/token/GUA"' in html
+    assert "$GUA funding" in html
+    assert 'href="/signals?window_hours=6" aria-current="page"' in html
+    assert "local listener" not in html
+    assert "local Telegram topics" not in html
+    assert "—" not in html
+
+
+def test_signals_lanes_use_shared_theme_surfaces() -> None:
+    """Pale dark-theme text must never sit on hard-coded white signal cards."""
+
+    signals_css = server.APP_CSS.split(".signals-page, .funding-page", 1)[1].split(
+        ".funding-grid", 1
+    )[0]
+
+    assert ".signal-lane { background: var(--terminal-panel);" in signals_css
+    assert ".signal-event {" in signals_css
+    assert "background: var(--terminal-row);" in signals_css
+    assert ".signal-lane .empty { color: var(--terminal-muted);" in signals_css
+
+
 def test_priority_funding_legs_are_attempted_before_rotating_catalog(tmp_path, monkeypatch) -> None:
     attempted = []
     monkeypatch.setattr(

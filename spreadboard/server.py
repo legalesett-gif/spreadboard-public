@@ -7734,22 +7734,31 @@ def render_signals_page(
     data = api_signals(board_path, query)
     recent = data.get("recent_events") or {}
     community = data.get("community") or {}
+    window_hours = _float_or_none((data.get("filters") or {}).get("window_hours")) or 6.0
+    window_actions = []
+    for hours, label in ((1, "1h"), (6, "6h"), (12, "12h"), (48, "48h")):
+        current = ' aria-current="page"' if abs(window_hours - hours) < 0.001 else ""
+        window_actions.append(
+            f'<a class="secondary signals-window-tab" href="/signals?window_hours={hours}"{current}>{label}</a>'
+        )
+    subscriber_lookup_lane = render_signal_lane(
+        "Subscriber Lookups",
+        recent.get("chat") or [],
+        empty_message="No subscriber lookups in this window.",
+    )
     body = f"""
     <section class="signals-page" data-refresh="120">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Signals</span>
-          <h1>Telegram signal tape</h1>
-          <p>Alerts, closes, momentum, funding pings, community calls, and results from the local listener. Read-only and sanitized.</p>
+          <h1>Subscriber signal tape</h1>
+          <p>Anonymous subscriber-bot lookups joined to current market routes. Any alert, funding, close, momentum, community, and result rows are privacy-safe research evidence, not trade execution.</p>
         </div>
-        <div class="intel-actions">
-          <a class="secondary" href="/signals?window_hours=1">1h</a>
-          <a class="secondary" href="/signals?window_hours=12">12h</a>
-          <a class="secondary" href="/signals?window_hours=48">48h</a>
-        </div>
+        <div class="intel-actions">{"".join(window_actions)}</div>
       </div>
       {render_intel_source_grid(data.get("source_freshness") or {})}
       <section class="signal-board">
+        {subscriber_lookup_lane}
         {render_signal_lane("New Alerts", recent.get("alerts") or [])}
         {render_signal_lane("Funding Pings", recent.get("funding") or [])}
         {render_signal_lane("Closes", recent.get("closes") or [])}
@@ -7757,16 +7766,16 @@ def render_signals_page(
       </section>
       <section class="signal-split">
         <div class="intel-section">
-          <div class="panel-head flat"><div><h2>Community Calls</h2><p>Potential setup posts and discussion markers from local Telegram topics.</p></div></div>
+          <div class="panel-head flat"><div><h2>Community Calls</h2><p>Shown only when a privacy-safe source supplies a call row; token lookups are never promoted into recommendations.</p></div></div>
           <div class="signal-list">{"".join(render_signal_event({**item, "bucket": "call"}) for item in community.get("calls") or []) or '<p class="empty">No community calls in this window.</p>'}</div>
         </div>
         <div class="intel-section">
-          <div class="panel-head flat"><div><h2>Results</h2><p>Result-topic rows for later backfill into route lessons and PnL stories.</p></div></div>
+          <div class="panel-head flat"><div><h2>Results</h2><p>Outcome rows appear only when supplied by a privacy-safe source; SpreadBoard does not infer PnL from a lookup.</p></div></div>
           <div class="signal-list">{"".join(render_signal_event({**item, "bucket": "result"}) for item in community.get("results") or []) or '<p class="empty">No results rows in this window.</p>'}</div>
         </div>
       </section>
       <section class="intel-section">
-        <div class="panel-head flat"><div><h2>Question Pulse</h2><p>Recurring things people ask about, useful for future alert/profile features.</p></div></div>
+        <div class="panel-head flat"><div><h2>Question Pulse</h2><p>Question categories require privacy-safe question evidence. Anonymous token/view lookups contain no raw message text.</p></div></div>
         {render_questions(data.get("question_patterns") or [])}
       </section>
     </section>
@@ -14301,11 +14310,16 @@ def render_event_column(title: str, rows: list[dict[str, Any]]) -> str:
     """
 
 
-def render_signal_lane(title: str, rows: list[dict[str, Any]]) -> str:
+def render_signal_lane(
+    title: str,
+    rows: list[dict[str, Any]],
+    *,
+    empty_message: str = "No rows in this window.",
+) -> str:
     return f"""
     <section class="signal-lane">
       <div class="side-head"><h2>{h(title)}</h2><span>{h(len(rows))}</span></div>
-      <div class="signal-list">{"".join(render_signal_event({**item, "bucket": title}) for item in rows) or '<p class="empty">No rows in this window.</p>'}</div>
+      <div class="signal-list">{"".join(render_signal_event({**item, "bucket": title}) for item in rows) or f'<p class="empty">{h(empty_message)}</p>'}</div>
     </section>
     """
 
@@ -15358,15 +15372,26 @@ def render_signal_event(item: dict[str, Any]) -> str:
         if item.get("spread_pct") is not None
         else item.get("funding_delta_pct")
     )
+    metric = (
+        fmt_signed_pct(spread)
+        if spread is not None
+        else label_text(item.get("kind") or "no numeric metric")
+    )
+    symbol = str(item.get("symbol") or "").strip()
+    symbol_html = (
+        f'<a href="/token/{quote(symbol, safe="")}"><strong>{h(symbol)}</strong></a>'
+        if symbol
+        else "<strong>Token unavailable</strong>"
+    )
     return f"""
     <article class="signal-event">
       <div>
         <span>{h(item.get("bucket") or item.get("event"))}</span>
-        <strong>{h(item.get("symbol"))}</strong>
+        {symbol_html}
         <p>{h(item.get("first_line") or item.get("text_excerpt"))}</p>
       </div>
       <aside>
-        <b>{fmt_signed_pct(spread)}</b>
+        <b>{metric}</b>
         <em>{fmt_age(item.get("age_min"))}</em>
       </aside>
     </article>
@@ -17419,16 +17444,21 @@ body.alert-modal-open { overflow: hidden; }
 .feed-row em { color: #007e61; font-style: normal; font-weight: 900; }
 .feed-row small { color: var(--terminal-muted); }
 .signals-page, .funding-page { display: grid; gap: 16px; }
-.signal-board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.signal-lane, .funding-card { background: #f7f7f7; border: 1px solid #d0d0d0; border-radius: 10px; box-shadow: var(--shadow); padding: 12px; }
+.signal-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.signal-lane { background: var(--terminal-panel); border: 1px solid var(--terminal-line); border-radius: 10px; box-shadow: var(--shadow); padding: 12px; }
+.funding-card { background: #f7f7f7; border: 1px solid #d0d0d0; border-radius: 10px; box-shadow: var(--shadow); padding: 12px; }
+.signal-lane h2 { color: var(--terminal-text); }
+.signal-lane .empty { color: var(--terminal-muted); }
 .signal-list { display: grid; gap: 8px; }
-.signal-event { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 10px; border-radius: 7px; background: white; border: 1px solid #dedede; }
-.signal-event span { color: #666; font-size: 11px; font-weight: 900; text-transform: uppercase; }
-.signal-event strong { display: block; margin: 2px 0; font-size: 18px; }
-.signal-event p { margin: 0; color: #52635e; font-size: 12px; overflow-wrap: anywhere; }
+.signal-event { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 10px; border-radius: 7px; background: var(--terminal-row); border: 1px solid var(--terminal-line); }
+.signal-event span { color: var(--terminal-muted); font-size: 11px; font-weight: 900; text-transform: uppercase; }
+.signal-event strong { display: block; margin: 2px 0; color: var(--terminal-text); font-size: 18px; }
+.signal-event a { color: var(--terminal-text); }
+.signal-event p { margin: 0; color: var(--terminal-muted); font-size: 12px; overflow-wrap: anywhere; }
 .signal-event aside { display: grid; justify-items: end; align-content: center; gap: 4px; }
-.signal-event aside b { color: #007e61; font-size: 16px; }
-.signal-event aside em { color: #666; font-style: normal; font-size: 11px; }
+.signal-event aside b { color: var(--terminal-accent); font-size: 16px; }
+.signal-event aside em { color: var(--terminal-muted); font-style: normal; font-size: 11px; }
+.signals-window-tab[aria-current="page"] { background: var(--terminal-accent); color: var(--accent-ink); }
 .signal-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
 .funding-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .funding-card { display: grid; gap: 10px; }

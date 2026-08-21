@@ -225,7 +225,7 @@ def build_intel(
     payload = {
         "ok": True,
         "generated_at_us": int(now * 1_000_000),
-        "mode": "read_only_local_intel",
+        "mode": "read_only_subscriber_intel",
         "filters": {
             "window_hours": window_hours,
             "kind": kind,

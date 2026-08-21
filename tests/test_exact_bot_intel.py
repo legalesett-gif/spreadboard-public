@@ -77,6 +77,7 @@ def test_always_on_subscriber_bot_events_feed_the_intel_surface(tmp_path, monkey
     assert payload["hot_symbols"][0]["symbol"] == "SIREN"
     assert all(item["symbol"] != "VANRY" for item in payload["hot_symbols"])
     assert payload["source_freshness"]["telegram_events"]["status"] == "fresh"
+    assert payload["mode"] == "read_only_subscriber_intel"
 
 
 def test_empty_sync_is_zero_bytes_and_remote_copy_is_container_readable(
