@@ -154,6 +154,19 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   upstream labels are escaped before Telegram HTML. The real bot page, Pro
   Table action, exact GUA/SIREN/ESPORTS/BTW/transfer command paths and all four
   viewport/theme states pass without sending a Telegram message.
+- A follow-up contradicted the earlier Markets/Arbitrage completion claim:
+  both pages nested a layout `<main>` inside the shell's main landmark. The
+  inner element is now a CSS-preserving `<div class="market-main">`; a failing
+  route-level test, the full suite and production prove exactly one main on
+  both routes without changing their layout or controls.
+- `/guide` is now fully audited. It no longer says two legs are automatically
+  neutral, futures/spot always converges, 1x removes borrowing/liquidation risk,
+  equal token counts ignore contract multipliers, or DEX spot can be sold
+  without inventory. The production Guide now separates funding from captured
+  convergence, explains matched underlying exposure, independent collateral,
+  volatility/adverse-basis reserve evidence, exact identity, inventory and the
+  `$500 matched VWAP` boundary. Both auth states, all four viewport/theme
+  captures, all nine jumps and all ten product destinations pass.
 
 ### Current deployment and verification
 
@@ -165,20 +178,20 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `spreadboard/portfolio.py` SHA-256 remains
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
-- Latest deployed audited-page code commit: **`8c07197`** for Telegram. Run
+- Latest deployed audited-page code commit: **`19e1a47`** for Guide. Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
-- Production's code marker is **`8c07197f07a41070e2c0f6eefa79512cd68f90d6`**.
+- Production's code marker is **`19e1a47692396aa1b54c6445184c14ff637bc8ea`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Current `server.py` SHA-256 is
-  **`f6ccf393f622fd056847fd482ea26a2abdfab8bf90f4a572e0904b7214124aef`**;
+  **`aea20b415cdaeeb80985cb1232cadd8c9e522b3b148334fef975e606ff3ad9d6`**;
   current `telegram_bot.py` SHA-256 is
   **`4a597b5dda93aaac4fbfdbe73b5dd5184323b7ee30e1bb482414f33b0f8c87c7`**;
   current `intel.py` SHA-256 remains
   **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
-- Full suite: **1,486 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,489 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -191,14 +204,14 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `output/playwright/2026-08-21-page-audit/`. The same directory now contains
   `/intel` desktop/mobile light/dark evidence and the final non-overlapping
   mobile capture, plus `/triage`, `/signals`, `/community`, `/learn`, `/proof`
-  `/executor`, `/status` and `/telegram` before/final desktop/mobile light/dark
-  evidence.
+  `/executor`, `/status`, `/telegram` and `/guide` before/final
+  desktop/mobile light/dark evidence.
 
 ### Fresh ML gate — do not train or activate
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 25,834 observations, 17,568
+`deterministic_dual_opportunity_evidence_v5`: 25,990 observations, 17,568
 labeled 24h outcomes, 1,846 routes and 6.83 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
@@ -215,8 +228,8 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/guide`.
-2. Then complete `/methodology`, `/pricing`, `/subscription`, `/partner`,
+1. Continue §8 with the remaining static routes, starting at `/methodology`.
+2. Then complete `/pricing`, `/subscription`, `/partner`,
    `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
