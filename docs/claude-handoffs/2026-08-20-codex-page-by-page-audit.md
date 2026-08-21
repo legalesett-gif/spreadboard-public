@@ -236,6 +236,14 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   without exposing recipients, tokens or provider IDs publicly. Production
   Resend accepted a real authenticated reset; the status page shows that
   evidence and timestamp without claiming inbox delivery.
+- `/login` no longer leaks credentials into a no-JavaScript GET or embeds the
+  user-controlled `next` path inside executable script. Redirect targets are
+  normalized server-side, HTML login is same-origin, unknown accounts perform
+  dummy scrypt work, inputs are bounded and successful/failing JavaScript and
+  no-JavaScript paths are usable. Production light/dark and desktop/mobile
+  states pass; one disposable member proved both success paths and was removed
+  with all three sessions. The destination exposed a separate 423px no-script
+  mobile overflow on `/account`; fix that during the scheduled Account audit.
 
 ### Current deployment and verification
 
@@ -248,20 +256,19 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
 - Latest deployed code commit:
-  **`61bb68584bd95b44fc82ff0084589dc505a7a2f2`** for the completed password-
-  recovery audit.
+  **`65d95c3e3b272d53b42b1f426209f9cdca81f9dd`** for the completed Login audit.
   Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
 - Production's code marker is
-  **`61bb68584bd95b44fc82ff0084589dc505a7a2f2`**.
+  **`65d95c3e3b272d53b42b1f426209f9cdca81f9dd`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Current `server.py` SHA-256 is
-  **`d0d266dabe05d4bef2de509833d0a8cac76dc5f70c61ce19c5435eed4f4d984e`**;
+  **`4f5e42ed00f446e14ebc0fa9c867af4a664f6ffb50915c6bc0954673b0e2dcd8`**;
   current `accounts.py` SHA-256 is
-  **`639dab84d88c40a876f8f0654035a12b0139387aef4c985d7257b6aea23bd497`**;
+  **`d30d108c97d1f041ac4187d2aeead9c8754bdb8998e5d753fee4f2da423df248`**;
   current `mailer.py` SHA-256 is
   **`01cdd5267d62f1266a2ba2bcf1cad818c8ca563c226648b4cb974b30c27bb379`**;
   current `affiliates.py` SHA-256 is
@@ -270,7 +277,7 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   **`4a597b5dda93aaac4fbfdbe73b5dd5184323b7ee30e1bb482414f33b0f8c87c7`**;
   current `intel.py` SHA-256 remains
   **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
-- Full suite: **1,536 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,545 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 530 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -294,7 +301,8 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   recovery public/authenticated desktop and public mobile light/dark,
   confirmation and targeted Status evidence is in the same directory under
   `forgot-password-*-final.png` and
-  `status-email-recovery-mobile-targeted-final.png`.
+  `status-email-recovery-mobile-targeted-final.png`. Login desktop/mobile
+  light/dark and no-JavaScript error evidence is under `login-*-final.png`.
 
 ### Fresh ML gate — do not train or activate
 
@@ -320,11 +328,12 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 ### Resume exactly here
 
 1. Continue §8 with auth and legal routes in this order:
-   `/login`, `/register`, `/set-password`, `/terms`,
+   `/register`, `/set-password`, `/terms`,
    `/privacy`, `/refunds`, `/affiliate-terms`.
 2. Then complete the `/account` alias and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
-   test; exercise its controls under both themes and both viewports.
+   test; exercise its controls under both themes and both viewports. Include
+   the proven no-JavaScript 423px mobile overflow reached after Login success.
 3. Finish dynamic `/token/*`, `/pair/*` and `/r/*` routes and the authenticated
    Account flows.
 4. Replace the first uncached JSON `warming` response with an explicit
