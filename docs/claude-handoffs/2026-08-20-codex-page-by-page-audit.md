@@ -133,6 +133,14 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   canonical machine-readable health link and both themes/viewports pass; light
   contrast misses on the caveat/archive copy were caught and fixed before the
   final deployment.
+- `/executor` is now fully audited. Its comforting “never loaded here” list was
+  false because Portfolio intentionally supports opt-in private-ledger
+  accounting. The page and attestation now distinguish browser-sealed
+  credential intake from decryption: production web can seal but cannot
+  decrypt; the isolated accounting worker can decrypt but is read-only; trading
+  and withdrawal permissions, order capabilities and any handoff remain
+  forbidden. A web-process private-key mount changes the verdict to an explicit
+  boundary violation instead of preserving a false safety claim.
 
 ### Current deployment and verification
 
@@ -144,12 +152,11 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `spreadboard/portfolio.py` SHA-256 remains
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
-- Latest deployed audited-page code commits: **`733f502`** and **`756cbc0`**
-  for Proof. Run
+- Latest deployed audited-page code commit: **`3b63e56`** for Executor. Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
-- Production's code marker is **`756cbc08586be2b984a0c6a0c1d73f33f65baca5`**.
+- Production's code marker is **`3b63e56ccf6a680f77b6023dc6c8050553aa618f`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Full suite: **1,478 passed**, one pre-existing unknown `asyncio_mode` warning.
@@ -164,8 +171,8 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `/profile` position and settings evidence is under
   `output/playwright/2026-08-21-page-audit/`. The same directory now contains
   `/intel` desktop/mobile light/dark evidence and the final non-overlapping
-  mobile capture, plus `/triage`, `/signals`, `/community`, `/learn` and
-  `/proof` before/final desktop/mobile light/dark evidence.
+  mobile capture, plus `/triage`, `/signals`, `/community`, `/learn`, `/proof`
+  and `/executor` before/final desktop/mobile light/dark evidence.
 
 ### Fresh ML gate — do not train or activate
 
@@ -188,8 +195,8 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/executor`.
-2. Then complete `/status`, `/telegram`, `/guide`,
+1. Continue §8 with the remaining static routes, starting at `/status`.
+2. Then complete `/telegram`, `/guide`,
    `/methodology`, `/pricing`, `/subscription`, `/partner`, `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
