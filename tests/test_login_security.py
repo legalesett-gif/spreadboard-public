@@ -40,6 +40,7 @@ def test_login_page_has_safe_progressive_enhancement_and_theme() -> None:
     assert "auth-theme-toggle" in html
     assert "data-theme" in html
     assert "try{localStorage.setItem" in html.replace(" ", "")
+    assert "<noscript><style>.auth-theme-toggle{display:none}</style></noscript>" in html
 
 
 def test_login_next_path_cannot_break_out_of_the_inline_script() -> None:
