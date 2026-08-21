@@ -4072,12 +4072,16 @@ def _triage_community_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _triage_source_item(name: str, item: dict[str, Any]) -> dict[str, Any]:
+    source_title = {
+        "telegram_events": "Anonymous subscriber-bot attention feed",
+        "board": "Current public route board",
+    }.get(name)
     return {
         "source": name,
         "status": item.get("status"),
         "age_min": item.get("age_min"),
         "path": item.get("path"),
-        "title": item.get("title"),
+        "title": item.get("title") or source_title,
         "decision": "refresh_or_explain_source",
     }
 
@@ -7575,7 +7579,7 @@ def render_triage_page(
         <div>
           <span class="page-kicker">Triage</span>
           <h1>What to inspect next</h1>
-          <p>Local Telegram, board, funding, identity, and freshness signals collapsed into an operator queue. Read-only: this never sends alerts or touches exchange accounts.</p>
+          <p>Subscriber-bot, board, funding, identity, and freshness signals collapsed into an operator queue. Read-only: this never sends alerts or touches exchange accounts.</p>
         </div>
         <div class="intel-actions">
           <a class="secondary" href="/intel">Intel</a>
@@ -7591,16 +7595,16 @@ def render_triage_page(
         {render_triage_summary_card("Sources", summary.get("source_gaps"), "stale/missing")}
       </section>
       <section class="triage-layout">
-        <main class="triage-main">
+        <div class="triage-main">
           {render_triage_lane("Look Now", "Fresh matched rows worth opening first.", buckets.get("look_now") or [], "route")}
           {render_triage_lane("Data Review", "Routes with incomplete public fields such as venue symbols, identity, or transfer rails.", buckets.get("setup_needed") or [], "route")}
           {render_triage_lane("Funding Carry", "Funding outliers and funding pings that may matter more than the headline spread.", buckets.get("funding_carry") or [], "funding")}
-        </main>
+        </div>
         <aside class="triage-side">
           {render_triage_lane("DEX Identity Work", "Tokens that need exact chain and contract proof before any DEX row should be trusted.", buckets.get("dex_identity") or [], "route")}
           {render_triage_lane("Community Spikes", "Symbols getting repeated alerts, closes, calls, or funding discussion.", buckets.get("community_spike") or [], "community")}
           {render_triage_lane("Stale Route Matches", "Matched board rows that are too old for Look Now; use them as research context only.", buckets.get("stale_routes") or [], "route")}
-          {render_triage_lane("Source Gaps", "Stale or missing local sources that should explain weak/empty views.", buckets.get("source_gaps") or [], "source")}
+          {render_triage_lane("Source Gaps", "Stale or missing server-side sources that should explain weak/empty views.", buckets.get("source_gaps") or [], "source")}
         </aside>
       </section>
     </section>
@@ -7715,7 +7719,7 @@ def render_triage_source_card(row: dict[str, Any]) -> str:
         <strong>{h(str(row.get("source") or "").replace("_", " "))}</strong>
         <span>{label_text(row.get("status"))}</span>
       </div>
-      <p>{h(row.get("title") or row.get("path") or "No local source detail")}</p>
+      <p>{h(row.get("title") or row.get("path") or "Source metadata is intentionally not exposed")}</p>
       <div class="triage-metrics">
         <span>Age<strong>{fmt_age(row.get("age_min"))}</strong></span>
         <span>Next<strong>{label_text(row.get("decision"))}</strong></span>
@@ -15729,7 +15733,8 @@ def render_auto_refresh_script() -> str:
   pill.className = "auto-refresh-pill";
   pill.setAttribute("aria-live", "polite");
   pill.innerHTML = '<span id="autoRefreshStatus"></span><button id="autoRefreshToggle" type="button"></button>';
-  if (!silent) document.body.appendChild(pill);
+  const pillHost = document.querySelector(".header-actions");
+  if (!silent) (pillHost || document.body).appendChild(pill);
   const label = pill.querySelector("#autoRefreshStatus");
   const toggle = pill.querySelector("#autoRefreshToggle");
   let remaining = seconds;
@@ -16910,11 +16915,14 @@ main { max-width: none; margin: 0; padding: 32px 24px 0; }
 .score-meta { display: flex; gap: 7px; flex-wrap: wrap; }
 .score-meta em { padding: 4px 6px; border-radius: 5px; background: rgba(255,255,255,.12); color: #dce8e5; font-size: 11px; font-style: normal; }
 .pair-subnav { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.auto-refresh-pill { position: fixed; right: 14px; bottom: 14px; z-index: 60; display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 5px 6px 5px 10px; border: 1px solid rgba(21,32,31,.12); border-radius: 999px; background: rgba(247,247,247,.94); color: var(--dark); box-shadow: var(--shadow); backdrop-filter: blur(8px); font-size: 11px; font-weight: 900; }
+.auto-refresh-pill { position: static; margin: 10px 14px 14px auto; width: max-content; max-width: calc(100vw - 28px); z-index: 60; display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 5px 6px 5px 10px; border: 1px solid var(--terminal-line); border-radius: 999px; background: var(--terminal-panel-2); color: var(--terminal-text); box-shadow: var(--shadow); backdrop-filter: blur(8px); font-size: 11px; font-weight: 900; }
 .auto-refresh-pill span { min-width: 64px; text-align: center; }
 .auto-refresh-pill button { min-height: 24px; border: 0; border-radius: 999px; padding: 0 8px; background: var(--dark); color: white; cursor: pointer; font-size: 10px; font-weight: 900; }
 .auto-refresh-pill.paused { background: #fff8f0; border-color: rgba(191,125,0,.28); }
 .auto-refresh-pill.paused button { background: var(--accent); color: var(--accent-ink); }
+.header-actions .auto-refresh-pill { margin: 0; width: auto; max-width: none; min-height: 34px; padding: 0 4px 0 8px; border-radius: 2px; background: transparent; box-shadow: none; backdrop-filter: none; }
+.header-actions .auto-refresh-pill span { min-width: 58px; }
+.header-actions .auto-refresh-pill button { border: 1px solid var(--terminal-line); border-radius: 2px; background: var(--terminal-panel-2); color: var(--terminal-text); }
 .pair-snapshot-banner { display: flex; justify-content: space-between; gap: 14px; align-items: center; padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(242,109,125,.42); background: #fff6f7; color: var(--dark); box-shadow: var(--shadow); }
 .pair-snapshot-banner div { display: grid; gap: 4px; min-width: 0; }
 .pair-snapshot-banner span { color: #a1283d; font-size: 11px; font-weight: 900; text-transform: uppercase; }
@@ -17309,28 +17317,28 @@ body.alert-modal-open { overflow: hidden; }
 .triage-summary-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
 .triage-layout { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 16px; align-items: start; }
 .triage-main, .triage-side { display: grid; gap: 16px; min-width: 0; }
-.triage-lane { display: grid; gap: 10px; min-width: 0; padding: 14px; border-radius: 10px; border: 1px solid #d0d0d0; background: #f7f7f7; box-shadow: var(--shadow); }
+.triage-lane { display: grid; gap: 10px; min-width: 0; padding: 14px; border-radius: 10px; border: 1px solid var(--terminal-line); background: var(--terminal-panel); color: var(--terminal-text); box-shadow: var(--shadow); }
 .triage-lane .panel-head span { align-self: flex-start; padding: 5px 8px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-ink); font-size: 12px; font-weight: 900; }
 .triage-card-list { display: grid; gap: 8px; min-width: 0; }
-.triage-card { display: grid; gap: 9px; padding: 11px; border-radius: 8px; background: white; border: 1px solid #dedede; min-width: 0; }
-.triage-card.stale { border-color: rgba(242,109,125,.30); background: #fff8f9; }
+.triage-card { display: grid; gap: 9px; padding: 11px; border-radius: 8px; background: var(--terminal-row); border: 1px solid var(--terminal-line); color: var(--terminal-text); min-width: 0; }
+.triage-card.stale { border-color: rgba(242,109,125,.30); background: var(--terminal-danger-soft); }
 .triage-card.fresh { border-color: rgba(0,184,132,.22); }
 .triage-card.funding { border-color: rgba(0,184,132,.32); }
 .triage-card.community { border-color: rgba(111,140,255,.35); }
 .triage-card.source { border-color: rgba(242,109,125,.32); }
 .triage-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; min-width: 0; }
-.triage-card-head a, .triage-card-head strong { min-width: 0; font-size: 19px; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.triage-card-head span { flex: 0 1 auto; min-width: 0; max-width: 48%; padding: 4px 7px; border-radius: 5px; background: var(--row); color: #52635e; font-size: 11px; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.triage-card p { margin: 0; color: #52635e; font-size: 12px; overflow-wrap: anywhere; }
-.triage-freshness { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 7px 8px; border-radius: 6px; background: #f2f5f3; color: #52635e; }
+.triage-card-head a, .triage-card-head strong { min-width: 0; color: var(--terminal-text); font-size: 19px; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.triage-card-head span { flex: 0 1 auto; min-width: 0; max-width: 48%; padding: 4px 7px; border-radius: 5px; background: var(--terminal-panel-2); color: var(--terminal-muted); font-size: 11px; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.triage-card p { margin: 0; color: var(--terminal-muted); font-size: 12px; overflow-wrap: anywhere; }
+.triage-freshness { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 7px 8px; border-radius: 6px; background: var(--terminal-panel-2); color: var(--terminal-muted); }
 .triage-freshness span { min-width: 0; font-size: 11px; font-weight: 900; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.triage-freshness strong { flex: 0 0 auto; color: var(--dark); font-size: 12px; }
-.triage-freshness.stale { background: #ffe9ed; color: #a1283d; }
-.triage-freshness.stale strong { color: #a1283d; }
+.triage-freshness strong { flex: 0 0 auto; color: var(--terminal-text); font-size: 12px; }
+.triage-freshness.stale { background: var(--terminal-danger-soft); color: #d55d70; }
+.triage-freshness.stale strong { color: #d55d70; }
 .triage-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
 .triage-card.source .triage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.triage-metrics span { padding: 7px; border-radius: 6px; background: #f2f5f3; color: #666; font-size: 11px; min-width: 0; }
-.triage-metrics strong { display: block; color: var(--dark); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.triage-metrics span { padding: 7px; border-radius: 6px; background: var(--terminal-panel-2); color: var(--terminal-muted); font-size: 11px; min-width: 0; }
+.triage-metrics strong { display: block; color: var(--terminal-text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .triage-tags { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .triage-tags span { min-width: 0; max-width: 100%; padding: 4px 6px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-ink); font-size: 11px; font-weight: 800; line-height: 1.2; overflow-wrap: anywhere; }
 .watchlist-page { display: grid; gap: 16px; }
@@ -18007,7 +18015,6 @@ pre { background: var(--dark); color: white; padding: 14px; border-radius: 8px; 
   .facts { grid-template-columns: 1fr; }
   .pair-anchors { max-width: 100%; overflow-x: auto; flex-wrap: nowrap; }
   .price-pair { justify-content: flex-start; }
-  .auto-refresh-pill { position: static; margin: 10px 14px 14px auto; width: max-content; max-width: calc(100vw - 28px); }
 }
 @media (max-width: 560px) {
   .ranking-explainer, .ranking-filter { grid-template-columns: 1fr; }

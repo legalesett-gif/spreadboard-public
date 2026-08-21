@@ -625,11 +625,63 @@ def test_intel_long_bot_username_cannot_force_mobile_overflow() -> None:
     assert "overflow-wrap: anywhere" in server.APP_CSS
 
 
-def test_mobile_auto_refresh_control_does_not_cover_page_content() -> None:
-    assert (
+def test_auto_refresh_control_never_covers_page_content_at_any_viewport() -> None:
+    assert ".auto-refresh-pill { position: fixed;" not in server.APP_CSS
+    assert server.APP_CSS.count(
         ".auto-refresh-pill { position: static; margin: 10px 14px 14px auto;"
-        in server.APP_CSS
+    ) == 1
+    script = server.render_auto_refresh_script()
+    assert 'const pillHost = document.querySelector(".header-actions");' in script
+    assert "(pillHost || document.body).appendChild(pill);" in script
+    assert ".header-actions .auto-refresh-pill { margin: 0;" in server.APP_CSS
+
+
+def test_triage_cards_follow_the_shared_theme_and_use_one_main_landmark(monkeypatch) -> None:
+    monkeypatch.setattr(
+        server,
+        "api_triage",
+        lambda *_args, **_kwargs: {
+            "summary": {},
+            "buckets": {},
+        },
     )
+
+    html = server.render_triage_page(Path("/missing.json"), {}, {})
+    triage_css = server.APP_CSS.split(".triage-page", 1)[1].split(".watchlist-page", 1)[0]
+
+    assert html.count("<main") == 1
+    assert '<div class="triage-main">' in html
+    assert "background: #f7f7f7" not in triage_css
+    assert "background: white" not in triage_css
+    assert "background: var(--terminal-panel);" in triage_css
+    assert "background: var(--terminal-row);" in triage_css
+    assert ".triage-card p { margin: 0; color: var(--terminal-muted);" in triage_css
+    assert ".triage-metrics strong { display: block; color: var(--terminal-text);" in triage_css
+
+
+def test_triage_names_the_always_on_subscriber_source_instead_of_a_local_file(
+    monkeypatch,
+) -> None:
+    payload = {
+        "summary": {"source_gaps": 1},
+        "buckets": {
+            "source_gaps": server.build_triage_buckets(
+                {
+                    "source_freshness": {
+                        "telegram_events": {"status": "stale", "age_min": 30.0}
+                    }
+                }
+            )["source_gaps"]
+        },
+    }
+    monkeypatch.setattr(server, "api_triage", lambda *_args, **_kwargs: payload)
+
+    html = server.render_triage_page(Path("/missing.json"), {}, {})
+
+    assert "Subscriber-bot, board, funding, identity" in html
+    assert "Stale or missing server-side sources" in html
+    assert "Anonymous subscriber-bot attention feed" in html
+    assert "No local source detail" not in html
 
 
 def test_priority_funding_legs_are_attempted_before_rotating_catalog(tmp_path, monkeypatch) -> None:
