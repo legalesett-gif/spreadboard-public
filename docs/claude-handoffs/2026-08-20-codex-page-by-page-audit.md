@@ -220,21 +220,25 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `spreadboard/portfolio.py` SHA-256 remains
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
-- Latest deployed code commit: **`69cae15`** for Subscription plus backup
-  repair. Run
+- Latest deployed code commit: **`7947c3c`** for the completed Partner audit.
+  Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
-- Production's code marker is **`69cae15f344db4d885b8c479d7d2ab64201a71e5`**.
+- Production's code marker is **`7947c3cd6562c5195033011fc12ff3a4d00ad00d`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Current `server.py` SHA-256 is
-  **`0b309847fa860a0ca548eb90ffdef08d9a29eda8b8fe58744adf9bf6495653cd`**;
+  **`9b0e77e776acaaed678875c2e26f6efb5ed3486cdc15190c2cc82988a6bc0457`**;
+  current `accounts.py` SHA-256 is
+  **`b91f578b4f227473f06e150f5a26c360881947bbaf1b29bd3289327259eff4fb`**;
+  current `affiliates.py` SHA-256 is
+  **`ea6f0d7bb54c4f80ddbf6dabb3d10b3fd63cb9e1643de261c62b757ecedb81fe`**;
   current `telegram_bot.py` SHA-256 is
   **`4a597b5dda93aaac4fbfdbe73b5dd5184323b7ee30e1bb482414f33b0f8c87c7`**;
   current `intel.py` SHA-256 remains
   **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
-- Full suite: **1,506 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,515 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -251,18 +255,20 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   desktop/mobile light/dark evidence, plus `/methodology` before/final
   desktop/mobile light/dark evidence and `/pricing` final desktop/mobile
   light/dark evidence, plus `/subscription` active desktop/mobile light/dark
-  and inactive Scanner desktop-light evidence.
+  and inactive Scanner desktop-light evidence. Partner admin/member/empty,
+  populated payout-state and mobile-containment evidence is in the same
+  2026-08-21 directory.
 
 ### Fresh ML gate — do not train or activate
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 26,435 observations, 17,764
-labeled 24h outcomes, 1,862 routes and 6.92 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 26,591 observations, 17,864
+labeled 24h outcomes, 1,863 routes and 6.96 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
-6.92/30 days; no candidate exists, activation is false and the deterministic
-fallback remains active. The v5 observation store itself spans 8.4167 days;
+6.96/30 days; no candidate exists, activation is false and the deterministic
+fallback remains active. The v5 observation store itself spans 8.4583 days;
 only the labeled span is allowed to satisfy activation. Do not mix the 5,832
 v4 rows or weaken these gates.
 
@@ -276,9 +282,8 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/partner`.
-2. Then complete `/partner`,
-   `/free`, all auth
+1. Continue §8 with the remaining static routes, starting at `/free`.
+2. Then complete `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
    test; exercise its controls under both themes and both viewports.
