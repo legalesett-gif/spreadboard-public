@@ -2564,30 +2564,47 @@ def consume_password_token(
     now = datetime.now(tz=timezone.utc)
     connection = _connect(db_path)
     try:
+        # Serialize the read/claim/write sequence. Without the early write lock,
+        # two requests can both observe used_at=NULL before either one claims
+        # the credential, which makes a nominally one-use link last-writer-wins.
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             "SELECT * FROM password_tokens WHERE token_hash = ?", (_token_hash(text),)
         ).fetchone()
         if row is None or row["used_at"]:
+            connection.rollback()
             return None
         try:
             expires = datetime.fromisoformat(str(row["expires_at"]))
         except ValueError:
+            connection.rollback()
             return None
         if expires <= now:
+            connection.rollback()
+            return None
+        claimed = connection.execute(
+            "UPDATE password_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL",
+            (_utc_iso(), int(row["id"])),
+        )
+        if claimed.rowcount != 1:
+            connection.rollback()
             return None
         connection.execute(
             "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
             (encoded, _utc_iso(), int(row["user_id"])),
         )
-        connection.execute(
-            "UPDATE password_tokens SET used_at = ? WHERE id = ?", (_utc_iso(), int(row["id"]))
-        )
         connection.execute("DELETE FROM sessions WHERE user_id = ?", (int(row["user_id"]),))
-        connection.commit()
         user = connection.execute(
             "SELECT id, email, display_name FROM users WHERE id = ?", (int(row["user_id"]),)
         ).fetchone()
-        return dict(user) if user else None
+        if user is None:
+            connection.rollback()
+            return None
+        connection.commit()
+        return dict(user)
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
 

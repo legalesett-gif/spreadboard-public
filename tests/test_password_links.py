@@ -170,7 +170,8 @@ def test_partner_password_setup_returns_to_the_partner_cabinet(db: Path) -> None
         {"token": [token], "next": ["/partner"]}, db
     )
 
-    assert 'window.location.assign("/login?next=%2Fpartner")' in page
+    assert 'name="next" value="/partner"' in page
+    assert "window.location.assign(body.next||'/login')" in page
     assert '@media(max-width:560px)' in page
 
 

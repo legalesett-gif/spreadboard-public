@@ -1813,31 +1813,125 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
     def _handle_set_password(self) -> None:
         """Spend a one-time link. Rate limited like a login, for the same reason."""
         payload = self._read_payload()
-        key = self._client_ip()
+        form_request = not self._is_json_request()
+        next_path = _safe_local_path(str(payload.get("next") or ""), "/")
+        raw_token = str(payload.get("token") or "").strip()
+        token = raw_token if len(raw_token) <= 512 else ""
+        if form_request and not self._same_origin_form_post():
+            self._send_json(
+                {"ok": False, "error": "invalid_request_origin"},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
+        if form_request and str(payload.get("password") or "") != str(
+            payload.get("confirm") or ""
+        ):
+            self._set_password_error(
+                "passwords_do_not_match",
+                form_request=True,
+                token=token,
+                next_path=next_path,
+            )
+            return
+        key = "set-password:" + self._client_ip()
         now = time.monotonic()
         with self._login_attempts_lock:
             recent = [item for item in self._login_attempts.get(key, []) if now - item < 900]
-            recent.append(now)
-            self._login_attempts[key] = recent
-        if len(recent) > 10:
-            self._send_json(
-                {"ok": False, "error": "too_many_attempts"},
-                status=HTTPStatus.TOO_MANY_REQUESTS,
-            )
-            return
+            if len(recent) >= 10:
+                self._set_password_error(
+                    "too_many_attempts",
+                    form_request=form_request,
+                    token=token,
+                    next_path=next_path,
+                    status=HTTPStatus.TOO_MANY_REQUESTS,
+                )
+                return
+            self._login_attempts[key] = recent + [now]
         try:
             updated = accounts.consume_password_token(
-                str(payload.get("token") or ""),
+                token,
                 str(payload.get("password") or ""),
                 db_path=self.server.accounts_path,
             )
         except ValueError as exc:
-            self._send_json({"ok": False, "error": str(exc)[:120]}, status=HTTPStatus.BAD_REQUEST)
+            error = str(exc)
+            public_error = (
+                error
+                if error
+                in {
+                    "password_must_be_at_least_12_characters",
+                    "password_must_be_at_most_1024_characters",
+                }
+                else "password_update_unavailable"
+            )
+            self._set_password_error(
+                public_error,
+                form_request=form_request,
+                token=token,
+                next_path=next_path,
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - do not expose database/hash detail.
+            sys.stderr.write(f"spreadboard: set_password_failed:{type(exc).__name__}\n")
+            self._set_password_error(
+                "password_update_unavailable",
+                form_request=form_request,
+                token=token,
+                next_path=next_path,
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
             return
         if updated is None:
-            self._send_json({"ok": False, "error": "link_not_valid"}, status=HTTPStatus.BAD_REQUEST)
+            self._set_password_error(
+                "link_not_valid",
+                form_request=form_request,
+                token="",
+                next_path=next_path,
+            )
             return
-        self._send_json({"ok": True})
+        with self._login_attempts_lock:
+            self._login_attempts.pop(key, None)
+        login_target = "/login" + (
+            "?" + urlencode({"next": next_path}) if next_path != "/" else ""
+        )
+        if form_request:
+            self._redirect(login_target)
+            return
+        self._send_json({"ok": True, "next": login_target})
+
+    def _set_password_error(
+        self,
+        error: str,
+        *,
+        form_request: bool,
+        token: str,
+        next_path: str,
+        status: HTTPStatus = HTTPStatus.BAD_REQUEST,
+    ) -> None:
+        """Return one safe error shape without reflecting either password."""
+        if form_request:
+            code = {
+                "passwords_do_not_match": "mismatch",
+                "password_must_be_at_least_12_characters": "password",
+                "password_must_be_at_most_1024_characters": "password",
+                "too_many_attempts": "rate",
+                "link_not_valid": "invalid",
+                "password_update_unavailable": "unavailable",
+            }.get(error, "unavailable")
+            query = {"next": next_path, "error": code}
+            if token and code != "invalid":
+                query["token"] = token
+            self._redirect("/set-password?" + urlencode(query))
+            return
+        public_error = error if error in {
+            "passwords_do_not_match",
+            "password_must_be_at_least_12_characters",
+            "password_must_be_at_most_1024_characters",
+            "too_many_attempts",
+            "link_not_valid",
+            "password_update_unavailable",
+        } else "password_update_unavailable"
+        self._send_json({"ok": False, "error": public_error}, status=status)
 
     def _handle_password_reset_request(self) -> None:
         """Send a reset link without revealing whether an email is registered."""
@@ -6565,91 +6659,96 @@ def leg_market_label(venue: Any, market_type: Any) -> str:
     return str(market_type or "").strip()
 
 
-def render_set_password_page(query: dict[str, list[str]], accounts_path: Path) -> str:
-    """Where someone sets their own password from a one-time link.
+def _render_auth_document(title: str, inner: str, *, page_script: str = "") -> str:
+    """Render one quiet auth surface without the member navigation shell."""
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>{h(title)}</title>
+<script>
+(() => {{
+  try {{
+    const saved=localStorage.getItem('spreadboard.theme.v1');
+    document.documentElement.dataset.theme=saved==='dark'||saved==='light'
+      ? saved
+      : (matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  }} catch(error) {{ document.documentElement.dataset.theme='light'; }}
+}})();
+</script>
+<style>
+:root {{ color-scheme:light;--bg:#f1f5f3;--field:#f8fbfa;--line:#cbd9d4;--ink:#13201d;--muted:#60736c;--accent:#0f766e;--button-ink:#fff;--danger:#b4233a;--toggle:#fff; }}
+:root[data-theme="dark"] {{ color-scheme:dark;--bg:#07110f;--field:#0b1714;--line:#29443d;--ink:#edf8f4;--muted:#9bb1aa;--accent:#38d4bd;--button-ink:#052c26;--danger:#ff8695;--toggle:#101d1a; }}
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}}.login-shell{{width:min(376px,100%)}}.login-brand{{display:flex;align-items:center;gap:9px;margin-bottom:24px;font-size:15px;font-weight:650}}.login-mark{{width:10px;height:10px;border-radius:50%;background:var(--accent)}}.login-panel{{padding:24px 0;border:1px solid var(--line);border-width:1px 0}}h1{{margin:0 0 8px;font-size:27px;font-weight:650;letter-spacing:-.03em}}p{{color:var(--muted);margin:0 0 24px;line-height:1.5;font-size:12.5px}}.set-password-panel form{{display:grid}}label{{display:grid;gap:7px;margin:0 0 16px;color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}}input:not([type="hidden"]){{width:100%;min-height:42px;border:1px solid var(--line);background:var(--field);color:var(--ink);border-radius:2px;padding:0 13px;font:inherit}}input:focus{{outline:2px solid var(--accent);outline-offset:1px}}.field-hint{{margin:-10px 0 16px;color:var(--muted);font-size:11px;line-height:1.45}}.login-panel button{{width:100%;min-height:42px;border:0;border-radius:2px;background:var(--accent);color:var(--button-ink);font:inherit;font-weight:700;cursor:pointer}}button:disabled{{opacity:.55;cursor:wait}}.login-error{{min-height:20px;margin:14px 0 0;color:var(--danger);font-size:13px;line-height:1.45}}.login-note{{margin-top:18px;color:var(--muted);font-size:11px;line-height:1.55;text-align:center}}.login-note a{{color:var(--accent);font-weight:800}}.set-password-panel .login-note{{text-align:left}}
+.auth-theme-toggle{{position:fixed;top:18px;right:18px;display:inline-flex;align-items:center;gap:7px;width:auto;min-height:34px;padding:0 10px;border:1px solid var(--line);border-radius:3px;background:var(--toggle);color:var(--ink);font:inherit;font-size:11px;font-weight:700;cursor:pointer}}.theme-swatch{{width:13px;height:13px;border:1px solid var(--line);border-radius:50%;background:linear-gradient(90deg,var(--accent) 0 50%,var(--field) 50% 100%)}}
+@media(max-width:560px){{.auth-theme-toggle{{top:12px;right:12px}}}}
+</style><noscript><style>.auth-theme-toggle{{display:none}}</style></noscript></head><body>
+<main class="login-shell" data-password-setup><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div><section class="login-panel set-password-panel">{inner}</section></main>
+<button class="auth-theme-toggle" id="themeToggle" type="button" aria-label="Toggle light and dark mode" aria-pressed="false"><span class="theme-swatch" aria-hidden="true"></span><span data-theme-label>Theme</span></button>
+<script>
+(() => {{
+  const key='spreadboard.theme.v1',button=document.getElementById('themeToggle'),label=button.querySelector('[data-theme-label]');
+  const current=()=>document.documentElement.dataset.theme==='dark'?'dark':'light';
+  const apply=theme=>{{document.documentElement.dataset.theme=theme;try{{localStorage.setItem(key,theme);}}catch(error){{}}button.setAttribute('aria-pressed',theme==='dark'?'true':'false');label.textContent=theme==='dark'?'Dark':'Light';}};
+  apply(current());button.addEventListener('click',()=>apply(current()==='dark'?'light':'dark'));
+}})();
+{page_script}
+</script></body></html>"""
 
-    Public by necessity -- the person using it cannot sign in yet, which is the
-    whole point -- so the token is the only credential and it is single use,
-    time limited, and revokes every existing session when spent.
-    """
-    token = _query_first(query, "token") or ""
-    next_path = _query_first(query, "next") or "/"
-    if not next_path.startswith("/") or next_path.startswith("//"):
-        next_path = "/"
-    login_target = "/login" + ("?" + urlencode({"next": next_path}) if next_path != "/" else "")
+
+def render_set_password_page(query: dict[str, list[str]], accounts_path: Path) -> str:
+    """Render the one-time password credential as a progressive auth form."""
+    raw_token = _query_first(query, "token") or ""
+    token = raw_token if len(raw_token) <= 512 else ""
+    next_path = _safe_local_path(_query_first(query, "next"), "/")
+    error_message = {
+        "mismatch": "The two passwords do not match.",
+        "password": "Use a password between 12 and 1,024 characters.",
+        "rate": "Too many attempts. Try again later.",
+        "unavailable": "The password could not be changed. Try again shortly.",
+    }.get(_query_first(query, "error") or "", "")
     state = accounts.password_token_status(token, db_path=accounts_path) if token else None
     if state is None:
         inner = (
             "<h1>This link is not valid</h1>"
-            "<p>It may have been used already, or expired. Ask for a new one.</p>"
-            '<div class="login-note"><a href="/login">Back to sign in</a></div>'
+            "<p>It may have expired, been replaced or already been used.</p>"
+            '<div class="login-note"><a href="/forgot-password">Request a fresh reset link</a>'
+            '<br><br><a href="/login">Back to sign in</a></div>'
         )
-    else:
-        who = h(str(state.get("display_name") or state.get("email") or ""))
-        verb = "Set your password" if state.get("purpose") == "invite" else "Choose a new password"
-        inner = f"""
-          <h1>{verb}</h1>
-          <p>for <b>{who}</b></p>
-          <form id="setPasswordForm">
-            <input type="hidden" name="token" value="{h(token)}">
-            <label>New password<input name="password" type="password" minlength="12"
-              autocomplete="new-password" required autofocus></label>
-            <label>Repeat it<input name="confirm" type="password" minlength="12"
-              autocomplete="new-password" required></label>
-            <button type="submit">Save password</button>
-            <div class="login-error" role="alert"></div>
-          </form>
-          <div class="login-note">At least 12 characters. Signing in anywhere else will be ended.</div>
-        """
-    return shell(
-        "Set password - SpreadBoard",
-        "login",
-        f"""
-    <style>
-      .set-password-shell {{ width:min(480px,calc(100% - 32px)); margin:76px auto 100px; }}
-      .set-password-brand {{ display:flex;align-items:center;gap:11px;margin:0 0 22px;font-size:22px;font-weight:900; }}
-      .set-password-mark {{ width:24px;height:24px;border-radius:50%;background:var(--terminal-accent);border:3px solid #dffff8;box-shadow:11px 8px 0 -5px #7fdccf; }}
-      .set-password-panel {{ padding:30px;border:1px solid var(--terminal-line);border-radius:9px;background:var(--terminal-panel);box-shadow:0 16px 50px rgba(9,25,21,.08); }}
-      .set-password-panel h1 {{ margin:0 0 8px;font-size:32px;line-height:1.1; }}
-      .set-password-panel > p {{ margin:0 0 24px;color:var(--terminal-muted); }}
-      .set-password-panel form {{ display:grid;gap:16px; }}
-      .set-password-panel label {{ display:grid;gap:7px;color:var(--terminal-muted);font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.04em; }}
-      .set-password-panel input:not([type="hidden"]) {{ width:100%;min-height:46px;padding:0 13px;border:1px solid var(--terminal-line);border-radius:5px;background:var(--terminal-panel-2);color:var(--terminal-text);font:inherit; }}
-      .set-password-panel input:focus {{ outline:2px solid var(--terminal-accent);outline-offset:1px; }}
-      .set-password-panel button {{ min-height:46px;border:0;border-radius:5px;background:var(--terminal-accent);color:#052c26;font:inherit;font-weight:900;cursor:pointer; }}
-      .set-password-panel .login-error {{ min-height:20px;color:var(--red);font-size:13px; }}
-      .set-password-panel .login-note {{ margin-top:18px;color:var(--terminal-muted);font-size:12px;line-height:1.5; }}
-      .set-password-panel .login-note a {{ color:var(--terminal-accent);font-weight:900; }}
-      @media(max-width:560px) {{ .set-password-shell {{ margin-top:36px; }} .set-password-panel {{ padding:22px; }} .set-password-panel h1 {{ font-size:27px; }} }}
-    </style>
-    <main class="set-password-shell" data-password-setup>
-      <div class="set-password-brand"><span class="set-password-mark"></span>SpreadBoard</div>
-      <section class="set-password-panel">{inner}</section>
-    </main>
-    <script>
-    (function(){{
-      const form = document.getElementById('setPasswordForm');
-      if(!form) return;
-      form.addEventListener('submit', async (event) => {{
-        event.preventDefault();
-        const box = form.querySelector('.login-error');
-        const data = new FormData(form);
-        if(String(data.get('password')) !== String(data.get('confirm'))){{
-          box.textContent = 'The two passwords do not match.'; return;
-        }}
-        box.textContent = 'Saving...';
-        try{{
-          const response = await fetch('/api/set-password', {{
-            method: 'POST', headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({{token: data.get('token'), password: data.get('password')}})}});
-          const body = await response.json().catch(() => ({{}}));
-          if(!response.ok || body.ok === false) throw new Error(body.error || 'Could not save');
-          box.textContent = 'Saved. Taking you to sign in...';
-          setTimeout(() => window.location.assign({json.dumps(login_target)}), 900);
-        }}catch(error){{ box.textContent = error.message; }}
-      }});
-    }})();
-    </script>""",
+        return _render_auth_document("Set password - SpreadBoard", inner)
+
+    who = h(str(state.get("display_name") or state.get("email") or ""))
+    verb = "Set your password" if state.get("purpose") == "invite" else "Choose a new password"
+    inner = f"""
+      <h1>{verb}</h1>
+      <p>For <b>{who}</b>. This link works once.</p>
+      <form id="setPasswordForm" action="/api/set-password" method="post">
+        <input type="hidden" name="token" value="{h(token)}">
+        <input type="hidden" name="next" value="{h(next_path)}">
+        <label>New password<input name="password" type="password" minlength="12" maxlength="1024"
+          autocomplete="new-password" aria-describedby="passwordHint" required autofocus></label>
+        <label>Repeat password<input name="confirm" type="password" minlength="12" maxlength="1024"
+          autocomplete="new-password" required></label>
+        <div class="field-hint" id="passwordHint">12–1,024 characters. Existing sessions will be signed out.</div>
+        <button type="submit">Save password</button>
+        <div class="login-error" role="alert" aria-live="polite">{h(error_message)}</div>
+      </form>
+      <div class="login-note">Need another link? <a href="/forgot-password">Request a reset</a>.</div>
+    """
+    page_script = """
+(() => {
+  const form=document.getElementById('setPasswordForm');if(!form)return;
+  const messages={passwords_do_not_match:'The two passwords do not match.',password_must_be_at_least_12_characters:'Use at least 12 characters.',password_must_be_at_most_1024_characters:'Use no more than 1,024 characters.',too_many_attempts:'Too many attempts. Try again later.',link_not_valid:'This link is no longer valid. Request a fresh one.',password_update_unavailable:'The password could not be changed. Try again shortly.'};
+  form.addEventListener('submit',async event=>{
+    event.preventDefault();const button=form.querySelector('button[type="submit"]'),message=form.querySelector('.login-error'),data=Object.fromEntries(new FormData(form));
+    if(String(data.password)!==String(data.confirm)){message.textContent=messages.passwords_do_not_match;form.elements.confirm.value='';form.elements.confirm.focus();return;}
+    button.disabled=true;form.setAttribute('aria-busy','true');message.textContent='Saving password...';
+    try{const response=await fetch('/api/set-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const body=await response.json().catch(()=>({}));if(!response.ok||body.ok===false)throw new Error(messages[body.error]||messages.password_update_unavailable);message.textContent='Password saved. Taking you to sign in...';window.location.assign(body.next||'/login');}
+    catch(error){message.textContent=error.message||messages.password_update_unavailable;form.elements.password.value='';form.elements.confirm.value='';form.elements.password.focus();}
+    finally{form.removeAttribute('aria-busy');button.disabled=false;}
+  });
+})();
+"""
+    return _render_auth_document(
+        "Set password - SpreadBoard", inner, page_script=page_script
     )
 
 
