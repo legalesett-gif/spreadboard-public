@@ -10394,13 +10394,19 @@ def render_learn_page() -> str:
       </div>
     </section>
     <section class="learn-grid">
-      <article class="panel text"><h2>Route types</h2><p>Futures-Futures compares two perp/futures markets. Spot-Futures and Futures-Spot mix a spot leg with a perp leg. Spot-Spot needs transfer rails. DEX routes need exact chain and token identity.</p></article>
-      <article class="panel text"><h2>Funding</h2><p>Perpetual futures use funding payments to keep futures prices near spot. Funding can be more important than the visible open spread for a basis farm.</p></article>
-      <article class="panel text"><h2>Volatility</h2><p>24h realized volatility is computed from public hourly candles when exchanges provide them. If candles are missing, the app says so instead of guessing.</p></article>
-      <article class="panel text"><h2>Freshness</h2><p>Rows older than the fresh window are hidden from the main board by default. The source-health panel shows whether a tab is fresh, stale, empty, or unavailable in the local source.</p></article>
-      <article class="panel text"><h2>OKX DEX</h2><p>OKX DEX is treated as the preferred DEX source. Quote enrichment is blocked unless the row has exact chain and contract identity.</p></article>
-      <article class="panel text"><h2>Safety</h2><p>This app is read-only. It does not approve, swap, transfer, borrow, repay, withdraw, sign, broadcast, or place live orders.</p></article>
+      <article class="panel text"><h2>Route direction</h2><p>Every row is written Long → Short: buy or hold the long leg and sell or short the short leg. Futures-Futures compares two derivatives. Spot-Futures buys spot and shorts a derivative. Futures-Spot needs a genuinely shortable spot leg. Spot-Spot buys at the buy-low venue, transfers the exact token, then sells at the destination; identity, withdrawal and deposit rails, fees, minimums and transfer time all matter.</p></article>
+      <article class="panel text"><h2>Funding opportunity</h2><p>This asks whether normalized funding carry is favorable, persistent and likely to survive fees. Rate sign and payout cadence must be interpreted for each venue. A strong funding setup can exist even when the visible spread is unattractive.</p></article>
+      <article class="panel text"><h2>Spread opportunity</h2><p>This asks whether the entry dislocation is executable at the chosen size and has evidence of convergence. Funding is a separate cashflow: it can offset or add to the result instead of deciding whether the spread itself exists.</p></article>
+      <article class="panel text"><h2>Volatility and margin</h2><p>Realized volatility and observed basis widening describe how far a hedge has moved in public history. Missing history stays unavailable. Margin reserve is account-specific and must also consider leverage, collateral placement, liquidation rules and adverse widening; it is not a personalized prediction.</p></article>
+      <article class="panel text"><h2>Freshness</h2><p>Rows older than the fresh window are hidden from the main board by default. Source health reports whether the always-on canonical public-API collector is fresh, stale, warming, empty or unavailable; an older structural generation is never presented as current.</p></article>
+      <article class="panel text"><h2>DEX identity and provider</h2><p>OKX DEX is the canonical DEX quote provider when available. Quote enrichment is blocked without exact chain and contract identity. Provider rejection or zero verified DEX rows does not prove that no DEX route exists; check live system status before drawing that conclusion.</p></article>
+      <article class="panel text"><h2>Read-only trading boundary</h2><p>Market research never approves, swaps, transfers, borrows, repays, withdraws, signs, broadcasts or places live orders. Journal, alert, account and billing changes stay inside SpreadBoard and do not authorize exchange trading.</p></article>
     </section>
+    <nav class="profile-actions" aria-label="Learn next steps">
+      <a class="sheet-button primary" href="/methodology">Read methodology</a>
+      <a class="sheet-button" href="/status">Live system status</a>
+      <a class="sheet-button" href="/guide">Open guide</a>
+    </nav>
     """
     return shell("Learn - SpreadBoard", "learn", body)
 
