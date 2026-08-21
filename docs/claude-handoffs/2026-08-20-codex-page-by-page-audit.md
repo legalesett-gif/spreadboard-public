@@ -256,6 +256,16 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   no-JavaScript creation, origin rejection and inactive/active redirects pass.
   Both exact disposable users and all three sessions were deleted; no
   attribution survived and SQLite quick/foreign-key checks pass.
+- `/set-password` is now a standalone one-main auth document rather than the
+  full member shell. The form is explicit POST with safe no-JavaScript 303
+  behavior, local-path-only `next`, bounded fields, generic errors, a separate
+  reset limiter and `Referrer-Policy: no-referrer`. Password hashing precedes
+  `BEGIN IMMEDIATE`; token claim, password update and all-session revocation
+  are atomic. A production no-script trace caught Chromium's `Origin: null`
+  behavior; absent/null Origin is now accepted only when browser-controlled
+  Fetch Metadata proves a same-origin navigation, while cross-site/null remains
+  denied. Complete valid/used/expired JavaScript and no-JavaScript lifecycles,
+  desktop/mobile light/dark and exact cleanup pass.
 
 ### Current deployment and verification
 
@@ -268,19 +278,21 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
 - Latest deployed code commit:
-  **`08f626e39c427b520b6a75bfd25d456be369fa52`** for the completed Registration audit.
+  **`3234edfa1e29eb14498ef7db9303459cbd9992d8`** for the completed Set Password audit.
   Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
 - Production's code marker is
-  **`08f626e39c427b520b6a75bfd25d456be369fa52`**.
+  **`3234edfa1e29eb14498ef7db9303459cbd9992d8`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Current `server.py` SHA-256 is
-  **`b5d89d93c5afbe2e53d3f09553054cafd8ab61ab5d6586bf0ae52a473c4037ce`**;
+  **`938a658984a7f37f30d28bdec3404235012f92385aef2dd99fea642a5a24b8cf`**;
   current `accounts.py` SHA-256 is
-  **`afab0a70ceb6ddd5c852bd435dcd703e9268bf1d85d720b10c1e4a6e505c5845`**;
+  **`5ba685d0cbf1100bcbad2c4b880905a70c77bd159118cd1f42bc44846ca0aa92`**;
+  current `Caddyfile` SHA-256 is
+  **`7eeb938711057266aeb855b9b8260dd4b2049db21e7c8b5f7b78ce9d70bfc98e`**;
   current `mailer.py` SHA-256 is
   **`01cdd5267d62f1266a2ba2bcf1cad818c8ca563c226648b4cb974b30c27bb379`**;
   current `affiliates.py` SHA-256 is
@@ -289,7 +301,7 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   **`4a597b5dda93aaac4fbfdbe73b5dd5184323b7ee30e1bb482414f33b0f8c87c7`**;
   current `intel.py` SHA-256 remains
   **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
-- Full suite: **1,552 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,557 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 530 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -316,7 +328,9 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `status-email-recovery-mobile-targeted-final.png`. Login desktop/mobile
   light/dark and no-JavaScript error evidence is under `login-*-final.png`.
   Registration desktop/mobile light/dark and the no-JavaScript success
-  destination are under `register-*-final.png`.
+  destination are under `register-*-final.png`. Set Password valid/expired
+  desktop/mobile light/dark, used-token and no-JavaScript evidence is under
+  `set-password-*-final.png`.
 
 - One deployment error occurred and is preserved as an operational warning.
   A large chained SCP reached the tool boundary, leaving the staged and then
@@ -326,13 +340,17 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   services returned healthy, and the whole-package verifier now proves 51/51
   persisted-host/app/collector files. Never install a transferred production
   file until the remote size and digest match the committed local source.
+- Caddy's production config is a bind mount: replacing `/etc/caddy/Caddyfile`
+  inside the running container fails and replacing the host file inode does not
+  update the old mount. Validate the staged config, then recreate only Caddy
+  with `docker compose ... up -d --no-deps --force-recreate caddy`.
 
 ### Fresh ML gate — do not train or activate
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 27,434 observations, 18,392
-labeled 24h outcomes, 1,916 routes and 7.12 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 27,523 observations, 18,396
+labeled 24h outcomes, 1,919 routes and 7.12 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
 7.12/30 days; no candidate exists, activation is false and the deterministic
@@ -350,9 +368,8 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with auth and legal routes in this order:
-   `/set-password`, `/terms`,
-   `/privacy`, `/refunds`, `/affiliate-terms`.
+1. Continue §8 with legal routes in this order:
+   `/terms`, `/privacy`, `/refunds`, `/affiliate-terms`.
 2. Then complete the `/account` alias and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
    test; exercise its controls under both themes and both viewports. Include
