@@ -147,6 +147,13 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   accounting. Telegram requires both the bot and private community destination;
   transient DEX failures are not mislabeled as access blocks. All ten cards,
   both footer actions, both themes and both viewports pass production checks.
+- `/telegram` is now fully audited. Public `/top` no longer turns a cold
+  snapshot into a false no-route claim, and a ready result says it is the
+  latest completed immutable snapshot with its age and coverage counts instead
+  of calling it live/now. Forum copy follows the actual configured state, and
+  upstream labels are escaped before Telegram HTML. The real bot page, Pro
+  Table action, exact GUA/SIREN/ESPORTS/BTW/transfer command paths and all four
+  viewport/theme states pass without sending a Telegram message.
 
 ### Current deployment and verification
 
@@ -158,18 +165,20 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `spreadboard/portfolio.py` SHA-256 remains
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
-- Latest deployed audited-page code commit: **`0081631`** for Status. Run
+- Latest deployed audited-page code commit: **`8c07197`** for Telegram. Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
-- Production's code marker is **`00816316a98637784a853367751670bcd6e98210`**.
+- Production's code marker is **`8c07197f07a41070e2c0f6eefa79512cd68f90d6`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Current `server.py` SHA-256 is
-  **`9b28eaabc06872f6ec3d31de9408c6d68a86b89ad67413c068e8d04c0f1358d3`**;
+  **`f6ccf393f622fd056847fd482ea26a2abdfab8bf90f4a572e0904b7214124aef`**;
+  current `telegram_bot.py` SHA-256 is
+  **`4a597b5dda93aaac4fbfdbe73b5dd5184323b7ee30e1bb482414f33b0f8c87c7`**;
   current `intel.py` SHA-256 remains
   **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
-- Full suite: **1,481 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,486 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -182,7 +191,8 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `output/playwright/2026-08-21-page-audit/`. The same directory now contains
   `/intel` desktop/mobile light/dark evidence and the final non-overlapping
   mobile capture, plus `/triage`, `/signals`, `/community`, `/learn`, `/proof`
-  `/executor` and `/status` before/final desktop/mobile light/dark evidence.
+  `/executor`, `/status` and `/telegram` before/final desktop/mobile light/dark
+  evidence.
 
 ### Fresh ML gate — do not train or activate
 
@@ -205,9 +215,9 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/telegram`.
-2. Then complete `/guide`,
-   `/methodology`, `/pricing`, `/subscription`, `/partner`, `/free`, all auth
+1. Continue §8 with the remaining static routes, starting at `/guide`.
+2. Then complete `/methodology`, `/pricing`, `/subscription`, `/partner`,
+   `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
    test; exercise its controls under both themes and both viewports.
