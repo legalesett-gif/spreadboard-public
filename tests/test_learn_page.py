@@ -29,3 +29,10 @@ def test_learn_page_teaches_route_friction_and_scopes_read_only_claim() -> None:
     assert 'href="/methodology"' in html
     assert 'href="/status"' in html
     assert 'href="/guide"' in html
+
+
+def test_odd_final_learn_card_uses_the_full_grid_width() -> None:
+    html = server.render_learn_page()
+
+    assert 'class="panel text learn-wide"' in html
+    assert ".learn-grid .learn-wide { grid-column: 1 / -1; }" in server.APP_CSS

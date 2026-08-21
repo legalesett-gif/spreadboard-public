@@ -10400,7 +10400,7 @@ def render_learn_page() -> str:
       <article class="panel text"><h2>Volatility and margin</h2><p>Realized volatility and observed basis widening describe how far a hedge has moved in public history. Missing history stays unavailable. Margin reserve is account-specific and must also consider leverage, collateral placement, liquidation rules and adverse widening; it is not a personalized prediction.</p></article>
       <article class="panel text"><h2>Freshness</h2><p>Rows older than the fresh window are hidden from the main board by default. Source health reports whether the always-on canonical public-API collector is fresh, stale, warming, empty or unavailable; an older structural generation is never presented as current.</p></article>
       <article class="panel text"><h2>DEX identity and provider</h2><p>OKX DEX is the canonical DEX quote provider when available. Quote enrichment is blocked without exact chain and contract identity. Provider rejection or zero verified DEX rows does not prove that no DEX route exists; check live system status before drawing that conclusion.</p></article>
-      <article class="panel text"><h2>Read-only trading boundary</h2><p>Market research never approves, swaps, transfers, borrows, repays, withdraws, signs, broadcasts or places live orders. Journal, alert, account and billing changes stay inside SpreadBoard and do not authorize exchange trading.</p></article>
+      <article class="panel text learn-wide"><h2>Read-only trading boundary</h2><p>Market research never approves, swaps, transfers, borrows, repays, withdraws, signs, broadcasts or places live orders. Journal, alert, account and billing changes stay inside SpreadBoard and do not authorize exchange trading.</p></article>
     </section>
     <nav class="profile-actions" aria-label="Learn next steps">
       <a class="sheet-button primary" href="/methodology">Read methodology</a>
@@ -17711,6 +17711,7 @@ body.alert-modal-open { overflow: hidden; }
 .route-list, .two-col, .learn-grid { display: grid; gap: 14px; }
 .route-list { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 14px; }
 .two-col, .learn-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.learn-grid .learn-wide { grid-column: 1 / -1; }
 .route-card { display: grid; gap: 5px; padding: 12px; background: var(--row); border-radius: 8px; }
 table { width: 100%; border-collapse: collapse; min-width: 980px; }
 th, td { padding: 10px; border-bottom: 1px solid #d0d0d0; text-align: left; }
