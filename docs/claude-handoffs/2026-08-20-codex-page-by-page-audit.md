@@ -186,6 +186,29 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   required for the discount banner. The final light muted-text contrast is
   `5.26:1`; public/authenticated controls, desktop/mobile light/dark captures,
   landmarks, exact 375px fit, console and production requests all pass.
+- `/subscription` is now fully audited. Active and billing-managed tiers can no
+  longer be relabelled by a query string, and the page never offers a tier or
+  billing path that its server will reject. Direct prepaid members get only
+  their current/selected tier's three crypto terms and truthful same-tier
+  renewal copy; recurring accounts get only their portal; administrators and
+  signed-out renders have no dead purchase controls. Clipboard, polling,
+  cancellation, consent and contrast states are truthful. Production exercised
+  active Research Pro plus disposable inactive Scanner/Research Pro journeys,
+  real invoice creation, token/QR/wallet switching and polling without sending
+  crypto; every audit invoice, consent, session and temporary member row was
+  then proved absent.
+- The production six-hour encrypted backup was discovered failing. The
+  hardened service hid rclone's only config under root home and then prevented
+  SQLite's read-only WAL connection from creating a transient `-shm`. It now
+  reads a `0600 root:root` config from the backup-secret directory, keeps home
+  hidden, grants a narrow runtime write exception, keeps application code
+  read-only and names any database that fails consistency copying. Repaired
+  snapshot `ceea08b8` processed 88 files/3.727 GiB and stored 934.406 MiB;
+  retention kept two snapshots, the configured 1/20 repository data check found
+  no errors, and a separate temporary accounts-DB restore passed SQLite
+  `quick_check` with 36 tables and 12 users. The six-hour timer is enabled and
+  active. Shared Google API quota errors were retried successfully; a private
+  OAuth client remains a resilience improvement, not an open backup incident.
 
 ### Current deployment and verification
 
@@ -197,20 +220,21 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `spreadboard/portfolio.py` SHA-256 remains
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
-- Latest deployed audited-page code commit: **`f01fece`** for Pricing. Run
+- Latest deployed code commit: **`69cae15`** for Subscription plus backup
+  repair. Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
-- Production's code marker is **`f01fece990cf7f6bd5dd20572f3e3597500d53fd`**.
+- Production's code marker is **`69cae15f344db4d885b8c479d7d2ab64201a71e5`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Current `server.py` SHA-256 is
-  **`6f1b43a78847e57dedfff2f8cf171e7bf3f4b38268dadc5fd011eef6e68ed426`**;
+  **`0b309847fa860a0ca548eb90ffdef08d9a29eda8b8fe58744adf9bf6495653cd`**;
   current `telegram_bot.py` SHA-256 is
   **`4a597b5dda93aaac4fbfdbe73b5dd5184323b7ee30e1bb482414f33b0f8c87c7`**;
   current `intel.py` SHA-256 remains
   **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
-- Full suite: **1,494 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,506 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -226,18 +250,19 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `/executor`, `/status`, `/telegram` and `/guide` before/final
   desktop/mobile light/dark evidence, plus `/methodology` before/final
   desktop/mobile light/dark evidence and `/pricing` final desktop/mobile
-  light/dark evidence.
+  light/dark evidence, plus `/subscription` active desktop/mobile light/dark
+  and inactive Scanner desktop-light evidence.
 
 ### Fresh ML gate — do not train or activate
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 26,171 observations, 17,677
-labeled 24h outcomes, 1,858 routes and 6.88 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 26,435 observations, 17,764
+labeled 24h outcomes, 1,862 routes and 6.92 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
-6.88/30 days; no candidate exists, activation is false and the deterministic
-fallback remains active. The v5 observation store itself spans 8.375 days;
+6.92/30 days; no candidate exists, activation is false and the deterministic
+fallback remains active. The v5 observation store itself spans 8.4167 days;
 only the labeled span is allowed to satisfy activation. Do not mix the 5,832
 v4 rows or weaken these gates.
 
@@ -251,8 +276,8 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/subscription`.
-2. Then complete `/subscription`, `/partner`,
+1. Continue §8 with the remaining static routes, starting at `/partner`.
+2. Then complete `/partner`,
    `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
