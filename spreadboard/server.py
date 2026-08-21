@@ -7728,6 +7728,16 @@ def render_triage_source_card(row: dict[str, Any]) -> str:
     """
 
 
+def render_intel_window_actions(path: str, window_hours: float) -> str:
+    actions = []
+    for hours, label in ((1, "1h"), (6, "6h"), (12, "12h"), (48, "48h")):
+        current = ' aria-current="page"' if abs(window_hours - hours) < 0.001 else ""
+        actions.append(
+            f'<a class="secondary signals-window-tab" href="{h(path)}?window_hours={hours}"{current}>{label}</a>'
+        )
+    return "".join(actions)
+
+
 def render_signals_page(
     board_path: Path, config: dict[str, Any], query: dict[str, list[str]]
 ) -> str:
@@ -7735,12 +7745,7 @@ def render_signals_page(
     recent = data.get("recent_events") or {}
     community = data.get("community") or {}
     window_hours = _float_or_none((data.get("filters") or {}).get("window_hours")) or 6.0
-    window_actions = []
-    for hours, label in ((1, "1h"), (6, "6h"), (12, "12h"), (48, "48h")):
-        current = ' aria-current="page"' if abs(window_hours - hours) < 0.001 else ""
-        window_actions.append(
-            f'<a class="secondary signals-window-tab" href="/signals?window_hours={hours}"{current}>{label}</a>'
-        )
+    window_actions = render_intel_window_actions("/signals", window_hours)
     subscriber_lookup_lane = render_signal_lane(
         "Subscriber Lookups",
         recent.get("chat") or [],
@@ -7754,7 +7759,7 @@ def render_signals_page(
           <h1>Subscriber signal tape</h1>
           <p>Anonymous subscriber-bot lookups joined to current market routes. Any alert, funding, close, momentum, community, and result rows are privacy-safe research evidence, not trade execution.</p>
         </div>
-        <div class="intel-actions">{"".join(window_actions)}</div>
+        <div class="intel-actions">{window_actions}</div>
       </div>
       {render_intel_source_grid(data.get("source_freshness") or {})}
       <section class="signal-board">
@@ -8250,23 +8255,28 @@ def render_community_page(
 ) -> str:
     data = api_community(board_path, query)
     insights = data.get("community_insights") or {}
+    window_hours = _float_or_none((data.get("filters") or {}).get("window_hours")) or 6.0
+    window_actions = render_intel_window_actions("/community", window_hours)
     body = f"""
     <section class="community-page" data-refresh="180">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Community</span>
           <h1>Calls, results, and repeated questions</h1>
-          <p>Community scoreboard, result threads, and discussion patterns joined to local board reality. Read-only and sanitized.</p>
+          <p>Privacy-safe subscriber evidence and source-supplied call, result, and question patterns joined to current board reality. Read-only; no message text or identity is stored.</p>
         </div>
-        <div class="intel-actions">
-          <a class="secondary" href="/intel">Intel</a>
-          <a class="secondary" href="/signals">Signal tape</a>
-          <a class="secondary" href="/playbook">Playbook</a>
+        <div class="community-hero-actions">
+          <div class="intel-actions">
+            <a class="secondary" href="/intel">Intel</a>
+            <a class="secondary" href="/signals">Signal tape</a>
+            <a class="secondary" href="/playbook">Playbook</a>
+          </div>
+          <nav class="intel-actions" aria-label="Community evidence window">{window_actions}</nav>
         </div>
       </div>
       {render_intel_source_grid(data.get("source_freshness") or {})}
       <section class="community-layout">
-        <main class="community-main">
+        <div class="community-main">
           {render_community_scoreboard(insights.get("scoreboard") or {})}
           {render_community_call_ledger(insights.get("call_ledger") or [])}
           {render_community_discussion(insights.get("discussion") or [])}
@@ -8274,7 +8284,7 @@ def render_community_page(
             {render_community_event_group("Community Calls", insights.get("calls") or [], "call")}
             {render_community_event_group("Results", insights.get("results") or [], "result")}
           </section>
-        </main>
+        </div>
         <aside class="community-side">
           {render_community_brief(insights)}
           {render_questions(insights.get("question_patterns") or data.get("question_patterns") or [])}
@@ -14360,7 +14370,7 @@ def render_community_scoreboard(scoreboard: dict[str, Any]) -> str:
     return f"""
     <section class="community-panel scoreboard-panel">
       <div class="panel-head flat">
-        <div><h2>Community Scoreboard</h2><p>Reported winners and distrust rows parsed from the latest local topic brief.</p></div>
+        <div><h2>Community Scoreboard</h2><p>Source-supplied reported outcomes and distrust rows. Subscriber lookups are never promoted into performance claims.</p></div>
         <span class="status-pill {h(scoreboard.get("status") or "missing")}">{label_text(scoreboard.get("status") or "missing")}</span>
       </div>
       <div class="scoreboard-grid">
@@ -14481,7 +14491,7 @@ def render_community_call_ledger(rows: list[dict[str, Any]]) -> str:
 def render_community_event_group(title: str, rows: list[dict[str, Any]], bucket: str) -> str:
     return f"""
     <section class="community-panel">
-      <div class="panel-head flat"><div><h2>{h(title)}</h2><p>{h(len(rows))} local rows in the selected window.</p></div></div>
+      <div class="panel-head flat"><div><h2>{h(title)}</h2><p>{h(len(rows))} privacy-safe source rows in the selected window.</p></div></div>
       <div class="signal-list">{"".join(render_signal_event({**item, "bucket": bucket}) for item in rows[:12]) or '<p class="empty">No rows in this window.</p>'}</div>
     </section>
     """
@@ -17598,44 +17608,45 @@ body.alert-modal-open { overflow: hidden; }
 .mini-action { display: inline-flex; align-items: center; min-height: 30px; padding: 0 9px; border-radius: 6px; background: #e5e5e5; font-size: 12px; font-weight: 900; }
 .mini-action.primary-link { background: var(--accent); color: var(--accent-ink); }
 .community-page { display: grid; gap: 16px; }
+.community-hero-actions { display: grid; gap: 8px; justify-items: end; }
 .community-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
 .community-main, .community-side { display: grid; gap: 16px; min-width: 0; }
-.community-panel, .discussion-card, .score-lane { background: #f7f7f7; border: 1px solid #d0d0d0; border-radius: 10px; box-shadow: var(--shadow); }
+.community-panel, .discussion-card, .score-lane { background: var(--terminal-panel); border: 1px solid var(--terminal-line); border-radius: 10px; color: var(--terminal-text); box-shadow: none; }
 .community-panel { padding: 14px; }
-.status-pill { align-self: flex-start; padding: 5px 8px; border-radius: 5px; background: var(--row); color: #52635e; font-size: 12px; font-weight: 900; }
-.status-pill.fresh { background: var(--accent-soft); color: var(--accent-ink); }
-.status-pill.stale, .status-pill.missing, .status-pill.error { background: #ffe1e6; color: #a1283d; }
+.community-page .muted, .community-page .empty { color: var(--terminal-muted); }
+.status-pill { align-self: flex-start; padding: 5px 8px; border-radius: 5px; background: var(--terminal-row); color: var(--terminal-muted); font-size: 12px; font-weight: 900; }
+.status-pill.fresh { background: var(--terminal-accent-soft); color: var(--accent-ink); }
+.status-pill.stale, .status-pill.missing, .status-pill.error { background: var(--terminal-danger-soft); color: #d55d70; }
 .scoreboard-grid, .community-events { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .score-lane { padding: 12px; box-shadow: none; }
 .score-lane h3 { margin: 0 0 10px; font-size: 16px; }
 .score-list { display: grid; gap: 7px; }
-.score-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; padding: 8px; border-radius: 7px; background: white; border: 1px solid #dedede; }
+.score-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; padding: 8px; border-radius: 7px; background: var(--terminal-row); border: 1px solid var(--terminal-line); color: var(--terminal-text); }
 .score-row strong { font-size: 18px; overflow-wrap: anywhere; }
 .score-row span { font-weight: 900; }
-.score-row.positive span { color: #007e61; }
-.score-row.negative span { color: #bf3149; }
-.score-row em { color: #666; font-style: normal; font-size: 11px; }
+.score-row.positive span { color: var(--terminal-accent); }
+.score-row.negative span { color: #d55d70; }
+.score-row em { color: var(--terminal-muted); font-style: normal; font-size: 11px; }
 .call-ledger-panel { display: grid; gap: 10px; }
 .call-ledger-list { display: grid; gap: 8px; }
-.call-ledger-row { display: grid; grid-template-columns: 140px minmax(0, 1.45fr) minmax(280px, .95fr) minmax(260px, .9fr); gap: 10px; align-items: stretch; padding: 10px; border-radius: 8px; background: white; border: 1px solid #dedede; min-width: 0; }
-.call-ledger-row.inspect_route { border-color: rgba(0,184,132,.45); background: #f4fffb; }
-.call-ledger-row.result_reported { border-color: rgba(53,199,186,.45); background: #f2fffd; }
-.call-ledger-row.closed_or_faded, .call-ledger-row.stale_board_match { border-color: rgba(242,109,125,.3); background: #fff7f8; }
+.call-ledger-row { display: grid; grid-template-columns: 140px minmax(0, 1.45fr) minmax(280px, .95fr) minmax(260px, .9fr); gap: 10px; align-items: stretch; padding: 10px; border-radius: 8px; background: var(--terminal-row); border: 1px solid var(--terminal-line); color: var(--terminal-text); min-width: 0; }
+.call-ledger-row.inspect_route, .call-ledger-row.result_reported { border-color: rgba(56,212,189,.45); background: var(--terminal-accent-soft); }
+.call-ledger-row.closed_or_faded, .call-ledger-row.stale_board_match { border-color: rgba(242,109,125,.3); background: var(--terminal-danger-soft); }
 .call-ledger-symbol, .call-ledger-story, .call-ledger-route, .call-ledger-next { min-width: 0; }
 .call-ledger-symbol { display: grid; align-content: start; gap: 6px; }
-.call-ledger-symbol a { color: var(--dark); font-size: 21px; font-weight: 950; overflow-wrap: anywhere; }
-.call-ledger-symbol span { width: fit-content; padding: 4px 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-ink); font-size: 11px; font-weight: 900; }
+.call-ledger-symbol a { color: var(--terminal-text); font-size: 21px; font-weight: 950; overflow-wrap: anywhere; }
+.call-ledger-symbol span { width: fit-content; padding: 4px 7px; border-radius: 5px; background: var(--terminal-accent-soft); color: var(--accent-ink); font-size: 11px; font-weight: 900; }
 .call-ledger-story { display: grid; gap: 5px; align-content: start; }
-.call-ledger-story strong { color: var(--dark); font-size: 13px; overflow-wrap: anywhere; }
-.call-ledger-story em, .call-ledger-next em { color: #52635e; font-size: 12px; font-style: normal; overflow-wrap: anywhere; }
+.call-ledger-story strong { color: var(--terminal-text); font-size: 13px; overflow-wrap: anywhere; }
+.call-ledger-story em, .call-ledger-next em { color: var(--terminal-muted); font-size: 12px; font-style: normal; overflow-wrap: anywhere; }
 .call-ledger-route { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-.call-ledger-route span { display: grid; gap: 2px; padding: 7px; border-radius: 6px; background: var(--row); color: #666; font-size: 11px; font-weight: 800; }
-.call-ledger-route strong { color: var(--dark); overflow-wrap: anywhere; }
+.call-ledger-route span { display: grid; gap: 2px; padding: 7px; border-radius: 6px; background: var(--terminal-panel-2); color: var(--terminal-muted); font-size: 11px; font-weight: 800; }
+.call-ledger-route strong { color: var(--terminal-text); overflow-wrap: anywhere; }
 .call-ledger-next { display: grid; gap: 6px; align-content: start; }
-.call-ledger-next > strong { color: var(--dark); font-size: 13px; overflow-wrap: anywhere; }
+.call-ledger-next > strong { color: var(--terminal-text); font-size: 13px; overflow-wrap: anywhere; }
 .discussion-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .discussion-card { display: grid; gap: 10px; padding: 12px; box-shadow: none; }
-.discussion-card p { min-height: 32px; margin: 0; color: #52635e; font-size: 13px; }
+.discussion-card p { min-height: 32px; margin: 0; color: var(--terminal-muted); font-size: 13px; }
 .sources-page { display: grid; gap: 16px; }
 .source-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .sources-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
@@ -17985,6 +17996,7 @@ pre { background: var(--dark); color: white; padding: 14px; border-radius: 8px; 
   .board-meta { flex-wrap: wrap; }
   .detail-head, .panel-head { align-items: stretch; flex-direction: column; }
   .intel-hero { align-items: flex-start; flex-direction: column; }
+  .community-hero-actions { justify-items: start; }
   .intel-source-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .intel-layout, .hot-grid, .reality-routes, .feed-columns, .signal-board, .signal-split, .funding-grid, .alert-status-grid, .alert-rule-grid, .alert-template-grid, .triage-summary-grid, .triage-layout, .triage-metrics, .watch-status-grid, .watchlist-layout, .watch-items, .watch-route-links, .watch-alert-list, .chart-summary-grid, .chart-grid, .community-layout, .community-events, .scoreboard-grid, .discussion-grid, .call-ledger-row, .playbook-status, .playbook-grid, .source-summary-grid, .sources-layout, .route-source-grid, .source-files-grid, .change-counts, .change-highlights, .action-row, .pair-hero, .pair-diagram, .pair-cockpit-grid, .ticket-legs, .pair-proof-rail, .pair-intel-strip, .pair-layout, .pair-decision-strip, .spread-equation, .spread-breakdown, .checklist-grid, .context-grid, .timeline-head, .timeline-stats, .timeline-dual, .token-pulse-grid, .lifecycle-row { grid-template-columns: 1fr; }
   .triage-summary-grid, .triage-metrics, .triage-card.source .triage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }

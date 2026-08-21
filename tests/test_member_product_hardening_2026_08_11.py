@@ -684,6 +684,70 @@ def test_triage_names_the_always_on_subscriber_source_instead_of_a_local_file(
     assert "No local source detail" not in html
 
 
+def test_community_uses_one_landmark_and_names_the_real_subscriber_source(
+    monkeypatch,
+) -> None:
+    """The member page must not claim a retired local topic-brief pipeline.
+
+    Production consumes the privacy-safe subscriber feed.  When that source is
+    stale, Community is intentionally empty; the shell must describe that
+    evidence boundary accurately rather than implying a live local listener.
+    """
+
+    monkeypatch.setattr(
+        server,
+        "api_community",
+        lambda *_args, **_kwargs: {
+            "filters": {"window_hours": 6},
+            "source_freshness": {
+                "telegram_events": {"status": "stale", "age_min": 30.0},
+                "board": {"status": "fresh", "age_min": 1.0},
+            },
+            "community_insights": {
+                "scoreboard": {"status": "missing"},
+                "call_ledger": [],
+                "discussion": [],
+                "calls": [],
+                "results": [],
+                "question_patterns": [],
+            },
+        },
+    )
+
+    html = server.render_community_page(Path("/missing.json"), {}, {})
+
+    assert html.count("<main") == 1
+    assert '<div class="community-main">' in html
+    assert "privacy-safe subscriber evidence" in html.casefold()
+    assert "local board reality" not in html
+    assert "local topic brief" not in html
+    assert "local rows" not in html
+    assert 'href="/community?window_hours=6" aria-current="page"' in html
+    assert 'aria-label="Community evidence window"' in html
+
+
+def test_community_cards_use_shared_theme_surfaces() -> None:
+    """Dark mode must not render pale headings on hard-coded white cards."""
+
+    community_css = server.APP_CSS.split(".community-page", 1)[1].split(
+        ".sources-page", 1
+    )[0]
+
+    assert "background: #f7f7f7" not in community_css
+    assert "background: white" not in community_css
+    assert "background: #f4fffb" not in community_css
+    assert "background: #f2fffd" not in community_css
+    assert "background: #fff7f8" not in community_css
+    assert (
+        ".community-panel, .discussion-card, .score-lane { background: var(--terminal-panel);"
+        in community_css
+    )
+    assert ".score-row {" in community_css
+    assert "background: var(--terminal-row);" in community_css
+    assert ".call-ledger-row {" in community_css
+    assert "color: var(--terminal-text);" in community_css
+
+
 def test_signals_renders_the_real_subscriber_lookup_lane_and_selected_window(
     monkeypatch,
 ) -> None:
