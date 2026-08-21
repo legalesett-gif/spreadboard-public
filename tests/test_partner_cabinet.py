@@ -185,6 +185,28 @@ def test_partner_earnings_are_labelled_usdt_without_lifetime_overclaim(
     assert "data-copy-partner-link" in admin_script
 
 
+def test_partner_grid_contains_wide_ledgers_on_mobile(tmp_path) -> None:
+    db = tmp_path / "accounts.sqlite3"
+    accounts.initialize(db)
+    partner_user = _user(db, "mobile-partner@example.test")
+    affiliates.create_partner(
+        partner_user,
+        slug="mobile-partner",
+        display_name="Mobile Partner",
+        db_path=db,
+    )
+    user = accounts.get_user_object(partner_user, db_path=db)
+    assert user is not None
+
+    server.render_partner_page(user, db)
+
+    assert ".partner-page>* { min-width:0; }" in server.APP_CSS
+    assert (
+        ".partner-table-wrap { width:100%; min-width:0; max-width:100%; overflow-x:auto; }"
+        in server.APP_CSS
+    )
+
+
 def test_only_an_admin_can_cancel_a_draft_through_the_http_boundary(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
