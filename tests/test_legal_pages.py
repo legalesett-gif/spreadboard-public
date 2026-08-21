@@ -118,7 +118,8 @@ def test_authenticated_mobile_keeps_a_bounded_logout_control(
 
     html = server.render_legal_page("terms")
 
-    assert ".account-chip,.logout-status { display:none; }" in server.APP_CSS
+    assert ".account-chip { display:none; }" in server.APP_CSS
+    assert ".logout-status:not(:empty)" in server.APP_CSS
     assert ".account-chip,.logout-status,.logout-button { display:none; }" not in server.APP_CSS
     assert "const controller=new AbortController()" in html
     assert "signal:controller.signal" in html
