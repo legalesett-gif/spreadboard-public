@@ -124,6 +124,15 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   volatility/margin limits, freshness, DEX provider/identity truth and the
   exchange-trading boundary. Methodology, Status and Guide actions, both
   themes and both viewports pass; the final odd card spans the desktop grid.
+- `/proof` is now fully audited. The page had presented the archived 7 August
+  checkpoint as current and counted matched opening basis directly as modeled
+  PnL. The current 21 August checkpoint is now separate from a collapsed,
+  explicitly archived audit, reports 10/35 closed routes, 4/4 visual states per
+  closed route, 51/51 synchronized production modules and 1,478 tests, and
+  labels only captured basis convergence as PnL. The audit-in-progress caveat,
+  canonical machine-readable health link and both themes/viewports pass; light
+  contrast misses on the caveat/archive copy were caught and fixed before the
+  final deployment.
 
 ### Current deployment and verification
 
@@ -135,11 +144,14 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `spreadboard/portfolio.py` SHA-256 remains
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
-- Latest source-check commit: **`2ee93e8`**. Run
+- Latest deployed audited-page code commits: **`733f502`** and **`756cbc0`**
+  for Proof. Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
-- Latest audited-page code commits: **`c8a2ad5`** and **`b908165`** for Learn.
+- Production's code marker is **`756cbc08586be2b984a0c6a0c1d73f33f65baca5`**.
+  A later documentation-only checkpoint may make local `HEAD` newer; the
+  whole-package verifier, not marker equality, remains authoritative.
 - Full suite: **1,478 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
@@ -152,14 +164,14 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `/profile` position and settings evidence is under
   `output/playwright/2026-08-21-page-audit/`. The same directory now contains
   `/intel` desktop/mobile light/dark evidence and the final non-overlapping
-  mobile capture, plus `/triage`, `/signals`, `/community` and `/learn`
-  before/final desktop/mobile light/dark evidence.
+  mobile capture, plus `/triage`, `/signals`, `/community`, `/learn` and
+  `/proof` before/final desktop/mobile light/dark evidence.
 
 ### Fresh ML gate — do not train or activate
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 25,357 observations, 17,344
+`deterministic_dual_opportunity_evidence_v5`: 25,479 observations, 17,345
 labeled 24h outcomes, 1,832 routes and 6.75 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
@@ -170,15 +182,14 @@ fallback remains active. Do not mix the 5,832 v4 rows or weaken these gates.
 
 OKX DEX currently rejects catalogue access on chains 1, 56, 137, 42161 and
 8453 with an API-key/region entitlement error. Both verified DEX lanes remain
-zero after 1,034 under-covered completed cycles. Credentials are present; this
+zero after 1,130 under-covered completed cycles. Credentials are present; this
 needs provider/account entitlement repair and then sustained-cycle proof. Do
 not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/proof`.
-2. Then complete
-   `/executor`, `/status`, `/telegram`, `/guide`,
+1. Continue §8 with the remaining static routes, starting at `/executor`.
+2. Then complete `/status`, `/telegram`, `/guide`,
    `/methodology`, `/pricing`, `/subscription`, `/partner`, `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
@@ -194,7 +205,9 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 After the checkpoint commit the only intentional uncommitted files are the
 generated historical-cache JSON, `data/token_rankings.json`, and Playwright
 screenshots. Preserve them; do not discard or overwrite them. No trade,
-transfer, Telegram group message or secret disclosure occurred.
+transfer or Telegram group message occurred. A separate 21 August credential-
+exposure incident from an unfiltered environment diagnostic is recorded in
+`REMINDERS.md`; never repeat that diagnostic pattern or print secret values.
 
 ---
 
