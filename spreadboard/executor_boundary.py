@@ -6,10 +6,12 @@ import os
 from typing import Any
 from urllib.parse import urlparse
 
+from . import credential_crypto
+
 
 FORBIDDEN_IN_SPREADBOARD = (
-    "exchange API credentials",
-    "private balances or positions",
+    "exchange trading or withdrawal permissions",
+    "plaintext credential decryption in the web process",
     "order placement or cancellation",
     "borrow, repay, convert or transfer mutations",
     "wallet approvals, signatures or broadcasts",
@@ -33,6 +35,13 @@ def status() -> dict[str, Any]:
         and executor_origin.startswith("https://")
         and executor_origin != research_origin
     )
+    envelope_intake = credential_crypto.encryption_available()
+    web_decryption = credential_crypto.decryption_available()
+    verdict = (
+        "web_secret_boundary_violation"
+        if web_decryption
+        else ("separate_origin_reserved" if separate else "separate_executor_required")
+    )
     return {
         "mode": "separate_product_boundary",
         "research_product": "read_only",
@@ -40,11 +49,20 @@ def status() -> dict[str, Any]:
         "separate_origin_verified": separate,
         # This application intentionally has no handoff or order endpoint.
         "handoff_enabled": False,
-        "exchange_credentials_loaded": False,
+        # Backward-compatible field: "loaded" means decryptable plaintext in
+        # this web process, not a client-sealed envelope stored for the isolated
+        # read-only accounting worker.
+        "exchange_credentials_loaded": web_decryption,
+        "read_only_accounting": {
+            "browser_sealed_envelope_intake": envelope_intake,
+            "web_process_decryption_available": web_decryption,
+            "separate_worker_required": True,
+            "execution_permissions_allowed": False,
+        },
         "order_capabilities": [],
         "forbidden_in_spreadboard": list(FORBIDDEN_IN_SPREADBOARD),
         "required_separate_controls": list(REQUIRED_SEPARATE_CONTROLS),
-        "verdict": "separate_executor_required" if not separate else "separate_origin_reserved",
+        "verdict": verdict,
     }
 
 

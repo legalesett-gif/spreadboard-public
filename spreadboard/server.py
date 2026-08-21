@@ -10870,6 +10870,17 @@ def render_proof_page() -> str:
 
 def render_executor_boundary_page() -> str:
     boundary = executor_boundary.status()
+    accounting = boundary["read_only_accounting"]
+    accounting_copy = (
+        "Boundary violation: this web process can decrypt subscriber credentials. "
+        "Remove the private key before treating the research boundary as intact."
+        if accounting["web_process_decryption_available"]
+        else "Portfolio can accept subscriber-owned read-only exchange credentials, but the "
+        "browser encrypts them before upload and the web process cannot decrypt them. A "
+        "separate accounting worker uses the sealed credentials only to import ledger "
+        "summaries. Credentials must have trading and withdrawals disabled; this accounting "
+        "path is not an order handoff."
+    )
     forbidden = "".join(
         f'<li><span aria-hidden="true">×</span>{h(item)}</li>'
         for item in boundary["forbidden_in_spreadboard"]
@@ -10881,8 +10892,9 @@ def render_executor_boundary_page() -> str:
     body = f"""
     <section class="research-page executor-boundary-page">
       <header class="research-hero"><div><span class="page-kicker">Trust boundary</span><h1>Research here. Execution somewhere else.</h1><p>SpreadBoard intentionally cannot place orders. A future executor must be a separately secured product that repeats every preflight from fresh evidence.</p></div><aside><strong>0</strong><span>order capabilities in this deployment</span><a href="/api/executor-boundary">Machine-readable attestation →</a></aside></header>
-      <section class="executor-boundary-grid"><article class="forbidden"><span>SpreadBoard</span><h2>Never loaded here</h2><ul>{forbidden}</ul></article><article><span>Separate executor</span><h2>Required before live use</h2><ul>{required}</ul></article></section>
+      <section class="executor-boundary-grid"><article class="forbidden"><span>SpreadBoard</span><h2>Execution powers absent here</h2><ul>{forbidden}</ul></article><article><span>Separate executor</span><h2>Required before live use</h2><ul>{required}</ul></article></section>
       <section class="audit-process"><h2>Current verdict: {h(str(boundary["verdict"]).replace("_", " "))}</h2><p>No handoff endpoint is exposed. Configuring a different HTTPS origin reserves a product boundary; it does not make that product safe or authorize a trade.</p></section>
+      <section class="audit-process accounting-boundary"><h2>Read-only accounting is a separate trust path</h2><p>{h(accounting_copy)}</p><div class="evidence-labels"><div><span>{"Configured" if accounting["browser_sealed_envelope_intake"] else "Not configured"}</span><p>Browser-sealed credential intake</p></div><div><span>{"Boundary violation" if accounting["web_process_decryption_available"] else "Disabled"}</span><p>Web-process credential decryption</p></div><div><span>Forbidden</span><p>Trading and withdrawal permissions</p></div><div><span>0</span><p>Order capabilities</p></div></div></section>
       <footer class="research-footer"><a class="pricing-button primary" href="/markets?view=table">Return to research</a><a class="pricing-button" href="/methodology">Read methodology</a></footer>
     </section>
     """

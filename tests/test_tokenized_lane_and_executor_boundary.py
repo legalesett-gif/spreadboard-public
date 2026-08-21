@@ -195,12 +195,20 @@ def test_market_filter_and_executor_attestation_are_explicit(monkeypatch):
     assert "Tokenized assets" in html
     assert 'name="asset_class" value="tokenized"' in html
 
+    monkeypatch.setattr(executor_boundary.credential_crypto, "encryption_available", lambda: True)
+    monkeypatch.setattr(executor_boundary.credential_crypto, "decryption_available", lambda: False)
     monkeypatch.setenv("SPREADBOARD_PUBLIC_URL", "https://spreadboard.example")
     monkeypatch.setenv("SPREADBOARD_EXECUTOR_URL", "https://spreadboard.example/orders")
     same_origin = executor_boundary.status()
     assert same_origin["separate_origin_verified"] is False
     assert same_origin["handoff_enabled"] is False
     assert same_origin["exchange_credentials_loaded"] is False
+    assert same_origin["read_only_accounting"] == {
+        "browser_sealed_envelope_intake": True,
+        "web_process_decryption_available": False,
+        "separate_worker_required": True,
+        "execution_permissions_allowed": False,
+    }
     assert same_origin["order_capabilities"] == []
 
     monkeypatch.setenv("SPREADBOARD_EXECUTOR_URL", "https://executor.example")
@@ -213,6 +221,17 @@ def test_market_filter_and_executor_attestation_are_explicit(monkeypatch):
     assert "0" in page and "order capabilities" in page
     assert "Research here. Execution somewhere else." in page
     assert "No handoff endpoint is exposed" in page
+    assert "Read-only accounting is a separate trust path" in page
+    assert "browser encrypts them before upload" in page
+    assert "web process cannot decrypt them" in page
+    assert "private balances or positions" not in page
+
+    monkeypatch.setattr(executor_boundary.credential_crypto, "decryption_available", lambda: True)
+    violation = executor_boundary.status()
+    assert violation["verdict"] == "web_secret_boundary_violation"
+    violation_page = server.render_executor_boundary_page()
+    assert "Boundary violation: this web process can decrypt" in violation_page
+    assert "web process cannot decrypt them" not in violation_page
 
 
 def test_telegram_landing_preview_shows_reader_text_not_transport_html(tmp_path, monkeypatch):
