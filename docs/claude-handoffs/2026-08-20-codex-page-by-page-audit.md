@@ -83,6 +83,16 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   and explicit always-on subscriber-source copy. The refresh control is in the
   header's normal layout on every auto-refresh page, so it stays accessible
   without covering data at desktop or mobile widths.
+- `/signals` is now fully audited. Its five lanes used hard-coded light
+  surfaces in dark mode, it ignored the only event kind produced by the
+  always-on subscriber webhook (`chat_signal`), its copy still described a
+  local listener, and its default six-hour window had no selectable/current
+  control. It now renders an explicit Subscriber Lookups lane without
+  inventing numeric metrics, links tokens safely, uses shared theme tokens,
+  identifies the privacy-safe subscriber source accurately, and exposes
+  1h/6h/12h/48h controls with the selected window announced to assistive
+  technology. The real source remains stale, so the production empty lanes
+  were preserved rather than populated synthetically.
 
 ### Current deployment and verification
 
@@ -93,12 +103,12 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `spreadboard/portfolio.py` SHA-256 remains
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
-- Latest source commit: **`2c286d8`**. Production source, persisted host, app
+- Latest source commit: **`6092c88`**. Production source, persisted host, app
   and collector are identical: `spreadboard/server.py`
-  `3cbeb771304a8a7db71897b05b3e542a0eb15a4889b5f9a18f6a4efa2c3b9cd2`
+  `b07f528da55bfae8516622b4809351a6234ee0d2c327506609ff9dc8aeb18742`
   and `spreadboard/intel.py`
-  `4238f0102adbd0c0ec3fb26b9a9ae3aee6d3867b4423dd8835441fb58c9cf8f2`.
-- Full suite: **1,465 passed**, one pre-existing unknown `asyncio_mode` warning.
+  `9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`.
+- Full suite: **1,467 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 532 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -110,31 +120,32 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `/profile` position and settings evidence is under
   `output/playwright/2026-08-21-page-audit/`. The same directory now contains
   `/intel` desktop/mobile light/dark evidence and the final non-overlapping
-  mobile capture, plus `/triage` before/final desktop/mobile light/dark evidence.
+  mobile capture, plus `/triage` and `/signals` before/final desktop/mobile
+  light/dark evidence.
 
 ### Fresh ML gate — do not train or activate
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 23,540 observations, 16,128
-labeled 24h outcomes, 1,746 routes and 6.29 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 24,936 observations, 17,142
+labeled 24h outcomes, 1,819 routes and 6.67 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
-6.25/30 days; no candidate exists, activation is false and the deterministic
+6.67/30 days; no candidate exists, activation is false and the deterministic
 fallback remains active. Do not mix the 5,832 v4 rows or weaken these gates.
 
 ### External live failure still open
 
 OKX DEX currently rejects catalogue access on chains 1, 56, 137, 42161 and
 8453 with an API-key/region entitlement error. Both verified DEX lanes remain
-zero after 445 under-covered completed cycles. Credentials are present; this
+zero after 1,011 under-covered completed cycles. Credentials are present; this
 needs provider/account entitlement repair and then sustained-cycle proof. Do
 not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the remaining static routes, starting at `/signals`.
-2. Then complete `/community`,
+1. Continue §8 with the remaining static routes, starting at `/community`.
+2. Then complete
    `/learn`, `/proof`, `/executor`, `/status`, `/telegram`, `/guide`,
    `/methodology`, `/pricing`, `/subscription`, `/partner`, `/free`, all auth
    and legal routes, and the previously partial Funding/Rankings/Fair/Charts/
