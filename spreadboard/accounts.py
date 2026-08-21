@@ -935,8 +935,64 @@ def create_invited_user(
         finally:
             connection.close()
         created = get_user(int(created["id"]), db_path=db_path) or created
-    token = create_password_token(int(created["id"]), purpose="invite", db_path=db_path)
+    try:
+        token = create_password_token(int(created["id"]), purpose="invite", db_path=db_path)
+    except Exception:
+        if (
+            role == "member"
+            and subscription_status == "inactive"
+            and subscription_tier == "free"
+        ):
+            delete_unclaimed_invited_user(
+                int(created["id"]), email=str(created["email"]), db_path=db_path
+            )
+        raise
     return created, token
+
+
+def delete_unclaimed_invited_user(
+    user_id: int,
+    *,
+    email: str,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> bool:
+    """Remove an invite that failed before it could be returned to its owner.
+
+    The strict predicates make this safe only for the untouched, inactive
+    member account created for an invite.  A claimed account, logged-in user,
+    or attached affiliate is never deleted by this recovery path.
+    """
+    normalized_email = email.strip().casefold()
+    connection = _connect(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            """SELECT u.id
+               FROM users u
+               WHERE u.id = ? AND u.email = ? COLLATE NOCASE
+                 AND u.role = 'member'
+                 AND u.subscription_status = 'inactive'
+                 AND u.subscription_tier = 'free'
+                 AND u.last_login_at IS NULL
+                 AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.user_id = u.id)
+                 AND NOT EXISTS (
+                     SELECT 1 FROM affiliate_partners p WHERE p.user_id = u.id
+                 )""",
+            (int(user_id), normalized_email),
+        ).fetchone()
+        if row is None:
+            connection.commit()
+            return False
+        deleted = connection.execute(
+            "DELETE FROM users WHERE id = ?", (int(user_id),)
+        ).rowcount
+        connection.commit()
+        return deleted == 1
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def get_user(user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any] | None:

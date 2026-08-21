@@ -1095,12 +1095,20 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     subscription_days=1,
                     db_path=self.server.accounts_path,
                 )
-                partner = affiliates.create_partner(
-                    int(created["id"]),
-                    slug=clean_slug,
-                    display_name=clean_name,
-                    db_path=self.server.accounts_path,
-                )
+                try:
+                    partner = affiliates.create_partner(
+                        int(created["id"]),
+                        slug=clean_slug,
+                        display_name=clean_name,
+                        db_path=self.server.accounts_path,
+                    )
+                except Exception:
+                    accounts.delete_unclaimed_invited_user(
+                        int(created["id"]),
+                        email=str(created["email"]),
+                        db_path=self.server.accounts_path,
+                    )
+                    raise
                 base = (
                     os.environ.get("SPREADBOARD_PUBLIC_URL", "https://spreadarbitrage.ink")
                     .strip()
@@ -1152,6 +1160,18 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 batch = affiliates.mark_payout_paid(
                     batch_id,
                     payment_reference=str(payload.get("payment_reference") or ""),
+                    db_path=self.server.accounts_path,
+                )
+                self._send_json({"ok": True, "batch": batch})
+            elif parsed.path.startswith("/api/admin/payouts/") and parsed.path.endswith(
+                "/cancel"
+            ):
+                if not user.is_admin:
+                    raise PermissionError("admin_required")
+                batch_id = int(parsed.path.split("/")[4])
+                batch = affiliates.cancel_payout_batch(
+                    batch_id,
+                    reason=str(payload.get("reason") or ""),
                     db_path=self.server.accounts_path,
                 )
                 self._send_json({"ok": True, "batch": batch})
@@ -12023,6 +12043,13 @@ def _fmt_cents(value: Any) -> str:
         return "$0.00"
 
 
+def _fmt_usdt_cents(value: Any) -> str:
+    try:
+        return f"{int(value or 0) / 100:,.2f} USDT"
+    except (TypeError, ValueError):
+        return "0.00 USDT"
+
+
 def render_partner_page(
     user: accounts.User,
     accounts_path: Path | str = accounts.DEFAULT_DB_PATH,
@@ -12038,7 +12065,7 @@ def render_partner_page(
           <section class="partner-policy-grid">
             <article><span>Attribution</span><strong>90 days</strong><p>The qualifying link is attached at registration and persists for every later renewal.</p></article>
             <article><span>Subscriber offer</span><strong>20% once</strong><p>Applied to the first 30-day membership value, including when the first invoice prepays a longer term.</p></article>
-            <article><span>Commission</span><strong>Lifetime 50%</strong><p>Calculated from the actual plan amount collected after discount, excluding invoice-identification cents.</p></article>
+            <article><span>Commission</span><strong>Recurring 50%</strong><p>Calculated from valid attributed subscription revenue collected under the active program terms, after discount and excluding invoice-identification cents.</p></article>
             <article><span>Payout</span><strong>Weekly</strong><p>Eligible after a seven-day hold; the operator records a wallet transfer reference when paid.</p></article>
           </section>
           <section class="partner-panel">
@@ -12074,11 +12101,11 @@ def render_partner_page(
         commission_rows.append(
             f"<tr><td>#{h(item.get('invoice_id'))}</td><td>{h(PLAN_CATALOG.get(str(item.get('subscription_tier')), {}).get('name') or item.get('subscription_tier'))}</td>"
             f"<td>{h(item.get('period_days'))} days</td><td>{_fmt_cents(item.get('commission_base_cents'))}</td>"
-            f'<td><strong>{_fmt_cents(item.get("commission_cents"))}</strong></td><td><span class="partner-status {h(status)}">{h(status)}</span></td>'
+            f'<td><strong>{_fmt_usdt_cents(item.get("commission_cents"))}</strong></td><td><span class="partner-status {h(status)}">{h(status)}</span></td>'
             f"<td>{h(item.get('earned_at'))}</td></tr>"
         )
     payout_rows = [
-        f"<tr><td>#{h(item.get('id'))}</td><td>{_fmt_cents(item.get('amount_cents'))}</td><td>{h(item.get('payout_asset') or 'USDT')} on {h(item.get('payout_network') or 'Arbitrum')}</td><td>{h(item.get('status'))}</td><td>{h(item.get('created_at'))}</td><td>{h(item.get('payment_reference') or '—')}</td></tr>"
+        f"<tr><td>#{h(item.get('id'))}</td><td>{_fmt_usdt_cents(item.get('amount_cents'))}</td><td>{h(item.get('payout_asset') or 'USDT')} on {h(item.get('payout_network') or 'Arbitrum')}</td><td>{h(item.get('status'))}</td><td>{h(item.get('created_at'))}</td><td>{h(item.get('payment_reference') or '—')}</td></tr>"
         for item in summary.get("payouts") or []
     ]
     body = f"""
@@ -12092,12 +12119,12 @@ def render_partner_page(
         {render_account_kpi("Link visits", metrics.get("clicks"), "qualifying clicks")}
         {render_account_kpi("Registrations", metrics.get("registrations"), "accounts attributed")}
         {render_account_kpi("Paying customers", metrics.get("customers"), "at least one settlement")}
-        {render_account_kpi("Payable now", _fmt_cents(metrics.get("payable")), "after seven-day hold")}
+        {render_account_kpi("Payable now", _fmt_usdt_cents(metrics.get("payable")), "after seven-day hold")}
       </section>
       <section class="partner-policy-grid">
-        <article><span>On hold</span><strong>{_fmt_cents(metrics.get("on_hold"))}</strong><p>Settled, still inside the seven-day review window.</p></article>
-        <article><span>In payout batch</span><strong>{_fmt_cents(metrics.get("batched"))}</strong><p>Frozen into a weekly batch awaiting transfer.</p></article>
-        <article><span>Paid to date</span><strong>{_fmt_cents(metrics.get("paid"))}</strong><p>Recorded transfers with an operator reference.</p></article>
+        <article><span>On hold</span><strong>{_fmt_usdt_cents(metrics.get("on_hold"))}</strong><p>Settled, still inside the seven-day review window.</p></article>
+        <article><span>In payout batch</span><strong>{_fmt_usdt_cents(metrics.get("batched"))}</strong><p>Frozen into a weekly batch awaiting transfer.</p></article>
+        <article><span>Paid to date</span><strong>{_fmt_usdt_cents(metrics.get("paid"))}</strong><p>Recorded transfers with an operator reference.</p></article>
       </section>
       <section class="partner-panel"><div class="account-panel-head"><div><h2>Payout destination</h2><p>Weekly payouts are always sent in USDT on Arbitrum. Check the address carefully; every payout batch freezes a snapshot of these details.</p></div></div>
         <form class="partner-payout-form" data-partner-payout-profile>
@@ -12113,7 +12140,7 @@ def render_partner_page(
     </section>
     <script type="application/json" id="partner-session">{json_script_data({"csrf_token": user.csrf_token})}</script>
     <script>
-    document.querySelector('[data-copy-partner-link]')?.addEventListener('click',async event=>{{try{{await navigator.clipboard.writeText(event.currentTarget.dataset.link);event.currentTarget.textContent='Copied';}}catch(_error){{event.currentTarget.textContent='Copy failed';}}}});
+    document.querySelector('[data-copy-partner-link]')?.addEventListener('click',async event=>{{const button=event.currentTarget;try{{await navigator.clipboard.writeText(button.dataset.link);button.textContent='Copied';}}catch(_error){{button.textContent='Copy failed';}}}});
     document.querySelector('[data-partner-payout-profile]')?.addEventListener('submit',async event=>{{
       event.preventDefault();const form=event.currentTarget,output=form.querySelector('output'),csrf=JSON.parse(document.getElementById('partner-session').textContent).csrf_token;output.textContent='Saving…';
       try{{const response=await fetch('/api/partner/payout-profile',{{method:'POST',headers:{{'Content-Type':'application/json','X-CSRF-Token':csrf}},body:JSON.stringify(Object.fromEntries(new FormData(form)))}});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not save');output.textContent='Payout details saved.';}}
@@ -12131,12 +12158,89 @@ def render_partner_admin_script() -> str:
       const csrf=JSON.parse(document.getElementById('partner-session').textContent||'{}').csrf_token;
       const list=root.querySelector('[data-partner-list]'),error=root.querySelector('[data-partner-error]'),invite=root.querySelector('[data-partner-invite]');
       const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-      const money=value=>new Intl.NumberFormat(undefined,{style:'currency',currency:'USD'}).format(Number(value||0)/100);
-      async function request(url,body){const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body||{})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Request failed');return data;}
-      async function load(){const response=await fetch('/api/admin/partners'),data=await response.json();list.innerHTML=(data.partners||[]).map(item=>`<article class="partner-admin-row" data-partner-id="${esc(item.id)}"><div><strong>${esc(item.display_name)} · ${esc(item.status)}</strong><span>${esc(item.email)}</span><a href="${esc(item.referral_url)}" target="_blank" rel="noopener">${esc(item.referral_url)}</a></div><div><span>${esc(item.registrations)} registrations · ${esc(item.customers)} customers</span><strong>${money(item.pending_cents)} pending · ${money(item.paid_cents)} paid</strong><span>${item.payout_destination?`${esc(item.payout_asset)} on ${esc(item.payout_network)} · ${esc(item.payout_destination)}`:'Payout wallet not set'}</span></div><div class="partner-row-actions"><button class="sheet-button" data-partner-detail>Invoice ledger</button><button class="sheet-button" data-partner-status="${item.status==='active'?'paused':'active'}">${item.status==='active'?'Pause link':'Reactivate link'}</button>${item.draft_batch_id?`<button class="sheet-button primary" data-mark-paid="${esc(item.draft_batch_id)}">Mark ${money(item.draft_batch_amount_cents)} paid</button>`:`<button class="sheet-button" data-create-payout ${item.payout_destination?'':'disabled'}>Build weekly payout</button>`}</div><div class="partner-admin-detail" data-partner-detail-body hidden></div></article>`).join('')||'<p>No partners yet.</p>';}
-      root.querySelector('[data-partner-create]')?.addEventListener('submit',async event=>{event.preventDefault();error.textContent='';try{const result=await request('/api/admin/partners',Object.fromEntries(new FormData(event.currentTarget)));invite.hidden=false;invite.innerHTML=`<strong>Partner created</strong><p><a href="${esc(result.partner.referral_url)}" target="_blank" rel="noopener">Referral link</a></p><p><a href="${esc(result.setup_url)}" target="_blank" rel="noopener">Single-use password setup link</a></p>`;try{await navigator.clipboard.writeText(result.setup_url);}catch(_error){}event.currentTarget.reset();await load();}catch(exc){error.textContent=exc.message;}});
-      list.addEventListener('click',async event=>{const row=event.target.closest('[data-partner-id]');if(!row)return;error.textContent='';try{if(event.target.matches('[data-partner-detail]')){const panel=row.querySelector('[data-partner-detail-body]');if(!panel.hidden){panel.hidden=true;return;}const response=await fetch(`/api/admin/partners/${row.dataset.partnerId}/summary`),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load ledger');const summary=data.summary||{},metrics=summary.metrics||{};panel.innerHTML=`<strong>${esc(metrics.clicks||0)} visits · ${esc(metrics.registrations||0)} registrations · ${esc(metrics.customers||0)} customers</strong><div class="partner-table-wrap"><table class="partner-table"><thead><tr><th>Invoice</th><th>Tier</th><th>Term</th><th>Net revenue</th><th>Commission</th><th>Status</th><th>Earned</th></tr></thead><tbody>${(summary.commissions||[]).map(item=>`<tr><td>#${esc(item.invoice_id)}</td><td>${esc(String(item.subscription_tier||'').replace('_',' '))}</td><td>${esc(item.period_days)} days</td><td>${money(item.commission_base_cents)}</td><td>${money(item.commission_cents)}</td><td>${esc(item.status)}</td><td>${esc(item.earned_at)}</td></tr>`).join('')||'<tr><td colspan="7">No settled referred invoices yet.</td></tr>'}</tbody></table></div>`;panel.hidden=false;return;}if(event.target.matches('[data-partner-status]'))await request(`/api/admin/partners/${row.dataset.partnerId}/status`,{status:event.target.dataset.partnerStatus});if(event.target.matches('[data-create-payout]'))await request(`/api/admin/partners/${row.dataset.partnerId}/payouts`,{note:'weekly payout'});if(event.target.matches('[data-mark-paid]')){const reference=prompt('Crypto transaction hash or payout reference');if(!reference)return;await request(`/api/admin/payouts/${event.target.dataset.markPaid}/paid`,{payment_reference:reference});}await load();}catch(exc){error.textContent=exc.message;}});
-      load().catch(exc=>error.textContent=exc.message);
+      const usd=value=>new Intl.NumberFormat(undefined,{style:'currency',currency:'USD'}).format(Number(value||0)/100);
+      const usdt=value=>`${new Intl.NumberFormat(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(value||0)/100)} USDT`;
+      const message=value=>({
+        no_payable_commissions:'No commissions have completed the seven-day hold yet.',
+        payout_profile_required:'The partner must save a USDT on Arbitrum payout wallet first.',
+        payout_cancel_reason_required:'Enter a reason for cancelling the payout draft.',
+        paid_payout_cannot_be_cancelled:'A paid payout cannot be cancelled.',
+        void_reason_required:'Enter a reason for voiding this commission.',
+      }[String(value||'')]||String(value||'Request failed').replaceAll('_',' '));
+      async function request(url,body){
+        const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body||{})});
+        const data=await response.json();
+        if(!response.ok)throw new Error(message(data.error||'Request failed'));
+        return data;
+      }
+      const payoutAction=item=>{
+        if(item.draft_batch_id)return `<button class="sheet-button primary" data-mark-paid="${esc(item.draft_batch_id)}">Mark ${usdt(item.draft_batch_amount_cents)} paid</button><button class="sheet-button danger" data-cancel-payout="${esc(item.draft_batch_id)}">Cancel draft</button>`;
+        if(!item.payout_destination)return '<button class="sheet-button" disabled>Wallet required</button>';
+        if(Number(item.payable_cents||0)<=0)return `<button class="sheet-button" disabled>${Number(item.pending_cents||0)>0?'In seven-day hold':'Nothing payable'}</button>`;
+        return `<button class="sheet-button" data-create-payout>Build ${usdt(item.payable_cents)} payout</button>`;
+      };
+      async function load(){
+        const response=await fetch('/api/admin/partners'),data=await response.json();
+        if(!response.ok)throw new Error(message(data.error||'Could not load partners'));
+        list.innerHTML=(data.partners||[]).map(item=>`<article class="partner-admin-row" data-partner-id="${esc(item.id)}"><div><strong>${esc(item.display_name)} · ${esc(item.status)}</strong><span>${esc(item.email)}</span><span>${esc(item.referral_url)}</span></div><div><span>${esc(item.registrations)} registrations · ${esc(item.customers)} customers</span><strong>${usdt(item.pending_cents)} pending · ${usdt(item.paid_cents)} paid</strong><span>${item.payout_destination?`${esc(item.payout_asset)} on ${esc(item.payout_network)} · ${esc(item.payout_destination)}`:'Payout wallet not set'}</span></div><div class="partner-row-actions"><button class="sheet-button" type="button" data-copy-partner-link data-link="${esc(item.referral_url)}">Copy referral link</button><button class="sheet-button" data-partner-detail>Invoice ledger</button><button class="sheet-button" data-partner-status="${item.status==='active'?'paused':'active'}">${item.status==='active'?'Pause link':'Reactivate link'}</button>${payoutAction(item)}</div><div class="partner-admin-detail" data-partner-detail-body hidden></div></article>`).join('')||'<p>No partners yet.</p>';
+      }
+      root.querySelector('[data-partner-create]')?.addEventListener('submit',async event=>{
+        event.preventDefault();
+        const form=event.currentTarget;
+        const payload=Object.fromEntries(new FormData(form));
+        error.textContent='';
+        try{
+          const result=await request('/api/admin/partners',payload);
+          invite.hidden=false;
+          invite.innerHTML=`<strong>Partner created</strong><p><span>${esc(result.partner.referral_url)}</span> <button class="sheet-button" type="button" data-copy-invite-link data-link="${esc(result.partner.referral_url)}">Copy referral link</button></p><p><button class="sheet-button primary" type="button" data-copy-invite-link data-link="${esc(result.setup_url)}">Copy password setup link</button></p><p>Send the setup link privately. It is single-use and expires after seven days.</p>`;
+          form.reset();
+          await load();
+        }catch(exc){error.textContent=message(exc.message);}
+      });
+      invite.addEventListener('click',async event=>{
+        const button=event.target.closest('[data-copy-invite-link]');if(!button)return;
+        const original=button.textContent;
+        try{await navigator.clipboard.writeText(button.dataset.link);button.textContent='Copied';}
+        catch(_error){button.textContent='Copy failed';}
+        setTimeout(()=>button.textContent=original,2000);
+      });
+      list.addEventListener('click',async event=>{
+        const row=event.target.closest('[data-partner-id]');if(!row)return;
+        error.textContent='';
+        try{
+          if(event.target.matches('[data-copy-partner-link]')){
+            const button=event.target,original=button.textContent;
+            try{await navigator.clipboard.writeText(button.dataset.link);button.textContent='Copied';}
+            catch(_error){button.textContent='Copy failed';}
+            setTimeout(()=>button.textContent=original,2000);return;
+          }
+          if(event.target.matches('[data-partner-detail]')){
+            const panel=row.querySelector('[data-partner-detail-body]');
+            if(!panel.hidden){panel.hidden=true;return;}
+            const response=await fetch(`/api/admin/partners/${row.dataset.partnerId}/summary`),data=await response.json();
+            if(!response.ok)throw new Error(message(data.error||'Could not load ledger'));
+            const summary=data.summary||{},metrics=summary.metrics||{};
+            panel.innerHTML=`<strong>${esc(metrics.clicks||0)} visits · ${esc(metrics.registrations||0)} registrations · ${esc(metrics.customers||0)} customers</strong><div class="partner-table-wrap"><table class="partner-table"><thead><tr><th>Invoice</th><th>Tier</th><th>Term</th><th>Net revenue</th><th>Commission</th><th>Status</th><th>Earned</th><th>Review</th></tr></thead><tbody>${(summary.commissions||[]).map(item=>`<tr><td>#${esc(item.invoice_id)}</td><td>${esc(String(item.subscription_tier||'').replace('_',' '))}</td><td>${esc(item.period_days)} days</td><td>${usd(item.commission_base_cents)}</td><td>${usdt(item.commission_cents)}</td><td>${esc(item.status)}</td><td>${esc(item.earned_at)}</td><td>${item.status==='pending'?`<button class="sheet-button danger" data-void-commission="${esc(item.id)}">Void</button>`:'—'}</td></tr>`).join('')||'<tr><td colspan="8">No settled referred invoices yet.</td></tr>'}</tbody></table></div>`;
+            panel.hidden=false;return;
+          }
+          if(event.target.matches('[data-partner-status]'))await request(`/api/admin/partners/${row.dataset.partnerId}/status`,{status:event.target.dataset.partnerStatus});
+          if(event.target.matches('[data-create-payout]'))await request(`/api/admin/partners/${row.dataset.partnerId}/payouts`,{note:'weekly payout'});
+          if(event.target.matches('[data-mark-paid]')){
+            const reference=window.prompt('Crypto transaction hash or payout reference');if(!reference)return;
+            await request(`/api/admin/payouts/${event.target.dataset.markPaid}/paid`,{payment_reference:reference});
+          }
+          if(event.target.matches('[data-cancel-payout]')){
+            if(!window.confirm('Cancel this unpaid payout draft and return its commissions to payable?'))return;
+            await request(`/api/admin/payouts/${event.target.dataset.cancelPayout}/cancel`,{reason:'cancelled by operator before transfer'});
+          }
+          if(event.target.matches('[data-void-commission]')){
+            const reason=window.prompt('Reason for voiding this unpaid commission');if(!reason)return;
+            await request(`/api/admin/commissions/${event.target.dataset.voidCommission}/void`,{reason});
+          }
+          await load();
+        }catch(exc){error.textContent=message(exc.message);}
+      });
+      load().catch(exc=>error.textContent=message(exc.message||'Could not load partners'));
     })();
     </script>"""
 

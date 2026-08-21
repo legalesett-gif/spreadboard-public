@@ -492,7 +492,12 @@ def partner_summary_for_id(
     return partner_summary(int(row["user_id"]), db_path=db_path, now=now)
 
 
-def list_partners(*, db_path=accounts.DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+def list_partners(
+    *,
+    db_path=accounts.DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    now_iso = accounts._utc_iso(_moment(now))
     connection = accounts._connect(db_path)
     try:
         rows = connection.execute(
@@ -500,12 +505,14 @@ def list_partners(*, db_path=accounts.DEFAULT_DB_PATH) -> list[dict[str, Any]]:
                       (SELECT COUNT(*) FROM affiliate_attributions a WHERE a.partner_id = p.id) AS registrations,
                       (SELECT COUNT(*) FROM affiliate_attributions a WHERE a.partner_id = p.id AND a.first_payment_at IS NOT NULL) AS customers,
                       (SELECT COALESCE(SUM(c.commission_cents), 0) FROM affiliate_commissions c WHERE c.partner_id = p.id AND c.status = 'pending') AS pending_cents,
+                      (SELECT COALESCE(SUM(c.commission_cents), 0) FROM affiliate_commissions c WHERE c.partner_id = p.id AND c.status = 'pending' AND c.available_at <= ?) AS payable_cents,
                       (SELECT COALESCE(SUM(c.commission_cents), 0) FROM affiliate_commissions c WHERE c.partner_id = p.id AND c.status = 'paid') AS paid_cents,
                       (SELECT b.id FROM affiliate_payout_batches b WHERE b.partner_id = p.id AND b.status = 'draft' ORDER BY b.created_at DESC LIMIT 1) AS draft_batch_id,
                       (SELECT b.amount_cents FROM affiliate_payout_batches b WHERE b.partner_id = p.id AND b.status = 'draft' ORDER BY b.created_at DESC LIMIT 1) AS draft_batch_amount_cents
                FROM affiliate_partners p
                JOIN users u ON u.id = p.user_id
-               ORDER BY p.created_at DESC"""
+               ORDER BY p.created_at DESC""",
+            (now_iso,),
         ).fetchall()
         return [_partner_dict(row) | {"email": row["email"]} for row in rows]
     finally:
@@ -604,6 +611,57 @@ def mark_payout_paid(
             "SELECT * FROM affiliate_payout_batches WHERE id = ?", (int(batch_id),)
         ).fetchone()
         return dict(row)
+    finally:
+        connection.close()
+
+
+def cancel_payout_batch(
+    batch_id: int,
+    *,
+    reason: str,
+    db_path=accounts.DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Cancel an unpaid draft and return its commissions to the payable queue."""
+    clean_reason = reason.strip()
+    if not clean_reason or len(clean_reason) > 500:
+        raise ValueError("payout_cancel_reason_required")
+    cancelled_at = accounts._utc_iso(_moment(now))
+    connection = accounts._connect(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        batch = connection.execute(
+            "SELECT * FROM affiliate_payout_batches WHERE id = ?", (int(batch_id),)
+        ).fetchone()
+        if batch is None:
+            raise ValueError("payout_batch_not_found")
+        status = str(batch["status"])
+        if status == "cancelled":
+            connection.commit()
+            return dict(batch)
+        if status != "draft":
+            raise ValueError("paid_payout_cannot_be_cancelled")
+        released = connection.execute(
+            """UPDATE affiliate_commissions
+               SET status = 'pending', payout_batch_id = NULL
+               WHERE payout_batch_id = ? AND status = 'in_batch'""",
+            (int(batch_id),),
+        ).rowcount
+        prior_note = str(batch["note"] or "").strip()
+        cancellation_note = f"Cancelled {cancelled_at}: {clean_reason}"
+        note = f"{prior_note}\n{cancellation_note}".strip()[:1_000]
+        connection.execute(
+            "UPDATE affiliate_payout_batches SET status = 'cancelled', note = ? WHERE id = ?",
+            (note, int(batch_id)),
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM affiliate_payout_batches WHERE id = ?", (int(batch_id),)
+        ).fetchone()
+        return dict(row) | {"released_commissions": int(released)}
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
 
