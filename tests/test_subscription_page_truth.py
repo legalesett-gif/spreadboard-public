@@ -138,6 +138,7 @@ def test_invoice_polling_does_not_swallow_repeated_status_failures() -> None:
 
     assert "pollFailures" in script
     assert "Confirmation status is temporarily unavailable in this browser." in script
+    assert "clearInterval(poll); poll=null;" in script
     assert ".catch(function(){});" not in script
 
 

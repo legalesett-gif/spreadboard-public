@@ -11324,6 +11324,7 @@ def render_crypto_checkout_script() -> str:
         }).catch(function(){
           pollFailures+=1;
           if(pollFailures>=3){
+            clearInterval(poll); poll=null;
             statusEl.textContent='Confirmation status is temporarily unavailable in this browser. Do not send another payment; refresh or check Portfolio.';
           }
         });
