@@ -233,6 +233,23 @@ def test_public_methodology_and_proof_label_evidence_honestly() -> None:
     proof = server.render_proof_page()
     for expected in ("Matched-size VWAP", "Settled funding", "Identity", "Unknown stays unknown"):
         assert expected in methodology
-    for expected in ("Verified release audit", "638", "12 / 12", "Modeled example", "Losing example"):
+    for expected in (
+        "Current audit in progress",
+        "10 / 35",
+        "4 / 4",
+        "per closed route",
+        "51 / 51",
+        "1,478",
+        "Archived audit · 7 August 2026",
+        "638",
+        "12 / 12",
+        "Modeled example",
+        "Losing example",
+        "Basis convergence captured",
+    ):
         assert expected in proof
+    assert "Matched opening edge" not in proof
+    assert "Latest verified checkpoint" not in proof
+    assert '<a href="/api/health">Machine-readable live health →</a>' in proof
+    assert '<details class="archive-audit">' in proof
     assert "guaranteed" not in (methodology + proof).lower()
