@@ -38,6 +38,7 @@ def _group(token: str, *, edge: float, funding: float) -> dict:
         "executable_spread_pct": edge,
         "depth_weighted_spread_pct": edge,
         "depth_usd": 50.0,
+        "funding_projected_24h_pct": funding,
     }
     return {
         "token": token,
@@ -46,6 +47,7 @@ def _group(token: str, *, edge: float, funding: float) -> dict:
         "best_funding_route": route,
         "best_edge_pct": edge,
         "best_funding_24h_pct": funding,
+        "best_funding_24h_basis": "projected_current_rate",
     }
 
 
@@ -97,6 +99,48 @@ def test_the_free_page_carries_the_live_hooks_it_needs_to_tick(
     assert "/api/stream/free" in html
 
 
+def test_a_cold_free_shell_recovers_in_place_and_reconnects_its_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A warming visit used to remain an empty 0-token page forever.
+
+    The price stream cannot create missing route markup, and the public stream's
+    allow-list is frozen when the connection opens.  The cold shell therefore
+    needs the same in-place structural recovery as Markets, followed by a new
+    EventSource connection for the recovered visible route set.
+    """
+    _stub_board(
+        monkeypatch,
+        {
+            "ok": False,
+            "status": "warming",
+            "summary": {},
+            "source_health": {"canonical_api": {"status": "warming"}},
+            "top_edges": [],
+            "top_funding": [],
+        },
+    )
+
+    html = server.render_free_page(Path("board.json"))
+    refresh = server.render_auto_refresh_script()
+    stream = server.render_board_stream_script({}, endpoint="/api/stream/free")
+
+    assert 'class="free-page" data-refresh="5" data-refresh-silent="1"' in html
+    assert 'document.dispatchEvent(new CustomEvent("spreadboard:structure-refreshed"))' in refresh
+    assert 'document.addEventListener("spreadboard:structure-refreshed", connect)' in stream
+    assert "source.close()" in stream
+
+
+def test_a_live_free_shell_uses_the_slow_structural_cadence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_board(monkeypatch, PAYLOAD)
+
+    html = server.render_free_page(Path("board.json"))
+
+    assert 'class="free-page" data-refresh="300" data-refresh-silent="1"' in html
+
+
 def test_the_visible_rows_are_the_same_component_a_member_sees(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -144,6 +188,128 @@ def test_a_teaser_row_shows_the_numbers_and_hides_the_entry(
     assert "Binance" not in teasers, "the buy venue leaked"
     # ...while the sell leg is shown, so the shape of the route is legible.
     assert "Gate" in teasers
+
+
+def test_a_funding_teaser_shows_the_ranked_value_and_its_evidence_basis() -> None:
+    """The public funding lane must not rank on one number and print another."""
+    group = _group("CARRY", edge=1.0, funding=0.8)
+    route = group["best_funding_route"]
+    route["funding_24h_pct"] = 0.1
+    route["funding_projected_24h_pct"] = 0.8
+    group["best_funding_24h_pct"] = 0.8
+    group["best_funding_24h_basis"] = "projected_current_rate"
+
+    html = server.render_teaser_row(group, metric="funding")
+
+    assert "+0.800%" in html
+    assert "24h at current rate" in html
+    assert "+0.100%" not in html
+
+
+def test_a_funding_teaser_uses_the_funding_routes_own_spread() -> None:
+    group = _group("CARRY", edge=8.0, funding=0.8)
+    funding_route = dict(group["best_funding_route"])
+    funding_route.update(
+        {
+            "route_key": "CARRY|Mexc|Spot|Bybit|Futures",
+            "depth_weighted_spread_pct": 0.35,
+            "executable_spread_pct": 0.4,
+        }
+    )
+    group["best_funding_route"] = funding_route
+    group["best_funding_24h_pct"] = 0.8
+    group["best_funding_24h_basis"] = "projected_current_rate"
+
+    html = server.render_teaser_row(group, metric="funding")
+
+    assert ">0.3%</strong>" in html
+    assert ">8.0%</strong>" not in html
+
+
+def test_a_full_group_has_distinct_live_keys_for_spread_and_funding() -> None:
+    group = _group("CARRY", edge=1.0, funding=0.8)
+    funding_route = dict(group["best_funding_route"])
+    funding_route.update(
+        {
+            "route_key": "CARRY|Mexc|Spot|Bybit|Futures",
+            "long_venue": "Mexc",
+            "long_market_type": "Spot",
+            "short_venue": "Bybit",
+            "short_market_type": "Futures",
+            "funding_projected_24h_pct": 0.8,
+        }
+    )
+    group["best_funding_route"] = funding_route
+    group["best_funding_24h_pct"] = 0.8
+    group["best_funding_24h_basis"] = "projected_current_rate"
+
+    html = server.render_market_token_group(group)
+
+    assert 'data-route-key="CARRY|Binance Futures|Gate Futures"' in html
+    assert 'data-funding-route-key="CARRY|Mexc|Spot|Bybit|Futures"' in html
+    assert "Mexc → Bybit" in html
+
+
+def test_settled_funding_is_not_overwritten_by_a_live_projection() -> None:
+    group = _group("CARRY", edge=1.0, funding=0.8)
+    route = group["best_funding_route"]
+    route["funding_24h_pct"] = 0.8
+    route["funding_24h_source"] = "settled_public_events"
+    route["funding_projected_24h_pct"] = 0.2
+    group["best_funding_24h_pct"] = 0.8
+    group["best_funding_24h_basis"] = "settled_public_events"
+
+    group_html = server.render_market_token_group(group)
+    route_html = server.render_market_group_route(route)
+
+    assert '<strong>+0.800%</strong>' in group_html
+    assert '<strong data-live-funding>+0.800%</strong>' not in group_html
+    assert '<strong>+0.800%</strong>' in route_html
+    assert '<strong data-live-funding>+0.800%</strong>' not in route_html
+
+
+def test_the_free_stream_allows_both_headline_routes_only_for_full_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    groups = []
+    for index in range(3):
+        group = _group(f"T{index}", edge=3.0 - index, funding=0.8 - index / 10)
+        funding_route = dict(group["best_funding_route"])
+        funding_route["route_key"] = f"T{index}|Mexc|Spot|Bybit|Futures"
+        group["best_funding_route"] = funding_route
+        groups.append(group)
+    _stub_board(
+        monkeypatch,
+        {
+            **PAYLOAD,
+            "top_edges": groups,
+            "top_funding": [],
+        },
+    )
+
+    mapping = server.free_stream_key_map(Path("board.json"))
+
+    for index in range(server.FREE_TOKEN_LIMIT):
+        assert mapping[f"T{index}|Binance Futures|Gate Futures"] == (
+            f"T{index}|Binance Futures|Gate Futures"
+        )
+        assert mapping[f"T{index}|Mexc|Spot|Bybit|Futures"] == (
+            f"T{index}|Mexc|Spot|Bybit|Futures"
+        )
+    assert "T2|Binance Futures|Gate Futures" in mapping
+    assert "T2|Mexc|Spot|Bybit|Futures" not in mapping
+
+
+def test_free_copy_does_not_claim_hidden_depth_future_settlements_or_fixed_dex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_board(monkeypatch, PAYLOAD)
+
+    html = server.render_free_page(Path("board.json"))
+
+    assert "depth are all open" not in html
+    assert "What the position pays over 24h at the settled rate" not in html
+    assert "venues and OKX DEX" not in html
 
 
 def test_the_locked_rows_open_the_membership_dialog(

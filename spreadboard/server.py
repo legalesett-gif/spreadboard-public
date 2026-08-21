@@ -2563,12 +2563,23 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                     or float("-inf"),
                 )
                 daily_funding = _float_or_none(best_funding.get("funding_daily_pct"))
-                group["best_funding_route"] = best_funding
                 # A live rate update must not downgrade a verified settled-24h
                 # headline for the same token to a projection.  Keep the
-                # settled observation when it exists; otherwise the current
-                # rate provides the honest projected daily carry.
-                if retained_settled_daily is None:
+                # settled observation and the exact route that owns it when it
+                # still survives the evidence guards. Otherwise the current
+                # rate provides the honest projected daily carry and route.
+                retained_route = group.get("best_funding_route")
+                retained_route_key = str(
+                    retained_route.get("route_key")
+                    if isinstance(retained_route, dict)
+                    else ""
+                )
+                retained_route_is_candidate = any(
+                    str(candidate.get("route_key") or "") == retained_route_key
+                    for candidate in funding_candidates
+                )
+                if retained_settled_daily is None or not retained_route_is_candidate:
+                    group["best_funding_route"] = best_funding
                     group["best_funding_24h_pct"] = daily_funding
                     group["best_funding_apr_pct"] = (
                         daily_funding * 365.0 if daily_funding is not None else None
@@ -5485,7 +5496,7 @@ def render_board_stream_script(
     <script>
     (function(){
       if (!window.EventSource) return;
-      const source = new EventSource("__ENDPOINT____SUFFIX__");
+      let source = null;
       const pct = (value, digits) => {
         if (value === null || value === undefined || value === "") return null;
         const number = Number(value);
@@ -5498,7 +5509,10 @@ def render_board_stream_script(
         void node.offsetWidth;
         node.classList.add("live-tick");
       };
-      source.addEventListener("board", (event) => {
+      const connect = () => {
+        if (source) source.close();
+        source = new EventSource("__ENDPOINT____SUFFIX__");
+        source.addEventListener("board", (event) => {
         let payload;
         try { payload = JSON.parse(event.data); } catch (error) { return; }
         for (const route of payload.routes || []) {
@@ -5506,10 +5520,10 @@ def render_board_stream_script(
           // and once on its row inside the expansion. querySelector patched
           // only the first, so the number on screen never moved.
           const key = window.CSS && CSS.escape ? CSS.escape(route.route_key) : route.route_key;
-          const rows = document.querySelectorAll('[data-route-key="' + key + '"]');
+          const spreadRows = document.querySelectorAll('[data-route-key="' + key + '"]');
           const text = pct(route.spread_pct, 2);
           const carry = pct(route.funding_pct, 3);
-          for (const row of rows) {
+          for (const row of spreadRows) {
             // The outer group and its leader row intentionally share a route
             // key.  Querying through the whole <details> subtree made one
             // leader tick overwrite every expanded route beneath it.  The
@@ -5541,6 +5555,19 @@ def render_board_stream_script(
                 if (basis.textContent.trim() !== basisText) basis.textContent = basisText;
               }
             }
+          }
+          // A group can have one route leading on matched spread and another
+          // leading on funding. Child rows and public teasers own both values
+          // under data-route-key, while the collapsed group declares the
+          // separate funding identity explicitly.
+          const fundingRows = document.querySelectorAll(
+            '[data-route-key="' + key + '"]:not(details), ' +
+            'details[data-funding-route-key="' + key + '"]'
+          );
+          for (const row of fundingRows) {
+            const liveScope = row.matches("details")
+              ? (row.querySelector(":scope > summary") || row)
+              : row;
             for (const funding of liveScope.querySelectorAll("[data-live-funding]")) {
               if (carry && funding.textContent.trim() !== carry) {
                 funding.textContent = carry;
@@ -5562,7 +5589,10 @@ def render_board_stream_script(
             flash(maxSpread);
           }
         }
-      });
+        });
+      };
+      connect();
+      document.addEventListener("spreadboard:structure-refreshed", connect);
     })();
     </script>""".replace("__SUFFIX__", suffix).replace("__ENDPOINT__", endpoint).replace("__PROBE__", PROBE_LABEL)
 
@@ -5838,11 +5868,20 @@ def free_stream_key_map(board_path: Path) -> dict[str, str]:
     for name, best_key in (("top_edges", "best_route"), ("top_funding", "best_funding_route")):
         groups = data.get(name) or []
         for index, group in enumerate(groups[:limit]):
-            route = group.get(best_key) or group.get("best_route") or {}
-            key = str(route.get("route_key") or "")
-            if not key:
+            selected = group.get(best_key) or group.get("best_route") or {}
+            if index < FREE_TOKEN_LIMIT:
+                # A full group has two independently live headlines: spread
+                # belongs to best_route, while funding can belong to a different
+                # best_funding_route. Both identities are already disclosed by
+                # the full row and both must be allowed to tick.
+                for route in (group.get("best_route"), group.get("best_funding_route")):
+                    key = str(route.get("route_key") if isinstance(route, dict) else "")
+                    if key:
+                        mapping[key] = key
                 continue
-            mapping[key] = key if index < FREE_TOKEN_LIMIT else free_teaser_alias(key)
+            key = str(selected.get("route_key") or "")
+            if key and mapping.get(key) != key:
+                mapping[key] = free_teaser_alias(key)
     return mapping
 
 
@@ -5852,15 +5891,7 @@ def free_visible_route_keys(board_path: Path) -> set[str]:
     Teaser rows show live numbers too, so their keys go out as well -- what is
     withheld is the token and one venue, which never travel over the stream.
     """
-    data = api_market_spreads(board_path, dict(FREE_BOARD_QUERY))
-    keys: set[str] = set()
-    limit = FREE_TOKEN_LIMIT + FREE_TEASER_ROWS
-    for name, best_key in (("top_edges", "best_route"), ("top_funding", "best_funding_route")):
-        for group in (data.get(name) or [])[:limit]:
-            route = group.get(best_key) or group.get("best_route") or {}
-            if route.get("route_key"):
-                keys.add(str(route["route_key"]))
-    return keys
+    return set(free_stream_key_map(board_path))
 
 
 def render_teaser_row(group: dict[str, Any], *, metric: str) -> str:
@@ -5878,11 +5909,40 @@ def render_teaser_row(group: dict[str, Any], *, metric: str) -> str:
     route = (
         group.get("best_funding_route") if metric == "funding" else group.get("best_route")
     ) or {}
-    funding = (
-        route.get("funding_24h_pct")
-        if route.get("funding_24h_pct") is not None
-        else route.get("funding_projected_24h_pct")
+    if metric == "funding":
+        # The lane is ranked by the group headline, not by whichever historical
+        # field happens to remain on its route. Printing the route's settled
+        # value made a row selected at +0.831% say +0.000%.
+        funding = group.get("best_funding_24h_pct")
+        funding_basis = str(group.get("best_funding_24h_basis") or "")
+    else:
+        funding = (
+            route.get("funding_24h_pct")
+            if route.get("funding_24h_pct") is not None
+            else route.get("funding_projected_24h_pct")
+        )
+        funding_basis = (
+            "settled_public_events"
+            if route.get("funding_24h_pct") is not None
+            else "projected_current_rate"
+            if route.get("funding_projected_24h_pct") is not None
+            else ""
+        )
+    funding_basis_label = (
+        "settled 24h"
+        if funding_basis == "settled_public_events"
+        else "24h at current rate"
+        if funding_basis == "projected_current_rate"
+        else "funding unavailable"
     )
+    funding_live_hook = " data-live-funding" if funding_basis == "projected_current_rate" else ""
+    matched_spread = (
+        route.get("depth_weighted_spread_pct")
+        if metric == "funding"
+        else group.get("best_edge_pct")
+    )
+    if matched_spread is None:
+        matched_spread = route.get("executable_spread_pct")
     sell_leg = f"{route.get('short_venue') or '—'} {leg_market_label(route.get('short_venue'), route.get('short_market_type'))}".strip()
     return f"""
       <div class="teaser-row" data-route-key="{h(free_teaser_alias(str(route.get("route_key") or "")))}"
@@ -5901,13 +5961,13 @@ def render_teaser_row(group: dict[str, Any], *, metric: str) -> str:
         </div>
         <div class="group-number">
           <span>Matched spread</span>
-          <strong class="{spread_class(group.get("best_edge_pct"))}" data-live-spread>{fmt_pct(group.get("best_edge_pct"))}</strong>
+          <strong class="{spread_class(matched_spread)}" data-live-spread>{fmt_pct(matched_spread)}</strong>
           <em>{fmt_pct(route.get("executable_spread_pct"))} top book</em>
         </div>
         <div class="group-number">
           <span>Funding 24h</span>
-          <strong data-live-funding>{fmt_signed_pct(funding, digits=3) if funding is not None else "—"}</strong>
-          <em>{h(str(group.get("route_count") or 0))} routes</em>
+          <strong{funding_live_hook}>{fmt_signed_pct(funding, digits=3) if funding is not None else "—"}</strong>
+          <em>{h(funding_basis_label)} · {h(str(group.get("route_count") or 0))} routes</em>
         </div>
         <div class="teaser-cta">Unlock</div>
       </div>
@@ -5941,6 +6001,7 @@ def render_free_page(board_path: Path) -> str:
     venues = len(data.get("exchange_options") or [])
     hidden = max(tokens - FREE_TOKEN_LIMIT, 0)
     widest, best_carry = _free_teaser(edges, hidden)
+    refresh_seconds = 300 if live else 5
 
     def section(title: str, blurb: str, groups: list[dict[str, Any]], metric: str) -> str:
         shown = "".join(render_market_token_group(group) for group in groups[:FREE_TOKEN_LIMIT])
@@ -6007,14 +6068,14 @@ def render_free_page(board_path: Path) -> str:
       @media(max-width:1000px) {{ .free-hero {{ grid-template-columns:1fr; }} .free-hero-side {{ border-left:0; border-top:1px solid var(--terminal-line); }}
         .free-stats {{ grid-template-columns:1fr 1fr; }} .teaser-row {{ grid-template-columns:1fr 1fr; }} }}
     </style>
-    <section class="free-page">
+    <section class="free-page" data-refresh="{refresh_seconds}" data-refresh-silent="1">
       <header class="free-hero">
         <div class="free-hero-copy">
           <span class="page-kicker">Free preview</span>
           <h1>Real spreads, live.</h1>
-          <p>Every number here is the same one members see, moving as the books move. The top
-             {FREE_TOKEN_LIMIT} are shown whole. Below them the spread, funding and depth are all
-             open &mdash; only the asset and where to buy it are held back.</p>
+          <p>Every number here comes from the same current source members see. The top
+             {FREE_TOKEN_LIMIT} are shown whole. Below them the matched spread, funding evidence
+             and route shape remain visible &mdash; only the asset and where to buy it are held back.</p>
         </div>
         <aside class="free-hero-side">
           <div class="terminal-live-box {"live" if live else "unavailable"}">
@@ -6022,7 +6083,7 @@ def render_free_page(board_path: Path) -> str:
             <strong data-live-stamp>{fmt_age(health.get("age_min"))}</strong>
             <em>streaming order books</em>
           </div>
-          <p class="free-note">Watch a number for a few seconds. If it moves, the feed is live.</p>
+          <p class="free-note">Source freshness is reported above; a quiet price can remain unchanged on a healthy feed.</p>
         </aside>
       </header>
 
@@ -6034,12 +6095,12 @@ def render_free_page(board_path: Path) -> str:
       </div>
 
       {section("Widest spreads", "Buy the long leg at its ask, sell the short leg at its bid.", edges, "spread")}
-      {section("Best funding", "What the position pays over 24h at the settled rate.", carries, "funding")}
+      {section("Best funding", "Ranked by the strongest available 24h carry evidence. Each row labels settled history or a current-rate projection.", carries, "funding")}
 
       <section class="free-cta">
         <div>
           <h2>{hidden:,} more tokens, with the entry shown</h2>
-          <p>A membership names the asset and both venues on every route, across all five lanes,
+          <p>A membership names the asset and both venues on every route, across available CEX and verified DEX lanes,
              with filters, convergence charts, saved pairs, transfer-rail checks, fair-price gaps
              and alerts on any token's price, spread or funding.</p>
         </div>
@@ -6050,30 +6111,34 @@ def render_free_page(board_path: Path) -> str:
       </section>
       <p class="free-note">Public market data, not advice. Every route carries execution risk, and a
          number on a screen is not a filled order.</p>
+      <dialog class="unlock-dialog" id="unlockDialog">
+        <h3>See the asset and the venue</h3>
+        <ul>
+          <li><span>&#10003;</span>Every one of {tokens:,} tokens and {routes:,} priced routes</li>
+          <li><span>&#10003;</span>Both legs named across {venues} current venue labels; DEX appears only with verified exact-chain quotes</li>
+          <li><span>&#10003;</span>Convergence charts, custom pairs, saved charts</li>
+          <li><span>&#10003;</span>Alerts on any token's price, spread or funding</li>
+          <li><span>&#10003;</span>Fair-price gaps and transfer-rail checks</li>
+        </ul>
+        <div class="free-actions">
+          <a class="free-button primary" href="/register">Create account</a>
+          <a class="free-button" href="/pricing">See membership</a>
+          <button class="free-button" type="button" data-close-unlock>Not now</button>
+        </div>
+      </dialog>
     </section>
-    <dialog class="unlock-dialog" id="unlockDialog">
-      <h3>See the asset and the venue</h3>
-      <ul>
-        <li><span>&#10003;</span>Every one of {tokens:,} tokens and {routes:,} priced routes</li>
-        <li><span>&#10003;</span>Both legs named on every route, {venues} venues and OKX DEX</li>
-        <li><span>&#10003;</span>Convergence charts, custom pairs, saved charts</li>
-        <li><span>&#10003;</span>Alerts on any token's price, spread or funding</li>
-        <li><span>&#10003;</span>Fair-price gaps and transfer-rail checks</li>
-      </ul>
-      <div class="free-actions">
-        <a class="free-button primary" href="/register">Create account</a>
-        <a class="free-button" href="/pricing">See membership</a>
-        <button class="free-button" type="button" data-close-unlock>Not now</button>
-      </div>
-    </dialog>
     <script>
     (function(){{
-      const dialog = document.getElementById('unlockDialog');
-      if(!dialog) return;
-      const open = () => {{ if(typeof dialog.showModal === 'function') dialog.showModal(); else window.location.assign('/pricing'); }};
+      const currentDialog = () => document.getElementById('unlockDialog');
+      const open = () => {{
+        const dialog = currentDialog();
+        if(!dialog) return;
+        if(typeof dialog.showModal === 'function') dialog.showModal();
+        else window.location.assign('/pricing');
+      }};
       document.addEventListener('click', (event) => {{
         if(event.target.closest('[data-locked]')) open();
-        if(event.target.closest('[data-close-unlock]')) dialog.close();
+        if(event.target.closest('[data-close-unlock]')) currentDialog()?.close();
       }});
       document.addEventListener('keydown', (event) => {{
         if((event.key === 'Enter' || event.key === ' ') && document.activeElement
@@ -6364,18 +6429,26 @@ def render_market_token_group(group: dict[str, Any]) -> str:
     venues = group.get("venues") or []
     kinds = group.get("route_kinds") or []
     funding_route = group.get("best_funding_route") or best
-    funding = (
-        funding_route.get("funding_24h_pct")
-        if funding_route.get("funding_24h_pct") is not None
-        else funding_route.get("funding_projected_24h_pct")
-    )
+    funding = group.get("best_funding_24h_pct")
+    if funding is None:
+        funding = (
+            funding_route.get("funding_24h_pct")
+            if funding_route.get("funding_24h_pct") is not None
+            else funding_route.get("funding_projected_24h_pct")
+        )
+    group_funding_basis = str(group.get("best_funding_24h_basis") or "")
     funding_basis = (
         "settled 24h"
-        if funding_route.get("funding_24h_pct") is not None
+        if group_funding_basis == "settled_public_events"
+        else "24h at current"
+        if group_funding_basis == "projected_current_rate"
+        else "settled 24h"
+        if funding_route.get("funding_24h_source") == "settled_public_events"
         else "24h at current"
         if funding_route.get("funding_projected_24h_pct") is not None
         else "history unavailable"
     )
+    funding_live_hook = " data-live-funding" if funding_basis == "24h at current" else ""
     funding_pair = " → ".join(
         venue
         for venue in (
@@ -6422,7 +6495,8 @@ def render_market_token_group(group: dict[str, Any]) -> str:
     )
     return f"""
     <details class="token-route-group" id="token-{h(group.get("token"))}"
-             data-route-key="{h(best.get("route_key") or "")}">
+             data-route-key="{h(best.get("route_key") or "")}"
+             data-funding-route-key="{h(funding_route.get("route_key") or "")}">
       <summary class="token-route-summary">
         <div class="asset-identity">
           <span class="asset-monogram">{h(str(group.get("token") or "?")[:2])}</span>
@@ -6440,8 +6514,8 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         </div>
         <div class="group-number">
           <span>Best-route funding</span>
-          <strong data-live-funding>{fmt_signed_pct(funding, digits=3) if funding is not None else "—"}</strong>
-          <em>{h(funding_basis)} · {h(funding_economic_label(funding, best))} · {h(funding_pair) if funding_pair else "not applicable"}</em>
+          <strong{funding_live_hook}>{fmt_signed_pct(funding, digits=3) if funding is not None else "—"}</strong>
+          <em>{h(funding_basis)} · {h(funding_economic_label(funding, funding_route))} · {h(funding_pair) if funding_pair else "not applicable"}</em>
         </div>
         <div class="group-routes">
           <span>Routes</span>
@@ -6645,6 +6719,9 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         if shown_funding is not None
         else "history unavailable"
     )
+    funding_live_hook = (
+        " data-live-funding" if settled_funding is None and shown_funding is not None else ""
+    )
     # A stale row used to discard everything: its stored spread AND the ratio of
     # the two leg prices it prints immediately to the left. So the board showed
     #   $0.136375 -> $0.1362   —   refreshing both legs
@@ -6689,7 +6766,7 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         <span data-live-spread-basis>{h(spread_detail)}</span>
       </div>
       <div class="route-funding">
-        <strong data-live-funding>{fmt_signed_pct(shown_funding, digits=3) if shown_funding is not None else "—"}</strong>
+        <strong{funding_live_hook}>{fmt_signed_pct(shown_funding, digits=3) if shown_funding is not None else "—"}</strong>
         <b>{h(funding_basis)} · {h(funding_economic_label(shown_funding, row))}</b>
         <span>{leg_funding_rates}</span>
         <em>{h(funding_cadence_pair(row))}</em>
@@ -8196,6 +8273,11 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
         if funding_24h is not None
         else "history unavailable"
     )
+    funding_live_hook = (
+        " data-live-funding"
+        if not historical and best.get("funding_24h_pct") is None and funding_24h is not None
+        else ""
+    )
     name = group.get("token_name") or "Metadata pending"
     best_chart_url = (
         f"/charts?route_key={board.route_key_url(str(best.get('route_key') or ''))}"
@@ -8215,7 +8297,7 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
           <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best funding-pair chart">{h(group.get("token"))}</a><em>{h(name)}</em>{status_badge}</span>
         </div>
         <div><span>Best farm</span><strong>{h(best.get("long_venue"))} → {h(best.get("short_venue"))}</strong></div>
-        <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
+        <div><span>Net 24h</span><strong{funding_live_hook}>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
         <div><span>Payouts</span><strong>{h(funding_cadence_pair(best))}</strong></div>
         <div><span>{"Last basis" if historical else "Entry basis" if basis_current else "Basis refreshing"}</span><strong data-live-spread>{fmt_pct(best.get("executable_spread_pct"))}</strong></div>
         <div class="funding-realised"><span>Realised</span>{render_funding_windows(best, best.get("route_key"))}</div>
@@ -8248,6 +8330,11 @@ def render_funding_pair(row: dict[str, Any]) -> str:
         if funding_24h is not None
         else "history unavailable"
     )
+    funding_live_hook = (
+        " data-live-funding"
+        if not historical and row.get("funding_24h_pct") is None and funding_24h is not None
+        else ""
+    )
     long_funding = (
         f"<em>{fmt_signed_pct(row.get('long_funding_pct'), digits=4)} · "
         f"{h(funding_interval_label(row.get('long_funding_interval_hours'), row.get('long_funding_interval_assumed')))}</em>"
@@ -8264,7 +8351,7 @@ def render_funding_pair(row: dict[str, Any]) -> str:
     <article class="funding-pair-row {"historical-radar" if historical else ""}" data-route-key="{h(row.get("route_key") or "")}">
       <div><span>Long</span>{render_exchange_link(row, "long", include_market_type=True)}{long_funding}</div>
       <div><span>Short</span>{render_exchange_link(row, "short", include_market_type=True)}{short_funding}</div>
-      <div><span>Net 24h</span><strong data-live-funding>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)} · {h(funding_cadence_pair(row))}</em></div>
+      <div><span>Net 24h</span><strong{funding_live_hook}>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)} · {h(funding_cadence_pair(row))}</em></div>
       <div><span>{"Last basis / VWAP" if historical else "Basis / VWAP" if basis_current else "Basis refreshing"}</span><strong data-live-spread>{fmt_pct(row.get("executable_spread_pct"))}</strong><em>{fmt_pct(row.get("depth_weighted_spread_pct"))}</em></div>
       <div><span>{"Last seen" if historical else "Updated"}</span><strong>{fmt_age(row.get("radar_last_seen_age_min") if historical else row.get("age_min"))}</strong></div>
       <div class="route-actions">{"" if historical else render_alert_draft_button(row, alert_type="funding", compact=True)}{"" if historical else f'<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a>'}<a href="/charts?route_key={h(board.route_key_url(str(row.get("route_key") or "")))}">Chart</a></div>
@@ -16197,6 +16284,11 @@ def render_auto_refresh_script() -> str:
           }
         }
         current.replaceWith(next);
+        // A public free stream snapshots its privacy allow-list when the
+        // connection opens. If the initial shell was warming, that list can be
+        // empty; reconnect after structural recovery so the newly inserted
+        // rows receive only their permitted live ticks.
+        document.dispatchEvent(new CustomEvent("spreadboard:structure-refreshed"));
         // A board opened during a reconnect starts at five seconds.  Once the
         // fetched shell says it is live, adopt its five-minute structural
         // cadence; retaining the startup interval rebuilt the full page twelve

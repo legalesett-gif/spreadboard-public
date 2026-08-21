@@ -3431,6 +3431,14 @@ def test_the_board_page_subscribes_to_price_pushes() -> None:
     assert "data-live-spread" in script and "data-live-funding" in script
 
 
+def test_the_board_stream_updates_group_funding_by_its_own_route_key() -> None:
+    script = server.render_board_stream_script({"kind": ["FUTURES"]})
+
+    assert "data-funding-route-key" in script
+    assert "fundingRows" in script
+    assert ':not(details)' in script
+
+
 def test_rows_carry_the_hooks_the_stream_patches() -> None:
     """A push with nothing to patch is a push into the void."""
     import inspect
@@ -3635,6 +3643,59 @@ def test_freshness_does_not_downgrade_settled_funding_to_projection(
 
     assert group["best_funding_24h_pct"] == pytest.approx(0.7)
     assert group["best_funding_apr_pct"] == pytest.approx(255.5)
+    assert group["best_funding_24h_basis"] == "settled_public_events"
+
+
+def test_freshness_keeps_the_route_that_owns_a_retained_settled_headline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A settled value must never be relabelled with a different live pair."""
+    settled = {
+        "route_key": "GUA|settled",
+        "quote_ts_us": 9_000_000,
+        "depth_weighted_spread_pct": 0.2,
+        "funding_daily_pct": 0.7,
+        "depth_unverified": False,
+    }
+    projected = {
+        "route_key": "GUA|projected",
+        "quote_ts_us": 9_000_000,
+        "depth_weighted_spread_pct": 0.3,
+        "funding_daily_pct": 0.9,
+        "depth_unverified": False,
+    }
+    group = {
+        "token": "GUA",
+        "best_route": projected,
+        "best_edge_pct": 0.3,
+        "best_funding_route": settled,
+        "best_funding_24h_pct": 0.7,
+        "best_funding_apr_pct": 255.5,
+        "best_funding_24h_basis": "settled_public_events",
+        "routes": [settled, projected],
+    }
+    payload = {
+        "filters": {"sort": "funding", "direction": "desc"},
+        "groups": [group],
+        "top_edges": [],
+        "top_funding": [],
+        "summary": {},
+    }
+    monkeypatch.setattr(
+        server.api_spreads,
+        "live_route_updates_for",
+        lambda _routes: {
+            "GUA|settled": (0.2, 0.7, 10_000_000),
+            "GUA|projected": (0.3, 0.9, 10_000_000),
+        },
+    )
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(server.api_spreads, "quote_age_min", lambda _row: 0.0)
+
+    server._apply_spread_freshness(payload)
+
+    assert group["best_funding_route"]["route_key"] == "GUA|settled"
+    assert group["best_funding_24h_pct"] == pytest.approx(0.7)
     assert group["best_funding_24h_basis"] == "settled_public_events"
 
 
