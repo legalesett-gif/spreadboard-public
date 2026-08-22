@@ -216,6 +216,20 @@ def test_the_watchlist_follows_the_theme_and_is_legible() -> None:
     assert all(h >= 38 for h in heights if h < 100), f"small tap target: {sorted(heights)}"
 
 
+def test_saved_alert_cards_follow_dark_and_light_theme_tokens() -> None:
+    """Saved alert cards were white with pale text in dark mode."""
+
+    import re
+
+    css = "\n".join(re.findall(r"\.member-alert[^\{]*\{[^}]*\}", server.APP_CSS))
+
+    for literal in ("#dedede", "#fff", "#6a6a6a", "#666", "#555", "#d5d5d5", "#f7f7f7"):
+        assert literal not in css
+    assert "background: var(--terminal-panel)" in css
+    assert "color: var(--terminal-text)" in css
+    assert ".member-alert-card.paused { opacity: 1;" in css
+
+
 def test_pro_table_keeps_execution_evidence_and_route_actions() -> None:
     html = server.render_pro_market_table([{
         "token": "SIREN", "route_key": "SIREN|OKX DEX|Spot|Gate|Futures",
