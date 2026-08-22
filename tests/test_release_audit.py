@@ -11,6 +11,7 @@ import pytest
 
 from spreadboard import api_spreads, live, server
 from spreadboard.verified_identity import build_verified_identity_registry
+from scripts import dex_spot_broad_scan
 from scripts.api_discovery_worker import build_parser as discovery_worker_parser
 from scripts.run_spreadboard_service import RefreshLoop, _merge_newer_fast_quotes
 from spreadarb.api_discovery import runner, sources, worker
@@ -1886,6 +1887,39 @@ def test_broad_dex_output_goes_to_the_writable_runtime_dir() -> None:
     source = (Path(__file__).resolve().parents[1] / "scripts/run_spreadboard_service.py").read_text(encoding="utf-8")
     assert "--broad-dex-output-path" in source
     assert 'RUNTIME_DIR / "api_discovery_broad_dex_latest.json"' in source
+
+
+def test_broad_dex_worker_entrypoint_is_shipped_and_fails_closed() -> None:
+    """The collector must not invoke a missing script or promote symbol matches."""
+    script_path = (
+        Path(__file__).resolve().parents[1] / "scripts/dex_spot_broad_scan.py"
+    )
+    assert script_path.is_file()
+    assert dex_spot_broad_scan.build_parser().parse_args([]).target_usd == 500.0
+    token = dex_spot_broad_scan.TokenInfo(
+        symbol="GUA",
+        name="GUA",
+        address="contract",
+        decimals=6,
+        universe="test",
+    )
+    row = dex_spot_broad_scan.build_row(
+        token=token,
+        source="jupiter",
+        direction="dex_long_sell_cex",
+        long_venue="Jupiter Solana",
+        short_venue="Gate",
+        long_ask=1.0,
+        short_bid=1.1,
+        cex_symbol="GUA/USDT",
+        quote_ts_us=1,
+        quote={"venue": "Jupiter Solana", "bid": 0.99, "ask": 1.0},
+        screen={},
+    )
+    assert row["validation_state"] == "quote_verified"
+    assert row["executor_status"] == "not_ready"
+    assert "identity_unverified" in row["blockers"]
+    assert "route_feasibility_unproven" in row["blockers"]
 
 
 def test_freshness_window_tracks_the_continuous_quote_workers() -> None:

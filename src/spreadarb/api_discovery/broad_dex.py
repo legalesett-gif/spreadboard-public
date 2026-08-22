@@ -111,6 +111,7 @@ def _research_row(row: dict[str, Any]) -> dict[str, Any] | None:
     blockers = [str(item) for item in normalized.get("blockers") or [] if str(item)]
     for blocker in (
         "broad_dex_research",
+        "depth_unverified",
         "symbol_match_only",
         "identity_unverified",
         "route_feasibility_unproven",
