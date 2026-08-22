@@ -341,6 +341,8 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `set-password-*-final.png`. Terms public/authenticated desktop/mobile
   light/dark and the mobile logout-failure notice are under
   `terms-*-final.png` and `terms-mobile-auth-dark-logout-failure.png`.
+  Privacy public/authenticated desktop/mobile light/dark is under
+  `privacy-*-final.png`.
 
 - One deployment error occurred and is preserved as an operational warning.
   A large chained SCP reached the tool boundary, leaving the staged and then
@@ -359,12 +361,12 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 27,831 observations, 18,600
-labeled 24h outcomes, 1,928 routes and 7.21 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 28,090 observations, 18,739
+labeled 24h outcomes, 1,935 routes and 7.25 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
-7.21/30 days; no candidate exists, activation is false and the deterministic
-fallback remains active. The v5 observation store itself spans about 8.71 days;
+7.25/30 days; no candidate exists, activation is false and the deterministic
+fallback remains active. The v5 observation store itself spans about 8.75 days;
 only the labeled span is allowed to satisfy activation. Do not mix the 5,832
 v4 rows or weaken these gates.
 
@@ -379,7 +381,7 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 ### Resume exactly here
 
 1. Continue §8 with the remaining legal routes in this order:
-   `/privacy`, `/refunds`, `/affiliate-terms`.
+   `/refunds`, `/affiliate-terms`. Privacy is complete at marker `2788bdf`.
 2. Then complete the `/account` alias and the previously partial Funding/Rankings/Fair/Charts/
    Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
    test; exercise its controls under both themes and both viewports. Include
