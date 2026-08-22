@@ -12705,11 +12705,11 @@ def render_legal_page(page: str) -> str:
         ),
         "affiliate": (
             "Affiliate Program Terms",
-            "The operating rules for SpreadBoard influencer links and weekly manual payouts.",
+            "The standard operating rules for SpreadBoard referral links, commission records, and weekly manual payouts. The Provider is the party identified as Provider in the signed Affiliate Partner Agreement.",
             [
                 (
-                    "Appointment and link",
-                    "Each approved channel receives one named cabinet and one unique referral link. The link is personal to that partner and must not be transferred, impersonated, used for self-referrals, or placed through misleading, automated, spam, paid-search brand bidding, cookie stuffing, or duplicate-account activity.",
+                    "Appointment and relationship",
+                    "Each approved channel receives one named cabinet and one unique referral link on a non-exclusive, revocable basis. The partner is an independent contractor with no authority to bind the Provider, collect customer funds, or make warranties for it. There is no minimum number of referrals or sales and no exclusivity unless the signed Deal Sheet says otherwise. The link is personal and must not be transferred, impersonated, used for self-referrals, or placed through misleading, automated, spam, paid-search brand bidding, cookie stuffing, or duplicate-account activity.",
                 ),
                 (
                     "Attribution",
@@ -12717,27 +12717,39 @@ def render_legal_page(page: str) -> str:
                 ),
                 (
                     "Subscriber discount",
-                    "The referred member receives 20% off the first 30-day membership value. On a longer first term, only one 30-day portion is discounted. Later renewals are charged at the then-current full price unless a separate written offer applies.",
+                    "The referred member receives 20% off the first 30-day membership value once. On a longer first term, only one 30-day portion is discounted. The offer is not transferable, exchangeable for cash, combinable, or retrospective. Later renewals are charged at the then-current full price unless a separate written offer applies.",
                 ),
                 (
                     "Commission",
-                    "The partner earns 50% of subscription plan revenue actually settled for each attributed invoice, after the subscriber discount and excluding the small invoice-identification amount. Commission is created only after confirmed settlement and is shown in the partner ledger.",
+                    "The partner earns 50% of subscription plan revenue actually received and finally settled for each attributed invoice, after the subscriber discount and excluding invoice-identification cents, taxes, refunds, reversals, duplicate payments, and sums that do not belong to the Provider. Commission is created only after confirmed settlement and is shown in the partner ledger; a click, registration, or unpaid invoice does not create commission.",
                 ),
                 (
-                    "Hold and payout",
-                    "Commission remains on hold for seven days, then enters the next weekly manual payout batch. Payouts are always USDT on Arbitrum, and the partner must maintain a valid address for that network. Each batch freezes the amount, network, and destination, and is marked paid with a transaction hash or other transfer reference.",
+                    "Hold, statements and payout",
+                    "Commission remains on hold for seven days, then becomes eligible for the next weekly manual payout batch. Payouts are always USDT on Arbitrum One, and the partner must maintain a valid compatible address in the cabinet. Each batch freezes the amount, network, and destination, and is marked paid with a transaction hash or other transfer reference. The partner must report a suspected statement error within 30 days and is responsible for loss caused by an incorrect wallet, unsupported network, compromised partner account, or loss of wallet access.",
                 ),
                 (
                     "Reversals and records",
-                    "We may void unpaid commission connected to refunds, charge reversals, duplicate or fraudulent accounts, self-referrals, prohibited promotion, or calculation error, with a recorded reason. Paid batches and their transaction references remain in the ledger for accounting and dispute review.",
+                    "We may withhold or void unpaid commission reasonably connected to refunds, charge reversals, duplicate or fraudulent accounts, self-referrals, sanctions concerns, prohibited or misleading promotion, material breach, or calculation error, with a recorded reason. Paid batches and their transaction references remain in the ledger for accounting and dispute review.",
                 ),
                 (
                     "Marketing disclosure",
-                    "Partners must make the commercial relationship clear and conspicuous. For YouTube, say and show near the start of the promotion, and repeat immediately before the link in the description: ‘AD — paid affiliate promotion. I receive a commission if you subscribe through this link.’ A platform disclosure tool may be used as well, but does not replace this disclosure. Promotions must be truthful, distinguish market research from investment advice, and must not promise profits or guaranteed returns.",
+                    "Partners must make the commercial relationship obviously identifiable as advertising before the audience engages. SpreadBoard requires a YouTube promotion to say and show near the start, and repeat immediately before the link in the description: ‘AD — paid affiliate promotion. I receive a commission if you subscribe through this link.’ A platform disclosure tool may be used as well, but does not replace this program requirement. Promotions must be truthful, distinguish market research from investment advice, and must not promise profits, guaranteed returns, risk-free trading, or specific future performance.",
                 ),
                 (
-                    "Tax and termination",
-                    "Partners are responsible for their own tax, legal, and reporting obligations and for accurate payout details. Either side may stop future promotion. Pausing or closing a link prevents new attribution; renewals from users already attributed continue to earn commission, subject to these terms, fraud review, and applicable law.",
+                    "Compliance, brand and data",
+                    "Partners are responsible for their own tax, legal, and reporting obligations and must follow applicable advertising, consumer-protection, privacy, sanctions, and platform rules where they and their audience are located. We may request reasonable identity, address, tax, or sanctions information before payout. Approved SpreadBoard names and assets are licensed only for this program and may not imply ownership or exclusivity. The cabinet provides aggregate and invoice-level commercial statistics but not customer email addresses, passwords, wallet credentials, or exchange credentials.",
+                ),
+                (
+                    "Suspension and termination",
+                    "We may pause a link or cabinet while investigating fraud, security, sanctions, unlawful promotion, or material reputational risk. Either side may end future promotion as the signed agreement provides. Pausing or closing a link stops new attribution. Valid users already attributed continue to earn commission on later settled renewals under the standard program, except for fraud or material breach; properly earned, undisputed commission remains payable after the hold period.",
+                ),
+                (
+                    "Service and earnings",
+                    "SpreadBoard is a research service that may change, be interrupted, or contain delayed, unavailable, or third-party data. The program does not guarantee customer conversions, commission, service availability, trading outcomes, or any minimum income.",
+                ),
+                (
+                    "Agreement and changes",
+                    "These public rules accompany the signed Affiliate Partner Agreement and Deal Sheet. Together they form the final agreement, which controls if there is a conflict. Material commercial terms may be changed only as that agreement allows or by a further written agreement.",
                 ),
                 (
                     "Contact and version",

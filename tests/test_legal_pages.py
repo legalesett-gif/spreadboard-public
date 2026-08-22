@@ -188,6 +188,43 @@ def test_refund_policy_preserves_fault_remedies_and_crypto_refund_rights() -> No
     assert "does not remove statutory remedies" in html
 
 
+def test_affiliate_terms_match_the_signed_program_and_operational_boundary() -> None:
+    """The public rules must not omit the obligations the partner signs.
+
+    The cabinet and payout engine already implement attribution, the seven-day
+    hold and USDT-on-Arbitrum payouts.  The former public page stopped there,
+    leaving out who may bind the Provider, statement and wallet responsibility,
+    customer-data limits, suspension, and the signed agreement's priority.
+    """
+
+    html = server.render_legal_page("affiliate")
+
+    for heading in (
+        "Appointment and relationship",
+        "Hold, statements and payout",
+        "Compliance, brand and data",
+        "Suspension and termination",
+        "Service and earnings",
+        "Agreement and changes",
+    ):
+        assert f"<h2>{heading}</h2>" in html
+    for promise in (
+        "party identified as Provider in the signed Affiliate Partner Agreement",
+        "independent contractor",
+        "no authority to bind",
+        "no minimum number of referrals or sales",
+        "USDT on Arbitrum One",
+        "report a suspected statement error within 30 days",
+        "incorrect wallet",
+        "customer email addresses",
+        "sanctions",
+        "does not guarantee customer conversions",
+        "signed Affiliate Partner Agreement and Deal Sheet",
+        "controls if there is a conflict",
+    ):
+        assert promise in html
+
+
 def test_legal_contact_methods_are_safe_working_links(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
