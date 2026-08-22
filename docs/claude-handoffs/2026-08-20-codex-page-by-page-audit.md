@@ -10,12 +10,43 @@ confident claims in this session turned out to be wrong. Verify first.
 
 ---
 
-## 0. Current exact continuation point — Codex update 2026-08-21
+## 0. Current exact continuation point — Codex final update 2026-08-22
 
 Read this section and the live ledger at
 `output/audit/2026-08-20-page-by-page-ledger.md` before doing anything else.
 The original sections below are retained as the starting brief; where they
 conflict with this checkpoint or the ledger, this checkpoint is newer.
+
+### Final finite checkpoint — read this first
+
+- Stop the site-wide audit loop. A final bounded recheck covered 11 of Claude's
+  original member surfaces in 22 desktop-light/mobile-dark states with 200
+  responses, exact 1440/375px fit, one main landmark and zero console, request
+  or response failures. Reopen a page only for a reproducible new defect,
+  deliberate product change or recovered provider.
+- Spread ranking and headlines now require explicit proof of the current `$500`
+  matched probe. Old `$50`, depth-unverified and top-book-only values cannot
+  lead matched rankings. Markets and Free say `Spread evidence`, then label
+  verified `$500 VWAP` separately from a top-book reference. Production exact-
+  now comparison finished 10/10 spread and 20/20 funding rows with zero
+  mismatch.
+- Charts passed the finite blank/selected desktop/mobile light/dark matrix,
+  all ten windows, BTW Mexc Spot to Aster Futures exact history and controls,
+  in-place Pin/Remove cleanup, and GUA long `OKX DEX 56` construction. The BTW
+  builder/selected page became ready in 1.0s/2.1s and its 56 latest rows
+  reconciled to browser values; no runtime error occurred.
+- The previously missing broad DEX scanner is shipped and defaults to `$500`.
+  It remains research-only with identity, depth, gas, route-feasibility and
+  executor blockers. Production omits a blank Jupiter key, so a non-persisted
+  smoke read 2,759 verified tokens and completed 1/1 quote. Missing 0x
+  credentials fail fast as `not_configured` instead of generating 40 known
+  401s. This does not make DEX executable: OKX entitlement is still rejected,
+  and a full natural Jupiter cycle still needs one later observation.
+- Production marker is `8a7a42990f17766ebad2804a1120a4fcdcbd2e15`.
+  All 1,602 tests pass; Ruff adds zero findings (531 known); all 51 package
+  modules match persisted host/app/collector; app, collector and accounting are
+  healthy with zero restarts; `/status` and `/api/health` return 200 and recent
+  logs are clean. No trade, transfer, payment or Telegram message occurred.
 
 ### Work completed and deployed
 
@@ -364,20 +395,22 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
 - Latest deployed code commit:
-  **`f3b65df79181063b352d6b9e098e171ef2aa8c3b`** for the completed dynamic-route
-  and bounded current-export audit. The latest code-affecting local follow-up is
-  the test-only lint cleanup **`0749f39`**; a later handoff-only commit may make
-  local `HEAD` newer, while package source remains identical to production.
+  **`8a7a42990f17766ebad2804a1120a4fcdcbd2e15`** for the completed `$500`
+  matched-proof, finite Charts/Claude-page recheck and broad DEX fallback.
+  A later handoff-only commit may make local `HEAD` newer, while package source
+  remains identical to production.
   Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
 - Production's code marker is
-  **`f3b65df79181063b352d6b9e098e171ef2aa8c3b`**.
+  **`8a7a42990f17766ebad2804a1120a4fcdcbd2e15`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Current `server.py` SHA-256 is
-  **`5bb5f23e8bdf1a05ba0996bdb21b6d709f9f6e9dbc1bc2a1950a5ed90c89f7f3`**;
+  **`d2f0c914426f5d4e77a45e626bef86bb57b94f8dffe18c87cc8b0a5a6d36cf53`**;
+  current `scripts/dex_spot_broad_scan.py` SHA-256 is
+  **`bfd86f8e9fac215929d6495ba6353c85a362ca38285fc86cb48abecbe8bbcf9d`**;
   current `accounts.py` SHA-256 is
   **`5ba685d0cbf1100bcbad2c4b880905a70c77bd159118cd1f42bc44846ca0aa92`**;
   current `Caddyfile` SHA-256 is
@@ -390,7 +423,7 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   **`4a597b5dda93aaac4fbfdbe73b5dd5184323b7ee30e1bb482414f33b0f8c87c7`**;
   current `intel.py` SHA-256 remains
   **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
-- Full suite: **1,596 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,602 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 531 known**.
 - The first default `/markets` generation after restart remains roughly 16
   seconds of current-only computation. It is no longer a broken/raw-export UX:
@@ -485,7 +518,11 @@ Claude should continue from the outstanding product/operator boundaries below,
 not from another visual sweep:
 
 1. Restore entitled/region-compatible OKX DEX quote access, then require
-   sustained verified-cycle proof before changing DEX readiness.
+   sustained verified-cycle proof before changing DEX readiness. If Ethereum
+   DEX coverage is wanted, add a 0x API key through the existing secret path;
+   otherwise the lane intentionally remains `not_configured`. Observe one later
+   natural full Jupiter cycle; the finite one-token public-path smoke is already
+   green and must not become a repeated loop.
 2. Keep ML shadow-only until the exact v5 30-day and 80% lifecycle-cost gates
    pass; do not mix v4, fabricate labels, weaken gates or activate early.
 3. Collect genuine encrypted opt-in subscriber exchange/account evidence
@@ -496,10 +533,9 @@ not from another visual sweep:
 6. Treat CSP tightening/shared authenticated-shell refactoring and further
    cold-build performance work as planned engineering, not open audit defects.
 
-Current release evidence: production marker
-`f3b65df79181063b352d6b9e098e171ef2aa8c3b`, latest code-affecting local commit
-`0749f39`,
-1,596 tests passed, Ruff added zero findings (531 known), all 51 package modules
+Current release evidence: production marker and latest code-affecting commit
+`8a7a42990f17766ebad2804a1120a4fcdcbd2e15`,
+1,602 tests passed, Ruff added zero findings (531 known), all 51 package modules
 match persisted host/app/collector, app/collector/accounting are healthy and
 recent logs have no Traceback, ERROR or Exception. No trade, transfer, payment
 or Telegram group message occurred.
