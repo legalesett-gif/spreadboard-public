@@ -18217,6 +18217,8 @@ main { max-width: none; margin: 0; padding: 32px 24px 0; }
 .pair-cockpit { display: grid; gap: 14px; min-width: 0; max-width: 100%; padding: 18px; border-radius: 10px; background: var(--dark); color: white; box-shadow: var(--shadow); }
 .pair-cockpit .page-kicker, .pair-cockpit .route-subline { color: #b9c8c3; }
 .pair-cockpit .back { color: var(--accent); }
+.pair-cockpit .route-alert-btn { border-color: rgba(255,255,255,.28); background: rgba(255,255,255,.08); color: white; }
+.pair-cockpit .route-alert-btn:hover { border-color: var(--accent); background: rgba(44,201,185,.18); color: white; }
 .pair-cockpit-head, .ticket-head, .pair-cockpit-foot { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; }
 .pair-cockpit-grid { display: grid; grid-template-columns: minmax(0, 1fr) 315px; gap: 14px; align-items: stretch; }
 .pair-trade-ticket, .pair-edge-panel { display: grid; gap: 12px; min-width: 0; padding: 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.08); }

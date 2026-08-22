@@ -125,3 +125,5 @@ def test_pair_page_has_one_main_landmark(monkeypatch) -> None:
 
     assert html.count("<main") == 1
     assert '<div class="pair-main">' in html
+    assert ".pair-cockpit .route-alert-btn" in server.APP_CSS
+    assert ".pair-cockpit .route-alert-btn:hover" in server.APP_CSS
