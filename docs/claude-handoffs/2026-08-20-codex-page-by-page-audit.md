@@ -242,8 +242,10 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   dummy scrypt work, inputs are bounded and successful/failing JavaScript and
   no-JavaScript paths are usable. Production light/dark and desktop/mobile
   states pass; one disposable member proved both success paths and was removed
-  with all three sessions. The destination exposed a separate 423px no-script
-  mobile overflow on `/account`; fix that during the scheduled Account audit.
+  with all three sessions. The destination initially appeared to expose a
+  423px no-script mobile overflow on `/account`; the dedicated Account audit
+  later proved that capture raced the external stylesheet, and the corrected
+  production document fits exactly at 375px.
 - `/register` now uses an explicit POST form and same-origin HTML boundary, so
   no-JavaScript registration cannot place the name, email or password in the
   URL. User creation, referral attribution and the first session are one
@@ -294,6 +296,19 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   automatic payment. All eight public/authenticated desktop/mobile light/dark
   states, destinations, contacts, theme persistence and authenticated logout
   pass; exact audit-session cleanup returned to zero.
+- `/account` is now fully audited. The apparent 423px no-JavaScript mobile
+  overflow was an audit race against the external stylesheet; the corrected
+  production capture fits exactly at 375px. A separate real defect was fixed:
+  chart-catalogue combinations with null quote evidence were coerced by
+  `Number(null)` into fake `0.000%` and `live · 0.0 min` labels. Current-book
+  routes now carry an explicit source; catalogue combinations remain null,
+  are labelled as catalogue identity only and require actual fills. Public and
+  authenticated desktop/mobile light/dark, authenticated mobile no-JavaScript,
+  all account tabs/settings/member states and the GUA add-position dialog pass
+  with clean console/network and exact widths. The dialog exposes 50 catalogue
+  pairs and 12 legs including DEX without inventing a quote. The audit member
+  has zero position, alert, Telegram-link/token or exchange-connection
+  artifacts; only Alex and Anatolij are administrators.
 
 ### Current deployment and verification
 
@@ -306,17 +321,17 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
 - Latest deployed code commit:
-  **`fa74bd4fd536a7374dfe28f9a42a54538ee9e229`** for the completed Affiliate Terms audit.
+  **`1a31726790bea2a0436d3a05e1c48dcec5e8463a`** for the completed Account audit.
   Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
 - Production's code marker is
-  **`fa74bd4fd536a7374dfe28f9a42a54538ee9e229`**.
+  **`1a31726790bea2a0436d3a05e1c48dcec5e8463a`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Current `server.py` SHA-256 is
-  **`9dc762cf2f309004d1d2e1bd30a33e1da1f0bd3c6e5d69ead5653657900ef9cf`**;
+  **`2b1bc51ba644064754610606c0e27f2542ba9f146b13a339d5ba7e29467e0f04`**;
   current `accounts.py` SHA-256 is
   **`5ba685d0cbf1100bcbad2c4b880905a70c77bd159118cd1f42bc44846ca0aa92`**;
   current `Caddyfile` SHA-256 is
@@ -329,7 +344,7 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   **`4a597b5dda93aaac4fbfdbe73b5dd5184323b7ee30e1bb482414f33b0f8c87c7`**;
   current `intel.py` SHA-256 remains
   **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
-- Full suite: **1,572 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,573 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 530 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -365,6 +380,9 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `privacy-*-final.png`. Refunds public/authenticated desktop/mobile light/dark
   is under `refunds-*-final.png`. Affiliate Terms public/authenticated
   desktop/mobile light/dark is under `affiliate-terms-*-final.png`.
+  Account public/authenticated desktop/mobile light/dark, authenticated mobile
+  no-JavaScript, administrator Members and GUA add-position evidence is under
+  `account-*-final.png` in the same directory.
 
 - One deployment error occurred and is preserved as an operational warning.
   A large chained SCP reached the tool boundary, leaving the staged and then
@@ -374,6 +392,13 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   services returned healthy, and the whole-package verifier now proves 51/51
   persisted-host/app/collector files. Never install a transferred production
   file until the remote size and digest match the committed local source.
+- A second operational mistake occurred during the temporary Account Members
+  audit: force-recreating the app from an older baked image reintroduced 11
+  stale package modules and the old Account reload behavior. The current
+  persisted host package was restored before service start and 51/51 sync was
+  reproved. Never recreate app/collector from that image unless it is rebuilt,
+  or current persisted source is installed into the stopped container before
+  it starts serving.
 - Caddy's production config is a bind mount: replacing `/etc/caddy/Caddyfile`
   inside the running container fails and replacing the host file inode does not
   update the old mount. Validate the staged config, then recreate only Caddy
@@ -383,12 +408,12 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
 
 The production ranking/outcome worker was run through `/app/.venv/bin/python`.
 Selected method is still exactly
-`deterministic_dual_opportunity_evidence_v5`: 28,252 observations, 18,916
-labeled 24h outcomes, 1,947 routes and 7.29 labeled days. Both class-balance
+`deterministic_dual_opportunity_evidence_v5`: 28,688 observations, 19,084
+labeled 24h outcomes, 1,957 routes and 7.38 labeled days. Both class-balance
 gates and leakage pass and the 24h-embargoed chronological split is valid.
 Data readiness still fails on 0%/80% exact lifecycle-cost completeness and
-7.29/30 days; no candidate exists, activation is false and the deterministic
-fallback remains active. The v5 observation store itself spans about 8.79 days;
+7.38/30 days; no candidate exists, activation is false and the deterministic
+fallback remains active. The v5 observation store itself spans about 8.88 days;
 only the labeled span is allowed to satisfy activation. Do not mix the 5,832
 v4 rows or weaken these gates.
 
@@ -402,12 +427,11 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the `/account` alias and the previously partial Funding/Rankings/Fair/Charts/
-   Portfolio/Watchlist passes. Do not mark a page complete after a batch smoke
-   test; exercise its controls under both themes and both viewports. Include
-   the proven no-JavaScript 423px mobile overflow reached after Login success.
-2. Finish dynamic `/token/*`, `/pair/*` and `/r/*` routes and the authenticated
-   Account flows.
+1. Continue §8 with the previously partial Funding/Rankings/Fair/Charts/
+   Portfolio/Watchlist passes, starting at `/funding`. Do not mark a page
+   complete after a batch smoke test; exercise every control under both themes
+   and both viewports.
+2. Finish dynamic `/token/*`, `/pair/*` and `/r/*` routes.
 3. Replace the first uncached JSON `warming` response with an explicit
    preparing/export UX without serving stale data. Characterize and improve
    the 15.5s post-restart cold default Markets generation without weakening
