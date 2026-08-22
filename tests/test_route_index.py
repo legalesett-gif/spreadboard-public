@@ -7,8 +7,8 @@ seconds a member waited.
 
 from __future__ import annotations
 
-from pathlib import Path
 import time
+from pathlib import Path
 
 import pytest
 
@@ -121,7 +121,7 @@ def test_catalogue_route_rejoins_the_exact_warm_pair(
     monkeypatch.setattr(
         server.token_rankings,
         "load",
-        lambda: {},
+        dict,
     )
     monkeypatch.setattr(
         server.token_rankings,
@@ -176,7 +176,7 @@ def test_catalogue_route_replaces_stale_index_economics_but_keeps_history_key(
         "for_token",
         lambda *_args, **_kwargs: {"routes": [current_catalogue]},
     )
-    monkeypatch.setattr(server.token_rankings, "load", lambda: {})
+    monkeypatch.setattr(server.token_rankings, "load", dict)
     monkeypatch.setattr(server.token_rankings, "dex_routes_for", lambda *_args: [])
     monkeypatch.setattr(
         server.catalog_pairs,
