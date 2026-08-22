@@ -107,6 +107,9 @@ def test_rankings_page_reads_precomputed_artifact_without_market_build(monkeypat
     assert "Individual token leaderboard" in html
     assert "GUA" in html
     assert "Pair coverage" in html
+    assert 'data-refresh-preserve="rankings-filters"' in html
+    assert "Current-rate 24h projection" in html
+    assert "Settled evidence lives only in the 24h, 7d, and 30d columns." in html
 
 
 def test_ranked_metrics_are_independent() -> None:

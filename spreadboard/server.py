@@ -7059,12 +7059,12 @@ def render_rankings_page(query: dict[str, list[str]]) -> str:
       </header>
       <section class="ranking-explainer">
         <article><span>Spread now</span><strong>Matched {PROBE_LABEL} VWAP</strong><p>Price dislocation on the best currently visible route. It does not claim convergence.</p></article>
-        <article><span>Funding now</span><strong>Projected or settled 24h</strong><p>Positive paired carry the displayed long-short direction receives. Current and historical figures stay labelled.</p></article>
+        <article><span>Funding now</span><strong>Current-rate 24h projection</strong><p>Positive paired carry the displayed long-short direction receives at the latest rate. Settled evidence lives only in the 24h, 7d, and 30d columns.</p></article>
         <article><span>Settled windows</span><strong>Venue payment history</strong><p>Actual public settlement events over 24h, 7d, and 30d. A dash means insufficient exact-symbol history.</p></article>
         <article><span>Pair coverage</span><strong>Complete catalogue capacity</strong><p>All exact spot, futures, and verified DEX market combinations known for the token, independent of the live top-route quota.</p></article>
       </section>
       <nav class="ranking-tabs" aria-label="Rank tokens by">{tabs}</nav>
-      <form class="ranking-filter" method="get" action="/rankings">
+      <form class="ranking-filter" data-refresh-preserve="rankings-filters" method="get" action="/rankings">
         <input type="hidden" name="rank" value="{h(metric)}">
         <label><span>Token</span><input name="q" value="{h(_query_first(query, "q") or "")}" placeholder="GUA, SIREN, BTC"></label>
         <label><span>Status</span><select name="status">
