@@ -5080,9 +5080,14 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
             return custom
         with _ROUTE_INDEX_LOCK:
             warm_candidates = tuple(_ROUTE_INDEX["rows"].values())
-        for candidate in warm_candidates:
-            if _same_chart_route(candidate, custom):
-                return candidate
+        indexed_match = next(
+            (
+                candidate
+                for candidate in warm_candidates
+                if _same_chart_route(candidate, custom)
+            ),
+            None,
+        )
         # Token pages use the complete warm catalogue rather than the bounded
         # scanner. Rejoin their CUSTOM Details links to that same exact row so
         # top-book, matched-size, funding, rails, and timestamps survive the
@@ -5098,10 +5103,22 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
             )
             for candidate in catalog.get("routes") or []:
                 if isinstance(candidate, dict) and _same_chart_route(candidate, custom):
-                    return candidate
+                    if indexed_match is None:
+                        return candidate
+                    # Preserve the canonical route key and history-bearing
+                    # scanner evidence, but let the complete token catalogue
+                    # replace its older quote economics. A changed discovery
+                    # generation can otherwise leave a fresh-looking stored
+                    # age beside an old absolute timestamp and blank the pair.
+                    return {
+                        **indexed_match,
+                        **candidate,
+                        "route_key": indexed_match.get("route_key")
+                        or candidate.get("route_key"),
+                    }
         except Exception:  # noqa: BLE001 - structural custom row remains usable.
             pass
-        return custom
+        return indexed_match or custom
     # A discovery generation can change while somebody has a chart open. The
     # previous structural row remains sufficient to render the shell, and the
     # exact sampler revalidates both public books and funding immediately in

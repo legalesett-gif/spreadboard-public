@@ -142,6 +142,58 @@ def test_catalogue_route_rejoins_the_exact_warm_pair(
     assert selected["depth_weighted_spread_pct"] == pytest.approx(2.8)
 
 
+def test_catalogue_route_replaces_stale_index_economics_but_keeps_history_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    custom = {
+        "route_key": "CUSTOM:ong",
+        "token": "ONG",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "long_market_symbol": "ONG/USDT",
+        "short_venue": "Binance",
+        "short_market_type": "Spot",
+        "short_market_symbol": "ONG/USDT",
+    }
+    stale_index = {
+        **custom,
+        "route_key": "ONG|Mexc|Spot|Binance|Spot",
+        "quote_ts_us": 1_700_000_000_000_000,
+        "executable_spread_pct": 1.0,
+        "depth_weighted_spread_pct": 0.9,
+        "notes": {"history": "preserve"},
+    }
+    current_catalogue = {
+        **custom,
+        "quote_ts_us": int(time.time() * 1_000_000),
+        "executable_spread_pct": 2.9,
+        "displayed_open_spread_pct": 2.9,
+        "depth_weighted_spread_pct": 2.8,
+    }
+    monkeypatch.setattr(server.chart_catalog, "route_from_key", lambda _k: custom)
+    monkeypatch.setattr(
+        server.catalog_pairs,
+        "for_token",
+        lambda *_args, **_kwargs: {"routes": [current_catalogue]},
+    )
+    monkeypatch.setattr(server.token_rankings, "load", lambda: {})
+    monkeypatch.setattr(server.token_rankings, "dex_routes_for", lambda *_args: [])
+    monkeypatch.setattr(
+        server.catalog_pairs,
+        "with_routes",
+        lambda payload, _extra, **_kwargs: payload,
+    )
+    with server._ROUTE_INDEX_LOCK:
+        server._ROUTE_INDEX["rows"] = {stale_index["route_key"]: stale_index}
+
+    selected = server._find_canonical_route("CUSTOM:ong", Path("board.jsonl"))
+
+    assert selected["route_key"] == stale_index["route_key"]
+    assert selected["notes"] == {"history": "preserve"}
+    assert selected["quote_ts_us"] == current_catalogue["quote_ts_us"]
+    assert selected["depth_weighted_spread_pct"] == pytest.approx(2.8)
+
+
 def test_pair_row_calls_matched_size_spread_executable() -> None:
     row = {
         "route_key": "CUSTOM:ong",
