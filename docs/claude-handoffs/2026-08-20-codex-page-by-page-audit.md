@@ -209,6 +209,49 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `quick_check` with 36 tables and 12 users. The six-hour timer is enabled and
   active. Shared Google API quota errors were retried successfully; a private
   OAuth client remains a resilience improvement, not an open backup incident.
+- `/portfolio` is now fully audited as the dedicated alias of the Account
+  renderer. A disposable live ONG Mexc Spot to Bybit Futures journal entry
+  proved numeric mark movement and total PnL, unimported funding kept separate,
+  actual fees deducted once, no hypothetical close-now/book-walk costs, no
+  manual funding control, and in-place deletion. `/portfolio` and `/account`
+  returned the same tabs and position ID; desktop/mobile light/dark states fit
+  exactly with clean console/network, and the exact audit entry was removed.
+- `/watchlist` and `/alerts` are now fully audited. Watchlist no longer nests a
+  second main landmark, loses its controls after a structural refresh, converts
+  absent research values to zero, or emits empty DEX/score evidence. Alert
+  create/save/delete now refresh the live surface in place, and saved cards use
+  readable light/dark tokens. Production exercised account-synced ONG plus an
+  unknown token, retained funding/spread scores, isolated/cross margin stress,
+  price and best-funding rules, worker last-value evidence, edit/pause/delete,
+  forced structural refresh, both themes and both viewports. All temporary
+  watch tokens and rules were removed; no Pushover delivery was fabricated.
+- Dynamic `/token/*` is now fully audited. Fresh `/token/ONG` exposed 82
+  current routes across eight venues and three market types, with 12 catalogue
+  markets and 11 fresh books. The remaining defect was downstream: Details
+  could discard those warm economics when its canonical history row was older
+  or partial. Exact token routes now rejoin the freshest catalogue economics
+  to the history-bearing key. Expand/collapse/re-collapse and all four
+  desktop/mobile light/dark states pass with one main and clean runtime.
+- Dynamic `/pair/*` is now fully audited. Pair Details no longer shows fresh
+  leg prices beside blank Current Open/Executable values, nests a second main,
+  calls top-book an executable VWAP or renders unreadable dark alert buttons.
+  A fresh ONG Mexc Spot to Binance Spot route reconciled Current Open to the
+  API top-book edge at about 2.9% and Executable to matched `$500` depth at
+  about 2.8%; its chart destination and both alert controls pass in all four
+  visual states.
+- Dynamic `/r/*` is now fully audited. A fresh invalid production slug failed
+  closed to `/pricing` without `?referred=1`, a discount banner or a referral
+  cookie. Valid attribution remains covered by the exact HTTP registration and
+  affiliate lifecycle tests; no fake production partner click was created.
+- The cross-page JSON cold state is closed. Markets and Funding now expose
+  Export JSON controls rather than raw API links. They immediately show
+  `Preparing current JSON…`, use a bounded 12-check loop with per-request
+  timeouts, never navigate or serve stale/incomplete data, and either download
+  the completed current Blob or return a finite retry message. A production
+  test forced one warming response and then downloaded a fresh 21,059,791-byte
+  file containing 500 groups, 3,774 returned rows and 5,858 matching rows.
+  Current-build admission returns an honest preparing state quickly while
+  preserving one builder and the no-stale invariant.
 
 ### Free `/free` audit complete
 
@@ -321,17 +364,20 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
 - Latest deployed code commit:
-  **`be43aeb9e9240e82541346a0d863d2861a54f935`** for the completed Funding audit.
+  **`f3b65df79181063b352d6b9e098e171ef2aa8c3b`** for the completed dynamic-route
+  and bounded current-export audit. The latest code-affecting local follow-up is
+  the test-only lint cleanup **`0749f39`**; a later handoff-only commit may make
+  local `HEAD` newer, while package source remains identical to production.
   Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
 - Production's code marker is
-  **`be43aeb9e9240e82541346a0d863d2861a54f935`**.
+  **`f3b65df79181063b352d6b9e098e171ef2aa8c3b`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Current `server.py` SHA-256 is
-  **`bbc72c07fdaea49adbb3a40e6a24ec448da6c21ede6f5cb5ba1daf4a2a852a1c`**;
+  **`5bb5f23e8bdf1a05ba0996bdb21b6d709f9f6e9dbc1bc2a1950a5ed90c89f7f3`**;
   current `accounts.py` SHA-256 is
   **`5ba685d0cbf1100bcbad2c4b880905a70c77bd159118cd1f42bc44846ca0aa92`**;
   current `Caddyfile` SHA-256 is
@@ -344,13 +390,12 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   **`4a597b5dda93aaac4fbfdbe73b5dd5184323b7ee30e1bb482414f33b0f8c87c7`**;
   current `intel.py` SHA-256 remains
   **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
-- Full suite: **1,584 passed**, one pre-existing unknown `asyncio_mode` warning.
-  Ruff ratchet: **0 new findings, 530 known**.
-- Warm signed-in timings after the restart were about 0.63s for `/markets`,
-  0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
-  for repeated 25-group API requests. The first default `/markets` generation
-  after restart took 15.5s; this is a real remaining cold-start UX issue, not
-  permission to restore stale serving.
+- Full suite: **1,596 passed**, one pre-existing unknown `asyncio_mode` warning.
+  Ruff ratchet: **0 new findings, 531 known**.
+- The first default `/markets` generation after restart remains roughly 16
+  seconds of current-only computation. It is no longer a broken/raw-export UX:
+  the page and Export JSON control enter an explicit bounded preparing state,
+  do not reload and never restore stale serving.
 - Screenshots added: `arbitrage-{desktop,mobile}-{light,dark}.png` plus the
   final Markets Pro Table files under `output/playwright/2026-08-20-page-audit/`;
   `/profile` position and settings evidence is under
@@ -382,7 +427,8 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   desktop/mobile light/dark is under `affiliate-terms-*-final.png`.
   Account public/authenticated desktop/mobile light/dark, authenticated mobile
   no-JavaScript, administrator Members and GUA add-position evidence is under
-  `account-*-final.png` in the same directory.
+  `account-*-final.png` in the same directory. Final dynamic ONG token/pair and
+  current-export evidence is under `output/playwright/2026-08-22-page-audit/`.
 
 - One deployment error occurred and is preserved as an operational warning.
   A large chained SCP reached the tool boundary, leaving the staged and then
@@ -425,19 +471,38 @@ zero after 1,130 under-covered completed cycles. Credentials are present; this
 needs provider/account entitlement repair and then sustained-cycle proof. Do
 not portray the zero lanes as evidence no DEX opportunity exists.
 
-### Resume exactly here
+### Finite stopping point reached
 
-1. Funding is closed at marker `be43aeb9e9240e82541346a0d863d2861a54f935`.
-   Continue §8 with Rankings/Fair/Charts/Portfolio/Watchlist, starting at
-   `/rankings`. Do not mark a page
-   complete after a batch smoke test; exercise every control under both themes
-   and both viewports.
-2. Finish dynamic `/token/*`, `/pair/*` and `/r/*` routes.
-3. Replace the first uncached JSON `warming` response with an explicit
-   preparing/export UX without serving stale data. Characterize and improve
-   the 15.5s post-restart cold default Markets generation without weakening
-   freshness.
-4. Re-run the full suite and Ruff ratchet, deploy, and reverify production.
+The page-by-page audit is complete through the static/public/auth/legal/member
+surfaces, Claude's original Markets/Funding/Charts/Portfolio/Intel/Watchlist
+work, legacy aliases, and dynamic `/token/*`, `/pair/*` and `/r/*` routes. The
+last current-export issue is also closed. Do not restart another unbounded
+page loop merely because live numbers change; reopen a page only for a new
+reproducible defect, a provider recovery that enables previously unavailable
+evidence, or an intentional product change.
+
+Claude should continue from the outstanding product/operator boundaries below,
+not from another visual sweep:
+
+1. Restore entitled/region-compatible OKX DEX quote access, then require
+   sustained verified-cycle proof before changing DEX readiness.
+2. Keep ML shadow-only until the exact v5 30-day and 80% lifecycle-cost gates
+   pass; do not mix v4, fabricate labels, weaken gates or activate early.
+3. Collect genuine encrypted opt-in subscriber exchange/account evidence
+   before presenting private-ledger settled funding or fees as complete.
+4. Complete owner/legal work: Provider legal identity/address, governing law
+   and qualified-counsel review before the first affiliate signature.
+5. Recover the separately parked `.com` domain only if it is still wanted.
+6. Treat CSP tightening/shared authenticated-shell refactoring and further
+   cold-build performance work as planned engineering, not open audit defects.
+
+Current release evidence: production marker
+`f3b65df79181063b352d6b9e098e171ef2aa8c3b`, latest code-affecting local commit
+`0749f39`,
+1,596 tests passed, Ruff added zero findings (531 known), all 51 package modules
+match persisted host/app/collector, app/collector/accounting are healthy and
+recent logs have no Traceback, ERROR or Exception. No trade, transfer, payment
+or Telegram group message occurred.
 
 After the checkpoint commit the only intentional uncommitted files are the
 generated historical-cache JSON, `data/token_rankings.json`, and Playwright
@@ -447,6 +512,14 @@ exposure incident from an unfiltered environment diagnostic is recorded in
 `REMINDERS.md`; never repeat that diagnostic pattern or print secret values.
 
 ---
+
+## Historical source brief below — do not resume from it
+
+Everything below this line records the state Claude originally handed over and
+the reasoning used to discover later defects. Its `NEVER AUDITED`, `open` and
+`start here` labels are historical, not current instructions. The authoritative
+continuation boundary is **Finite stopping point reached** above and the live
+evidence ledger.
 
 ## 1. The operator's standing instruction (this is the spec)
 
