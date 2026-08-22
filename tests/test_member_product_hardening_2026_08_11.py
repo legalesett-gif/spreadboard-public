@@ -1054,6 +1054,8 @@ def test_watchlist_does_not_render_unknown_research_values_as_zero() -> None:
 
     assert "value === null || value === undefined" in script
     assert "const number = optionalNumber(value)" in script
+    assert "Number(item.confidence) > 0" in script
+    assert "!String(evidence.status || \"\").trim()" in script
 
 
 def test_fresh_bot_attention_joins_the_warmed_member_market(tmp_path, monkeypatch) -> None:

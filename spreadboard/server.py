@@ -14846,7 +14846,7 @@ WATCHLIST_SCRIPT = """
       const basisRisk = risk.route_basis || {};
       const riskQuality = risk.data_quality || {};
       const fundingOutlook = funding.funding_outlook || {};
-      const scoreLabel = item => Number.isFinite(Number(item.score)) ? `${Number(item.score).toFixed(1)} / 100` : "Insufficient data";
+      const scoreLabel = item => Number.isFinite(Number(item.score)) && Number(item.confidence) > 0 ? `${Number(item.score).toFixed(1)} / 100` : "Insufficient data";
       const componentLine = item => Object.entries(item.components || {}).map(([name,value]) => `${labelText(name)} ${Number(value.value||0).toFixed(0)}/${Number(value.max||0).toFixed(0)}`).join(" · ");
       const basisP95 = Number(basisRisk.adverse_24h_p95_pct_points);
       const correlation = Number(risk.leg_return_correlation);
@@ -14856,7 +14856,7 @@ WATCHLIST_SCRIPT = """
         riskQuality.samples ? `${riskQuality.samples} hourly samples / ${labelText(riskQuality.grade || "limited")}` : "limited route history"
       ].filter(Boolean).join(" · ");
       const dexLine = (evidence) => {
-        if (!evidence || evidence.status === "not_applicable") return "";
+        if (!evidence || !String(evidence.status || "").trim() || evidence.status === "not_applicable") return "";
         const transfer = evidence.transfer || {};
         const bits = [
           evidence.chain && evidence.contract ? `chain ${evidence.chain} · ${evidence.contract}` : "identity missing",
