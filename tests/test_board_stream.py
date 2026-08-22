@@ -76,6 +76,7 @@ def test_board_stream_emits_a_board_event(
         assert saw_event, "the stream never emitted a board event"
         assert payload["updated_at"].endswith("Z")
         assert payload["max_spread_pct"] == 1.25
+        assert payload["max_funding_pct"] == 0.031
         route = payload["routes"][0]
         assert route["spread_pct"] == 1.25
         assert route["funding_pct"] == 0.031
@@ -143,6 +144,16 @@ def test_stream_updates_the_label_when_a_live_tick_is_only_top_book() -> None:
 
     assert "route.spread_basis" in source
     assert "[data-live-spread-basis]" in source
+
+
+def test_funding_headline_tracks_the_same_live_ticks_as_its_rows() -> None:
+    """A live row must not outrun the page's advertised largest carry."""
+    from spreadboard import server
+
+    source = server.render_board_stream_script({})
+
+    assert "payload.max_funding_pct" in source
+    assert "[data-live-max-funding]" in source
 
 
 def test_group_leader_tick_does_not_overwrite_expanded_route_rows() -> None:

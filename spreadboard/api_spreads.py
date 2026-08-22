@@ -2698,6 +2698,14 @@ def _summary(
             (abs(_effective_funding_24h(row) or 0.0) for row in filtered),
             default=None,
         ),
+        "max_funding_24h_pct": max(
+            (
+                _effective_funding_24h(row)
+                for row in filtered
+                if _effective_funding_24h(row) is not None
+            ),
+            default=None,
+        ),
     }
 
 

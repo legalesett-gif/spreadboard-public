@@ -2330,6 +2330,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         for values in rows.values()
                         if _float_or_none(values[0]) is not None
                     ]
+                    current_funding = [
+                        values[1]
+                        for values in rows.values()
+                        if _float_or_none(values[1]) is not None
+                    ]
                     payload = {
                         "updated_at": datetime.now(tz=timezone.utc)
                         .replace(microsecond=0)
@@ -2341,6 +2346,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         # fast move looked like a contradictory or fabricated
                         # board until the next structural page reload.
                         "max_spread_pct": max(current_spreads, default=None),
+                        "max_funding_pct": max(current_funding, default=None),
                         "routes": [
                             {
                                 "route_key": key,
@@ -6021,6 +6027,14 @@ def render_board_stream_script(
             flash(maxSpread);
           }
         }
+        const maxFunding = document.querySelector("[data-live-max-funding]");
+        if (maxFunding) {
+          const next = pct(payload.max_funding_pct, 3);
+          if (next && maxFunding.textContent.trim() !== next) {
+            maxFunding.textContent = next;
+            flash(maxFunding);
+          }
+        }
         });
       };
       connect();
@@ -8599,7 +8613,7 @@ def render_funding_page(
             default=None,
         )
         if selected_window != "now"
-        else summary.get("max_abs_funding_24h_pct")
+        else summary.get("max_funding_24h_pct")
     )
     displayed_largest_label = (
         "Largest 24h" if selected_window in {"now", "1d"} else f"Largest {selected_window}"
@@ -8674,7 +8688,8 @@ def render_funding_page(
         render_market_metric(
             displayed_largest_label,
             fmt_signed_pct(displayed_largest, digits=3),
-            "settled paired carry" if selected_window != "now" else "absolute paired carry",
+            "settled paired carry" if selected_window != "now" else "largest collecting carry",
+            live_hook="live-max-funding" if selected_window == "now" else None,
         )
     }
         {
