@@ -198,6 +198,27 @@ def test_position_suggestions_ignore_stale_out_of_order_responses() -> None:
     assert script.count("if(requestVersion!==suggestionVersion)return") == 2
 
 
+def test_chart_catalogue_position_suggestions_never_fabricate_zero_evidence() -> None:
+    """A missing quote is not a zero spread and a missing age is not live now.
+
+    Production GUA had no current parsed route at this instant, so the endpoint
+    correctly returned chart-catalogue combinations with null spread, prices
+    and age. JavaScript's ``Number(null)`` then advertised every combination
+    as ``0.000%`` and ``live · 0.0 min``. Keep catalogue identity useful for
+    prefilling a journal entry without inventing market evidence.
+    """
+
+    script = server.render_account_script()
+
+    assert "const optionalNumber=value=>" in script
+    assert "value===null||value===undefined||value===''" in script
+    assert "const spread=optionalNumber(route.entry_spread_pct)" in script
+    assert "const age=optionalNumber(route.age_min)" in script
+    assert "route.source==='live public books'" in script
+    assert "chart-catalogue combination" in script
+    assert "require your actual fills" in script
+
+
 def test_position_suggestions_include_chart_catalogue_dex_long_pairs(monkeypatch) -> None:
     monkeypatch.setattr(server.telegram_queries, "client_visible_payload", lambda: {})
     monkeypatch.setattr(server.api_spreads, "load_spreads", lambda **_k: {"rows": []})
