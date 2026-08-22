@@ -321,17 +321,17 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   `666e3986c1cefee1c11a4ca365f5999e6895f5d0106f9c8ce5d867a84cc10867`;
   current server and Intel hashes are below.
 - Latest deployed code commit:
-  **`1a31726790bea2a0436d3a05e1c48dcec5e8463a`** for the completed Account audit.
+  **`be43aeb9e9240e82541346a0d863d2861a54f935`** for the completed Funding audit.
   Run
   `.venv/bin/python scripts/verify_production_source_sync.py`; the last fresh
   result matched all 51 package modules on the persisted host, app and
   collector with no drift.
 - Production's code marker is
-  **`1a31726790bea2a0436d3a05e1c48dcec5e8463a`**.
+  **`be43aeb9e9240e82541346a0d863d2861a54f935`**.
   A later documentation-only checkpoint may make local `HEAD` newer; the
   whole-package verifier, not marker equality, remains authoritative.
 - Current `server.py` SHA-256 is
-  **`2b1bc51ba644064754610606c0e27f2542ba9f146b13a339d5ba7e29467e0f04`**;
+  **`bbc72c07fdaea49adbb3a40e6a24ec448da6c21ede6f5cb5ba1daf4a2a852a1c`**;
   current `accounts.py` SHA-256 is
   **`5ba685d0cbf1100bcbad2c4b880905a70c77bd159118cd1f42bc44846ca0aa92`**;
   current `Caddyfile` SHA-256 is
@@ -344,7 +344,7 @@ conflict with this checkpoint or the ledger, this checkpoint is newer.
   **`4a597b5dda93aaac4fbfdbe73b5dd5184323b7ee30e1bb482414f33b0f8c87c7`**;
   current `intel.py` SHA-256 remains
   **`9a02c40c2e390578ed1755ce38f260c57a38fbb7fbb8cb15a3558ef3536991d5`**.
-- Full suite: **1,573 passed**, one pre-existing unknown `asyncio_mode` warning.
+- Full suite: **1,584 passed**, one pre-existing unknown `asyncio_mode` warning.
   Ruff ratchet: **0 new findings, 530 known**.
 - Warm signed-in timings after the restart were about 0.63s for `/markets`,
   0.85s for `/arbitrage?kind=FUTURES`, 0.42s for `/account`, and 0.29–0.34s
@@ -427,8 +427,9 @@ not portray the zero lanes as evidence no DEX opportunity exists.
 
 ### Resume exactly here
 
-1. Continue §8 with the previously partial Funding/Rankings/Fair/Charts/
-   Portfolio/Watchlist passes, starting at `/funding`. Do not mark a page
+1. Funding is closed at marker `be43aeb9e9240e82541346a0d863d2861a54f935`.
+   Continue §8 with Rankings/Fair/Charts/Portfolio/Watchlist, starting at
+   `/rankings`. Do not mark a page
    complete after a batch smoke test; exercise every control under both themes
    and both viewports.
 2. Finish dynamic `/token/*`, `/pair/*` and `/r/*` routes.
