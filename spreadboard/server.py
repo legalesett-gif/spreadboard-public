@@ -8847,12 +8847,16 @@ def render_alert_draft_button(
     alert_type: str,
     compact: bool = False,
     label: str | None = None,
+    allow_unquoted: bool = False,
 ) -> str:
     symbol = row.get("token") or row.get("symbol") or ""
-    if alert_type == "token_spread" and not api_spreads.spread_quote_current(row):
+    spread_current = api_spreads.spread_quote_current(row)
+    if alert_type == "token_spread" and not spread_current and not allow_unquoted:
         return ""
     if alert_type == "funding":
         current_value = funding_rank_value(row, "now")
+    elif alert_type == "token_spread" and not spread_current:
+        current_value = None
     else:
         current_value = (
             row.get("displayed_open_spread_pct")
@@ -9770,7 +9774,7 @@ def render_selected_chart(
       <footer class="selected-chart-foot">
         <div class="selected-chart-alerts">
           <a href="/pair/{h(route_key)}">Open full pair details</a>
-          {render_alert_draft_button(row, alert_type="token_spread") if spread_current else ""}
+          {render_alert_draft_button(row, alert_type="token_spread", allow_unquoted=True)}
           {render_alert_draft_button(row, alert_type="funding")}
         </div>
         <span data-chart-observation-count>{h(len(history))} observations · {coverage_note}</span>
@@ -10126,6 +10130,10 @@ def render_live_spread_chart(
           return;
         }}
         const latest = rows[rows.length - 1];
+        const spreadAlert = document.querySelector('.selected-chart-alerts [data-alert-type="token_spread"]');
+        if (spreadAlert && Number.isFinite(latest.entry)) {{
+          spreadAlert.dataset.currentValue = String(latest.entry);
+        }}
         root.querySelector('[data-latest-matched]').textContent = pct(latest.matched);
         root.querySelector('[data-latest-entry]').textContent = pct(latest.entry);
         root.querySelector('[data-latest-exit]').textContent = pct(latest.exit);

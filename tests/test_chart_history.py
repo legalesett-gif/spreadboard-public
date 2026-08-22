@@ -9,6 +9,7 @@ empty panel reading "1 observations, 0% window coverage".
 
 from __future__ import annotations
 
+import inspect
 import threading
 import time
 from pathlib import Path
@@ -350,6 +351,35 @@ def test_the_chart_draws_the_convergence_line() -> None:
     assert "Dashed" in block
     # ...and it has to survive a theme flip.
     assert "convergenceLine?.applyOptions" in source
+
+
+def test_spread_alert_survives_the_first_live_sample_transition() -> None:
+    """A catalogue chart starts unquoted, then receives an exact live spread.
+
+    Suppressing the button at server render left only Funding alert even after
+    the chart displayed a numeric live opening spread.
+    """
+
+    row = {
+        "token": "BTW",
+        "route_key": "CUSTOM:btw",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "short_venue": "Aster",
+        "short_market_type": "Futures",
+    }
+    button = server.render_alert_draft_button(
+        row,
+        alert_type="token_spread",
+        allow_unquoted=True,
+    )
+
+    assert 'data-alert-type="token_spread"' in button
+    assert 'data-current-value=""' in button
+    selected_source = inspect.getsource(server.render_selected_chart)
+    live_source = inspect.getsource(server.render_live_spread_chart)
+    assert "allow_unquoted=True" in selected_source
+    assert "spreadAlert.dataset.currentValue = String(latest.entry)" in live_source
 
 
 def test_the_convergence_colour_is_defined_in_both_themes() -> None:
