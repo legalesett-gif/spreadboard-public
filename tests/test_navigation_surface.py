@@ -69,3 +69,17 @@ def test_scanner_members_keep_their_reduced_navigation() -> None:
 
     source = inspect.getsource(server.render_primary_nav)
     assert "research_pro" in source
+
+
+def test_watchlist_has_one_main_landmark() -> None:
+    """The shell already owns the page main landmark.
+
+    A second nested main around the Watchlist columns is invalid navigation for
+    screen-reader landmark shortcuts even though the visual grid still looks
+    correct.
+    """
+
+    html = server.render_watchlist_page(server.board.DEFAULT_BOARD_PATH, {}, {})
+
+    assert html.count("<main") == 1
+    assert '<div class="watchlist-main"' in html

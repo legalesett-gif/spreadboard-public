@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from cryptography.fernet import Fernet
 
-from spreadboard import accounts, alerts
+from spreadboard import accounts, alerts, server
 
 
 @pytest.fixture()
@@ -336,6 +336,24 @@ def test_the_alerts_page_offers_a_token_form() -> None:
     assert '<option value="token_funding">' in source
     # It must post the token type through, not a route.
     assert "type: data.get('type')" in source
+
+
+def test_token_alert_mutations_refresh_the_surface_without_reloading() -> None:
+    """Creating a token alert must not throw away the live page and scroll.
+
+    The form and cards are replaced by server-rendered current state, while a
+    delegated listener remains alive for subsequent create, save and delete
+    actions.
+    """
+
+    source = server.render_member_alert_script()
+
+    assert "location.reload()" not in source
+    assert "window.location.reload()" not in source
+    assert "refreshMemberAlerts" in source
+    assert "new DOMParser()" in source
+    assert "event.target.closest('#tokenAlertForm')" in source
+    assert "current.replaceWith(next)" in source
 
 
 def test_a_bad_rule_is_a_bad_request_not_a_server_error() -> None:

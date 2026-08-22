@@ -14071,31 +14071,43 @@ def render_member_alert_script() -> str:
         if(!response.ok || data.ok === false) throw new Error(data.error || 'Could not save');
         return data;
       }
-      const tokenForm = document.getElementById('tokenAlertForm');
-      if(tokenForm){
-        tokenForm.addEventListener('submit', async (event) => {
-          event.preventDefault();
-          const status = tokenForm.querySelector('[data-token-alert-status]');
-          const data = new FormData(tokenForm);
-          const symbol = String(data.get('symbol') || '').trim().toUpperCase();
-          const threshold = Number(data.get('threshold'));
-          if(!symbol || !Number.isFinite(threshold)){
-            status.textContent = 'Enter a token and a level.'; return;
-          }
-          status.textContent = 'Creating...';
-          try{
-            await send('/api/market-alert-rules', {
-              type: data.get('type'),
-              symbol,
-              direction: data.get('direction'),
-              threshold,
-              stability_seconds: Number(data.get('stability_seconds') || 0)});
-            status.textContent = symbol + ' alert created.';
-            tokenForm.reset();
-            setTimeout(() => window.location.reload(), 700);
-          }catch(error){ status.textContent = error.message; }
-        });
+      let refreshVersion = 0;
+      async function refreshMemberAlerts(){
+        const requestVersion = ++refreshVersion;
+        const response = await fetch(location.href, {headers:{'X-Requested-With':'fetch'}});
+        if(!response.ok) return false;
+        const parsed = new DOMParser().parseFromString(await response.text(), 'text/html');
+        if(requestVersion !== refreshVersion) return true;
+        const current = document.querySelector('.alerts-page');
+        const next = parsed.querySelector('.alerts-page');
+        if(!current || !next) return false;
+        current.replaceWith(next);
+        return true;
       }
+      document.addEventListener('submit', async (event) => {
+        const tokenForm = event.target.closest('#tokenAlertForm');
+        if(!tokenForm) return;
+        event.preventDefault();
+        const status = tokenForm.querySelector('[data-token-alert-status]');
+        const data = new FormData(tokenForm);
+        const symbol = String(data.get('symbol') || '').trim().toUpperCase();
+        const threshold = Number(data.get('threshold'));
+        if(!symbol || !Number.isFinite(threshold)){
+          status.textContent = 'Enter a token and a level.'; return;
+        }
+        status.textContent = 'Creating...';
+        try{
+          await send('/api/market-alert-rules', {
+            type: data.get('type'),
+            symbol,
+            direction: data.get('direction'),
+            threshold,
+            stability_seconds: Number(data.get('stability_seconds') || 0)});
+          status.textContent = symbol + ' alert created.';
+          tokenForm.reset();
+          if(!await refreshMemberAlerts()) status.textContent = symbol + ' alert created; list refresh delayed.';
+        }catch(error){ status.textContent = error.message; }
+      });
       document.addEventListener('click', async (event) => {
         const card = event.target.closest('[data-alert-id]');
         if(!card) return;
@@ -14109,12 +14121,13 @@ def render_member_alert_script() -> str:
               stability_seconds: Number(card.querySelector('[name=stability_seconds]').value || 0),
               enabled: card.querySelector('[name=enabled]').checked});
             status.textContent = 'Saved.';
+            await refreshMemberAlerts();
           }catch(error){ status.textContent = error.message; }
         }
         if(event.target.matches('[data-alert-delete]')){
           try{
             await send(`/api/market-alert-rules/${id}/delete`, {});
-            card.remove();
+            if(!await refreshMemberAlerts()) card.remove();
           }catch(error){ status.textContent = error.message; }
         }
       });
@@ -14226,7 +14239,7 @@ def render_watchlist_page(
         <article class="chart-summary-card"><span>Reference matches</span><strong>{h(trigger_count)}</strong><em>preview context</em></article>
       </section>
       <section class="watchlist-layout">
-        <main class="watchlist-main">
+        <div class="watchlist-main" data-refresh-preserve="watchlist-main">
           <section class="watch-panel">
             <div class="panel-head flat"><div><h2>Your Watchlist</h2><p>Saved to your account, with a browser copy for resilient loading.</p></div></div>
             <form class="watch-control-row" id="watchForm">
@@ -14271,7 +14284,7 @@ def render_watchlist_page(
             <div class="panel-head flat"><div><h2>Alert Context</h2><p>Read-only spread and funding examples matched only to your pinned tokens.</p></div></div>
             <div class="watch-alert-list" id="watchAlerts"></div>
           </section>
-        </main>
+        </div>
         <aside class="watchlist-side">
           <section class="watch-panel">
             <div class="panel-head flat"><div><h2>Suggested Pins</h2><p>Seeded from Community Intel and route matches.</p></div></div>
@@ -14641,14 +14654,27 @@ WATCHLIST_SCRIPT = """
 <script>
 (() => {
   const storageKey = "spreadboard.watchlist.v1";
-  const dataEl = document.getElementById("watchlistData");
-  const data = JSON.parse((dataEl && dataEl.textContent) || "{}");
-  const hotSymbols = Array.isArray(data.hot_symbols) ? data.hot_symbols : [];
-  const routeReality = Array.isArray(data.route_reality) ? data.route_reality : [];
-  const alertCards = Array.isArray((data.alert_preview || {}).cards) ? data.alert_preview.cards : [];
-  const profileWatchlist = Array.isArray((data.profile_shell || {}).watchlist) ? data.profile_shell.watchlist : [];
+  const readPageData = () => {
+    const dataEl = document.getElementById("watchlistData");
+    try { return JSON.parse((dataEl && dataEl.textContent) || "{}"); }
+    catch (_error) { return {}; }
+  };
+  let data = readPageData();
+  let hotSymbols = Array.isArray(data.hot_symbols) ? data.hot_symbols : [];
+  let routeReality = Array.isArray(data.route_reality) ? data.route_reality : [];
+  let alertCards = Array.isArray((data.alert_preview || {}).cards) ? data.alert_preview.cards : [];
+  let profileWatchlist = Array.isArray((data.profile_shell || {}).watchlist) ? data.profile_shell.watchlist : [];
   let routeBySymbol = new Map(routeReality.map((item) => [normaliseSymbol(item.symbol), item]).filter(([symbol]) => symbol));
   let accountWatchlistHydrating = true;
+
+  function refreshPageData() {
+    data = readPageData();
+    hotSymbols = Array.isArray(data.hot_symbols) ? data.hot_symbols : [];
+    routeReality = Array.isArray(data.route_reality) ? data.route_reality : [];
+    alertCards = Array.isArray((data.alert_preview || {}).cards) ? data.alert_preview.cards : [];
+    profileWatchlist = Array.isArray((data.profile_shell || {}).watchlist) ? data.profile_shell.watchlist : [];
+    routeBySymbol = new Map(routeReality.map((item) => [normaliseSymbol(item.symbol), item]).filter(([symbol]) => symbol));
+  }
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -14671,14 +14697,20 @@ WATCHLIST_SCRIPT = """
     return spaced.charAt(0).toUpperCase() + spaced.slice(1);
   }
 
-  function formatPct(value, digits = 1) {
+  function optionalNumber(value) {
+    if (value === null || value === undefined || value === "" || String(value).trim() === "") return null;
     const number = Number(value);
-    return Number.isFinite(number) ? `${number.toFixed(digits)}%` : "\u2014";
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function formatPct(value, digits = 1) {
+    const number = optionalNumber(value);
+    return number !== null ? `${number.toFixed(digits)}%` : "\u2014";
   }
 
   function formatSignedPct(value, digits = 1) {
-    const number = Number(value);
-    return Number.isFinite(number) ? `${number >= 0 ? "+" : ""}${number.toFixed(digits)}%` : "\u2014";
+    const number = optionalNumber(value);
+    return number !== null ? `${number >= 0 ? "+" : ""}${number.toFixed(digits)}%` : "\u2014";
   }
 
   function loadTokens() {
@@ -15021,6 +15053,11 @@ WATCHLIST_SCRIPT = """
     if (suggestion) addToken(suggestion.getAttribute("data-watch-symbol"));
     const remove = event.target.closest("[data-remove-symbol]");
     if (remove) removeToken(remove.getAttribute("data-remove-symbol"));
+  });
+  document.addEventListener("spreadboard:structure-refreshed", () => {
+    refreshPageData();
+    const tokens = loadTokens();
+    refreshMarketContext(tokens).then(renderAll);
   });
 
   updateMarginMode();

@@ -1036,6 +1036,26 @@ def test_watchlist_does_not_claim_saved_account_is_empty_while_hydrating() -> No
     assert "finally {\n      accountWatchlistHydrating = false;\n      renderAll();" in script
 
 
+def test_watchlist_controls_survive_structural_refresh() -> None:
+    """A DOMParser refresh must not replace live forms with inert copies."""
+
+    page = server.render_watchlist_page(server.board.DEFAULT_BOARD_PATH, {}, {})
+    script = server.WATCHLIST_SCRIPT
+
+    assert 'data-refresh-preserve="watchlist-main"' in page
+    assert "spreadboard:structure-refreshed" in script
+    assert "refreshPageData" in script
+
+
+def test_watchlist_does_not_render_unknown_research_values_as_zero() -> None:
+    """JavaScript Number(null) is zero, but an absent rate or spread is unknown."""
+
+    script = server.WATCHLIST_SCRIPT
+
+    assert "value === null || value === undefined" in script
+    assert "const number = optionalNumber(value)" in script
+
+
 def test_fresh_bot_attention_joins_the_warmed_member_market(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         server.intel,
