@@ -250,22 +250,24 @@ def test_a_full_group_has_distinct_live_keys_for_spread_and_funding() -> None:
     assert "Mexc → Bybit" in html
 
 
-def test_settled_funding_is_not_overwritten_by_a_live_projection() -> None:
+def test_now_funding_is_not_overwritten_by_an_older_settled_window() -> None:
     group = _group("CARRY", edge=1.0, funding=0.8)
     route = group["best_funding_route"]
     route["funding_24h_pct"] = 0.8
     route["funding_24h_source"] = "settled_public_events"
     route["funding_projected_24h_pct"] = 0.2
-    group["best_funding_24h_pct"] = 0.8
-    group["best_funding_24h_basis"] = "settled_public_events"
+    route["funding_daily_pct"] = 0.2
+    route["funding_rank_basis"] = "projected_current_rate"
+    group["best_funding_24h_pct"] = 0.2
+    group["best_funding_24h_basis"] = "projected_current_rate"
 
     group_html = server.render_market_token_group(group)
     route_html = server.render_market_group_route(route)
 
-    assert '<strong>+0.800%</strong>' in group_html
-    assert '<strong data-live-funding>+0.800%</strong>' not in group_html
-    assert '<strong>+0.800%</strong>' in route_html
-    assert '<strong data-live-funding>+0.800%</strong>' not in route_html
+    assert '<strong data-live-funding>+0.200%</strong>' in group_html
+    assert '<strong data-live-funding>+0.200%</strong>' in route_html
+    assert "+0.800%" not in group_html
+    assert "+0.800%" not in route_html
 
 
 def test_the_free_stream_allows_both_headline_routes_only_for_full_groups(

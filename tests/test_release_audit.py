@@ -1257,15 +1257,15 @@ def test_projected_funding_is_visible_rankable_and_filterable_in_24h_units() -> 
     groups = api_spreads._group_rows([settled, projected, negative])
     by_token = {group["token"]: group for group in groups}
 
-    assert by_token["SETTLED"]["best_funding_24h_pct"] == 0.25
-    assert by_token["SETTLED"]["best_funding_24h_basis"] == "settled_public_events"
+    assert by_token["SETTLED"]["best_funding_24h_pct"] == 9.0
+    assert by_token["SETTLED"]["best_funding_24h_basis"] == "projected_current_rate"
     assert by_token["PROJECTED"]["best_funding_24h_pct"] == 0.5
     assert by_token["PROJECTED"]["best_funding_24h_basis"] == "projected_current_rate"
-    assert by_token["NEGATIVE"]["best_funding_24h_pct"] == -0.75
+    assert by_token["NEGATIVE"]["best_funding_24h_pct"] == -0.1
     assert api_spreads._filter_rows(
         [settled, projected],
         min_abs_funding_24h_pct=0.4,
-    ) == [projected]
+    ) == [settled, projected]
 
 
 def test_okx_dex_retries_rate_limits_without_changing_quote_math() -> None:
@@ -2260,16 +2260,15 @@ def test_short_dex_spot_leg_also_requires_existing_inventory() -> None:
     ) is False
 
 
-def test_a_measured_24h_sum_outranks_the_annualised_instantaneous_print() -> None:
-    """Kraken settles hourly and caps at 0.5%/h: AGLD's print extrapolated to
-    9.78%/day while the 24 rates it actually paid summed to 5.66%/day."""
+def test_now_uses_the_live_rate_while_history_keeps_the_measured_24h_sum() -> None:
+    """The live Funding rank must not silently substitute yesterday's sum."""
     daily, apr = api_spreads.normalised_funding(_frow(
         funding_24h_pct=5.66,
         long_funding_pct=0.0, long_funding_interval_hours=8.0,
         short_funding_pct=0.4076, short_funding_interval_hours=1.0,
     ))
-    assert round(daily, 2) == 5.66
-    assert round(apr, 1) == round(5.66 * 365.0, 1)
+    assert round(daily, 4) == round(0.4076 * 24.0, 4)
+    assert round(apr, 1) == round(0.4076 * 24.0 * 365.0, 1)
 
 
 def _funding_row(token: str, *, long_venue: str, long_type: str, short_venue: str,

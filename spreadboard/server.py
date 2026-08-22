@@ -6348,18 +6348,14 @@ def render_teaser_row(group: dict[str, Any], *, metric: str) -> str:
         funding = group.get("best_funding_24h_pct")
         funding_basis = str(group.get("best_funding_24h_basis") or "")
     else:
-        funding = (
-            route.get("funding_24h_pct")
-            if route.get("funding_24h_pct") is not None
-            else route.get("funding_projected_24h_pct")
-        )
-        funding_basis = (
-            "settled_public_events"
-            if route.get("funding_24h_pct") is not None
-            else "projected_current_rate"
-            if route.get("funding_projected_24h_pct") is not None
-            else ""
-        )
+        funding = funding_rank_value(route, "now")
+        funding_basis = str(route.get("funding_rank_basis") or "")
+        if not funding_basis and funding is not None:
+            funding_basis = (
+                "settled_public_events"
+                if funding_rank_basis(route, "now") == "settled 24h fallback"
+                else "projected_current_rate"
+            )
     funding_basis_label = (
         "settled 24h"
         if funding_basis == "settled_public_events"
@@ -6868,11 +6864,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
     funding_route = group.get("best_funding_route") or best
     funding = group.get("best_funding_24h_pct")
     if funding is None:
-        funding = (
-            funding_route.get("funding_24h_pct")
-            if funding_route.get("funding_24h_pct") is not None
-            else funding_route.get("funding_projected_24h_pct")
-        )
+        funding = funding_rank_value(funding_route, "now")
     group_funding_basis = str(group.get("best_funding_24h_basis") or "")
     funding_basis = (
         "settled 24h"
@@ -7145,19 +7137,12 @@ def _ranking_funding_basis(row: dict[str, Any]) -> str:
 
 def render_market_group_route(row: dict[str, Any]) -> str:
     spread_current = api_spreads.spread_quote_current(row)
-    settled_funding = row.get("funding_24h_pct")
-    shown_funding = (
-        settled_funding if settled_funding is not None else row.get("funding_projected_24h_pct")
-    )
-    funding_basis = (
-        "settled 24h"
-        if settled_funding is not None
-        else "24h at current"
-        if shown_funding is not None
-        else "history unavailable"
-    )
+    shown_funding = funding_rank_value(row, "now")
+    funding_basis = funding_rank_basis(row, "now")
     funding_live_hook = (
-        " data-live-funding" if settled_funding is None and shown_funding is not None else ""
+        " data-live-funding"
+        if shown_funding is not None and funding_basis == "24h at current rate"
+        else ""
     )
     # A stale row used to discard everything: its stored spread AND the ratio of
     # the two leg prices it prints immediately to the left. So the board showed
@@ -8448,6 +8433,41 @@ def render_funding_windows(route: dict[str, Any] | None, route_key: Any) -> str:
     return f'<div class="funding-window-strip" title="{h(coverage_title)}">{"".join(cells)}</div>'
 
 
+def funding_rank_value(row: dict[str, Any], selected_window: str = "now") -> float | None:
+    """The exact value a Funding rank promises to show.
+
+    ``Now`` is a current-rate surface, so its projected 24-hour carry must win
+    over an older settled day. Historical ranks deliberately do the opposite:
+    they display the selected realised window and never let a live tick rewrite
+    it. A settled-day fallback remains useful only when a current projection is
+    genuinely unavailable.
+    """
+    window = str(selected_window or "now").casefold()
+    if window != "now":
+        return _float_or_none(funding_radar.window_value(row, window))
+    for key in ("funding_daily_pct", "funding_projected_24h_pct", "funding_24h_pct"):
+        value = _float_or_none(row.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def funding_rank_basis(row: dict[str, Any], selected_window: str = "now") -> str:
+    window = str(selected_window or "now").casefold()
+    if window != "now":
+        return f"settled {'24h' if window == '1d' else window}"
+    if row.get("funding_rank_basis") == "settled_public_events":
+        return "settled 24h fallback"
+    if any(
+        _float_or_none(row.get(key)) is not None
+        for key in ("funding_daily_pct", "funding_projected_24h_pct")
+    ):
+        return "24h at current rate"
+    if _float_or_none(row.get("funding_24h_pct")) is not None:
+        return "settled 24h fallback"
+    return "funding unavailable"
+
+
 def _historical_funding_groups(
     current_groups: list[dict[str, Any]],
     *,
@@ -8585,6 +8605,8 @@ def render_funding_page(
         "Largest 24h" if selected_window in {"now", "1d"} else f"Largest {selected_window}"
     )
     api_health_data = (market_data.get("source_health") or {}).get("canonical_api") or {}
+    source_ready = bool(market_data.get("ok")) and api_health_data.get("status") == "fresh"
+    refresh_seconds = 300 if source_ready else 5
     history_health = funding_history_health()
     tabs = [
         ("futures-futures", "Futures-Futures"),
@@ -8592,7 +8614,7 @@ def render_funding_page(
         ("futures-dex", "Futures-DEX"),
     ]
     body = f"""
-    <section class="funding-page terminal-page" data-refresh="300" data-refresh-silent="1">
+    <section class="funding-page terminal-page" data-refresh="{refresh_seconds}" data-refresh-silent="1">
       {render_board_stream_script(funding_query)}
       <div class="terminal-heading">
         <div>
@@ -8601,7 +8623,7 @@ def render_funding_page(
           <p>Funding is ranked as a hedge pair, never as a floating single contract. Now stays strictly live; 24h, 7d, and 30d retain cooled leaders as a clearly labelled research radar.</p>
         </div>
         <div class="terminal-live-box">
-          <span>{"Live" if market_data.get("ok") else "Updating"}</span>
+          <span>{"Live" if source_ready else "Updating"}</span>
           <strong>{fmt_age(api_health_data.get("age_min"))}</strong>
           <em>public funding APIs</em>
         </div>
@@ -8675,12 +8697,15 @@ def render_funding_page(
     }">JSON</a>
         </div>
         <div class="funding-ledger-head" aria-hidden="true">
-          <span>Token</span><span>Best farm</span><span>Net 24h</span><span>Payouts</span>
+          <span>Token</span><span>Best farm</span><span>{h("Net now / 24h" if selected_window == "now" else "Settled 24h" if selected_window == "1d" else f"Settled {selected_window}")}</span><span>Payouts</span>
           <span>Entry basis</span><span>Settled windows</span><span>Pairs</span><span></span>
         </div>
         <div class="funding-group-list">
           {
-        "".join(render_funding_token_group(group) for group in funding_groups)
+        "".join(
+            render_funding_token_group(group, selected_window=selected_window)
+            for group in funding_groups
+        )
         or render_funding_farm_empty(selected_farm, api_health_data)
     }
         </div>
@@ -8690,29 +8715,22 @@ def render_funding_page(
     return shell("Funding - SpreadBoard", "funding", body)
 
 
-def render_funding_token_group(group: dict[str, Any]) -> str:
+def render_funding_token_group(
+    group: dict[str, Any], *, selected_window: str = "now"
+) -> str:
     best = group.get("best_funding_route") or group.get("best_route") or {}
     historical = bool(best.get("radar_historical"))
     basis_current = not historical and api_spreads.spread_quote_current(best)
-    funding_24h = (
-        funding_radar.window_value(best, "1d")
-        if historical
-        else best.get("funding_24h_pct")
-        if best.get("funding_24h_pct") is not None
-        else best.get("funding_projected_24h_pct")
-    )
-    funding_basis = (
-        "last live observation"
-        if historical
-        else "settled 24h"
-        if best.get("funding_24h_pct") is not None
-        else "24h at current rate"
-        if funding_24h is not None
-        else "history unavailable"
-    )
+    funding_24h = funding_rank_value(best, selected_window)
+    funding_basis = funding_rank_basis(best, selected_window)
+    if historical:
+        funding_basis = f"{funding_basis} · last live route"
     funding_live_hook = (
         " data-live-funding"
-        if not historical and best.get("funding_24h_pct") is None and funding_24h is not None
+        if selected_window == "now"
+        and not historical
+        and funding_24h is not None
+        and funding_rank_basis(best, selected_window) == "24h at current rate"
         else ""
     )
     name = group.get("token_name") or "Metadata pending"
@@ -8742,34 +8760,25 @@ def render_funding_token_group(group: dict[str, Any]) -> str:
         <span class="funding-chevron" aria-hidden="true">⌄</span>
       </summary>
       <div class="funding-pair-list">
-        {"".join(render_funding_pair(route) for route in group.get("routes") or [])}
+        {"".join(render_funding_pair(route, selected_window=selected_window) for route in group.get("routes") or [])}
       </div>
     </details>
     """
 
 
-def render_funding_pair(row: dict[str, Any]) -> str:
+def render_funding_pair(row: dict[str, Any], *, selected_window: str = "now") -> str:
     historical = bool(row.get("radar_historical"))
     basis_current = not historical and api_spreads.spread_quote_current(row)
-    funding_24h = (
-        funding_radar.window_value(row, "1d")
-        if historical
-        else row.get("funding_24h_pct")
-        if row.get("funding_24h_pct") is not None
-        else row.get("funding_projected_24h_pct")
-    )
-    funding_basis = (
-        "last live observation"
-        if historical
-        else "settled"
-        if row.get("funding_24h_pct") is not None
-        else "at current rate"
-        if funding_24h is not None
-        else "history unavailable"
-    )
+    funding_24h = funding_rank_value(row, selected_window)
+    funding_basis = funding_rank_basis(row, selected_window)
+    if historical:
+        funding_basis = f"{funding_basis} · last live route"
     funding_live_hook = (
         " data-live-funding"
-        if not historical and row.get("funding_24h_pct") is None and funding_24h is not None
+        if selected_window == "now"
+        and not historical
+        and funding_24h is not None
+        and funding_rank_basis(row, selected_window) == "24h at current rate"
         else ""
     )
     long_funding = (
@@ -8802,11 +8811,7 @@ def render_funding_route_row(row: dict[str, Any]) -> str:
     headline = row.get("displayed_open_spread_pct")
     if headline is None:
         headline = row.get("executable_spread_pct")
-    funding_24h = (
-        row.get("funding_24h_pct")
-        if row.get("funding_24h_pct") is not None
-        else row.get("funding_projected_24h_pct")
-    )
+    funding_24h = funding_rank_value(row, "now")
     return f"""
     <article class="funding-terminal-grid funding-route-row {direction_class} {h(row.get("freshness"))}">
       <div class="funding-token-cell">
@@ -8839,11 +8844,7 @@ def render_alert_draft_button(
     if alert_type == "token_spread" and not api_spreads.spread_quote_current(row):
         return ""
     if alert_type == "funding":
-        current_value = (
-            row.get("funding_24h_pct")
-            if row.get("funding_24h_pct") is not None
-            else row.get("funding_daily_pct")
-        )
+        current_value = funding_rank_value(row, "now")
     else:
         current_value = (
             row.get("displayed_open_spread_pct")

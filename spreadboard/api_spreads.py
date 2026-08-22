@@ -2892,10 +2892,15 @@ def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
                     else None
                 ),
                 "best_funding_24h_basis": (
-                    "settled_public_events"
-                    if best_funding is not None and best_funding.funding_24h_pct is not None
-                    else "projected_current_rate"
+                    "projected_current_rate"
                     if best_funding is not None
+                    and (
+                        best_funding.long_funding_pct is not None
+                        or best_funding.short_funding_pct is not None
+                        or best_funding.funding_projected_24h_pct is not None
+                    )
+                    else "settled_public_events"
+                    if best_funding is not None and best_funding.funding_24h_pct is not None
                     else None
                 ),
                 "age_min": min(
@@ -3031,26 +3036,27 @@ def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | 
     selling spot you do not own, the executable trade is the mirror image (hold
     spot long, short the futures), so the carry flips sign with it.
 
-    A settled 24h sum is a measurement; annualising one instantaneous print is a
-    forecast, so the measurement wins whenever we have it. Kraken Futures settles
-    HOURLY and caps at +/-0.5%/h: AGLD's current print extrapolated to 9.78%/day
-    (3570% APR) while the 24 rates it actually paid summed to 5.66%/day.
+    This is the live ``Now`` value, so current leg rates win. Settled 24h is a
+    different, historical measurement exposed separately by the Funding radar;
+    mixing it into this value made the ``Now`` rank lag the rates visible on the
+    exchanges. The measured sum remains a last-resort fallback when no current
+    leg rate or pre-computed projection exists.
     """
-    net_daily = _float_or_none(getattr(row, "funding_24h_pct", None))
+    long_daily = _per_day(
+        getattr(row, "long_funding_pct", None),
+        getattr(row, "long_funding_interval_hours", None),
+    )
+    short_daily = _per_day(
+        getattr(row, "short_funding_pct", None),
+        getattr(row, "short_funding_interval_hours", None),
+    )
+    if long_daily is not None or short_daily is not None:
+        net_daily = (short_daily or 0.0) - (long_daily or 0.0)
+    else:
+        # Fast-quote and board rows can carry only a pre-computed projection.
+        net_daily = _float_or_none(getattr(row, "funding_projected_24h_pct", None))
     if net_daily is None:
-        long_daily = _per_day(
-            getattr(row, "long_funding_pct", None),
-            getattr(row, "long_funding_interval_hours", None),
-        )
-        short_daily = _per_day(
-            getattr(row, "short_funding_pct", None),
-            getattr(row, "short_funding_interval_hours", None),
-        )
-        if long_daily is not None or short_daily is not None:
-            net_daily = (short_daily or 0.0) - (long_daily or 0.0)
-        else:
-            # Fast-quote and board rows carry only a pre-computed projection.
-            net_daily = _float_or_none(getattr(row, "funding_projected_24h_pct", None))
+        net_daily = _float_or_none(getattr(row, "funding_24h_pct", None))
     if net_daily is None:
         return None, None
     if requires_existing_spot_inventory(row):
@@ -3080,6 +3086,17 @@ def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
         payload["funding_daily_pct"] = daily
         payload["funding_spread_pct"] = daily
         payload["funding_apr_pct"] = apr
+    payload["funding_rank_basis"] = (
+        "projected_current_rate"
+        if (
+            getattr(row, "long_funding_pct", None) is not None
+            or getattr(row, "short_funding_pct", None) is not None
+            or getattr(row, "funding_projected_24h_pct", None) is not None
+        )
+        else "settled_public_events"
+        if getattr(row, "funding_24h_pct", None) is not None
+        else None
+    )
     payload["executable_direction"] = (
         "hold spot long, short futures"
         if requires_existing_spot_inventory(row)

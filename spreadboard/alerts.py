@@ -689,9 +689,11 @@ def token_metrics(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
             value = _float(row.get(f"{side}_price"))
             if value is not None and value > 0:
                 prices.setdefault(token, []).append(value)
-        carry = _float(row.get("funding_24h_pct"))
+        carry = _float(row.get("funding_daily_pct"))
         if carry is None:
             carry = _float(row.get("funding_projected_24h_pct"))
+        if carry is None:
+            carry = _float(row.get("funding_24h_pct"))
         if carry is not None:
             funding[token] = max(funding.get(token, float("-inf")), carry)
 
@@ -719,10 +721,10 @@ def _float(value: Any) -> float | None:
 
 #: How each metric reads in the notification, and whether it is a percentage.
 _METRIC_LABELS = {
-    "funding_24h_pct": ("24h paired funding", True),
+    "funding_24h_pct": ("current-rate 24h paired funding", True),
     "open_spread_pct": ("open spread", True),
     "token_price": ("price", False),
-    "token_funding_24h_pct": ("best 24h funding", True),
+    "token_funding_24h_pct": ("best current-rate 24h funding", True),
     "route_deliverable": ("deposit / withdrawal route", False),
     "quote_age_seconds": ("quote age", False),
 }
@@ -779,9 +781,9 @@ def _rule_value(row: dict[str, Any] | None, metric: str) -> float | None:
     # against; the older names stay as fallbacks for rules stored before.
     keys = (
         (
-            "funding_24h_pct",
-            "funding_projected_24h_pct",
             "funding_daily_pct",
+            "funding_projected_24h_pct",
+            "funding_24h_pct",
             "funding_net_24h_pct",
             "net_funding_24h_pct",
         )
