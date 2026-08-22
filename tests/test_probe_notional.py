@@ -37,6 +37,7 @@ def test_no_module_hardcodes_the_old_fifty_dollar_probe() -> None:
         "spreadboard/server.py",
         "spreadboard/catalog_pairs.py",
         "scripts/route_quote_worker.py",
+        "scripts/audit_spread_accuracy.py",
     ):
         text = (ROOT / name).read_text(encoding="utf-8")
         if re.search(r"target_notional_usd\s*=\s*50\.0", text):

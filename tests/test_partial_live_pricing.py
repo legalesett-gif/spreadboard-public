@@ -104,7 +104,7 @@ def test_top_only_cex_fast_leg_keeps_a_verified_dex_depth_quote(
         long_venue="Uniswap",
         long_market_type="DEX",
         depth_usd=None,
-        matched_size_notional_usd=50.0,
+        matched_size_notional_usd=api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD,
         depth_weighted_spread_pct=9.5,
     )
 

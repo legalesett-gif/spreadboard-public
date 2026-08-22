@@ -650,6 +650,39 @@ def spread_quote_current(
     return age is not None and 0.0 <= age <= max_age_min
 
 
+def matched_probe_verified(row: Any) -> bool:
+    """Whether ``row`` proves the product's complete matched-size probe.
+
+    ``depth_weighted_spread_pct`` survived several historical probe-size
+    changes, so the number alone is not evidence that today's $500 target was
+    filled. API-discovery rows carry ``matched_size_notional_usd``; warm
+    catalogue rows carry ``target_notional_usd``; and rows rebuilt directly
+    from resident books carry ``live_book`` plus ``depth_usd``. One of those
+    explicit proofs must reach the current target and the route must not be
+    labelled depth-unverified.
+    """
+
+    getter = (
+        row.get
+        if isinstance(row, dict)
+        else lambda key, default=None: getattr(row, key, default)
+    )
+    if _float_or_none(getter("depth_weighted_spread_pct")) is None:
+        return False
+    blockers = getter("blockers", []) or []
+    if bool(getter("depth_unverified")) or "depth_unverified" in blockers:
+        return False
+    proofs = [
+        _float_or_none(getter("matched_size_notional_usd")),
+        _float_or_none(getter("target_notional_usd")),
+    ]
+    if bool(getter("live_book")) or bool(getter("catalog_pair")):
+        proofs.append(_float_or_none(getter("depth_usd")))
+    return max((value or 0.0 for value in proofs), default=0.0) >= (
+        LIVE_BOOK_TARGET_NOTIONAL_USD
+    )
+
+
 def _live_books() -> dict[str, Any]:
     try:
         from spreadboard import live_book_cache
@@ -914,18 +947,7 @@ def live_route_updates_for(
                 update = (None, funding_daily, None, None)
                 out[str(route["route_key"])] = update if include_basis else update[:3]
             continue
-        prior_depth_verified = (
-            not bool(route.get("depth_unverified"))
-            and (
-                (_float_or_none(route.get("depth_usd")) or 0.0)
-                >= LIVE_BOOK_TARGET_NOTIONAL_USD
-                or (
-                    _float_or_none(route.get("matched_size_notional_usd")) or 0.0
-                )
-                >= LIVE_BOOK_TARGET_NOTIONAL_USD
-                or _float_or_none(route.get("depth_weighted_spread_pct")) is not None
-            )
-        )
+        prior_depth_verified = matched_probe_verified(route)
         if long_book is not None:
             ask, ask_vwap = _book_side(long_book, "ask")
         else:
@@ -943,7 +965,7 @@ def live_route_updates_for(
             if bid_vwap is not None and ask_vwap is not None and ask_vwap > 0
             else None
         )
-        # A top-of-book-only fast leg is not allowed to erase a verified $50
+        # A top-of-book-only fast leg is not allowed to erase a verified $500
         # route. It can update the top quote, but the UI must keep the last
         # timestamped depth result until a fresh ladder replaces it. Returning
         # None here was what made DEX cards and valid bulk routes disappear as
@@ -968,7 +990,7 @@ def live_route_updates_for(
             live_depth_spread = (bid / ask - 1.0) * 100.0
             spread_basis = "top_book"
         if measured_depth_spread is None:
-            # A top-only tick may retain a still-current prior $50 quote, but
+            # A top-only tick may retain a still-current prior $500 quote, but
             # it cannot renew that proof.  Preserve the quote's own timestamp.
             quote_ts_us = int(_float_or_none(route.get("quote_ts_us")) or 0) or None
         else:
@@ -1006,11 +1028,36 @@ def live_route_updates_for(
         if existing is None:
             out[route_key] = fast if include_basis else fast[:3]
             continue
-        spread = existing[0] if existing[0] is not None else fast[0]
-        funding = existing[1] if existing[1] is not None else fast[1]
-        timestamp = existing[2] if existing[0] is not None else fast[2]
         existing_basis = existing[3] if include_basis and len(existing) > 3 else None
-        basis = existing_basis if existing[0] is not None else fast[3]
+        fast_basis = fast[3] if len(fast) > 3 else None
+        prefer_fast_spread = (
+            include_basis
+            and fast[0] is not None
+            and fast_basis in {"matched_vwap", "retained_matched_vwap"}
+            and existing_basis not in {"matched_vwap", "retained_matched_vwap"}
+        )
+        spread = (
+            fast[0]
+            if prefer_fast_spread
+            else existing[0]
+            if existing[0] is not None
+            else fast[0]
+        )
+        funding = existing[1] if existing[1] is not None else fast[1]
+        timestamp = (
+            fast[2]
+            if prefer_fast_spread
+            else existing[2]
+            if existing[0] is not None
+            else fast[2]
+        )
+        basis = (
+            fast_basis
+            if prefer_fast_spread
+            else existing_basis
+            if existing[0] is not None
+            else fast_basis
+        )
         merged = (spread, funding, timestamp, basis)
         out[route_key] = merged if include_basis else merged[:3]
     return out
@@ -1825,6 +1872,22 @@ def _row_from_api(
             identity_key=_str_or_none(raw.get("identity_key")),
         )
     )
+    matched_size_notional_usd = _float_or_none(
+        raw.get("target_notional_usd"),
+        dex_input.get("quote_notional_usd") if isinstance(dex_input, dict) else None,
+        long_input.get("quote_notional_usd") if isinstance(long_input, dict) else None,
+        short_input.get("quote_notional_usd") if isinstance(short_input, dict) else None,
+    )
+    # A route measured under an earlier probe remains useful top-book/funding
+    # context, but it cannot claim today's matched-size spread. Enforce that at
+    # ingestion so structural grouping and every downstream surface inherit
+    # the same boundary even before the live overlay runs.
+    if (
+        _float_or_none(raw.get("depth_weighted_spread_pct")) is not None
+        and (matched_size_notional_usd or 0.0) < LIVE_BOOK_TARGET_NOTIONAL_USD
+        and "depth_unverified" not in blockers
+    ):
+        blockers.append("depth_unverified")
     return SpreadTerminalRow(
         token=token,
         token_name=token_metadata.token_name(token, metadata or {}),
@@ -1965,12 +2028,7 @@ def _row_from_api(
         listing_age_source=_str_or_none(metadata_entry.get("listing_age_source")),
         asset_class=str(asset_class),
         liquidity_evidence_kind="minimum_leg_volume_24h",
-        matched_size_notional_usd=_float_or_none(
-            raw.get("target_notional_usd"),
-            dex_input.get("quote_notional_usd") if isinstance(dex_input, dict) else None,
-            long_input.get("quote_notional_usd") if isinstance(long_input, dict) else None,
-            short_input.get("quote_notional_usd") if isinstance(short_input, dict) else None,
-        ),
+        matched_size_notional_usd=matched_size_notional_usd,
         gas_adjusted_spread_pct=_float_or_none(raw.get("gas_adjusted_spread_pct")),
         dex_gas_estimate_usd=_float_or_none(
             dex_input.get("gas_estimate_usd") if isinstance(dex_input, dict) else None

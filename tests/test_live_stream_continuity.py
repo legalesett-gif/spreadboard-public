@@ -113,6 +113,29 @@ def test_a_thin_live_tick_identifies_itself_as_top_book(
     assert update[3] == "top_book"
 
 
+def test_current_exact_500_quote_outranks_a_thin_resident_top_book(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The acceleration feed cannot demote exact matched evidence to top-book."""
+    _books(monkeypatch)
+    route = _route()
+    monkeypatch.setattr(
+        api_spreads,
+        "_fast_quote_updates_for",
+        lambda _routes: {
+            route["route_key"]: (1.75, None, 1_700_000_200_000_000, "matched_vwap")
+        },
+    )
+
+    update = api_spreads.live_route_updates_for([route], include_basis=True)[
+        route["route_key"]
+    ]
+
+    assert update[0] == pytest.approx(1.75)
+    assert update[2] == 1_700_000_200_000_000
+    assert update[3] == "matched_vwap"
+
+
 def test_a_proven_route_still_reports_its_matched_vwap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -3461,6 +3461,7 @@ def test_freshness_guard_resorts_blank_mirages_below_real_edges(
         "route_key": "GUA|valid",
         "executable_spread_pct": 1.2,
         "depth_weighted_spread_pct": 1.1,
+        "matched_size_notional_usd": api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD,
         "depth_unverified": False,
         "mirage_guarded": False,
     }
@@ -3487,12 +3488,13 @@ def test_freshness_guard_resorts_blank_mirages_below_real_edges(
 def test_freshness_keeps_timestamped_matched_depth_despite_fast_top_only_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A fast ticker tick cannot erase the route's still-current $50 proof."""
+    """A fast ticker tick cannot erase the route's still-current $500 proof."""
     route = {
         "route_key": "GUA|matched",
         "executable_spread_pct": 1.2,
         "depth_weighted_spread_pct": 1.05,
-        "depth_unverified": True,
+        "matched_size_notional_usd": api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD,
+        "depth_unverified": False,
         "mirage_guarded": False,
     }
     payload = {
@@ -3508,6 +3510,53 @@ def test_freshness_keeps_timestamped_matched_depth_despite_fast_top_only_flag(
     server._apply_spread_freshness(payload)
 
     assert payload["groups"][0]["best_edge_pct"] == pytest.approx(1.05)
+
+
+def test_freshness_never_promotes_an_old_smaller_probe_over_current_500_depth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A large legacy $50 edge is context, not today's matched-size leader."""
+    legacy = {
+        "route_key": "MSTU|legacy",
+        "executable_spread_pct": 4.1,
+        "depth_weighted_spread_pct": 3.9,
+        "matched_size_notional_usd": 50.0,
+        "depth_unverified": False,
+    }
+    verified = {
+        "route_key": "MSTU|verified",
+        "executable_spread_pct": 1.4,
+        "depth_weighted_spread_pct": 1.25,
+        "matched_size_notional_usd": api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD,
+        "depth_unverified": False,
+    }
+    payload = {
+        "filters": {"sort": "edge", "direction": "desc"},
+        "groups": [
+            {
+                "token": "MSTU",
+                "best_route": legacy,
+                "best_edge_pct": 3.9,
+                "routes": [legacy, verified],
+            }
+        ],
+        "top_edges": [],
+        "top_funding": [],
+        "summary": {},
+    }
+    monkeypatch.setattr(
+        server.api_spreads,
+        "live_route_updates_for",
+        lambda _routes, **_kwargs: {},
+    )
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(server.api_spreads, "quote_age_min", lambda _row: 0.0)
+
+    server._apply_spread_freshness(payload)
+
+    group = payload["groups"][0]
+    assert group["best_route"]["route_key"] == "MSTU|verified"
+    assert group["best_edge_pct"] == pytest.approx(1.25)
 
 
 def test_filtered_empty_lane_never_borrows_a_global_headline_edge(
@@ -3580,7 +3629,9 @@ def test_freshness_reprices_cached_routes_and_repairs_headline_panel(
     monkeypatch.setattr(
         server.api_spreads,
         "live_route_updates_for",
-        lambda _routes: {"GUA|route": (1.25, 0.2, 9_000_000)},
+        lambda _routes, **_kwargs: {
+            "GUA|route": (1.25, 0.2, 9_000_000, "matched_vwap")
+        },
     )
     monkeypatch.setattr(
         server.api_spreads,
@@ -3633,7 +3684,9 @@ def test_freshness_keeps_now_live_and_leaves_settled_to_history(
     monkeypatch.setattr(
         server.api_spreads,
         "live_route_updates_for",
-        lambda _routes: {"GUA|funding": (0.25, 0.4, 10_000_000)},
+        lambda _routes, **_kwargs: {
+            "GUA|funding": (0.25, 0.4, 10_000_000, "matched_vwap")
+        },
     )
     monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
     monkeypatch.setattr(server.api_spreads, "quote_age_min", lambda _row: 0.0)
@@ -3684,9 +3737,9 @@ def test_freshness_promotes_the_route_with_the_best_live_carry(
     monkeypatch.setattr(
         server.api_spreads,
         "live_route_updates_for",
-        lambda _routes: {
-            "GUA|settled": (0.2, 0.7, 10_000_000),
-            "GUA|projected": (0.3, 0.9, 10_000_000),
+        lambda _routes, **_kwargs: {
+            "GUA|settled": (0.2, 0.7, 10_000_000, "matched_vwap"),
+            "GUA|projected": (0.3, 0.9, 10_000_000, "matched_vwap"),
         },
     )
     monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)

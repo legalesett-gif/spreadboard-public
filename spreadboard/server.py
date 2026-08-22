@@ -2329,6 +2329,8 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         values[0]
                         for values in rows.values()
                         if _float_or_none(values[0]) is not None
+                        and len(values) > 2
+                        and values[2] in {"matched_vwap", "retained_matched_vwap"}
                     ]
                     current_funding = [
                         values[1]
@@ -2836,15 +2838,27 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(route, dict) and route.get("route_key"):
             route_copies.append(route)
 
-    live_updates = api_spreads.live_route_updates_for(route_copies)
+    live_updates = api_spreads.live_route_updates_for(route_copies, include_basis=True)
     for route in route_copies:
         update = live_updates.get(str(route.get("route_key") or ""))
         if update is None:
             continue
-        spread, funding, quote_ts_us = update
+        spread, funding, quote_ts_us, spread_basis = update
         if spread is not None and quote_ts_us is not None:
-            route["depth_weighted_spread_pct"] = spread
             route["quote_ts_us"] = quote_ts_us
+            if spread_basis in {"matched_vwap", "retained_matched_vwap"}:
+                route["depth_weighted_spread_pct"] = spread
+                route["depth_unverified"] = False
+                route["matched_size_notional_usd"] = (
+                    api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD
+                )
+                route["depth_usd"] = api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD
+            elif spread_basis == "top_book":
+                route["executable_spread_pct"] = spread
+                route["displayed_open_spread_pct"] = spread
+                route["depth_weighted_spread_pct"] = None
+                route["depth_unverified"] = True
+                route["matched_size_notional_usd"] = None
         if funding is not None:
             route["funding_daily_pct"] = funding
 
@@ -2864,21 +2878,15 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
             return False
         if route.get("deliverable") is False:
             return False
-        # `depth_unverified` can mean either "ticker/top book only" or "the
-        # newest fast tick had no ladder but this exact route still carries a
-        # timestamped matched-size quote". Only the latter may retain a leader
-        # slot. Treating the flag alone as disqualifying blanked the entire
-        # board immediately after every bulk/websocket overlay.
-        if route.get("depth_unverified") and _float_or_none(
-            route.get("depth_weighted_spread_pct")
-        ) is None:
+        if not api_spreads.matched_probe_verified(route):
             return False
         guard = route.get("tokenized_guard") or {}
         return not isinstance(guard, dict) or guard.get("rankable") is not False
 
     def spread_value(route: dict[str, Any]) -> float | None:
-        matched = _float_or_none(route.get("depth_weighted_spread_pct"))
-        return matched if matched is not None else _float_or_none(route.get("executable_spread_pct"))
+        if not api_spreads.matched_probe_verified(route):
+            return None
+        return _float_or_none(route.get("depth_weighted_spread_pct"))
 
     filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
     sort_by = str(filters.get("sort") or "edge")
@@ -6146,13 +6154,13 @@ def _board_stream_rows(board_path: Path, query: dict[str, list[str]]) -> dict[st
         # route from the member's screen and turned the whole board into
         # "refreshing" until both books happened to enter the fast cache.
         if spread is None and api_spreads.spread_quote_current(route):
-            spread = _float_or_none(route.get("depth_weighted_spread_pct"))
-            if spread is None:
+            if api_spreads.matched_probe_verified(route):
+                spread = _float_or_none(route.get("depth_weighted_spread_pct"))
+                spread_basis = "retained_matched_vwap"
+            else:
                 spread = _float_or_none(route.get("executable_spread_pct"))
                 if spread is not None:
                     spread_basis = "top_book"
-            else:
-                spread_basis = "retained_matched_vwap"
         rows[key] = (
             spread,
             funding if funding is not None else route.get("funding_daily_pct"),

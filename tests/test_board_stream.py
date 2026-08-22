@@ -75,7 +75,7 @@ def test_board_stream_emits_a_board_event(
 
         assert saw_event, "the stream never emitted a board event"
         assert payload["updated_at"].endswith("Z")
-        assert payload["max_spread_pct"] == 1.25
+        assert payload["max_spread_pct"] is None
         assert payload["max_funding_pct"] == 0.031
         route = payload["routes"][0]
         assert route["spread_pct"] == 1.25
@@ -120,6 +120,7 @@ def test_stream_does_not_erase_a_current_quote_when_fast_books_are_absent(
     route = {
         "route_key": "GUA|Mexc|Spot|Gate|Futures",
         "depth_weighted_spread_pct": 1.125,
+        "matched_size_notional_usd": api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD,
         "executable_spread_pct": 1.2,
         "funding_daily_pct": 0.4,
     }
