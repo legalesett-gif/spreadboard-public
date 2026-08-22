@@ -126,6 +126,68 @@ def test_privacy_controller_details_are_configurable_and_escaped(
     assert "1 <Main> Street" not in html
 
 
+def test_refund_policy_and_checkout_state_the_actual_immediate_access_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A vague "may affect" checkbox is not an acknowledgement of lost rights.
+
+    Instant digital supply needs a deliberate request and an acknowledgement
+    of when an applicable 14-day cancellation right is lost.  The same promise
+    must be visible in the policy, while faulty or misdescribed access remains
+    protected.
+    """
+
+    monkeypatch.setenv(
+        "SPREADBOARD_CRYPTO_RECEIVING_ADDRESS",
+        "0xe45cedb238f0a90f111a283eb5f67f7e4d80b937",
+    )
+    monkeypatch.setenv("SPREADBOARD_CRYPTO_RPC_URL", "https://example.invalid/rpc")
+    user = SimpleNamespace(
+        id=71,
+        email="buyer@example.test",
+        display_name="Buyer",
+        role="member",
+        is_admin=False,
+        subscription_active=False,
+        subscription_status="inactive",
+        subscription_tier="free",
+        subscription_expires_at=None,
+        subscription_cancel_at_period_end=False,
+        billing_customer_id=None,
+        csrf_token="csrf",
+        entitlement_tier="free",
+    )
+    monkeypatch.setattr(server.accounts, "current_user", lambda: user)
+
+    refunds = server.render_legal_page("refunds")
+    subscription = server.render_subscription_page()
+
+    assert server.TERMS_VERSION == "2026-08-22"
+    assert "may affect the statutory 14-day cancellation right" not in refunds
+    assert "may be affected once digital access begins" not in subscription
+    assert server.IMMEDIATE_ACCESS_CONSENT_COPY in refunds
+    assert server.IMMEDIATE_ACCESS_CONSENT_COPY in subscription
+    assert "lose it once paid digital access begins" in refunds
+    assert "faulty or not as described" in refunds
+    assert "paid digital access has not begun" in refunds
+
+
+def test_refund_policy_preserves_fault_remedies_and_crypto_refund_rights() -> None:
+    """A generic possible credit must not hide the statutory remedy sequence."""
+
+    html = server.render_legal_page("refunds")
+
+    assert "repair or replacement" in html
+    assert "repeat performance" in html
+    assert "within a reasonable time and without significant inconvenience" in html
+    assert "price reduction" in html
+    assert "full refund" in html
+    assert "within 14 days after we agree" in html
+    assert "unless you expressly agree otherwise" in html
+    assert "Blockchain transfers cannot be reversed" in html
+    assert "does not remove statutory remedies" in html
+
+
 def test_legal_contact_methods_are_safe_working_links(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

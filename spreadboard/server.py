@@ -171,7 +171,13 @@ _PUBLIC_INTEL_FEED_URL = os.environ.get(
     "b348e50f10b0ad7de8b71fd619ea7151/raw/spreadboard-community-feed.json",
 )
 _PUBLIC_INTEL_FEED_CACHE: tuple[float, dict[str, Any]] | None = None
-TERMS_VERSION = "2026-08-12"
+TERMS_VERSION = "2026-08-22"
+IMMEDIATE_ACCESS_CONSENT_COPY = (
+    "I request immediate access to the digital service before any applicable "
+    "statutory 14-day cancellation period ends. I acknowledge that, where the "
+    "statutory cancellation right applies, I lose it once paid digital access "
+    "begins. This does not affect my rights if access is faulty or not as described."
+)
 PASSWORD_RESET_QUEUE_STALE_SECONDS = max(
     60.0, float(os.environ.get("SPREADBOARD_PASSWORD_RESET_QUEUE_STALE_SECONDS", "300"))
 )
@@ -12111,8 +12117,7 @@ def render_subscription_page(query: dict[str, list[str]] | None = None) -> str:
     crypto_ready = bool(crypto_billing.status().get("checkout_ready"))
     consent = (
         '<label class="subscription-consent"><input type="checkbox" data-subscription-consent>'
-        '<span>I request immediate access and acknowledge that the statutory cancellation '
-        'right may be affected once digital access begins.</span></label>'
+        f'<span>{h(IMMEDIATE_ACCESS_CONSENT_COPY)}</span></label>'
         if show_crypto_checkout and crypto_ready
         else ""
     )
@@ -12657,11 +12662,26 @@ def render_legal_page(page: str) -> str:
                 ),
                 (
                     "Immediate access",
-                    "At checkout you are asked to request immediate digital access and acknowledge that beginning supply may affect the statutory 14-day cancellation right. This does not remove rights that cannot legally be waived.",
+                    (
+                        "Where a statutory 14-day cancellation right applies, it remains "
+                        "available until paid digital access begins. The checkout "
+                        f"confirmation states: “{IMMEDIATE_ACCESS_CONSENT_COPY}” If paid "
+                        "digital access has not begun, you may cancel by sending a clear "
+                        "statement through either contact method below; no special form "
+                        "is required."
+                    ),
                 ),
                 (
                     "Service faults",
-                    "If paid access is materially unavailable or not supplied as described, contact us promptly. We will investigate and provide the remedy required by applicable consumer law, which may include restoration, a credit, or a refund.",
+                    (
+                        "If paid access is faulty or not supplied as described, contact us "
+                        "promptly. Applicable law may entitle you first to repair or "
+                        "replacement of digital content, or repeat performance of the "
+                        "service, as applicable, within a reasonable time and without "
+                        "significant inconvenience. If that remedy is impossible or is "
+                        "not provided within those limits, you may be entitled to an "
+                        "appropriate price reduction, which may be a full refund."
+                    ),
                 ),
                 (
                     "Duplicate or incorrect payments",
@@ -12669,7 +12689,17 @@ def render_legal_page(page: str) -> str:
                 ),
                 (
                     "How to request",
-                    f"Contact {support} or {support_url}. Include the account email, payment date, public transaction hash, and reason. Refunds, when due, are handled to a verified destination using the original payment asset where practical.",
+                    (
+                        f"Contact {support} or {support_url}. Include the account email, "
+                        "payment date, public transaction hash, and reason. If a refund "
+                        "is due, we process it without undue delay and, where the "
+                        "statutory rule applies, within 14 days after we agree you are "
+                        "entitled. We use the original payment asset and a verified "
+                        "destination unless you expressly agree otherwise, and do not "
+                        "impose a refund fee where the law prohibits one. Blockchain "
+                        "transfers cannot be reversed, but that does not remove statutory "
+                        "remedies."
+                    ),
                 ),
             ],
         ),
