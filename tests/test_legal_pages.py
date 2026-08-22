@@ -10,6 +10,24 @@ import pytest
 from spreadboard import server
 
 
+def _contrast_ratio(foreground: str, background: str) -> float:
+    def luminance(value: str) -> float:
+        channels = [int(value[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+        linear = [
+            channel / 12.92
+            if channel <= 0.04045
+            else ((channel + 0.055) / 1.055) ** 2.4
+            for channel in channels
+        ]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    foreground_luminance = luminance(foreground)
+    background_luminance = luminance(background)
+    lighter = max(foreground_luminance, background_luminance)
+    darker = min(foreground_luminance, background_luminance)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
 def test_every_legal_document_has_one_main_landmark() -> None:
     """The shared shell already owns the document's only main landmark."""
 
@@ -37,6 +55,26 @@ def test_legal_copy_and_actions_use_contrast_safe_light_tokens() -> None:
     assert ".legal-page nav a,.legal-contact a {" in css
     assert "color:var(--legal-link);" in css
     assert ".legal-page .page-kicker { color:var(--legal-link); }" in css
+
+
+def test_shared_light_navigation_uses_an_aa_safe_shell_token() -> None:
+    """Privacy exposed a shared light-shell contrast miss around its content.
+
+    The desktop and mobile navigation links measured 4.424:1 on production,
+    just below the 4.5:1 requirement for their small text.  The correction is
+    intentionally scoped to navigation so it does not silently restyle every
+    other muted evidence label in the product.
+    """
+
+    css = server.APP_CSS
+
+    assert "--terminal-nav-muted:#60716a;" in css
+    assert "--terminal-nav-muted:var(--terminal-muted);" in css
+    assert ".main-nav a {" in css
+    assert "color:var(--terminal-nav-muted); font-size:12px" in css
+    assert ".mobile-primary-nav a,.mobile-secondary-nav a {" in css
+    assert "color:var(--terminal-nav-muted); font-size:11px" in css
+    assert _contrast_ratio("#60716a", "#f3f6f4") >= 4.5
 
 
 def test_privacy_notice_covers_the_data_the_product_actually_collects() -> None:

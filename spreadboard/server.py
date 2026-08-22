@@ -19266,6 +19266,7 @@ pre { background: var(--dark); color: white; padding: 14px; border-radius: 8px; 
   --terminal-line:#cbd8d3;
   --terminal-shell:#f8faf9;
   --terminal-shell-text:#11201c;
+  --terminal-nav-muted:#60716a;
   --terminal-accent:#168f81;
   --terminal-accent-soft:rgba(22,143,129,.10);
 }
@@ -19287,6 +19288,7 @@ pre { background: var(--dark); color: white; padding: 14px; border-radius: 8px; 
   --terminal-line:rgba(172,216,203,.20);
   --terminal-shell:#07110f;
   --terminal-shell-text:#ecf4f1;
+  --terminal-nav-muted:var(--terminal-muted);
   --terminal-accent:#43d7c4;
   --terminal-accent-soft:rgba(67,215,196,.10);
 }
@@ -19308,7 +19310,7 @@ strong, b, table, .terminal-kpi, .terminal-kpis, .terminal-tape,
 .brand-mark { width:10px; height:10px; border-radius:50%; background:var(--terminal-accent); }
 .brand-mark::before,.brand-mark::after { display:none; }
 .main-nav { gap:0; overflow-x:auto; scrollbar-width:none; }
-.main-nav a { height:50px; padding:0 11px; border-bottom:2px solid transparent; color:var(--terminal-muted); font-size:12px; font-weight:600; }
+.main-nav a { height:50px; padding:0 11px; border-bottom:2px solid transparent; color:var(--terminal-nav-muted); font-size:12px; font-weight:600; }
 .main-nav a.active { color:var(--terminal-text); border-bottom-color:var(--terminal-accent); box-shadow:none; }
 .header-actions { gap:10px; }
 .account-chip { color:var(--terminal-text); font-weight:600; }
@@ -19533,7 +19535,7 @@ main { padding:22px 24px 56px; }
   .topbar { min-height:48px; padding:7px 14px; align-items:center; }
   .brand { font-size:14px; }
   .mobile-primary-nav,.mobile-secondary-nav { display:flex; gap:0; overflow-x:auto; padding:0 8px; border-bottom:1px solid var(--terminal-line); background:var(--terminal-bg); }
-  .mobile-primary-nav a,.mobile-secondary-nav a { flex:0 0 auto; min-height:42px; display:inline-flex; align-items:center; padding:0 9px; border-bottom:2px solid transparent; color:var(--terminal-muted); font-size:11px; font-weight:650; }
+  .mobile-primary-nav a,.mobile-secondary-nav a { flex:0 0 auto; min-height:42px; display:inline-flex; align-items:center; padding:0 9px; border-bottom:2px solid transparent; color:var(--terminal-nav-muted); font-size:11px; font-weight:650; }
   .mobile-primary-nav a.active,.mobile-secondary-nav a.active { border-bottom-color:var(--terminal-accent); background:transparent; color:var(--terminal-text); }
   main { padding:18px 14px 44px; }
   .terminal-heading { grid-template-columns:1fr; gap:12px; padding:0 0 14px; }
