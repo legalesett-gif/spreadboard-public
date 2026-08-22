@@ -24,6 +24,20 @@ def test_copy_view_link_keeps_the_button_across_the_clipboard_await() -> None:
     assert "event.currentTarget.textContent='Link copied'" not in source
 
 
+def test_json_export_prepares_then_downloads_instead_of_opening_raw_warming_data() -> None:
+    page_source = Path(server.__file__).read_text(encoding="utf-8")
+    script = server.render_json_export_script()
+
+    assert 'data-market-export' in page_source
+    assert 'data-market-export-status' in page_source
+    assert "Preparing current JSON" in script
+    assert "payload.status === 'warming'" in script
+    assert "URL.createObjectURL" in script
+    assert "anchor.download" in script
+    assert "for (let attempt = 1; attempt <= 12; attempt += 1)" in script
+    assert "location.assign" not in script
+
+
 def test_dex_market_empty_state_names_a_zero_row_provider_failure() -> None:
     health = {
         "status": "fresh",

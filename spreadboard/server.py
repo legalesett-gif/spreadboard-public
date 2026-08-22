@@ -3170,7 +3170,7 @@ def _market_cache_finish(cache_key: tuple[Any, ...], data: dict[str, Any] | None
 #: than a cold build so waiters do not pile on, short enough that nobody holds a
 #: page open indefinitely.
 _MARKET_BUILD_WAIT_SECONDS = max(
-    5.0, float(os.environ.get("SPREADBOARD_MARKET_BUILD_WAIT_SECONDS", "25"))
+    3.0, float(os.environ.get("SPREADBOARD_MARKET_BUILD_WAIT_SECONDS", "5"))
 )
 
 #: How long to wait for a build slot before giving up and answering anyway.
@@ -3180,7 +3180,7 @@ _MARKET_BUILD_WAIT_SECONDS = max(
 #: slot: ten lane tabs opened at once produced a 60s hang and a dropped
 #: connection instead of a prompt "still warming".
 _MARKET_BUILD_SLOT_WAIT_SECONDS = max(
-    0.5, float(os.environ.get("SPREADBOARD_MARKET_BUILD_SLOT_WAIT_SECONDS", "6"))
+    0.5, float(os.environ.get("SPREADBOARD_MARKET_BUILD_SLOT_WAIT_SECONDS", "1.5"))
 )
 
 
@@ -6177,6 +6177,7 @@ def render_markets_page(
     api_health_data = source_health.get("canonical_api") or {}
     pagination = data.get("pagination") or {}
     pro_view = (_query_first(query, "view") or "grouped") == "table"
+    generation_warming = data.get("status") == "warming"
     source_ready = data.get("ok") and api_health_data.get("status") == "fresh"
     market_wide_sidebar = _query_bool(query, "funding_only") or any(
         _query_first(query, key)
@@ -6209,9 +6210,9 @@ def render_markets_page(
           <p>Executable public order-book prices grouped by token. Expand an asset to compare every venue pair, funding leg, transfer rail, and chart.</p>
         </div>
         <div class="terminal-live-box {"live" if source_ready else "unavailable"}">
-          <span>{"Live" if source_ready else "Reconnecting"}</span>
-          <strong data-live-stamp>{fmt_age(api_health_data.get("age_min"))}</strong>
-          <em>streaming order books · no refresh needed</em>
+          <span>{"Live" if source_ready else "Preparing" if generation_warming else "Reconnecting"}</span>
+          <strong data-live-stamp>{"Current generation" if generation_warming else fmt_age(api_health_data.get("age_min"))}</strong>
+          <em>{"building current routes · this page updates automatically" if generation_warming else "streaming order books · no refresh needed"}</em>
         </div>
       </header>
     """
@@ -6289,9 +6290,7 @@ def render_markets_page(
         else f"Top {h(min(int(pagination.get('returned_rows') or 0), api_spreads.DEFAULT_LIMIT))} assets by live open spread. Select a token to reveal every venue route."
     }</p>
             </div>
-            <div class="market-head-actions"><button class="mini-action" type="button" data-share-market>Copy view link</button><a class="mini-action primary-link" href="/api/spreads?{
-        h(urlencode(_query_with(query, limit=500, offset=0)))
-    }">JSON</a></div>
+            <div class="market-head-actions"><button class="mini-action" type="button" data-share-market>Copy view link</button>{render_json_export_control("/api/spreads?" + urlencode(_query_with(query, limit=500, offset=0)))}</div>
           </div>
           {market_group_header}
           {market_results}
@@ -6310,8 +6309,83 @@ def render_markets_page(
       </section>
       {render_net_edge_dialog()}
     </section>
+    {render_json_export_script()}
     """
     return shell("Markets - SpreadBoard", "markets", body)
+
+
+def render_json_export_control(export_url: str) -> str:
+    return f"""
+    <span class="market-export-control">
+      <button class="mini-action primary-link" type="button" data-market-export data-export-url="{h(export_url)}">Export JSON</button>
+      <span class="market-export-status" data-market-export-status role="status" aria-live="polite"></span>
+    </span>
+    """
+
+
+def render_json_export_script() -> str:
+    """Download only a complete current generation, with a finite warm-up wait."""
+
+    return """
+    <script>
+    (() => {
+      const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+      document.addEventListener('click', async event => {
+        const button = event.target.closest('[data-market-export]');
+        if (!button || button.disabled) return;
+        const status = button.parentElement?.querySelector('[data-market-export-status]');
+        const originalLabel = button.textContent;
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        try {
+          for (let attempt = 1; attempt <= 12; attempt += 1) {
+            button.textContent = 'Preparing…';
+            if (status) status.textContent = attempt === 1
+              ? 'Preparing current JSON…'
+              : `Still preparing current JSON · check ${attempt} of 12`;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 15000);
+            let response;
+            try {
+              response = await fetch(button.dataset.exportUrl, {
+                headers: {'Accept': 'application/json'},
+                cache: 'no-store',
+                signal: controller.signal,
+              });
+            } finally {
+              clearTimeout(timeout);
+            }
+            if (!response.ok) throw new Error('export_request_failed');
+            const payload = await response.json();
+            if (payload.status === 'warming') {
+              if (attempt === 12) throw new Error('export_still_warming');
+              await pause(1500);
+              continue;
+            }
+            if (payload.ok !== true) throw new Error('export_not_ready');
+            const blob = new Blob([JSON.stringify(payload)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = `spreadboard-markets-${new Date().toISOString().slice(0, 10)}.json`;
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            if (status) status.textContent = 'Current JSON downloaded.';
+            return;
+          }
+        } catch (_error) {
+          if (status) status.textContent = 'Export is still preparing. Try again shortly.';
+        } finally {
+          button.disabled = false;
+          button.removeAttribute('aria-busy');
+          button.textContent = originalLabel;
+        }
+      });
+    })();
+    </script>
+    """
 
 
 #: The free board is built from the query the warmer already keeps hot, so a
@@ -8745,9 +8819,7 @@ def render_funding_page(
             <h2>{h(dict(tabs).get(selected_farm))} Farms</h2>
             <p>Positive net values mean the displayed long-short pair receives funding under the exchange sign convention.</p>
           </div>
-          <a class="mini-action primary-link" href="/api/spreads?{
-        h(urlencode(_query_with(funding_query, limit=500, offset=0)))
-    }">JSON</a>
+          {render_json_export_control("/api/spreads?" + urlencode(_query_with(funding_query, limit=500, offset=0)))}
         </div>
         <div class="funding-ledger-head" aria-hidden="true">
           <span>Token</span><span>Best farm</span><span>{h("Net now / 24h" if selected_window == "now" else "Settled 24h" if selected_window == "1d" else f"Settled {selected_window}")}</span><span>Payouts</span>
@@ -8764,6 +8836,7 @@ def render_funding_page(
         </div>
       </section>
     </section>
+    {render_json_export_script()}
     """
     return shell("Funding - SpreadBoard", "funding", body)
 
@@ -17722,6 +17795,9 @@ main { max-width: none; margin: 0; padding: 32px 24px 0; }
 .filter-preset-guest a { color:var(--terminal-accent); }
 .market-head-actions { display:flex; gap:6px; align-items:center; }
 .market-head-actions button { cursor:pointer; background:var(--terminal-panel-2); color:var(--terminal-text); }
+.market-export-control { display:inline-flex; align-items:center; gap:7px; min-width:0; }
+.market-export-status { max-width:220px; color:var(--terminal-muted); font-size:10px; line-height:1.25; overflow-wrap:anywhere; }
+.market-export-control button[aria-busy="true"] { cursor:progress; opacity:.8; }
 .pro-market-wrap { width:100%; overflow:auto; border:1px solid var(--terminal-line); border-radius:8px; background:var(--terminal-panel); }
 .pro-market-table { width:100%; min-width:1060px; border-collapse:collapse; color:var(--terminal-text); font-size:12px; }
 .pro-market-table caption { padding:9px 12px; text-align:left; color:var(--terminal-muted); font-size:10px; font-weight:900; text-transform:uppercase; letter-spacing:.06em; }

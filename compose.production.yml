@@ -82,6 +82,11 @@ services:
       # intermittent page stalls and a rising memory tail. The previous
       # a second full build cannot overlap the first.
       SPREADBOARD_MARKET_BUILD_SLOTS: "1"
+      # Readers do not wait through a 15-25 second cold generation. They get a
+      # truthful preparing shell/export state quickly and retry the one
+      # admitted current build; no second build or stale fallback is allowed.
+      SPREADBOARD_MARKET_BUILD_WAIT_SECONDS: "5"
+      SPREADBOARD_MARKET_BUILD_SLOT_WAIT_SECONDS: "1.5"
       # Live collectors keep the strict quote cadence but yield CPU to HTTP and
       # the one admitted structural build when the four-vCPU host is busy.
       SPREADBOARD_LIVE_WORKER_NICE: "8"

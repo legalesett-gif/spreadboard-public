@@ -152,7 +152,8 @@ def test_admission_control_fails_fast() -> None:
     and a dropped connection rather than a prompt "still warming".
     """
     assert server._MARKET_BUILD_SLOT_WAIT_SECONDS < server._MARKET_BUILD_WAIT_SECONDS
-    assert server._MARKET_BUILD_SLOT_WAIT_SECONDS <= 10
+    assert server._MARKET_BUILD_WAIT_SECONDS <= 5
+    assert server._MARKET_BUILD_SLOT_WAIT_SECONDS <= 2
 
     import inspect
 
