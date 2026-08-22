@@ -3603,7 +3603,7 @@ def test_freshness_reprices_cached_routes_and_repairs_headline_panel(
     assert payload["summary"]["max_depth_weighted_spread_pct"] == pytest.approx(1.25)
 
 
-def test_freshness_does_not_downgrade_settled_funding_to_projection(
+def test_freshness_keeps_now_live_and_leaves_settled_to_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     route = {
@@ -3640,15 +3640,16 @@ def test_freshness_does_not_downgrade_settled_funding_to_projection(
 
     server._apply_spread_freshness(payload)
 
-    assert group["best_funding_24h_pct"] == pytest.approx(0.7)
-    assert group["best_funding_apr_pct"] == pytest.approx(255.5)
-    assert group["best_funding_24h_basis"] == "settled_public_events"
+    assert group["best_funding_24h_pct"] == pytest.approx(0.4)
+    assert group["best_funding_apr_pct"] == pytest.approx(146.0)
+    assert group["best_funding_24h_basis"] == "projected_current_rate"
+    assert payload["summary"]["max_funding_24h_pct"] == pytest.approx(0.4)
 
 
-def test_freshness_keeps_the_route_that_owns_a_retained_settled_headline(
+def test_freshness_promotes_the_route_with_the_best_live_carry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A settled value must never be relabelled with a different live pair."""
+    """The Now route changes with live carry; settled windows stay separate."""
     settled = {
         "route_key": "GUA|settled",
         "quote_ts_us": 9_000_000,
@@ -3693,9 +3694,10 @@ def test_freshness_keeps_the_route_that_owns_a_retained_settled_headline(
 
     server._apply_spread_freshness(payload)
 
-    assert group["best_funding_route"]["route_key"] == "GUA|settled"
-    assert group["best_funding_24h_pct"] == pytest.approx(0.7)
-    assert group["best_funding_24h_basis"] == "settled_public_events"
+    assert group["best_funding_route"]["route_key"] == "GUA|projected"
+    assert group["best_funding_24h_pct"] == pytest.approx(0.9)
+    assert group["best_funding_24h_basis"] == "projected_current_rate"
+    assert payload["summary"]["max_funding_24h_pct"] == pytest.approx(0.9)
 
 
 def test_the_stream_reports_only_what_changed(tmp_path, monkeypatch) -> None:

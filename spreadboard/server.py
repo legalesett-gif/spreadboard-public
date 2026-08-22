@@ -2921,12 +2921,6 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                 and not route.get("identity_mismatch")
                 and route.get("deliverable") is not False
             ]
-            retained_settled_basis = str(group.get("best_funding_24h_basis") or "")
-            retained_settled_daily = (
-                _float_or_none(group.get("best_funding_24h_pct"))
-                if retained_settled_basis == "settled_public_events"
-                else None
-            )
             if funding_candidates:
                 best_funding = max(
                     funding_candidates,
@@ -2934,28 +2928,15 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                     or float("-inf"),
                 )
                 daily_funding = _float_or_none(best_funding.get("funding_daily_pct"))
-                # A live rate update must not downgrade a verified settled-24h
-                # headline for the same token to a projection.  Keep the
-                # settled observation and the exact route that owns it when it
-                # still survives the evidence guards. Otherwise the current
-                # rate provides the honest projected daily carry and route.
-                retained_route = group.get("best_funding_route")
-                retained_route_key = str(
-                    retained_route.get("route_key")
-                    if isinstance(retained_route, dict)
-                    else ""
+                # ``Now`` and the push stream are current-rate surfaces. A
+                # settled observation belongs to the explicit 24h/7d/30d
+                # radar and must not freeze this leader or its route identity.
+                group["best_funding_route"] = best_funding
+                group["best_funding_24h_pct"] = daily_funding
+                group["best_funding_apr_pct"] = (
+                    daily_funding * 365.0 if daily_funding is not None else None
                 )
-                retained_route_is_candidate = any(
-                    str(candidate.get("route_key") or "") == retained_route_key
-                    for candidate in funding_candidates
-                )
-                if retained_settled_daily is None or not retained_route_is_candidate:
-                    group["best_funding_route"] = best_funding
-                    group["best_funding_24h_pct"] = daily_funding
-                    group["best_funding_apr_pct"] = (
-                        daily_funding * 365.0 if daily_funding is not None else None
-                    )
-                    group["best_funding_24h_basis"] = "projected_current_rate"
+                group["best_funding_24h_basis"] = "projected_current_rate"
         # Freshness, identity and matched-depth guards can invalidate the route
         # that originally bought a token its place. Re-sort every cached lane
         # after choosing its new valid best; otherwise guarded 100% ticker
@@ -3017,6 +2998,18 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
         visit_route(route)
     summary = payload.get("summary")
     if isinstance(summary, dict):
+        visible_funding = [
+            _float_or_none(group.get("best_funding_24h_pct"))
+            for group in payload.get("groups") or []
+            if isinstance(group, dict)
+        ]
+        # Catalogue expansion can add a stronger live route inside a visible
+        # token after the scanner summary was built. The Funding tape describes
+        # the rows on this page, so repair it from those exact live leaders.
+        summary["max_funding_24h_pct"] = max(
+            (value for value in visible_funding if value is not None),
+            default=None,
+        )
         result_filter_keys = (
             "q",
             "exchange",
