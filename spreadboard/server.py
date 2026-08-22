@@ -6638,7 +6638,7 @@ def render_fair_price_page() -> str:
       .fair-usage p {{ margin:0;color:var(--terminal-muted);font-size:13px;line-height:1.5; }}
       @media(max-width:820px) {{ .fair-row {{ grid-template-columns:1fr 1fr; }} .fair-token {{ grid-column:1 / -1; }} .fair-usage {{ grid-template-columns:1fr; }} }}
     </style>
-    <section class="fair-page">
+    <section class="fair-page" data-refresh="120" data-refresh-silent="1">
       <header class="terminal-heading">
         <div>
           <span class="page-kicker">Fair price</span>

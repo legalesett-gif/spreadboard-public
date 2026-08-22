@@ -129,6 +129,7 @@ def test_the_page_renders_the_flagged_contracts(monkeypatch) -> None:
     assert "+7.34%" in html
     assert "Long" in html
     assert "Mexc" in html
+    assert 'class="fair-page" data-refresh="120" data-refresh-silent="1"' in html
 
 
 def test_the_page_says_so_when_nothing_is_flagged(monkeypatch) -> None:
