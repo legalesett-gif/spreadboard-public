@@ -8,11 +8,12 @@ a fixed 10:1 and so only read correctly once one side is scaled).
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import pytest
 
-from spreadboard import accounts
+from spreadboard import accounts, server
 
 
 @pytest.fixture()
@@ -76,3 +77,14 @@ def test_removing_another_members_chart_does_nothing(db: Path) -> None:
 def test_a_route_key_is_required(db: Path) -> None:
     with pytest.raises(ValueError):
         accounts.add_saved_chart(1, {"label": "no route"}, db_path=db)
+
+
+def test_pin_and_remove_refresh_only_the_saved_chart_panel() -> None:
+    """Saving a chart must not tear down the live chart and its history stream."""
+
+    source = inspect.getsource(server.render_saved_charts_panel)
+
+    assert "location.reload()" not in source
+    assert "DOMParser" in source
+    assert "current.replaceWith(next)" in source
+    assert 'document.addEventListener("click"' in source

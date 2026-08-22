@@ -9301,31 +9301,65 @@ def render_saved_charts_panel(user: Any, selected_route: str, accounts_path: Any
       <div class="panel-head flat"><div><h2>My charts</h2><p>Pairs you track, including ones that never converge.</p></div></div>
       {pin}
       <ul class="saved-chart-list">{rows}</ul>
+      <p class="saved-chart-status" data-saved-chart-status aria-live="polite"></p>
     </section>
     <script>
     (() => {{
-      const pinBtn = document.getElementById("savedChartPin");
       // Every state-changing POST carries the session CSRF token; without it
       // the server answers 400 before the handler ever runs.
       const csrf = () => document.querySelector("[data-logout]")?.dataset.csrf || "";
-      const post = (path, body) => fetch(path, {{
+      const status = (message) => {{
+        const node = document.querySelector("[data-saved-chart-status]");
+        if (node) node.textContent = message;
+      }};
+      const refreshPanel = async () => {{
+        const response = await fetch(location.href, {{
+          credentials: "same-origin",
+          headers: {{"X-Requested-With": "fetch"}},
+        }});
+        if (!response.ok) throw new Error("Could not refresh saved charts");
+        const parsed = new DOMParser().parseFromString(await response.text(), "text/html");
+        const current = document.querySelector(".saved-charts-panel");
+        const next = parsed.querySelector(".saved-charts-panel");
+        if (!current || !next) throw new Error("Saved charts panel unavailable");
+        current.replaceWith(next);
+      }};
+      const post = async (path, body) => {{
+        const response = await fetch(path, {{
         method: "POST",
         credentials: "same-origin",
         headers: {{"Content-Type": "application/json", "X-CSRF-Token": csrf()}},
         body: JSON.stringify(body),
-      }}).then(() => window.location.reload());
-      if (pinBtn) {{
-        pinBtn.addEventListener("click", () => post("/api/saved-charts", {{
-          route_key: pinBtn.dataset.route,
-          label: (document.getElementById("savedChartLabel") || {{}}).value || "",
-          ratio: Number((document.getElementById("savedChartRatio") || {{}}).value || 1) || 1,
-        }}));
-      }}
-      for (const button of document.querySelectorAll(".saved-chart-remove")) {{
-        button.addEventListener("click", () => post("/api/saved-charts/delete", {{
-          route_key: button.dataset.route,
-        }}));
-      }}
+        }});
+        const data = await response.json().catch(() => ({{}}));
+        if (!response.ok || data.ok === false) throw new Error(data.error || "Could not save chart");
+        await refreshPanel();
+        return data;
+      }};
+      document.addEventListener("click", async (event) => {{
+        const pinBtn = event.target.closest("#savedChartPin");
+        const removeBtn = event.target.closest(".saved-chart-remove");
+        const button = pinBtn || removeBtn;
+        if (!button) return;
+        button.disabled = true;
+        status(pinBtn ? "Saving chart..." : "Removing chart...");
+        try {{
+          if (pinBtn) {{
+            await post("/api/saved-charts", {{
+              route_key: pinBtn.dataset.route,
+              label: (document.getElementById("savedChartLabel") || {{}}).value || "",
+              ratio: Number((document.getElementById("savedChartRatio") || {{}}).value || 1) || 1,
+            }});
+          }} else {{
+            await post("/api/saved-charts/delete", {{route_key: removeBtn.dataset.route}});
+          }}
+          status(pinBtn ? "Chart saved." : "Chart removed.");
+        }} catch (error) {{
+          status(error.message || "Could not update saved charts");
+        }} finally {{
+          if (button.isConnected) button.disabled = false;
+        }}
+      }});
     }})();
     </script>"""
 
