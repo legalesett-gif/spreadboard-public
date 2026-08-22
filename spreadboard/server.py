@@ -4760,7 +4760,17 @@ def _member_size_quote_payload(
 def _canonical_pair_row(row: dict[str, Any]) -> dict[str, Any]:
     data = dict(row)
     spread_current = api_spreads.spread_quote_current(row)
-    current_spread = row.get("executable_spread_pct") if spread_current else None
+    top_book_spread = row.get("executable_spread_pct") if spread_current else None
+    # The pair cockpit labels ``spread_pct`` as executable VWAP. Catalogue
+    # routes carry both a directional top-book quote and a matched $500 book
+    # walk, so use the matched value when it is proved and retain top book as
+    # the opening/headline spread. Falling back to top book keeps a route
+    # useful without pretending unmeasured depth exists.
+    current_spread = (
+        row.get("depth_weighted_spread_pct")
+        if spread_current and row.get("depth_weighted_spread_pct") is not None
+        else top_book_spread
+    )
     data.update(
         {
             "symbol": row.get("token"),
@@ -4771,12 +4781,12 @@ def _canonical_pair_row(row: dict[str, Any]) -> dict[str, Any]:
             "displayed_open_spread_pct": (
                 row.get("displayed_open_spread_pct")
                 if spread_current and row.get("displayed_open_spread_pct") is not None
-                else current_spread
+                else top_book_spread
             ),
             "displayed_headline_spread_pct": (
                 row.get("displayed_open_spread_pct")
                 if spread_current and row.get("displayed_open_spread_pct") is not None
-                else current_spread
+                else top_book_spread
             ),
             "route_line": (
                 f"Buy on {row.get('long_venue') or '?'} {row.get('long_market_type') or '?'}, "
@@ -5073,6 +5083,24 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
         for candidate in warm_candidates:
             if _same_chart_route(candidate, custom):
                 return candidate
+        # Token pages use the complete warm catalogue rather than the bounded
+        # scanner. Rejoin their CUSTOM Details links to that same exact row so
+        # top-book, matched-size, funding, rails, and timestamps survive the
+        # handoff. This is a bounded per-token cache/SQLite read; it does not
+        # rebuild the 12k-row board that the fast-path above deliberately
+        # avoids.
+        try:
+            token = str(custom.get("token") or "")
+            catalog = catalog_pairs.with_routes(
+                catalog_pairs.for_token(token, limit=None),
+                token_rankings.dex_routes_for(token_rankings.load(), token),
+                limit=None,
+            )
+            for candidate in catalog.get("routes") or []:
+                if isinstance(candidate, dict) and _same_chart_route(candidate, custom):
+                    return candidate
+        except Exception:  # noqa: BLE001 - structural custom row remains usable.
+            pass
         return custom
     # A discovery generation can change while somebody has a chart open. The
     # previous structural row remains sufficient to render the shell, and the
@@ -9105,7 +9133,7 @@ def render_pair_page(route_key: str, board_path: Path, config: dict[str, Any]) -
       {render_pair_tokenized_guard(row)}
 
       <section class="pair-layout">
-        <main class="pair-main">
+        <div class="pair-main">
           {render_pair_checklist(row, detail)}
           {render_route_timeline(row, history)}
           <div class="metric-tape">
@@ -9122,7 +9150,7 @@ def render_pair_page(route_key: str, board_path: Path, config: dict[str, Any]) -
             {render_route_health_card(detail.get("route_health"))}
           </div>
           {render_pair_telegram_context(pair_intel)}
-        </main>
+        </div>
         <aside class="pair-side">
           {render_leg_card("Buy leg", legs.get("long") or {})}
           {render_leg_card("Sell leg", legs.get("short") or {})}

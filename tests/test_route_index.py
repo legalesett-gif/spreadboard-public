@@ -8,6 +8,7 @@ seconds a member waited.
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import pytest
 
@@ -89,3 +90,70 @@ def test_a_catalogue_route_short_circuits(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(server.api_spreads, "load_spreads", explode)
 
     assert server._find_canonical_route("custom", Path("board.jsonl")) == {"route_key": "custom"}
+
+
+def test_catalogue_route_rejoins_the_exact_warm_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    custom = {
+        "route_key": "CUSTOM:ong",
+        "token": "ONG",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "long_market_symbol": "ONG/USDT",
+        "short_venue": "Bybit",
+        "short_market_type": "Futures",
+        "short_market_symbol": "ONG/USDT:USDT",
+    }
+    warm = {
+        **custom,
+        "executable_spread_pct": 2.9,
+        "displayed_open_spread_pct": 2.9,
+        "depth_weighted_spread_pct": 2.8,
+        "quote_ts_us": 1_800_000_000_000_000,
+    }
+    monkeypatch.setattr(server.chart_catalog, "route_from_key", lambda _k: custom)
+    monkeypatch.setattr(
+        server.catalog_pairs,
+        "for_token",
+        lambda *_args, **_kwargs: {"routes": [warm]},
+    )
+    monkeypatch.setattr(
+        server.token_rankings,
+        "load",
+        lambda: {},
+    )
+    monkeypatch.setattr(
+        server.token_rankings,
+        "dex_routes_for",
+        lambda *_args: [],
+    )
+    monkeypatch.setattr(
+        server.catalog_pairs,
+        "with_routes",
+        lambda payload, _extra, **_kwargs: payload,
+    )
+    with server._ROUTE_INDEX_LOCK:
+        server._ROUTE_INDEX["rows"] = {}
+
+    selected = server._find_canonical_route("CUSTOM:ong", Path("board.jsonl"))
+
+    assert selected is warm
+    assert selected["depth_weighted_spread_pct"] == pytest.approx(2.8)
+
+
+def test_pair_row_calls_matched_size_spread_executable() -> None:
+    row = {
+        "route_key": "CUSTOM:ong",
+        "token": "ONG",
+        "route_kind": "SPOT-FUTURES",
+        "executable_spread_pct": 2.9,
+        "displayed_open_spread_pct": 2.9,
+        "depth_weighted_spread_pct": 2.8,
+        "quote_ts_us": int(time.time() * 1_000_000),
+    }
+
+    pair_row = server._canonical_pair_row(row)
+
+    assert pair_row["spread_pct"] == pytest.approx(2.8)
+    assert pair_row["displayed_open_spread_pct"] == pytest.approx(2.9)

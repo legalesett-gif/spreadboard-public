@@ -83,3 +83,45 @@ def test_watchlist_has_one_main_landmark() -> None:
 
     assert html.count("<main") == 1
     assert '<div class="watchlist-main"' in html
+
+
+def test_pair_page_has_one_main_landmark(monkeypatch) -> None:
+    row = {
+        "route_key": "CUSTOM:pair",
+        "symbol": "ONG",
+        "kind": "SPOT-FUTURES",
+        "kind_label": "Spot-Futures",
+        "route_line": "Buy on Mexc Spot, sell on Bybit Futures",
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "long_market_symbol": "ONG/USDT",
+        "short_venue": "Bybit",
+        "short_market_type": "Futures",
+        "short_market_symbol": "ONG/USDT:USDT",
+        "spread_pct": 2.9,
+        "displayed_open_spread_pct": 2.9,
+        "age_min": 0.1,
+        "canonical_api": True,
+    }
+    detail = {
+        "ok": True,
+        "board_row": row,
+        "legs": {
+            "long": {"market_symbol": "ONG/USDT"},
+            "short": {"market_symbol": "ONG/USDT:USDT"},
+        },
+        "funding": {},
+        "route_health": {},
+    }
+    monkeypatch.setattr(server, "api_pair", lambda *_args, **_kwargs: detail)
+    monkeypatch.setattr(
+        server,
+        "api_intel",
+        lambda *_args, **_kwargs: {"recent_events": {}, "hot_symbols": []},
+    )
+    monkeypatch.setattr(server, "api_history", lambda *_args, **_kwargs: {"rows": []})
+
+    html = server.render_pair_page("CUSTOM:pair", server.board.DEFAULT_BOARD_PATH, {})
+
+    assert html.count("<main") == 1
+    assert '<div class="pair-main">' in html
