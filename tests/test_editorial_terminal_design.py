@@ -56,7 +56,11 @@ def test_markets_and_funding_have_explicit_ledger_headers(monkeypatch) -> None:
     funding = server.render_funding_page(Path("missing.jsonl"), {}, {})
 
     assert 'class="token-route-ledger-head"' in markets
-    assert "Matched spread" in markets and "Best-route funding" in markets
+    assert (
+        "<span>Token</span><span>Best route</span><span>Spread evidence</span>"
+        in markets
+    )
+    assert "Best-route funding" in markets
     assert 'class="funding-ledger-head"' in funding
     assert "Settled windows" in funding and "Entry basis" in funding
 

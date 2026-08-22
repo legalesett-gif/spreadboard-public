@@ -37,7 +37,8 @@ def _group(token: str, *, edge: float, funding: float) -> dict:
         "age_min": 0.1,
         "executable_spread_pct": edge,
         "depth_weighted_spread_pct": edge,
-        "depth_usd": 50.0,
+        "depth_usd": 500.0,
+        "target_notional_usd": 500.0,
         "funding_projected_24h_pct": funding,
     }
     return {
@@ -224,6 +225,21 @@ def test_a_funding_teaser_uses_the_funding_routes_own_spread() -> None:
 
     assert ">0.3%</strong>" in html
     assert ">8.0%</strong>" not in html
+
+
+def test_a_teaser_does_not_label_legacy_depth_as_current_matched_spread() -> None:
+    group = _group("LEGACY", edge=3.0, funding=0.2)
+    route = group["best_route"]
+    route.pop("target_notional_usd", None)
+    route["depth_usd"] = 50.0
+    route["executable_spread_pct"] = 0.5
+
+    html = server.render_teaser_row(group, metric="spread")
+
+    assert "Spread evidence" in html
+    assert ">0.5%</strong>" in html
+    assert "target depth unavailable" in html
+    assert ">3.0%</strong>" not in html
 
 
 def test_a_full_group_has_distinct_live_keys_for_spread_and_funding() -> None:

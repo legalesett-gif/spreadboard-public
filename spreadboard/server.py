@@ -6249,7 +6249,7 @@ def render_markets_page(
         if pro_view
         else """
           <div class="token-route-ledger-head" aria-hidden="true">
-            <span>Token</span><span>Best route</span><span>Matched spread</span>
+            <span>Token</span><span>Best route</span><span>Spread evidence</span>
             <span>Best-route funding</span><span>Routes</span><span>Updated</span>
           </div>
         """
@@ -6498,13 +6498,24 @@ def render_teaser_row(group: dict[str, Any], *, metric: str) -> str:
         else "funding unavailable"
     )
     funding_live_hook = " data-live-funding" if funding_basis == "projected_current_rate" else ""
-    matched_spread = (
+    stored_matched_spread = (
         route.get("depth_weighted_spread_pct")
         if metric == "funding"
         else group.get("best_edge_pct")
     )
-    if matched_spread is None:
-        matched_spread = route.get("executable_spread_pct")
+    matched_spread = (
+        stored_matched_spread
+        if stored_matched_spread is not None
+        and api_spreads.matched_probe_verified(route)
+        else None
+    )
+    top_book_spread = route.get("executable_spread_pct")
+    spread_value = matched_spread if matched_spread is not None else top_book_spread
+    spread_basis = (
+        f"{PROBE_LABEL} VWAP · {fmt_pct(top_book_spread)} top book"
+        if matched_spread is not None
+        else f"{fmt_pct(top_book_spread)} top book · target depth unavailable"
+    )
     sell_leg = f"{route.get('short_venue') or '—'} {leg_market_label(route.get('short_venue'), route.get('short_market_type'))}".strip()
     return f"""
       <div class="teaser-row" data-route-key="{h(free_teaser_alias(str(route.get("route_key") or "")))}"
@@ -6522,9 +6533,9 @@ def render_teaser_row(group: dict[str, Any], *, metric: str) -> str:
           <span>Sell leg</span><strong>{h(sell_leg)}</strong>
         </div>
         <div class="group-number">
-          <span>Matched spread</span>
-          <strong class="{spread_class(matched_spread)}" data-live-spread>{fmt_pct(matched_spread)}</strong>
-          <em>{fmt_pct(route.get("executable_spread_pct"))} top book</em>
+          <span>Spread evidence</span>
+          <strong class="{spread_class(spread_value)}" data-live-spread>{fmt_pct(spread_value)}</strong>
+          <em data-live-spread-basis>{h(spread_basis)}</em>
         </div>
         <div class="group-number">
           <span>Funding 24h</span>
@@ -6995,6 +7006,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
     name = group.get("token_name") or "Metadata pending"
     venues = group.get("venues") or []
     kinds = group.get("route_kinds") or []
+    catalog_coverage = group.get("coverage_mode") == "catalog_live_books"
     funding_route = group.get("best_funding_route") or best
     funding = group.get("best_funding_24h_pct")
     if funding is None:
@@ -7020,21 +7032,21 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         )
         if venue
     )
-    catalog_coverage = group.get("coverage_mode") == "catalog_live_books"
+    matched = (
+        best.get("depth_weighted_spread_pct")
+        if api_spreads.matched_probe_verified(best)
+        else None
+    )
+    top_book = best.get("executable_spread_pct")
     spread_heading = (
-        "Best current pair"
-        if catalog_coverage and spread_current
-        else "Best matched spread"
-        if spread_current
+        "Best matched spread"
+        if spread_current and matched is not None
+        else "Best current pair"
+        if spread_current and top_book is not None
         else "Spread refreshing"
     )
-    matched = best.get("depth_weighted_spread_pct")
     spread_value = (
-        matched
-        if matched is not None
-        else best.get("executable_spread_pct")
-        if catalog_coverage
-        else group.get("best_edge_pct")
+        matched if matched is not None else top_book
     ) if spread_current else None
     if spread_value is None:
         # Same obligation as the detail rows: a headline that publishes both
@@ -7048,9 +7060,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
     spread_note = (
         f"{PROBE_LABEL} VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book"
         if matched is not None
-        else f"{fmt_pct(best.get('executable_spread_pct'))} top book · depth not measured"
-        if catalog_coverage
-        else f"matched {PROBE_LABEL} VWAP · {fmt_pct(best.get('executable_spread_pct'))} top book"
+        else f"{fmt_pct(top_book)} top book · {PROBE_LABEL} depth unavailable"
     ) if spread_current else (
         "from both leg prices · quote refreshing"
         if spread_value is not None

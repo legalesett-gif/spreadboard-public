@@ -1922,6 +1922,30 @@ def test_broad_dex_worker_entrypoint_is_shipped_and_fails_closed() -> None:
     assert "route_feasibility_unproven" in row["blockers"]
 
 
+def test_broad_dex_public_jupiter_lane_omits_a_blank_key_header() -> None:
+    assert "x-api-key" not in dex_spot_broad_scan.jupiter_headers("")
+    assert dex_spot_broad_scan.jupiter_headers("configured")["x-api-key"] == "configured"
+
+
+def test_broad_dex_zerox_lane_fails_fast_without_a_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dex_spot_broad_scan, "keychain", lambda *_args: None)
+    monkeypatch.setattr(
+        dex_spot_broad_scan,
+        "fetch_evm_token_list",
+        lambda *_args: pytest.fail("the token list must not be fetched without a 0x key"),
+    )
+
+    result = dex_spot_broad_scan.scan_zerox(
+        dex_spot_broad_scan.build_parser().parse_args([]), {}, set()
+    )
+
+    assert result["status"] == "not_configured"
+    assert result["quote_attempted_tokens"] == 0
+    assert result["errors"] == ["0x_api_key_not_configured"]
+
+
 def test_freshness_window_tracks_the_continuous_quote_workers() -> None:
     """Discovery finds routes; continuous workers must keep them admissible.
 

@@ -251,10 +251,11 @@ def ticker_bid_ask(ticker: Any) -> tuple[float | None, float | None]:
 
 def scan_jupiter(args: argparse.Namespace, cex_quotes: dict[str, list[CexQuote]], cex_symbols: set[str]) -> dict[str, Any]:
     api_key = keychain("SPREADARB/jupiter/api_key") or ""
+    headers = jupiter_headers(api_key)
     try:
         tokens_payload = fetch_json_with_retries(
             f"{JUPITER_TOKEN_URL}?{urlencode({'query': 'verified'})}",
-            {"x-api-key": api_key, "accept": "application/json", "user-agent": "spreadarb-broad-dex/1.0"},
+            headers,
             timeout=60.0,
             retry_429=args.retry_429,
             rate_limit_s=args.rate_limit_s,
@@ -313,6 +314,24 @@ def scan_jupiter(args: argparse.Namespace, cex_quotes: dict[str, list[CexQuote]]
 
 def scan_zerox(args: argparse.Namespace, cex_quotes: dict[str, list[CexQuote]], cex_symbols: set[str]) -> dict[str, Any]:
     api_key = keychain("SPREADARB/0x/api_key") or ""
+    if not api_key:
+        return {
+            "source": "0x",
+            "status": "not_configured",
+            "evm_tokens": 0,
+            "unique_symbols": 0,
+            "duplicate_symbol_groups": 0,
+            "crosslisted_unique_symbols_before_filters": 0,
+            "candidate_tokens_after_filters": 0,
+            "quote_attempted_tokens": 0,
+            "quote_success_tokens": 0,
+            "quote_error_tokens": 0,
+            "rows": [],
+            "row_count": 0,
+            "positive_row_count": 0,
+            "research_row_count_ge_1pct_lte_90pct": 0,
+            "errors": ["0x_api_key_not_configured"],
+        }
     try:
         token_list, token_list_url = fetch_evm_token_list(args.evm_token_list_url)
     except Exception as exc:
@@ -516,8 +535,20 @@ def build_row(
     }
 
 
+def jupiter_headers(api_key: str) -> dict[str, str]:
+    """Use Jupiter's public lane without sending a blank credential header."""
+
+    headers = {
+        "accept": "application/json",
+        "user-agent": "spreadarb-broad-dex/1.0",
+    }
+    if api_key:
+        headers["x-api-key"] = api_key
+    return headers
+
+
 def quote_jupiter(token: TokenInfo, api_key: str, args: argparse.Namespace) -> dict[str, Any]:
-    headers = {"x-api-key": api_key, "accept": "application/json", "user-agent": "spreadarb-broad-dex/1.0"}
+    headers = jupiter_headers(api_key)
     buy = fetch_json(
         f"{JUPITER_QUOTE_URL}?{urlencode({'inputMint': USDC_SOLANA, 'outputMint': token.address, 'amount': str(int(args.target_usd * 1_000_000)), 'slippageBps': str(args.slippage_bps), 'restrictIntermediateTokens': 'true'})}",
         headers,
