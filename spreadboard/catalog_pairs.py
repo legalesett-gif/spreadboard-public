@@ -214,6 +214,7 @@ def for_tokens(
     max_age_seconds: float = MAX_BOOK_AGE_SECONDS,
     limit_per_token: int | None = None,
     include_history: bool = False,
+    include_short_spot: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Build current CEX pair catalogues for several tokens from one book read.
 
@@ -290,6 +291,7 @@ def for_tokens(
             catalog_market_count=len(token_markets),
             max_age_seconds=max_age_seconds,
             include_history=include_history,
+            include_short_spot=include_short_spot,
         )
         output[token] = _limited(payload, limit_per_token)
     return output
@@ -402,6 +404,7 @@ def _payload_from_legs(
     catalog_market_count: int,
     max_age_seconds: float,
     include_history: bool,
+    include_short_spot: bool = False,
 ) -> dict[str, Any]:
     routes: list[dict[str, Any]] = []
     rejected = {
@@ -413,7 +416,9 @@ def _payload_from_legs(
     }
     for left_index, left in enumerate(legs):
         for right in legs[left_index + 1 :]:
-            for long_leg, short_leg in _directions(left, right):
+            for long_leg, short_leg in _directions(
+                left, right, include_short_spot=include_short_spot
+            ):
                 reason = _reject_reason(token, long_leg, short_leg, rails)
                 if reason:
                     rejected[reason] += 1
@@ -733,7 +738,12 @@ def all_token_summaries(
     return output
 
 
-def _directions(left: Leg, right: Leg) -> list[tuple[Leg, Leg]]:
+def _directions(
+    left: Leg,
+    right: Leg,
+    *,
+    include_short_spot: bool = False,
+) -> list[tuple[Leg, Leg]]:
     if left.market_type == right.market_type == "Futures":
         if left.venue == right.venue:
             return []
@@ -746,6 +756,8 @@ def _directions(left: Leg, right: Leg) -> list[tuple[Leg, Leg]]:
         return [(left, right)] if left_to_right >= right_to_left else [(right, left)]
     spot = left if left.market_type == "Spot" else right
     future = right if left.market_type == "Spot" else left
+    if include_short_spot:
+        return [(spot, future), (future, spot)]
     return [(spot, future)]
 
 
@@ -821,6 +833,9 @@ def _route(
     oldest_us = min(long_leg.book.quote_ts_us, short_leg.book.quote_ts_us)
     age_min = max(0.0, (time.time() - oldest_us / 1_000_000.0) / 60.0)
     identity_ratio = max(long_top, short_top) / min(long_top, short_top)
+    requires_existing_spot_inventory = (
+        long_leg.market_type == "Futures" and short_leg.market_type == "Spot"
+    )
     row = {
         "token": token,
         "token_name": None,
@@ -891,6 +906,12 @@ def _route(
         "mirage_guarded": identity_ratio >= 1.5,
         "identity_warning": identity_ratio >= 1.5,
         "identity_ratio": identity_ratio,
+        "requires_existing_spot_inventory": requires_existing_spot_inventory,
+        "execution_note": (
+            "Short spot inventory or borrow is required."
+            if requires_existing_spot_inventory
+            else None
+        ),
     }
     windows = (
         venue_funding_history.route_windows(row)

@@ -281,9 +281,15 @@ def _history_pages(
             params["page_num"] = page_number
         elif venue == "Bitget":
             params["pageNo"] = page_number
-        elif venue == "Gate" and cursor is not None:
-            params["until"] = cursor - 1
-            request_since = since
+        elif venue == "Gate":
+            # Gate treats ``since`` as a lower bound and returns the *oldest*
+            # rows after it.  Combining that with a backwards ``until`` cursor
+            # traps every later page in an old slice and never reaches the
+            # latest settlement.  Start at the newest page instead, then walk
+            # backwards until the requested boundary is covered.
+            request_since = None
+            if cursor is not None:
+                params["until"] = cursor - 1
         elif venue == "OKX":
             request_since = None
             if cursor is not None:
@@ -316,7 +322,7 @@ def _history_pages(
         fingerprints.add(fingerprint)
         pages += 1
         rows.extend(page)
-        if timestamps[0] <= since:
+        if venue in {"Gate", "OKX", "WhiteBIT", "Mexc", "Bitget"} and timestamps[0] <= since:
             break
         if venue in {"Gate", "OKX", "WhiteBIT", "Mexc", "Bitget"}:
             cursor = timestamps[0]
@@ -328,6 +334,34 @@ def _history_pages(
                 break
             cursor = newest
     return rows, pages
+
+
+def _history_page_budget(
+    status: dict[str, Any] | None,
+    cached: dict[str, float | None] | None,
+    *,
+    priority: bool,
+) -> int:
+    """Choose enough pages without making every catalogue pass maximal.
+
+    One page is sufficient for an ordinary 8-hour market over 30 days.  Faster
+    markets (Gate 4-hour, Aster hourly, and similar) require multiple pages on
+    every refresh; otherwise a later shallow maintenance pass can replace a
+    valid aggregate with an incomplete slice.  Previously incomplete legs also
+    receive a deep pass so a one-page source check cannot masquerade as archive
+    completion.
+    """
+    if priority:
+        return PRIORITY_HISTORY_PAGES
+    previous = status or {}
+    values = cached or {}
+    if int(previous.get("history_pages") or 0) > 1:
+        return PRIORITY_HISTORY_PAGES
+    if str(previous.get("status") or "") in {"ok", "ok_cached"} and any(
+        values.get(label) is None for label in ("1d", "7d", "30d")
+    ):
+        return PRIORITY_HISTORY_PAGES
+    return 1
 
 
 def leg_history_outcome(
@@ -484,6 +518,10 @@ def build(
     ordered = list(dict.fromkeys(legs))
     start = int(previous.get("next_cursor") or 0) % max(1, len(ordered))
     priorities = list(dict.fromkeys(priority_legs or []))
+    priority_start = int(previous.get("priority_next_cursor") or 0) % max(
+        1, len(priorities)
+    )
+    rotated_priorities = priorities[priority_start:] + priorities[:priority_start]
     retryable_or_pending = [
         item
         for item in ordered
@@ -497,12 +535,13 @@ def build(
     ]
     leading = list(dict.fromkeys([*priorities, *retryable_or_pending]))
     rotated = (
-        priorities
+        rotated_priorities
         if priority_only
         else leading
         + [item for item in ordered[start:] + ordered[:start] if item not in leading]
     )
     attempted = 0
+    priority_attempted = 0
     background_attempted = 0
     retryable_errors = 0
     refreshed_at = datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat()
@@ -511,11 +550,19 @@ def build(
             break
         attempted += 1
         is_priority = (venue, symbol) in priorities
+        if is_priority:
+            priority_attempted += 1
+        key = f"{venue}|{symbol}"
+        page_budget = _history_page_budget(
+            leg_status.get(key),
+            windows.get(key),
+            priority=is_priority,
+        )
         try:
             outcome = leg_history_outcome(
                 venue,
                 symbol,
-                max_pages=PRIORITY_HISTORY_PAGES if is_priority else 1,
+                max_pages=page_budget,
             )
         except TypeError as exc:
             # Preserve simple injected test/provider shims that predate the
@@ -525,7 +572,6 @@ def build(
             outcome = leg_history_outcome(venue, symbol)
         entries = list(outcome.get("entries") or [])
         outcome_status = str(outcome.get("status") or "api_error")
-        key = f"{venue}|{symbol}"
         if entries:
             details = realised_window_details(entries)
             windows[key] = details["windows"]
@@ -540,6 +586,11 @@ def build(
                     value is not None for value in windows[key].values()
                 ),
                 "history_pages": int(outcome.get("pages") or 1),
+                "deep_history_checked_at": (
+                    refreshed_at
+                    if page_budget > 1
+                    else (leg_status.get(key) or {}).get("deep_history_checked_at")
+                ),
                 "oldest_event_at": details["oldest_event_at"],
                 "latest_event_at": details["latest_event_at"],
                 "window_details": details["window_details"],
@@ -593,6 +644,23 @@ def build(
     catalog_classified = sum(
         _status_is_classified(leg_status.get(key)) for key in catalog_keys
     )
+    window_leg_counts = {
+        label: sum((windows.get(key) or {}).get(label) is not None for key in catalog_keys)
+        for label in ("1d", "7d", "30d")
+    }
+    fully_complete = sum(
+        all((windows.get(key) or {}).get(label) is not None for label in ("1d", "7d", "30d"))
+        for key in catalog_keys
+    )
+    deep_history_pending = sum(
+        str((leg_status.get(key) or {}).get("status") or "") in {"ok", "ok_cached"}
+        and not (leg_status.get(key) or {}).get("deep_history_checked_at")
+        and not all(
+            (windows.get(key) or {}).get(label) is not None
+            for label in ("1d", "7d", "30d")
+        )
+        for key in catalog_keys
+    )
     payload = {
         "schema": SCHEMA,
         "updated_at": refreshed_at,
@@ -600,6 +668,11 @@ def build(
             start
             if priority_only
             else (start + background_attempted) % max(1, len(ordered))
+        ),
+        "priority_next_cursor": (
+            (priority_start + priority_attempted) % max(1, len(priorities))
+            if priority_only
+            else int(previous.get("priority_next_cursor") or 0)
         ),
         "catalog_leg_count": len(catalog_keys),
         "catalog_attempted_leg_count": catalog_attempted,
@@ -613,6 +686,13 @@ def build(
             (catalog_attempted / len(catalog_keys) * 100.0) if catalog_keys else 100.0,
             2,
         ),
+        "window_leg_counts": window_leg_counts,
+        "window_coverage_pct": {
+            label: round((count / len(catalog_keys) * 100.0) if catalog_keys else 100.0, 2)
+            for label, count in window_leg_counts.items()
+        },
+        "fully_complete_leg_count": fully_complete,
+        "deep_history_pending_leg_count": deep_history_pending,
         "latest_cycle_attempted": attempted,
         "latest_cycle_background_attempted": background_attempted,
         "latest_cycle_retryable_error_count": retryable_errors,
@@ -655,6 +735,24 @@ def coverage_summary(
         in RETRYABLE_STATUSES
         for key in keys
     )
+    values = payload.get("legs") or {} if payload.get("schema") == SCHEMA else {}
+    window_leg_counts = {
+        label: sum((values.get(key) or {}).get(label) is not None for key in keys)
+        for label in ("1d", "7d", "30d")
+    }
+    fully_complete = sum(
+        all((values.get(key) or {}).get(label) is not None for label in ("1d", "7d", "30d"))
+        for key in keys
+    )
+    deep_history_pending = sum(
+        str((statuses.get(key) or {}).get("status") or "") in {"ok", "ok_cached"}
+        and not (statuses.get(key) or {}).get("deep_history_checked_at")
+        and not all(
+            (values.get(key) or {}).get(label) is not None
+            for label in ("1d", "7d", "30d")
+        )
+        for key in keys
+    )
     total = len(keys)
     pending = max(0, total - attempted)
     return {
@@ -665,7 +763,15 @@ def coverage_summary(
         "retryable_error_leg_count": retryable,
         "coverage_pct": round((classified / total * 100.0) if total else 100.0, 2),
         "source_check_pct": round((attempted / total * 100.0) if total else 100.0, 2),
+        "window_leg_counts": window_leg_counts,
+        "window_coverage_pct": {
+            label: round((count / total * 100.0) if total else 100.0, 2)
+            for label, count in window_leg_counts.items()
+        },
+        "fully_complete_leg_count": fully_complete,
+        "deep_history_pending_leg_count": deep_history_pending,
         "catch_up_complete": pending == 0,
+        "history_catch_up_complete": pending == 0 and deep_history_pending == 0,
     }
 
 

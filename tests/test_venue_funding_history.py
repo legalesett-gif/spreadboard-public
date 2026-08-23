@@ -254,7 +254,12 @@ def test_coverage_distinguishes_unattempted_from_an_honest_empty_result(tmp_path
         "retryable_error_leg_count": 0,
         "coverage_pct": 66.67,
         "source_check_pct": 66.67,
+        "window_leg_counts": {"1d": 0, "7d": 0, "30d": 0},
+        "window_coverage_pct": {"1d": 0.0, "7d": 0.0, "30d": 0.0},
+        "fully_complete_leg_count": 0,
+        "deep_history_pending_leg_count": 1,
         "catch_up_complete": False,
+        "history_catch_up_complete": False,
     }
 
 
@@ -275,6 +280,7 @@ def test_retryable_provider_failure_is_checked_but_not_classified(tmp_path) -> N
     assert summary["coverage_pct"] == 0.0
     assert summary["source_check_pct"] == 100.0
     assert summary["catch_up_complete"]
+    assert summary["history_catch_up_complete"]
 
 
 def test_legacy_v3_empty_statuses_are_reclassified(tmp_path) -> None:
@@ -299,7 +305,12 @@ def test_empty_catalog_is_already_caught_up(tmp_path) -> None:
         "retryable_error_leg_count": 0,
         "coverage_pct": 100.0,
         "source_check_pct": 100.0,
+        "window_leg_counts": {"1d": 0, "7d": 0, "30d": 0},
+        "window_coverage_pct": {"1d": 100.0, "7d": 100.0, "30d": 100.0},
+        "fully_complete_leg_count": 0,
+        "deep_history_pending_leg_count": 0,
         "catch_up_complete": True,
+        "history_catch_up_complete": True,
     }
 
 
@@ -313,6 +324,8 @@ def test_service_reserves_separate_priority_and_catalog_budgets() -> None:
     assert "priority_only=True" in source
     assert "priority_legs=[]" in source
     assert source.count("budget_seconds=120.0") == 2
+    assert "[:120]" not in source
+    assert 'before["history_catch_up_complete"]' in source
 
 
 def test_leg_history_outcome_distinguishes_source_failures() -> None:
@@ -406,6 +419,98 @@ def test_provider_pagination_requests_an_older_second_page(
     )
 
     assert calls[1]["params"][cursor_key] == cursor_value
+
+
+def test_gate_starts_from_the_latest_page_before_walking_backwards() -> None:
+    calls: list[dict] = []
+
+    class Paged:
+        def fetch_funding_rate_history(self, _symbol, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return [
+                    {"timestamp": 900, "fundingRate": 0.001},
+                    {"timestamp": 1000, "fundingRate": 0.001},
+                ]
+            return []
+
+    vfh._history_pages(Paged(), "Gate", "ONE", since=1, now_ms=2000, max_pages=2)
+
+    assert calls[0]["since"] is None
+    assert "params" not in calls[0]
+    assert calls[1]["params"]["until"] == 899
+
+
+def test_gate_two_page_archive_proves_gua_and_siren_style_four_hour_windows() -> None:
+    now_ms = 1_800_000_000_000
+    interval_ms = 4 * 3_600_000
+    since = now_ms - 31 * 86_400_000
+    events = [
+        {"timestamp": timestamp, "fundingRate": 0.0001}
+        for timestamp in range(since + interval_ms, now_ms + 1, interval_ms)
+    ]
+
+    class GateArchive:
+        def fetch_funding_rate_history(self, _symbol, **kwargs):
+            upper = int((kwargs.get("params") or {}).get("until") or now_ms)
+            eligible = [row for row in events if row["timestamp"] <= upper]
+            return eligible[-vfh.HISTORY_PAGE_SIZE :]
+
+    rows, pages = vfh._history_pages(
+        GateArchive(), "Gate", "GUA/USDT:USDT", since=since, now_ms=now_ms, max_pages=10
+    )
+    details = vfh.realised_window_details(rows, now_ms=now_ms)
+
+    assert pages == 2
+    assert len(rows) == len(events)
+    assert details["windows"] == pytest.approx({"1d": 0.06, "7d": 0.42, "30d": 1.8})
+    assert all(item["complete"] for item in details["window_details"].values())
+
+
+@pytest.mark.parametrize("symbol", ["SIREN/USDT:USDT", "龙虾/USDT:USDT"])
+def test_aster_hourly_archive_pages_forward_to_the_latest_settlement(symbol: str) -> None:
+    now_ms = 1_800_000_000_000
+    interval_ms = 3_600_000
+    since = now_ms - 31 * 86_400_000
+    events = [
+        {"timestamp": timestamp, "fundingRate": 0.00001}
+        for timestamp in range(since + interval_ms, now_ms + 1, interval_ms)
+    ]
+
+    class AsterArchive:
+        def fetch_funding_rate_history(self, _symbol, **kwargs):
+            lower = int(kwargs["since"])
+            return [row for row in events if row["timestamp"] >= lower][
+                : vfh.HISTORY_PAGE_SIZE
+            ]
+
+    rows, pages = vfh._history_pages(
+        AsterArchive(), "Aster", symbol, since=since, now_ms=now_ms, max_pages=10
+    )
+    details = vfh.realised_window_details(rows, now_ms=now_ms)
+
+    assert pages == 8
+    assert len(rows) == len(events)
+    assert details["windows"] == pytest.approx({"1d": 0.024, "7d": 0.168, "30d": 0.72})
+    assert all(item["complete"] for item in details["window_details"].values())
+
+
+def test_incomplete_or_multi_page_history_keeps_a_deep_refresh_budget() -> None:
+    assert vfh._history_page_budget(
+        {"status": "ok", "history_pages": 1},
+        {"1d": 1.0, "7d": None, "30d": None},
+        priority=False,
+    ) == vfh.PRIORITY_HISTORY_PAGES
+    assert vfh._history_page_budget(
+        {"status": "ok", "history_pages": 8},
+        {"1d": 1.0, "7d": 7.0, "30d": 30.0},
+        priority=False,
+    ) == vfh.PRIORITY_HISTORY_PAGES
+    assert vfh._history_page_budget(
+        {"status": "ok", "history_pages": 1},
+        {"1d": 1.0, "7d": 7.0, "30d": 30.0},
+        priority=False,
+    ) == 1
 
 
 def test_failed_cached_client_is_retried_after_backoff(monkeypatch) -> None:

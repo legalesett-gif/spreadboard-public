@@ -24,7 +24,9 @@ from spreadboard import venue_funding_history
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", "data"))
 DEFAULT_CACHE_PATH = RUNTIME_DIR / "funding_radar.json"
 RETENTION_DAYS = 30
-MAX_RECORDS = 2000
+MAX_RECORDS = max(
+    5_000, int(os.environ.get("SPREADBOARD_FUNDING_RADAR_RECORDS", "75000"))
+)
 SCHEMA = "spreadboard.funding_radar.v2"
 
 _LOCK = threading.Lock()
@@ -49,6 +51,23 @@ _ROUTE_FIELDS = {
     "funding_projected_24h_pct",
     "mirage_guarded",
     "blockers",
+    "requires_existing_spot_inventory",
+    "execution_note",
+}
+
+_LEG_SUFFIXES = {
+    "venue",
+    "market_type",
+    "market_symbol",
+    "quote",
+    "funding_pct",
+    "funding_interval_hours",
+    "funding_interval_assumed",
+    "next_funding_ts_us",
+    "exchange_url",
+}
+_LEG_FIELDS = {
+    f"{side}_{suffix}" for side in ("long", "short") for suffix in _LEG_SUFFIXES
 }
 
 
@@ -67,7 +86,7 @@ def _route_snapshot(route: dict[str, Any]) -> dict[str, Any]:
     snapshot = {
         key: value
         for key, value in route.items()
-        if key in _ROUTE_FIELDS or key.startswith("long_") or key.startswith("short_")
+        if key in _ROUTE_FIELDS or key in _LEG_FIELDS
     }
     # Round-trip through JSON so the cache can never receive a dataclass,
     # Decimal, or other process-only object from a future public row.

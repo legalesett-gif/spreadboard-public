@@ -1004,9 +1004,10 @@ def _warm_funding_cache() -> None:
     gap and refreshes Telegram from the exact same completed payloads.
     """
 
-    from spreadboard import server, telegram_queries
+    from spreadboard import funding_catalog, server, telegram_queries
 
     started = time.monotonic()
+    funding_catalog.clear_cache()
     payloads: list[dict[str, Any]] = []
     for query in WARM_QUERIES:
         if not query.get("funding_only"):
@@ -1354,10 +1355,11 @@ def _warm_board_cache(*, force: bool = False) -> None:
         return
     _LAST_WARM_AT = now
 
-    from spreadboard import server
+    from spreadboard import funding_catalog, server
 
     started = time.monotonic()
     _log("board cache warm starting")
+    funding_catalog.clear_cache()
     # A new discovery snapshot invalidates route links before it invalidates a
     # member's need to click them. Rebuild this small lookup first; the larger
     # navigation views can continue warming afterwards.
@@ -1498,11 +1500,18 @@ def _refresh_funding_windows() -> None:
     cannot happen while rendering. Doing it here, for the routes the warm pass
     just built, means the page only ever reads the answer.
     """
-    from spreadboard import funding_radar, market_history, research_calibration, server
+    from spreadboard import (
+        funding_catalog,
+        funding_radar,
+        market_history,
+        research_calibration,
+        server,
+    )
 
     try:
         route_keys: list[str] = []
         leaders: list[dict[str, Any]] = []
+        warm_routes: list[dict[str, Any]] = []
         for query in WARM_QUERIES:
             if not query.get("funding_only"):
                 continue
@@ -1512,6 +1521,8 @@ def _refresh_funding_windows() -> None:
                 if isinstance(leader, dict):
                     leaders.append(leader)
                 for route in group.get("routes") or []:
+                    if isinstance(route, dict):
+                        warm_routes.append(route)
                     key = route.get("route_key")
                     if key:
                         route_keys.append(str(key))
@@ -1524,8 +1535,17 @@ def _refresh_funding_windows() -> None:
         # A rate can lead for thirty minutes and cool before the next settlement
         # history refresh; that brief leader still belongs on the historical
         # radar, explicitly marked as no longer live.
-        radar_count = funding_radar.refresh(leaders)
-        _log(f"funding radar retained {radar_count} leader routes")
+        radar_routes_by_key = {
+            str(route.get("route_key")): route
+            for route in [*funding_catalog.archive_routes(), *warm_routes, *leaders]
+            if route.get("route_key")
+        }
+        radar_routes = list(radar_routes_by_key.values())
+        radar_count = funding_radar.refresh(radar_routes)
+        _log(
+            f"funding radar retained {radar_count} complete-catalogue routes "
+            f"from {len(radar_routes)} current candidates"
+        )
         calibration_capture = research_calibration.capture_routes(leaders)
         calibration_labels = research_calibration.label_matured()
         _log(
@@ -1533,7 +1553,7 @@ def _refresh_funding_windows() -> None:
             f"captured={calibration_capture['inserted']} "
             f"labeled={calibration_labels['labeled']}"
         )
-        _refresh_venue_funding_history(leaders=leaders)
+        _refresh_venue_funding_history(leaders=leaders, radar_routes=radar_routes)
     except Exception as exc:  # noqa: BLE001 - a missing history file is not fatal.
         _log(f"funding windows skipped: {type(exc).__name__}: {exc}")
 
@@ -1560,7 +1580,11 @@ _LAST_VENUE_HISTORY_PRIORITY_AT = 0.0
 _LAST_VENUE_HISTORY_CATALOG_AT = 0.0
 
 
-def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = None) -> None:
+def _refresh_venue_funding_history(
+    *,
+    leaders: list[dict[str, Any]] | None = None,
+    radar_routes: list[dict[str, Any]] | None = None,
+) -> None:
     """Pull each venue's settled funding for the legs the board is showing."""
     global _LAST_VENUE_HISTORY_PRIORITY_AT, _LAST_VENUE_HISTORY_CATALOG_AT
 
@@ -1581,6 +1605,7 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
         interval = (
             VENUE_HISTORY_INTERVAL_SECONDS
             if before["catch_up_complete"]
+            and before["history_catch_up_complete"]
             and int(before.get("retryable_error_leg_count") or 0) == 0
             else VENUE_HISTORY_CATCH_UP_SECONDS
         )
@@ -1617,14 +1642,11 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
             and item.get("venue")
             and item.get("symbol")
         )
-        for retained in funding_radar.routes_for():
-            for side in ("long", "short"):
-                if retained.get(f"{side}_market_type") == "Futures":
-                    venue = retained.get(f"{side}_venue")
-                    symbol = retained.get(f"{side}_market_symbol")
-                    if venue and symbol:
-                        priority_legs.append((str(venue), str(symbol)))
-        priority_legs = list(dict.fromkeys(priority_legs))[:120]
+        # Explicitly visible queries, open positions and member watchlists are
+        # the demand-driven fast lane. Retained radar routes already remain in
+        # the rotating full catalogue; adding that entire archive here made a
+        # static first-120 slice starve later symbols forever.
+        priority_legs = list(dict.fromkeys(priority_legs))
         if not catalog_legs and not priority_legs:
             return
         if priority_due:
@@ -1657,12 +1679,15 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
             modes.append(
                 "maintenance"
                 if before["catch_up_complete"]
+                and before["history_catch_up_complete"]
                 and int(before.get("retryable_error_leg_count") or 0) == 0
                 else "catch_up"
             )
         # Replace the just-captured settlement snapshots with the fresher venue
         # history while these routes are still known live.
-        if leaders:
+        if radar_routes:
+            funding_radar.refresh(radar_routes)
+        elif leaders:
             funding_radar.refresh(leaders)
         after = venue_funding_history.coverage_summary(catalog_legs)
         _log(
@@ -1670,6 +1695,10 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
             f"checked={after['attempted_leg_count']}/{after['catalog_leg_count']} "
             f"classified={after['classified_leg_count']} "
             f"pending={after['pending_leg_count']} verified={after['coverage_pct']}% "
+            f"windows=24h:{after['window_leg_counts']['1d']},"
+            f"7d:{after['window_leg_counts']['7d']},"
+            f"30d:{after['window_leg_counts']['30d']} "
+            f"deep_pending={after['deep_history_pending_leg_count']} "
             f"retryable={after['retryable_error_leg_count']} "
             f"mode={'+'.join(modes) or 'idle'} "
             f"in {time.monotonic() - started:.1f}s"

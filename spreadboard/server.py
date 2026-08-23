@@ -47,6 +47,7 @@ from spreadboard import (  # noqa: E402
     exchange_credentials,
     executor_boundary,
     fair_price,
+    funding_catalog,
     funding_radar,
     historical_spreads,
     intel,
@@ -2538,42 +2539,67 @@ def api_market_spreads(
     try:
         min_funding_24h = _query_float(query, "min_abs_funding_24h_pct")
         min_funding_apr = _query_float(query, "min_abs_funding_apr_pct")
-        data = api_spreads.load_spreads(
-            board_path=board_path,
-            q=_query_first(query, "q"),
-            exchange=_query_first(query, "exchange"),
-            kind=_query_first(query, "kind"),
-            source=_query_first(query, "source"),
-            min_spread_pct=_query_float(query, "min_spread_pct"),
-            min_abs_funding_24h_pct=min_funding_24h,
-            min_abs_funding_apr_pct=min_funding_apr,
-            quote=_query_first(query, "quote"),
-            min_volume_24h_usd=_query_float(query, "min_volume_24h_usd"),
-            min_market_cap_usd=_query_float(query, "min_market_cap_usd"),
-            max_market_cap_usd=_query_float(query, "max_market_cap_usd"),
-            min_fdv_usd=_query_float(query, "min_fdv_usd"),
-            max_fdv_usd=_query_float(query, "max_fdv_usd"),
-            max_listing_age_days=_query_float(query, "max_listing_age_days"),
-            persistence=_query_first(query, "persistence"),
-            asset_class=_query_first(query, "asset_class"),
-            funding_only=_query_bool(query, "funding_only"),
-            include_stale=_market_include_stale(query),
-            include_unverified=_query_bool(query, "include_unverified"),
-            # The board is a list of trades to consider; a route whose rail is
-            # shut is not one. The reopen watcher reads load_spreads directly
-            # and still sees them.
-            require_deliverable=True,
-            sort_by=_query_first(query, "sort") or "edge",
-            direction=_query_first(query, "direction") or "desc",
-            offset=offset,
-            limit=limit,
+        complete_funding_request = _can_use_complete_funding_catalog(query)
+        data = (
+            _funding_catalog_seed_payload(query, offset=offset, limit=limit)
+            if complete_funding_request
+            else api_spreads.load_spreads(
+                board_path=board_path,
+                q=_query_first(query, "q"),
+                exchange=_query_first(query, "exchange"),
+                kind=_query_first(query, "kind"),
+                source=_query_first(query, "source"),
+                min_spread_pct=_query_float(query, "min_spread_pct"),
+                min_abs_funding_24h_pct=min_funding_24h,
+                min_abs_funding_apr_pct=min_funding_apr,
+                quote=_query_first(query, "quote"),
+                min_volume_24h_usd=_query_float(query, "min_volume_24h_usd"),
+                min_market_cap_usd=_query_float(query, "min_market_cap_usd"),
+                max_market_cap_usd=_query_float(query, "max_market_cap_usd"),
+                min_fdv_usd=_query_float(query, "min_fdv_usd"),
+                max_fdv_usd=_query_float(query, "max_fdv_usd"),
+                max_listing_age_days=_query_float(query, "max_listing_age_days"),
+                persistence=_query_first(query, "persistence"),
+                asset_class=_query_first(query, "asset_class"),
+                funding_only=_query_bool(query, "funding_only"),
+                include_stale=_market_include_stale(query),
+                include_unverified=_query_bool(query, "include_unverified"),
+                # The board is a list of trades to consider; a route whose rail is
+                # shut is not one. The reopen watcher reads load_spreads directly
+                # and still sees them.
+                require_deliverable=True,
+                sort_by=_query_first(query, "sort") or "edge",
+                direction=_query_first(query, "direction") or "desc",
+                offset=offset,
+                limit=limit,
+            )
         )
         # Discovery is deliberately capped per token so its atomic snapshot
         # stays bounded.  The product page is a pair browser, not that scanner
         # quota: expand only the already-selected visible tokens from the
         # process-shared catalogue and live-book store.  No exchange request is
         # made here, and a failure leaves the original scanner payload intact.
-        if limit <= api_spreads.DEFAULT_LIMIT:
+        if complete_funding_request:
+            data = _expand_complete_funding_groups(data, query, offset=offset, limit=limit)
+            if data.get("coverage_mode") != "complete_funding_catalogue_ranked_before_pagination":
+                data = api_spreads.load_spreads(
+                    board_path=board_path,
+                    q=_query_first(query, "q"),
+                    exchange=_query_first(query, "exchange"),
+                    kind=_query_first(query, "kind"),
+                    min_abs_funding_24h_pct=min_funding_24h,
+                    min_abs_funding_apr_pct=min_funding_apr,
+                    quote=_query_first(query, "quote"),
+                    funding_only=True,
+                    include_stale=_market_include_stale(query),
+                    include_unverified=_query_bool(query, "include_unverified"),
+                    require_deliverable=True,
+                    sort_by="funding",
+                    direction=_query_first(query, "direction") or "desc",
+                    offset=offset,
+                    limit=limit,
+                )
+        elif limit <= api_spreads.DEFAULT_LIMIT:
             data = _expand_visible_catalog_groups(data, query)
     except Exception:
         if cache_key is not None:
@@ -2590,6 +2616,187 @@ def api_market_spreads(
 CATALOG_ROUTES_PER_VISIBLE_TOKEN = max(
     12, int(os.environ.get("SPREADBOARD_CATALOG_ROUTES_PER_VISIBLE_TOKEN", "40"))
 )
+
+
+def _can_use_complete_funding_catalog(query: dict[str, list[str]]) -> bool:
+    if not _query_bool(query, "funding_only") or _query_first(query, "kind") not in {
+        "FUTURES",
+        "FUTURES-SPOT-PAIR",
+    }:
+        return False
+    unsupported = (
+        "source",
+        "min_spread_pct",
+        "min_volume_24h_usd",
+        "min_market_cap_usd",
+        "max_market_cap_usd",
+        "min_fdv_usd",
+        "max_fdv_usd",
+        "max_listing_age_days",
+        "persistence",
+        "asset_class",
+    )
+    return not any(_query_first(query, key) for key in unsupported)
+
+
+def _funding_catalog_seed_payload(
+    query: dict[str, list[str]],
+    *,
+    offset: int,
+    limit: int,
+) -> dict[str, Any]:
+    """O(1) health shell for a catalogue that does not need the 40 MB scanner."""
+
+    try:
+        age_seconds = max(
+            0.0, time.time() - live_book_cache.DEFAULT_PATH.stat().st_mtime
+        )
+    except OSError:
+        age_seconds = float("inf")
+    catalog = chart_catalog.load()
+    source_status = (
+        "fresh"
+        if catalog.get("ok")
+        and age_seconds <= api_spreads.LIVE_BOOK_MAX_AGE_SECONDS
+        else "stale"
+    )
+    return {
+        "ok": source_status == "fresh",
+        "mode": "complete_funding_catalogue_seed",
+        "filters": {
+            "q": _query_first(query, "q"),
+            "exchange": _query_first(query, "exchange"),
+            "kind": _query_first(query, "kind"),
+            "quote": _query_first(query, "quote"),
+            "min_abs_funding_24h_pct": _query_float(
+                query, "min_abs_funding_24h_pct"
+            ),
+            "min_abs_funding_apr_pct": _query_float(
+                query, "min_abs_funding_apr_pct"
+            ),
+            "funding_only": True,
+            "sort": "funding",
+            "direction": _query_first(query, "direction") or "desc",
+            "offset": offset,
+            "limit": limit,
+        },
+        "summary": {},
+        "pagination": {"offset": offset, "limit": limit},
+        "source_health": {
+            "canonical_api": {
+                "status": source_status,
+                "age_min": (
+                    round(age_seconds / 60.0, 3)
+                    if age_seconds != float("inf")
+                    else None
+                ),
+                "row_count": int(catalog.get("count") or 0),
+                "source": "complete_market_catalogue_plus_shared_live_books",
+            }
+        },
+        "top_edges": [],
+        "top_funding": [],
+        "groups": [],
+        "rows": [],
+    }
+
+
+def _expand_complete_funding_groups(
+    data: dict[str, Any],
+    query: dict[str, list[str]],
+    *,
+    offset: int,
+    limit: int,
+) -> dict[str, Any]:
+    """Replace bounded-scanner funding ranks with the complete CEX universe.
+
+    The scanner still supplies source health and guarded DEX rows.  For CEX
+    funding, however, token selection must happen only after every live-book
+    catalogue pair has been constructed; expanding the first 25 scanner tokens
+    cannot discover a stronger route stranded in token 26.
+    """
+
+    try:
+        complete = funding_catalog.page(
+            route_kind=_query_first(query, "kind"),
+            window=_query_first(query, "funding_window") or "now",
+            symbol=_query_first(query, "q"),
+            exchange=_query_first(query, "exchange"),
+            quote=_query_first(query, "quote"),
+            min_abs_funding_24h_pct=_query_float(query, "min_abs_funding_24h_pct"),
+            min_abs_funding_apr_pct=_query_float(query, "min_abs_funding_apr_pct"),
+            offset=offset,
+            limit=limit,
+        )
+    except Exception:  # noqa: BLE001 - preserve the last scanner generation.
+        return data
+    if not complete.get("groups") and complete.get("matching_token_count") is None:
+        return data
+
+    result = dict(data)
+    result["groups"] = list(complete.get("groups") or [])
+    result["rows"] = list(complete.get("rows") or [])
+    result["coverage_mode"] = complete.get("mode")
+    result["funding_catalog"] = {
+        key: complete.get(key)
+        for key in (
+            "window",
+            "window_value_kind",
+            "window_duration_days",
+            "now_is_independent",
+            "matching_token_count",
+            "matching_route_count",
+            "returned_token_count",
+            "returned_route_count",
+            "offset",
+            "limit",
+            "largest_value",
+            "window_route_counts",
+            "window_token_counts",
+        )
+    }
+    summary = dict(result.get("summary") or {})
+    groups = result["groups"]
+    basis_values = [
+        _float_or_none(route.get("depth_weighted_spread_pct"))
+        for route in result["rows"]
+        if isinstance(route, dict)
+    ]
+    summary.update(
+        {
+            "matching_tokens": int(complete.get("matching_token_count") or 0),
+            "returned_tokens": int(complete.get("returned_token_count") or 0),
+            "matching_rows": int(complete.get("matching_route_count") or 0),
+            "returned_rows": int(complete.get("returned_route_count") or 0),
+            "funding_rows": int(complete.get("matching_route_count") or 0),
+            "max_funding_24h_pct": _float_or_none(complete.get("largest_value")),
+            "max_depth_weighted_spread_pct": max(
+                (value for value in basis_values if value is not None),
+                default=None,
+            ),
+            "expanded_visible_route_count": int(
+                complete.get("returned_route_count") or 0
+            ),
+        }
+    )
+    result["summary"] = summary
+    pagination = dict(result.get("pagination") or {})
+    pagination.update(
+        {
+            "offset": int(complete.get("offset") or 0),
+            "limit": int(complete.get("limit") or limit),
+            "matching_rows": int(complete.get("matching_route_count") or 0),
+            "returned_rows": int(complete.get("returned_route_count") or 0),
+            "matching_tokens": int(complete.get("matching_token_count") or 0),
+            "returned_tokens": int(complete.get("returned_token_count") or 0),
+        }
+    )
+    result["pagination"] = pagination
+    canonical_health = (result.get("source_health") or {}).get("canonical_api")
+    if isinstance(canonical_health, dict):
+        canonical_health["row_count"] = int(complete.get("matching_route_count") or 0)
+    result["ok"] = bool(groups)
+    return result
 
 
 def _expand_visible_catalog_groups(
@@ -2907,6 +3114,14 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
         return _float_or_none(route.get("depth_weighted_spread_pct"))
 
     filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+    funding_catalog_state = (
+        payload.get("funding_catalog")
+        if isinstance(payload.get("funding_catalog"), dict)
+        else {}
+    )
+    historical_funding_page = bool(filters.get("funding_only")) and str(
+        funding_catalog_state.get("window") or "now"
+    ) != "now"
     sort_by = str(filters.get("sort") or "edge")
     direction = str(filters.get("direction") or "desc")
     preferred_sort = sort_by
@@ -2935,39 +3150,40 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                 group["best_edge_pct"] = spread_value(best)
             else:
                 group["best_edge_pct"] = None
-            funding_candidates = [
-                route
-                for route in [
-                    *(group.get("routes") or []),
-                    group.get("best_funding_route"),
+            if not (historical_funding_page and name == "groups"):
+                funding_candidates = [
+                    route
+                    for route in [
+                        *(group.get("routes") or []),
+                        group.get("best_funding_route"),
+                    ]
+                    if isinstance(route, dict)
+                    and _float_or_none(route.get("funding_daily_pct")) is not None
+                    and not route.get("mirage_guarded")
+                    and not route.get("identity_mismatch")
+                    and route.get("deliverable") is not False
                 ]
-                if isinstance(route, dict)
-                and _float_or_none(route.get("funding_daily_pct")) is not None
-                and not route.get("mirage_guarded")
-                and not route.get("identity_mismatch")
-                and route.get("deliverable") is not False
-            ]
-            if funding_candidates:
-                best_funding = max(
-                    funding_candidates,
-                    key=lambda route: _float_or_none(route.get("funding_daily_pct"))
-                    or float("-inf"),
-                )
-                daily_funding = _float_or_none(best_funding.get("funding_daily_pct"))
-                # ``Now`` and the push stream are current-rate surfaces. A
-                # settled observation belongs to the explicit 24h/7d/30d
-                # radar and must not freeze this leader or its route identity.
-                group["best_funding_route"] = best_funding
-                group["best_funding_24h_pct"] = daily_funding
-                group["best_funding_apr_pct"] = (
-                    daily_funding * 365.0 if daily_funding is not None else None
-                )
-                group["best_funding_24h_basis"] = "projected_current_rate"
-            else:
-                group["best_funding_route"] = None
-                group["best_funding_24h_pct"] = None
-                group["best_funding_apr_pct"] = None
-                group["best_funding_24h_basis"] = None
+                if funding_candidates:
+                    best_funding = max(
+                        funding_candidates,
+                        key=lambda route: _float_or_none(route.get("funding_daily_pct"))
+                        or float("-inf"),
+                    )
+                    daily_funding = _float_or_none(best_funding.get("funding_daily_pct"))
+                    # ``Now`` and the push stream are current-rate surfaces. A
+                    # settled observation belongs to the explicit 24h/7d/30d
+                    # radar and must not freeze this leader or its route identity.
+                    group["best_funding_route"] = best_funding
+                    group["best_funding_24h_pct"] = daily_funding
+                    group["best_funding_apr_pct"] = (
+                        daily_funding * 365.0 if daily_funding is not None else None
+                    )
+                    group["best_funding_24h_basis"] = "projected_current_rate"
+                else:
+                    group["best_funding_route"] = None
+                    group["best_funding_24h_pct"] = None
+                    group["best_funding_apr_pct"] = None
+                    group["best_funding_24h_basis"] = None
         # Freshness, identity and matched-depth guards can invalidate the route
         # that originally bought a token its place. Re-sort every cached lane
         # after choosing its new valid best; otherwise guarded 100% ticker
@@ -2975,10 +3191,11 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
         # stranded below the fold.
         lane_sort = "funding" if name == "top_funding" else preferred_sort
         lane_direction = "desc" if name in {"top_edges", "top_funding"} else direction
-        (payload.get(name) or []).sort(
-            key=lambda group: api_spreads._group_sort_value(group, lane_sort),
-            reverse=lane_direction != "asc",
-        )
+        if not (historical_funding_page and name == "groups"):
+            (payload.get(name) or []).sort(
+                key=lambda group: api_spreads._group_sort_value(group, lane_sort),
+                reverse=lane_direction != "asc",
+            )
     # The structural top-eight shortlist can itself be older than the live
     # books.  Repair it from the current visible universe so a cooled former
     # leader cannot leave the headline panel empty while current rows sit in
@@ -3025,7 +3242,7 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
         {key: value for key, value in group.items() if key != "routes"}
         for group in refreshed_top_funding
     ]
-    if filters.get("funding_only"):
+    if filters.get("funding_only") and not historical_funding_page:
         payload["groups"] = [
             group
             for group in payload.get("groups") or []
@@ -3042,18 +3259,19 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
         visit_route(route)
     summary = payload.get("summary")
     if isinstance(summary, dict):
-        visible_funding = [
-            _float_or_none(group.get("best_funding_24h_pct"))
-            for group in payload.get("groups") or []
-            if isinstance(group, dict)
-        ]
-        # Catalogue expansion can add a stronger live route inside a visible
-        # token after the scanner summary was built. The Funding tape describes
-        # the rows on this page, so repair it from those exact live leaders.
-        summary["max_funding_24h_pct"] = max(
-            (value for value in visible_funding if value is not None),
-            default=None,
-        )
+        if not historical_funding_page:
+            visible_funding = [
+                _float_or_none(group.get("best_funding_24h_pct"))
+                for group in payload.get("groups") or []
+                if isinstance(group, dict)
+            ]
+            # Catalogue expansion can add a stronger live route inside a visible
+            # token after the scanner summary was built. The Funding tape describes
+            # the rows on this page, so repair it from those exact live leaders.
+            summary["max_funding_24h_pct"] = max(
+                (value for value in visible_funding if value is not None),
+                default=None,
+            )
         result_filter_keys = (
             "q",
             "exchange",
@@ -5841,21 +6059,24 @@ def funding_history_health() -> dict[str, Any]:
         )
     )
     summary = venue_funding_history.coverage_summary(legs)
-    windows = venue_funding_history.load()
-    keys = {f"{venue}|{symbol}" for venue, symbol in legs}
-    summary["window_leg_counts"] = {
-        label: sum((windows.get(key) or {}).get(label) is not None for key in keys)
-        for label in ("1d", "7d", "30d")
-    }
     retryable = int(summary.get("retryable_error_leg_count") or 0)
     pending = int(summary.get("pending_leg_count") or 0)
+    deep_pending = int(summary.get("deep_history_pending_leg_count") or 0)
+    complete = int(summary.get("fully_complete_leg_count") or 0)
+    total = int(summary.get("catalog_leg_count") or 0)
     summary["status"] = (
-        "operational"
-        if pending == 0 and retryable == 0
-        else "retrying"
+        "retrying"
         if retryable
-        else "catching_up"
+        else "source_catching_up"
+        if pending
+        else "archive_catching_up"
+        if deep_pending
+        else "operational"
+        if complete == total
+        else "operational_partial_history"
     )
+    summary["window_value_kind"] = "aggregate_exact_settlements"
+    summary["now_is_independent"] = True
     return summary
 
 
@@ -8646,9 +8867,9 @@ def render_signals_page(
 #: actually paid.
 FUNDING_RANK_TABS: tuple[tuple[str, str], ...] = (
     ("now", "Now"),
-    ("1d", "Last 24h"),
-    ("7d", "Last 7d"),
-    ("30d", "Last 30d"),
+    ("1d", "24h total"),
+    ("7d", "7d total"),
+    ("30d", "30d total"),
 )
 
 
@@ -8673,16 +8894,17 @@ def render_funding_windows(route: dict[str, Any] | None, route_key: Any) -> str:
         )
     )
     cells = []
+    display_labels = {"1d": "24h", "7d": "7d", "30d": "30d"}
     for label in ("1d", "7d", "30d"):
         value = funding_radar.window_value(route or {}, label)
         if value is None:
             cells.append(
-                f'<span class="funding-window unknown" title="{h(coverage_title)}"><em>{label}</em><strong>—</strong></span>'
+                f'<span class="funding-window unknown" title="{h(coverage_title)}"><em>{display_labels[label]} total</em><strong>—</strong></span>'
             )
         else:
             tone = "positive" if value > 0 else "negative" if value < 0 else "flat"
             cells.append(
-                f'<span class="funding-window {tone}"><em>{label}</em>'
+                f'<span class="funding-window {tone}"><em>{display_labels[label]} total</em>'
                 f"<strong>{fmt_signed_pct(value, digits=2)}</strong></span>"
             )
     return f'<div class="funding-window-strip" title="{h(coverage_title)}">{"".join(cells)}</div>'
@@ -8710,7 +8932,7 @@ def funding_rank_value(row: dict[str, Any], selected_window: str = "now") -> flo
 def funding_rank_basis(row: dict[str, Any], selected_window: str = "now") -> str:
     window = str(selected_window or "now").casefold()
     if window != "now":
-        return f"settled {'24h' if window == '1d' else window}"
+        return f"settled {'24h' if window == '1d' else window} aggregate total"
     if any(
         _float_or_none(row.get(key)) is not None
         for key in ("funding_daily_pct", "funding_projected_24h_pct")
@@ -8807,9 +9029,12 @@ def render_funding_page(
     }
     if selected_farm not in farm_kinds:
         selected_farm = "futures-futures"
-    # `rank` and `farm` decide presentation, not data. Letting them into the
-    # query gives each tab its own cache key for an identical payload, which is
-    # what left /funding?rank=7d at 7.9s beside /funding at 0.03s.
+    selected_window = (_query_first(query, "rank") or "now").casefold()
+    if selected_window not in {value for value, _ in FUNDING_RANK_TABS}:
+        selected_window = "now"
+    # `rank` and `farm` remain presentation names. Historical CEX lanes pass an
+    # explicit funding_window because their complete, globally ranked payload
+    # genuinely differs from Now; the old bounded payload did not.
     data_query = {k: v for k, v in query.items() if k not in {"rank", "farm"}}
     funding_query = _query_lists_with(
         data_query,
@@ -8820,15 +9045,17 @@ def render_funding_page(
         direction=_query_first(query, "direction") or "desc",
         limit=_query_first(query, "limit") or "25",
     )
+    if selected_window != "now" and selected_farm != "futures-dex":
+        funding_query = _query_lists_with(
+            funding_query,
+            funding_window=selected_window,
+        )
     market_data = api_market_spreads(board_path, funding_query)
     funding_groups = market_data.get("groups") or []
-    # "Now" keeps the rate-based order the board already computed. The realised
-    # windows are what a member wants when deciding whether a farm has actually
-    # been paying, so they re-rank on the settled figure instead.
-    selected_window = (_query_first(query, "rank") or "now").casefold()
-    if selected_window not in {value for value, _ in FUNDING_RANK_TABS}:
-        selected_window = "now"
-    if selected_window != "now":
+    # OKX DEX routes are scanner records rather than CEX catalogue pairs. Keep
+    # their exact retained union; CEX history was already globally ranked by
+    # the complete funding catalogue before this page received it.
+    if selected_window != "now" and selected_farm == "futures-dex":
         funding_groups = _historical_funding_groups(
             funding_groups,
             route_kind=farm_kinds[selected_farm],
@@ -8837,11 +9064,12 @@ def render_funding_page(
             symbol=_query_first(data_query, "q"),
         )
     summary = market_data.get("summary") or {}
-    displayed_assets = (
-        len(funding_groups) if selected_window != "now" else summary.get("matching_tokens")
-    )
-    displayed_largest = (
-        max(
+    funding_meta = market_data.get("funding_catalog") or {}
+    displayed_assets = funding_meta.get("matching_token_count", summary.get("matching_tokens"))
+    displayed_largest = funding_meta.get("largest_value", summary.get("max_funding_24h_pct"))
+    if selected_window != "now" and selected_farm == "futures-dex":
+        displayed_assets = len(funding_groups)
+        displayed_largest = max(
             (
                 float(group.get("best_funding_window_pct"))
                 for group in funding_groups
@@ -8849,17 +9077,19 @@ def render_funding_page(
             ),
             default=None,
         )
-        if selected_window != "now"
-        else summary.get("max_funding_24h_pct")
-    )
     displayed_largest_label = (
-        "Largest 24h" if selected_window in {"now", "1d"} else f"Largest {selected_window}"
+        "Largest now / 24h"
+        if selected_window == "now"
+        else "Largest 24h total"
+        if selected_window == "1d"
+        else f"Largest {selected_window} total"
     )
-    displayed_pairs = (
-        sum(int(group.get("route_count") or len(group.get("routes") or [])) for group in funding_groups)
-        if selected_window != "now"
-        else summary.get("matching_rows")
-    )
+    displayed_pairs = funding_meta.get("matching_route_count", summary.get("matching_rows"))
+    if selected_window != "now" and selected_farm == "futures-dex":
+        displayed_pairs = sum(
+            int(group.get("route_count") or len(group.get("routes") or []))
+            for group in funding_groups
+        )
     api_health_data = (market_data.get("source_health") or {}).get("canonical_api") or {}
     live_funding_health = bulk_quotes.funding_health()
     source_ready = (
@@ -8874,6 +9104,57 @@ def render_funding_page(
         ("futures-spot", "Futures-Spot"),
         ("futures-dex", "Futures-DEX"),
     ]
+    page_offset = max(0, int(_query_float(query, "offset", 0) or 0))
+    page_limit = max(20, min(500, int(_query_float(query, "limit", 25) or 25)))
+    total_tokens = int(displayed_assets or 0)
+    returned_tokens = len(funding_groups)
+
+    def funding_page_href(
+        *,
+        offset: int,
+        farm: str | None = None,
+        rank: str | None = None,
+        include_search: bool = True,
+    ) -> str:
+        params: dict[str, Any] = {
+            "farm": farm or selected_farm,
+            "rank": rank or selected_window,
+            "limit": page_limit,
+        }
+        search = _query_first(query, "q")
+        if search and include_search:
+            params["q"] = search
+        if offset > 0:
+            params["offset"] = offset
+        return "/funding?" + urlencode(params)
+
+    page_start = page_offset + 1 if returned_tokens else 0
+    page_end = page_offset + returned_tokens
+    pagination_html = (
+        '<nav class="funding-pagination" aria-label="Funding results pages">'
+        f'<span>Showing {h(page_start)}–{h(page_end)} of {h(total_tokens)} tokens · every eligible pair is inside its token row</span>'
+        + (
+            f'<a href="{h(funding_page_href(offset=max(0, page_offset - page_limit)))}">Previous</a>'
+            if page_offset > 0
+            else ""
+        )
+        + (
+            f'<a href="{h(funding_page_href(offset=page_offset + page_limit))}">Next</a>'
+            if page_end < total_tokens
+            else ""
+        )
+        + "</nav>"
+    )
+    window_token_counts = funding_meta.get("window_token_counts") or {}
+    exact_window_note = (
+        '<p class="funding-radar-note" data-exact-window-counts><strong>Exact positive-route coverage:</strong> '
+        f'24h {h(window_token_counts.get("1d", "—"))} tokens · '
+        f'7d {h(window_token_counts.get("7d", "—"))} · '
+        f'30d {h(window_token_counts.get("30d", "—"))}. '
+        "A missing 30d value is never backfilled from the current rate or a partial archive.</p>"
+        if funding_meta
+        else ""
+    )
     body = f"""
     <section class="funding-page terminal-page" data-refresh="{refresh_seconds}" data-refresh-silent="1">
       {render_board_stream_script(funding_query)}
@@ -8892,7 +9173,7 @@ def render_funding_page(
       <nav class="funding-farm-tabs" aria-label="Funding farm type">
         {
         "".join(
-            f'<a class="{"active" if value == selected_farm else ""}" href="/funding?farm={h(value)}">{h(label)}</a>'
+            f'<a class="{"active" if value == selected_farm else ""}" href="{h(funding_page_href(offset=0, farm=value))}">{h(label)}</a>'
             for value, label in tabs
         )
     }
@@ -8902,11 +9183,20 @@ def render_funding_page(
         {
         "".join(
             f'<a class="{"active" if value == selected_window else ""}" '
-            f'href="/funding?farm={h(selected_farm)}&amp;rank={h(value)}">{h(label)}</a>'
+            f'href="{h(funding_page_href(offset=0, rank=value))}">{h(label)}</a>'
             for value, label in FUNDING_RANK_TABS
         )
     }
       </nav>
+      <form class="funding-search" action="/funding" method="get">
+        <input type="hidden" name="farm" value="{h(selected_farm)}">
+        <input type="hidden" name="rank" value="{h(selected_window)}">
+        <input type="hidden" name="limit" value="{h(page_limit)}">
+        <label for="funding-token-search">Find a token in the complete catalogue</label>
+        <input id="funding-token-search" name="q" value="{h(_query_first(query, "q") or "")}" placeholder="e.g. ONG, GUA, BTC" autocomplete="off">
+        <button type="submit">Search</button>
+        {f'<a href="{h(funding_page_href(offset=0, include_search=False))}">Clear</a>' if _query_first(query, "q") else ""}
+      </form>
       {
         (
             '<p class="funding-radar-note"><strong>Historical radar:</strong> cooled rows remain discoverable for 30 days. Their rate and basis are the last live observation, not a current entry quote.</p>'
@@ -8915,6 +9205,8 @@ def render_funding_page(
         )
     }
       <p class="funding-radar-note"><strong>Blank history is explicit:</strong> 1d, 7d or 30d appears only after the exact venue symbols provide enough settled events. A token can be older than seven days while a venue API exposes less history; member Watchlist and Portfolio legs are now prioritised by the collector.</p>
+      <p class="funding-radar-note" data-window-semantics><strong>Period totals:</strong> 24h, 7d and 30d are separate aggregate sums of the exact settlements inside each complete trailing period. They are not divided into daily averages. <strong>Now is isolated</strong>: a live-rate change can re-rank Now, but cannot rewrite any historical total.</p>
+      {exact_window_note}
       <p class="funding-radar-note" data-history-coverage><strong>Settlement archive coverage:</strong> {
         h(history_health.get("attempted_leg_count"))
     }/{h(history_health.get("catalog_leg_count"))} exact futures legs source-checked; {
@@ -8952,12 +9244,12 @@ def render_funding_page(
         <div class="panel-head flat terminal-table-title">
           <div>
             <h2>{h(dict(tabs).get(selected_farm))} Farms</h2>
-            <p>Positive net values mean the displayed long-short pair receives funding under the exchange sign convention.</p>
+            <p>Positive net values mean the displayed long-short pair receives funding under the exchange sign convention. Ranking uses the complete pair catalogue before this token page is sliced.</p>
           </div>
           {render_json_export_control("/api/spreads?" + urlencode(_query_with(funding_query, limit=500, offset=0)))}
         </div>
         <div class="funding-ledger-head" aria-hidden="true">
-          <span>Token</span><span>Best farm</span><span>{h("Net now / 24h" if selected_window == "now" else "Settled 24h" if selected_window == "1d" else f"Settled {selected_window}")}</span><span>Payouts</span>
+          <span>Token</span><span>Best farm</span><span>{h("Net now / 24h" if selected_window == "now" else "Settled 24h total" if selected_window == "1d" else f"Settled {selected_window} total")}</span><span>Payouts</span>
           <span>Entry basis</span><span>Settled windows</span><span>Pairs</span><span></span>
         </div>
         <div class="funding-group-list">
@@ -8975,6 +9267,7 @@ def render_funding_page(
         )
     }
         </div>
+        {pagination_html}
       </section>
     </section>
     {render_json_export_script()}
@@ -9011,6 +9304,15 @@ def render_funding_token_group(
         if historical
         else f'<span class="funding-live-badge">Live now · funding {fmt_age(best.get("funding_age_min"))} old</span>'
     )
+    if best.get("requires_existing_spot_inventory"):
+        status_badge += '<span class="funding-inventory-badge">Short-spot inventory required</span>'
+    metric_label = (
+        "Net now / 24h"
+        if selected_window == "now"
+        else "Settled 24h total"
+        if selected_window == "1d"
+        else f"Settled {selected_window} total"
+    )
     return f"""
     <details class="funding-token-group {"historical-radar" if historical else ""}" data-route-key="{h(best.get("route_key") or "")}">
       <summary>
@@ -9019,7 +9321,7 @@ def render_funding_token_group(
           <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best funding-pair chart">{h(group.get("token"))}</a><em>{h(name)}</em>{status_badge}</span>
         </div>
         <div><span>Best farm</span><strong>{h(best.get("long_venue"))} → {h(best.get("short_venue"))}</strong></div>
-        <div><span>Net 24h</span><strong{funding_live_hook}>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
+        <div><span>{h(metric_label)}</span><strong{funding_live_hook}>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>
         <div><span>Payouts</span><strong>{h(funding_cadence_pair(best))}</strong></div>
         <div><span>{"Last basis" if historical else "Entry basis" if basis_current else "Basis refreshing"}</span><strong data-live-spread>{fmt_pct(best.get("executable_spread_pct"))}</strong></div>
         <div class="funding-realised"><span>Realised</span>{render_funding_windows(best, best.get("route_key"))}</div>
@@ -9060,11 +9362,23 @@ def render_funding_pair(row: dict[str, Any], *, selected_window: str = "now") ->
         if leg_pays_funding(row, "short")
         else ""
     )
+    inventory_note = (
+        '<em class="funding-inventory-note">Inventory or borrow required to short this Spot leg</em>'
+        if row.get("requires_existing_spot_inventory")
+        else ""
+    )
+    metric_label = (
+        "Net now / 24h"
+        if selected_window == "now"
+        else "Settled 24h total"
+        if selected_window == "1d"
+        else f"Settled {selected_window} total"
+    )
     return f"""
     <article class="funding-pair-row {"historical-radar" if historical else ""}" data-route-key="{h(row.get("route_key") or "")}">
       <div><span>Long</span>{render_exchange_link(row, "long", include_market_type=True)}{long_funding}</div>
-      <div><span>Short</span>{render_exchange_link(row, "short", include_market_type=True)}{short_funding}</div>
-      <div><span>Net 24h</span><strong{funding_live_hook}>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)} · {h(funding_cadence_pair(row))}</em></div>
+      <div><span>Short</span>{render_exchange_link(row, "short", include_market_type=True)}{short_funding}{inventory_note}</div>
+      <div><span>{h(metric_label)}</span><strong{funding_live_hook}>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)} · {h(funding_cadence_pair(row))}</em></div>
       <div><span>{"Last basis / VWAP" if historical else "Basis / VWAP" if basis_current else "Basis refreshing"}</span><strong data-live-spread>{fmt_pct(row.get("executable_spread_pct"))}</strong><em>{fmt_pct(row.get("depth_weighted_spread_pct"))}</em></div>
       <div><span>{"Last seen" if historical else "Updated"}</span><strong>{fmt_age(row.get("radar_last_seen_age_min") if historical else row.get("age_min"))}</strong></div>
       <div class="route-actions">{"" if historical else render_alert_draft_button(row, alert_type="funding", compact=True)}{"" if historical else f'<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a>'}<a href="/charts?route_key={h(board.route_key_url(str(row.get("route_key") or "")))}">Chart</a></div>
@@ -19187,9 +19501,19 @@ pre { background: var(--dark); color: white; padding: 14px; border-radius: 8px; 
 .token-group-list, .funding-group-list { display: grid; gap: 7px; }
 .token-route-group, .funding-token-group { min-width: 0; border: 1px solid var(--terminal-line); border-radius: 7px; background: var(--terminal-row); overflow: hidden; }
 .funding-token-group.historical-radar { border-color: rgba(250,204,21,.3); background: linear-gradient(90deg,rgba(250,204,21,.035),var(--terminal-row) 24%); }
-.funding-radar-badge, .funding-live-badge { display: block; width: fit-content; margin-top: 4px; padding: 2px 6px; border-radius: 999px; font-size: 9px; font-style: normal; font-weight: 700; letter-spacing: .02em; }
+.funding-radar-badge, .funding-live-badge, .funding-inventory-badge { display: block; width: fit-content; margin-top: 4px; padding: 2px 6px; border-radius: 999px; font-size: 9px; font-style: normal; font-weight: 700; letter-spacing: .02em; }
 .funding-radar-badge { color: #facc15; background: rgba(250,204,21,.10); border: 1px solid rgba(250,204,21,.24); }
 .funding-live-badge { color: #4ade80; background: rgba(74,222,128,.08); border: 1px solid rgba(74,222,128,.18); }
+.funding-inventory-badge, .funding-inventory-note { color: #fbbf24; }
+.funding-inventory-badge { background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.22); }
+.funding-pagination { display:flex; align-items:center; justify-content:flex-end; gap:8px; min-height:42px; margin-top:8px; padding:7px 10px; border-top:1px solid var(--terminal-line); color:var(--terminal-muted); font-size:11px; }
+.funding-pagination span { margin-right:auto; }
+.funding-pagination a { min-height:28px; display:inline-flex; align-items:center; padding:0 9px; border:1px solid var(--terminal-line); color:var(--terminal-text); text-decoration:none; }
+.funding-search { display:grid; grid-template-columns:minmax(180px,1fr) minmax(220px,2fr) auto auto; align-items:end; gap:7px; padding:8px 0; }
+.funding-search label { color:var(--terminal-muted); font-size:10px; text-transform:uppercase; letter-spacing:.04em; }
+.funding-search input:not([type="hidden"]), .funding-search button, .funding-search a { min-height:32px; border:1px solid var(--terminal-line); background:transparent; color:var(--terminal-text); padding:0 9px; font:inherit; }
+.funding-search button { cursor:pointer; }
+.funding-search a { display:inline-flex; align-items:center; text-decoration:none; }
 .funding-pair-row.historical-radar { border-left: 2px solid rgba(250,204,21,.45); }
 .token-route-group[open], .funding-token-group[open] { border-color: rgba(31,184,165,.58); }
 .token-route-summary, .funding-token-group > summary { list-style: none; cursor: pointer; }
@@ -19851,7 +20175,7 @@ main { padding:22px 24px 56px; }
 .funding-token-group > summary > div:not(.asset-identity) > span:first-child { display:none; }
 .funding-token-group > summary .funding-realised > span:first-child { display:none; }
 .funding-window { padding:1px 4px; border-radius:1px; background:transparent; }
-.funding-radar-badge,.funding-live-badge,.ranking-status,.partner-status,.persistence-badge,.saved-ratio { border-radius:1px; background:transparent; }
+.funding-radar-badge,.funding-live-badge,.funding-inventory-badge,.ranking-status,.partner-status,.persistence-badge,.saved-ratio { border-radius:1px; background:transparent; }
 .token-route-body,.funding-pair-list { border-top:1px solid var(--terminal-line); background:var(--terminal-panel); }
 .expanded-asset-bar { background:transparent; }
 .route-detail-row,.funding-pair-row { background:transparent; }
@@ -19960,6 +20284,11 @@ main { padding:22px 24px 56px; }
   .header-actions { margin-left:auto; }
   .theme-toggle > span:last-child { display:none; }
   .terminal-kpis,.terminal-tape,.funding-tape { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .funding-search { grid-template-columns:1fr auto; }
+  .funding-search label { grid-column:1/-1; }
+  .funding-search a { grid-column:1/-1; justify-content:center; }
+  .funding-pagination { flex-wrap:wrap; }
+  .funding-pagination span { flex:1 0 100%; }
   .terminal-kpis article:nth-child(2n),.terminal-tape article:nth-child(2n) { border-right:0; }
   .terminal-kpis article:nth-child(n+3),.terminal-tape article:nth-child(n+3) { border-top:1px solid var(--terminal-line); }
   .ranking-table-wrap { overflow:visible; }

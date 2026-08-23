@@ -107,19 +107,27 @@ history.
 
 ## Funding-history coverage
 
-- Live/portfolio/watchlist/radar legs remain first priority.
+- Live page leaders, portfolio legs, and member watchlists remain first
+  priority. Retained radar routes stay in the rotating full catalogue instead
+  of occupying a static priority prefix.
 - A new or expanded futures catalog runs bounded catch-up passes every ten
-  minutes until every current leg has been attempted at least once; the service
-  then returns to the three-hour settlement-history maintenance cadence.
+  minutes until every current leg has been attempted and every incomplete
+  exact-history leg has received a deep pagination pass; the service then
+  returns to the three-hour settlement-history maintenance cadence.
   Source-check coverage and successful classification are reported separately:
   a temporary provider failure counts as checked but never as verified history,
   remains labelled retryable, and cannot erase previously verified windows.
-- A missing 1d/7d/30d value is never replaced with zero or an estimate. A
-  window appears only when the venue's actual settlement rows cover at least
-  80% of that window.
+- A missing 24h/7d/30d value is never replaced with zero or an estimate. Each
+  published value is the aggregate sum of exact settlements in that complete
+  trailing period, not a daily average. `Now` uses only the current rate and
+  cannot alter these historical totals. A window appears only when the venue's
+  actual settlement cadence passes the 90% event, boundary, and internal-gap
+  checks.
 - `venue_funding_history.json` records source-checked, successfully classified,
-  pending and retryable counts, plus verified-coverage and latest-cycle counts
-  for operator verification.
+  pending and retryable counts, plus separate 24h/7d/30d complete-leg counts,
+  per-window coverage percentages, deep-pagination backlog, and latest-cycle
+  counts for operator verification. Source coverage alone is never reported as
+  complete historical coverage.
 
 ## Required external services before public onboarding
 

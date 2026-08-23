@@ -376,7 +376,7 @@ def _radar_summary(rows: list[dict[str, Any]]) -> str:
         )
     return (
         f"<b>Funding radar</b> · {escape(_route(best))} · last live {_radar_age(best.get('radar_last_seen_age_min'))} ago\n"
-        f"Settled: 24h {_pct(windows.get('1d'))} · 7d {_pct(windows.get('7d'))} · 30d {_pct(windows.get('30d'))}; "
+        f"Settled totals: 24h {_pct(windows.get('1d'))} · 7d {_pct(windows.get('7d'))} · 30d {_pct(windows.get('30d'))}; "
         f"last basis {_pct(best.get('executable_spread_pct'))}.{outlook_line}"
     )
 
@@ -413,14 +413,14 @@ def _render_radar(*, public_url: str = "") -> str:
                 _pct(windows.get("30d"), 2),
             )
         )
-    body = _table(("TOKEN", "24H", "7D", "30D"), (10, 8, 8, 8), lines)
+    body = _table(("TOKEN", "24H TOT", "7D TOT", "30D TOT"), (10, 9, 9, 9), lines)
     extra = f"\n<i>Showing top {MAX_ROWS} of {len(leaders)} retained tokens.</i>" if len(leaders) > MAX_ROWS else ""
     link = ""
     if public_url:
         link = f'\n\n<a href="{escape(public_url.rstrip("/"))}/funding?rank=1d">Open the full funding radar</a>'
     return (
         f"<b>Funding radar · last 30 days</b>\n<pre>{escape(body)}</pre>{extra}\n"
-        "<i>Settled historical carry. A retained token may be cooled now; re-check the live route before acting.</i>"
+        "<i>Aggregate settled carry for each complete period, not daily averages. Now is separate. A retained token may be cooled now; re-check the live route before acting.</i>"
         f"{link}"
     )
 
