@@ -132,7 +132,11 @@ def _handle_group_query(
         try:
             symbols = telegram_queries.suggestions(prefix, board_path=board_path)
         except Exception:  # noqa: BLE001 - a lookup failure must never break the webhook
-            return None
+            return _reply(
+                chat_id,
+                "The live token list is refreshing. Try again shortly or use /status.",
+                thread_id=thread_id,
+            )
         if not symbols:
             return _reply(chat_id, "No token matches that right now.", thread_id=thread_id)
         heading = f"Tokens matching <b>{prefix.upper()}</b>:" if prefix else "Biggest spreads right now — tap one:"
@@ -192,7 +196,13 @@ def _handle_group_query(
             query, board_path=board_path, public_url=public_url
         )
     except Exception:  # noqa: BLE001 - a lookup failure must never break the webhook
-        return None
+        return _reply(
+            chat_id,
+            "I recognised the command, but the live data view is refreshing. "
+            "Try again shortly or use <code>/status</code>.",
+            html=True,
+            thread_id=thread_id,
+        )
     markup = telegram_queries.keyboard(query, public_url=public_url)
     if "no parsed routes right now" in body:
         # A dead end helps nobody: offer what is near it instead.
@@ -235,7 +245,12 @@ def _handle_callback(cb: dict[str, Any], *, db_path: Any, board_path: Any) -> di
     try:
         body = telegram_queries.render(query, board_path=board_path, public_url=public_url)
     except Exception:  # noqa: BLE001
-        return None
+        return {
+            "method": "answerCallbackQuery",
+            "callback_query_id": str(cb.get("id") or ""),
+            "text": "Live data is refreshing. Try the button again shortly.",
+            "show_alert": True,
+        }
     return {
         "method": "editMessageText",
         "chat_id": chat_id,
@@ -264,7 +279,13 @@ def _handle_inline_query(
     try:
         matches = telegram_queries.suggest(str(iq.get("query") or ""), board_path=board_path)
     except Exception:  # noqa: BLE001
-        return None
+        return {
+            "method": "answerInlineQuery",
+            "inline_query_id": str(iq.get("id") or ""),
+            "results": [],
+            "cache_time": 1,
+            "is_personal": True,
+        }
     results = []
     for item in matches[:20]:
         token = item["token"]

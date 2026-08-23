@@ -477,13 +477,35 @@ def replace_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise TypeError("telegram_payload_must_be_a_mapping")
     if not isinstance(payload.get("groups"), list):
         raise TypeError("telegram_payload_groups_must_be_a_list")
-    catalog_pairs.clear_cache()
     global WARM_QUERY, _WARM_QUERY_UPDATED_AT
     with _WARM_QUERY_LOCK:
+        # ``api_market_spreads`` deliberately returns this sentinel while a
+        # different thread owns the expensive grouping slot. It is neither a
+        # completed market generation nor evidence that the market is empty.
+        # A background warm used to install it unconditionally and erase the
+        # last complete Telegram snapshot; the website recovered on its next
+        # request, while every bot command remained stuck behind the warming
+        # gate. Preserve the atomic last-complete generation instead.
+        source_health = payload.get("source_health")
+        canonical = (
+            source_health.get("canonical_api") or {}
+            if isinstance(source_health, dict)
+            else {}
+        )
+        if not isinstance(canonical, dict):
+            canonical = {}
+        try:
+            canonical_rows = int(float(canonical.get("row_count") or 0))
+        except (TypeError, ValueError):
+            canonical_rows = 0
+        incomplete_empty = not payload.get("groups") and canonical_rows > 0
+        if payload.get("status") == "warming" or incomplete_empty:
+            return WARM_QUERY
+        catalog_pairs.clear_cache()
         # An empty generation is installed like any other: the board can
-        # legitimately hold nothing, and serving a stale answer instead would
-        # be a worse lie than an honest gap. `payload_status().ready` is what
-        # keeps an empty snapshot from being answered as if it were data.
+        # legitimately hold nothing when it is a completed, authoritative
+        # answer. `payload_status().ready` is what keeps that empty snapshot
+        # from being answered as if it were data.
         WARM_QUERY = payload
         _WARM_QUERY_UPDATED_AT = time.time()
     return payload
@@ -499,6 +521,7 @@ def replace_funding_payloads(payloads: Iterable[dict[str, Any]]) -> dict[str, An
     show the current rate/basis without weakening the spread-board filters or
     doing exchange work inside Telegram's webhook deadline.
     """
+    global FUNDING_QUERY, _FUNDING_QUERY_UPDATED_AT
     groups: dict[str, dict[str, Any]] = {}
     seen: dict[str, set[tuple[Any, ...]]] = {}
     for payload in payloads:
@@ -506,6 +529,13 @@ def replace_funding_payloads(payloads: Iterable[dict[str, Any]]) -> dict[str, An
             raise TypeError("telegram_funding_payload_must_be_a_mapping")
         if not isinstance(payload.get("groups"), list):
             raise TypeError("telegram_funding_payload_groups_must_be_a_list")
+        # Funding is assembled from several lane views. Installing only the
+        # lanes that happened to finish would silently remove valid routes and
+        # make /funding disagree with the website. Keep the previous complete
+        # multi-lane snapshot and let the regular warmer retry the whole set.
+        if payload.get("status") == "warming":
+            with _WARM_QUERY_LOCK:
+                return FUNDING_QUERY
         for original in payload.get("groups") or []:
             if not isinstance(original, dict):
                 continue
@@ -527,7 +557,6 @@ def replace_funding_payloads(payloads: Iterable[dict[str, Any]]) -> dict[str, An
                 route_keys.add(identity)
                 group["routes"].append(route)
     installed = {"groups": list(groups.values())}
-    global FUNDING_QUERY, _FUNDING_QUERY_UPDATED_AT
     with _WARM_QUERY_LOCK:
         FUNDING_QUERY = installed
         _FUNDING_QUERY_UPDATED_AT = time.time()

@@ -61,3 +61,60 @@ def test_an_empty_install_is_reported_as_not_ready_rather_than_hidden() -> None:
     status = telegram_queries.payload_status()
     assert status["token_count"] == 0
     assert status["ready"] is False
+
+
+def test_a_transient_warming_generation_cannot_erase_the_last_complete_snapshot() -> None:
+    """Cache admission control is not an authoritative empty market.
+
+    ``api_market_spreads`` deliberately answers with this short-lived payload
+    when another thread owns the expensive grouping slot.  Installing it made
+    every Telegram data command stay in ``warming`` long after the website had
+    recovered.
+    """
+    complete = {
+        "groups": [{"token": "GUA", "routes": [{"token": "GUA"}]}],
+    }
+    telegram_queries.replace_payload(complete)
+
+    active = telegram_queries.replace_payload(
+        {"status": "warming", "groups": [], "rows": [], "pagination": {}}
+    )
+
+    assert active is complete
+    assert telegram_queries.client_visible_payload() is complete
+    status = telegram_queries.payload_status()
+    assert status["ready"] is True
+    assert status["token_count"] == 1
+
+
+def test_an_incomplete_empty_build_cannot_erase_a_populated_source_snapshot() -> None:
+    complete = {
+        "groups": [{"token": "GUA", "routes": [{"token": "GUA"}]}],
+    }
+    telegram_queries.replace_payload(complete)
+
+    active = telegram_queries.replace_payload(
+        {
+            "groups": [],
+            "source_health": {"canonical_api": {"row_count": 28_028}},
+        }
+    )
+
+    assert active is complete
+    assert telegram_queries.payload_status()["ready"] is True
+
+
+def test_a_partial_warming_funding_refresh_cannot_erase_complete_lanes() -> None:
+    complete = {
+        "groups": [{"token": "GUA", "routes": [{"token": "GUA"}]}],
+    }
+    telegram_queries.replace_funding_payloads([complete])
+
+    active = telegram_queries.replace_funding_payloads(
+        [complete, {"status": "warming", "groups": []}]
+    )
+
+    assert active["groups"][0]["token"] == "GUA"
+    status = telegram_queries.payload_status()
+    assert status["funding_token_count"] == 1
+    assert status["funding_route_count"] == 1

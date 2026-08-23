@@ -600,6 +600,7 @@ class SharedArtifactWatcher(threading.Thread):
         poll_seconds: float = 1.0,
         initial_warm_delay_seconds: float = 30.0,
         invalidation_interval_seconds: float | None = None,
+        telegram_recovery_interval_seconds: float | None = None,
     ) -> None:
         super().__init__(name="shared-market-artifact-watcher", daemon=True)
         self.stop_event = stop_event
@@ -621,6 +622,19 @@ class SharedArtifactWatcher(threading.Thread):
         self.last_invalidation_at = 0.0
         self.invalidation_pending = False
         self.pending_generation_kinds: set[str] = set()
+        self.telegram_recovery_interval_seconds = max(
+            30.0,
+            float(
+                telegram_recovery_interval_seconds
+                if telegram_recovery_interval_seconds is not None
+                else os.environ.get(
+                    "SPREADBOARD_TELEGRAM_RECOVERY_SECONDS", "60"
+                )
+            ),
+        )
+        self.next_telegram_recovery_at = (
+            time.monotonic() + self.telegram_recovery_interval_seconds
+        )
         self.generation_signature = _artifact_signature(MARKET_GENERATION_PATH)
         self.snapshot_signature = _artifact_signature(SNAPSHOT_PATH)
         self.warm_lock = threading.Lock()
@@ -657,6 +671,35 @@ class SharedArtifactWatcher(threading.Thread):
         ):
             self.initial_warm_requested = True
             self.request_warm()
+        self._recover_telegram_snapshot_if_due()
+
+    def _recover_telegram_snapshot_if_due(self) -> None:
+        """Retry a missing resident bot snapshot without waiting for discovery.
+
+        The collector's broad structural generation can be hours away. A
+        process-local Telegram snapshot is an availability cache, so a lost or
+        failed startup generation gets its own bounded recovery cadence. The
+        existing warm lock coalesces this with any structural/funding warm
+        already in progress.
+        """
+
+        now = time.monotonic()
+        if now < self.next_telegram_recovery_at:
+            return
+        self.next_telegram_recovery_at = (
+            now + self.telegram_recovery_interval_seconds
+        )
+        from spreadboard import telegram_queries
+
+        if telegram_queries.payload_status()["ready"]:
+            return
+        with self.warm_lock:
+            if self.warm_pending or (
+                self.warm_thread is not None and self.warm_thread.is_alive()
+            ):
+                return
+        _log("telegram snapshot missing; requesting automatic recovery warm")
+        self.request_warm()
 
     def _invalidate_if_due(self) -> None:
         """Coalesce price/funding generations while live overlays stay current."""

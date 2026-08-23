@@ -506,6 +506,28 @@ def test_query_is_answered_in_the_registered_group(db, board_file):
     assert "SIREN" in reply["text"]
 
 
+def test_a_recognised_group_command_never_fails_silently(
+    db, board_file, monkeypatch
+):
+    accounts.configure_telegram_community(
+        GROUP_ID, title="Subscribers", configured_by_telegram_user_id=1,
+        invite_link="https://t.me/+abc", db_path=db,
+    )
+    monkeypatch.setattr(
+        telegram_queries,
+        "render",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("refresh")),
+    )
+
+    reply = telegram_bot.handle_update(
+        message(GROUP_ID, "/funding SIREN"), db_path=db, board_path=board_file
+    )
+
+    assert reply is not None
+    assert "recognised the command" in reply["text"]
+    assert "/status" in reply["text"]
+
+
 def test_tagging_the_bot_then_typing_a_token_is_answered(db, board_file, monkeypatch):
     monkeypatch.setenv(
         "SPREADBOARD_TELEGRAM_BOT_USERNAME", "spreadarbitragesubscription_bot"
@@ -648,6 +670,30 @@ def test_pressing_a_view_button_edits_in_place(db, board_file):
     assert "Spread" in [b["text"] for r in reply["reply_markup"]["inline_keyboard"] for b in r]
 
 
+def test_a_view_button_refresh_failure_is_answered_instead_of_spinning(
+    db, board_file, monkeypatch
+):
+    accounts.configure_telegram_community(
+        GROUP_ID, title="Spread", configured_by_telegram_user_id=1,
+        invite_link="https://t.me/+abc", db_path=db,
+    )
+    monkeypatch.setattr(
+        telegram_queries,
+        "render",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("refresh")),
+    )
+    update = {"callback_query": {
+        "id": "callback-1", "data": "v:funding:SIREN",
+        "message": {"message_id": 55, "chat": {"id": GROUP_ID, "type": "supergroup"}},
+    }}
+
+    reply = telegram_bot.handle_update(update, db_path=db, board_path=board_file)
+
+    assert reply["method"] == "answerCallbackQuery"
+    assert reply["callback_query_id"] == "callback-1"
+    assert reply["show_alert"] is True
+
+
 def test_callback_from_an_unregistered_chat_is_ignored(db, board_file):
     update = {"callback_query": {
         "id": "1", "data": "v:funding:SIREN",
@@ -676,6 +722,33 @@ def test_inline_query_suggests_tokens(db, board_file, monkeypatch):
     titles = [r["title"] for r in reply["results"]]
     assert titles == ["SILVER", "SIREN"], "prefix filtered, ranked by best edge"
     assert reply["results"][0]["input_message_content"]["message_text"] == "$SILVER"
+
+
+def test_an_inline_refresh_failure_returns_an_empty_answer(
+    db, board_file, monkeypatch
+):
+    user = accounts.create_user(
+        email="inline-refresh@example.test", display_name="Inline",
+        password="a-secure-password", subscription_status="active",
+        subscription_days=30, db_path=db,
+    )
+    token = accounts.create_telegram_link_token(user["id"], db_path=db)
+    accounts.bind_telegram_chat(token, 42, db_path=db)
+    monkeypatch.setattr(
+        telegram_queries,
+        "suggest",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("refresh")),
+    )
+
+    reply = telegram_bot.handle_update(
+        {"inline_query": {"id": "q-refresh", "from": {"id": 42}, "query": "SI"}},
+        db_path=db, board_path=board_file,
+    )
+
+    assert reply["method"] == "answerInlineQuery"
+    assert reply["inline_query_id"] == "q-refresh"
+    assert reply["results"] == []
+    assert reply["cache_time"] == 1
 
 
 def test_inline_query_with_empty_prefix_returns_top_tokens(db, board_file, monkeypatch):

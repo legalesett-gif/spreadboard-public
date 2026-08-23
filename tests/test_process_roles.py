@@ -163,6 +163,33 @@ def test_web_watcher_coalesces_continuous_collector_generations(
     assert watcher.invalidation_pending is False
 
 
+def test_web_watcher_self_heals_a_missing_telegram_snapshot(monkeypatch) -> None:
+    """A lost resident snapshot must not wait for the next broad discovery."""
+    from spreadboard import telegram_queries
+
+    warms: list[bool] = []
+    monkeypatch.setattr(
+        telegram_queries,
+        "payload_status",
+        lambda: {"ready": False},
+    )
+    monkeypatch.setattr(
+        service, "_warm_board_cache", lambda *, force=False: warms.append(force)
+    )
+    watcher = service.SharedArtifactWatcher(
+        threading.Event(),
+        initial_warm_delay_seconds=3600,
+        telegram_recovery_interval_seconds=60,
+    )
+    watcher.next_telegram_recovery_at = 0.0
+
+    watcher.check_once()
+    assert watcher.warm_thread is not None
+    watcher.warm_thread.join(timeout=2)
+
+    assert warms == [True]
+
+
 def _write_live_books(path: Path, *, quote_ts_us: int) -> None:
     with sqlite3.connect(path) as connection:
         connection.execute(
