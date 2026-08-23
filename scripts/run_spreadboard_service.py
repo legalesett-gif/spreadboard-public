@@ -1178,8 +1178,8 @@ class MarketEvidenceLoop(threading.Thread):
         float(os.environ.get("SPREADBOARD_MARKET_EVIDENCE_TIMEOUT_SECONDS", "3600")),
     )
     INTERVAL_SECONDS = max(
-        900.0,
-        float(os.environ.get("SPREADBOARD_MARKET_EVIDENCE_SECONDS", "10800")),
+        300.0,
+        float(os.environ.get("SPREADBOARD_MARKET_EVIDENCE_SECONDS", "600")),
     )
     INITIAL_DELAY_SECONDS = max(
         0.0,
@@ -1198,8 +1198,15 @@ class MarketEvidenceLoop(threading.Thread):
         if self.stop_event.wait(self.INITIAL_DELAY_SECONDS):
             return
         while not self.stop_event.is_set():
+            started = time.monotonic()
             self._sweep_once()
-            self.stop_event.wait(self.INTERVAL_SECONDS)
+            # Start-to-start cadence: the bounded history work itself can use
+            # four minutes. Sleeping a further ten minutes made the advertised
+            # catch-up interval fourteen minutes and prolonged initial archive
+            # coverage by many hours.
+            self.stop_event.wait(
+                max(0.0, self.INTERVAL_SECONDS - (time.monotonic() - started))
+            )
 
     def _sweep_once(self) -> None:
         result = _run_worker(

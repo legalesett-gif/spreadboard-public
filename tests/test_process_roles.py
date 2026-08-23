@@ -105,6 +105,34 @@ def test_web_watcher_rebuilds_only_funding_views_after_funding_generation(
     assert funding_warms == [True]
 
 
+def test_market_evidence_catch_up_is_start_to_start(monkeypatch) -> None:
+    class StopAfterSweep:
+        def __init__(self) -> None:
+            self.stopped = False
+            self.waits: list[float] = []
+
+        def wait(self, seconds: float) -> bool:
+            self.waits.append(seconds)
+            if len(self.waits) > 1:
+                self.stopped = True
+            return self.stopped
+
+        def is_set(self) -> bool:
+            return self.stopped
+
+    stop = StopAfterSweep()
+    loop = service.MarketEvidenceLoop(stop)  # type: ignore[arg-type]
+    loop.INITIAL_DELAY_SECONDS = 0.0
+    loop.INTERVAL_SECONDS = 600.0
+    monkeypatch.setattr(loop, "_sweep_once", lambda: None)
+    ticks = iter((100.0, 160.0))
+    monkeypatch.setattr(service.time, "monotonic", lambda: next(ticks))
+
+    loop.run()
+
+    assert stop.waits == [0.0, 540.0]
+
+
 def test_web_watcher_coalesces_continuous_collector_generations(
     tmp_path, monkeypatch
 ) -> None:
