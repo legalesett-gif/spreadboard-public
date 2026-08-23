@@ -44,6 +44,10 @@ VENUES = {
     "OKX": ("okx", "okx"),
 }
 DEXSCREENER_CHAIN_NAMES = {56: "bsc"}
+# MEXC rejects its funding-ledger endpoint when ``pageSize`` exceeds 100.
+# Keep the larger default for venues which accept it, but make pagination a
+# provider contract instead of assuming every CCXT adapter has the same cap.
+FUNDING_HISTORY_PAGE_LIMITS = {"mexc": 100}
 
 
 def dec(value: Any) -> Decimal | None:
@@ -117,9 +121,14 @@ def fetch_private_funding(exchange: Any, symbol: str, since_ms: int) -> list[dic
     """Fetch a bounded, deduplicated signed account-funding ledger."""
 
     cursor = int(since_ms)
+    page_limit = FUNDING_HISTORY_PAGE_LIMITS.get(
+        str(getattr(exchange, "id", "") or "").casefold(), 1000
+    )
     events: dict[tuple[int, str, str], dict[str, Any]] = {}
     for _ in range(20):
-        rows = exchange.fetch_funding_history(symbol, since=cursor, limit=1000) or []
+        rows = exchange.fetch_funding_history(
+            symbol, since=cursor, limit=page_limit
+        ) or []
         latest = cursor
         for row in rows:
             stamp = int(row.get("timestamp") or 0)
@@ -130,7 +139,7 @@ def fetch_private_funding(exchange: Any, symbol: str, since_ms: int) -> list[dic
             key = (stamp, str(amount), code)
             events[key] = {"timestamp": stamp, "amount": str(amount), "code": code}
             latest = max(latest, stamp)
-        if not rows or len(rows) < 1000 or latest <= cursor:
+        if not rows or len(rows) < page_limit or latest <= cursor:
             break
         cursor = latest + 1
     return [events[key] for key in sorted(events)]

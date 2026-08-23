@@ -133,6 +133,32 @@ def test_private_sync_allocates_signed_events_to_position_window() -> None:
     assert item["latest_event_at"] == "2026-08-12T00:00:00Z"
 
 
+def test_mexc_private_funding_uses_the_supported_page_size() -> None:
+    class MexcFundingLedger:
+        id = "mexc"
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def fetch_funding_history(self, symbol, *, since, limit):
+            self.calls.append((symbol, since, limit))
+            return [
+                {
+                    "timestamp": since + 1,
+                    "amount": "1.25",
+                    "code": "USDT",
+                }
+            ]
+
+    exchange = MexcFundingLedger()
+    rows = sync_portfolio_funding.fetch_private_funding(
+        exchange, "BTW/USDT:USDT", 1_000
+    )
+
+    assert exchange.calls == [("BTW/USDT:USDT", 1_000, 100)]
+    assert rows == [{"timestamp": 1_001, "amount": "1.25", "code": "USDT"}]
+
+
 def test_overlapping_same_account_market_is_not_double_counted() -> None:
     first = position()
     second = position(id=9, opened_at="2026-08-11T23:30:00Z")
