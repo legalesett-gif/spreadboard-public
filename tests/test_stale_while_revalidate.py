@@ -59,6 +59,38 @@ def test_fast_quote_delta_changes_the_market_cache_generation(
     assert first != second
 
 
+def test_member_can_use_previous_fast_generation_while_warmer_builds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from spreadboard import server
+
+    now = time.monotonic()
+    old_key = ("board", (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), ())
+    new_key = ("board", (1, 1), (2, 2), (9, 9), (4, 4), (5, 5), ())
+    payload = {"ok": True, "groups": [{"token": "GUA"}]}
+    monkeypatch.setattr(server, "_MARKET_CACHE", {old_key: (now, payload)})
+
+    assert server._market_cache_get(new_key) is None
+    assert server._market_cache_get(
+        new_key, allow_previous_generation=True
+    ) is payload
+
+
+def test_empty_populated_source_generation_is_not_cached() -> None:
+    from spreadboard import server
+
+    assert server._market_payload_cacheable(
+        {
+            "ok": True,
+            "groups": [],
+            "source_health": {"canonical_api": {"row_count": 23_000}},
+        }
+    ) is False
+    assert server._market_payload_cacheable(
+        {"ok": True, "groups": [{"token": "GUA"}]}
+    ) is True
+
+
 def test_a_waiter_never_starts_a_second_build_of_the_same_view(monkeypatch) -> None:
     """The stampede that kept killing the container.
 

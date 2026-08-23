@@ -2486,8 +2486,11 @@ def api_market_spreads(
     )
     offset = max(0, int(_query_float(query, "offset", 0) or 0))
     cache_key = None if _query_bool(query, "no_cache") else _market_cache_key(board_path, query)
+    allow_previous_generation = not _market_build_is_background()
     if cache_key is not None:
-        cached = _market_cache_get(cache_key)
+        cached = _market_cache_get(
+            cache_key, allow_previous_generation=allow_previous_generation
+        )
         if cached is not None:
             return _sync_telegram_client_universe(cached)
         with _MARKET_CACHE_LOCK:
@@ -2509,10 +2512,14 @@ def api_market_spreads(
             # data can carry a materially wrong matched spread.
             deadline = time.monotonic() + _MARKET_BUILD_WAIT_SECONDS
             while not inflight.wait(timeout=1.0) and time.monotonic() < deadline:
-                cached = _market_cache_get(cache_key)
+                cached = _market_cache_get(
+                    cache_key, allow_previous_generation=allow_previous_generation
+                )
                 if cached is not None:
                     return _sync_telegram_client_universe(cached)
-            cached = _market_cache_get(cache_key)
+            cached = _market_cache_get(
+                cache_key, allow_previous_generation=allow_previous_generation
+            )
             if cached is not None:
                 return _sync_telegram_client_universe(cached)
             # The owner is still building. Say so rather than start a second
@@ -3152,7 +3159,9 @@ def _file_signature(path: Path | str) -> tuple[int, int] | None:
     return (stat.st_mtime_ns, stat.st_size)
 
 
-def _market_cache_get(cache_key: tuple[Any, ...]) -> dict[str, Any] | None:
+def _market_cache_get(
+    cache_key: tuple[Any, ...], *, allow_previous_generation: bool = False
+) -> dict[str, Any] | None:
     now = time.monotonic()
     with _MARKET_CACHE_LOCK:
         cached = _MARKET_CACHE.get(cache_key)
@@ -3160,12 +3169,29 @@ def _market_cache_get(cache_key: tuple[Any, ...]) -> dict[str, Any] | None:
             return cached[1]
         if cached:
             _MARKET_CACHE.pop(cache_key, None)
+        if allow_previous_generation:
+            # Fast quotes move every minute, while grouping every lane can take
+            # two minutes. Re-price the last complete structure from current
+            # books while a background warmer builds the new fast generation.
+            # Every other source signature and the exact query must match; this
+            # never carries a route across a structural snapshot, metadata or
+            # rail change.
+            candidates = [
+                (key, value)
+                for key, value in _MARKET_CACHE.items()
+                if len(key) == len(cache_key)
+                and key[:3] == cache_key[:3]
+                and key[4:] == cache_key[4:]
+                and now - value[0] <= _MARKET_CACHE_TTL_SECONDS
+            ]
+            if candidates:
+                return max(candidates, key=lambda item: item[1][0])[1][1]
     return None
 
 
 def _market_cache_finish(cache_key: tuple[Any, ...], data: dict[str, Any] | None) -> None:
     with _MARKET_CACHE_LOCK:
-        if data is not None:
+        if data is not None and _market_payload_cacheable(data):
             _MARKET_CACHE[cache_key] = (time.monotonic(), data)
             if len(_MARKET_CACHE) > _MARKET_CACHE_MAX_ENTRIES:
                 oldest = min(_MARKET_CACHE, key=lambda key: _MARKET_CACHE[key][0])
@@ -3173,6 +3199,18 @@ def _market_cache_finish(cache_key: tuple[Any, ...], data: dict[str, Any] | None
         inflight = _MARKET_CACHE_INFLIGHT.pop(cache_key, None)
         if inflight is not None:
             inflight.set()
+
+
+def _market_payload_cacheable(data: dict[str, Any]) -> bool:
+    if data.get("status") == "warming":
+        return False
+    if data.get("groups"):
+        return True
+    canonical = ((data.get("source_health") or {}).get("canonical_api") or {})
+    # A populated source producing zero current groups during a handoff is not
+    # a reusable generation. Genuine empty filters can be recomputed cheaply;
+    # caching them is less important than recovering automatically.
+    return int(_float_or_none(canonical.get("row_count")) or 0) == 0
 
 
 #: How long a request waits for someone else's build before giving up. Longer
@@ -3203,10 +3241,14 @@ _MARKET_FOREGROUND_BUILD_SLOT_WAIT_SECONDS = max(
 
 
 def _market_build_slot_wait_seconds() -> float:
-    name = threading.current_thread().name.casefold()
-    if "warm" in name or "artifact-watcher" in name:
+    if _market_build_is_background():
         return _MARKET_BUILD_SLOT_WAIT_SECONDS
     return _MARKET_FOREGROUND_BUILD_SLOT_WAIT_SECONDS
+
+
+def _market_build_is_background() -> bool:
+    name = threading.current_thread().name.casefold()
+    return "warm" in name or "artifact-watcher" in name
 
 
 def _market_warming_payload() -> dict[str, Any]:
