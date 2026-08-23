@@ -58,7 +58,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--broad-dex-sources", default="jupiter,0x")
     parser.add_argument("--broad-dex-jupiter-limit", type=int, default=30)
     parser.add_argument("--broad-dex-zerox-limit", type=int, default=40)
-    parser.add_argument("--broad-dex-rate-limit-s", type=float, default=0.2)
+    # Jupiter's free keyed plan is one request per second. A candidate uses a
+    # buy and a sell quote, so pacing only between candidates still bursts the
+    # second request into a 429. Keep a little clock-skew headroom and let the
+    # quote client apply this delay between each provider request.
+    parser.add_argument("--broad-dex-rate-limit-s", type=float, default=1.05)
     parser.add_argument("--broad-dex-retry-429", type=int, default=1)
     parser.add_argument("--broad-dex-quote-timeout-s", type=float, default=4.0)
     parser.add_argument("--broad-dex-timeout-s", type=float, default=210.0)

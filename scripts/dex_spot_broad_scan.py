@@ -109,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-jupiter-liquidity-usd", type=float, default=10_000.0)
     parser.add_argument("--max-screen-spread-pct", type=float, default=90.0)
     parser.add_argument("--include-extreme-symbol-matches", action="store_true")
-    parser.add_argument("--rate-limit-s", type=float, default=0.4)
+    parser.add_argument("--rate-limit-s", type=float, default=1.05)
     parser.add_argument("--quote-timeout-s", type=float, default=8.0)
     parser.add_argument("--retry-429", type=int, default=1)
     parser.add_argument("--evm-token-list-url", default=DEFAULT_EVM_TOKEN_LIST_URL)
@@ -557,6 +557,10 @@ def quote_jupiter(token: TokenInfo, api_key: str, args: argparse.Namespace) -> d
     buy_amount = int(str((buy or {}).get("outAmount") or "0"))
     if buy_amount <= 0:
         raise RuntimeError("jupiter_zero_buy_amount")
+    # Free keyed Jupiter access is one request per second. The buy and sell are
+    # separate requests; waiting only after the candidate is too late and made
+    # almost every sell quote hit 429.
+    sleep(max(0.0, float(args.rate_limit_s)))
     sell = fetch_json(
         f"{JUPITER_QUOTE_URL}?{urlencode({'inputMint': token.address, 'outputMint': USDC_SOLANA, 'amount': str(buy_amount), 'slippageBps': str(args.slippage_bps), 'restrictIntermediateTokens': 'true'})}",
         headers,
@@ -590,6 +594,7 @@ def quote_zerox(token: TokenInfo, api_key: str, args: argparse.Namespace) -> dic
     buy_amount = int(str((buy or {}).get("buyAmount") or "0"))
     if buy_amount <= 0:
         raise RuntimeError("zerox_zero_buy_amount")
+    sleep(max(0.0, float(args.rate_limit_s)))
     sell = fetch_json(
         f"{ZEROX_PRICE_URL}?{urlencode({'chainId': str(ZEROX_CHAIN_ID), 'sellToken': token.address, 'buyToken': USDC_ETHEREUM, 'sellAmount': str(buy_amount), 'slippageBps': str(args.slippage_bps)})}",
         headers,

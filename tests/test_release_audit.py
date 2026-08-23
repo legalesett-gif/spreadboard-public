@@ -1927,6 +1927,43 @@ def test_broad_dex_public_jupiter_lane_omits_a_blank_key_header() -> None:
     assert dex_spot_broad_scan.jupiter_headers("configured")["x-api-key"] == "configured"
 
 
+def test_broad_dex_paces_each_jupiter_quote_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        (
+            {"outAmount": "5000000", "routePlan": []},
+            {"outAmount": "499000000", "routePlan": []},
+        )
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        dex_spot_broad_scan,
+        "fetch_json",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr(dex_spot_broad_scan, "sleep", sleeps.append)
+    args = dex_spot_broad_scan.build_parser().parse_args([])
+
+    quote = dex_spot_broad_scan.quote_jupiter(
+        dex_spot_broad_scan.TokenInfo(
+            symbol="GUA",
+            name="GUA",
+            address="contract",
+            decimals=6,
+            universe="test",
+        ),
+        "configured",
+        args,
+    )
+
+    assert args.rate_limit_s == 1.05
+    assert discovery_worker_parser().parse_args([]).broad_dex_rate_limit_s == 1.05
+    assert sleeps == [1.05]
+    assert quote["ask"] == 100.0
+    assert quote["bid"] == pytest.approx(99.8)
+
+
 def test_broad_dex_zerox_lane_fails_fast_without_a_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
