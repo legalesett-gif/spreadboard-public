@@ -17,7 +17,15 @@ _CACHE: dict[str, Any] = {"stamp": None, "assets": {}}
 
 # Names that are clearly venue-wrapped equities/funds. This only classifies the
 # lane; it does not prove that two venues expose the same legal instrument.
-KNOWN_TOKENIZED = {"QNTX", "TSLL", "SOXL", "SKHX", "SKHY"}
+KNOWN_TOKENIZED = {
+    "ANTHROPIC",
+    "OPENAI",
+    "QNTX",
+    "TSLL",
+    "SOXL",
+    "SKHX",
+    "SKHY",
+}
 NAME_MARKERS = (" ETF", "STOCK", "TOKENIZED EQUITY", "TOKENIZED STOCK")
 
 

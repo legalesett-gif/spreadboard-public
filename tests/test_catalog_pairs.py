@@ -488,3 +488,53 @@ def test_catalogue_overlay_cannot_bypass_unsupported_valuation_filter(monkeypatc
         data, {"min_market_cap_usd": ["1000000"]}
     ) is data
     assert called is False
+
+
+def test_exact_search_recovers_from_complete_catalogue_when_scanner_group_is_empty(
+    monkeypatch,
+) -> None:
+    route = {
+        "token": "ANTHROPIC",
+        "route_key": "ANTHROPIC|Bitget|Futures|Aster|Futures",
+        "route_kind": "DEX-FUTURES",
+        "long_venue": "Bitget",
+        "long_market_type": "Futures",
+        "short_venue": "Aster",
+        "short_market_type": "Futures",
+        "depth_weighted_spread_pct": 3.2,
+        "funding_daily_pct": 0.1,
+        "quote_ts_us": 1_700_000_000_000_000,
+        "age_min": 0.2,
+        "freshness": "fresh",
+        "spread_quote_current": True,
+        "mirage_guarded": False,
+    }
+    monkeypatch.setattr(
+        server.catalog_pairs,
+        "for_tokens",
+        lambda *_args, **_kwargs: {
+            "ANTHROPIC": {"token": "ANTHROPIC", "route_count": 1, "routes": [route]}
+        },
+    )
+    monkeypatch.setattr(
+        catalog_pairs.venue_funding_history,
+        "route_windows",
+        lambda _route: {"1d": None, "7d": None, "30d": None},
+    )
+
+    result = server._expand_visible_catalog_groups(
+        {"groups": [], "rows": [], "summary": {"matching_rows": 0}},
+        {"q": ["ANTHROPIC"]},
+    )
+
+    assert [group["token"] for group in result["groups"]] == ["ANTHROPIC"]
+    assert result["rows"][0]["route_kind"] == "DEX-FUTURES"
+
+
+def test_native_perpetual_dex_is_catalogued_but_onchain_spot_is_provider_quoted() -> None:
+    assert catalog_pairs._is_onchain_spot(
+        {"venue": "OKX DEX 56", "market_type": "Spot"}
+    )
+    assert not catalog_pairs._is_onchain_spot(
+        {"venue": "Aster", "market_type": "Futures"}
+    )

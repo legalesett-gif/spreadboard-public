@@ -112,7 +112,7 @@ def for_token(
         for item in catalog.get("markets") or []
         if isinstance(item, dict)
         and _token(item.get("token")) == symbol
-        and not _is_dex(item)
+        and not _is_onchain_spot(item)
         and str(item.get("market_type") or "") in {"Spot", "Futures"}
     ]
     # A catalogue can retain two aliases for one exact market after an adapter
@@ -242,7 +242,7 @@ def for_tokens(
 
     markets_by_token: dict[str, dict[tuple[str, str, str], dict[str, Any]]] = {}
     for item in catalog.get("markets") or []:
-        if not isinstance(item, dict) or _is_dex(item):
+        if not isinstance(item, dict) or _is_onchain_spot(item):
             continue
         token = _token(item.get("token"))
         if token not in wanted:
@@ -628,7 +628,7 @@ def all_token_summaries(
     rails = public_rails.load_public_rails()
     markets_by_token: dict[str, dict[tuple[str, str, str], dict[str, Any]]] = {}
     for item in catalog.get("markets") or []:
-        if not isinstance(item, dict) or _is_dex(item):
+        if not isinstance(item, dict) or _is_onchain_spot(item):
             continue
         token = _token(item.get("token"))
         key = (
@@ -978,8 +978,18 @@ def _spread_rank(row: dict[str, Any]) -> float:
     return _number(row.get("executable_spread_pct")) or float("-inf")
 
 
-def _is_dex(item: dict[str, Any]) -> bool:
-    return "dex" in str(item.get("venue") or "").casefold()
+def _is_onchain_spot(item: dict[str, Any]) -> bool:
+    """Keep provider-quoted spot DEX legs out of the CEX book catalogue.
+
+    Native perpetual DEXes such as Aster, Hyperliquid and Lighter have ordinary
+    order books and belong in this complete pair builder.  Treating every DEX
+    venue as an on-chain swap reduced Futures-DEX to the bounded scanner quota.
+    Contract-address spot swaps remain provider quoted and merge in later.
+    """
+
+    return route_taxonomy.leg_is_onchain_spot(
+        venue=item.get("venue"), market_type=item.get("market_type")
+    )
 
 
 def _route_is_dex(row: dict[str, Any]) -> bool:

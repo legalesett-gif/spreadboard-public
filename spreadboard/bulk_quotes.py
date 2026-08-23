@@ -26,6 +26,7 @@ import os
 from pathlib import Path
 import time
 from typing import Any
+from urllib.request import Request, urlopen
 
 from spreadboard import fair_price, live_book_cache, ourbit_quotes
 from spreadboard.fast_quotes import VENUE_IDS
@@ -101,6 +102,92 @@ def _market_type_of(market: dict[str, Any]) -> str | None:
     return None
 
 
+def _public_json(url: str) -> Any:
+    request = Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"},
+    )
+    with urlopen(request, timeout=25.0) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _native_aster_books(*, fetcher: Any = None) -> list[dict[str, Any]]:
+    """Return Aster's complete USDT spot and perpetual top books.
+
+    CCXT's bulk adapter has repeatedly omitted Aster's newer contracts even
+    while the venue's own all-symbol endpoint listed and priced them.  That
+    made a DEX with hundreds of markets look like a seven-token shortlist.
+    Aster exposes Binance-compatible all-symbol book tickers, so one public
+    request per instrument family covers the whole venue without per-market
+    polling or private credentials.
+    """
+
+    get_json = fetcher or _public_json
+    output: list[dict[str, Any]] = []
+    endpoints = (
+        ("Futures", "https://fapi.asterdex.com/fapi/v1/ticker/bookTicker"),
+        ("Spot", "https://sapi.asterdex.com/api/v1/ticker/bookTicker"),
+    )
+    for market_type, endpoint in endpoints:
+        try:
+            payload = get_json(endpoint)
+        except Exception as exc:  # noqa: BLE001 - keep the other public family healthy.
+            LOGGER.warning("Aster native %s bulk failed: %s", market_type, type(exc).__name__)
+            continue
+        now_us = int(time.time() * 1_000_000)
+        for item in payload if isinstance(payload, list) else []:
+            if not isinstance(item, dict):
+                continue
+            compact = str(item.get("symbol") or "").upper()
+            # SpreadBoard's product quote is USDT. Do not guess how an
+            # unfamiliar suffix maps into a unified exchange symbol.
+            if not compact.endswith("USDT") or len(compact) <= 4:
+                continue
+            base = compact[:-4]
+            symbol = (
+                f"{base}/USDT:USDT" if market_type == "Futures" else f"{base}/USDT"
+            )
+            try:
+                bid = float(item.get("bidPrice") or 0.0)
+                ask = float(item.get("askPrice") or 0.0)
+                bid_amount = float(item.get("bidQty") or 0.0)
+                ask_amount = float(item.get("askQty") or 0.0)
+                timestamp_ms = float(item.get("time") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if bid <= 0 or ask <= 0 or bid_amount <= 0 or ask_amount <= 0:
+                continue
+            output.append(
+                {
+                    "venue": "Aster",
+                    "market_type": market_type,
+                    "symbol": symbol,
+                    "bids": [[bid, bid_amount]],
+                    "asks": [[ask, ask_amount]],
+                    "quote_ts_us": int(timestamp_ms * 1000) if timestamp_ms > 0 else now_us,
+                    "source": "native_bulk_ticker",
+                }
+            )
+    return output
+
+
+def _write_books(store: live_book_cache.LiveBookStore, books: list[dict[str, Any]]) -> int:
+    put_many = getattr(store, "put_many", None)
+    if callable(put_many):
+        return int(put_many(books) or 0)
+    for book in books:
+        store.put(
+            book["venue"],
+            book["market_type"],
+            book["symbol"],
+            bids=book["bids"],
+            asks=book["asks"],
+            quote_ts_us=book["quote_ts_us"],
+            source=book["source"],
+        )
+    return len(books)
+
+
 def sweep_venue(
     venue: str,
     *,
@@ -116,6 +203,12 @@ def sweep_venue(
     """
     if venue in SKIP_VENUES:
         return 0
+    if venue == "Aster" and client_factory is None:
+        # The native response is complete and materially broader than the CCXT
+        # adapter. Fall back to CCXT only if both public families fail.
+        native_books = _native_aster_books()
+        if native_books:
+            return _write_books(store, native_books)
     pending_books: list[dict[str, Any]] = []
     for market_type in ("Spot", "Futures"):
         try:
@@ -172,20 +265,7 @@ def sweep_venue(
                 })
             except (TypeError, ValueError):
                 continue
-    put_many = getattr(store, "put_many", None)
-    if callable(put_many):
-        return int(put_many(pending_books) or 0)
-    for book in pending_books:
-        store.put(
-            book["venue"],
-            book["market_type"],
-            book["symbol"],
-            bids=book["bids"],
-            asks=book["asks"],
-            quote_ts_us=book["quote_ts_us"],
-            source=book["source"],
-        )
-    return len(pending_books)
+    return _write_books(store, pending_books)
 
 
 #: Where the last sweep stopped. Without this every pass starts at the same

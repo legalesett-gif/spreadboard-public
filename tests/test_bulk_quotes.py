@@ -102,6 +102,51 @@ def test_a_venue_with_no_bulk_ticker_is_skipped() -> None:
     assert bulk_quotes.sweep_venue("Binance", store=store, client_factory=lambda *_a: client) == 0
 
 
+def test_aster_native_bulk_prices_every_usdt_family_without_private_credentials() -> None:
+    payloads = {
+        "fapi": [
+            {
+                "symbol": "ANTHROPICUSDT",
+                "bidPrice": "1888.9",
+                "bidQty": "0.05",
+                "askPrice": "1906.5",
+                "askQty": "0.01",
+                "time": 1_787_453_992_200,
+            }
+        ],
+        "sapi": [
+            {
+                "symbol": "GUAUSDT",
+                "bidPrice": "0.0400",
+                "bidQty": "4000",
+                "askPrice": "0.0401",
+                "askQty": "5000",
+                "time": 1_787_453_992_300,
+            },
+            # Unknown quote suffixes are not guessed into a unified symbol.
+            {
+                "symbol": "GUAUSDC",
+                "bidPrice": "0.0400",
+                "bidQty": "4000",
+                "askPrice": "0.0401",
+                "askQty": "5000",
+                "time": 1_787_453_992_300,
+            },
+        ],
+    }
+
+    books = bulk_quotes._native_aster_books(
+        fetcher=lambda url: payloads["fapi" if "fapi" in url else "sapi"]
+    )
+
+    assert [(row["market_type"], row["symbol"]) for row in books] == [
+        ("Futures", "ANTHROPIC/USDT:USDT"),
+        ("Spot", "GUA/USDT"),
+    ]
+    assert all(row["venue"] == "Aster" for row in books)
+    assert all(row["source"] == "native_bulk_ticker" for row in books)
+
+
 def test_a_venue_whose_ticker_carries_no_quotes_is_not_called_each_cycle() -> None:
     """Coinbase returns 528 symbols with neither bid nor ask."""
     assert "Coinbase" in bulk_quotes.SKIP_VENUES

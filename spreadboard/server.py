@@ -2615,6 +2615,14 @@ def _expand_visible_catalog_groups(
 
     groups = [group for group in data.get("groups") or [] if isinstance(group, dict)]
     tokens = [str(group.get("token") or "") for group in groups if group.get("token")]
+    exact_lookup = _clean_symbol(_query_first(query, "q") or "")
+    # The bounded scanner is a discovery index, not the complete pair store.
+    # If it has no current group during a handoff, an exact member search must
+    # still recover the token from the warm catalogue and current shared books.
+    # This is generic for every catalogued token and makes no exchange request.
+    if not tokens and exact_lookup:
+        groups = [{"token": exact_lookup, "routes": [], "href": f"/token/{exact_lookup}"}]
+        tokens = [exact_lookup]
     if not tokens:
         return data
     try:
