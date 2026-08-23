@@ -316,13 +316,23 @@ def sweep(
     written = 0
     covered = 0
     fair_price_rows: list[dict[str, Any]] = []
+    # Aster's complete native response takes well under a second. Refresh it
+    # before the slower cross-venue pass for immediate startup coverage, then
+    # again at publication so its books do not spend the entire 90-second
+    # client freshness window ageing behind the other venues.
+    aster_opening_count = 0
+    if venues is None:
+        try:
+            aster_opening_count = sweep_venue("Aster", store=target)
+        except Exception:
+            LOGGER.warning("Aster opening bulk sweep failed", exc_info=True)
     # Ourbit has no CCXT adapter, so it is absent from VENUE_IDS and would
     # never be priced by the rotation below. It is swept natively first, on its
     # own budget, so a slow rotation cannot starve the venue whose absence was
     # costing us whole routes.
     if venues is None:
         try:
-            written += ourbit_quotes.sweep(
+            ourbit_count = ourbit_quotes.sweep(
                 store=target,
                 depth_priority=_ourbit_depth_priority(),
                 # Protection is DISABLED: skipping ticker refreshes starved the
@@ -333,10 +343,15 @@ def sweep(
                 # coverage is dense enough to carry them on its own.
                 protected_symbols=None,
             )
-            covered += 1
+            written += ourbit_count
+            covered += int(ourbit_count > 0)
         except Exception:
             LOGGER.warning("ourbit native sweep failed", exc_info=True)
-    ordered = venues if venues is not None else sorted(VENUE_IDS)
+    ordered = (
+        venues
+        if venues is not None
+        else sorted(venue for venue in VENUE_IDS if venue != "Aster")
+    )
     start = _load_cursor(len(ordered))
     rotation = ordered[start:] + ordered[:start]
     position = start
@@ -379,6 +394,16 @@ def sweep(
                     covered += 1
                     written += count
     _store_cursor(position)
+    if venues is None:
+        try:
+            aster_closing_count = sweep_venue("Aster", store=target)
+        except Exception:
+            LOGGER.warning("Aster closing bulk sweep failed", exc_info=True)
+            aster_closing_count = 0
+        aster_count = aster_closing_count or aster_opening_count
+        if aster_count:
+            covered += 1
+            written += aster_count
     deviations = fair_price.write(fair_price_rows)
     return {
         "status": "ok",

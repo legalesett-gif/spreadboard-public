@@ -260,6 +260,28 @@ def test_independent_venues_refresh_concurrently(tmp_path, monkeypatch) -> None:
     assert result["venues"] == 4
 
 
+def test_normal_sweep_refreshes_aster_again_at_publication(tmp_path, monkeypatch) -> None:
+    visited: list[str] = []
+
+    def record(venue, **_kwargs):
+        visited.append(venue)
+        return 2 if venue == "Aster" else 1
+
+    monkeypatch.setattr(bulk_quotes, "CURSOR_PATH", tmp_path / "cursor.json")
+    monkeypatch.setattr(bulk_quotes, "VENUE_IDS", {"Aster": "aster", "Binance": "binance"})
+    monkeypatch.setattr(bulk_quotes.ourbit_quotes, "sweep", lambda **_kwargs: 0)
+    monkeypatch.setattr(bulk_quotes.fair_price, "write", lambda rows, **_kwargs: 0)
+    monkeypatch.setattr(bulk_quotes, "sweep_venue", record)
+
+    result = bulk_quotes.sweep(store=_Store(), budget_seconds=30.0, workers=1)
+
+    assert visited == ["Aster", "Binance", "Aster"]
+    assert result["venues"] == 2
+    # The count describes the published closing generation, not two writes of
+    # the same Aster books.
+    assert result["quotes"] == 3
+
+
 def test_live_funding_overlays_a_leg(monkeypatch) -> None:
     """554 of 5,382 futures legs carried no rate and 424 disagreed, because the
     rotating quote worker reaches about three venues of eighteen per pass."""
