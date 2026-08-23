@@ -535,16 +535,22 @@ def _warm_telegram_payload_at_startup(board_path: Path) -> None:
         # default key before the larger Telegram catalogue so the first member
         # after a deploy never pays a 15-20 second grouped-board build.
         server.api_market_spreads(board_path, {})
+        _yield_to_requests()
         payload = server.api_market_spreads(
             board_path,
             {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
         )
+        _yield_to_requests()
         telegram_queries.replace_payload(payload)
-        telegram_queries.replace_funding_payloads([
-            server.api_market_spreads(board_path, dict(query))
-            for query in WARM_QUERIES
-            if query.get("funding_only")
-        ])
+        funding_payloads = []
+        for query in WARM_QUERIES:
+            if not query.get("funding_only"):
+                continue
+            funding_payloads.append(
+                server.api_market_spreads(board_path, dict(query))
+            )
+            _yield_to_requests()
+        telegram_queries.replace_funding_payloads(funding_payloads)
         _log(
             "telegram startup payload ready "
             f"in {time.monotonic() - started:.1f}s"
@@ -791,6 +797,16 @@ def main() -> int:
     # deploy look broken. Pay that one-time cost inside Docker's startup grace
     # period, before the service announces that it is serving traffic.
     _warm_route_index()
+    # Build the member's default market view before the background Telegram and
+    # funding warm can occupy the only memory-safe grouping slot. Otherwise an
+    # early browser sees a false empty scanner even though the mounted snapshot
+    # and live books are already available.
+    try:
+        from spreadboard import server as server_module
+
+        server_module.api_market_spreads(board_path, {})
+    except Exception as exc:  # noqa: BLE001 - readiness still reports the failure.
+        _log(f"default market warm skipped: {type(exc).__name__}: {exc}")
 
     def stop_service(_signum: int, _frame: Any) -> None:
         threading.Thread(target=server.shutdown, daemon=True).start()

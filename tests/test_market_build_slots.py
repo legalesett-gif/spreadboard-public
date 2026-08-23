@@ -158,4 +158,9 @@ def test_admission_control_fails_fast() -> None:
     import inspect
 
     source = inspect.getsource(server.api_market_spreads)
-    assert "_MARKET_BUILD_SLOTS.acquire(timeout=_MARKET_BUILD_SLOT_WAIT_SECONDS)" in source
+    assert "_MARKET_BUILD_SLOTS.acquire(timeout=_market_build_slot_wait_seconds())" in source
+    # Warmers retain the original fast admission boundary; only a real member
+    # request can wait for the single current owner instead of receiving a
+    # false empty market.
+    assert server._MARKET_BUILD_SLOT_WAIT_SECONDS <= 2
+    assert server._MARKET_FOREGROUND_BUILD_SLOT_WAIT_SECONDS <= 20

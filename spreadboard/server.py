@@ -2519,7 +2519,7 @@ def api_market_spreads(
             # copy of the same work.
             return _market_warming_payload()
 
-    acquired = _MARKET_BUILD_SLOTS.acquire(timeout=_MARKET_BUILD_SLOT_WAIT_SECONDS)
+    acquired = _MARKET_BUILD_SLOTS.acquire(timeout=_market_build_slot_wait_seconds())
     if not acquired:
         # Every slot is busy. Do not pile on another full build and do not serve
         # an older generation. A no_cache caller is an explicit internal
@@ -3191,6 +3191,22 @@ _MARKET_BUILD_WAIT_SECONDS = max(
 _MARKET_BUILD_SLOT_WAIT_SECONDS = max(
     0.5, float(os.environ.get("SPREADBOARD_MARKET_BUILD_SLOT_WAIT_SECONDS", "1.5"))
 )
+
+# Background warmers still fail fast and yield between generations. A real
+# member request may wait for that one owner to finish instead of being told
+# that an actually populated market is empty. The semaphore remains single
+# flight, so this does not reintroduce the former memory stampede.
+_MARKET_FOREGROUND_BUILD_SLOT_WAIT_SECONDS = max(
+    _MARKET_BUILD_SLOT_WAIT_SECONDS,
+    float(os.environ.get("SPREADBOARD_MARKET_FOREGROUND_SLOT_WAIT_SECONDS", "20")),
+)
+
+
+def _market_build_slot_wait_seconds() -> float:
+    name = threading.current_thread().name.casefold()
+    if "warm" in name or "artifact-watcher" in name:
+        return _MARKET_BUILD_SLOT_WAIT_SECONDS
+    return _MARKET_FOREGROUND_BUILD_SLOT_WAIT_SECONDS
 
 
 def _market_warming_payload() -> dict[str, Any]:

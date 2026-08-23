@@ -102,6 +102,28 @@ def test_a_waiter_never_starts_a_second_build_of_the_same_view(monkeypatch) -> N
     assert len(builds) == 1, f"the waiter started its own build: {len(builds)}"
 
 
+def test_member_build_waits_longer_than_background_warm(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from spreadboard import server
+
+    monkeypatch.setattr(server, "_MARKET_BUILD_SLOT_WAIT_SECONDS", 1.5)
+    monkeypatch.setattr(server, "_MARKET_FOREGROUND_BUILD_SLOT_WAIT_SECONDS", 20.0)
+    monkeypatch.setattr(
+        server.threading,
+        "current_thread",
+        lambda: SimpleNamespace(name="Thread-7 (process_request_thread)"),
+    )
+    assert server._market_build_slot_wait_seconds() == 20.0
+
+    monkeypatch.setattr(
+        server.threading,
+        "current_thread",
+        lambda: SimpleNamespace(name="spreadboard-telegram-startup-warm"),
+    )
+    assert server._market_build_slot_wait_seconds() == 1.5
+
+
 def test_the_readiness_probe_never_builds_the_board(monkeypatch) -> None:
     """It ran a 14s build against a 12s probe timeout, so the container was
     reported unhealthy while serving pages in two seconds."""
