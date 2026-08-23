@@ -6320,7 +6320,8 @@ def render_markets_page(
         + (
             "".join(render_market_token_group(group) for group in groups)
             or render_market_lane_empty(
-                str(_query_first(query, "kind") or "").upper(), api_health_data
+                str(_query_first(query, "kind") or "").upper(),
+                {**api_health_data, "generation_warming": generation_warming},
             )
         )
         + "</div>"
@@ -7006,11 +7007,13 @@ def render_live_market_empty(health: dict[str, Any]) -> str:
 
 
 def render_market_lane_empty(selected_kind: str, health: dict[str, Any]) -> str:
-    """Distinguish a genuinely empty DEX lane from an unavailable provider.
+    """Distinguish a genuinely empty DEX lane from unavailable evidence.
 
-    The canonical CEX snapshot can be fresh while its nested DEX source failed
-    every chain. Calling that state "no matching routes" turns missing evidence
-    into a market conclusion, exactly when members most need the distinction.
+    Futures-DEX contains native perpetual DEXes such as Aster, Hyperliquid and
+    Lighter in addition to provider-quoted on-chain spot legs. Its empty state
+    must therefore never blame the OKX spot provider alone. Spot-DEX still
+    depends on exact-chain quote providers, so provider health remains material
+    there.
     """
 
     kind = str(selected_kind or "").upper()
@@ -7023,6 +7026,23 @@ def render_market_lane_empty(selected_kind: str, health: dict[str, Any]) -> str:
     errors = [str(item) for item in source.get("errors") or []]
     lane = "Futures-DEX" if kind == "DEX-FUTURES" else "Spot-DEX"
 
+    if kind == "DEX-FUTURES":
+        if not health.get("generation_warming") and str(
+            health.get("status") or ""
+        ) == "fresh":
+            return (
+                '<p class="empty market-empty">No live Futures-DEX routes match '
+                "these filters. Native perpetual DEX and exact-chain spot DEX "
+                "coverage are evaluated independently.</p>"
+            )
+        return """
+    <article class="live-market-empty">
+      <strong>Refreshing Futures-DEX markets</strong>
+      <p>Native perpetual DEX books and exact-chain spot DEX quotes are being joined into the current generation. This page will populate automatically.</p>
+      <span>No stale route is presented as current</span>
+    </article>
+    """
+
     if rows == 0 and (errors or status == "partial"):
         rejected = any(
             phrase in error.casefold()
@@ -7030,9 +7050,9 @@ def render_market_lane_empty(selected_kind: str, health: dict[str, Any]) -> str:
             for phrase in ("no access", "access rejected", "ip validation")
         )
         title = (
-            "OKX DEX provider access was rejected"
+            "On-chain DEX provider access was rejected"
             if rejected
-            else "OKX DEX returned no verified quotes"
+            else "On-chain DEX providers returned no verified quotes"
         )
         return f"""
     <article class="live-market-empty dex-source-failure">
@@ -7044,19 +7064,19 @@ def render_market_lane_empty(selected_kind: str, health: dict[str, Any]) -> str:
     if "api_credentials_missing" in blockers or status in {"skipped", "absent"}:
         return f"""
     <article class="live-market-empty dex-source-failure">
-      <strong>OKX DEX feed is temporarily unavailable</strong>
+      <strong>On-chain DEX spot feeds are temporarily unavailable</strong>
       <p>No {h(lane)} market conclusion is shown without verified exact-chain quotes.</p>
       <span>DEX source reconnecting · CEX lanes remain live</span>
     </article>
     """
     if status == "ok":
         return (
-            '<p class="empty market-empty">OKX DEX quoting completed, but no verified '
+            '<p class="empty market-empty">On-chain DEX quoting completed, but no verified '
             f"{h(lane)} route matched these filters this cycle.</p>"
         )
     return f"""
     <article class="live-market-empty dex-source-failure">
-      <strong>OKX DEX quoting is unavailable</strong>
+      <strong>On-chain DEX quoting is unavailable</strong>
       <p>No {h(lane)} market conclusion is shown until verified exact-chain quotes resume.</p>
       <span>Source status: {h(status)}</span>
     </article>
@@ -7066,9 +7086,9 @@ def render_market_lane_empty(selected_kind: str, health: dict[str, Any]) -> str:
 def render_funding_farm_empty(selected_farm: str, health: dict[str, Any]) -> str:
     """Explain an empty farm tab instead of rendering a blank list.
 
-    Futures-DEX in particular stays empty whenever the OKX DEX quote source is
-    skipped, which happens when its API credentials are absent. Silently showing
-    nothing made that look like "no opportunities" rather than "not configured".
+    Futures-DEX combines native perpetual DEX books with exact-chain spot DEX
+    quotes. Silently showing nothing would turn a rebuilding or partially
+    unavailable source set into a market conclusion.
     """
 
     if selected_farm != "futures-dex":
@@ -8930,7 +8950,13 @@ def render_funding_page(
             render_funding_token_group(group, selected_window=selected_window)
             for group in funding_groups
         )
-        or render_funding_farm_empty(selected_farm, api_health_data)
+        or render_funding_farm_empty(
+            selected_farm,
+            {
+                **api_health_data,
+                "generation_warming": market_data.get("status") == "warming",
+            },
+        )
     }
         </div>
       </section>

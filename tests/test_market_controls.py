@@ -38,7 +38,7 @@ def test_json_export_prepares_then_downloads_instead_of_opening_raw_warming_data
     assert "location.assign" not in script
 
 
-def test_dex_market_empty_state_names_a_zero_row_provider_failure() -> None:
+def test_futures_dex_empty_state_does_not_blame_one_spot_provider() -> None:
     health = {
         "status": "fresh",
         "dex_spot_source": {
@@ -53,9 +53,21 @@ def test_dex_market_empty_state_names_a_zero_row_provider_failure() -> None:
 
     rendered = server.render_market_lane_empty("DEX-FUTURES", health)
 
-    assert "provider access was rejected" in rendered
-    assert "not evidence that no DEX routes exist" in rendered
-    assert "No live API routes match" not in rendered
+    assert "No live Futures-DEX routes match these filters" in rendered
+    assert "evaluated independently" in rendered
+    assert "OKX" not in rendered
+
+
+def test_futures_dex_warming_state_names_both_source_families() -> None:
+    rendered = server.render_market_lane_empty(
+        "DEX-FUTURES",
+        {"status": "warming", "dex_spot_source": {"status": "absent"}},
+    )
+
+    assert "Refreshing Futures-DEX markets" in rendered
+    assert "Native perpetual DEX books" in rendered
+    assert "exact-chain spot DEX quotes" in rendered
+    assert "OKX DEX feed is temporarily unavailable" not in rendered
 
 
 def test_dex_market_empty_state_distinguishes_a_successful_empty_cycle() -> None:
@@ -85,7 +97,8 @@ def test_funding_dex_empty_state_does_not_call_a_failed_cycle_successful() -> No
         },
     )
 
-    assert "provider access was rejected" in rendered
+    assert "No live Futures-DEX routes match these filters" in rendered
+    assert "OKX" not in rendered
     assert "quoting ran but no DEX route matched" not in rendered
 
 
