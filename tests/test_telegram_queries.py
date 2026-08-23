@@ -225,6 +225,16 @@ def test_spread_reply_lists_every_route_best_first(board_file):
     assert "$142K" in body
 
 
+def test_okx_dex_keeps_its_dex_lane_label_even_when_the_quote_is_spot() -> None:
+    row = route(
+        "GUA", "DEX-FUTURES", "OKX DEX 56", "Gate", 1.0, 0.2, 73.0, 500
+    )
+    row["long_market_type"] = "Spot"
+    row["short_market_type"] = "Futures"
+
+    assert telegram_queries._route(row).startswith("OKX DEX 56·D>Gate·F")
+
+
 def test_funding_reply_only_ranks_positive_paired_carry(board_file) -> None:
     telegram_queries.replace_funding_payloads(
         [

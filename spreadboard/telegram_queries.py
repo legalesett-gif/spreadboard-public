@@ -317,14 +317,6 @@ def _funding_value(row: dict[str, Any]) -> float | None:
 
 
 def _market_code(row: dict[str, Any], side: str) -> str:
-    market_type = str(row.get(f"{side}_market_type") or "").upper()
-    if market_type:
-        if "DEX" in market_type:
-            return "D"
-        if any(word in market_type for word in ("FUTURE", "PERP", "SWAP")):
-            return "F"
-        if "SPOT" in market_type:
-            return "S"
     kind = str(row.get("route_kind") or "").upper().replace("_", "-")
     inferred = {
         "FUTURES": ("F", "F"),
@@ -335,7 +327,20 @@ def _market_code(row: dict[str, Any], side: str) -> str:
         "DEX-SPOT": ("D", "S"),
         "SPOT-DEX": ("S", "D"),
     }.get(kind)
-    return inferred[0 if side == "long" else 1] if inferred else "?"
+    inferred_code = inferred[0 if side == "long" else 1] if inferred else ""
+    # OKX DEX is a product lane even though its quote instrument is naturally
+    # described as Spot. Preserve the lane identity before generic market type.
+    if inferred_code == "D":
+        return "D"
+    market_type = str(row.get(f"{side}_market_type") or "").upper()
+    if market_type:
+        if "DEX" in market_type:
+            return "D"
+        if any(word in market_type for word in ("FUTURE", "PERP", "SWAP")):
+            return "F"
+        if "SPOT" in market_type:
+            return "S"
+    return inferred_code or "?"
 
 
 def _leg_label(row: dict[str, Any], side: str) -> str:
