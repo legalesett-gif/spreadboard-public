@@ -1964,6 +1964,43 @@ def test_broad_dex_paces_each_jupiter_quote_request(
     assert quote["bid"] == pytest.approx(99.8)
 
 
+def test_broad_dex_paces_first_quote_after_jupiter_catalogue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr(dex_spot_broad_scan, "keychain", lambda *_args: "configured")
+    monkeypatch.setattr(
+        dex_spot_broad_scan,
+        "fetch_json_with_retries",
+        lambda *_args, **_kwargs: [
+            {
+                "symbol": "GUA",
+                "name": "GUA",
+                "id": "contract",
+                "decimals": 6,
+                "usdPrice": 1.0,
+                "liquidity": 100_000.0,
+            }
+        ],
+    )
+    monkeypatch.setattr(dex_spot_broad_scan, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        dex_spot_broad_scan,
+        "quote_token_candidates",
+        lambda **_kwargs: {"source": "jupiter", "rows": []},
+    )
+    args = dex_spot_broad_scan.build_parser().parse_args(["--jupiter-limit", "1"])
+
+    result = dex_spot_broad_scan.scan_jupiter(
+        args,
+        {"GUA": [dex_spot_broad_scan.CexQuote("Gate", "GUA/USDT", 1.0, 1.0)]},
+        {"GUA"},
+    )
+
+    assert result["source"] == "jupiter"
+    assert sleeps == [1.05]
+
+
 def test_broad_dex_zerox_lane_fails_fast_without_a_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

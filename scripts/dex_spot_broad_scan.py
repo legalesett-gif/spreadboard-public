@@ -293,6 +293,12 @@ def scan_jupiter(args: argparse.Namespace, cex_quotes: dict[str, list[CexQuote]]
             continue
         candidates.append((token, screen))
     candidates.sort(key=lambda item: item[1]["max_abs_screen_spread_pct"], reverse=True)
+    # The verified-token catalogue uses the same keyed free quota as Quote.
+    # Without a pause here, the first buy request immediately followed the
+    # catalogue request and reliably consumed a 429 even though every later
+    # buy/sell request was paced correctly.
+    if candidates and args.rate_limit_s > 0:
+        sleep(args.rate_limit_s)
     return quote_token_candidates(
         source="jupiter",
         candidates=candidates[: max(0, args.jupiter_limit)],
