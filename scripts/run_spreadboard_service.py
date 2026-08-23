@@ -542,15 +542,9 @@ def _warm_telegram_payload_at_startup(board_path: Path) -> None:
         )
         _yield_to_requests()
         telegram_queries.replace_payload(payload)
-        funding_payloads = []
-        for query in WARM_QUERIES:
-            if not query.get("funding_only"):
-                continue
-            funding_payloads.append(
-                server.api_market_spreads(board_path, dict(query))
-            )
-            _yield_to_requests()
-        telegram_queries.replace_funding_payloads(funding_payloads)
+        funding_payloads = _complete_telegram_funding_payloads(board_path)
+        if funding_payloads:
+            telegram_queries.replace_funding_payloads(funding_payloads)
         _log(
             "telegram startup payload ready "
             f"in {time.monotonic() - started:.1f}s"
@@ -999,6 +993,79 @@ WARM_QUERIES: tuple[dict[str, list[str]], ...] = (
 )
 
 
+def _complete_telegram_funding_payloads(
+    board_path: Path,
+    *,
+    attempts: int | None = None,
+    retry_seconds: float | None = None,
+) -> list[dict[str, Any]]:
+    """Return every completed funding lane or no installable generation.
+
+    Funding views share a deliberately bounded build slot with the rest of the
+    website.  A concurrent page or startup warm can therefore return the
+    explicit ``status=warming`` sentinel for one lane while the other lanes
+    finish.  Installing that mixed batch would either erase Telegram funding
+    entirely or publish a partial universe.  Retain completed lanes and retry
+    only the contended ones for a finite number of background attempts.
+    """
+
+    from spreadboard import server
+
+    queries = [dict(query) for query in WARM_QUERIES if query.get("funding_only")]
+    completed: list[dict[str, Any] | None] = [None] * len(queries)
+    max_attempts = max(
+        1,
+        int(
+            attempts
+            if attempts is not None
+            else os.environ.get("SPREADBOARD_TELEGRAM_FUNDING_WARM_ATTEMPTS", "4")
+        ),
+    )
+    pause = max(
+        0.0,
+        float(
+            retry_seconds
+            if retry_seconds is not None
+            else os.environ.get("SPREADBOARD_TELEGRAM_FUNDING_WARM_RETRY_SECONDS", "2")
+        ),
+    )
+    for attempt in range(max_attempts):
+        for index, query in enumerate(queries):
+            if completed[index] is not None:
+                continue
+            try:
+                payload = server.api_market_spreads(board_path, dict(query))
+            except Exception as exc:  # noqa: BLE001 - bounded retry preserves the last complete snapshot.
+                _log(
+                    "telegram funding lane retry "
+                    f"kind={query.get('kind', ['all'])[0]} "
+                    f"attempt={attempt + 1}/{max_attempts} "
+                    f"error={type(exc).__name__}"
+                )
+                continue
+            if payload.get("status") == "warming" or not isinstance(
+                payload.get("groups"), list
+            ):
+                continue
+            completed[index] = payload
+            _yield_to_requests()
+        pending = [index for index, payload in enumerate(completed) if payload is None]
+        if not pending:
+            return [payload for payload in completed if payload is not None]
+        if attempt + 1 < max_attempts and pause:
+            time.sleep(pause)
+    pending_kinds = [
+        str((queries[index].get("kind") or ["all"])[0])
+        for index, payload in enumerate(completed)
+        if payload is None
+    ]
+    _log(
+        "telegram funding generation incomplete; preserving last complete snapshot "
+        f"pending={','.join(pending_kinds)} attempts={max_attempts}"
+    )
+    return []
+
+
 def _warm_funding_cache() -> None:
     """Rebuild only funding views while members keep the last complete page.
 
@@ -1009,19 +1076,11 @@ def _warm_funding_cache() -> None:
     gap and refreshes Telegram from the exact same completed payloads.
     """
 
-    from spreadboard import funding_catalog, server, telegram_queries
+    from spreadboard import funding_catalog, telegram_queries
 
     started = time.monotonic()
     funding_catalog.clear_cache()
-    payloads: list[dict[str, Any]] = []
-    for query in WARM_QUERIES:
-        if not query.get("funding_only"):
-            continue
-        try:
-            payloads.append(server.api_market_spreads(_board_path(), dict(query)))
-        except Exception as exc:  # noqa: BLE001 - the last complete view remains live.
-            _log(f"funding cache warm skipped {query}: {type(exc).__name__}: {exc}")
-        _yield_to_requests()
+    payloads = _complete_telegram_funding_payloads(_board_path())
     if payloads:
         telegram_queries.replace_funding_payloads(payloads)
     _log(
@@ -1395,11 +1454,9 @@ def _warm_board_cache(*, force: bool = False) -> None:
             {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
         )
         telegram_queries.replace_payload(payload)
-        telegram_queries.replace_funding_payloads([
-            server.api_market_spreads(_board_path(), dict(query))
-            for query in WARM_QUERIES
-            if query.get("funding_only")
-        ])
+        funding_payloads = _complete_telegram_funding_payloads(_board_path())
+        if funding_payloads:
+            telegram_queries.replace_funding_payloads(funding_payloads)
     except Exception as exc:  # noqa: BLE001 - warming is best effort.
         _log(f"telegram payload warm skipped: {type(exc).__name__}: {exc}")
     _yield_to_requests()
