@@ -48,14 +48,14 @@ def test_a_zero_rate_is_a_projection_of_zero_not_a_missing_one() -> None:
     assert inputs["short"]["projected_24h_pct"] == 0.0
 
 
-def test_a_measured_value_is_never_overwritten_by_the_estimate() -> None:
-    """Settled and enriched values are measured; this one is arithmetic."""
+def test_a_stale_projection_is_recomputed_from_the_fresh_rate() -> None:
+    """A projected value is arithmetic, not a settled historical payment."""
     raw, legs = _row(0.05, 8.0, 0.05, 8.0)
     raw["notes"]["route_inputs"]["long"]["projected_24h_pct"] = 9.99
 
     inputs = api_spreads._apply_live_funding(raw, legs)["notes"]["route_inputs"]
 
-    assert inputs["long"]["projected_24h_pct"] == 9.99
+    assert inputs["long"]["projected_24h_pct"] == pytest.approx(0.15)
     assert inputs["short"]["projected_24h_pct"] == pytest.approx(0.15)
 
 
@@ -130,7 +130,7 @@ def test_a_spot_leg_pays_nothing_and_does_not_block_the_total() -> None:
     assert api_spreads._project_route_funding(raw)["funding_projected_24h_pct"] == pytest.approx(0.06)
 
 
-def test_a_settled_total_is_never_replaced_by_the_projection() -> None:
+def test_settled_history_and_current_projection_remain_separate() -> None:
     raw = {
         "funding_24h_pct": 0.5,
         "long_market_type": "Futures", "short_market_type": "Futures",
@@ -140,7 +140,9 @@ def test_a_settled_total_is_never_replaced_by_the_projection() -> None:
         }},
     }
 
-    assert api_spreads._project_route_funding(raw).get("funding_projected_24h_pct") is None
+    projected = api_spreads._project_route_funding(raw)
+    assert projected["funding_24h_pct"] == 0.5
+    assert projected["funding_projected_24h_pct"] == 0.0
 
 
 def test_a_spot_spot_route_gets_no_funding_invented() -> None:
@@ -150,3 +152,25 @@ def test_a_spot_spot_route_gets_no_funding_invented() -> None:
     }
 
     assert api_spreads._project_route_funding(raw).get("funding_projected_24h_pct") is None
+
+
+def test_one_live_futures_leg_cannot_stand_in_for_a_missing_second_leg() -> None:
+    row = api_spreads._row_from_api(
+        {
+            "token": "ONE",
+            "long_venue": "Gate",
+            "long_market_type": "Futures",
+            "long_market_symbol": "ONE/USDT:USDT",
+            "short_venue": "Bybit",
+            "short_market_type": "Futures",
+            "short_market_symbol": "ONE/USDT:USDT",
+            "notes": {"route_inputs": {"long": {"symbol": "ONE/USDT:USDT"}, "short": {"symbol": "ONE/USDT:USDT"}}},
+        },
+        bucket="api_discovered",
+        now=1.0,
+        live_funding={
+            "Gate|ONE/USDT:USDT": {"rate_pct": 0.1, "interval_hours": 8.0}
+        },
+    )
+
+    assert api_spreads.normalised_funding(row) == (None, None)

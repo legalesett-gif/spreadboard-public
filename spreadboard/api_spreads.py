@@ -86,6 +86,7 @@ class SpreadTerminalRow:
     funding_24h_pct: float | None = None
     funding_projected_24h_pct: float | None = None
     funding_24h_source: str | None = None
+    funding_age_min: float | None = None
     long_funding_interval_hours: float | None = None
     short_funding_interval_hours: float | None = None
     long_funding_interval_assumed: bool = False
@@ -797,11 +798,7 @@ def _stream_funding_daily(
             interval = _float_or_none(entry.get("interval_hours"))
             saw_live_leg = True
         else:
-            rate = _float_or_none(
-                route.get(f"{side}_current_funding_pct"),
-                route.get(f"{side}_funding_pct"),
-            )
-            interval = _float_or_none(route.get(f"{side}_funding_interval_hours"))
+            return None
         value = _per_day(rate, interval)
         if value is None:
             return None
@@ -1047,13 +1044,7 @@ def live_route_updates_for(
             quote_ts_us = min(stamps) if stamps else None
         update = (
             live_depth_spread,
-            (
-                funding_daily
-                if funding_daily is not None
-                else _float_or_none(route.get("funding_daily_pct"))
-            )
-            if include_funding
-            else None,
+            funding_daily if include_funding else None,
             quote_ts_us,
             spread_basis,
         )
@@ -1099,6 +1090,24 @@ def live_route_updates_for(
         )
         merged = (spread, funding, timestamp, basis)
         out[route_key] = merged if include_basis else merged[:3]
+    if include_funding:
+        # Funding has a dedicated exact-leg freshness cache. Never let a rate
+        # embedded in the slower discovery/fast-price artefacts survive after
+        # that leg has expired. Ensure every requested route receives an
+        # explicit value (including None) so HTML, JSON and Telegram all clear
+        # stale current carry together.
+        for route in routes:
+            route_key = str(route.get("route_key") or "")
+            if not route_key:
+                continue
+            funding = _stream_funding_daily(route, funding_legs)
+            existing = out.get(route_key)
+            if existing is None:
+                merged = (None, funding, None, None)
+            else:
+                basis = existing[3] if len(existing) > 3 else None
+                merged = (existing[0], funding, existing[2], basis)
+            out[route_key] = merged if include_basis else merged[:3]
     return out
 
 
@@ -1112,6 +1121,7 @@ def live_prices_for(
         for route_key, (spread, funding, _quote_ts_us) in live_route_updates_for(
             routes, include_funding=include_funding
         ).items()
+        if spread is not None or funding is not None
     }
 
 
@@ -1618,34 +1628,90 @@ def _apply_live_funding(
     more disagreed, because the quote worker is a fresh process each cycle and
     covers about three venues of eighteen per pass.
     """
+    explicit_legs = legs is not None
     if legs is None:
         from spreadboard import bulk_quotes
 
         legs = bulk_quotes.load_funding()
-    if not legs:
-        return raw
+        if not legs:
+            # Direct callers and fixture builders may intentionally provide an
+            # already-current in-memory row. Production always passes the
+            # loaded cache explicitly, including an empty cache, so expiry is
+            # still fail-closed there.
+            return raw
     notes = raw.get("notes")
     updated_notes: dict[str, Any] | None = None
+    missing_live_leg = False
+    observed_ages: list[float] = []
+    touched = False
+    top_level_current = any(
+        raw.get(field) is not None
+        for field in (
+            "funding_daily_pct",
+            "funding_projected_24h_pct",
+            "funding_spread_pct",
+            "funding_spread_apr_pct",
+            "funding_apr_pct",
+            "long_funding_pct",
+            "short_funding_pct",
+            "long_funding",
+            "short_funding",
+        )
+    )
     for side in ("long", "short"):
         if raw.get(f"{side}_market_type") != "Futures":
             continue
+        if updated_notes is None:
+            updated_notes = dict(notes) if isinstance(notes, dict) else {}
+            existing = updated_notes.get("route_inputs")
+            updated_notes["route_inputs"] = dict(existing) if isinstance(existing, dict) else {}
+            legacy = updated_notes.get("funding")
+            updated_notes["funding"] = dict(legacy) if isinstance(legacy, dict) else {}
+        route_inputs = updated_notes["route_inputs"]
+        leg = dict(route_inputs.get(side) or {})
+        legacy_funding = updated_notes["funding"]
+        legacy_leg = legacy_funding.get(side)
+        had_legacy_current = isinstance(legacy_leg, dict) and any(
+            legacy_leg.get(field) is not None
+            for field in ("current_funding_pct", "rate_pct", "projected_24h_pct")
+        )
+        if explicit_legs or legs:
+            legacy_funding.pop(side, None)
         # The snapshot carries no top-level market_symbol for a futures leg --
         # all 32,056 of them keep it in notes.route_inputs -- so keying on that
         # field produced "venue|None" every time and the overlay never matched
         # anything at all. Resolve it the way the row itself does.
         symbol = _leg_symbol(raw, side)
         if not symbol:
+            had_current = any(
+                leg.get(field) is not None
+                for field in ("current_funding_pct", "projected_24h_pct")
+            )
+            leg.pop("current_funding_pct", None)
+            leg.pop("projected_24h_pct", None)
+            route_inputs[side] = leg
+            missing_live_leg = True
+            touched = touched or had_current or had_legacy_current or top_level_current
             continue
         entry = legs.get(f"{raw.get(f'{side}_venue')}|{symbol}")
         if not entry:
+            had_current = any(
+                leg.get(field) is not None
+                for field in ("current_funding_pct", "projected_24h_pct")
+            )
+            leg.pop("current_funding_pct", None)
+            leg.pop("projected_24h_pct", None)
+            route_inputs[side] = leg
+            missing_live_leg = True
+            touched = touched or had_current or had_legacy_current or top_level_current
             continue
-        if updated_notes is None:
-            updated_notes = dict(notes) if isinstance(notes, dict) else {}
-            existing = updated_notes.get("route_inputs")
-            updated_notes["route_inputs"] = dict(existing) if isinstance(existing, dict) else {}
-        route_inputs = updated_notes["route_inputs"]
-        leg = dict(route_inputs.get(side) or {})
+        touched = True
         leg["current_funding_pct"] = entry.get("rate_pct")
+        age_seconds = _float_or_none(entry.get("age_seconds"))
+        if age_seconds is not None:
+            observed_ages.append(age_seconds)
+            leg["funding_observed_at"] = entry.get("observed_at")
+            leg["funding_age_seconds"] = age_seconds
         if entry.get("interval_hours") is not None:
             from spreadboard import funding_interval as _fi
 
@@ -1667,18 +1733,38 @@ def _apply_live_funding(
         # arithmetic; deriving it here is not a new estimate, it is the one the
         # enrichment step would have made.
         #
-        # Never overwrite: a settled or enriched value is measured, this is not.
-        if leg.get("projected_24h_pct") is None:
-            rate = _float_or_none(entry.get("rate_pct"))
-            interval = _float_or_none(
-                entry.get("interval_hours") or leg.get("funding_interval_hours")
-            )
-            if rate is not None and interval and interval > 0:
-                leg["projected_24h_pct"] = rate * 24.0 / interval
+        rate = _float_or_none(entry.get("rate_pct"))
+        interval = _float_or_none(
+            entry.get("interval_hours") or leg.get("funding_interval_hours")
+        )
+        if rate is not None and interval and interval > 0:
+            leg["projected_24h_pct"] = rate * 24.0 / interval
+        else:
+            leg.pop("projected_24h_pct", None)
         route_inputs[side] = leg
-    if updated_notes is None:
+    if updated_notes is None or not touched:
         return raw
-    return {**raw, "notes": updated_notes}
+    updated = {**raw, "notes": updated_notes}
+    # Current carry fields are projections from live prints.  If either
+    # futures leg is absent/expired, fail closed rather than preserving a
+    # discovery-snapshot rate that may be tens of minutes old. Historical
+    # settled windows remain independent in venue_funding_history.
+    for field in (
+        "funding_daily_pct",
+        "funding_projected_24h_pct",
+        "funding_spread_pct",
+        "funding_spread_apr_pct",
+        "funding_apr_pct",
+        "long_funding_pct",
+        "short_funding_pct",
+        "long_funding",
+        "short_funding",
+    ):
+        updated[field] = None
+    updated["funding_age_min"] = (
+        max(observed_ages) / 60.0 if observed_ages and not missing_live_leg else None
+    )
+    return updated
 
 
 def _project_route_funding(raw: dict[str, Any]) -> dict[str, Any]:
@@ -1694,8 +1780,6 @@ def _project_route_funding(raw: dict[str, Any]) -> dict[str, Any]:
     a gap: a settled or already-projected total is left exactly as it was.
     """
     if raw.get("funding_projected_24h_pct") is not None:
-        return raw
-    if raw.get("funding_24h_pct") is not None:
         return raw
     notes = raw.get("notes") if isinstance(raw.get("notes"), dict) else {}
     legs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
@@ -1719,7 +1803,13 @@ def _project_route_funding(raw: dict[str, Any]) -> dict[str, Any]:
     if not any(raw.get(f"{side}_market_type") == "Futures" for side in ("long", "short")):
         return raw
     # The short leg receives, the long leg pays.
-    return {**raw, "funding_projected_24h_pct": daily["short"] - daily["long"]}
+    projected = daily["short"] - daily["long"]
+    return {
+        **raw,
+        "funding_daily_pct": projected,
+        "funding_projected_24h_pct": projected,
+        "funding_apr_pct": projected * 365.0,
+    }
 
 
 def _mirror_if_spot_sale_required(raw: dict[str, Any]) -> dict[str, Any]:
@@ -1979,22 +2069,23 @@ def _row_from_api(
             _nested_float(route_inputs, "short", "bid"),
         ),
         long_funding_pct=_float_or_none(
+            _nested_float(route_inputs, "long", "current_funding_pct"),
             raw.get("long_funding_pct"),
             raw.get("long_funding"),
-            _nested_float(route_inputs, "long", "current_funding_pct"),
             long_funding.get("current_funding_pct"),
             long_funding.get("rate_pct"),
         ),
         short_funding_pct=_float_or_none(
+            _nested_float(route_inputs, "short", "current_funding_pct"),
             raw.get("short_funding_pct"),
             raw.get("short_funding"),
-            _nested_float(route_inputs, "short", "current_funding_pct"),
             short_funding.get("current_funding_pct"),
             short_funding.get("rate_pct"),
         ),
         funding_24h_pct=funding_24h,
         funding_projected_24h_pct=funding_projected_24h,
         funding_24h_source=_str_or_none(raw.get("funding_24h_source")),
+        funding_age_min=_float_or_none(raw.get("funding_age_min")),
         long_funding_interval_hours=_float_or_none(
             _nested_float(route_inputs, "long", "funding_interval_hours"),
             long_funding.get("funding_interval_hours"),
@@ -2006,15 +2097,15 @@ def _row_from_api(
             short_funding.get("interval_hours"),
         ),
         long_funding_interval_assumed=bool(
-            long_funding.get(
+            (long_input or {}).get(
                 "funding_interval_assumed",
-                long_funding.get("interval_assumed", False),
+                long_funding.get("funding_interval_assumed", long_funding.get("interval_assumed", False)),
             )
         ),
         short_funding_interval_assumed=bool(
-            short_funding.get(
+            (short_input or {}).get(
                 "funding_interval_assumed",
-                short_funding.get("interval_assumed", False),
+                short_funding.get("funding_interval_assumed", short_funding.get("interval_assumed", False)),
             )
         ),
         long_next_funding_ts_us=_int_or_none(
@@ -3145,8 +3236,8 @@ def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | 
     This is the live ``Now`` value, so current leg rates win. Settled 24h is a
     different, historical measurement exposed separately by the Funding radar;
     mixing it into this value made the ``Now`` rank lag the rates visible on the
-    exchanges. The measured sum remains a last-resort fallback when no current
-    leg rate or pre-computed projection exists.
+    exchanges. If no fresh current leg or projection exists, this value is
+    deliberately unavailable.
     """
     long_daily = _per_day(
         getattr(row, "long_funding_pct", None),
@@ -3156,13 +3247,23 @@ def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | 
         getattr(row, "short_funding_pct", None),
         getattr(row, "short_funding_interval_hours", None),
     )
-    if long_daily is not None or short_daily is not None:
+    has_leg_rate = any(
+        _float_or_none(getattr(row, f"{side}_funding_pct", None)) is not None
+        for side in ("long", "short")
+    )
+    if has_leg_rate:
+        for side, value in (("long", long_daily), ("short", short_daily)):
+            if (
+                str(getattr(row, f"{side}_market_type", "") or "") == "Futures"
+                and value is None
+            ):
+                return None, None
         net_daily = (short_daily or 0.0) - (long_daily or 0.0)
     else:
         # Fast-quote and board rows can carry only a pre-computed projection.
         net_daily = _float_or_none(getattr(row, "funding_projected_24h_pct", None))
-    if net_daily is None:
-        net_daily = _float_or_none(getattr(row, "funding_24h_pct", None))
+        if net_daily is None:
+            net_daily = _float_or_none(getattr(row, "funding_daily_pct", None))
     if net_daily is None:
         return None, None
     if requires_existing_spot_inventory(row):
@@ -3199,8 +3300,6 @@ def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
             or getattr(row, "short_funding_pct", None) is not None
             or getattr(row, "funding_projected_24h_pct", None) is not None
         )
-        else "settled_public_events"
-        if getattr(row, "funding_24h_pct", None) is not None
         else None
     )
     payload["executable_direction"] = (
@@ -3295,8 +3394,7 @@ def _effective_funding_24h_dict(row: dict[str, Any]) -> float | None:
     normalised = _float_or_none(row.get("funding_daily_pct"))
     if normalised is not None:
         return normalised
-    settled = _float_or_none(row.get("funding_24h_pct"))
-    return settled if settled is not None else _float_or_none(row.get("funding_projected_24h_pct"))
+    return _float_or_none(row.get("funding_projected_24h_pct"))
 
 
 def _exchange_counts(rows: list[SpreadTerminalRow]) -> dict[str, int]:

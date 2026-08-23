@@ -127,15 +127,16 @@ def test_token_funding_alert_uses_the_best_current_projection() -> None:
 
 def test_settled_only_fallback_is_never_labelled_live() -> None:
     route = _route(
-        funding_daily_pct=2.371,
+        funding_daily_pct=None,
         funding_projected_24h_pct=None,
+        funding_24h_pct=2.371,
         funding_rank_basis="settled_public_events",
     )
 
     html = server.render_funding_pair(route)
 
-    assert "+2.371%" in html
-    assert "settled 24h fallback" in html
+    assert "+2.371%" not in html
+    assert "funding unavailable" in html
     assert "data-live-funding" not in html
 
 
@@ -185,6 +186,11 @@ def test_funding_recovers_quickly_only_while_its_generation_is_warming(
             "pending_leg_count": 0,
             "retryable_error_leg_count": 0,
         },
+    )
+    monkeypatch.setattr(
+        server.bulk_quotes,
+        "funding_health",
+        lambda: {"status": "fresh", "p95_age_seconds": 30.0},
     )
 
     html = server.render_funding_page(Path("board.json"), {}, {})

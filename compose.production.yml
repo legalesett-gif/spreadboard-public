@@ -106,7 +106,8 @@ services:
       SPREADBOARD_FUNDING_VENUES_PER_PASS: "4"
       # A provider failure may keep the last good rate through one rotation,
       # but never indefinitely. The reader independently enforces this age.
-      SPREADBOARD_FUNDING_MAX_AGE_SECONDS: "1800"
+      SPREADBOARD_FUNDING_MAX_AGE_SECONDS: "600"
+      SPREADBOARD_VENUE_HISTORY_PRIORITY_SECONDS: "600"
       # Complete token pages read the shared catalogue, not the capped scanner.
       # The bound matches a measured whole-catalogue quote rotation.
       SPREADBOARD_CATALOG_BOOK_AGE_SECONDS: "180"

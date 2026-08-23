@@ -15,8 +15,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
+from itertools import pairwise
 import time
 from typing import Any
 
@@ -24,7 +26,7 @@ from spreadboard.fast_quotes import VENUE_IDS
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", "data"))
 DEFAULT_CACHE_PATH = RUNTIME_DIR / "venue_funding_history.json"
-SCHEMA = "spreadboard.venue_funding_history.v4"
+SCHEMA = "spreadboard.venue_funding_history.v5"
 
 # Only these outcomes prove that a leg was genuinely classified. Provider and
 # client failures remain retryable; counting them as complete is how a brief
@@ -43,10 +45,119 @@ CLASSIFIED_STATUSES = frozenset(
 RETRYABLE_STATUSES = frozenset({"api_error", "client_unavailable"})
 
 WINDOW_DAYS: tuple[int, ...] = (1, 7, 30)
-#: A window needs the venue to have published far enough back to be meaningful.
-#: Bybit returns 20 days where Binance returns 30, so a 30d figure from Bybit is
-#: really 20 days and must say so rather than under-report the month.
-MIN_WINDOW_COVERAGE = 0.8
+#: A displayed realised window must be supported by a nearly complete sequence
+#: of exact settlement events.  A start/end span alone is insufficient: two
+#: rows thirty days apart do not make a truthful thirty-day return.
+MIN_EVENT_COVERAGE = 0.90
+MAX_BOUNDARY_INTERVALS = 1.5
+MAX_INTERNAL_GAP_INTERVALS = 2.0
+HISTORY_PAGE_SIZE = 100
+PRIORITY_HISTORY_PAGES = 10
+
+
+def realised_window_details(
+    entries: list[dict[str, Any]], *, now_ms: int | None = None
+) -> dict[str, Any]:
+    """Validate and sum exact settlements for trailing 1d/7d/30d windows.
+
+    Windows use ``(now - duration, now]``. Duplicate timestamps are counted
+    once, future/invalid rows are rejected, and a value is published only when
+    the event cadence proves that the beginning, end, and interior are covered.
+    """
+    now = now_ms if now_ms is not None else int(time.time() * 1000)
+    by_timestamp: dict[int, float] = {}
+    discarded_invalid = 0
+    discarded_future = 0
+    discarded_duplicates = 0
+    for entry in entries:
+        try:
+            timestamp = int(entry["timestamp"])
+            rate = float(entry["fundingRate"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            discarded_invalid += 1
+            continue
+        if not math.isfinite(rate) or timestamp <= 0:
+            discarded_invalid += 1
+            continue
+        if timestamp > now:
+            discarded_future += 1
+            continue
+        if timestamp in by_timestamp:
+            discarded_duplicates += 1
+        by_timestamp[timestamp] = rate
+    stamped = sorted(by_timestamp.items())
+    output: dict[str, float | None] = {f"{days}d": None for days in WINDOW_DAYS}
+    windows: dict[str, dict[str, Any]] = {}
+    for days in WINDOW_DAYS:
+        label = f"{days}d"
+        window_ms = days * 86_400_000
+        since = now - window_ms
+        points = [(timestamp, rate) for timestamp, rate in stamped if since < timestamp <= now]
+        diffs = [
+            current[0] - previous[0]
+            for previous, current in pairwise(points)
+            if current[0] > previous[0]
+        ]
+        # Funding cadence can tighten temporarily (for example 4h -> 2h) for
+        # volatile contracts. The 90th-percentile ordinary gap represents the
+        # slow schedule and avoids declaring a complete mixed-cadence series
+        # incomplete merely because it also paid more frequently.
+        ordered_diffs = sorted(diffs)
+        interval_ms = (
+            int(ordered_diffs[min(len(ordered_diffs) - 1, math.ceil(len(ordered_diffs) * 0.9) - 1)])
+            if ordered_diffs
+            else None
+        )
+        if interval_ms is not None:
+            from spreadboard import funding_interval
+
+            interval_hours = funding_interval.normalise(interval_ms / 3_600_000)
+            interval_ms = int(interval_hours * 3_600_000) if interval_hours else None
+        expected = (
+            max(1, round(window_ms / interval_ms))
+            if interval_ms and interval_ms > 0
+            else None
+        )
+        coverage_pct = (
+            min(100.0, len(points) / expected * 100.0) if expected else 0.0
+        )
+        start_gap = points[0][0] - since if points else None
+        end_gap = now - points[-1][0] if points else None
+        max_gap = max(diffs) if diffs else None
+        complete = bool(
+            interval_ms
+            and expected
+            and len(points) >= math.ceil(expected * MIN_EVENT_COVERAGE)
+            and start_gap is not None
+            and start_gap <= interval_ms * MAX_BOUNDARY_INTERVALS
+            and end_gap is not None
+            and end_gap <= interval_ms * MAX_BOUNDARY_INTERVALS
+            and (max_gap is None or max_gap <= interval_ms * MAX_INTERNAL_GAP_INTERVALS)
+        )
+        if complete:
+            output[label] = sum(rate for _timestamp, rate in points) * 100.0
+        windows[label] = {
+            "complete": complete,
+            "event_count": len(points),
+            "expected_event_count": expected,
+            "coverage_pct": round(coverage_pct, 2),
+            "inferred_interval_hours": (
+                round(interval_ms / 3_600_000, 4) if interval_ms else None
+            ),
+            "earliest_event_at": points[0][0] if points else None,
+            "latest_event_at": points[-1][0] if points else None,
+            "max_gap_hours": round(max_gap / 3_600_000, 4) if max_gap else None,
+        }
+    return {
+        "windows": output,
+        "window_details": windows,
+        "settlement_count": len(stamped),
+        "oldest_event_at": stamped[0][0] if stamped else None,
+        "latest_event_at": stamped[-1][0] if stamped else None,
+        "discarded_invalid_count": discarded_invalid,
+        "discarded_future_count": discarded_future,
+        "discarded_duplicate_count": discarded_duplicates,
+    }
 
 
 def realised_windows(
@@ -57,29 +168,7 @@ def realised_windows(
     Each entry is a payment that already happened, so the realised return is
     their sum -- no interval arithmetic and no interpolation.
     """
-    now = now_ms if now_ms is not None else int(time.time() * 1000)
-    stamped = sorted(
-        (
-            (int(entry["timestamp"]), float(entry["fundingRate"]))
-            for entry in entries
-            if entry.get("timestamp") is not None and entry.get("fundingRate") is not None
-        ),
-        key=lambda item: item[0],
-    )
-    output: dict[str, float | None] = {f"{days}d": None for days in WINDOW_DAYS}
-    if not stamped:
-        return output
-    earliest = stamped[0][0]
-    for days in WINDOW_DAYS:
-        window_ms = days * 86_400_000
-        since = now - window_ms
-        observed = now - max(earliest, since)
-        if observed < window_ms * MIN_WINDOW_COVERAGE:
-            continue
-        output[f"{days}d"] = (
-            sum(rate for timestamp, rate in stamped if timestamp >= since) * 100.0
-        )
-    return output
+    return realised_window_details(entries, now_ms=now_ms)["windows"]
 
 
 #: Venues CCXT cannot give settled history for. BitMart is the only one, and it
@@ -151,6 +240,7 @@ def leg_history(
     *,
     client_factory: Any = None,
     days: int = 30,
+    max_pages: int = PRIORITY_HISTORY_PAGES,
 ) -> list[dict[str, Any]]:
     """Compatibility wrapper returning one venue's settled funding rows."""
     return list(
@@ -159,8 +249,85 @@ def leg_history(
             symbol,
             client_factory=client_factory,
             days=days,
+            max_pages=max_pages,
         )["entries"]
     )
+
+
+def _history_pages(
+    client: Any,
+    venue: str,
+    symbol: str,
+    *,
+    since: int,
+    now_ms: int,
+    max_pages: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Fetch bounded, provider-aware pages of exact settlement events.
+
+    CCXT unifies the row shape but not the pagination direction.  Several
+    adapters ignore ``since`` and return only the newest 100 rows unless their
+    native cursor is supplied.  Keep these rules explicit and stop on any
+    repeated page so a provider quirk cannot create an infinite loop.
+    """
+    rows: list[dict[str, Any]] = []
+    fingerprints: set[tuple[int, int]] = set()
+    cursor: int | None = None
+    pages = 0
+    for page_number in range(1, max(1, int(max_pages)) + 1):
+        params: dict[str, Any] = {}
+        request_since: int | None = since
+        if venue == "Mexc":
+            params["page_num"] = page_number
+        elif venue == "Bitget":
+            params["pageNo"] = page_number
+        elif venue == "Gate" and cursor is not None:
+            params["until"] = cursor - 1
+            request_since = since
+        elif venue == "OKX":
+            request_since = None
+            if cursor is not None:
+                params["after"] = str(cursor)
+        elif venue == "WhiteBIT" and cursor is not None:
+            # WhiteBIT's endpoint expects epoch seconds, not milliseconds.
+            params["endDate"] = max(1, int((cursor - 1) / 1000))
+        elif cursor is not None:
+            # Generic adapters normally page forward from ``since``.
+            request_since = cursor + 1
+        kwargs: dict[str, Any] = {
+            "since": request_since,
+            "limit": HISTORY_PAGE_SIZE,
+        }
+        if params:
+            kwargs["params"] = params
+        page = client.fetch_funding_rate_history(symbol, **kwargs) or []
+        if not page:
+            break
+        timestamps = sorted(
+            int(item["timestamp"])
+            for item in page
+            if item.get("timestamp") is not None
+        )
+        if not timestamps:
+            break
+        fingerprint = (timestamps[0], timestamps[-1])
+        if fingerprint in fingerprints:
+            break
+        fingerprints.add(fingerprint)
+        pages += 1
+        rows.extend(page)
+        if timestamps[0] <= since:
+            break
+        if venue in {"Gate", "OKX", "WhiteBIT", "Mexc", "Bitget"}:
+            cursor = timestamps[0]
+        else:
+            # A generic adapter that returned only recent rows despite a past
+            # since cursor cannot be safely back-paged without venue semantics.
+            newest = timestamps[-1]
+            if newest >= now_ms or newest <= (cursor or since):
+                break
+            cursor = newest
+    return rows, pages
 
 
 def leg_history_outcome(
@@ -169,6 +336,7 @@ def leg_history_outcome(
     *,
     client_factory: Any = None,
     days: int = 30,
+    max_pages: int = PRIORITY_HISTORY_PAGES,
 ) -> dict[str, Any]:
     """Return rows plus a truthful, retry-aware source classification."""
     if venue in NATIVE_HISTORY:
@@ -190,15 +358,22 @@ def leg_history_outcome(
             return {"status": "unsupported_history_api", "entries": []}
         if symbol not in getattr(client, "symbols", []) or []:
             return {"status": "symbol_not_indexed", "entries": []}
-        since = int((time.time() - days * 86_400) * 1000)
-        # WhiteBIT's documented hard maximum is 100; passing 1,000 made every
-        # one of its 305 futures legs fail with BadRequest and permanently left
-        # all realised windows cold. Three funding settlements per day means
-        # 100 rows still covers the full 30-day research window.
-        entries = client.fetch_funding_rate_history(symbol, since=since, limit=100) or []
+        now_ms = int(time.time() * 1000)
+        # One extra day lets the completeness validator infer the cadence at
+        # the trailing-window boundary without counting that older settlement.
+        since = now_ms - (days + 1) * 86_400_000
+        entries, pages = _history_pages(
+            client,
+            venue,
+            symbol,
+            since=since,
+            now_ms=now_ms,
+            max_pages=max_pages,
+        )
         return {
             "status": "ok" if entries else "no_history_rows",
             "entries": entries,
+            "pages": pages,
         }
     except Exception as exc:  # noqa: BLE001 - one unreachable venue must not stop the sweep.
         # BingX keeps paused synthetic contracts in its public market catalogue
@@ -278,6 +453,7 @@ def build(
     priority_legs: list[tuple[str, str]] | None = None,
     cache_path: Path | str = DEFAULT_CACHE_PATH,
     budget_seconds: float = 240.0,
+    priority_only: bool = False,
 ) -> dict[str, dict[str, float | None]]:
     """Realised windows for each (venue, symbol), written where the board reads.
 
@@ -291,15 +467,19 @@ def build(
         previous = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         previous = {}
-    windows: dict[str, dict[str, float | None]] = dict(previous.get("legs") or {})
-    leg_updated_at: dict[str, str] = dict(previous.get("leg_updated_at") or {})
-    # v3 treated every empty result, including client/API failures, as a genuine
-    # empty history. Keep its valid settled windows but reclassify every source
-    # under v4 before declaring catalogue coverage complete.
+    # v5 applies stricter completeness and de-duplication rules that cannot be
+    # reconstructed from v4's three aggregate numbers.  Never carry an old
+    # aggregate across the schema boundary: blank is safer than false realised
+    # history, and priority legs refill immediately from exact provider rows.
+    same_schema = previous.get("schema") == SCHEMA
+    windows: dict[str, dict[str, float | None]] = (
+        dict(previous.get("legs") or {}) if same_schema else {}
+    )
+    leg_updated_at: dict[str, str] = (
+        dict(previous.get("leg_updated_at") or {}) if same_schema else {}
+    )
     leg_status: dict[str, dict[str, Any]] = (
-        dict(previous.get("leg_status") or {})
-        if previous.get("schema") == SCHEMA
-        else {}
+        dict(previous.get("leg_status") or {}) if same_schema else {}
     )
     ordered = list(dict.fromkeys(legs))
     start = int(previous.get("next_cursor") or 0) % max(1, len(ordered))
@@ -316,9 +496,12 @@ def build(
         in RETRYABLE_STATUSES
     ]
     leading = list(dict.fromkeys([*priorities, *retryable_or_pending]))
-    rotated = leading + [
-        item for item in ordered[start:] + ordered[:start] if item not in leading
-    ]
+    rotated = (
+        priorities
+        if priority_only
+        else leading
+        + [item for item in ordered[start:] + ordered[:start] if item not in leading]
+    )
     attempted = 0
     background_attempted = 0
     retryable_errors = 0
@@ -327,22 +510,42 @@ def build(
         if time.monotonic() >= deadline:
             break
         attempted += 1
-        outcome = leg_history_outcome(venue, symbol)
+        is_priority = (venue, symbol) in priorities
+        try:
+            outcome = leg_history_outcome(
+                venue,
+                symbol,
+                max_pages=PRIORITY_HISTORY_PAGES if is_priority else 1,
+            )
+        except TypeError as exc:
+            # Preserve simple injected test/provider shims that predate the
+            # bounded pagination argument; real adapters accept the keyword.
+            if "max_pages" not in str(exc):
+                raise
+            outcome = leg_history_outcome(venue, symbol)
         entries = list(outcome.get("entries") or [])
         outcome_status = str(outcome.get("status") or "api_error")
         key = f"{venue}|{symbol}"
         if entries:
-            windows[key] = realised_windows(entries)
+            details = realised_window_details(entries)
+            windows[key] = details["windows"]
             leg_updated_at[key] = refreshed_at
             leg_status[key] = {
                 "status": "ok",
                 "updated_at": refreshed_at,
                 "last_attempt_at": refreshed_at,
                 "last_attempt_status": "ok",
-                "settlement_count": len(entries),
+                "settlement_count": details["settlement_count"],
                 "available_windows": sum(
                     value is not None for value in windows[key].values()
                 ),
+                "history_pages": int(outcome.get("pages") or 1),
+                "oldest_event_at": details["oldest_event_at"],
+                "latest_event_at": details["latest_event_at"],
+                "window_details": details["window_details"],
+                "discarded_invalid_count": details["discarded_invalid_count"],
+                "discarded_future_count": details["discarded_future_count"],
+                "discarded_duplicate_count": details["discarded_duplicate_count"],
             }
         elif outcome_status in RETRYABLE_STATUSES:
             retryable_errors += 1
@@ -381,7 +584,7 @@ def build(
                     cached.get(label) is not None for label in ("1d", "7d", "30d")
                 ),
             }
-        if (venue, symbol) not in priorities:
+        if not is_priority:
             background_attempted += 1
     catalog_keys = {f"{venue}|{symbol}" for venue, symbol in ordered}
     catalog_attempted = sum(
@@ -393,7 +596,11 @@ def build(
     payload = {
         "schema": SCHEMA,
         "updated_at": refreshed_at,
-        "next_cursor": (start + background_attempted) % max(1, len(ordered)),
+        "next_cursor": (
+            start
+            if priority_only
+            else (start + background_attempted) % max(1, len(ordered))
+        ),
         "catalog_leg_count": len(catalog_keys),
         "catalog_attempted_leg_count": catalog_attempted,
         "catalog_classified_leg_count": catalog_classified,
@@ -409,6 +616,7 @@ def build(
         "latest_cycle_attempted": attempted,
         "latest_cycle_background_attempted": background_attempted,
         "latest_cycle_retryable_error_count": retryable_errors,
+        "latest_cycle_priority_only": bool(priority_only),
         "leg_updated_at": leg_updated_at,
         "leg_status": leg_status,
         "legs": windows,
@@ -422,7 +630,7 @@ def build(
 
 def coverage_summary(
     legs: list[tuple[str, str]], *, cache_path: Path | str = DEFAULT_CACHE_PATH
-) -> dict[str, int | float | bool]:
+) -> dict[str, Any]:
     """How much of the current catalog has a successful source classification.
 
     A classified leg counts as attempted even when the venue returned no rows.
@@ -476,9 +684,14 @@ def load(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, dict[str, 
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return {}
-        _CACHE["legs"] = payload.get("legs") or {}
-        _CACHE["leg_status"] = payload.get("leg_status") or {}
-        _CACHE["leg_updated_at"] = payload.get("leg_updated_at") or {}
+        if payload.get("schema") != SCHEMA:
+            _CACHE["legs"] = {}
+            _CACHE["leg_status"] = {}
+            _CACHE["leg_updated_at"] = {}
+        else:
+            _CACHE["legs"] = payload.get("legs") or {}
+            _CACHE["leg_status"] = payload.get("leg_status") or {}
+            _CACHE["leg_updated_at"] = payload.get("leg_updated_at") or {}
         _CACHE["stamp"] = stamp
     return _CACHE["legs"]
 
@@ -521,7 +734,7 @@ def route_history_status(route: dict[str, Any]) -> dict[str, Any]:
     elif "no_history_rows" in outcomes:
         note = "The venue history request succeeded but returned no settled funding rows for one exact symbol."
     elif any(windows.get(label) is None for label in ("1d", "7d", "30d")):
-        note = "Settled rows exist, but the returned history does not yet cover at least 80% of every displayed window."
+        note = "Exact settlement rows exist, but their cadence does not yet prove a complete trailing window."
     else:
         note = "All exact-leg settlement windows are available."
     return {

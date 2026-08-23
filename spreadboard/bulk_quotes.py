@@ -22,6 +22,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import time
@@ -428,7 +429,7 @@ INTERVAL_SECONDS = max(1.0, float(os.environ.get("SPREADBOARD_BULK_QUOTE_SECONDS
 #: with the venue. Here the clients are already loaded, so a full pass is cheap.
 FUNDING_CACHE_PATH = RUNTIME_DIR / "live_funding.json"
 FUNDING_MAX_AGE_SECONDS = max(
-    300.0, float(os.environ.get("SPREADBOARD_FUNDING_MAX_AGE_SECONDS", "1800"))
+    300.0, float(os.environ.get("SPREADBOARD_FUNDING_MAX_AGE_SECONDS", "600"))
 )
 
 
@@ -525,7 +526,7 @@ def sweep_funding(
     }
 
 
-_FUNDING_CACHE: dict[str, Any] = {"stamp": None, "legs": {}}
+_FUNDING_CACHE: dict[str, Any] = {"stamp": None, "legs": {}, "health": {}}
 
 
 def _funding_entry(fields: dict[str, Any]) -> dict[str, Any]:
@@ -565,13 +566,39 @@ def load_funding(*, cache_path: Path | str = FUNDING_CACHE_PATH) -> dict[str, di
         timestamps = payload.get("leg_updated_at") or {}
         fallback_stamp = _iso_timestamp(payload.get("updated_at"))
         cutoff = time.time() - FUNDING_MAX_AGE_SECONDS
-        _FUNDING_CACHE["legs"] = {
-            str(key): value
-            for key, value in legs.items()
-            if float(_float(timestamps.get(key)) or fallback_stamp or 0.0) >= cutoff
+        now = time.time()
+        accepted: dict[str, dict[str, Any]] = {}
+        ages: list[float] = []
+        for key, value in legs.items():
+            observed_at = float(_float(timestamps.get(key)) or fallback_stamp or 0.0)
+            if observed_at < cutoff:
+                continue
+            age_seconds = max(0.0, now - observed_at)
+            accepted[str(key)] = {
+                **(value if isinstance(value, dict) else {}),
+                "observed_at": observed_at,
+                "age_seconds": age_seconds,
+            }
+            ages.append(age_seconds)
+        ages.sort()
+        p95_index = min(len(ages) - 1, max(0, math.ceil(len(ages) * 0.95) - 1)) if ages else 0
+        _FUNDING_CACHE["legs"] = accepted
+        _FUNDING_CACHE["health"] = {
+            "status": "fresh" if accepted else "stale_or_empty",
+            "leg_count": len(accepted),
+            "updated_at": payload.get("updated_at"),
+            "max_age_seconds": round(ages[-1], 1) if ages else None,
+            "p95_age_seconds": round(ages[p95_index], 1) if ages else None,
+            "ttl_seconds": FUNDING_MAX_AGE_SECONDS,
         }
         _FUNDING_CACHE["stamp"] = stamp
     return _FUNDING_CACHE["legs"]
+
+
+def funding_health(*, cache_path: Path | str = FUNDING_CACHE_PATH) -> dict[str, Any]:
+    """Freshness of the exact per-leg current-funding cache."""
+    load_funding(cache_path=cache_path)
+    return dict(_FUNDING_CACHE.get("health") or {})
 
 
 def _float(value: Any) -> float | None:

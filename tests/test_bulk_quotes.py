@@ -335,6 +335,34 @@ def test_no_cached_funding_leaves_the_row_alone(monkeypatch) -> None:
     assert api_spreads._apply_live_funding(raw) is raw
 
 
+def test_expired_funding_clears_snapshot_current_fields(monkeypatch) -> None:
+    from spreadboard import api_spreads
+
+    monkeypatch.setattr(bulk_quotes, "load_funding", lambda **_kw: {})
+    raw = {
+        "long_venue": "Gate",
+        "long_market_type": "Futures",
+        "long_market_symbol": "T/USDT:USDT",
+        "funding_daily_pct": 4.2,
+        "funding_projected_24h_pct": 4.2,
+        "notes": {
+            "route_inputs": {
+                "long": {
+                    "symbol": "T/USDT:USDT",
+                    "current_funding_pct": 1.4,
+                    "projected_24h_pct": 4.2,
+                }
+            }
+        },
+    }
+
+    updated = api_spreads._apply_live_funding(raw, {})
+
+    assert updated["funding_daily_pct"] is None
+    assert updated["funding_projected_24h_pct"] is None
+    assert "current_funding_pct" not in updated["notes"]["route_inputs"]["long"]
+
+
 def test_a_funding_sweep_invalidates_cached_rows(tmp_path, monkeypatch) -> None:
     """A sweep can refresh every rate on the board, and the cached rows would
     keep the old ones until the snapshot happened to move."""

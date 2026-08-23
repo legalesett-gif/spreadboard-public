@@ -38,6 +38,7 @@ from spreadboard import (  # noqa: E402
     api_spreads,
     billing,
     board,
+    bulk_quotes,
     catalog_pairs,
     chart_catalog,
     crypto_billing,
@@ -2875,8 +2876,9 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                 route["depth_weighted_spread_pct"] = None
                 route["depth_unverified"] = True
                 route["matched_size_notional_usd"] = None
-        if funding is not None:
-            route["funding_daily_pct"] = funding
+        route["funding_daily_pct"] = funding
+        route["funding_projected_24h_pct"] = funding
+        route["funding_apr_pct"] = funding * 365.0 if funding is not None else None
 
     def visit_route(route: Any) -> None:
         if not isinstance(route, dict) or id(route) in seen:
@@ -2961,6 +2963,11 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                     daily_funding * 365.0 if daily_funding is not None else None
                 )
                 group["best_funding_24h_basis"] = "projected_current_rate"
+            else:
+                group["best_funding_route"] = None
+                group["best_funding_24h_pct"] = None
+                group["best_funding_apr_pct"] = None
+                group["best_funding_24h_basis"] = None
         # Freshness, identity and matched-depth guards can invalidate the route
         # that originally bought a token its place. Re-sort every cached lane
         # after choosing its new valid best; otherwise guarded 100% ticker
@@ -3018,6 +3025,19 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
         {key: value for key, value in group.items() if key != "routes"}
         for group in refreshed_top_funding
     ]
+    if filters.get("funding_only"):
+        payload["groups"] = [
+            group
+            for group in payload.get("groups") or []
+            if _float_or_none(group.get("best_funding_24h_pct")) is not None
+            and float(group["best_funding_24h_pct"]) > 0
+        ]
+        payload["rows"] = [
+            row
+            for row in payload.get("rows") or []
+            if _float_or_none(row.get("funding_daily_pct")) is not None
+            and float(row["funding_daily_pct"]) > 0
+        ]
     for route in payload.get("rows") or []:
         visit_route(route)
     summary = payload.get("summary")
@@ -3155,6 +3175,9 @@ def _market_cache_key(board_path: Path, query: dict[str, list[str]]) -> tuple[An
         ),
         _file_signature(api_spreads.token_metadata.DEFAULT_CACHE_PATH),
         _file_signature(api_spreads.public_rails.DEFAULT_CACHE_PATH),
+        _file_signature(bulk_quotes.FUNDING_CACHE_PATH),
+        _file_signature(venue_funding_history.DEFAULT_CACHE_PATH),
+        _file_signature(funding_radar.DEFAULT_CACHE_PATH),
         normalized_query,
     )
 
@@ -8646,13 +8669,11 @@ def render_funding_windows(route: dict[str, Any] | None, route_key: Any) -> str:
     A rate tells you what a farm pays right now; these tell you what it has
     actually paid. The reference product shows them on every row and it is how
     a member separates a durable farm from this morning's spike. A window we
-    have not observed for at least half its length shows a dash rather than a
-    number built from a fraction of the period.
+    cannot prove a complete event cadence shows a dash rather than a partial
+    number.
     """
-    # The venue's own settlement history is the better source: it reaches back
-    # thirty days where our samples hold about eighty-six hours, and each entry
-    # is a payment that really happened. Our samples remain the fallback for a
-    # leg whose venue publishes no history.
+    # Only the venue's exact settlement events qualify. Sampled market history
+    # is useful chart evidence but must never be labelled realised funding.
     coverage = venue_funding_history.route_history_status(route or {})
     coverage_title = (
         "All settlement windows are available."
@@ -8685,12 +8706,12 @@ def funding_rank_value(row: dict[str, Any], selected_window: str = "now") -> flo
     over an older settled day. Historical ranks deliberately do the opposite:
     they display the selected realised window and never let a live tick rewrite
     it. A settled-day fallback remains useful only when a current projection is
-    genuinely unavailable.
+    genuinely unavailable. Historical settlements never substitute into Now.
     """
     window = str(selected_window or "now").casefold()
     if window != "now":
         return _float_or_none(funding_radar.window_value(row, window))
-    for key in ("funding_daily_pct", "funding_projected_24h_pct", "funding_24h_pct"):
+    for key in ("funding_daily_pct", "funding_projected_24h_pct"):
         value = _float_or_none(row.get(key))
         if value is not None:
             return value
@@ -8701,15 +8722,11 @@ def funding_rank_basis(row: dict[str, Any], selected_window: str = "now") -> str
     window = str(selected_window or "now").casefold()
     if window != "now":
         return f"settled {'24h' if window == '1d' else window}"
-    if row.get("funding_rank_basis") == "settled_public_events":
-        return "settled 24h fallback"
     if any(
         _float_or_none(row.get(key)) is not None
         for key in ("funding_daily_pct", "funding_projected_24h_pct")
     ):
         return "24h at current rate"
-    if _float_or_none(row.get("funding_24h_pct")) is not None:
-        return "settled 24h fallback"
     return "funding unavailable"
 
 
@@ -8850,7 +8867,12 @@ def render_funding_page(
         "Largest 24h" if selected_window in {"now", "1d"} else f"Largest {selected_window}"
     )
     api_health_data = (market_data.get("source_health") or {}).get("canonical_api") or {}
-    source_ready = bool(market_data.get("ok")) and api_health_data.get("status") == "fresh"
+    live_funding_health = bulk_quotes.funding_health()
+    source_ready = (
+        bool(market_data.get("ok"))
+        and api_health_data.get("status") == "fresh"
+        and live_funding_health.get("status") == "fresh"
+    )
     refresh_seconds = 300 if source_ready else 5
     history_health = funding_history_health()
     tabs = [
@@ -8869,8 +8891,8 @@ def render_funding_page(
         </div>
         <div class="terminal-live-box">
           <span>{"Live" if source_ready else "Updating"}</span>
-          <strong>{fmt_age(api_health_data.get("age_min"))}</strong>
-          <em>public funding APIs</em>
+          <strong>{fmt_age((_float_or_none(live_funding_health.get("p95_age_seconds")) or 0.0) / 60.0 if live_funding_health.get("p95_age_seconds") is not None else None)}</strong>
+          <em>current funding · p95 age</em>
         </div>
       </div>
       <nav class="funding-farm-tabs" aria-label="Funding farm type">
@@ -8993,7 +9015,7 @@ def render_funding_token_group(
     status_badge = (
         f'<span class="funding-radar-badge">Cooled now · seen {fmt_age(best.get("radar_last_seen_age_min"))} ago</span>'
         if historical
-        else '<span class="funding-live-badge">Live now</span>'
+        else f'<span class="funding-live-badge">Live now · funding {fmt_age(best.get("funding_age_min"))} old</span>'
     )
     return f"""
     <details class="funding-token-group {"historical-radar" if historical else ""}" data-route-key="{h(best.get("route_key") or "")}">

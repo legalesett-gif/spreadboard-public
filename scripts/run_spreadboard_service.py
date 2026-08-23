@@ -1433,12 +1433,16 @@ VENUE_HISTORY_CATCH_UP_SECONDS = max(
         float(os.environ.get("SPREADBOARD_VENUE_HISTORY_CATCH_UP_SECONDS", "600")),
     ),
 )
-_LAST_VENUE_HISTORY_AT = 0.0
+VENUE_HISTORY_PRIORITY_SECONDS = max(
+    300.0, float(os.environ.get("SPREADBOARD_VENUE_HISTORY_PRIORITY_SECONDS", "600"))
+)
+_LAST_VENUE_HISTORY_PRIORITY_AT = 0.0
+_LAST_VENUE_HISTORY_CATALOG_AT = 0.0
 
 
 def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = None) -> None:
     """Pull each venue's settled funding for the legs the board is showing."""
-    global _LAST_VENUE_HISTORY_AT
+    global _LAST_VENUE_HISTORY_PRIORITY_AT, _LAST_VENUE_HISTORY_CATALOG_AT
 
     from spreadboard import accounts, chart_catalog, funding_radar, server, venue_funding_history
 
@@ -1461,9 +1465,10 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
             else VENUE_HISTORY_CATCH_UP_SECONDS
         )
         now = time.monotonic()
-        if now - _LAST_VENUE_HISTORY_AT < interval:
+        priority_due = now - _LAST_VENUE_HISTORY_PRIORITY_AT >= VENUE_HISTORY_PRIORITY_SECONDS
+        catalog_due = now - _LAST_VENUE_HISTORY_CATALOG_AT >= interval
+        if not priority_due and not catalog_due:
             return
-        _LAST_VENUE_HISTORY_AT = now
 
         priority_legs: list[tuple[str, str]] = []
         for query in WARM_QUERIES:
@@ -1502,9 +1507,15 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
         priority_legs = list(dict.fromkeys(priority_legs))[:120]
         if not catalog_legs and not priority_legs:
             return
+        if priority_due:
+            _LAST_VENUE_HISTORY_PRIORITY_AT = now
+        if catalog_due:
+            _LAST_VENUE_HISTORY_CATALOG_AT = now
         started = time.monotonic()
         windows = venue_funding_history.build(
-            list(dict.fromkeys(catalog_legs)), priority_legs=priority_legs
+            list(dict.fromkeys(catalog_legs)),
+            priority_legs=priority_legs,
+            priority_only=priority_due and not catalog_due,
         )
         # Replace the just-captured settlement snapshots with the fresher venue
         # history while these routes are still known live.
@@ -1518,7 +1529,9 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
             f"pending={after['pending_leg_count']} verified={after['coverage_pct']}% "
             f"retryable={after['retryable_error_leg_count']} "
             f"mode={
-                'maintenance'
+                'priority'
+                if priority_due and not catalog_due
+                else 'maintenance'
                 if after['catch_up_complete']
                 and int(after.get('retryable_error_leg_count') or 0) == 0
                 else 'catch_up'

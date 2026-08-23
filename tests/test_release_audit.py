@@ -3347,7 +3347,7 @@ def test_every_token_keeps_at_least_one_route() -> None:
 def _erow(spread=None, funding=None, **kw):
     from types import SimpleNamespace
     base = dict(token="X", route_key="X|A|B", executable_spread_pct=spread,
-                funding_24h_pct=funding, funding_projected_24h_pct=None,
+                funding_24h_pct=funding, funding_projected_24h_pct=funding,
                 long_funding_pct=None, short_funding_pct=None,
                 long_funding_interval_hours=None, short_funding_interval_hours=None,
                 route_kind="FUTURES", long_market_type="Futures", short_market_type="Futures",
@@ -3393,7 +3393,7 @@ def test_the_funding_lane_only_lists_carry_you_receive() -> None:
             {"token": token, "long_venue": "Gate", "long_market_type": "Futures",
              "short_venue": "Bybit", "short_market_type": "Futures",
              "quote_ts_us": quote_ts_us, "executable_spread_pct": 0.5,
-             "funding_24h_pct": funding},
+             "funding_24h_pct": funding, "funding_projected_24h_pct": funding},
             bucket="api_discovered", now=quote_ts_us / 1_000_000,
         )
 

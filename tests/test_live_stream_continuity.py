@@ -251,5 +251,5 @@ def test_fast_quote_delta_corrects_an_expanded_route_without_resident_books(
     update = api_spreads.live_route_updates_for([route], include_basis=True)[route["route_key"]]
 
     assert update[0] == pytest.approx(0.5568672572)
-    assert update[1] == pytest.approx(0.015)
+    assert update[1] is None, "an old fast-price artefact must not renew expired funding"
     assert update[3] == "matched_vwap"

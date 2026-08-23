@@ -31,7 +31,6 @@ def test_a_cooled_leader_is_retained_with_its_settled_windows(tmp_path, monkeypa
         "route_windows",
         lambda _route: {"1d": 1.1, "7d": 2.4, "30d": 5.9},
     )
-    monkeypatch.setattr(funding_radar.market_history, "load_funding_windows", lambda: {})
 
     funding_radar.refresh([_gua()], cache_path=path, now=1_000_000)
     funding_radar.refresh([], cache_path=path, now=1_000_000 + 1_800)
@@ -50,7 +49,6 @@ def test_a_radar_record_expires_after_thirty_days(tmp_path, monkeypatch) -> None
         "route_windows",
         lambda _route: {"1d": 1.0, "7d": 2.0, "30d": 3.0},
     )
-    monkeypatch.setattr(funding_radar.market_history, "load_funding_windows", lambda: {})
     funding_radar.refresh([_gua()], cache_path=path, now=1_000_000)
 
     funding_radar.refresh([], cache_path=path, now=1_000_000 + 31 * 86_400)
@@ -83,3 +81,13 @@ def test_radar_kind_mapping_keeps_spot_futures_in_the_combined_lane() -> None:
     assert funding_radar.kind_matches("SPOT-FUTURES", "FUTURES-SPOT-PAIR")
     assert funding_radar.kind_matches("FUTURES-SPOT", "FUTURES-SPOT-PAIR")
     assert not funding_radar.kind_matches("FUTURES", "FUTURES-SPOT-PAIR")
+
+
+def test_blank_exact_history_never_becomes_a_sampled_realised_window(monkeypatch) -> None:
+    monkeypatch.setattr(
+        funding_radar.venue_funding_history,
+        "route_windows",
+        lambda _route: {"1d": None, "7d": None, "30d": None},
+    )
+
+    assert funding_radar.window_value(_gua(), "7d") is None

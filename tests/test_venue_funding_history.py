@@ -24,14 +24,14 @@ def _settlements(count: int, rate: float, *, every_hours: int = 8, now_ms: int) 
 
 def test_a_window_is_the_sum_of_what_settled_inside_it() -> None:
     now = int(time.time() * 1000)
-    # 0.01% every 8h for 30 days. The window edge is inclusive, so a day holds
-    # the three settlements inside it plus the one exactly on the boundary.
+    # 0.01% every 8h for 30 days. Trailing windows use (since, now], so the
+    # settlement exactly on the old boundary belongs to the preceding window.
     entries = _settlements(90, 0.0001, now_ms=now)
 
     windows = vfh.realised_windows(entries, now_ms=now)
 
-    assert abs(windows["1d"] - 0.04) < 0.005, windows
-    assert abs(windows["7d"] - 0.22) < 0.02, windows
+    assert abs(windows["1d"] - 0.03) < 0.005, windows
+    assert abs(windows["7d"] - 0.21) < 0.02, windows
     assert abs(windows["30d"] - 0.90) < 0.02, windows
 
 
@@ -56,6 +56,24 @@ def test_no_history_is_not_a_zero() -> None:
         "7d": None,
         "30d": None,
     }
+
+
+def test_duplicate_future_and_sparse_rows_cannot_inflate_a_window() -> None:
+    now = int(time.time() * 1000)
+    complete = _settlements(90, 0.0001, now_ms=now)
+    contaminated = [
+        *complete,
+        dict(complete[0]),
+        {"timestamp": now + 3_600_000, "fundingRate": 9.0},
+    ]
+    details = vfh.realised_window_details(contaminated, now_ms=now)
+
+    assert details["windows"]["1d"] == pytest.approx(0.03)
+    assert details["discarded_duplicate_count"] == 1
+    assert details["discarded_future_count"] == 1
+    assert vfh.realised_windows(
+        [complete[0], complete[-1]], now_ms=now
+    ) == {"1d": None, "7d": None, "30d": None}
 
 
 def test_a_spot_leg_contributes_zero_not_unknown(monkeypatch) -> None:
@@ -219,7 +237,7 @@ def test_bitmart_unicode_market_is_percent_encoded(monkeypatch) -> None:
 def test_coverage_distinguishes_unattempted_from_an_honest_empty_result(tmp_path) -> None:
     path = tmp_path / "funding.json"
     path.write_text(
-        '{"schema":"spreadboard.venue_funding_history.v4",'
+        f'{{"schema":"{vfh.SCHEMA}",'
         '"leg_status":{"A|ONE":{"status":"ok"},'
         '"B|TWO":{"status":"no_history_rows"}}}'
     )
@@ -243,7 +261,7 @@ def test_coverage_distinguishes_unattempted_from_an_honest_empty_result(tmp_path
 def test_retryable_provider_failure_is_checked_but_not_classified(tmp_path) -> None:
     path = tmp_path / "funding.json"
     path.write_text(
-        '{"schema":"spreadboard.venue_funding_history.v4",'
+        f'{{"schema":"{vfh.SCHEMA}",'
         '"leg_status":{"A|ONE":{"status":"client_unavailable",'
         '"last_attempt_status":"client_unavailable"}}}'
     )
@@ -346,6 +364,38 @@ def test_history_request_respects_the_strictest_public_limit() -> None:
     assert outcome["status"] == "ok"
 
 
+@pytest.mark.parametrize(
+    ("venue", "cursor_key", "cursor_value"),
+    [
+        ("Mexc", "page_num", 2),
+        ("Bitget", "pageNo", 2),
+        ("Gate", "until", 899),
+        ("OKX", "after", "900"),
+        ("WhiteBIT", "endDate", 1),
+    ],
+)
+def test_provider_pagination_requests_an_older_second_page(
+    venue: str, cursor_key: str, cursor_value: object
+) -> None:
+    calls: list[dict] = []
+
+    class Paged:
+        def fetch_funding_rate_history(self, _symbol, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return [
+                    {"timestamp": 900, "fundingRate": 0.001},
+                    {"timestamp": 1000, "fundingRate": 0.001},
+                ]
+            return []
+
+    vfh._history_pages(
+        Paged(), venue, "ONE", since=1, now_ms=2000, max_pages=2
+    )
+
+    assert calls[1]["params"][cursor_key] == cursor_value
+
+
 def test_failed_cached_client_is_retried_after_backoff(monkeypatch) -> None:
     exchange_id = "retry-test"
     vfh._CLIENTS.pop(exchange_id, None)
@@ -362,12 +412,12 @@ def test_failed_cached_client_is_retried_after_backoff(monkeypatch) -> None:
     assert vfh._CLIENT_FAILURE_AT[exchange_id] == 161.0
 
 
-def test_retryable_refresh_retains_v4_classification_and_cached_windows(
+def test_retryable_refresh_retains_v5_classification_and_cached_windows(
     tmp_path, monkeypatch
 ) -> None:
     path = tmp_path / "funding.json"
     path.write_text(
-        '{"schema":"spreadboard.venue_funding_history.v4",'
+        f'{{"schema":"{vfh.SCHEMA}",'
         '"legs":{"A|ONE":{"1d":1.0,"7d":2.0,"30d":3.0}},'
         '"leg_updated_at":{"A|ONE":"earlier"},'
         '"leg_status":{"A|ONE":{"status":"ok"}}}'
@@ -414,8 +464,8 @@ def test_retryable_refresh_does_not_verify_legacy_cached_windows(
     result = vfh.build([("A", "ONE")], cache_path=path, budget_seconds=5)
     payload = __import__("json").loads(path.read_text())
 
-    assert result["A|ONE"] == {"1d": 1.0, "7d": 2.0, "30d": 3.0}
-    assert payload["leg_status"]["A|ONE"]["status"] == "unclassified_cached"
+    assert "A|ONE" not in result
+    assert payload["leg_status"]["A|ONE"]["status"] == "client_unavailable"
     assert payload["catalog_attempted_leg_count"] == 1
     assert payload["catalog_classified_leg_count"] == 0
     assert payload["catalog_pending_leg_count"] == 0
@@ -426,7 +476,7 @@ def test_retryable_and_unattempted_legs_run_before_healthy_maintenance(
 ) -> None:
     path = tmp_path / "funding.json"
     path.write_text(
-        '{"schema":"spreadboard.venue_funding_history.v4",'
+        f'{{"schema":"{vfh.SCHEMA}",'
         '"leg_status":{"A|HEALTHY":{"status":"ok"},'
         '"B|RETRY":{"status":"api_error","last_attempt_status":"api_error"}}}'
     )

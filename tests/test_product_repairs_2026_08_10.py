@@ -28,7 +28,7 @@ def test_alex_and_anatolij_can_operate_the_member_ledger() -> None:
     assert not _user("subscriber@example.com").can_manage_members
 
 
-def test_partial_funding_refresh_merges_instead_of_erasing_previous_legs(
+def test_new_funding_schema_discards_unverifiable_legacy_aggregates(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -60,9 +60,9 @@ def test_partial_funding_refresh_merges_instead_of_erasing_previous_legs(
     )
     payload = json.loads(cache.read_text())
 
-    assert "Bybit|OLD/USDT:USDT" in result
+    assert "Bybit|OLD/USDT:USDT" not in result
     assert "Gate|NEW/USDT:USDT" in result
-    assert payload["schema"] == "spreadboard.venue_funding_history.v4"
+    assert payload["schema"] == "spreadboard.venue_funding_history.v5"
     assert payload["leg_updated_at"]["Gate|NEW/USDT:USDT"]
 
 

@@ -19,12 +19,13 @@ import threading
 import time
 from typing import Any, Iterable
 
-from spreadboard import market_history, venue_funding_history
+from spreadboard import venue_funding_history
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", "data"))
 DEFAULT_CACHE_PATH = RUNTIME_DIR / "funding_radar.json"
 RETENTION_DAYS = 30
 MAX_RECORDS = 2000
+SCHEMA = "spreadboard.funding_radar.v2"
 
 _LOCK = threading.Lock()
 _CACHE: dict[str, Any] = {"stamp": None, "records": {}}
@@ -75,14 +76,7 @@ def _route_snapshot(route: dict[str, Any]) -> dict[str, Any]:
 
 def _window_snapshot(route: dict[str, Any]) -> dict[str, float | None]:
     venue = venue_funding_history.route_windows(route)
-    sampled = market_history.load_funding_windows().get(str(route.get("route_key") or "")) or {}
-    output: dict[str, float | None] = {}
-    for label in ("1d", "7d", "30d"):
-        value = _float_or_none(venue.get(label))
-        if value is None:
-            value = _float_or_none((sampled.get(label) or {}).get("net"))
-        output[label] = value
-    return output
+    return {label: _float_or_none(venue.get(label)) for label in ("1d", "7d", "30d")}
 
 
 def _read(cache_path: Path | str) -> dict[str, Any]:
@@ -90,6 +84,8 @@ def _read(cache_path: Path | str) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return {"records": {}}
+    if payload.get("schema") != SCHEMA:
         return {"records": {}}
     records = payload.get("records")
     return payload if isinstance(records, dict) else {"records": {}}
@@ -138,7 +134,7 @@ def refresh(
             )[:MAX_RECORDS]
             records = dict(newest)
         payload = {
-            "schema": "spreadboard.funding_radar.v1",
+            "schema": SCHEMA,
             "updated_at": _iso(moment),
             "retention_days": max(1, int(retention_days)),
             "records": records,
@@ -214,7 +210,7 @@ def kind_matches(route_kind: str, requested_kind: str) -> bool:
 
 
 def window_value(route: dict[str, Any], label: str) -> float | None:
-    """Settled carry for a live or retained route, with sampled fallback."""
+    """Settled carry for a live or retained route from exact venue events."""
     radar = route.get("radar_windows") if isinstance(route.get("radar_windows"), dict) else {}
     value = _float_or_none(radar.get(label))
     if value is not None:
@@ -222,5 +218,4 @@ def window_value(route: dict[str, Any], label: str) -> float | None:
     value = _float_or_none(venue_funding_history.route_windows(route).get(label))
     if value is not None:
         return value
-    sampled = market_history.load_funding_windows().get(str(route.get("route_key") or "")) or {}
-    return _float_or_none((sampled.get(label) or {}).get("net"))
+    return None
