@@ -1485,12 +1485,18 @@ def default_sources(
             # could pass a direct quote test while every published cycle still
             # contained zero OKX routes.
             *primary_cex,
+            # The account is on OKX's Startup tier.  Quote the on-chain leg as
+            # soon as one broad Spot/Futures pair has supplied a cross-listed
+            # universe.  Every later include_reference_quotes source sees and
+            # pairs against these OKX quotes, including Aster/Hyperliquid.
+            # Keeping the provider after the slower derivative book pass left
+            # too little headroom for a 150-contract, two-sided scan.
+            okx_dex,
             # These are normal Futures instruments in the product taxonomy,
-            # but they must be collected before OKX so its spot leg can be
-            # paired against Aster and Hyperliquid as well as the main CEXes.
+            # and because they include reference quotes they can pair their
+            # futures legs against the OKX spot quotes collected just above.
             perp_venues,
             builder_venues,
-            okx_dex,
             # Later CEX batches see the OKX quotes through runner.py and add
             # their own venue pairs without making OKX wait for the full scan.
             *later_cex,

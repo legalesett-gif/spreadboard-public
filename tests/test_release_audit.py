@@ -4131,12 +4131,12 @@ def _perp_dex_source_index(enabled: list) -> int:
     raise AssertionError("no perp DEX source in the default set")
 
 
-def test_perp_dexes_are_collected_before_the_spot_dex_that_pairs_against_them() -> None:
-    """Aster has to exist before a DEX spot leg can be hedged onto it.
+def test_okx_dex_is_collected_before_slower_derivative_enrichment() -> None:
+    """OKX must finish early; later derivative sources consume its quotes.
 
-    A source only ever sees the quotes gathered ahead of it. Collecting Aster
-    and Hyperliquid after the OKX DEX source meant no DEX spot leg could pair
-    with a perp DEX, which is the shape most of these farms take.
+    Aster and Hyperliquid use ``include_reference_quotes``.  They therefore
+    produce their OKX pairs when collected after OKX, without making the
+    two-sided 150-contract provider pass wait behind their book verification.
     """
     enabled = sources.default_sources(include_network=True)
     spot_dex = [
@@ -4146,7 +4146,7 @@ def test_perp_dexes_are_collected_before_the_spot_dex_that_pairs_against_them() 
     ]
 
     assert spot_dex, "no DEX spot source in the default set"
-    assert _perp_dex_source_index(enabled) < min(spot_dex)
+    assert min(spot_dex) < _perp_dex_source_index(enabled)
 
 
 def test_okx_dex_is_checkpointed_before_the_slow_cex_tail() -> None:
@@ -4170,7 +4170,8 @@ def test_okx_dex_is_checkpointed_before_the_slow_cex_tail() -> None:
     ]
 
     assert cex_indexes[:2] == [0, 1]
-    assert okx_index > _perp_dex_source_index(enabled)
+    assert okx_index == cex_indexes[1] + 1
+    assert okx_index < _perp_dex_source_index(enabled)
     assert okx_index < cex_indexes[2]
 
 
@@ -4300,6 +4301,19 @@ def test_the_dex_token_ceiling_leaves_room_for_the_mainstream_names() -> None:
     )
     assert configured > 50
     assert configured <= ceiling
+
+
+def test_okx_startup_rate_stays_below_the_visible_plan_ceiling() -> None:
+    """The connected project is on Startup (2 RPS minimum), not Trial."""
+
+    configured = float(
+        re.search(
+            r'SPREADBOARD_OKX_DEX_MIN_INTERVAL_S:\s*"([0-9.]+)"',
+            Path("compose.production.yml").read_text(encoding="utf-8"),
+        ).group(1)
+    )
+    assert configured >= 0.5
+    assert configured < 1.0, "150 two-sided quotes no longer fit the intended scan window"
 
 
 def test_the_most_traded_tokens_keep_a_share_of_the_dex_slots() -> None:

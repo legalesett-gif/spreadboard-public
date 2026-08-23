@@ -152,6 +152,11 @@ services:
       SPREADBOARD_DEX_CANDIDATES: "450"
       SPREADBOARD_DEX_SPOT_TIMEOUT_SECONDS: "420"
       SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS: "150"
+      # The connected project is visibly on OKX's Startup plan (minimum 2
+      # RPS). Stay below that ceiling while cutting a two-sided 150-contract
+      # quote pass from about six minutes to about three. Provider 429s still
+      # back off and retry; free mode still stops on HTTP 402 and cannot pay.
+      SPREADBOARD_OKX_DEX_MIN_INTERVAL_S: "0.55"
       SPREADBOARD_FUNDING_HISTORY_WORKERS: "14"
       # Settled funding needs one history call per futures leg -- no venue
       # offers it in bulk -- so it cannot cover the whole board. At 25 tokens a
