@@ -21,6 +21,7 @@ from spreadboard import (
     exchange_links,
     market_events,
     public_rails,
+    route_taxonomy,
     token_metadata,
     tokenized_assets,
     venue_funding_history,
@@ -245,7 +246,7 @@ def load_spreads(
                 row.route_kind
                 for row in all_rows
                 if row.route_kind.startswith("DEX-")
-                or row.raw_source_kind == "dex_discovered_rows"
+                or route_taxonomy.source_is_dex(row.raw_source_kind)
             ).items()
         )
     )
@@ -1247,7 +1248,7 @@ def _apply_fast_quote_delta(
             continue
         bucket = (
             "dex_discovered_rows"
-            if str(raw.get("source_kind") or "") == "dex_discovered"
+            if route_taxonomy.source_is_dex(raw.get("source_kind"))
             else "api_discovered_rows"
         )
         row = _row_from_api(raw, bucket=bucket, now=now, metadata=metadata, rails=rails)
@@ -1503,11 +1504,10 @@ def _funding_leg_quality(funding: dict[str, Any]) -> tuple[int, int, int]:
 
 
 def _dex_spot_source_status(payload: dict[str, Any]) -> dict[str, Any]:
-    """Report whether the OKX DEX spot quote source actually ran.
+    """Report the exact-identity OKX spot-DEX provider separately.
 
-    Futures-DEX renders empty whenever this source is skipped. The rows counted
-    by `dex_discovered_count` are Hyperliquid/Aster perpetuals, which classify as
-    Futures-Futures, so that number is not evidence that DEX quoting works.
+    Hyperliquid/Aster/Lighter perpetuals remain valid DEX-Futures sources even
+    when OKX Web3 is unavailable.
     """
 
     sources = ((payload.get("source_refresh") or {}).get("sources")) or []
@@ -1831,16 +1831,16 @@ def _row_from_api(
     short_input = route_inputs.get("short") if isinstance(route_inputs.get("short"), dict) else {}
     dex_input = (
         long_input
-        if "dex" in f"{long_venue or ''} {long_market_type or ''}".casefold()
+        if route_taxonomy.leg_is_dex(venue=long_venue, market_type=long_market_type)
         else short_input
-        if "dex" in f"{short_venue or ''} {short_market_type or ''}".casefold()
+        if route_taxonomy.leg_is_dex(venue=short_venue, market_type=short_market_type)
         else {}
     )
     dex_identity = (
         long_identity
-        if "dex" in str(long_venue or "").casefold()
+        if route_taxonomy.leg_is_dex(venue=long_venue, market_type=long_market_type)
         else short_identity
-        if "dex" in str(short_venue or "").casefold()
+        if route_taxonomy.leg_is_dex(venue=short_venue, market_type=short_market_type)
         else {}
     )
     dex_chain = _str_or_none(dex_identity.get("chain_id"))
@@ -2713,7 +2713,9 @@ def _summary(
         "fresh_rows": len([row for row in filtered if row.freshness == "fresh"]),
         "stale_rows": len([row for row in filtered if row.freshness == "stale"]),
         "api_rows": len(all_rows),
-        "dex_rows": len([row for row in all_rows if row.raw_source_kind == "dex_discovered"]),
+        "dex_rows": len(
+            [row for row in all_rows if route_taxonomy.source_is_dex(row.raw_source_kind)]
+        ),
         "funding_rows": len([row for row in filtered if _effective_funding_24h(row) is not None]),
         "max_executable_spread_pct": max(
             (
@@ -3286,27 +3288,13 @@ def _route_kind(
     short_market_type: str | None,
     source_kind: str | None,
 ) -> str:
-    venues = f"{long_venue or ''} {short_venue or ''}".casefold()
-    market_types = {
-        str(long_market_type or "").casefold(),
-        str(short_market_type or "").casefold(),
-    }
-    is_dex = "dex" in market_types or any(
-        token in venues for token in ("jupiter", "zerox", "0x", "okx dex")
+    return route_taxonomy.route_kind(
+        long_venue=long_venue,
+        long_market_type=long_market_type,
+        short_venue=short_venue,
+        short_market_type=short_market_type,
+        source_kind=source_kind,
     )
-    if is_dex:
-        if "futures" in market_types:
-            return "DEX-FUTURES"
-        return "DEX-SPOT"
-    if long_market_type == "Futures" and short_market_type == "Futures":
-        return "FUTURES"
-    if long_market_type == "Spot" and short_market_type == "Futures":
-        return "SPOT-FUTURES"
-    if long_market_type == "Futures" and short_market_type == "Spot":
-        return "FUTURES-SPOT"
-    if long_market_type == "Spot" and short_market_type == "Spot":
-        return "SPOT"
-    return "UNKNOWN"
 
 
 def _reconciliation_summary(

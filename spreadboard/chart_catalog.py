@@ -15,6 +15,7 @@ import threading
 from typing import Any
 
 from spreadboard.fast_quotes import NATIVE_FUTURES_VENUES, NATIVE_SPOT_VENUES, VENUE_IDS
+from spreadboard import route_taxonomy
 from spreadarb.api_discovery.identity import load_watchlist
 
 
@@ -372,17 +373,18 @@ def skhx_skhynix_route_key() -> str:
 
 
 def _route_kind(long_leg: dict[str, str], short_leg: dict[str, str]) -> str:
-    types = {long_leg["market_type"], short_leg["market_type"]}
-    if _is_dex_leg(long_leg) or _is_dex_leg(short_leg):
-        return "DEX-FUTURES" if "Futures" in types else "DEX-SPOT"
-    if types == {"Futures"}:
-        return "FUTURES"
-    if types == {"Spot"}:
-        return "SPOT"
-    return "FUTURES-SPOT"
+    return route_taxonomy.route_kind(
+        long_venue=long_leg.get("venue"),
+        long_market_type=long_leg.get("market_type"),
+        short_venue=short_leg.get("venue"),
+        short_market_type=short_leg.get("market_type"),
+    )
 
 
 def _is_dex_leg(leg: dict[str, str]) -> bool:
+    # Only on-chain spot legs carry chain/contract identity in custom route
+    # payloads. Perpetual DEXes are classified by _route_kind but keep ordinary
+    # venue symbols and must not be forced through this contract path.
     return "okx dex" in str(leg.get("venue") or "").casefold()
 
 

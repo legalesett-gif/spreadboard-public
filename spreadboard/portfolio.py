@@ -18,6 +18,7 @@ from spreadboard import (
     market_history,
     portfolio_funding,
     position_markets,
+    route_taxonomy,
 )
 
 
@@ -884,15 +885,13 @@ class PositionAlertWorker:
 
 
 def _route_kind(position: dict[str, Any]) -> str:
-    types = {
-        str(position.get("long_market_type") or ""),
-        str(position.get("short_market_type") or ""),
-    }
-    if types == {"Futures"}:
-        return "FUTURES"
-    if types == {"Spot"}:
-        return "SPOT"
-    return "FUTURES-SPOT"
+    return route_taxonomy.route_kind(
+        long_venue=position.get("long_venue"),
+        long_market_type=position.get("long_market_type"),
+        short_venue=position.get("short_venue"),
+        short_market_type=position.get("short_market_type"),
+        source_kind=position.get("source_kind"),
+    )
 
 
 def _spread(denominator: float | None, numerator: float | None) -> float | None:

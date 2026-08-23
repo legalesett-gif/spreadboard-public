@@ -22,7 +22,13 @@ import time
 from typing import Any
 from urllib.parse import quote
 
-from spreadboard import api_spreads, catalog_pairs, chart_catalog, funding_radar
+from spreadboard import (
+    api_spreads,
+    catalog_pairs,
+    chart_catalog,
+    funding_radar,
+    route_taxonomy,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -495,7 +501,9 @@ def _base_record(token: str, *, status: str) -> dict[str, Any]:
 
 
 def _catalog_kind(item: dict[str, Any]) -> str:
-    if "dex" in str(item.get("venue") or "").casefold():
+    if route_taxonomy.leg_is_dex(
+        venue=item.get("venue"), market_type=item.get("market_type")
+    ):
         return "dex"
     return "futures" if str(item.get("market_type") or "").casefold() == "futures" else "spot"
 
@@ -509,11 +517,12 @@ def _catalog_quote(item: dict[str, Any]) -> str:
 
 
 def _is_dex_route(route: dict[str, Any]) -> bool:
-    if "DEX" in str(route.get("route_kind") or "").upper():
-        return True
-    return any(
-        "DEX" in str(route.get(key) or "").upper()
-        for key in ("long_venue", "short_venue")
+    return route_taxonomy.route_has_dex(
+        long_venue=route.get("long_venue"),
+        long_market_type=route.get("long_market_type"),
+        short_venue=route.get("short_venue"),
+        short_market_type=route.get("short_market_type"),
+        source_kind=route.get("source_kind"),
     )
 
 

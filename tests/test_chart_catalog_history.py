@@ -34,7 +34,7 @@ def test_custom_chart_route_round_trip() -> None:
     row = chart_catalog.route_from_key(key)
     assert row is not None
     assert row["token"] == "COTI"
-    assert row["route_kind"] == "FUTURES-SPOT"
+    assert row["route_kind"] == "DEX-FUTURES"
     assert row["long_market_symbol"] == "COTI/USDT"
     assert row["short_market_symbol"] == "COTI/USDT:USDT"
     assert row["blockers"] == ["custom_chart_research_only"]

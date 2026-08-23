@@ -119,6 +119,19 @@ class OkxDexQuoteSource:
                     blockers=("api_credentials_missing",),
                 )
             )
+        if not credentials.project_id:
+            return SourceResult(
+                status=SourceStatus(
+                    name=self.name,
+                    kind=self.kind,
+                    status="skipped",
+                    started_at=started_at,
+                    finished_at=utc_now_iso(),
+                    elapsed_seconds=monotonic() - started,
+                    blockers=("api_project_id_missing",),
+                    details={"provider": "OKX DEX"},
+                )
+            )
         reference_tokens = {
             quote.token.upper()
             for quote in context.reference_quotes
@@ -160,7 +173,7 @@ class OkxDexQuoteSource:
                     )
                     if quote is not None:
                         quotes.append(quote)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - isolate one provider asset failure.
                     errors.append(f"{asset.token}:{chain_id}:{clean_error(exc)}")
         rows = dex_candidates(
             quotes,
@@ -1171,6 +1184,139 @@ class JupiterQuoteSource:
         return payload if isinstance(payload, dict) else {}
 
 
+class VeloraQuoteSource:
+    """Keyless exact-chain EVM quotes used when OKX Web3 is unavailable."""
+
+    name = "velora_evm_quote"
+    kind = "dex_spot"
+
+    def __init__(self, *, http_get_json: HttpGetJson = None) -> None:  # type: ignore[assignment]
+        self.http_get_json = http_get_json
+
+    def collect(self, context: DiscoveryContext) -> SourceResult:
+        from spreadarb.dex import velora_quotes
+
+        started_at = utc_now_iso()
+        started = monotonic()
+        reference_tokens = {
+            quote.token.upper()
+            for quote in context.reference_quotes
+            if quote.market_type in {"Spot", "Futures"}
+        }
+        assets = [
+            asset for asset in _dex_assets(context.watchlist) if asset.token in reference_tokens
+        ]
+        quotes: list[MarketQuote] = []
+        errors: list[str] = []
+        attempted = 0
+        for asset in assets:
+            for chain_id, contract in (asset.evm_contracts or {}).items():
+                if str(chain_id) not in velora_quotes.USDT_BY_CHAIN or context.timed_out():
+                    continue
+                attempted += 1
+                try:
+                    quote = self._quote_asset(
+                        asset,
+                        chain_id=int(chain_id),
+                        contract=str(contract),
+                        context=context,
+                        velora=velora_quotes,
+                    )
+                    if quote is not None:
+                        quotes.append(quote)
+                except Exception as exc:  # noqa: BLE001 - isolate one provider asset failure.
+                    errors.append(f"{asset.token}:{chain_id}:{clean_error(exc)}")
+        rows = dex_candidates(
+            quotes,
+            context.reference_quotes,
+            source_name=self.name,
+            min_spread_pct=context.min_spread_pct,
+            max_spread_pct=context.max_spread_pct,
+        )
+        status = SourceStatus(
+            name=self.name,
+            kind=self.kind,
+            status="partial" if errors else "ok",
+            started_at=started_at,
+            finished_at=utc_now_iso(),
+            elapsed_seconds=monotonic() - started,
+            rows=len(rows),
+            errors=tuple(errors[:12]),
+            blockers=tuple(["partial_source_errors"] if errors else []),
+            details={
+                "provider": "Velora",
+                "quote_count": len(quotes),
+                "attempted_assets": attempted,
+                "stable": "USDT",
+            },
+        )
+        return SourceResult(status=status, rows=tuple(rows), quotes=tuple(quotes))
+
+    def _quote_asset(
+        self,
+        asset: WatchAsset,
+        *,
+        chain_id: int,
+        contract: str,
+        context: DiscoveryContext,
+        velora: Any,
+    ) -> MarketQuote | None:
+        buy = velora.quote_usdt_to_token(
+            chain=str(chain_id),
+            token_address=contract,
+            token_decimals=asset.decimals,
+            notional_usdt=Decimal(str(context.target_notional_usd)),
+            http_get=self.http_get_json,
+            timeout=context.remaining_timeout(8.0),
+        )
+        if buy.get("status") != "ok":
+            raise RuntimeError(";".join(str(item) for item in buy.get("blockers") or []))
+        quantity = Decimal(str(buy.get("out_qty") or "0"))
+        if quantity <= 0:
+            return None
+        sell = velora.quote_token_to_usdt(
+            chain=str(chain_id),
+            token_address=contract,
+            token_decimals=asset.decimals,
+            token_quantity=quantity,
+            http_get=self.http_get_json,
+            timeout=context.remaining_timeout(8.0),
+        )
+        if sell.get("status") != "ok":
+            raise RuntimeError(";".join(str(item) for item in sell.get("blockers") or []))
+        ask = as_float(buy.get("dex_buy_price_usd"))
+        bid = as_float(sell.get("dex_sell_price_usd"))
+        if ask is None or bid is None:
+            return None
+        return MarketQuote(
+            token=asset.token,
+            venue=f"Velora DEX {chain_id}",
+            market_type="Spot",
+            bid=bid,
+            ask=ask,
+            bid_vwap=bid,
+            ask_vwap=ask,
+            quote_ts_us=now_us(),
+            source_name=self.name,
+            quote_asset="USDT",
+            identity_key=asset.identity_key,
+            identity_source="watchlist",
+            decimals=asset.decimals,
+            chain_id=chain_id,
+            token_address=contract,
+            gas_estimate_usd=as_float(sell.get("gas_estimate_usd")),
+            ask_gas_estimate_usd=as_float(buy.get("gas_estimate_usd")),
+            bid_gas_estimate_usd=as_float(sell.get("gas_estimate_usd")),
+            price_impact_pct=as_float(buy.get("price_impact_pct")),
+            ask_price_impact_pct=as_float(buy.get("price_impact_pct")),
+            bid_price_impact_pct=as_float(sell.get("price_impact_pct")),
+            quote_notional_usd=float(context.target_notional_usd),
+            route_plan=tuple(str(item) for item in buy.get("route_plan") or []),
+            mev_protection=str(buy.get("mev_protection") or "provider_quote_only"),
+            quote_source=self.name,
+        )
+
+
 def default_enabled_cex_source() -> CexCcxtSource:
     return CexCcxtSource(
         venues={
@@ -1248,6 +1394,7 @@ def default_sources(
             # DEX spot leg.
             DexDerivativeCcxtSource(venues={"Hyperliquid": "hyperliquid", "Aster": "aster"}),
             HyperliquidBuilderDexSource(),
+            VeloraQuoteSource(),
             OkxDexQuoteSource(),
         ]
         enabled.extend(source for source in source_specs if _source_enabled(source, source_filter))

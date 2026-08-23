@@ -34,6 +34,7 @@ from spreadboard import (
     market_history,
     portfolio,
     rail_watch,
+    route_taxonomy,
     subscription_lifecycle,
     telegram_bot,
     telegram_checkout,
@@ -1678,21 +1679,18 @@ def _funding_refresh_route_keys(
 
 
 def _funding_lane(row: dict[str, Any]) -> str | None:
-    long_type = str(row.get("long_market_type") or "")
-    short_type = str(row.get("short_market_type") or "")
-    venue_text = " ".join(
-        (
-            str(row.get("long_venue") or ""),
-            str(row.get("short_venue") or ""),
-        )
-    ).casefold()
-    if "Futures" in {long_type, short_type} and (
-        "dex" in venue_text or "dex" in f"{long_type} {short_type}".casefold()
-    ):
-        return "DEX-FUTURES"
-    if long_type == short_type == "Futures":
+    kind = route_taxonomy.route_kind(
+        long_venue=row.get("long_venue"),
+        long_market_type=row.get("long_market_type"),
+        short_venue=row.get("short_venue"),
+        short_market_type=row.get("short_market_type"),
+        source_kind=row.get("source_kind"),
+    )
+    if kind == "DEX-FUTURES":
+        return kind
+    if kind == "FUTURES":
         return "FUTURES"
-    if {long_type, short_type} == {"Futures", "Spot"}:
+    if kind in {"FUTURES-SPOT", "SPOT-FUTURES"}:
         return "FUTURES-SPOT"
     return None
 

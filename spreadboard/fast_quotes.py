@@ -19,7 +19,13 @@ from urllib.request import Request, urlopen
 
 from spreadarb.api_discovery.models import spread_pct
 from spreadarb.api_discovery.orderbook import depth_weighted_price
-from spreadboard import live_book_cache, public_rails, token_metadata, tokenized_assets
+from spreadboard import (
+    live_book_cache,
+    public_rails,
+    route_taxonomy,
+    token_metadata,
+    tokenized_assets,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 LEVERAGED_TOKEN_PATTERN = re.compile(r"^[A-Z0-9]+[2-5][LS]$")
@@ -573,7 +579,7 @@ class FastQuoteRefresher:
             min(24, int(os.environ.get("SPREADBOARD_DEX_QUOTE_CHUNK_SIZE", "8"))),
         )
         for venue_key, jobs in jobs_by_venue.items():
-            if "okx dex" in venue_key[0].casefold():
+            if _is_onchain_spot_venue(venue_key[0], venue_key[1]):
                 # OKX DEX quotes are stateless HTTP requests. Keeping dozens of
                 # them in one venue batch made that single task dominate the
                 # entire cycle even after CEX venues were parallelized.
@@ -926,7 +932,7 @@ class FastQuoteRefresher:
         symbol = str(
             leg.get("symbol") or row.get(f"{side}_market_symbol") or row.get(f"{side}_symbol") or ""
         )
-        if "okx dex" in venue.casefold():
+        if _is_onchain_spot_venue(venue, market_type):
             chain, contract = _dex_chain_contract(row, side=side)
             # The opening route only consumes the long leg's ask or the short
             # leg's bid.  Keep direction in the key so one exact contract can
@@ -937,9 +943,9 @@ class FastQuoteRefresher:
             key = (venue, market_type, symbol)
         if key in cache:
             return cache[key]
-        if "okx dex" in venue.casefold():
+        if _is_onchain_spot_venue(venue, market_type):
             failure: dict[str, str] = {}
-            value = _okx_dex_leg_quote(
+            value = _onchain_dex_leg_quote(
                 row,
                 side,
                 target_notional_usd=target_notional_usd,
@@ -1474,7 +1480,7 @@ def _route_leg_key(
     symbol = str(
         leg.get("symbol") or row.get(f"{side}_market_symbol") or row.get(f"{side}_symbol") or ""
     )
-    if "okx dex" in venue.casefold():
+    if _is_onchain_spot_venue(venue, market_type):
         chain, contract = _dex_chain_contract(row, side=side)
         symbol = f"{chain}:{contract}:{side}" if chain and contract else ""
     return (venue, market_type, symbol) if venue and market_type and symbol else None
@@ -1485,12 +1491,26 @@ def _fast_quote_lane(row: dict[str, Any]) -> str | None:
     short_type = str(row.get("short_market_type") or "")
     long_venue = str(row.get("long_venue") or "")
     short_venue = str(row.get("short_venue") or "")
-    venues = (long_venue, short_venue)
-    has_okx_dex = any("okx dex" in venue.casefold() for venue in venues)
-    cex_supported = all(venue in VENUE_IDS or "okx dex" in venue.casefold() for venue in venues)
-    if not cex_supported:
+    onchain_sides = [
+        side
+        for side in ("long", "short")
+        if _is_onchain_spot_venue(
+            str(row.get(f"{side}_venue") or ""),
+            str(row.get(f"{side}_market_type") or ""),
+        )
+    ]
+    legs_supported = all(
+        venue in VENUE_IDS
+        or supports_native_order_book(venue, market_type)
+        or _is_onchain_spot_venue(venue, market_type)
+        for venue, market_type in (
+            (long_venue, long_type),
+            (short_venue, short_type),
+        )
+    )
+    if not legs_supported:
         return None
-    if has_okx_dex:
+    if onchain_sides:
         blockers = {str(item) for item in row.get("blockers") or []}
         identity_unverified = (
             "cex_identity_unverified" in blockers
@@ -1505,19 +1525,32 @@ def _fast_quote_lane(row: dict[str, Any]) -> str | None:
         if long_type == short_type == "Spot":
             return "DEX-SPOT"
         return None
-    if long_type == short_type == "Futures":
-        return "FUTURES"
-    if {long_type, short_type} == {"Spot", "Futures"}:
+    kind = route_taxonomy.route_kind(
+        long_venue=long_venue,
+        long_market_type=long_type,
+        short_venue=short_venue,
+        short_market_type=short_type,
+        source_kind=row.get("source_kind"),
+    )
+    if kind in {"FUTURES", "DEX-FUTURES", "SPOT"}:
+        return kind
+    if kind in {"SPOT-FUTURES", "FUTURES-SPOT"}:
         return "FUTURES-SPOT"
-    if long_type == short_type == "Spot":
-        return "SPOT"
     return None
 
 
 def _is_dex_route(row: dict[str, Any]) -> bool:
-    return any(
-        "okx dex" in str(row.get(f"{side}_venue") or "").casefold() for side in ("long", "short")
+    return route_taxonomy.route_has_dex(
+        long_venue=row.get("long_venue"),
+        long_market_type=row.get("long_market_type"),
+        short_venue=row.get("short_venue"),
+        short_market_type=row.get("short_market_type"),
+        source_kind=row.get("source_kind"),
     )
+
+
+def _is_onchain_spot_venue(venue: str, market_type: str) -> bool:
+    return route_taxonomy.leg_is_onchain_spot(venue=venue, market_type=market_type)
 
 
 def _unique_token_rows(
@@ -2041,7 +2074,7 @@ def _dex_contract_identity(row: dict[str, Any]) -> tuple[str, str, str, str]:
         (
             side
             for side in ("long", "short")
-            if "okx dex" in str(row.get(f"{side}_venue") or "").casefold()
+            if route_taxonomy.venue_is_onchain_spot(row.get(f"{side}_venue"))
         ),
         "",
     )
@@ -2751,6 +2784,32 @@ def _sorted_book(
     return bids, asks
 
 
+def _onchain_dex_leg_quote(
+    row: dict[str, Any],
+    side: str,
+    *,
+    target_notional_usd: float,
+    quote_both: bool = True,
+    failure: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
+    venue = str(row.get(f"{side}_venue") or "").casefold()
+    if "velora" in venue or "paraswap" in venue:
+        return _velora_dex_leg_quote(
+            row,
+            side,
+            target_notional_usd=target_notional_usd,
+            quote_both=quote_both,
+            failure=failure,
+        )
+    return _okx_dex_leg_quote(
+        row,
+        side,
+        target_notional_usd=target_notional_usd,
+        quote_both=quote_both,
+        failure=failure,
+    )
+
+
 def _okx_dex_leg_quote(
     row: dict[str, Any],
     side: str,
@@ -2865,9 +2924,128 @@ def _okx_dex_leg_quote(
             }
         )
         return result
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - provider libraries raise heterogeneous errors.
         _set_quote_failure(failure, f"dex_exception:{type(exc).__name__}")
         return None
+
+
+def _velora_dex_leg_quote(
+    row: dict[str, Any],
+    side: str,
+    *,
+    target_notional_usd: float,
+    quote_both: bool = True,
+    failure: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
+    chain, contract = _dex_chain_contract(row, side=side)
+    if not chain or not contract:
+        _set_quote_failure(failure, "dex_identity_missing")
+        return None
+    try:
+        from spreadarb.dex import velora_quotes
+
+        buy: dict[str, Any] | None = None
+        sell: dict[str, Any] | None = None
+        quantity: Decimal | None = None
+        decimals = _dex_leg_decimals(row, side)
+        if decimals is None:
+            _set_quote_failure(failure, "dex_decimals_missing")
+            return None
+        if side == "long" or quote_both:
+            buy = velora_quotes.quote_usdt_to_token(
+                chain=chain,
+                token_address=contract,
+                token_decimals=decimals,
+                notional_usdt=Decimal(str(target_notional_usd)),
+            )
+            if buy.get("status") != "ok":
+                _set_quote_failure(failure, _velora_provider_failure_reason(buy))
+                return None
+            quantity = Decimal(str(buy.get("out_qty") or "0"))
+            if quantity <= 0:
+                _set_quote_failure(failure, "dex_buy_quantity_unavailable")
+                return None
+        if side == "short" or quote_both:
+            if quantity is None:
+                quantity, recovered_decimals = _dex_directional_sell_inputs(
+                    row,
+                    side=side,
+                    target_notional_usd=target_notional_usd,
+                )
+                decimals = decimals if decimals is not None else recovered_decimals
+            if quantity is None or quantity <= 0 or decimals is None:
+                _set_quote_failure(failure, "dex_sell_quantity_unavailable")
+                return None
+            sell = velora_quotes.quote_token_to_usdt(
+                chain=chain,
+                token_address=contract,
+                token_decimals=decimals,
+                token_quantity=quantity,
+            )
+            if sell.get("status") != "ok":
+                _set_quote_failure(failure, _velora_provider_failure_reason(sell))
+                return None
+        bid = _optional_number((sell or {}).get("dex_sell_price_usd"))
+        ask = _optional_number((buy or {}).get("dex_buy_price_usd"))
+        if (side == "long" and ask is None) or (side == "short" and bid is None):
+            _set_quote_failure(failure, "dex_price_unavailable")
+            return None
+        execution = buy if side == "long" else sell
+        execution = execution if isinstance(execution, dict) else {}
+        result: dict[str, Any] = {
+            "symbol": str(row.get("token") or ""),
+            "contract_size": 1.0,
+            "quote_ts_us": int(time.time() * 1_000_000),
+            "chain_id": chain,
+            "token_address": contract,
+            "sample_side": side,
+            "quote_notional_usd": target_notional_usd,
+            "gas_estimate_usd": _optional_number(execution.get("gas_estimate_usd")),
+            "slippage_bps": _optional_int(execution.get("slippage_bps")),
+            "price_impact_pct": _optional_number(execution.get("price_impact_pct")),
+            "quote_source": "velora_evm_quote",
+            "route_plan": list(execution.get("route_plan") or []),
+            "mev_protection": str(execution.get("mev_protection") or "").strip() or None,
+            "transfer_time_seconds": None,
+        }
+        if bid is not None:
+            result.update({"bid": bid, "bid_vwap": bid})
+        if ask is not None:
+            result.update({"ask": ask, "ask_vwap": ask})
+        return result
+    except Exception as exc:  # noqa: BLE001 - provider libraries raise heterogeneous errors.
+        _set_quote_failure(failure, f"dex_exception:{type(exc).__name__}")
+        return None
+
+
+def _dex_leg_decimals(row: dict[str, Any], side: str) -> int | None:
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    identities = notes.get("identity") if isinstance(notes.get("identity"), dict) else {}
+    identity = identities.get(side) if isinstance(identities.get(side), dict) else {}
+    if not identity.get("token_address"):
+        for candidate_side in ("long", "short"):
+            candidate = (
+                identities.get(candidate_side)
+                if isinstance(identities.get(candidate_side), dict)
+                else {}
+            )
+            if candidate.get("token_address"):
+                identity = candidate
+                break
+    return _optional_int(identity.get("decimals"))
+
+
+def _velora_provider_failure_reason(payload: dict[str, Any]) -> str:
+    blockers = " ".join(str(item) for item in payload.get("blockers") or []).casefold()
+    if "http_429" in blockers:
+        return "dex_provider_rate_limited"
+    if "transport" in blockers:
+        return "dex_provider_transport"
+    if "unsupported" in blockers:
+        return "dex_chain_unsupported"
+    if "http_5" in blockers:
+        return "dex_provider_http_5xx"
+    return "dex_provider_rejected"
 
 
 def _set_quote_failure(target: dict[str, str] | None, reason: str) -> None:
@@ -2946,7 +3124,7 @@ def _dex_chain_contract(
             if isinstance(identities.get(candidate_side), dict)
             else {}
         )
-        if "okx dex" not in venue.casefold():
+        if not route_taxonomy.venue_is_onchain_spot(venue):
             continue
         nested_chain = str(identity.get("chain_id") or "").strip()
         nested_contract = str(identity.get("token_address") or "").strip()

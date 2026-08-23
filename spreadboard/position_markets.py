@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from spreadboard import chart_catalog
+from spreadboard import chart_catalog, route_taxonomy
 
 
 def resolve_position_route(
@@ -113,7 +113,7 @@ def normalize_market_type(venue: Any, market_type: Any) -> str:
 
     venue_text = str(venue or "")
     value = str(market_type or "").strip().casefold()
-    if value == "dex" or "okx dex" in venue_text.casefold():
+    if value == "dex" or route_taxonomy.venue_is_onchain_spot(venue_text):
         return "Spot"
     if value in {"future", "futures", "perp", "perpetual", "swap"}:
         return "Futures"
@@ -239,7 +239,7 @@ def _same_leg(
         return symbol.casefold() == expected_symbol.casefold()
     # Canonical DEX discovery rows historically omitted *_market_symbol.  The
     # contract-verified catalogue symbol is the token itself in that adapter.
-    return "okx dex" in venue.casefold() and expected_symbol.upper() == token
+    return route_taxonomy.venue_is_onchain_spot(venue) and expected_symbol.upper() == token
 
 
 def _row_symbol(row: dict[str, Any], side: str) -> str:

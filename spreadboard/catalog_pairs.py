@@ -35,6 +35,7 @@ from spreadboard import (
     exchange_links,
     live_book_cache,
     public_rails,
+    route_taxonomy,
     tokenized_assets,
     venue_funding_history,
 )
@@ -962,11 +963,12 @@ def _leg_daily(leg: Leg, funding: dict[str, Any]) -> float | None:
 
 
 def _route_kind(long_leg: Leg, short_leg: Leg) -> str:
-    if long_leg.market_type == short_leg.market_type == "Futures":
-        return "FUTURES"
-    if long_leg.market_type == short_leg.market_type == "Spot":
-        return "SPOT"
-    return "SPOT-FUTURES"
+    return route_taxonomy.route_kind(
+        long_venue=long_leg.venue,
+        long_market_type=long_leg.market_type,
+        short_venue=short_leg.venue,
+        short_market_type=short_leg.market_type,
+    )
 
 
 def _spread_rank(row: dict[str, Any]) -> float:
@@ -981,9 +983,12 @@ def _is_dex(item: dict[str, Any]) -> bool:
 
 
 def _route_is_dex(row: dict[str, Any]) -> bool:
-    return "DEX" in str(row.get("route_kind") or "").upper() or any(
-        "dex" in str(row.get(key) or "").casefold()
-        for key in ("long_venue", "short_venue")
+    return route_taxonomy.route_has_dex(
+        long_venue=row.get("long_venue"),
+        long_market_type=row.get("long_market_type"),
+        short_venue=row.get("short_venue"),
+        short_market_type=row.get("short_market_type"),
+        source_kind=row.get("source_kind"),
     )
 
 

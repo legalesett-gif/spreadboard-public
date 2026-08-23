@@ -481,6 +481,7 @@ def test_production_fast_budget_reserves_dex_truth_and_cex_canaries() -> None:
                 "route_key": f"{lane}-{index}",
                 "token": f"{lane}{index}",
                 "depth_weighted_spread_pct": 100 - index,
+                "long_venue": "Binance",
                 "long_market_type": "Spot" if lane != "FUTURES" else "Futures",
                 "short_market_type": "Spot" if lane == "SPOT" else "Futures",
             }
@@ -532,7 +533,7 @@ def test_fast_quote_budget_is_failure_tolerant_across_all_lanes(monkeypatch) -> 
         for index in range(90):
             token = f"{prefix}{index}"
             if lane == "FUTURES":
-                long_venue, long_type, short_venue, short_type = "Aster", "Futures", "Bybit", "Futures"
+                long_venue, long_type, short_venue, short_type = "Binance", "Futures", "Bybit", "Futures"
             elif lane == "FUTURES-SPOT":
                 long_venue, long_type, short_venue, short_type = "Mexc", "Spot", "Bybit", "Futures"
             elif lane == "SPOT":
@@ -806,7 +807,7 @@ def test_fast_delta_identity_includes_exact_market_symbols() -> None:
 
 
 def test_fast_quote_lane_covers_all_public_route_families() -> None:
-    futures = _route()
+    futures = {**_route(), "long_venue": "Binance"}
     futures_spot = {
         **_route(),
         "long_venue": "Gate",
@@ -2232,11 +2233,11 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
     assert all("depth_unverified" not in row.get("blockers", []) for row in updated)
 
 
-def test_aster_and_hyperliquid_futures_are_not_mislabeled_as_dex() -> None:
+def test_aster_and_hyperliquid_futures_stay_in_the_dex_lane() -> None:
     row = _route()
-    assert market_history.route_kind_for(row) == "FUTURES"
+    assert market_history.route_kind_for(row) == "DEX-FUTURES"
     row["long_venue"] = "Hyperliquid"
-    assert market_history.route_kind_for(row) == "FUTURES"
+    assert market_history.route_kind_for(row) == "DEX-FUTURES"
 
 
 def test_native_spot_and_futures_routes_sample_inside_web_process() -> None:
@@ -2348,8 +2349,9 @@ def test_fast_quote_refresh_writes_what_it_has_when_the_deadline_passes(
         route = _route()
         route.update(
             {
-                "route_key": f"TEST{index}|Aster|Futures|Bybit|Futures",
+                "route_key": f"TEST{index}|Binance|Futures|Bybit|Futures",
                 "token": f"TEST{index}",
+                "long_venue": "Binance",
                 "depth_weighted_spread_pct": 2.0,
                 "executable_spread_pct": 2.0,
                 "blockers": [],

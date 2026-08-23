@@ -32,8 +32,11 @@ class LiveBookStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self.path, timeout=5, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn = sqlite3.connect(self.path, timeout=15, check_same_thread=False)
+        self._conn.execute("PRAGMA busy_timeout=15000")
+        journal_mode = self._conn.execute("PRAGMA journal_mode").fetchone()
+        if not journal_mode or str(journal_mode[0]).casefold() != "wal":
+            self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute(
             """

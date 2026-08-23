@@ -59,6 +59,7 @@ from spreadboard import (  # noqa: E402
     portfolio,
     research_calibration,
     research_score,
+    route_taxonomy,
     subscription_lifecycle,
     telegram_bot,
     telegram_queries,
@@ -4025,6 +4026,12 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
     return output
 
 
+def _position_market_type(venue: Any, market_type: Any) -> str:
+    if route_taxonomy.leg_is_onchain_spot(venue=venue, market_type=market_type):
+        return "DEX"
+    return str(market_type or "")
+
+
 def api_position_suggestions(
     board_path: Path, query: dict[str, list[str]] | None = None
 ) -> dict[str, Any]:
@@ -4083,17 +4090,23 @@ def api_position_suggestions(
     ]
     routes = []
     for row in exact_rows[:limit]:
+        long_market_type = _position_market_type(
+            row.get("long_venue"), row.get("long_market_type")
+        )
+        short_market_type = _position_market_type(
+            row.get("short_venue"), row.get("short_market_type")
+        )
         routes.append(
             {
                 "token": row.get("token"),
                 "route_key": row.get("route_key"),
                 "route_kind": row.get("route_kind"),
                 "long_venue": row.get("long_venue"),
-                "long_market_type": row.get("long_market_type"),
+                "long_market_type": long_market_type,
                 "long_symbol": row.get("long_market_symbol"),
                 "long_entry_price": row.get("long_ask") or row.get("long_price"),
                 "short_venue": row.get("short_venue"),
-                "short_market_type": row.get("short_market_type"),
+                "short_market_type": short_market_type,
                 "short_symbol": row.get("short_market_symbol"),
                 "short_entry_price": row.get("short_bid") or row.get("short_price"),
                 "entry_spread_pct": row.get("depth_weighted_spread_pct")
@@ -4134,21 +4147,23 @@ def api_position_suggestions(
             )
             if pair in existing_pairs or pair[:2] == pair[2:]:
                 continue
-            long_type = (
-                "DEX"
-                if "dex" in str(long_leg.get("venue") or "").casefold()
-                else long_leg.get("market_type")
+            long_type = _position_market_type(
+                long_leg.get("venue"), long_leg.get("market_type")
             )
-            short_type = (
-                "DEX"
-                if "dex" in str(short_leg.get("venue") or "").casefold()
-                else short_leg.get("market_type")
+            short_type = _position_market_type(
+                short_leg.get("venue"), short_leg.get("market_type")
+            )
+            route_kind = route_taxonomy.route_kind(
+                long_venue=long_leg.get("venue"),
+                long_market_type=long_leg.get("market_type"),
+                short_venue=short_leg.get("venue"),
+                short_market_type=short_leg.get("market_type"),
             )
             combinations.append(
                 {
                     "token": requested,
                     "route_key": "",
-                    "route_kind": f"{str(long_type or '').upper()}-{str(short_type or '').upper()}",
+                    "route_kind": route_kind,
                     "long_venue": long_leg.get("venue"),
                     "long_market_type": long_type,
                     "long_symbol": long_leg.get("symbol"),

@@ -115,6 +115,7 @@ def test_crypto_and_tokenized_lanes_filter_independently(monkeypatch):
         long_market_symbol="AMZNSTOCK/USDT:USDT",
         short_market_symbol="xyz:AMZN",
         asset_class="tokenized",
+        route_kind="DEX-FUTURES",
     )
     assert api_spreads._filter_rows([crypto, tokenized], asset_class="crypto") == [crypto]
     assert api_spreads._filter_rows([crypto, tokenized], asset_class="tokenized") == [tokenized]
@@ -144,6 +145,7 @@ def test_tokenized_guard_reaches_api_and_both_market_views(monkeypatch):
         long_market_symbol="AMZNSTOCK/USDT:USDT",
         short_market_symbol="xyz:AMZN",
         asset_class="tokenized",
+        route_kind="DEX-FUTURES",
     )
     monkeypatch.setattr(
         tokenized_assets,
@@ -173,7 +175,7 @@ def test_tokenized_guard_reaches_api_and_both_market_views(monkeypatch):
         "token": "AMZNSTOCK",
         "token_name": "Amazon tokenized stock",
         "venues": ["Mexc", "Hyperliquid"],
-        "route_kinds": ["FUTURES"],
+        "route_kinds": ["DEX-FUTURES"],
         "route_count": 1,
         "best_edge_pct": 0.2,
         "age_min": 1,

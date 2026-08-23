@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from spreadboard import route_taxonomy
+
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_DB_PATH = RUNTIME_DIR / "spreadboard_market_history.sqlite3"
@@ -387,32 +389,19 @@ def route_key_for(row: dict[str, Any]) -> str:
 
 def route_kind_for(row: dict[str, Any]) -> str:
     explicit = str(row.get("route_kind") or "").upper()
-    if explicit in {
-        "DEX-FUTURES",
-        "DEX-SPOT",
-        "FUTURES",
-        "SPOT-FUTURES",
-        "FUTURES-SPOT",
-        "SPOT",
-    }:
+    derived = route_taxonomy.route_kind(
+        long_venue=row.get("long_venue"),
+        long_market_type=row.get("long_market_type"),
+        short_venue=row.get("short_venue"),
+        short_market_type=row.get("short_market_type"),
+        source_kind=row.get("source_kind"),
+    )
+    # Correct old rows whose stored kind predates the canonical DEX taxonomy.
+    if derived.startswith("DEX-"):
+        return derived
+    if explicit in {"FUTURES", "SPOT-FUTURES", "FUTURES-SPOT", "SPOT"}:
         return explicit
-    long_type = str(row.get("long_market_type") or "")
-    short_type = str(row.get("short_market_type") or "")
-    source_kind = str(row.get("source_kind") or "")
-    is_dex = source_kind == "dex_discovered" or "DEX" in {long_type, short_type}
-    if is_dex and "Futures" in {long_type, short_type}:
-        return "DEX-FUTURES"
-    if is_dex:
-        return "DEX-SPOT"
-    if long_type == "Futures" and short_type == "Futures":
-        return "FUTURES"
-    if long_type == "Spot" and short_type == "Futures":
-        return "SPOT-FUTURES"
-    if long_type == "Futures" and short_type == "Spot":
-        return "FUTURES-SPOT"
-    if long_type == "Spot" and short_type == "Spot":
-        return "SPOT"
-    return "UNKNOWN"
+    return derived
 
 
 def _is_contaminated_dex_sample(
