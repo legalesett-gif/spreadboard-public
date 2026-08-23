@@ -18,28 +18,65 @@ from typing import Any
 
 from spreadboard import api_spreads, catalog_pairs, chart_catalog, funding_radar
 
-CACHE_SECONDS = max(15.0, float(os.environ.get("SPREADBOARD_COMPLETE_FUNDING_CACHE_SECONDS", "45")))
+CACHE_SECONDS = max(
+    30.0,
+    float(os.environ.get("SPREADBOARD_COMPLETE_FUNDING_CACHE_SECONDS", "300")),
+)
+COLD_BUILD_WAIT_SECONDS = max(
+    15.0,
+    float(os.environ.get("SPREADBOARD_COMPLETE_FUNDING_COLD_WAIT_SECONDS", "120")),
+)
 _CACHE_LOCK = threading.Lock()
 _CACHE_AT = 0.0
 _CACHE_PAYLOADS: dict[str, dict[str, Any]] = {}
+_CACHE_BUILDING = False
+_CACHE_BUILD_DONE = threading.Event()
+_CACHE_BUILD_DONE.set()
 
 
 def clear_cache() -> None:
-    global _CACHE_AT, _CACHE_PAYLOADS
+    """Make the current generation stale without taking it away from readers.
+
+    Rebuilding every catalogue pair can take longer than an ordinary HTTP
+    timeout on the production host.  A funding or discovery refresh must not
+    turn that background rebuild into a page-wide lock: readers keep the last
+    complete immutable generation until its replacement is ready.
+    """
+
+    global _CACHE_AT
     with _CACHE_LOCK:
         _CACHE_AT = 0.0
-        _CACHE_PAYLOADS = {}
 
 
 def _complete_payloads() -> dict[str, dict[str, Any]]:
     """One coherent all-token generation from already-warm local artifacts."""
 
-    global _CACHE_AT, _CACHE_PAYLOADS
+    global _CACHE_AT, _CACHE_PAYLOADS, _CACHE_BUILDING
     now = time.monotonic()
     with _CACHE_LOCK:
         if _CACHE_PAYLOADS and now - _CACHE_AT <= CACHE_SECONDS:
             return _CACHE_PAYLOADS
         previous = _CACHE_PAYLOADS
+        if _CACHE_BUILDING:
+            owns_build = False
+        else:
+            _CACHE_BUILDING = True
+            _CACHE_BUILD_DONE.clear()
+            owns_build = True
+
+    if not owns_build:
+        # A member request must never wait behind a background all-market
+        # rebuild when a complete prior generation exists.  On a genuinely
+        # cold start there is no safe prior answer, so wait for the sole owner
+        # rather than starting a duplicate multi-gigabyte build.
+        if previous:
+            return previous
+        _CACHE_BUILD_DONE.wait(timeout=COLD_BUILD_WAIT_SECONDS)
+        with _CACHE_LOCK:
+            return _CACHE_PAYLOADS
+
+    built: dict[str, dict[str, Any]] = {}
+    try:
         catalog = chart_catalog.load()
         tokens = sorted(
             {
@@ -48,25 +85,28 @@ def _complete_payloads() -> dict[str, dict[str, Any]]:
                 if isinstance(item, dict) and item.get("token")
             }
         )
-        try:
-            built = catalog_pairs.for_tokens(
-                tokens,
-                # Funding eligibility follows the fresh per-leg rate.  A book
-                # up to the board's ordinary four-minute boundary may retain
-                # the route and its identity while the UI honestly labels its
-                # basis as refreshing; the stricter 90-second execution gate
-                # still controls whether that basis is called current.
-                max_age_seconds=api_spreads.DEFAULT_MAX_AGE_MIN * 60.0,
-                include_history=True,
-                include_short_spot=True,
-            )
-        except Exception:
-            if previous:
-                return previous
+        built = catalog_pairs.for_tokens(
+            tokens,
+            # Funding eligibility follows the fresh per-leg rate.  A book up
+            # to the board's ordinary four-minute boundary may retain the
+            # route and its identity while the UI honestly labels its basis as
+            # refreshing; the stricter 90-second execution gate still controls
+            # whether that basis is called current.
+            max_age_seconds=api_spreads.DEFAULT_MAX_AGE_MIN * 60.0,
+            include_history=True,
+            include_short_spot=True,
+        )
+    except Exception:
+        if not previous:
             raise
-        if built:
-            _CACHE_PAYLOADS = built
-            _CACHE_AT = time.monotonic()
+    finally:
+        with _CACHE_LOCK:
+            if built:
+                _CACHE_PAYLOADS = built
+                _CACHE_AT = time.monotonic()
+            _CACHE_BUILDING = False
+            _CACHE_BUILD_DONE.set()
+    with _CACHE_LOCK:
         return _CACHE_PAYLOADS or previous
 
 

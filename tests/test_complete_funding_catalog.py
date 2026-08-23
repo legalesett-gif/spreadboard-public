@@ -2,9 +2,59 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from spreadboard import funding_catalog, funding_radar, server
+
+
+def test_catalog_rebuild_serves_last_complete_generation_to_concurrent_reader(
+    monkeypatch,
+) -> None:
+    old = {"OLD": {"routes": [{"token": "OLD"}]}}
+    new = {"NEW": {"routes": [{"token": "NEW"}]}}
+    entered = threading.Event()
+    release = threading.Event()
+    prior_payloads = funding_catalog._CACHE_PAYLOADS
+    prior_at = funding_catalog._CACHE_AT
+    prior_building = funding_catalog._CACHE_BUILDING
+
+    monkeypatch.setattr(
+        funding_catalog.chart_catalog,
+        "load",
+        lambda: {"markets": [{"token": "NEW"}]},
+    )
+
+    def slow_build(*_args, **_kwargs):
+        entered.set()
+        assert release.wait(timeout=2)
+        return new
+
+    monkeypatch.setattr(funding_catalog.catalog_pairs, "for_tokens", slow_build)
+    funding_catalog._CACHE_PAYLOADS = old
+    funding_catalog._CACHE_AT = 0.0
+    funding_catalog._CACHE_BUILDING = False
+    funding_catalog._CACHE_BUILD_DONE.set()
+    result: list[dict] = []
+    worker = threading.Thread(
+        target=lambda: result.append(funding_catalog._complete_payloads())
+    )
+    try:
+        worker.start()
+        assert entered.wait(timeout=1)
+        assert funding_catalog._complete_payloads() is old
+        release.set()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert result == [new]
+        assert funding_catalog._complete_payloads() is new
+    finally:
+        release.set()
+        worker.join(timeout=2)
+        funding_catalog._CACHE_PAYLOADS = prior_payloads
+        funding_catalog._CACHE_AT = prior_at
+        funding_catalog._CACHE_BUILDING = prior_building
+        funding_catalog._CACHE_BUILD_DONE.set()
 
 
 def _route(
