@@ -691,15 +691,20 @@ class SharedArtifactWatcher(threading.Thread):
         )
         from spreadboard import telegram_queries
 
-        if telegram_queries.payload_status()["ready"]:
+        snapshot = telegram_queries.payload_status()
+        if snapshot["ready"] and snapshot.get("funding_ready"):
             return
         with self.warm_lock:
             if self.warm_pending or (
                 self.warm_thread is not None and self.warm_thread.is_alive()
             ):
                 return
-        _log("telegram snapshot missing; requesting automatic recovery warm")
-        self.request_warm()
+        if not snapshot["ready"]:
+            _log("telegram snapshot missing; requesting automatic recovery warm")
+            self.request_warm()
+            return
+        _log("telegram funding snapshot missing; requesting recovery warm")
+        self.request_funding_warm()
 
     def _invalidate_if_due(self) -> None:
         """Coalesce price/funding generations while live overlays stay current."""

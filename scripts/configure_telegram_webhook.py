@@ -65,20 +65,33 @@ def main() -> int:
             ],
         },
     )
-    # Telegram writes "/funding@spreadarbitragesubscription_bot" into the
-    # message when a member picks a command from the "/" popup in a supergroup,
-    # and no API setting changes how the client writes it. What IS controllable
-    # is whether the popup has anything to offer.
-    #
-    # setMyCommands with an empty list does NOT remove a scope -- the old list
-    # survives it. deleteMyCommands is the removal. Both scopes must go:
-    # Telegram resolves a group's menu down the chain, so clearing only
-    # all_group_chats falls back to default and the popup returns.
-    #
-    # Nothing but the popup is lost. Registration drives that menu alone --
-    # privacy mode is off, so every group message reaches the bot regardless
-    # and a hand-typed "/funding" is answered exactly as before.
-    telegram_call(token, "deleteMyCommands", {"scope": {"type": "all_group_chats"}})
+    # Telegram writes "/funding@spreadarbitragesubscription_bot" when a member
+    # picks a command in a supergroup. The parser accepts that exact form, so
+    # the group can keep a discoverable menu without losing tagged requests.
+    # Account, payment and group-setup actions remain private-chat only.
+    telegram_call(
+        token,
+        "setMyCommands",
+        {
+            "scope": {"type": "all_group_chats"},
+            "commands": [
+                {"command": "top", "description": "Widest spreads now"},
+                {"command": "spread", "description": "Spread board or add a token"},
+                {"command": "funding", "description": "Best carry or add a token"},
+                {"command": "radar", "description": "24h / 7d / 30d funding leaders"},
+                {"command": "deep", "description": "Routes that proved the probe size"},
+                {"command": "carry", "description": "Best positive paired carry"},
+                {"command": "token", "description": "Spread view: /token GUA"},
+                {"command": "depth", "description": "Depth view: /depth GUA"},
+                {"command": "transfer", "description": "Rails view: /transfer GUA"},
+                {"command": "calc", "description": "Size capital: /calc GUA 5000"},
+                {"command": "help", "description": "Every command and shortcut"},
+                {"command": "status", "description": "Spread and funding freshness"},
+            ],
+        },
+    )
+    # Keep the default scope empty. Telegram should resolve explicitly to the
+    # private or group menu above, never leak one audience's actions to another.
     telegram_call(token, "deleteMyCommands", {"scope": {"type": "default"}})
     telegram_call(
         token,

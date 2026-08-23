@@ -91,19 +91,24 @@ def test_ordinary_prose_never_becomes_the_context() -> None:
     telegram_queries.note_message(CHAT, "the funding on that one looked good")
     telegram_queries.note_message(CHAT, "worth a look")
 
-    assert telegram_queries.resolve(parse_query("/funding"), chat_id=CHAT) is None
+    resolved = telegram_queries.resolve(parse_query("/funding"), chat_id=CHAT)
+    assert resolved == Query(kind="carry", symbol="")
 
 
 def test_an_unlisted_word_is_not_remembered() -> None:
     telegram_queries.note_message(CHAT, "NOTATOKEN")
 
-    assert telegram_queries.resolve(parse_query("/funding"), chat_id=CHAT) is None
+    assert telegram_queries.resolve(parse_query("/funding"), chat_id=CHAT) == Query(
+        kind="carry", symbol=""
+    )
 
 
 def test_context_is_per_chat() -> None:
     telegram_queries.remember_token(CHAT, "ESPORTS")
 
-    assert telegram_queries.resolve(parse_query("/funding"), chat_id=-999) is None
+    assert telegram_queries.resolve(parse_query("/funding"), chat_id=-999) == Query(
+        kind="carry", symbol=""
+    )
 
 
 def test_a_command_that_names_its_own_token_ignores_the_context() -> None:
@@ -134,7 +139,7 @@ def test_stale_context_expires_rather_than_answering_yesterdays_token() -> None:
         now=1000.0 + telegram_queries.CONTEXT_TTL_SECONDS + 1,
     )
 
-    assert resolved is None
+    assert resolved == Query(kind="carry", symbol="")
 
 
 # --------------------------------------------------------------------------
@@ -184,14 +189,17 @@ def test_sizing_still_takes_its_amount_without_a_slash() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_a_bare_command_with_no_context_is_answerable_rather_than_silent() -> None:
-    """Silence reads as a broken bot. It must say what it needs."""
+def test_a_bare_funding_command_with_no_context_returns_board_data() -> None:
+    """Silence or a prompt reads as a broken data command."""
     resolved = telegram_queries.resolve(parse_query("/funding"), chat_id=CHAT)
 
-    assert resolved is None  # nothing to answer with...
-    prompt = telegram_queries.needs_token_prompt(Query(kind="funding", symbol=""))
-    assert "funding" in prompt.casefold()
-    assert "/" in prompt
+    assert resolved == Query(kind="carry", symbol="")
+
+
+def test_a_bare_spread_command_with_no_context_returns_board_data() -> None:
+    resolved = telegram_queries.resolve(parse_query("/spread"), chat_id=CHAT)
+
+    assert resolved == Query(kind="top", symbol="")
 
 
 def test_help_illustrates_with_a_token_that_is_actually_on_the_board() -> None:

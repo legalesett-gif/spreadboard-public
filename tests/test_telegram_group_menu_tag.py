@@ -1,10 +1,8 @@
-"""No group command menu, because the menu is what pastes the @bot tag.
+"""The group command menu is useful only when every tagged form works.
 
 Telegram inserts "/funding@spreadarbitragesubscription_bot" when a member picks
-a command from the "/" popup in a supergroup. That insertion is done by the
-client and no API setting changes how it writes the command -- but the popup
-itself is populated by `setMyCommands` for the group scope. Register nothing
-there and the popup cannot offer, and therefore cannot tag, anything.
+a command from the "/" popup in a supergroup. The parser understands that form,
+so removing the menu only made working commands undiscoverable.
 
 Nothing is lost but the popup. Command registration only drives that menu; with
 privacy mode off the bot receives every message in the group either way, so a
@@ -53,10 +51,14 @@ def _deleted(scope: str) -> bool:
     )
 
 
-def test_the_group_menu_is_removed_so_nothing_can_be_tagged() -> None:
-    """The popup is the only thing that writes "@botname" into a message."""
-    assert _commands("all_group_chats") == []
-    assert _deleted("all_group_chats"), "an empty list does not remove a menu"
+def test_the_group_menu_exposes_every_member_data_view() -> None:
+    group = set(_commands("all_group_chats"))
+
+    assert {
+        "top", "spread", "funding", "radar", "deep", "carry", "token",
+        "depth", "transfer", "calc", "help", "status",
+    } <= group
+    assert {"subscribe", "mysubscription", "access", "setupgroup"}.isdisjoint(group)
 
 
 def test_private_chats_keep_their_menu() -> None:
@@ -91,13 +93,7 @@ def test_the_tagged_form_is_still_understood() -> None:
     assert query.kind == "top"
 
 
-def test_the_default_scope_is_cleared_too() -> None:
-    """An empty group scope falls back to default, and the popup returns.
-
-    Telegram resolves a group's menu down the scope chain. Leaving commands in
-    the default scope would put the popup -- and its "@botname" insertion --
-    straight back into the group.
-    """
+def test_the_default_scope_stays_clear_so_scoped_menus_do_not_leak() -> None:
     assert _deleted("default"), "default scope menu is not removed"
 
 

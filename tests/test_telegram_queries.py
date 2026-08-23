@@ -220,9 +220,41 @@ def test_spread_reply_lists_every_route_best_first(board_file):
         telegram_queries.Query("spread", "SIREN"), board_path=board_file
     )
     assert "SIREN" in body and "3 routes" in body
-    assert "OKX DEX&gt;Bybit" in body and "Gate&gt;Bybit" in body
+    assert "OKX DEX·D&gt;Bybit·F" in body and "Gate·S&gt;Bybit·F" in body
     assert body.index("+1.70%") < body.index("+1.10%"), "best edge must come first"
     assert "$142K" in body
+
+
+def test_funding_reply_only_ranks_positive_paired_carry(board_file) -> None:
+    telegram_queries.replace_funding_payloads(
+        [
+            {
+                "groups": [
+                    {
+                        "token": "SIREN",
+                        "routes": [
+                            route(
+                                "SIREN", "FUTURES", "A", "B", 0.0,
+                                -8.0, -2_920.0, None,
+                            ),
+                            route(
+                                "SIREN", "FUTURES", "C", "D", 0.0,
+                                0.4, 146.0, None,
+                            ),
+                        ],
+                    }
+                ]
+            }
+        ]
+    )
+
+    body = telegram_queries.render(
+        telegram_queries.Query("funding", "SIREN"), board_path=board_file
+    )
+
+    assert "+0.400%" in body
+    assert "-8.000%" not in body
+    assert "1 routes" in body
 
 
 def test_existing_warm_token_is_enriched_with_complete_catalogue(board_file, monkeypatch):
@@ -609,7 +641,7 @@ def test_unverified_routes_are_shown_but_marked(board_file):
         telegram_queries.Query("spread", "SIREN"), board_path=board_file
     )
     assert "Ghost" in body, "an unverified route must still reach the member"
-    assert "Ghost&gt;Phantom?" in body, "and must carry the ? identity marker"
+    assert "Ghost·F&gt;Phantom·F?" in body, "and must carry the ? identity marker"
     assert "identity unverified" in body
     assert "3 routes" in body
 

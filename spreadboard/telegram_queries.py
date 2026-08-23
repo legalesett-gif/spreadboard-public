@@ -306,6 +306,48 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def _funding_value(row: dict[str, Any]) -> float | None:
+    """Signed current paired carry, without treating zero as missing."""
+
+    for key in ("funding_daily_pct", "funding_spread_pct"):
+        value = _number(row.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _market_code(row: dict[str, Any], side: str) -> str:
+    market_type = str(row.get(f"{side}_market_type") or "").upper()
+    if market_type:
+        if "DEX" in market_type:
+            return "D"
+        if any(word in market_type for word in ("FUTURE", "PERP", "SWAP")):
+            return "F"
+        if "SPOT" in market_type:
+            return "S"
+    kind = str(row.get("route_kind") or "").upper().replace("_", "-")
+    inferred = {
+        "FUTURES": ("F", "F"),
+        "SPOT-FUTURES": ("S", "F"),
+        "FUTURES-SPOT-PAIR": ("S", "F"),
+        "DEX-FUTURES": ("D", "F"),
+        "FUTURES-DEX": ("F", "D"),
+        "DEX-SPOT": ("D", "S"),
+        "SPOT-DEX": ("S", "D"),
+    }.get(kind)
+    return inferred[0 if side == "long" else 1] if inferred else "?"
+
+
+def _leg_label(row: dict[str, Any], side: str) -> str:
+    venue = str(row.get(f"{side}_venue") or "?")
+    code = _market_code(row, side)
+    for suffix in (" Futures", " Spot"):
+        if venue.casefold().endswith(suffix.casefold()):
+            venue = venue[: -len(suffix)]
+    venue = venue.replace("Coinbase International", "Coinbase Intl")
+    return f"{venue}·{code}"
+
+
 def _route(row: dict[str, Any]) -> str:
     """Route label, suffixed with ? when identity is unverified.
 
@@ -313,7 +355,10 @@ def _route(row: dict[str, Any]) -> str:
     to see at a glance which legs have not had their token identity confirmed.
     """
     mark = "?" if row.get("mirage_guarded") else ""
-    return f"{row.get('long_venue') or '?'}>{row.get('short_venue') or '?'}{mark}"[:22]
+    label = f"{_leg_label(row, 'long')}>{_leg_label(row, 'short')}"
+    if len(label) > 22 - len(mark):
+        label = label[: 22 - len(mark)]
+    return f"{label}{mark}"
 
 
 def _current_basis(row: dict[str, Any]) -> Any:
@@ -524,6 +569,7 @@ def replace_funding_payloads(payloads: Iterable[dict[str, Any]]) -> dict[str, An
     global FUNDING_QUERY, _FUNDING_QUERY_UPDATED_AT
     groups: dict[str, dict[str, Any]] = {}
     seen: dict[str, set[tuple[Any, ...]]] = {}
+    canonical_rows = 0
     for payload in payloads:
         if not isinstance(payload, dict):
             raise TypeError("telegram_funding_payload_must_be_a_mapping")
@@ -536,6 +582,18 @@ def replace_funding_payloads(payloads: Iterable[dict[str, Any]]) -> dict[str, An
         if payload.get("status") == "warming":
             with _WARM_QUERY_LOCK:
                 return FUNDING_QUERY
+        source_health = payload.get("source_health")
+        canonical = (
+            source_health.get("canonical_api") or {}
+            if isinstance(source_health, dict)
+            else {}
+        )
+        try:
+            canonical_rows = max(
+                canonical_rows, int(float(canonical.get("row_count") or 0))
+            )
+        except (TypeError, ValueError, AttributeError):
+            pass
         for original in payload.get("groups") or []:
             if not isinstance(original, dict):
                 continue
@@ -558,6 +616,12 @@ def replace_funding_payloads(payloads: Iterable[dict[str, Any]]) -> dict[str, An
                 group["routes"].append(route)
     installed = {"groups": list(groups.values())}
     with _WARM_QUERY_LOCK:
+        # A populated canonical source cannot authoritatively become zero
+        # funding routes merely because a bounded cache build lost its slot.
+        # Preserve the last complete funding generation and let the dedicated
+        # recovery warm retry it.
+        if not groups and canonical_rows > 0 and FUNDING_QUERY.get("groups"):
+            return FUNDING_QUERY
         FUNDING_QUERY = installed
         _FUNDING_QUERY_UPDATED_AT = time.time()
     return installed
@@ -593,6 +657,8 @@ def payload_status(*, now: float | None = None) -> dict[str, Any]:
         token_count = len(groups)
         route_count = sum(len(group.get("routes") or []) for group in groups)
         funding_groups = FUNDING_QUERY.get("groups") or []
+        funding_updated_at = _FUNDING_QUERY_UPDATED_AT
+        funding_ready = bool(funding_groups)
         funding_token_count = len(funding_groups)
         funding_route_count = sum(len(group.get("routes") or []) for group in funding_groups)
     return {
@@ -602,6 +668,12 @@ def payload_status(*, now: float | None = None) -> dict[str, Any]:
         "route_count": route_count,
         "funding_token_count": funding_token_count,
         "funding_route_count": funding_route_count,
+        "funding_ready": funding_ready,
+        "funding_age_seconds": (
+            max(0.0, moment - funding_updated_at)
+            if funding_ready and funding_updated_at
+            else None
+        ),
     }
 
 
@@ -722,15 +794,15 @@ def _current_funding_monitor(
     public_url: str = "",
 ) -> str:
     rows = sorted(
-        rows,
-        key=lambda row: -abs(float(row.get("funding_daily_pct") or row.get("funding_spread_pct") or 0)),
+        (row for row in rows if (_funding_value(row) or 0.0) > 0.0),
+        key=lambda row: -float(_funding_value(row) or 0.0),
     )
     body = _table(
         ("ROUTE", "NET/DAY", "BASIS"), (22, 9, 8),
         [
             (
                 _route(row),
-                _pct(row.get("funding_daily_pct") or row.get("funding_spread_pct"), 3),
+                _pct(_funding_value(row), 3),
                 _pct(_current_basis(row), 2),
             )
             for row in rows[:MAX_ROWS]
@@ -838,8 +910,13 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
     symbol = _normalise(query.symbol)
     rows = _rows_for(symbol, board_path)
     funding_rows = _funding_rows_for(symbol)
-    if query.kind == "funding" and funding_rows:
-        rows = funding_rows
+    any_current_funding_rows = list(funding_rows or rows)
+    if query.kind == "funding":
+        rows = [
+            row
+            for row in any_current_funding_rows
+            if (_funding_value(row) or 0.0) > 0.0
+        ]
     elif query.kind == "spread":
         rows = [row for row in rows if _current_basis(row) is not None]
     if query.kind == "depth":
@@ -848,9 +925,19 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
         return _render_calc(symbol, rows, query.arg, public_url=public_url)
     radar_rows = _radar_rows(symbol) if query.kind in {"spread", "funding"} else []
     if not rows:
-        if funding_rows and query.kind == "spread":
+        if query.kind == "funding" and any_current_funding_rows:
+            return (
+                f"<b>{escape(symbol)} · funding</b>\n"
+                "No positive paired carry is available in the current route "
+                "directions. Use the spread view for price-basis research; "
+                "negative carry is not labelled as a funding opportunity."
+            )
+        positive_funding_rows = [
+            row for row in funding_rows if (_funding_value(row) or 0.0) > 0.0
+        ]
+        if positive_funding_rows and query.kind == "spread":
             return _current_funding_monitor(
-                symbol, funding_rows, radar_rows, public_url=public_url
+                symbol, positive_funding_rows, radar_rows, public_url=public_url
             )
         if radar_rows:
             summary = _radar_summary(radar_rows)
@@ -882,10 +969,10 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
         )
 
     if query.kind == "funding":
-        rows = sorted(rows, key=lambda r: -abs(float(r.get("funding_daily_pct") or r.get("funding_spread_pct") or 0)))
+        rows = sorted(rows, key=lambda row: -float(_funding_value(row) or 0.0))
         body = _table(
             ("ROUTE", "NET/DAY", "APR"), (22, 9, 8),
-            [(_route(r), _pct(r.get("funding_daily_pct") or r.get("funding_spread_pct"), 3), _pct(r.get("funding_apr_pct"), 1)) for r in rows[:MAX_ROWS]],
+            [(_route(r), _pct(_funding_value(r), 3), _pct(r.get("funding_apr_pct"), 1)) for r in rows[:MAX_ROWS]],
         )
         title = f"{symbol} · funding · {len(rows)} routes"
         current_basis = _current_basis(rows[0])
@@ -977,6 +1064,19 @@ def _all_routes() -> list[dict[str, Any]]:
     ]
 
 
+def _all_funding_routes() -> list[dict[str, Any]]:
+    """Every route in the dedicated funding snapshot, independent of spread rank."""
+
+    with _WARM_QUERY_LOCK:
+        groups = FUNDING_QUERY.get("groups") or []
+    return [
+        route
+        for group in groups
+        for route in group.get("routes") or []
+        if isinstance(route, dict)
+    ]
+
+
 def _proved_depth(row: dict[str, Any]) -> bool:
     """Whether this route walked a real ladder at the board's probe size."""
     return row.get("depth_weighted_spread_pct") is not None
@@ -1003,7 +1103,9 @@ def _render_leaderboard(
     kind: str, *, public_url: str = "", limit: int = MAX_ROWS
 ) -> str:
     """The three "show me the board" answers, which differ only in ranking."""
-    rows = _all_routes()
+    rows = _all_funding_routes() if kind == "carry" else _all_routes()
+    if kind == "carry" and not rows:
+        rows = _all_routes()
     if not rows:
         return (
             "The live snapshot is still warming. Try again in a minute."
@@ -1014,10 +1116,10 @@ def _render_leaderboard(
         ranker = _spread_of
         note = "Every row here filled the board's probe size. Re-check the book before sending."
     elif kind == "carry":
-        rows = [row for row in rows if row.get("funding_daily_pct") is not None]
+        rows = [row for row in rows if (_funding_value(row) or 0.0) > 0.0]
         heading = "Best paired carry right now"
         def ranker(row: dict[str, Any]) -> float:
-            return abs(float(row.get("funding_daily_pct") or 0.0))
+            return float(_funding_value(row) or 0.0)
 
         note = "Carry is what the pair pays per day. It is not the entry edge."
     else:
@@ -1044,7 +1146,7 @@ def _render_leaderboard(
     for row in rows:
         token = str(row.get("token") or "?").upper()
         if kind == "carry":
-            lines.append((token, _pct(row.get("funding_daily_pct"), 3), _pct(row.get("funding_apr_pct"), 0)))
+            lines.append((token, _pct(_funding_value(row), 3), _pct(row.get("funding_apr_pct"), 0)))
         else:
             flag = "" if _proved_depth(row) else " *"
             lines.append((token + flag, _pct(_spread_of(row), 2), _route(row)))
@@ -1194,13 +1296,19 @@ def _render_status(*, public_url: str = "") -> str:
     age = snapshot.get("age_seconds")
     age_text = "unknown" if age is None else f"{float(age):.0f}s ago"
     state = "live" if snapshot.get("ready") else "warming"
+    funding_state = "live" if snapshot.get("funding_ready") else "warming"
+    funding_age = snapshot.get("funding_age_seconds")
+    funding_age_text = (
+        "unknown" if funding_age is None else f"{float(funding_age):.0f}s ago"
+    )
     return (
         "<b>Data status</b>\n"
         f"<pre>Snapshot   {state}\n"
         f"Updated    {age_text}\n"
         f"Tokens     {snapshot.get('token_count')}\n"
         f"Routes     {snapshot.get('route_count')}\n"
-        f"Funding    {snapshot.get('funding_token_count')} tokens</pre>\n"
+        f"Funding    {funding_state} · {snapshot.get('funding_token_count')} tokens\n"
+        f"Fund upd   {funding_age_text}</pre>\n"
         f"<i>Probe size {_probe_label()}. Numbers here are the same ones the website shows.</i>"
         + _link(public_url, "/status", "Open status")
     )
@@ -1316,9 +1424,13 @@ def resolve(
     if query.symbol or query.kind in BOARDWIDE or query.kind == "radar":
         return query
     remembered = recall_token(chat_id, now=now)
-    if not remembered:
-        return None
-    return Query(kind=query.kind, symbol=remembered, arg=query.arg)
+    if remembered:
+        return Query(kind=query.kind, symbol=remembered, arg=query.arg)
+    if query.kind == "funding":
+        return Query(kind="carry", symbol="", arg=query.arg)
+    if query.kind == "spread":
+        return Query(kind="top", symbol="", arg=query.arg)
+    return None
 
 
 def needs_token_prompt(query: Query) -> str:

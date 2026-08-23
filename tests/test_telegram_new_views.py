@@ -128,6 +128,67 @@ def test_carry_ranks_by_funding_not_by_spread(monkeypatch) -> None:
     assert body.index("DEEP") < body.index("WIDE")
 
 
+def test_carry_never_labels_negative_carry_as_best(monkeypatch) -> None:
+    payload = _payload()
+    payload["groups"].append(
+        {
+            "token": "NEGATIVE",
+            "routes": [
+                {
+                    "token": "NEGATIVE",
+                    "long_venue": "A",
+                    "long_market_type": "Futures",
+                    "short_venue": "B",
+                    "short_market_type": "Futures",
+                    "funding_daily_pct": -9.0,
+                    "funding_apr_pct": -3_285.0,
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(telegram_queries, "client_visible_payload", lambda: payload)
+
+    body = _render("carry")
+
+    assert "NEGATIVE" not in body
+    assert "DEEP" in body
+
+
+def test_carry_uses_the_complete_funding_snapshot_not_the_spread_subset(
+    monkeypatch,
+) -> None:
+    spread_payload = _payload()
+    funding_only = {
+        "groups": [
+            {
+                "token": "COOLED",
+                "routes": [
+                    {
+                        "token": "COOLED",
+                        "long_venue": "Mexc",
+                        "long_market_type": "Futures",
+                        "short_venue": "Gate",
+                        "short_market_type": "Futures",
+                        "funding_daily_pct": 1.25,
+                        "funding_apr_pct": 456.25,
+                    }
+                ],
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        telegram_queries, "client_visible_payload", lambda: spread_payload
+    )
+    telegram_queries.replace_funding_payloads([funding_only])
+    try:
+        body = _render("carry")
+    finally:
+        telegram_queries.reset_payload()
+
+    assert "COOLED" in body
+    assert "+1.250%" in body
+
+
 # --------------------------------------------------------------------------
 # "Can I get size in?"
 # --------------------------------------------------------------------------

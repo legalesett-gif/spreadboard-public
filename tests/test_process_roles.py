@@ -105,6 +105,35 @@ def test_web_watcher_rebuilds_only_funding_views_after_funding_generation(
     assert funding_warms == [True]
 
 
+def test_web_watcher_recovers_a_missing_funding_snapshot_when_spreads_are_live(
+    monkeypatch,
+) -> None:
+    from spreadboard import telegram_queries
+
+    monkeypatch.setattr(
+        telegram_queries,
+        "payload_status",
+        lambda: {"ready": True, "funding_ready": False},
+    )
+    watcher = service.SharedArtifactWatcher(
+        threading.Event(),
+        initial_warm_delay_seconds=3600,
+        telegram_recovery_interval_seconds=30,
+    )
+    watcher.next_telegram_recovery_at = 0.0
+    spread_warms: list[bool] = []
+    funding_warms: list[bool] = []
+    monkeypatch.setattr(watcher, "request_warm", lambda: spread_warms.append(True))
+    monkeypatch.setattr(
+        watcher, "request_funding_warm", lambda: funding_warms.append(True)
+    )
+
+    watcher._recover_telegram_snapshot_if_due()
+
+    assert spread_warms == []
+    assert funding_warms == [True]
+
+
 def test_market_evidence_catch_up_is_start_to_start(monkeypatch) -> None:
     class StopAfterSweep:
         def __init__(self) -> None:

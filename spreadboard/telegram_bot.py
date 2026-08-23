@@ -66,6 +66,8 @@ def status(*, db_path: Any = accounts.DEFAULT_DB_PATH) -> dict[str, Any]:
         "query_snapshot_route_count": query_snapshot["route_count"],
         "funding_snapshot_token_count": query_snapshot["funding_token_count"],
         "funding_snapshot_route_count": query_snapshot["funding_route_count"],
+        "funding_snapshot_ready": query_snapshot["funding_ready"],
+        "funding_snapshot_age_seconds": query_snapshot["funding_age_seconds"],
     }
 
 
@@ -407,6 +409,20 @@ def handle_update(
         return _reply(chat_id, "Link this chat from Account settings in SpreadBoard first.")
     query = telegram_queries.parse_query(text, bot_username=config().bot_username)
     if query is not None:
+        resolved = telegram_queries.resolve(query, chat_id=chat_id)
+        if resolved is None:
+            return _reply(
+                chat_id,
+                telegram_queries.needs_token_prompt(query),
+                html=True,
+                markup=telegram_queries.suggestion_keyboard(
+                    telegram_queries.suggestions("", board_path=board_path)[:6],
+                    public_url=os.environ.get("SPREADBOARD_PUBLIC_URL", "").strip(),
+                )
+                if board_path is not None
+                else None,
+            )
+        query = resolved
         if not user.subscription_active:
             return _reply(chat_id, "An active membership is required. Use /subscribe to activate access.")
         if board_path is None or not telegram_queries.payload_status()["ready"]:

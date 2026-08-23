@@ -43,6 +43,7 @@ def test_a_payload_carrying_tokens_is_ready() -> None:
     assert status["ready"] is True
     assert status["token_count"] == 1
     assert status["route_count"] == 1
+    assert status["funding_ready"] is False
 
 
 def test_an_empty_install_is_reported_as_not_ready_rather_than_hidden() -> None:
@@ -118,3 +119,23 @@ def test_a_partial_warming_funding_refresh_cannot_erase_complete_lanes() -> None
     status = telegram_queries.payload_status()
     assert status["funding_token_count"] == 1
     assert status["funding_route_count"] == 1
+    assert status["funding_ready"] is True
+
+
+def test_an_incomplete_empty_funding_build_preserves_last_complete_snapshot() -> None:
+    complete = {
+        "groups": [{"token": "GUA", "routes": [{"token": "GUA"}]}],
+    }
+    telegram_queries.replace_funding_payloads([complete])
+
+    active = telegram_queries.replace_funding_payloads(
+        [
+            {
+                "groups": [],
+                "source_health": {"canonical_api": {"row_count": 28_028}},
+            }
+        ]
+    )
+
+    assert active["groups"][0]["token"] == "GUA"
+    assert telegram_queries.payload_status()["funding_ready"] is True

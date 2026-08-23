@@ -38,11 +38,13 @@ def _advertised() -> dict[str, set[str]]:
     return out
 
 
-def test_private_chats_are_the_only_scope_with_a_menu() -> None:
-    """Groups have theirs removed on purpose: the popup is what tags the bot."""
+def test_private_and_group_chats_have_purpose_built_menus() -> None:
     scopes = _advertised()
     assert "all_private_chats" in scopes
-    assert "all_group_chats" not in scopes
+    assert "all_group_chats" in scopes
+    assert {"subscribe", "mysubscription", "access"}.isdisjoint(
+        scopes["all_group_chats"]
+    )
 
 
 def test_every_advertised_command_is_understood_by_the_parser() -> None:
@@ -64,15 +66,13 @@ def test_every_advertised_command_is_understood_by_the_parser() -> None:
 def test_the_private_menu_leads_with_what_members_actually_ask() -> None:
     """"What is worth looking at" is the first question a member arrives with.
 
-    Groups have no menu at all now -- see test_telegram_group_menu_tag -- so the
-    private chat is where ordering matters.
+    Private chat still leads with the same board-wide research views.
     """
     private = list(_advertised()["all_private_chats"])
     assert {"top", "deep", "carry"} <= set(private)
 
 
-def test_every_board_wide_view_is_reachable_without_a_menu() -> None:
-    """The group lost its popup, so the parser is the only route in."""
+def test_every_board_wide_view_is_reachable_by_hand_too() -> None:
     for command in ("top", "deep", "carry", "help", "status"):
         assert telegram_queries.parse_query(f"/{command}") is not None, command
 
