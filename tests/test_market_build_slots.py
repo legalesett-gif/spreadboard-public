@@ -134,6 +134,68 @@ def test_the_limit_is_configurable_and_at_least_one() -> None:
     assert server._MARKET_BUILD_SLOTS._initial_value >= 1
 
 
+def test_complete_funding_catalog_does_not_wait_for_full_market_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its own single-flight protects the only expensive catalogue build."""
+    route = {
+        "token": "FAST",
+        "route_key": "fast",
+        "route_kind": "FUTURES",
+        "long_venue": "A",
+        "long_market_type": "Futures",
+        "long_market_symbol": "FAST/USDT:USDT",
+        "short_venue": "B",
+        "short_market_type": "Futures",
+        "short_market_symbol": "FAST/USDT:USDT",
+        "funding_daily_pct": 1.0,
+        "deliverable": True,
+    }
+    monkeypatch.setattr(
+        server.funding_catalog,
+        "page",
+        lambda **_kwargs: {
+            "mode": "complete_funding_catalogue_ranked_before_pagination",
+            "window": "now",
+            "groups": [{"token": "FAST", "routes": [route], "route_count": 1}],
+            "rows": [route],
+            "matching_token_count": 1,
+            "matching_route_count": 1,
+            "returned_token_count": 1,
+            "returned_route_count": 1,
+            "offset": 0,
+            "limit": 25,
+            "largest_value": 1.0,
+            "window_route_counts": {"1d": 0, "7d": 0, "30d": 0},
+            "window_token_counts": {"1d": 0, "7d": 0, "30d": 0},
+        },
+    )
+    held = []
+    try:
+        for _ in range(server._MARKET_BUILD_SLOTS._initial_value):
+            assert server._MARKET_BUILD_SLOTS.acquire(timeout=1.0)
+            held.append(True)
+        started = time.monotonic()
+        result = server.api_market_spreads(
+            Path("data/spreadboard.json"),
+            {
+                "funding_only": ["1"],
+                "kind": ["FUTURES"],
+                "sort": ["funding"],
+                "direction": ["desc"],
+                "limit": ["25"],
+            },
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        for _ in held:
+            server._MARKET_BUILD_SLOTS.release()
+
+    assert result["coverage_mode"] == "complete_funding_catalogue_ranked_before_pagination"
+    assert result.get("status") != "warming"
+    assert elapsed < 1.0
+
+
 def test_production_serialises_full_market_view_builds() -> None:
     """Parallel full builds add stalls and can exhaust the app container."""
     import re

@@ -2487,6 +2487,7 @@ def api_market_spreads(
         ),
     )
     offset = max(0, int(_query_float(query, "offset", 0) or 0))
+    complete_funding_request = _can_use_complete_funding_catalog(query)
     cache_key = None if _query_bool(query, "no_cache") else _market_cache_key(board_path, query)
     allow_previous_generation = not _market_build_is_background()
     if cache_key is not None:
@@ -2528,8 +2529,14 @@ def api_market_spreads(
             # copy of the same work.
             return _market_warming_payload()
 
-    acquired = _MARKET_BUILD_SLOTS.acquire(timeout=_market_build_slot_wait_seconds())
-    if not acquired:
+    # Complete CEX funding uses a small O(1) health shell plus the catalogue's
+    # own single-flight, stale-while-refresh generation.  It never loads the
+    # 40 MB scanner snapshot, so making it queue behind a broad market build
+    # adds up to 20 seconds without protecting any shared heavy work.
+    acquired = False
+    if not complete_funding_request:
+        acquired = _MARKET_BUILD_SLOTS.acquire(timeout=_market_build_slot_wait_seconds())
+    if not complete_funding_request and not acquired:
         # Every slot is busy. Do not pile on another full build and do not serve
         # an older generation. A no_cache caller is an explicit internal
         # request, so it proceeds unslotted.
@@ -2539,7 +2546,6 @@ def api_market_spreads(
     try:
         min_funding_24h = _query_float(query, "min_abs_funding_24h_pct")
         min_funding_apr = _query_float(query, "min_abs_funding_apr_pct")
-        complete_funding_request = _can_use_complete_funding_catalog(query)
         data = (
             _funding_catalog_seed_payload(query, offset=offset, limit=limit)
             if complete_funding_request
