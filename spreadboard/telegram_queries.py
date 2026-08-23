@@ -18,7 +18,10 @@ Design notes:
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -487,6 +490,87 @@ _WARM_QUERY_UPDATED_AT = 0.0
 FUNDING_QUERY: dict[str, Any] = {}
 _FUNDING_QUERY_UPDATED_AT = 0.0
 _WARM_QUERY_LOCK = threading.Lock()
+_PERSISTED_SNAPSHOT_SCHEMA = "spreadboard.telegram_snapshot.v1"
+
+
+def _persisted_snapshot_path(name: str) -> Path | None:
+    root = str(
+        os.environ.get("SPREADBOARD_TELEGRAM_SNAPSHOT_DIR")
+        or os.environ.get("SPREADBOARD_DATA_DIR")
+        or ""
+    ).strip()
+    return Path(root) / f"telegram_{name}_snapshot.json" if root else None
+
+
+def _persist_snapshot(name: str, payload: dict[str, Any], *, saved_at: float) -> None:
+    """Atomically retain public last-complete data across process restarts."""
+
+    path = _persisted_snapshot_path(name)
+    if path is None:
+        return
+    temporary = ""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{path.name}.", dir=path.parent
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "schema": _PERSISTED_SNAPSHOT_SCHEMA,
+                    "saved_at": float(saved_at),
+                    "payload": payload,
+                },
+                handle,
+                separators=(",", ":"),
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except (OSError, TypeError, ValueError):
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+
+def _read_persisted_snapshot(name: str) -> tuple[dict[str, Any], float] | None:
+    path = _persisted_snapshot_path(name)
+    if path is None:
+        return None
+    try:
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        payload = envelope.get("payload")
+        saved_at = float(envelope.get("saved_at") or path.stat().st_mtime)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if (
+        envelope.get("schema") != _PERSISTED_SNAPSHOT_SCHEMA
+        or not isinstance(payload, dict)
+        or not isinstance(payload.get("groups"), list)
+        or not payload.get("groups")
+    ):
+        return None
+    return payload, saved_at
+
+
+def restore_persisted_payloads() -> dict[str, bool]:
+    """Restore last-complete public snapshots before background cache warming."""
+
+    global WARM_QUERY, _WARM_QUERY_UPDATED_AT, FUNDING_QUERY, _FUNDING_QUERY_UPDATED_AT
+    spread = _read_persisted_snapshot("spread")
+    funding = _read_persisted_snapshot("funding")
+    restored_spread = False
+    restored_funding = False
+    with _WARM_QUERY_LOCK:
+        if not WARM_QUERY.get("groups") and spread is not None:
+            WARM_QUERY, _WARM_QUERY_UPDATED_AT = spread
+            restored_spread = True
+        if not FUNDING_QUERY.get("groups") and funding is not None:
+            FUNDING_QUERY, _FUNDING_QUERY_UPDATED_AT = funding
+            restored_funding = True
+    return {"spread": restored_spread, "funding": restored_funding}
 
 
 def refresh_payload(board_path: Path | str) -> dict[str, Any]:
@@ -528,6 +612,7 @@ def replace_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload.get("groups"), list):
         raise TypeError("telegram_payload_groups_must_be_a_list")
     global WARM_QUERY, _WARM_QUERY_UPDATED_AT
+    installed_at = time.time()
     with _WARM_QUERY_LOCK:
         # ``api_market_spreads`` deliberately returns this sentinel while a
         # different thread owns the expensive grouping slot. It is neither a
@@ -557,7 +642,8 @@ def replace_payload(payload: dict[str, Any]) -> dict[str, Any]:
         # answer. `payload_status().ready` is what keeps that empty snapshot
         # from being answered as if it were data.
         WARM_QUERY = payload
-        _WARM_QUERY_UPDATED_AT = time.time()
+        _WARM_QUERY_UPDATED_AT = installed_at
+    _persist_snapshot("spread", payload, saved_at=installed_at)
     return payload
 
 
@@ -620,6 +706,7 @@ def replace_funding_payloads(payloads: Iterable[dict[str, Any]]) -> dict[str, An
                 route_keys.add(identity)
                 group["routes"].append(route)
     installed = {"groups": list(groups.values())}
+    installed_at = time.time()
     with _WARM_QUERY_LOCK:
         # A populated canonical source cannot authoritatively become zero
         # funding routes merely because a bounded cache build lost its slot.
@@ -628,7 +715,9 @@ def replace_funding_payloads(payloads: Iterable[dict[str, Any]]) -> dict[str, An
         if not groups and canonical_rows > 0 and FUNDING_QUERY.get("groups"):
             return FUNDING_QUERY
         FUNDING_QUERY = installed
-        _FUNDING_QUERY_UPDATED_AT = time.time()
+        _FUNDING_QUERY_UPDATED_AT = installed_at
+    if groups:
+        _persist_snapshot("funding", installed, saved_at=installed_at)
     return installed
 
 

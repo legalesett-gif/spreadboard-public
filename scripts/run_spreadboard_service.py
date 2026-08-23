@@ -804,6 +804,7 @@ def _run_collector_service() -> int:
 
 def main() -> int:
     from spreadboard import server as server_module
+    from spreadboard import telegram_queries
 
     role = _service_role()
     if role == "collector":
@@ -819,6 +820,13 @@ def main() -> int:
     # columns before any warm thread or HTTP request can race the first writer.
     market_history.initialize()
     _seed_public_caches()
+    restored_telegram = telegram_queries.restore_persisted_payloads()
+    if restored_telegram["spread"] or restored_telegram["funding"]:
+        _log(
+            "telegram persisted snapshots restored "
+            f"spread={restored_telegram['spread']} "
+            f"funding={restored_telegram['funding']}"
+        )
     refresh_loop = RefreshLoop(interval) if role == "combined" else None
     service_stop_event = (
         refresh_loop.stop_event if refresh_loop is not None else threading.Event()
