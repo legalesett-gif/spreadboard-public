@@ -8866,6 +8866,11 @@ def render_funding_page(
     displayed_largest_label = (
         "Largest 24h" if selected_window in {"now", "1d"} else f"Largest {selected_window}"
     )
+    displayed_pairs = (
+        sum(int(group.get("route_count") or len(group.get("routes") or [])) for group in funding_groups)
+        if selected_window != "now"
+        else summary.get("matching_rows")
+    )
     api_health_data = (market_data.get("source_health") or {}).get("canonical_api") or {}
     live_funding_health = bulk_quotes.funding_health()
     source_ready = (
@@ -8936,7 +8941,7 @@ def render_funding_page(
             "radar tokens" if selected_window != "now" else "unique tokens",
         )
     }
-        {render_market_metric("Funding pairs", summary.get("matching_rows"), "live venue routes")}
+        {render_market_metric("Funding pairs", displayed_pairs, "radar routes" if selected_window != "now" else "live venue routes")}
         {
         render_market_metric(
             displayed_largest_label,

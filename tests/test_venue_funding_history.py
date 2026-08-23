@@ -303,6 +303,18 @@ def test_empty_catalog_is_already_caught_up(tmp_path) -> None:
     }
 
 
+def test_service_reserves_separate_priority_and_catalog_budgets() -> None:
+    import inspect
+
+    from scripts import run_spreadboard_service
+
+    source = inspect.getsource(run_spreadboard_service._refresh_venue_funding_history)
+
+    assert "priority_only=True" in source
+    assert "priority_legs=[]" in source
+    assert source.count("budget_seconds=120.0") == 2
+
+
 def test_leg_history_outcome_distinguishes_source_failures() -> None:
     class Unsupported:
         has = {"fetchFundingRateHistory": False}

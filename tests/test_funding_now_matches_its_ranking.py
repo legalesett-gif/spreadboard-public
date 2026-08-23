@@ -109,6 +109,8 @@ def test_the_page_passes_its_selected_window_into_every_row(
     assert "Settled 7d" in html
     assert "+9.060%" in html
     assert "+3.301%" not in html
+    assert "radar routes" in html
+    assert "Funding pairs" in html
 
 
 def test_funding_alert_draft_and_worker_use_the_current_projection() -> None:

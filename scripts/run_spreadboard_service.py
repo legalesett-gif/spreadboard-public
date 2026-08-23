@@ -1512,11 +1512,34 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
         if catalog_due:
             _LAST_VENUE_HISTORY_CATALOG_AT = now
         started = time.monotonic()
-        windows = venue_funding_history.build(
-            list(dict.fromkeys(catalog_legs)),
-            priority_legs=priority_legs,
-            priority_only=priority_due and not catalog_due,
-        )
+        windows: dict[str, dict[str, float | None]] = {}
+        modes: list[str] = []
+        # Keep the total historical-work budget unchanged while reserving half
+        # for subscriber-visible leaders and half for the unattempted catalog.
+        # Putting all priority legs at the head of every catch-up generation
+        # could otherwise consume the entire 240 seconds and leave the same
+        # thousands of background legs pending forever.
+        if priority_due and priority_legs:
+            windows = venue_funding_history.build(
+                list(dict.fromkeys(catalog_legs)),
+                priority_legs=priority_legs,
+                priority_only=True,
+                budget_seconds=120.0,
+            )
+            modes.append("priority")
+        if catalog_due:
+            windows = venue_funding_history.build(
+                list(dict.fromkeys(catalog_legs)),
+                priority_legs=[],
+                priority_only=False,
+                budget_seconds=120.0,
+            )
+            modes.append(
+                "maintenance"
+                if before["catch_up_complete"]
+                and int(before.get("retryable_error_leg_count") or 0) == 0
+                else "catch_up"
+            )
         # Replace the just-captured settlement snapshots with the fresher venue
         # history while these routes are still known live.
         if leaders:
@@ -1528,14 +1551,7 @@ def _refresh_venue_funding_history(*, leaders: list[dict[str, Any]] | None = Non
             f"classified={after['classified_leg_count']} "
             f"pending={after['pending_leg_count']} verified={after['coverage_pct']}% "
             f"retryable={after['retryable_error_leg_count']} "
-            f"mode={
-                'priority'
-                if priority_due and not catalog_due
-                else 'maintenance'
-                if after['catch_up_complete']
-                and int(after.get('retryable_error_leg_count') or 0) == 0
-                else 'catch_up'
-            } "
+            f"mode={'+'.join(modes) or 'idle'} "
             f"in {time.monotonic() - started:.1f}s"
         )
     except Exception as exc:  # noqa: BLE001 - best effort beside everything else.
