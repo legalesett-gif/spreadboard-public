@@ -685,18 +685,56 @@ def matched_probe_verified(row: Any) -> bool:
 
 
 def _live_books() -> dict[str, Any]:
+    now_us = int(time.time() * 1_000_000)
+    cutoff_us = now_us - int(LIVE_BOOK_MAX_AGE_SECONDS * 1_000_000)
+
+    def still_current(book: Any) -> bool:
+        try:
+            return int(book.quote_ts_us) >= cutoff_us
+        except (AttributeError, TypeError, ValueError):
+            return False
+
     try:
         from spreadboard import live_book_cache
 
         if not live_book_cache.DEFAULT_PATH.exists():
-            return {}
+            raise FileNotFoundError(live_book_cache.DEFAULT_PATH)
         store = live_book_cache.LiveBookStore()
         try:
-            return store.load_all(max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS)
+            current = store.load_all(max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS)
         finally:
             store.close()
+        # A venue-sized writer transaction can briefly leave a reader with an
+        # incomplete generation. Merge only still-current books from the last
+        # successful read; their own quote timestamps keep this fail-safe
+        # inside the exact same 90-second truth boundary as a normal read.
+        with _LIVE_BOOK_FALLBACK_LOCK:
+            fallback = {
+                key: book
+                for key, book in _LAST_GOOD_LIVE_BOOKS.items()
+                if still_current(book)
+            }
+            merged = {**fallback, **current}
+            _LAST_GOOD_LIVE_BOOKS.clear()
+            _LAST_GOOD_LIVE_BOOKS.update(merged)
+        return merged
     except Exception:  # noqa: BLE001 - a missing feed must not take the board down.
-        return {}
+        # Do not turn a transient SQLite handoff into an empty Markets page.
+        # This is bounded by each book's real quote timestamp, never by when it
+        # happened to be cached in this process.
+        with _LIVE_BOOK_FALLBACK_LOCK:
+            fallback = {
+                key: book
+                for key, book in _LAST_GOOD_LIVE_BOOKS.items()
+                if still_current(book)
+            }
+            _LAST_GOOD_LIVE_BOOKS.clear()
+            _LAST_GOOD_LIVE_BOOKS.update(fallback)
+            return dict(fallback)
+
+
+_LIVE_BOOK_FALLBACK_LOCK = Lock()
+_LAST_GOOD_LIVE_BOOKS: dict[str, Any] = {}
 
 
 def _book_side(book: Any, side: str) -> tuple[float | None, float | None]:

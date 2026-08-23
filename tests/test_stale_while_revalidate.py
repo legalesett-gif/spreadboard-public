@@ -3,11 +3,46 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
 from spreadboard import server
+
+
+def test_live_book_reader_reuses_only_current_last_good_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from spreadboard import api_spreads, live_book_cache
+
+    path = tmp_path / "books.sqlite3"
+    path.touch()
+    recent = live_book_cache.CachedBook(
+        bids=[[1.0, 100.0]],
+        asks=[[1.01, 100.0]],
+        quote_ts_us=int(time.time() * 1_000_000),
+    )
+    expired = live_book_cache.CachedBook(
+        bids=[[2.0, 100.0]],
+        asks=[[2.01, 100.0]],
+        quote_ts_us=int(
+            (time.time() - api_spreads.LIVE_BOOK_MAX_AGE_SECONDS - 1) * 1_000_000
+        ),
+    )
+    monkeypatch.setattr(live_book_cache, "DEFAULT_PATH", path)
+    monkeypatch.setattr(
+        live_book_cache,
+        "LiveBookStore",
+        lambda: (_ for _ in ()).throw(RuntimeError("writer handoff")),
+    )
+    monkeypatch.setattr(
+        api_spreads,
+        "_LAST_GOOD_LIVE_BOOKS",
+        {"recent": recent, "expired": expired},
+    )
+
+    assert api_spreads._live_books() == {"recent": recent}
 
 
 def test_fast_quote_delta_changes_the_market_cache_generation(
