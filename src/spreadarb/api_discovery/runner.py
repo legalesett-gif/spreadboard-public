@@ -115,7 +115,10 @@ def run_discovery(
         # Some ordinary Futures providers retain a legacy dex_derivative source
         # kind. They still belong in the reference pool so OKX DEX spot quotes
         # can be paired with them; source provenance does not choose UI lanes.
-        if result.quotes and source.kind in {"cex", "dex_derivative"}:
+        if result.quotes and (
+            source.kind in {"cex", "dex_derivative"}
+            or str(getattr(source, "name", "")) == "okx_dex_quote"
+        ):
             reference_quotes = (*reference_quotes, *result.quotes)
         for row in result.rows:
             if row.get("source_kind") == SOURCE_DEX_DISCOVERED:

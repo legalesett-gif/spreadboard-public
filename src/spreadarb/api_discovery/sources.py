@@ -1464,17 +1464,40 @@ def default_sources(
         futures = default_enabled_cex_futures_source()
         spot_batches = _batched_cex_sources(spot, batch_size=5)
         futures_batches = _batched_cex_sources(futures, batch_size=5)
-        source_specs: list[DiscoverySource] = [
-            *[source for pair in zip(spot_batches, futures_batches) for source in pair],
+        paired_cex = [
+            source for pair in zip(spot_batches, futures_batches) for source in pair
+        ]
+        remaining_cex = [
             *spot_batches[len(futures_batches) :],
             *futures_batches[len(spot_batches) :],
-            # Perpetual venues come before OKX DEX because a source is paired
-            # only against quotes gathered ahead of it. They remain ordinary
-            # Futures instruments in the product taxonomy.
-            DexDerivativeCcxtSource(venues={"Hyperliquid": "hyperliquid", "Aster": "aster"}),
-            HyperliquidBuilderDexSource(),
+        ]
+        primary_cex = paired_cex[:2]
+        later_cex = paired_cex[2:] + remaining_cex
+        perp_venues = DexDerivativeCcxtSource(
+            venues={"Hyperliquid": "hyperliquid", "Aster": "aster"}
+        )
+        builder_venues = HyperliquidBuilderDexSource()
+        okx_dex = OkxDexQuoteSource()
+        source_specs: list[DiscoverySource] = [
+            # One broad spot/futures pair gives OKX a useful cross-listed
+            # universe quickly. The complete CEX scan takes longer than the
+            # publication budget, so leaving OKX last meant valid credentials
+            # could pass a direct quote test while every published cycle still
+            # contained zero OKX routes.
+            *primary_cex,
+            # These are normal Futures instruments in the product taxonomy,
+            # but they must be collected before OKX so its spot leg can be
+            # paired against Aster and Hyperliquid as well as the main CEXes.
+            perp_venues,
+            builder_venues,
+            okx_dex,
+            # Later CEX batches see the OKX quotes through runner.py and add
+            # their own venue pairs without making OKX wait for the full scan.
+            *later_cex,
+            # Velora remains an ordinary on-chain Spot venue and therefore
+            # belongs in the normal Spot/Futures lanes, never the OKX-only DEX
+            # product lane.
             VeloraQuoteSource(),
-            OkxDexQuoteSource(),
         ]
         enabled.extend(source for source in source_specs if _source_enabled(source, source_filter))
     disabled_specs = [

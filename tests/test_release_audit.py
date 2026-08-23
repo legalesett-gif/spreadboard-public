@@ -4149,6 +4149,31 @@ def test_perp_dexes_are_collected_before_the_spot_dex_that_pairs_against_them() 
     assert _perp_dex_source_index(enabled) < min(spot_dex)
 
 
+def test_okx_dex_is_checkpointed_before_the_slow_cex_tail() -> None:
+    """A healthy key must reach a published checkpoint inside one scan.
+
+    The full CEX universe is intentionally batched.  Putting OKX after every
+    batch made it unreachable whenever the worker published a timeout-safe
+    partial, even though a direct provider verification succeeded.
+    """
+
+    enabled = sources.default_sources(include_network=True)
+    okx_index = next(
+        index
+        for index, source in enumerate(enabled)
+        if isinstance(source, sources.OkxDexQuoteSource)
+    )
+    cex_indexes = [
+        index
+        for index, source in enumerate(enabled)
+        if isinstance(source, sources.CexCcxtSource) and source.kind == "cex"
+    ]
+
+    assert cex_indexes[:2] == [0, 1]
+    assert okx_index > _perp_dex_source_index(enabled)
+    assert okx_index < cex_indexes[2]
+
+
 def test_perp_dex_quotes_join_the_pool_a_dex_leg_is_paired_against(tmp_path: Path) -> None:
     """`dex_derivative` quotes are hedge venues, not only route producers."""
 
@@ -4198,6 +4223,59 @@ def test_perp_dex_quotes_join_the_pool_a_dex_leg_is_paired_against(tmp_path: Pat
     )
 
     assert "Aster" in downstream.seen
+
+
+def test_okx_quotes_join_the_pool_for_later_cex_batches(tmp_path: Path) -> None:
+    """CEX batches reached after OKX must still produce OKX venue pairs."""
+
+    def quote(venue: str, market_type: str) -> MarketQuote:
+        return MarketQuote(
+            token="AAA",
+            venue=venue,
+            market_type=market_type,
+            bid=1.0,
+            ask=1.0,
+            bid_vwap=1.0,
+            ask_vwap=1.0,
+            quote_ts_us=1,
+            source_name="test",
+        )
+
+    class Source:
+        def __init__(self, name: str, kind: str, market_type: str) -> None:
+            self.name = name
+            self.kind = kind
+            self.market_type = market_type
+
+        def collect(self, context):
+            self.seen = tuple(q.venue for q in context.reference_quotes)
+            return SourceResult(
+                status=SourceStatus(
+                    name=self.name,
+                    kind=self.kind,
+                    status="ok",
+                    started_at="now",
+                    finished_at="now",
+                    elapsed_seconds=0.0,
+                ),
+                quotes=(quote(self.name, self.market_type),),
+            )
+
+    primary = Source("Gate", "cex", "Futures")
+    okx = Source("okx_dex_quote", "dex_spot", "Spot")
+    later = Source("Mexc", "cex", "Futures")
+
+    runner.run_discovery(
+        db_path=None,
+        watchlist_path=None,
+        snapshot_path=tmp_path / "snapshot.json",
+        archive_dir=tmp_path / "archive",
+        timeout_seconds=None,
+        sources=[primary, okx, later],
+        blacklist_filter_enabled=False,
+    )
+
+    assert "okx_dex_quote" in later.seen
 
 
 def test_the_dex_token_ceiling_leaves_room_for_the_mainstream_names() -> None:
