@@ -73,6 +73,38 @@ def test_web_watcher_invalidates_prices_and_warms_structural_changes(
     assert warms == [True]
 
 
+def test_web_watcher_rebuilds_only_funding_views_after_funding_generation(
+    tmp_path, monkeypatch
+) -> None:
+    generation = tmp_path / "market_generation.json"
+    snapshot = tmp_path / "api_discovery_latest.json"
+    monkeypatch.setattr(service, "MARKET_GENERATION_PATH", generation)
+    monkeypatch.setattr(service, "SNAPSHOT_PATH", snapshot)
+    invalidations: list[bool] = []
+    funding_warms: list[bool] = []
+    monkeypatch.setattr(
+        service, "_invalidate_market_price_caches", lambda: invalidations.append(True)
+    )
+    monkeypatch.setattr(
+        service, "_warm_funding_cache", lambda: funding_warms.append(True)
+    )
+    watcher = service.SharedArtifactWatcher(
+        threading.Event(),
+        initial_warm_delay_seconds=3600,
+        invalidation_interval_seconds=120,
+    )
+
+    generation.write_text(
+        json.dumps({"kind": "bulk_funding"}), encoding="utf-8"
+    )
+    watcher.check_once()
+    assert watcher.warm_thread is not None
+    watcher.warm_thread.join(timeout=2)
+
+    assert invalidations == [True]
+    assert funding_warms == [True]
+
+
 def test_web_watcher_coalesces_continuous_collector_generations(
     tmp_path, monkeypatch
 ) -> None:

@@ -580,6 +580,16 @@ def _artifact_signature(path: Path) -> tuple[int, int] | None:
     return stat.st_mtime_ns, stat.st_size
 
 
+def _artifact_generation_kind(path: Path) -> str:
+    """Best-effort reason attached to an atomic shared generation marker."""
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return "market"
+    return str(payload.get("kind") or "market").strip().casefold()
+
+
 class SharedArtifactWatcher(threading.Thread):
     """Bridge collector file generations into the web process's memory caches."""
 
@@ -610,10 +620,12 @@ class SharedArtifactWatcher(threading.Thread):
         )
         self.last_invalidation_at = 0.0
         self.invalidation_pending = False
+        self.pending_generation_kinds: set[str] = set()
         self.generation_signature = _artifact_signature(MARKET_GENERATION_PATH)
         self.snapshot_signature = _artifact_signature(SNAPSHOT_PATH)
         self.warm_lock = threading.Lock()
         self.warm_pending = False
+        self.funding_warm_pending = False
         self.warm_thread: threading.Thread | None = None
 
     def run(self) -> None:
@@ -629,6 +641,9 @@ class SharedArtifactWatcher(threading.Thread):
         if generation != self.generation_signature:
             self.generation_signature = generation
             self.invalidation_pending = True
+            self.pending_generation_kinds.add(
+                _artifact_generation_kind(MARKET_GENERATION_PATH)
+            )
         self._invalidate_if_due()
 
         snapshot = _artifact_signature(SNAPSHOT_PATH)
@@ -652,9 +667,13 @@ class SharedArtifactWatcher(threading.Thread):
             and now - self.last_invalidation_at < self.invalidation_interval_seconds
         ):
             return
+        kinds = set(self.pending_generation_kinds)
         _invalidate_market_price_caches()
         self.invalidation_pending = False
+        self.pending_generation_kinds.clear()
         self.last_invalidation_at = now
+        if "bulk_funding" in kinds:
+            self.request_funding_warm()
 
     def request_warm(self) -> None:
         """Coalesce structural changes while never losing the newest one."""
@@ -670,13 +689,33 @@ class SharedArtifactWatcher(threading.Thread):
             )
             self.warm_thread.start()
 
+    def request_funding_warm(self) -> None:
+        """Refresh only funding views after a live-rate generation advances."""
+
+        with self.warm_lock:
+            self.funding_warm_pending = True
+            if self.warm_thread is not None and self.warm_thread.is_alive():
+                return
+            self.warm_thread = threading.Thread(
+                target=self._drain_warms,
+                name="shared-market-funding-warm",
+                daemon=True,
+            )
+            self.warm_thread.start()
+
     def _drain_warms(self) -> None:
         while not self.stop_event.is_set():
             with self.warm_lock:
-                if not self.warm_pending:
+                if not self.warm_pending and not self.funding_warm_pending:
                     return
+                full_warm = self.warm_pending
+                funding_warm = self.funding_warm_pending
                 self.warm_pending = False
-            _warm_board_cache(force=True)
+                self.funding_warm_pending = False
+            if full_warm:
+                _warm_board_cache(force=True)
+            elif funding_warm:
+                _warm_funding_cache()
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -910,6 +949,36 @@ WARM_QUERIES: tuple[dict[str, list[str]], ...] = (
     # rebuild or any relaxed filtering.
     {"funding_only": ["1"], "sort": ["funding"], "direction": ["desc"], "limit": ["500"]},
 )
+
+
+def _warm_funding_cache() -> None:
+    """Rebuild only funding views while members keep the last complete page.
+
+    Live rate files advance far more often than the structural discovery
+    snapshot. Rebuilding all eleven navigation views on every rate slice was
+    too expensive, but never rebuilding the four funding views made their
+    membership drift until the next broad scan. This bounded warm closes that
+    gap and refreshes Telegram from the exact same completed payloads.
+    """
+
+    from spreadboard import server, telegram_queries
+
+    started = time.monotonic()
+    payloads: list[dict[str, Any]] = []
+    for query in WARM_QUERIES:
+        if not query.get("funding_only"):
+            continue
+        try:
+            payloads.append(server.api_market_spreads(_board_path(), dict(query)))
+        except Exception as exc:  # noqa: BLE001 - the last complete view remains live.
+            _log(f"funding cache warm skipped {query}: {type(exc).__name__}: {exc}")
+        _yield_to_requests()
+    if payloads:
+        telegram_queries.replace_funding_payloads(payloads)
+    _log(
+        f"funding cache warm views={len(payloads)} "
+        f"in {time.monotonic() - started:.1f}s"
+    )
 
 
 def _low_priority_prefix() -> list[str]:
@@ -1152,7 +1221,7 @@ class MarketEvidenceLoop(threading.Thread):
 
 
 def _invalidate_market_price_caches() -> None:
-    """Drop grouped payloads after a worker writes newer books or deltas.
+    """Expire source builds while retaining completed grouped pages for SWR.
 
     Those caches are keyed on the large discovery snapshot because that keeps
     page loads fast. Price workers deliberately do not rewrite that snapshot,
@@ -1160,12 +1229,13 @@ def _invalidate_market_price_caches() -> None:
     for 15-20 minutes after newer prices were already on disk.
     """
 
-    from spreadboard import server as server_module
-
     with api_spreads._SNAPSHOT_CACHE_LOCK:
         api_spreads._RESULT_CACHE.clear()
-    with server_module._MARKET_CACHE_LOCK:
-        server_module._MARKET_CACHE.clear()
+    # Do not clear server._MARKET_CACHE here. Its key contains every dynamic
+    # file signature, and foreground requests use the last structurally
+    # compatible generation with live books/funding overlaid while the
+    # background warmer builds the new key. Clearing it created a false empty
+    # Funding page for several seconds at every collector handoff.
 
 
 def _board_path() -> Path:

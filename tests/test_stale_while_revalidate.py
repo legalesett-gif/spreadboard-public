@@ -76,6 +76,28 @@ def test_member_can_use_previous_fast_generation_while_warmer_builds(
     ) is payload
 
 
+def test_member_can_use_previous_dynamic_funding_generation_while_warmer_builds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = time.monotonic()
+    query = (("funding_only", ("1",)),)
+    old_key = (
+        "board", (1, 1), (2, 2), (3, 3), (4, 4), (5, 5),
+        (6, 6), (7, 7), (8, 8), query,
+    )
+    new_key = (
+        "board", (1, 1), (2, 2), (30, 30), (4, 4), (5, 5),
+        (60, 60), (70, 70), (80, 80), query,
+    )
+    payload = {"ok": True, "groups": [{"token": "GUA"}]}
+    monkeypatch.setattr(server, "_MARKET_CACHE", {old_key: (now, payload)})
+
+    assert server._market_cache_get(new_key) is None
+    assert server._market_cache_get(
+        new_key, allow_previous_generation=True
+    ) is payload
+
+
 def test_empty_populated_source_generation_is_not_cached() -> None:
     from spreadboard import server
 

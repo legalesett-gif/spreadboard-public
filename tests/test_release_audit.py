@@ -532,7 +532,7 @@ def test_production_board_does_not_admit_hour_old_routes_as_live() -> None:
     assert float(match.group(1)) <= 5.0
 
 
-def test_price_worker_invalidates_grouped_market_payloads() -> None:
+def test_price_worker_keeps_completed_grouped_payload_for_stale_while_revalidate() -> None:
     from scripts import run_spreadboard_service as service
 
     api_spreads._RESULT_CACHE.clear()
@@ -543,7 +543,7 @@ def test_price_worker_invalidates_grouped_market_payloads() -> None:
     service._invalidate_market_price_caches()
 
     assert api_spreads._RESULT_CACHE == {}
-    assert server._MARKET_CACHE == {}
+    assert server._MARKET_CACHE == {("test",): (0.0, {"old": True})}
 
 
 def test_visual_audit_rejects_entitlement_redirects() -> None:

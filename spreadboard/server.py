@@ -3211,8 +3211,15 @@ def _market_cache_get(
                 (key, value)
                 for key, value in _MARKET_CACHE.items()
                 if len(key) == len(cache_key)
+                # Board, structural discovery, metadata, rails and the exact
+                # query must match. Fast books, live funding and settled/radar
+                # files are dynamic inputs: `_apply_spread_freshness` overlays
+                # their current values while a background warm builds the new
+                # generation. Keeping this compatible completed page prevents
+                # an honest refresh from becoming a false empty page.
                 and key[:3] == cache_key[:3]
-                and key[4:] == cache_key[4:]
+                and key[4:6] == cache_key[4:6]
+                and key[9:] == cache_key[9:]
                 and now - value[0] <= _MARKET_CACHE_TTL_SECONDS
             ]
             if candidates:
