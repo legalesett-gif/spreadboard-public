@@ -684,7 +684,10 @@ class FastQuoteRefresher:
             ThreadPoolExecutor(max_workers=dex_workers) as dex_pool,
             ThreadPoolExecutor(max_workers=cex_workers) as cex_pool,
         ):
-            futures = [
+            okx_priority_owner = _begin_okx_provider_priority(
+                any(route_taxonomy.venue_is_dex(venue_key[0]) for venue_key, _jobs in dex_batches)
+            )
+            dex_futures = [
                 dex_pool.submit(
                     self._quote_venue_jobs,
                     venue_key,
@@ -695,6 +698,12 @@ class FastQuoteRefresher:
                 )
                 for venue_key, jobs in dex_batches
             ]
+            okx_futures = {
+                future
+                for future, (venue_key, _jobs) in zip(dex_futures, dex_batches)
+                if route_taxonomy.venue_is_dex(venue_key[0])
+            }
+            futures = list(dex_futures)
             futures.extend(
                 cex_pool.submit(
                     self._quote_venue_jobs,
@@ -706,9 +715,18 @@ class FastQuoteRefresher:
                 )
                 for venue_key, jobs in cex_batches
             )
-            for future in as_completed(futures):
-                leg_cache.update(future.result())
-                publish_ready(final=False)
+            try:
+                for future in as_completed(futures):
+                    leg_cache.update(future.result())
+                    if future in okx_futures:
+                        okx_futures.remove(future)
+                        if not okx_futures and okx_priority_owner:
+                            _end_okx_provider_priority(okx_priority_owner)
+                            okx_priority_owner = ""
+                    publish_ready(final=False)
+            finally:
+                if okx_priority_owner:
+                    _end_okx_provider_priority(okx_priority_owner)
         publish_ready(final=True)
         if funding_summary.get("legs"):
             # A funding sweep touches legs across the whole board, which a delta
@@ -2806,6 +2824,47 @@ def _onchain_dex_leg_quote(
         quote_both=quote_both,
         failure=failure,
     )
+
+
+def _begin_okx_provider_priority(enabled: bool) -> str:
+    """Pause background catalogue quotes only while live OKX jobs exist.
+
+    The worker used to hold this marker for the whole CEX+DEX refresh.  Even a
+    snapshot with zero OKX rows therefore starved structural OKX discovery in
+    repeated 250 ms sleeps.  The caller now opens the window only for futures
+    that actually use the OKX provider and closes it as soon as they finish.
+    """
+
+    if not enabled:
+        return ""
+    path = Path(
+        os.environ.get(
+            "SPREADBOARD_OKX_DEX_PRIORITY_STATE_PATH",
+            "/tmp/spreadboard-okx-dex-priority.state",
+        )
+    )
+    owner = f"{os.getpid()}:{time.time()}"
+    try:
+        path.write_text(owner, encoding="ascii")
+    except OSError:
+        return ""
+    return owner
+
+
+def _end_okx_provider_priority(owner: str) -> None:
+    if not owner:
+        return
+    path = Path(
+        os.environ.get(
+            "SPREADBOARD_OKX_DEX_PRIORITY_STATE_PATH",
+            "/tmp/spreadboard-okx-dex-priority.state",
+        )
+    )
+    try:
+        if path.read_text(encoding="ascii") == owner:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _okx_dex_leg_quote(

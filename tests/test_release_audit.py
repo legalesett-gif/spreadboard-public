@@ -2939,16 +2939,34 @@ def test_fast_quote_cycle_publishes_rankings_without_blocking_next_rotation() ->
 
 def test_broad_dex_discovery_yields_to_current_quote_rotation() -> None:
     import inspect
-    from scripts import fast_quote_worker, run_spreadboard_service
+    from scripts import run_spreadboard_service
+    from spreadboard import fast_quotes
     from spreadarb.dex import okx_quotes
 
     refresh_source = inspect.getsource(run_spreadboard_service.RefreshLoop.refresh_once)
-    worker_source = inspect.getsource(fast_quote_worker.main)
+    worker_source = inspect.getsource(fast_quotes.FastQuoteRefresher.refresh)
     gate_source = inspect.getsource(okx_quotes._wait_for_priority_window)
 
     assert "SPREADBOARD_OKX_DEX_BACKGROUND" in refresh_source
-    assert "OKX_DEX_PRIORITY_STATE_PATH" in worker_source
+    assert "_begin_okx_provider_priority" in worker_source
+    assert "_end_okx_provider_priority" in worker_source
     assert "SPREADBOARD_OKX_DEX_BACKGROUND" in gate_source
+
+
+def test_okx_priority_marker_exists_only_during_real_provider_work(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from spreadboard import fast_quotes
+
+    path = tmp_path / "okx-priority.state"
+    monkeypatch.setenv("SPREADBOARD_OKX_DEX_PRIORITY_STATE_PATH", str(path))
+
+    assert fast_quotes._begin_okx_provider_priority(False) == ""
+    assert not path.exists()
+    owner = fast_quotes._begin_okx_provider_priority(True)
+    assert owner and path.read_text(encoding="ascii") == owner
+    fast_quotes._end_okx_provider_priority(owner)
+    assert not path.exists()
 
 
 def test_book_verification_upgrades_quotes_it_does_not_discard_them() -> None:
