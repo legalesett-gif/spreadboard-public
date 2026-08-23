@@ -119,19 +119,10 @@ class OkxDexQuoteSource:
                     blockers=("api_credentials_missing",),
                 )
             )
-        if not credentials.project_id:
-            return SourceResult(
-                status=SourceStatus(
-                    name=self.name,
-                    kind=self.kind,
-                    status="skipped",
-                    started_at=started_at,
-                    finished_at=utc_now_iso(),
-                    elapsed_seconds=monotonic() - started,
-                    blockers=("api_project_id_missing",),
-                    details={"provider": "OKX DEX"},
-                )
-            )
+        # Current OnchainOS v6 requests authenticate with the four OK-ACCESS
+        # headers. A project id can still be supplied for accounts that expose
+        # one, but its absence must not prevent a valid project-created key
+        # from being tested by the provider.
         reference_tokens = {
             quote.token.upper()
             for quote in context.reference_quotes
@@ -151,6 +142,7 @@ class OkxDexQuoteSource:
             context.reference_quotes,
             dynamic_assets,
             registry=context.identity_registry,
+            ambiguous_tokens=getattr(self, "last_ambiguous_tokens", set()),
         )
         quotes: list[MarketQuote] = []
         errors: list[str] = []
@@ -182,6 +174,19 @@ class OkxDexQuoteSource:
             min_spread_pct=context.min_spread_pct,
             max_spread_pct=context.max_spread_pct,
         )
+        provider_blockers = tuple(
+            dict.fromkeys(
+                blocker
+                for error in errors
+                for blocker in (
+                    "okx_dex_api_access_denied",
+                    "okx_dex_credentials_rejected",
+                    "okx_dex_ip_restricted",
+                    "okx_dex_geo_blocked",
+                )
+                if blocker in error
+            )
+        )
         status = SourceStatus(
             name=self.name,
             kind=self.kind,
@@ -191,7 +196,9 @@ class OkxDexQuoteSource:
             elapsed_seconds=monotonic() - started,
             rows=len(rows),
             errors=tuple(errors[:12]),
-            blockers=tuple(["partial_source_errors"] if errors else []),
+            blockers=tuple(
+                dict.fromkeys((*provider_blockers, *(["partial_source_errors"] if errors else [])))
+            ),
             details={
                 "provider": "OKX DEX",
                 "quote_count": len(quotes),
@@ -255,19 +262,14 @@ class OkxDexQuoteSource:
                 if symbol in candidate_symbols:
                     matches[symbol].append(token)
 
-        unique_matches = {
-            symbol: items[0]
-            for symbol, items in matches.items()
-            if len(
-                {
-                    (
-                        str(item.get("chain_index")),
-                        str(item.get("address")).casefold(),
-                    )
-                    for item in items
-                }
-            )
-            == 1
+        registry = getattr(context, "identity_registry", None) or IdentityRegistry.empty()
+        selected_matches: dict[str, tuple[dict[str, Any], str, bool]] = {}
+        for symbol, items in matches.items():
+            selected_match = _select_okx_symbol_contract(symbol, items, registry=registry)
+            if selected_match is not None:
+                selected_matches[symbol] = selected_match
+        self.last_ambiguous_tokens = {
+            symbol for symbol, (_item, _identity, ambiguous) in selected_matches.items() if ambiguous
         }
 
         def priority(symbol: str) -> tuple[float, int, float, str]:
@@ -293,14 +295,14 @@ class OkxDexQuoteSource:
         # unremarkable while their volume is not. The source is already over its
         # time budget, so this buys their coverage inside the same slot count
         # rather than by scanning longer.
-        by_funding = sorted(unique_matches, key=priority, reverse=True)
+        by_funding = sorted(selected_matches, key=priority, reverse=True)
         reserved = max(0, int(limit * VOLUME_RESERVED_SHARE))
 
         def traded(symbol: str) -> float:
             refs = reference_by_token.get(symbol) or []
             return max((quote.volume_24h_usd or 0.0 for quote in refs), default=0.0)
 
-        by_volume = sorted(unique_matches, key=traded, reverse=True)
+        by_volume = sorted(selected_matches, key=traded, reverse=True)
         selected_set = set(by_funding[: max(0, limit - reserved)])
         for symbol in by_volume:
             if len(selected_set) >= limit:
@@ -308,19 +310,12 @@ class OkxDexQuoteSource:
             selected_set.add(symbol)
         selected = [symbol for symbol in by_funding if symbol in selected_set]
         selected += [s for s in by_volume if s in selected_set and s not in set(selected)]
-        # Where the funnel narrows. Raising the cap from 50 to 150 changed
-        # nothing, which means the loss is upstream of it -- most likely the
-        # uniqueness rule below, which drops any symbol that resolves to more
-        # than one contract across chains, and that is exactly the mainstream
-        # names: DOGE, SHIB and WIF are listed on several chains at once.
-        # Which names actually made it, and where the well-known ones fell out.
-        # Two rounds of guessing at DOGE/WIF/SHIB/FARTCOIN/STETH cost more than
-        # this line would have.
         watched = ("DOGE", "WIF", "SHIB", "FARTCOIN", "STETH", "PENGU", "BONK", "RAY")
         self.last_funnel = {
             "candidates": len(candidate_symbols),
             "matched_on_chain": len(matches),
-            "unique_across_chains": len(unique_matches),
+            "selected_contracts": len(selected_matches),
+            "ambiguous_symbols": len(self.last_ambiguous_tokens),
             "limit": limit,
             "volume_reserved": reserved,
             "selected": len(selected),
@@ -328,7 +323,7 @@ class OkxDexQuoteSource:
             "watched": {
                 name: (
                     "selected" if name in set(selected)
-                    else "dropped_not_unique" if name in matches
+                    else "outside_current_budget" if name in matches
                     else "no_okx_listing" if name in candidate_symbols
                     else "not_a_cex_token"
                 )
@@ -337,17 +332,13 @@ class OkxDexQuoteSource:
         }
         assets: list[WatchAsset] = []
         for symbol in selected:
-            item = unique_matches[symbol]
+            item, identity_key, _ambiguous = selected_matches[symbol]
             chain_id = int(str(item["chain_index"]))
             address = str(item["address"])
             assets.append(
                 WatchAsset(
                     symbol=symbol,
-                    identity_key=(
-                        f"solana:501/token:{address}"
-                        if chain_id == 501
-                        else f"eip155:{chain_id}/erc20:{address.casefold()}"
-                    ),
+                    identity_key=identity_key,
                     decimals=int(item["decimals"]),
                     cex_enabled=True,
                     dex_enabled=True,
@@ -472,11 +463,92 @@ def _okx_rate_limited(result: Mapping[str, Any]) -> bool:
     return "too many requests" in normalized or "rate limit" in normalized
 
 
+OKX_DYNAMIC_CHAIN_PRIORITY = {56: 0, 1: 1, 501: 2, 42161: 3, 8453: 4, 137: 5}
+
+
+def _select_okx_symbol_contract(
+    symbol: str,
+    items: Iterable[dict[str, Any]],
+    *,
+    registry: IdentityRegistry,
+) -> tuple[dict[str, Any], str, bool] | None:
+    """Select one exact contract without pretending a ticker proves identity.
+
+    A registry contract match is authoritative. A single OKX listing is safe
+    for same-cycle ticker inference. When a ticker exists on several contracts,
+    retain one deterministic, USDT-first route for research visibility but mark
+    it ambiguous so its identity is never copied to CEX quotes.
+    """
+
+    unique: dict[tuple[int, str], dict[str, Any]] = {}
+    for item in items:
+        try:
+            chain_id = int(str(item.get("chain_index")))
+        except (TypeError, ValueError):
+            continue
+        address = str(item.get("address") or "").strip()
+        if not address:
+            continue
+        key = (chain_id, address if chain_id == 501 else address.casefold())
+        unique[key] = item
+    if not unique:
+        return None
+
+    registry_matches: dict[tuple[str, int, str], dict[str, Any]] = {}
+    for asset in registry.assets.values():
+        if asset.token != symbol.upper():
+            continue
+        for (chain_id, address), item in unique.items():
+            expected = (
+                asset.solana_mint
+                if chain_id == 501
+                else (asset.evm_contracts or {}).get(chain_id)
+            )
+            if expected and str(expected).casefold() == address.casefold():
+                registry_matches[(asset.asset_id, chain_id, address)] = item
+    matched_assets = {key[0] for key in registry_matches}
+    if len(matched_assets) == 1:
+        asset_id = next(iter(matched_assets))
+        candidates = [
+            (key[1], key[2], item)
+            for key, item in registry_matches.items()
+            if key[0] == asset_id
+        ]
+        chain_id, _address, selected = min(
+            candidates,
+            key=lambda value: (
+                OKX_DYNAMIC_CHAIN_PRIORITY.get(value[0], 99),
+                value[1],
+            ),
+        )
+        del chain_id
+        return selected, asset_id, False
+
+    chain_id, address = min(
+        unique,
+        key=lambda value: (
+            OKX_DYNAMIC_CHAIN_PRIORITY.get(value[0], 99),
+            value[1],
+        ),
+    )
+    identity_key = (
+        f"solana:501/token:{address}"
+        if chain_id == 501
+        else f"eip155:{chain_id}/erc20:{address}"
+    )
+    return (
+        unique[(chain_id, address)],
+        identity_key,
+        len(unique) > 1 or len(matched_assets) > 1,
+    )
+
+
 def _apply_unique_okx_identities(
     quotes: Iterable[MarketQuote],
     assets: Iterable[WatchAsset],
     *,
     registry: IdentityRegistry | None,
+    ambiguous_tokens: set[str] | None = None,
 ) -> list[MarketQuote]:
     """Carry a unique OKX token-list identity onto same-cycle CEX quotes.
 
@@ -488,13 +560,21 @@ def _apply_unique_okx_identities(
     """
 
     registry = registry or IdentityRegistry.empty()
+    ambiguous_tokens = {str(item).upper() for item in (ambiguous_tokens or set())}
     inferred: dict[str, WatchAsset] = {}
+    rejected: set[str] = set()
     for asset in assets:
         symbol = asset.token.upper()
-        if not asset.identity_key or symbol in registry.known_ticker_collisions:
+        if (
+            not asset.identity_key
+            or symbol in registry.known_ticker_collisions
+            or symbol in ambiguous_tokens
+            or symbol in rejected
+        ):
             continue
         if symbol in inferred and inferred[symbol].identity_key != asset.identity_key:
             inferred.pop(symbol, None)
+            rejected.add(symbol)
             continue
         inferred[symbol] = asset
 
@@ -1388,10 +1468,9 @@ def default_sources(
             *[source for pair in zip(spot_batches, futures_batches) for source in pair],
             *spot_batches[len(futures_batches) :],
             *futures_batches[len(spot_batches) :],
-            # The perp DEXes come before the spot DEX source: a source is only
-            # paired against the quotes gathered ahead of it, so collecting
-            # Aster and Hyperliquid afterwards left them invisible to every
-            # DEX spot leg.
+            # Perpetual venues come before OKX DEX because a source is paired
+            # only against quotes gathered ahead of it. They remain ordinary
+            # Futures instruments in the product taxonomy.
             DexDerivativeCcxtSource(venues={"Hyperliquid": "hyperliquid", "Aster": "aster"}),
             HyperliquidBuilderDexSource(),
             VeloraQuoteSource(),
@@ -2012,7 +2091,11 @@ def _dex_candidate_pair(
             continue
         identities = [dex_quote.identity_key, cex_quote.identity_key]
         known_identities = {identity for identity in identities if identity}
-        identity = next(iter(known_identities)) if len(known_identities) == 1 else None
+        identity = (
+            next(iter(known_identities))
+            if len(known_identities) == 1 and all(identities)
+            else None
+        )
         inferred_identity = cex_quote.identity_source == "okx_unique_symbol_inference"
         gas_notional = as_float(dex_quote.quote_notional_usd)
         gas_estimate = as_float(dex_quote.gas_estimate_usd)

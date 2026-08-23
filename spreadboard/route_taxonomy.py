@@ -1,10 +1,10 @@
-"""One canonical market-lane taxonomy for every SpreadBoard surface.
+"""One canonical product-lane taxonomy for every SpreadBoard surface.
 
-Market type describes the instrument (spot or perpetual futures); venue type
-describes where it trades. Aster, Hyperliquid and Lighter therefore keep a
-``Futures`` instrument type while belonging to the DEX lane. Keeping those
-concepts separate prevents perpetual DEXes from leaking into the ordinary CEX
-Futures and Futures-Spot views.
+``DEX`` is a SpreadBoard product name reserved for the OKX DEX aggregator.
+Other venues retain their actual instrument type in the ordinary Futures and
+Spot lanes, even when they settle on-chain. Operational on-chain detection is
+kept separate because Jupiter, Velora and similar swap venues still require
+chain/contract identity and provider quotes.
 """
 
 from __future__ import annotations
@@ -18,22 +18,10 @@ DEX_SOURCE_KINDS = {
     "dex_spot",
 }
 
-# Match normalized venue families, not arbitrary substring checks. Prefixes
-# cover chain-qualified venues such as ``OKX DEX 56`` and ``0x Ethereum``.
-DEX_VENUE_FAMILIES = (
-    "okx dex",
-    "jupiter",
-    "0x",
-    "zerox",
-    "velora",
-    "paraswap",
-    "aster",
-    "hyperliquid",
-    "lighter",
-    "dydx",
-    "apex",
-    "paradex",
-)
+# Product DEX lanes are intentionally OKX-only. Prefix matching covers
+# chain-qualified labels such as ``OKX DEX 56`` without accepting a venue just
+# because its name contains the letters "DEX".
+DEX_VENUE_FAMILIES = ("okx dex",)
 
 ONCHAIN_SPOT_VENUE_FAMILIES = (
     "okx dex",
@@ -58,7 +46,8 @@ def venue_is_dex(venue: Any) -> bool:
 
 
 def leg_is_dex(*, venue: Any = None, market_type: Any = None) -> bool:
-    return str(market_type or "").strip().casefold() == "dex" or venue_is_dex(venue)
+    del market_type
+    return venue_is_dex(venue)
 
 
 def leg_is_onchain_spot(*, venue: Any = None, market_type: Any = None) -> bool:
@@ -83,9 +72,24 @@ def route_has_dex(
     short_market_type: Any = None,
     source_kind: Any = None,
 ) -> bool:
-    return source_is_dex(source_kind) or leg_is_dex(
+    # ``source_kind`` is provenance, not a product-lane instruction. Several
+    # normal Futures/Spot venues arrive through legacy dex_* source buckets.
+    del source_kind
+    return leg_is_dex(
         venue=long_venue, market_type=long_market_type
     ) or leg_is_dex(venue=short_venue, market_type=short_market_type)
+
+
+def instrument_type(*, venue: Any = None, market_type: Any = None) -> str:
+    """Return the actual instrument used by product-lane classification.
+
+    Older provider rows sometimes stored ``DEX`` as a market type. That means
+    an on-chain spot swap, not a third instrument class.
+    """
+
+    del venue
+    normalized = str(market_type or "").strip().casefold()
+    return "spot" if normalized == "dex" else normalized
 
 
 def route_kind(
@@ -96,8 +100,8 @@ def route_kind(
     short_market_type: Any = None,
     source_kind: Any = None,
 ) -> str:
-    long_type = str(long_market_type or "").strip().casefold()
-    short_type = str(short_market_type or "").strip().casefold()
+    long_type = instrument_type(venue=long_venue, market_type=long_market_type)
+    short_type = instrument_type(venue=short_venue, market_type=short_market_type)
     market_types = {long_type, short_type}
     if route_has_dex(
         long_venue=long_venue,

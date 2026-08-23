@@ -205,9 +205,9 @@ services:
       # Slow settled-history/radar publication runs in an isolated low-priority
       # worker after startup, never in the HTTP process or collector parent.
       SPREADBOARD_MARKET_EVIDENCE_INITIAL_DELAY_SECONDS: "120"
-      # Structural discovery is deliberately broad and can span long venue/DEX
-      # cycles. Live truth has separate 3-minute book/generation and 15-minute
-      # DEX gates below; the structural universe must still advance within 72h.
+      # Structural discovery is deliberately broad and can span long venue and
+      # OKX DEX cycles. Live truth has separate book/generation and exact-chain
+      # quote gates; the structural universe must still advance within 72h.
       SPREADBOARD_COLLECTOR_SNAPSHOT_MAX_AGE_SECONDS: "259200"
     command: ["/app/.venv/bin/python", "scripts/run_spreadboard_service.py"]
     healthcheck:

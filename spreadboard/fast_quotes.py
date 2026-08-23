@@ -1520,11 +1520,9 @@ def _fast_quote_lane(row: dict[str, Any]) -> str | None:
         chain, contract = _dex_chain_contract(row)
         if identity_unverified or not chain or not contract:
             return None
-        if {long_type, short_type} == {"Spot", "Futures"}:
-            return "DEX-FUTURES"
-        if long_type == short_type == "Spot":
-            return "DEX-SPOT"
-        return None
+        # Exact identity is an execution-safety requirement, but it does not
+        # select the product lane. Only OKX DEX belongs in DEX lanes;
+        # Jupiter/Velora/0x remain ordinary Spot instruments.
     kind = route_taxonomy.route_kind(
         long_venue=long_venue,
         long_market_type=long_type,
@@ -1532,7 +1530,7 @@ def _fast_quote_lane(row: dict[str, Any]) -> str | None:
         short_market_type=short_type,
         source_kind=row.get("source_kind"),
     )
-    if kind in {"FUTURES", "DEX-FUTURES", "SPOT"}:
+    if kind in {"FUTURES", "DEX-FUTURES", "DEX-SPOT", "SPOT"}:
         return kind
     if kind in {"SPOT-FUTURES", "FUTURES-SPOT"}:
         return "FUTURES-SPOT"

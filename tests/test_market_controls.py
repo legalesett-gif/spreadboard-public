@@ -38,36 +38,31 @@ def test_json_export_prepares_then_downloads_instead_of_opening_raw_warming_data
     assert "location.assign" not in script
 
 
-def test_futures_dex_empty_state_does_not_blame_one_spot_provider() -> None:
+def test_futures_dex_empty_state_reports_its_only_provider_failure() -> None:
     health = {
         "status": "fresh",
         "dex_spot_source": {
             "status": "partial",
             "rows": 0,
-            "blockers": ["partial_source_errors"],
-            "errors": [
-                "catalogue:1:okx_dex_tokens:Your API key or regions have no access to current services"
-            ],
+            "blockers": ["okx_dex_api_access_denied", "partial_source_errors"],
+            "errors": ["catalogue:1:okx_dex_api_access_denied"],
         },
     }
 
     rendered = server.render_market_lane_empty("DEX-FUTURES", health)
 
-    assert "No live Futures-DEX routes match these filters" in rendered
-    assert "evaluated independently" in rendered
-    assert "OKX" not in rendered
+    assert "OKX DEX provider access was rejected" in rendered
+    assert "zero verified OKX DEX quotes" in rendered
 
 
-def test_futures_dex_warming_state_names_both_source_families() -> None:
+def test_futures_dex_absent_state_names_okx_as_its_only_provider() -> None:
     rendered = server.render_market_lane_empty(
         "DEX-FUTURES",
         {"status": "warming", "dex_spot_source": {"status": "absent"}},
     )
 
-    assert "Refreshing Futures-DEX markets" in rendered
-    assert "Native perpetual DEX books" in rendered
-    assert "exact-chain spot DEX quotes" in rendered
-    assert "OKX DEX feed is temporarily unavailable" not in rendered
+    assert "OKX DEX is temporarily unavailable" in rendered
+    assert "Native perpetual DEX books" not in rendered
 
 
 def test_dex_market_empty_state_distinguishes_a_successful_empty_cycle() -> None:
@@ -91,14 +86,13 @@ def test_funding_dex_empty_state_does_not_call_a_failed_cycle_successful() -> No
             "dex_spot_source": {
                 "status": "partial",
                 "rows": 0,
-                "blockers": ["partial_source_errors"],
-                "errors": ["catalogue:1:okx_dex_tokens:no access to current services"],
+                "blockers": ["okx_dex_api_access_denied", "partial_source_errors"],
+                "errors": ["catalogue:1:okx_dex_api_access_denied"],
             },
         },
     )
 
-    assert "No live Futures-DEX routes match these filters" in rendered
-    assert "OKX" not in rendered
+    assert "OKX DEX provider access was rejected" in rendered
     assert "quoting ran but no DEX route matched" not in rendered
 
 

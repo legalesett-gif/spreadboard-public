@@ -979,12 +979,11 @@ def _spread_rank(row: dict[str, Any]) -> float:
 
 
 def _is_onchain_spot(item: dict[str, Any]) -> bool:
-    """Keep provider-quoted spot DEX legs out of the CEX book catalogue.
+    """Keep provider-quoted on-chain spot legs out of the order-book catalogue.
 
-    Native perpetual DEXes such as Aster, Hyperliquid and Lighter have ordinary
-    order books and belong in this complete pair builder.  Treating every DEX
-    venue as an on-chain swap reduced Futures-DEX to the bounded scanner quota.
-    Contract-address spot swaps remain provider quoted and merge in later.
+    Aster, Hyperliquid and Lighter have ordinary futures order books and belong
+    in this complete pair builder. Contract-address spot swaps remain provider
+    quoted and merge in later; only OKX DEX gets the product DEX label.
     """
 
     return route_taxonomy.leg_is_onchain_spot(

@@ -496,7 +496,7 @@ def test_exact_search_recovers_from_complete_catalogue_when_scanner_group_is_emp
     route = {
         "token": "ANTHROPIC",
         "route_key": "ANTHROPIC|Bitget|Futures|Aster|Futures",
-        "route_kind": "DEX-FUTURES",
+        "route_kind": "FUTURES",
         "long_venue": "Bitget",
         "long_market_type": "Futures",
         "short_venue": "Aster",
@@ -528,7 +528,7 @@ def test_exact_search_recovers_from_complete_catalogue_when_scanner_group_is_emp
     )
 
     assert [group["token"] for group in result["groups"]] == ["ANTHROPIC"]
-    assert result["rows"][0]["route_kind"] == "DEX-FUTURES"
+    assert result["rows"][0]["route_kind"] == "FUTURES"
 
 
 def test_native_perpetual_dex_is_catalogued_but_onchain_spot_is_provider_quoted() -> None:

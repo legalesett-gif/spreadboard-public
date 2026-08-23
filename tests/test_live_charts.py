@@ -2233,11 +2233,11 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
     assert all("depth_unverified" not in row.get("blockers", []) for row in updated)
 
 
-def test_aster_and_hyperliquid_futures_stay_in_the_dex_lane() -> None:
+def test_aster_and_hyperliquid_stay_in_the_normal_futures_lane() -> None:
     row = _route()
-    assert market_history.route_kind_for(row) == "DEX-FUTURES"
+    assert market_history.route_kind_for(row) == "FUTURES"
     row["long_venue"] = "Hyperliquid"
-    assert market_history.route_kind_for(row) == "DEX-FUTURES"
+    assert market_history.route_kind_for(row) == "FUTURES"
 
 
 def test_native_spot_and_futures_routes_sample_inside_web_process() -> None:

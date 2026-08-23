@@ -238,16 +238,15 @@ def load_spreads(
     # stale price, and this is the whole point of streaming the books.
     api_rows = apply_live_books(api_rows, _live_books(), now=current_time)
     all_rows = _dedupe_rows(api_rows)
-    # Diagnostic: how DEX-sourced rows classify BEFORE retirement is applied.
-    # Futures-DEX is currently empty on the public board while discovery still
-    # reports DEX rows, so surface the raw distribution to pinpoint the loss.
+    # Product DEX diagnostics are OKX-only. Source provenance is intentionally
+    # not counted here because several ordinary Futures/Spot venues still use
+    # legacy dex_* discovery buckets.
     dex_raw_kind_counts = dict(
         sorted(
             Counter(
                 row.route_kind
                 for row in all_rows
                 if row.route_kind.startswith("DEX-")
-                or route_taxonomy.source_is_dex(row.raw_source_kind)
             ).items()
         )
     )
@@ -1552,11 +1551,7 @@ def _funding_leg_quality(funding: dict[str, Any]) -> tuple[int, int, int]:
 
 
 def _dex_spot_source_status(payload: dict[str, Any]) -> dict[str, Any]:
-    """Report the exact-identity OKX spot-DEX provider separately.
-
-    Hyperliquid/Aster/Lighter perpetuals remain valid DEX-Futures sources even
-    when OKX Web3 is unavailable.
-    """
+    """Report the exact-identity OKX DEX provider separately."""
 
     sources = ((payload.get("source_refresh") or {}).get("sources")) or []
     for source in sources:
@@ -1959,16 +1954,24 @@ def _row_from_api(
     short_input = route_inputs.get("short") if isinstance(route_inputs.get("short"), dict) else {}
     dex_input = (
         long_input
-        if route_taxonomy.leg_is_dex(venue=long_venue, market_type=long_market_type)
+        if route_taxonomy.leg_is_onchain_spot(
+            venue=long_venue, market_type=long_market_type
+        )
         else short_input
-        if route_taxonomy.leg_is_dex(venue=short_venue, market_type=short_market_type)
+        if route_taxonomy.leg_is_onchain_spot(
+            venue=short_venue, market_type=short_market_type
+        )
         else {}
     )
     dex_identity = (
         long_identity
-        if route_taxonomy.leg_is_dex(venue=long_venue, market_type=long_market_type)
+        if route_taxonomy.leg_is_onchain_spot(
+            venue=long_venue, market_type=long_market_type
+        )
         else short_identity
-        if route_taxonomy.leg_is_dex(venue=short_venue, market_type=short_market_type)
+        if route_taxonomy.leg_is_onchain_spot(
+            venue=short_venue, market_type=short_market_type
+        )
         else {}
     )
     dex_chain = _str_or_none(dex_identity.get("chain_id"))
@@ -2843,7 +2846,7 @@ def _summary(
         "stale_rows": len([row for row in filtered if row.freshness == "stale"]),
         "api_rows": len(all_rows),
         "dex_rows": len(
-            [row for row in all_rows if route_taxonomy.source_is_dex(row.raw_source_kind)]
+            [row for row in all_rows if row.route_kind.startswith("DEX-")]
         ),
         "funding_rows": len([row for row in filtered if _effective_funding_24h(row) is not None]),
         "max_executable_spread_pct": max(

@@ -11,6 +11,28 @@ def _credentials() -> okx_quotes.OkxDexCredentials:
     )
 
 
+def test_dex_credentials_do_not_fall_back_to_exchange_trading_key(monkeypatch) -> None:
+    values = {
+        "SPREADARB/okx/api_key": "exchange-key",
+        "SPREADARB/okx/secret": "exchange-secret",
+        "SPREADARB/okx/passphrase": "exchange-passphrase",
+    }
+    monkeypatch.setattr(okx_quotes, "keychain", values.get)
+
+    assert okx_quotes.load_okx_dex_credentials() is None
+
+
+def test_provider_access_failure_is_sanitized() -> None:
+    assert okx_quotes._provider_blocker(
+        {"code": "50100", "msg": "Your API key or regions have no access to current services"},
+        "tokens",
+    ) == "okx_dex_api_access_denied"
+    assert okx_quotes._provider_blocker(
+        {"code": "50101", "msg": "Invalid Authority"},
+        "quote",
+    ) == "okx_dex_api_access_denied"
+
+
 def test_signed_get_retries_default_client_rate_limit(monkeypatch) -> None:
     responses = [
         {"code": "50011", "msg": "Too Many Requests"},

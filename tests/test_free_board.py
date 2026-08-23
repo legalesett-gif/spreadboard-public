@@ -829,6 +829,8 @@ def test_a_dex_leg_is_labelled_dex_not_spot() -> None:
     assert server.leg_market_label("Binance", "Spot") == "Spot"
     assert server.leg_market_label("Hyperliquid", "Futures") == "Futures"
     assert server.leg_market_label("Aster", "Futures") == "Futures"
+    assert server.leg_market_label("Jupiter Solana", "DEX") == "Spot"
+    assert server.leg_market_label("Velora DEX 56", "Spot") == "Spot"
 
 
 def test_the_exchange_link_shows_dex_not_spot() -> None:

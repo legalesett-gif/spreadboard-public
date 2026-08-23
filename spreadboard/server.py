@@ -4123,9 +4123,10 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
 
 
 def _position_market_type(venue: Any, market_type: Any) -> str:
-    if route_taxonomy.leg_is_onchain_spot(venue=venue, market_type=market_type):
+    if route_taxonomy.leg_is_dex(venue=venue, market_type=market_type):
         return "DEX"
-    return str(market_type or "")
+    normalized = route_taxonomy.instrument_type(venue=venue, market_type=market_type)
+    return normalized.title() if normalized else str(market_type or "")
 
 
 def api_position_suggestions(
@@ -6925,9 +6926,10 @@ def leg_market_label(venue: Any, market_type: Any) -> str:
     route -- the lane was right, the label was not, and that is why the DEX
     farms looked mixed in with the Futures-Spot ones.
     """
-    if "DEX" in str(venue or "").upper():
+    if route_taxonomy.leg_is_dex(venue=venue, market_type=market_type):
         return "DEX"
-    return str(market_type or "").strip()
+    normalized = route_taxonomy.instrument_type(venue=venue, market_type=market_type)
+    return normalized.title() if normalized else str(market_type or "").strip()
 
 
 def _render_auth_document(title: str, inner: str, *, page_script: str = "") -> str:
@@ -7037,14 +7039,7 @@ def render_live_market_empty(health: dict[str, Any]) -> str:
 
 
 def render_market_lane_empty(selected_kind: str, health: dict[str, Any]) -> str:
-    """Distinguish a genuinely empty DEX lane from unavailable evidence.
-
-    Futures-DEX contains native perpetual DEXes such as Aster, Hyperliquid and
-    Lighter in addition to provider-quoted on-chain spot legs. Its empty state
-    must therefore never blame the OKX spot provider alone. Spot-DEX still
-    depends on exact-chain quote providers, so provider health remains material
-    there.
-    """
+    """Distinguish an empty OKX DEX lane from unavailable provider evidence."""
 
     kind = str(selected_kind or "").upper()
     if kind not in {"DEX-FUTURES", "DEX-SPOT"}:
@@ -7056,57 +7051,45 @@ def render_market_lane_empty(selected_kind: str, health: dict[str, Any]) -> str:
     errors = [str(item) for item in source.get("errors") or []]
     lane = "Futures-DEX" if kind == "DEX-FUTURES" else "Spot-DEX"
 
-    if kind == "DEX-FUTURES":
-        if not health.get("generation_warming") and str(
-            health.get("status") or ""
-        ) == "fresh":
-            return (
-                '<p class="empty market-empty">No live Futures-DEX routes match '
-                "these filters. Native perpetual DEX and exact-chain spot DEX "
-                "coverage are evaluated independently.</p>"
-            )
-        return """
-    <article class="live-market-empty">
-      <strong>Refreshing Futures-DEX markets</strong>
-      <p>Native perpetual DEX books and exact-chain spot DEX quotes are being joined into the current generation. This page will populate automatically.</p>
-      <span>No stale route is presented as current</span>
-    </article>
-    """
-
     if rows == 0 and (errors or status == "partial"):
         rejected = any(
-            phrase in error.casefold()
-            for error in errors
-            for phrase in ("no access", "access rejected", "ip validation")
+            blocker
+            in {
+                "okx_dex_api_access_denied",
+                "okx_dex_credentials_rejected",
+                "okx_dex_ip_restricted",
+                "okx_dex_geo_blocked",
+            }
+            for blocker in blockers
         )
         title = (
-            "On-chain DEX provider access was rejected"
+            "OKX DEX provider access was rejected"
             if rejected
-            else "On-chain DEX providers returned no verified quotes"
+            else "OKX DEX returned no verified quotes"
         )
         return f"""
     <article class="live-market-empty dex-source-failure">
       <strong>{h(title)}</strong>
-      <p>The latest cycle returned zero verified DEX quotes. This is not evidence that no DEX routes exist; the {h(lane)} lane is unavailable until exact-chain quotes resume.</p>
-      <span>DEX source degraded · CEX lanes remain live</span>
+      <p>The latest cycle returned zero verified OKX DEX quotes. This is not evidence that no routes exist; the {h(lane)} lane is unavailable until exact-chain quotes resume.</p>
+      <span>OKX DEX source degraded · other market lanes remain live</span>
     </article>
     """
     if "api_credentials_missing" in blockers or status in {"skipped", "absent"}:
         return f"""
     <article class="live-market-empty dex-source-failure">
-      <strong>On-chain DEX spot feeds are temporarily unavailable</strong>
+      <strong>OKX DEX is temporarily unavailable</strong>
       <p>No {h(lane)} market conclusion is shown without verified exact-chain quotes.</p>
-      <span>DEX source reconnecting · CEX lanes remain live</span>
+      <span>OKX DEX source reconnecting · other market lanes remain live</span>
     </article>
     """
     if status == "ok":
         return (
-            '<p class="empty market-empty">On-chain DEX quoting completed, but no verified '
+            '<p class="empty market-empty">OKX DEX quoting completed, but no verified '
             f"{h(lane)} route matched these filters this cycle.</p>"
         )
     return f"""
     <article class="live-market-empty dex-source-failure">
-      <strong>On-chain DEX quoting is unavailable</strong>
+      <strong>OKX DEX quoting is unavailable</strong>
       <p>No {h(lane)} market conclusion is shown until verified exact-chain quotes resume.</p>
       <span>Source status: {h(status)}</span>
     </article>
@@ -7116,9 +7099,8 @@ def render_market_lane_empty(selected_kind: str, health: dict[str, Any]) -> str:
 def render_funding_farm_empty(selected_farm: str, health: dict[str, Any]) -> str:
     """Explain an empty farm tab instead of rendering a blank list.
 
-    Futures-DEX combines native perpetual DEX books with exact-chain spot DEX
-    quotes. Silently showing nothing would turn a rebuilding or partially
-    unavailable source set into a market conclusion.
+    Futures-DEX is the OKX DEX spot leg paired with a futures leg. Silently
+    showing nothing would turn a provider failure into a market conclusion.
     """
 
     if selected_farm != "futures-dex":

@@ -174,7 +174,7 @@ def test_fast_quote_worker_reprices_velora_leg_without_okx_credentials(
         quote_both=False,
     )
 
-    assert fast_quotes._fast_quote_lane(row) == "DEX-FUTURES"
+    assert fast_quotes._fast_quote_lane(row) == "FUTURES-SPOT"
     assert quote is not None
     assert quote["ask"] == pytest.approx(0.02)
     assert quote["quote_source"] == "velora_evm_quote"

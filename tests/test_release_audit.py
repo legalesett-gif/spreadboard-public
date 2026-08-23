@@ -16,6 +16,7 @@ from scripts.api_discovery_worker import build_parser as discovery_worker_parser
 from scripts.run_spreadboard_service import RefreshLoop, _merge_newer_fast_quotes
 from spreadarb.api_discovery import runner, sources, worker
 from spreadarb.api_discovery.identity import (
+    AssetIdentity,
     IdentityRegistry,
     WatchAsset,
     load_identity_registry,
@@ -184,6 +185,45 @@ def test_unique_okx_identity_does_not_infer_known_collision() -> None:
     assert sources._apply_unique_okx_identities([quote], [asset], registry=registry)[0] == quote
 
 
+def test_okx_route_with_unverified_cex_ticker_is_not_identity_verified() -> None:
+    dex = MarketQuote(
+        token="AMBIG",
+        venue="OKX DEX 56",
+        market_type="Spot",
+        bid=1.0,
+        ask=1.01,
+        bid_vwap=1.0,
+        ask_vwap=1.01,
+        quote_ts_us=1,
+        source_name="okx_dex_quote",
+        identity_key="eip155:56/erc20:0xabc",
+        chain_id=56,
+        token_address="0xabc",
+        gas_estimate_usd=0.01,
+        quote_notional_usd=50.0,
+    )
+    cex = MarketQuote(
+        token="AMBIG",
+        venue="Bybit",
+        market_type="Futures",
+        bid=1.02,
+        ask=1.03,
+        bid_vwap=1.02,
+        ask_vwap=1.03,
+        quote_ts_us=1,
+        source_name="ccxt",
+    )
+
+    rows = sources.dex_candidates(
+        [dex], [cex], source_name="okx_dex_quote", min_spread_pct=-100
+    )
+
+    assert rows
+    assert all(row["validation_state"] == "quote_verified" for row in rows)
+    assert all(row.get("identity_key") is None for row in rows)
+    assert all("cex_identity_unverified" in row["blockers"] for row in rows)
+
+
 def test_source_health_uses_live_quote_age_without_hiding_discovery_age(
     tmp_path: Path,
 ) -> None:
@@ -282,6 +322,34 @@ def test_okx_dex_source_budget_covers_rate_limited_watchlist_scan() -> None:
     args = discovery_worker_parser().parse_args([])
 
     assert args.dex_spot_timeout_s == 240.0
+
+
+def test_okx_dex_source_tests_provider_even_without_optional_project_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from spreadarb.dex import okx_quotes
+
+    credentials = okx_quotes.OkxDexCredentials("key", "secret", "passphrase")
+    monkeypatch.setattr(okx_quotes, "load_okx_dex_credentials", lambda: credentials)
+    source = sources.OkxDexQuoteSource(request_interval_seconds=0)
+    monkeypatch.setattr(
+        source,
+        "_discover_okx_assets",
+        lambda **_kwargs: ([], ["catalogue:1:okx_dex_api_access_denied"]),
+    )
+    result = source.collect(
+        sources.DiscoveryContext(
+            tokens=(),
+            watchlist={},
+            deadline_monotonic=None,
+            reference_quotes=(),
+            identity_registry=IdentityRegistry.empty(),
+        )
+    )
+
+    assert result.status.status == "partial"
+    assert "okx_dex_api_access_denied" in result.status.blockers
+    assert "api_project_id_missing" not in result.status.blockers
 
 
 def test_open_chart_can_requote_route_after_board_freshness_cutoff(
@@ -1293,7 +1361,7 @@ def test_okx_dex_retries_rate_limits_without_changing_quote_math() -> None:
     assert calls == 2
 
 
-def test_okx_dynamic_catalogue_keeps_only_unique_symbol_contracts(
+def test_okx_dynamic_catalogue_retains_multichain_symbols_without_false_inference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS", "25")
@@ -1371,8 +1439,74 @@ def test_okx_dynamic_catalogue_keeps_only_unique_symbol_contracts(
     )
 
     assert errors == []
-    assert [asset.token for asset in assets] == ["UNIQUE"]
-    assert assets[0].identity_key == "eip155:1/erc20:0x111"
+    assert [asset.token for asset in assets] == ["DUP", "UNIQUE"]
+    by_token = {asset.token: asset for asset in assets}
+    # BSC is the deterministic USDT-first choice when no exact registry
+    # contract is known, but the ambiguous ticker must not be copied to CEX.
+    assert by_token["DUP"].identity_key == "eip155:56/erc20:0x333"
+    assert source.last_ambiguous_tokens == {"DUP"}
+    unresolved = MarketQuote(
+        token="DUP", venue="Bybit", market_type="Futures", bid=2, ask=2,
+        bid_vwap=2, ask_vwap=2, quote_ts_us=1, source_name="test",
+    )
+    assert sources._apply_unique_okx_identities(
+        [unresolved],
+        assets,
+        registry=IdentityRegistry.empty(),
+        ambiguous_tokens=source.last_ambiguous_tokens,
+    )[0].identity_key is None
+
+
+def test_okx_dynamic_catalogue_prefers_exact_registry_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS", "25")
+    source = sources.OkxDexQuoteSource(request_interval_seconds=0)
+    refs = (
+        MarketQuote(
+            token="WRAPPED", venue="Bybit", market_type="Futures", bid=2, ask=2,
+            bid_vwap=2, ask_vwap=2, quote_ts_us=1, source_name="test",
+        ),
+    )
+    registry = IdentityRegistry(
+        assets={
+            "asset:wrapped": AssetIdentity(
+                asset_id="asset:wrapped",
+                symbol="WRAPPED",
+                evm_contracts={1: "0x111"},
+            )
+        }
+    )
+
+    class Okx:
+        @staticmethod
+        def list_tokens(*, chain: str, **_kwargs: object) -> dict[str, object]:
+            if chain == "1":
+                return {"status": "ok", "tokens": [
+                    {"symbol": "WRAPPED", "address": "0x111", "decimals": 18, "chain_index": "1"}
+                ]}
+            if chain == "56":
+                return {"status": "ok", "tokens": [
+                    {"symbol": "WRAPPED", "address": "0x222", "decimals": 18, "chain_index": "56"}
+                ]}
+            return {"status": "ok", "tokens": []}
+
+    assets, errors = source._discover_okx_assets(
+        context=SimpleNamespace(
+            reference_quotes=refs,
+            timed_out=lambda: False,
+            identity_registry=registry,
+        ),
+        credentials=object(),
+        okx_dex=Okx,
+        existing_tokens=set(),
+    )
+
+    assert errors == []
+    assert len(assets) == 1
+    assert assets[0].identity_key == "asset:wrapped"
+    assert assets[0].evm_contracts == {1: "0x111"}
+    assert source.last_ambiguous_tokens == set()
 
 
 def test_okx_dynamic_catalogue_prioritizes_funding_before_volume(

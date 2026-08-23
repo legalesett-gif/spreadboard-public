@@ -103,11 +103,13 @@ class OkxDexCredentials:
 
 
 def load_okx_dex_credentials() -> OkxDexCredentials | None:
-    api_key = keychain("SPREADARB/okx_dex/api_key") or keychain("SPREADARB/okx/api_key")
-    secret = keychain("SPREADARB/okx_dex/secret") or keychain("SPREADARB/okx/secret")
-    passphrase = keychain("SPREADARB/okx_dex/passphrase") or keychain(
-        "SPREADARB/okx/passphrase"
-    )
+    # Trading-account API keys and OnchainOS developer keys are different
+    # products. Falling back to the ordinary OKX exchange key produced
+    # ``Invalid Authority`` and made an incorrectly configured DEX source look
+    # present. Only accept the dedicated OnchainOS services here.
+    api_key = keychain("SPREADARB/okx_dex/api_key")
+    secret = keychain("SPREADARB/okx_dex/secret")
+    passphrase = keychain("SPREADARB/okx_dex/passphrase")
     project_id = keychain("SPREADARB/okx_dex/project_id") or keychain(
         "SPREADARB/okx_web3/project_id"
     )
@@ -295,13 +297,7 @@ def list_tokens(
         path=OKX_DEX_TOKENS_PATH,
     )
     if str(raw.get("code")) != "0":
-        code = str(raw.get("code") or "")
-        blocker = (
-            "okx_dex_geo_blocked"
-            if code == "53015"
-            else f"okx_dex_tokens:{raw.get('msg') or code or 'unknown'}"
-        )
-        return {"status": "blocked", "blockers": [blocker]}
+        return {"status": "blocked", "blockers": [_provider_blocker(raw, "tokens")]}
     tokens = []
     for item in raw.get("data") or []:
         if not isinstance(item, dict):
@@ -485,14 +481,49 @@ def _is_retryable_provider_failure(payload: dict[str, Any]) -> bool:
 
 def _quote_payload(raw: dict[str, Any]) -> dict[str, Any]:
     if str(raw.get("code")) != "0":
-        code = str(raw.get("code") or "")
-        blocker = "okx_dex_geo_blocked" if code == "53015" else f"okx_dex_quote:{raw.get('msg') or code or 'unknown'}"
+        blocker = _provider_blocker(raw, "quote")
         return {"status": "blocked", "blockers": [blocker], "raw": raw}
     data = raw.get("data")
     quote = data[0] if isinstance(data, list) and data else None
     if not isinstance(quote, dict):
         return {"status": "blocked", "blockers": ["okx_dex_quote_empty"], "raw": raw}
     return quote
+
+
+def _provider_blocker(raw: dict[str, Any], operation: str) -> str:
+    """Map provider failures to stable, non-secret operational diagnostics."""
+
+    code = str(raw.get("code") or "").strip()
+    message = str(raw.get("msg") or "").strip().casefold()
+    if code == "53015":
+        return "okx_dex_geo_blocked"
+    if "ip validation" in message or "ip whitelist" in message:
+        return "okx_dex_ip_restricted"
+    if any(
+        phrase in message
+        for phrase in (
+            "no access to current services",
+            "invalid authority",
+            "permission denied",
+            "not authorized",
+        )
+    ):
+        return "okx_dex_api_access_denied"
+    if any(
+        phrase in message
+        for phrase in (
+            "api key doesn't exist",
+            "api key does not exist",
+            "invalid api key",
+            "invalid sign",
+            "invalid signature",
+            "invalid passphrase",
+        )
+    ):
+        return "okx_dex_credentials_rejected"
+    if _is_rate_limited(raw):
+        return "okx_dex_rate_limited"
+    return f"okx_dex_{operation}_provider_error:{code or 'unknown'}"
 
 
 def _slippage_bps(value: str) -> int | None:
