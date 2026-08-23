@@ -495,6 +495,17 @@ def _provider_blocker(raw: dict[str, Any], operation: str) -> str:
 
     code = str(raw.get("code") or "").strip()
     message = str(raw.get("msg") or "").strip().casefold()
+    # SpreadBoard is deliberately free-mode only. It never constructs an x402
+    # payment credential or signs a pay-per-call authorization. Make a 402
+    # explicit so an exhausted free allowance stops the source instead of
+    # looking like a generic provider fault (or inviting an automatic payer to
+    # be added without an operator decision).
+    if (
+        str(raw.get("http_status") or "") == "402"
+        or code == "402"
+        or "payment required" in message
+    ):
+        return "okx_dex_payment_required_free_mode"
     if code == "53015":
         return "okx_dex_geo_blocked"
     if "ip validation" in message or "ip whitelist" in message:

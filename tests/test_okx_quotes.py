@@ -33,6 +33,30 @@ def test_provider_access_failure_is_sanitized() -> None:
     ) == "okx_dex_api_access_denied"
 
 
+def test_payment_required_stays_in_explicit_free_mode() -> None:
+    assert okx_quotes._provider_blocker(
+        {"code": "402", "msg": "Payment Required", "http_status": 402},
+        "quote",
+    ) == "okx_dex_payment_required_free_mode"
+
+
+def test_signed_quotes_never_attach_an_x402_payment_credential() -> None:
+    calls = []
+
+    def fake_http_get(url, headers):
+        calls.append((url, headers))
+        return {"code": "0", "data": []}
+
+    okx_quotes._signed_get(
+        params={"chainIndex": "1"},
+        credentials=_credentials(),
+        http_get=fake_http_get,
+    )
+
+    assert len(calls) == 1
+    assert not any("payment" in name.casefold() for name in calls[0][1])
+
+
 def test_signed_get_retries_default_client_rate_limit(monkeypatch) -> None:
     responses = [
         {"code": "50011", "msg": "Too Many Requests"},
