@@ -643,7 +643,8 @@ def replace_payload(payload: dict[str, Any]) -> dict[str, Any]:
         # from being answered as if it were data.
         WARM_QUERY = payload
         _WARM_QUERY_UPDATED_AT = installed_at
-    _persist_snapshot("spread", payload, saved_at=installed_at)
+    if payload.get("groups"):
+        _persist_snapshot("spread", payload, saved_at=installed_at)
     return payload
 
 

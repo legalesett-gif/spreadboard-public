@@ -685,6 +685,12 @@ class SharedArtifactWatcher(threading.Thread):
         )
         from spreadboard import telegram_queries
 
+        restored = telegram_queries.restore_persisted_payloads()
+        if restored["spread"] or restored["funding"]:
+            _log(
+                "telegram persisted snapshots recovered "
+                f"spread={restored['spread']} funding={restored['funding']}"
+            )
         snapshot = telegram_queries.payload_status()
         if snapshot["ready"] and snapshot.get("funding_ready"):
             return
