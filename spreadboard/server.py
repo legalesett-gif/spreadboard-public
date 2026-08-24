@@ -7126,6 +7126,15 @@ FREE_TOKEN_LIMIT = 2
 #: How many teaser rows follow, carrying real numbers with the entry hidden.
 FREE_TEASER_ROWS = 6
 
+_FREE_STREAM_MAP_LOCK = threading.Lock()
+_FREE_STREAM_MAP_CACHE: tuple[
+    tuple[str, int], float, dict[str, str]
+] | None = None
+FREE_STREAM_MAP_CACHE_SECONDS = max(
+    30.0,
+    float(os.environ.get("SPREADBOARD_FREE_STREAM_MAP_CACHE_SECONDS", "300")),
+)
+
 
 def free_teaser_alias(route_key: str) -> str:
     """An opaque, stable id for a teaser row.
@@ -7141,12 +7150,9 @@ def free_teaser_alias(route_key: str) -> str:
     return "t" + hashlib.blake2s(str(route_key).encode(), digest_size=8).hexdigest()
 
 
-def free_stream_key_map(board_path: Path) -> dict[str, str]:
-    """Real route key -> what the public stream is allowed to call it.
+def _free_stream_key_map_from_payload(data: dict[str, Any]) -> dict[str, str]:
+    """Build the privacy-preserving stream map from one rendered generation."""
 
-    The two full rows keep their own keys; every teaser route is aliased.
-    """
-    data = api_market_spreads(board_path, dict(FREE_BOARD_QUERY))
     mapping: dict[str, str] = {}
     limit = FREE_TOKEN_LIMIT + FREE_TEASER_ROWS
     for name, best_key in (("top_edges", "best_route"), ("top_funding", "best_funding_route")):
@@ -7167,6 +7173,44 @@ def free_stream_key_map(board_path: Path) -> dict[str, str]:
             if key and mapping.get(key) != key:
                 mapping[key] = free_teaser_alias(key)
     return mapping
+
+
+def _store_free_stream_key_map(
+    board_path: Path,
+    data: dict[str, Any],
+) -> dict[str, str]:
+    """Prime the SSE allowlist from the exact payload the visitor just saw."""
+
+    global _FREE_STREAM_MAP_CACHE
+
+    mapping = _free_stream_key_map_from_payload(data)
+    cache_key = (str(board_path), id(api_market_spreads))
+    with _FREE_STREAM_MAP_LOCK:
+        _FREE_STREAM_MAP_CACHE = (cache_key, time.monotonic(), mapping)
+    return dict(mapping)
+
+
+def free_stream_key_map(board_path: Path) -> dict[str, str]:
+    """Real route key -> what the public stream is allowed to call it.
+
+    The two full rows keep their own keys; every teaser route is aliased. The
+    free HTML computes this same payload immediately before opening its SSE
+    connection, so reuse that exact generation instead of making the stream
+    handshake repeat the board projection.
+    """
+
+    cache_key = (str(board_path), id(api_market_spreads))
+    now = time.monotonic()
+    with _FREE_STREAM_MAP_LOCK:
+        cached = _FREE_STREAM_MAP_CACHE
+        if (
+            cached is not None
+            and cached[0] == cache_key
+            and now - cached[1] < FREE_STREAM_MAP_CACHE_SECONDS
+        ):
+            return dict(cached[2])
+    data = api_market_spreads(board_path, dict(FREE_BOARD_QUERY))
+    return _store_free_stream_key_map(board_path, data)
 
 
 def free_visible_route_keys(board_path: Path) -> set[str]:
@@ -7282,6 +7326,7 @@ def _free_teaser(groups: list[dict[str, Any]], hidden: int) -> tuple[str, str]:
 def render_free_page(board_path: Path) -> str:
     """The board a visitor sees: two rows whole, the rest with the entry hidden."""
     data = api_market_spreads(board_path, dict(FREE_BOARD_QUERY))
+    _store_free_stream_key_map(board_path, data)
     summary = data.get("summary") or {}
     health = (data.get("source_health") or {}).get("canonical_api") or {}
     live = bool(data.get("ok")) and health.get("status") == "fresh"

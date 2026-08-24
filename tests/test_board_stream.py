@@ -177,6 +177,31 @@ def test_public_stream_reprices_only_its_preapproved_visible_keys(
     assert rows == {"GUA|visible": (1.5, 0.5, "matched_vwap")}
 
 
+def test_free_stream_mapping_reuses_the_completed_page_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stream handshake must not pay for the same board projection twice."""
+    from spreadboard import server
+
+    route = {"route_key": "GUA|visible"}
+    payload = {
+        "top_edges": [{"best_route": route, "best_funding_route": route}],
+        "top_funding": [{"best_route": route, "best_funding_route": route}],
+    }
+    calls = []
+    monkeypatch.setattr(
+        server,
+        "api_market_spreads",
+        lambda *_args, **_kwargs: calls.append(True) or payload,
+    )
+
+    first = server.free_stream_key_map(Path("board.jsonl"))
+    second = server.free_stream_key_map(Path("board.jsonl"))
+
+    assert first == second == {"GUA|visible": "GUA|visible"}
+    assert calls == [True]
+
+
 def test_stream_updates_the_label_when_a_live_tick_is_only_top_book() -> None:
     """Production WKC changed the main number over SSE but left the adjacent
     ``$500 VWAP`` label behind. A current top-book tick must change both so the
