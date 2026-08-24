@@ -248,6 +248,15 @@ def test_dex_historical_api_exports_the_same_globally_ranked_page_two(monkeypatc
 
     monkeypatch.setattr(server, "_historical_funding_page", historical_page)
 
+    class UnrelatedBuildSlot:
+        def acquire(self, **_kwargs):
+            raise AssertionError("historical DEX pagination must not queue here")
+
+        def release(self):
+            raise AssertionError("an unacquired slot must not be released")
+
+    monkeypatch.setattr(server, "_MARKET_BUILD_SLOTS", UnrelatedBuildSlot())
+
     payload = server.api_market_spreads(
         Path("board.json"),
         {

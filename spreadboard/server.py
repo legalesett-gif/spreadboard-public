@@ -2535,9 +2535,9 @@ def api_market_spreads(
     # 40 MB scanner snapshot, so making it queue behind a broad market build
     # adds up to 20 seconds without protecting any shared heavy work.
     acquired = False
-    if not complete_funding_request:
+    if not complete_funding_request and not historical_dex_request:
         acquired = _MARKET_BUILD_SLOTS.acquire(timeout=_market_build_slot_wait_seconds())
-    if not complete_funding_request and not acquired:
+    if not complete_funding_request and not historical_dex_request and not acquired:
         # Every slot is busy. Do not pile on another full build and do not serve
         # an older generation. A no_cache caller is an explicit internal
         # request, so it proceeds unslotted.
