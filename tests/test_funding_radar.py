@@ -289,3 +289,12 @@ def test_broad_dex_history_lane_is_archived_but_not_added_to_telegram_queries() 
     ]
     assert service.FUNDING_ARCHIVE_QUERIES[0] not in telegram_queries
     assert "FUNDING_ARCHIVE_QUERIES" in inspect.getsource(service._refresh_funding_windows)
+
+
+def test_web_startup_explicitly_owns_the_cold_funding_generation() -> None:
+    source = inspect.getsource(service._warm_telegram_payload_at_startup)
+
+    assert "funding_catalog.refresh_cache()" in source
+    assert source.index("funding_catalog.refresh_cache()") < source.index(
+        "_complete_telegram_funding_payloads"
+    )

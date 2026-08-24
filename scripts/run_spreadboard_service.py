@@ -528,7 +528,7 @@ def _warm_telegram_payload_at_startup(board_path: Path) -> None:
     bot even while the website was healthy.
     """
     try:
-        from spreadboard import server, telegram_queries
+        from spreadboard import funding_catalog, server, telegram_queries
 
         started = time.monotonic()
         # Markets is the first authenticated navigation view. Warm its exact
@@ -542,6 +542,12 @@ def _warm_telegram_payload_at_startup(board_path: Path) -> None:
         )
         _yield_to_requests()
         telegram_queries.replace_payload(payload)
+        # A fresh web process has no in-memory complete-pair generation. Start
+        # the sole explicit background build immediately at startup; HTTP
+        # readers return a bounded honest warming response and can never own or
+        # wait behind this multi-minute job.
+        funding_catalog.refresh_cache()
+        _yield_to_requests()
         funding_payloads = _complete_telegram_funding_payloads(board_path)
         if funding_payloads:
             telegram_queries.replace_funding_payloads(funding_payloads)
