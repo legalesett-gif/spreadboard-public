@@ -2339,7 +2339,11 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"retry: 3000\n\n")
             self.wfile.flush()
             for _ in range(20_000):
-                rows = _shared_stream_rows(self.server.board_path, query)
+                rows = _shared_stream_rows(
+                    self.server.board_path,
+                    query,
+                    only_keys=set(rename) if rename is not None else None,
+                )
                 if rename is not None:
                     # Filters and aliases in one pass: anything not listed does
                     # not go out at all, and a teaser route goes out under a
@@ -6785,19 +6789,27 @@ LIVE_TICK_SECONDS = max(0.2, float(os.environ.get("SPREADBOARD_LIVE_TICK_SECONDS
 
 
 def _shared_stream_rows(
-    board_path: Path, query: dict[str, list[str]]
+    board_path: Path,
+    query: dict[str, list[str]],
+    *,
+    only_keys: set[str] | None = None,
 ) -> dict[str, tuple[Any, ...]]:
     """Current prices for a lane, computed once however many streams want them."""
     key = (
         str(board_path),
         tuple(sorted((k, tuple(v)) for k, v in query.items())),
+        tuple(sorted(only_keys or ())),
     )
     now = time.monotonic()
     with _LIVE_TICK_LOCK:
         cached = _LIVE_TICK.get(key)
         if cached is not None and now - cached[0] < LIVE_TICK_SECONDS:
             return cached[1]
-    rows = _board_stream_rows(board_path, query)
+    rows = (
+        _board_stream_rows(board_path, query)
+        if only_keys is None
+        else _board_stream_rows(board_path, query, only_keys=only_keys)
+    )
     with _LIVE_TICK_LOCK:
         _LIVE_TICK[key] = (time.monotonic(), rows)
         if len(_LIVE_TICK) > 32:
@@ -6806,7 +6818,12 @@ def _shared_stream_rows(
     return rows
 
 
-def _board_stream_rows(board_path: Path, query: dict[str, list[str]]) -> dict[str, tuple[Any, ...]]:
+def _board_stream_rows(
+    board_path: Path,
+    query: dict[str, list[str]],
+    *,
+    only_keys: set[str] | None = None,
+) -> dict[str, tuple[Any, ...]]:
     """Current spread and funding per route, for the lane the member is viewing.
 
     The grouped board is cached because building it is expensive, so prices in it
@@ -6818,13 +6835,28 @@ def _board_stream_rows(board_path: Path, query: dict[str, list[str]]) -> dict[st
     # Overriding limit/sort here produced a second cache key, so the stream and
     # the page each paid their own ~20s board build every time the cache turned
     # over -- on two cores that is what pushed warm page loads back to seconds.
-    payload = api_market_spreads(board_path, query)
-    routes = [
-        route
-        for group in payload.get("groups") or []
-        for route in group.get("routes") or []
-        if isinstance(route, dict) and route.get("route_key")
-    ]
+    routes: list[dict[str, Any]] = []
+    if only_keys:
+        # The public free stream has already resolved the exact small set it
+        # may disclose. Re-projecting and re-reading books for the broader
+        # board four times per second spent more than a full CPU continuously,
+        # even though all but these keys were discarded before transmission.
+        # The resident universe keeps these same rows current in memory.
+        routes, resident = warm_query_projection.LIVE_UNIVERSE.target_rows(
+            route_keys=tuple(only_keys)
+        )
+        if not resident.get("ready"):
+            routes = []
+    if not routes:
+        payload = api_market_spreads(board_path, query)
+        routes = [
+            route
+            for group in payload.get("groups") or []
+            for route in group.get("routes") or []
+            if isinstance(route, dict)
+            and route.get("route_key")
+            and (not only_keys or str(route.get("route_key")) in only_keys)
+        ]
     live = api_spreads.live_route_updates_for(routes, include_basis=True)
     rows: dict[str, tuple[Any, ...]] = {}
     for route in routes:

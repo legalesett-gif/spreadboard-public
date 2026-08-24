@@ -133,6 +133,50 @@ def test_stream_does_not_erase_a_current_quote_when_fast_books_are_absent(
     assert rows[route["route_key"]] == (1.125, 0.4, "retained_matched_vwap")
 
 
+def test_public_stream_reprices_only_its_preapproved_visible_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The free SSE lane must not scan the member-only board every tick."""
+    from spreadboard import server
+
+    visible = {
+        "route_key": "GUA|visible",
+        "depth_weighted_spread_pct": 1.25,
+        "funding_daily_pct": 0.4,
+    }
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        server.warm_query_projection.LIVE_UNIVERSE,
+        "target_rows",
+        lambda **kwargs: (
+            [visible],
+            {"ready": True, "requested": sorted(kwargs["route_keys"])},
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "api_market_spreads",
+        lambda *_args, **_kwargs: pytest.fail(
+            "resident visible keys must avoid a full board projection"
+        ),
+    )
+
+    def live_updates(routes, **_kwargs):
+        seen.append([str(route["route_key"]) for route in routes])
+        return {"GUA|visible": (1.5, 0.5, 10_000_000, "matched_vwap")}
+
+    monkeypatch.setattr(server.api_spreads, "live_route_updates_for", live_updates)
+
+    rows = server._board_stream_rows(
+        tmp_path / "board.jsonl",
+        {},
+        only_keys={"GUA|visible"},
+    )
+
+    assert seen == [["GUA|visible"]]
+    assert rows == {"GUA|visible": (1.5, 0.5, "matched_vwap")}
+
+
 def test_stream_updates_the_label_when_a_live_tick_is_only_top_book() -> None:
     """Production WKC changed the main number over SSE but left the adjacent
     ``$500 VWAP`` label behind. A current top-book tick must change both so the
