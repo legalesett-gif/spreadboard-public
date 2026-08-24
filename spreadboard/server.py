@@ -9007,6 +9007,13 @@ FUNDING_RANK_TABS: tuple[tuple[str, str], ...] = (
     ("30d", "30d total"),
 )
 
+# The complete funding catalogue can contain thousands of economic pairs on a
+# single 25-token page.  Eagerly serialising every pair into closed <details>
+# blocks produced multi-megabyte HTML and made the authenticated page time out.
+# Ranking and JSON export remain complete; the page body is only a compact
+# preview of the already-ranked routes for each token.
+FUNDING_PAIR_PREVIEW_LIMIT = 3
+
 
 def render_funding_windows(route: dict[str, Any] | None, route_key: Any) -> str:
     """Realised 1d/7d/30d carry for a route, or an honest blank.
@@ -9315,7 +9322,7 @@ def render_funding_page(
     page_end = page_offset + returned_tokens
     pagination_html = (
         '<nav class="funding-pagination" aria-label="Funding results pages">'
-        f'<span>Showing {h(page_start)}–{h(page_end)} of {h(total_tokens)} tokens · every eligible pair is inside its token row</span>'
+        f'<span>Showing {h(page_start)}–{h(page_end)} of {h(total_tokens)} tokens · top {h(FUNDING_PAIR_PREVIEW_LIMIT)} pairs previewed per token; this page\'s Export JSON includes every pair for these tokens</span>'
         + (
             f'<a href="{h(funding_page_href(offset=max(0, page_offset - page_limit)))}">Previous</a>'
             if page_offset > 0
@@ -9451,7 +9458,7 @@ def render_funding_page(
             <h2>{h(dict(tabs).get(selected_farm))} Farms</h2>
             <p>Positive net values mean the displayed long-short pair receives funding under the exchange sign convention. Ranking uses the complete pair catalogue before this token page is sliced.</p>
           </div>
-          {render_json_export_control("/api/spreads?" + urlencode(_query_with(funding_query, limit=500, offset=0)))}
+          {render_json_export_control("/api/spreads?" + urlencode(_query_with(funding_query, limit=page_limit, offset=page_offset)))}
         </div>
         <div class="funding-ledger-head" aria-hidden="true">
           <span>Token</span><span>Best farm</span><span>{h("Net now / 24h" if selected_window == "now" else "Settled 24h total" if selected_window == "1d" else f"Settled {selected_window} total")}</span><span>Payouts</span>
@@ -9460,7 +9467,11 @@ def render_funding_page(
         <div class="funding-group-list">
           {
         "".join(
-            render_funding_token_group(group, selected_window=selected_window)
+            render_funding_token_group(
+                group,
+                selected_window=selected_window,
+                route_limit=FUNDING_PAIR_PREVIEW_LIMIT,
+            )
             for group in funding_groups
         )
         or render_funding_farm_empty(
@@ -9481,7 +9492,10 @@ def render_funding_page(
 
 
 def render_funding_token_group(
-    group: dict[str, Any], *, selected_window: str = "now"
+    group: dict[str, Any],
+    *,
+    selected_window: str = "now",
+    route_limit: int | None = None,
 ) -> str:
     best = group.get("best_funding_route") or group.get("best_route") or {}
     historical = bool(best.get("radar_historical"))
@@ -9518,6 +9532,23 @@ def render_funding_token_group(
         if selected_window == "1d"
         else f"Settled {selected_window} total"
     )
+    routes = list(group.get("routes") or [])
+    visible_routes = routes
+    if route_limit is not None:
+        visible_routes = routes[: max(1, int(route_limit))]
+    try:
+        total_routes = max(len(routes), int(group.get("route_count") or 0))
+    except (TypeError, ValueError):
+        total_routes = len(routes)
+    hidden_routes = max(0, total_routes - len(visible_routes))
+    overflow_note = (
+        '<p class="funding-pair-overflow">'
+        f'Showing the best {h(len(visible_routes))} of {h(total_routes)} exact pairs. '
+        f'{h(hidden_routes)} more are included in this token page\'s Export JSON with the same rank and period filters.'
+        "</p>"
+        if hidden_routes
+        else ""
+    )
     return f"""
     <details class="funding-token-group {"historical-radar" if historical else ""}" data-route-key="{h(best.get("route_key") or "")}">
       <summary>
@@ -9534,7 +9565,8 @@ def render_funding_token_group(
         <span class="funding-chevron" aria-hidden="true">⌄</span>
       </summary>
       <div class="funding-pair-list">
-        {"".join(render_funding_pair(route, selected_window=selected_window) for route in group.get("routes") or [])}
+        {"".join(render_funding_pair(route, selected_window=selected_window) for route in visible_routes)}
+        {overflow_note}
       </div>
     </details>
     """
@@ -19801,6 +19833,7 @@ pre { background: var(--dark); color: white; padding: 14px; border-radius: 8px; 
 .funding-token-group > summary > div:not(.asset-identity) span { color: var(--terminal-muted); font-size: 9px; text-transform: uppercase; }
 .funding-token-group > summary > div:not(.asset-identity) strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .funding-pair-list { border-top: 1px solid var(--terminal-line); }
+.funding-pair-overflow { margin: 0; padding: 9px 12px; border-top: 1px solid var(--terminal-line); color: var(--terminal-muted); font-size: 10px; }
 .funding-pair-row { display: grid; grid-template-columns: minmax(150px,1fr) minmax(150px,1fr) 110px 110px 80px 130px; gap: 10px; align-items: center; min-height: 66px; padding: 8px 12px; border-top: 1px solid var(--terminal-line); background: var(--terminal-panel-2); }
 .funding-pair-row:first-child { border-top: 0; }
 .funding-pair-row > div:not(.route-actions) { display: grid; gap: 3px; min-width: 0; }

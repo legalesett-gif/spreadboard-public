@@ -527,6 +527,10 @@ def test_historical_dex_page_and_export_request_the_same_selected_window(monkeyp
     assert captured["offset"] == ["20"]
     assert captured["limit"] == ["20"]
     assert "funding_window=7d" in html
+    assert (
+        'data-export-url="/api/spreads?offset=20&amp;limit=20&amp;funding_only=1'
+        in html
+    )
 
 
 def test_live_overlay_does_not_reselect_or_remove_historical_leaders(monkeypatch) -> None:
