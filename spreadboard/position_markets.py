@@ -26,12 +26,26 @@ def resolve_position_route(
     catalogue = catalogue if isinstance(catalogue, dict) else chart_catalog.load()
     market_index = market_index or catalogue_market_index(catalogue)
     token = str(position.get("token") or "").upper()
-    long_leg = _catalogue_leg(
-        position, "long", token=token, market_index=market_index
-    )
-    short_leg = _catalogue_leg(
-        position, "short", token=token, market_index=market_index
-    )
+    saved_custom_route = _saved_custom_route(position, token=token)
+    if saved_custom_route is not None:
+        # A relative-value position can intentionally join two catalogue
+        # tickers for the same economic asset (for example xyz:SKHX against
+        # 10 x xyz:SKHY).  The signed custom route fixes both exact symbols and
+        # their display multipliers; looking both legs up under the composite
+        # position label would otherwise make a valid pair appear unlisted.
+        long_leg = _catalogue_leg_for_route(
+            saved_custom_route, "long", market_index=market_index
+        )
+        short_leg = _catalogue_leg_for_route(
+            saved_custom_route, "short", market_index=market_index
+        )
+    else:
+        long_leg = _catalogue_leg(
+            position, "long", token=token, market_index=market_index
+        )
+        short_leg = _catalogue_leg(
+            position, "short", token=token, market_index=market_index
+        )
     listed_sides = [side for side, leg in (("long", long_leg), ("short", short_leg)) if leg]
     listing_status = (
         "listed"
@@ -45,12 +59,16 @@ def resolve_position_route(
     chart_route_key = None
     history_route_key = normalized_route_key(position)
     if long_leg is not None and short_leg is not None:
-        try:
-            chart_route_key = chart_catalog.custom_route_key(token, long_leg, short_leg)
-            canonical_route = chart_catalog.route_from_key(chart_route_key)
-        except (KeyError, TypeError, ValueError):
-            canonical_route = None
-            chart_route_key = None
+        if saved_custom_route is not None:
+            chart_route_key = str(position.get("route_key") or "")
+            canonical_route = saved_custom_route
+        else:
+            try:
+                chart_route_key = chart_catalog.custom_route_key(token, long_leg, short_leg)
+                canonical_route = chart_catalog.route_from_key(chart_route_key)
+            except (KeyError, TypeError, ValueError):
+                canonical_route = None
+                chart_route_key = None
         if canonical_route is not None:
             history_route_key = route_history_key(canonical_route)
 
@@ -164,6 +182,70 @@ def _catalogue_leg(
             requested_symbol.casefold(),
         )
     )
+    return dict(item) if item is not None else None
+
+
+def _saved_custom_route(
+    position: dict[str, Any], *, token: str
+) -> dict[str, Any] | None:
+    route = chart_catalog.route_from_key(str(position.get("route_key") or ""))
+    if not isinstance(route, dict) or str(route.get("token") or "").upper() != token:
+        return None
+    for side in ("long", "short"):
+        venue = str(position.get(f"{side}_venue") or "")
+        expected = {
+            "venue": venue,
+            "market_type": normalize_market_type(
+                venue, position.get(f"{side}_market_type")
+            ),
+            "symbol": str(position.get(f"{side}_symbol") or ""),
+        }
+        actual = {
+            "venue": str(route.get(f"{side}_venue") or ""),
+            "market_type": normalize_market_type(
+                route.get(f"{side}_venue"), route.get(f"{side}_market_type")
+            ),
+            "symbol": str(route.get(f"{side}_market_symbol") or ""),
+        }
+        if any(
+            actual[key].casefold() != expected[key].casefold()
+            for key in ("venue", "market_type", "symbol")
+        ):
+            return None
+    return route
+
+
+def _catalogue_leg_for_route(
+    route: dict[str, Any],
+    side: str,
+    *,
+    market_index: dict[tuple[str, str, str, str], dict[str, Any]],
+) -> dict[str, Any] | None:
+    venue = str(route.get(f"{side}_venue") or "")
+    market_type = normalize_market_type(venue, route.get(f"{side}_market_type"))
+    symbol = str(route.get(f"{side}_market_symbol") or "")
+    if not venue or not market_type or not symbol:
+        return None
+    # Catalogue tokens normally equal the unified symbol base.  Keep the
+    # exact-identity fallback for adapters whose display token is aliased.
+    symbol_token = symbol.partition("/")[0].upper()
+    item = market_index.get(
+        (symbol_token, venue.casefold(), market_type, symbol.casefold())
+    )
+    if item is None:
+        matches = [
+            candidate
+            for (
+                _candidate_token,
+                candidate_venue,
+                candidate_type,
+                candidate_symbol,
+            ), candidate in market_index.items()
+            if candidate_venue == venue.casefold()
+            and candidate_type == market_type
+            and candidate_symbol == symbol.casefold()
+        ]
+        item = matches[0] if len(matches) == 1 else None
     return dict(item) if item is not None else None
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
@@ -9,6 +9,7 @@ import pytest
 
 from spreadboard import (
     accounts,
+    chart_catalog,
     fast_quotes,
     live_book_cache,
     portfolio,
@@ -98,6 +99,80 @@ def test_saved_dex_label_resolves_to_exact_catalogue_spot_adapter() -> None:
     assert route["dex_contract"] == "0xf39e4b21c84e737df08e2c3b32541d856f508e48"
 
 
+def test_relative_value_position_resolves_two_exact_tickers_and_normalizes_spread() -> None:
+    route_key = chart_catalog.skhx_skhynix_route_key()
+    position = {
+        **_dex_position(),
+        "id": 88,
+        "user_id": 9,
+        "token": "SKHX / SK HYNIX",
+        "route_key": route_key,
+        "long_venue": "Hyperliquid",
+        "long_market_type": "Futures",
+        "long_symbol": "XYZ-SKHX/USDC:USDC",
+        "long_quantity": 2.186,
+        "long_entry_price": 1182.625,
+        "short_venue": "Hyperliquid",
+        "short_market_type": "Futures",
+        "short_symbol": "XYZ-SKHY/USDC:USDC",
+        "short_quantity": 21.86,
+        "short_entry_price": 156.3022,
+        "entry_spread_pct": 32.164,
+        "entry_fees_usd": 0.2960745,
+        "funding_cashflows": [{"amount_usd": -53.4216385}],
+    }
+    catalogue = {
+        "markets": [
+            {
+                "token": "XYZ-SKHX",
+                "venue": "Hyperliquid",
+                "market_type": "Futures",
+                "symbol": "XYZ-SKHX/USDC:USDC",
+            },
+            {
+                "token": "XYZ-SKHY",
+                "venue": "Hyperliquid",
+                "market_type": "Futures",
+                "symbol": "XYZ-SKHY/USDC:USDC",
+            },
+        ]
+    }
+    timestamp = int(datetime.now(tz=UTC).timestamp() * 1_000_000)
+    books = {
+        live_book_cache.cache_key(
+            "Hyperliquid", "Futures", "XYZ-SKHX/USDC:USDC"
+        ): live_book_cache.CachedBook(
+            bids=[[1183.0, 10.0]], asks=[[1183.2, 10.0]], quote_ts_us=timestamp
+        ),
+        live_book_cache.cache_key(
+            "Hyperliquid", "Futures", "XYZ-SKHY/USDC:USDC"
+        ): live_book_cache.CachedBook(
+            bids=[[155.3, 100.0]], asks=[[155.4, 100.0]], quote_ts_us=timestamp
+        ),
+    }
+
+    resolved = position_markets.resolve_position_route(
+        position, [], catalogue=catalogue
+    )
+    hydrated = portfolio._hydrate_position(
+        position, [], books=books, funding_legs={}, catalogue=catalogue
+    )
+
+    assert resolved["listing_status"] == "listed"
+    assert resolved["long_leg"]["token"] == "XYZ-SKHX"
+    assert resolved["short_leg"]["token"] == "XYZ-SKHY"
+    assert resolved["canonical_route"]["notes"]["relative_value"] == {
+        "long_multiplier": 1.0,
+        "short_multiplier": 10.0,
+    }
+    assert hydrated["long_mark_price"] == pytest.approx(1183.1)
+    assert hydrated["short_mark_price"] == pytest.approx(155.35)
+    assert hydrated["current_marked_spread_pct"] == pytest.approx(
+        (155.35 * 10 / 1183.1 - 1) * 100
+    )
+    assert hydrated["funding_income_usd"] == pytest.approx(-53.4216385)
+
+
 def test_position_match_never_substitutes_a_different_saved_symbol() -> None:
     position = {
         **_dex_position(),
@@ -147,7 +222,7 @@ def test_listed_position_is_refreshing_not_claimed_market_unavailable(monkeypatc
 
 
 def test_reference_history_does_not_mark_a_full_position(monkeypatch) -> None:
-    now_us = int(datetime.now(tz=timezone.utc).timestamp() * 1_000_000)
+    now_us = int(datetime.now(tz=UTC).timestamp() * 1_000_000)
     monkeypatch.setattr(
         portfolio,
         "_history_quote",
@@ -187,7 +262,7 @@ def test_position_marks_use_reference_prices_without_exit_impact() -> None:
         "transfer_costs_usd": 4.0,
         "slippage_costs_usd": 5.0,
     }
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     now_us = int(now.timestamp() * 1_000_000)
     snapshot = {
         "schema": portfolio_funding.SCHEMA,
@@ -289,7 +364,7 @@ def test_position_chart_link_uses_exact_custom_route_and_since_entry() -> None:
 
 
 def test_since_entry_window_uses_exact_open_timestamp_and_caps_at_30_days() -> None:
-    opened = datetime.now(tz=timezone.utc) - timedelta(days=3, hours=2)
+    opened = datetime.now(tz=UTC) - timedelta(days=3, hours=2)
     since_us = server._position_opened_us(opened.isoformat())
     config = server.position_chart_window_config(since_us)
 

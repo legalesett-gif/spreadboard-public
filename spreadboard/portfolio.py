@@ -216,8 +216,17 @@ def _hydrate_position(
     )
     long_ask = _number(movement_quote.get("long_entry"))
     short_bid = _number(movement_quote.get("short_entry"))
-    open_spread = _spread(long_ask, short_bid)
-    marked_spread = _spread(long_mark, short_mark)
+    long_multiplier, short_multiplier = _relative_value_multipliers(
+        market.get("canonical_route") or current
+    )
+    open_spread = _spread(
+        long_ask * long_multiplier if long_ask is not None else None,
+        short_bid * short_multiplier if short_bid is not None else None,
+    )
+    marked_spread = _spread(
+        long_mark * long_multiplier if long_mark is not None else None,
+        short_mark * short_multiplier if short_mark is not None else None,
+    )
     listing_status = str(market.get("listing_status") or "unlisted")
     if (
         current
@@ -900,6 +909,19 @@ def _spread(denominator: float | None, numerator: float | None) -> float | None:
         (numerator / denominator - 1.0) * 100.0
         if denominator and numerator and denominator > 0
         else None
+    )
+
+
+def _relative_value_multipliers(route: dict[str, Any] | None) -> tuple[float, float]:
+    notes = route.get("notes") if isinstance(route, dict) else {}
+    relative = notes.get("relative_value") if isinstance(notes, dict) else {}
+    if not isinstance(relative, dict):
+        return 1.0, 1.0
+    long_multiplier = _number(relative.get("long_multiplier")) or 1.0
+    short_multiplier = _number(relative.get("short_multiplier")) or 1.0
+    return (
+        long_multiplier if long_multiplier > 0 else 1.0,
+        short_multiplier if short_multiplier > 0 else 1.0,
     )
 
 
