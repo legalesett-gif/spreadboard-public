@@ -260,3 +260,17 @@ def test_failed_refresh_retains_the_previous_complete_live_map(
     assert universe.snapshot()[1] == before
     assert status["ready"] is True
     assert "temporary sqlite handoff" in str(status["last_error"])
+
+
+def test_update_snapshot_reuses_immutable_maps_without_copying_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = {"GUA-route": _route("GUA", route_key="GUA-route")}
+    universe = _ready_universe(monkeypatch, rows)
+
+    updates, status = universe.update_snapshot()
+
+    assert updates is universe._updates
+    assert updates["GUA-route"][0] == pytest.approx(0.5)
+    assert status["ready"] is True
+    assert status["updated_route_count"] == 1

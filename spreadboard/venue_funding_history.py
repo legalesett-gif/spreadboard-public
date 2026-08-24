@@ -851,7 +851,11 @@ def route_history_status(route: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def route_windows(route: dict[str, Any]) -> dict[str, float | None]:
+def route_windows(
+    route: dict[str, Any],
+    *,
+    legs: dict[str, dict[str, float | None]] | None = None,
+) -> dict[str, float | None]:
     """Net realised carry for a route: what the short leg took less what the long paid.
 
     A spot leg pays no funding, so it contributes zero rather than unknown --
@@ -865,7 +869,7 @@ def route_windows(route: dict[str, Any]) -> dict[str, float | None]:
     )
     if not has_futures_leg:
         return net
-    legs = load()
+    exact_legs = load() if legs is None else legs
     sides: dict[str, dict[str, float | None] | None] = {}
     for side in ("long", "short"):
         venue = str(route.get(f"{side}_venue") or "")
@@ -877,7 +881,7 @@ def route_windows(route: dict[str, Any]) -> dict[str, float | None]:
             sides[side] = {label: 0.0 for label in net}
             continue
         key = f"{route.get(f'{side}_venue')}|{route.get(f'{side}_market_symbol')}"
-        sides[side] = legs.get(key)
+        sides[side] = exact_legs.get(key)
     if sides["long"] is None or sides["short"] is None:
         return net
     for label in net:

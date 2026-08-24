@@ -290,15 +290,10 @@ def test_current_ranking_happens_before_token_pagination(monkeypatch) -> None:
     assert page["groups"][0]["best_funding_route"]["route_key"] == "strong"
 
 
-def test_restored_catalog_now_uses_resident_live_carry(monkeypatch) -> None:
+def test_restored_catalog_now_uses_current_exact_leg_carry(monkeypatch) -> None:
     from spreadboard import warm_query_projection
 
     stale = _route("GUA", "gua", current=0.1, one_day=0.2)
-    current = {
-        **stale,
-        "funding_daily_pct": 1.5,
-        "funding_projected_24h_pct": 1.5,
-    }
     monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
     monkeypatch.setattr(
         funding_catalog,
@@ -307,14 +302,71 @@ def test_restored_catalog_now_uses_resident_live_carry(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         warm_query_projection.LIVE_UNIVERSE,
-        "target_rows",
-        lambda **_kwargs: ([current], {"ready": True}),
+        "update_snapshot",
+        lambda: ({}, {"ready": True}),
+    )
+    monkeypatch.setattr(
+        funding_catalog.bulk_quotes,
+        "load_funding",
+        lambda: {
+            "Long|GUA/USDT:USDT": {
+                "rate_pct": 0.0,
+                "interval_hours": 8.0,
+            },
+            "Short|GUA/USDT:USDT": {
+                "rate_pct": 0.5,
+                "interval_hours": 8.0,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        funding_catalog.funding_radar,
+        "window_value",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Now must not read historical windows")
+        ),
     )
 
     page = funding_catalog.page(route_kind="FUTURES", window="now")
 
     assert page["largest_value"] == 1.5
     assert page["groups"][0]["best_funding_route"]["funding_daily_pct"] == 1.5
+    assert page["window_route_counts"] == {}
+    assert page["window_token_counts"] == {}
+
+
+def test_populated_live_cache_never_backfills_a_missing_leg_from_stale_catalog(
+    monkeypatch,
+) -> None:
+    from spreadboard import warm_query_projection
+
+    stale = _route("GUA", "gua", current=9.9, one_day=0.2)
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setattr(
+        funding_catalog,
+        "_complete_payloads",
+        lambda: {"GUA": {"routes": [stale]}},
+    )
+    monkeypatch.setattr(
+        warm_query_projection.LIVE_UNIVERSE,
+        "update_snapshot",
+        lambda: ({}, {"ready": True}),
+    )
+    monkeypatch.setattr(
+        funding_catalog.bulk_quotes,
+        "load_funding",
+        lambda: {
+            "Short|GUA/USDT:USDT": {
+                "rate_pct": 0.5,
+                "interval_hours": 8.0,
+            }
+        },
+    )
+
+    page = funding_catalog.page(route_kind="FUTURES", window="now")
+
+    assert page["groups"] == []
+    assert page["matching_route_count"] == 0
 
 
 def test_production_historical_window_reads_current_exact_archive(monkeypatch) -> None:
@@ -326,16 +378,30 @@ def test_production_historical_window_reads_current_exact_archive(monkeypatch) -
         lambda: {"GUA": {"routes": [stale]}},
     )
     monkeypatch.setattr(funding_catalog, "_resident_live_overlay", lambda rows: rows)
+    archive = {
+        "Long|GUA/USDT:USDT": {"1d": 0.0, "7d": 0.0, "30d": 0.0},
+        "Short|GUA/USDT:USDT": {"1d": 1.25, "7d": 2.5, "30d": 5.0},
+    }
+    loads = []
+    monkeypatch.setattr(
+        funding_catalog.venue_funding_history,
+        "load",
+        lambda: loads.append(True) or archive,
+    )
     monkeypatch.setattr(
         funding_catalog.funding_radar,
         "window_value",
-        lambda _route, label: 1.25 if label == "1d" else None,
+        lambda _route, label, **kwargs: (
+            kwargs["exact_legs"]["Short|GUA/USDT:USDT"][label]
+            - kwargs["exact_legs"]["Long|GUA/USDT:USDT"][label]
+        ),
     )
 
     page = funding_catalog.page(route_kind="FUTURES", window="1d")
 
     assert page["largest_value"] == 1.25
     assert page["groups"][0]["best_funding_window_pct"] == 1.25
+    assert loads == [True]
 
 
 def test_every_eligible_route_for_a_returned_token_is_preserved(monkeypatch) -> None:

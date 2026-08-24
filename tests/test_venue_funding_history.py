@@ -140,6 +140,32 @@ def test_net_is_short_minus_long(monkeypatch) -> None:
     assert net["30d"] == pytest.approx(6.0)
 
 
+def test_preloaded_exact_legs_avoid_reopening_archive(monkeypatch) -> None:
+    exact_legs = {
+        "Gate|X/USDT:USDT": {"1d": 0.1, "7d": 0.7, "30d": 3.0},
+        "Bybit|X/USDT:USDT": {"1d": 0.4, "7d": 2.1, "30d": 9.0},
+    }
+    monkeypatch.setattr(
+        vfh,
+        "load",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("preloaded archive must not be reopened per route")
+        ),
+    )
+    route = {
+        "long_venue": "Gate",
+        "long_market_type": "Futures",
+        "long_market_symbol": "X/USDT:USDT",
+        "short_venue": "Bybit",
+        "short_market_type": "Futures",
+        "short_market_symbol": "X/USDT:USDT",
+    }
+
+    assert vfh.route_windows(route, legs=exact_legs) == pytest.approx(
+        {"1d": 0.3, "7d": 1.4, "30d": 6.0}
+    )
+
+
 def test_a_leg_we_have_no_history_for_leaves_the_route_unknown(monkeypatch) -> None:
     monkeypatch.setattr(vfh, "load", lambda **_kw: {})
     route = {

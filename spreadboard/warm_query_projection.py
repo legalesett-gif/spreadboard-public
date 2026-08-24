@@ -113,6 +113,14 @@ class LiveRouteUniverse:
         with self._lock:
             return self._headlines
 
+    def update_snapshot(
+        self,
+    ) -> tuple[dict[str, tuple[Any, ...]], dict[str, Any]]:
+        """Expose the immutable live map without copying all structural rows."""
+
+        with self._lock:
+            return self._updates, self._status_unlocked()
+
     def target_rows(
         self,
         *,

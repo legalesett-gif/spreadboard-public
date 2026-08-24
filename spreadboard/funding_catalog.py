@@ -20,7 +20,14 @@ from typing import Any
 
 import orjson
 
-from spreadboard import api_spreads, catalog_pairs, chart_catalog, funding_radar
+from spreadboard import (
+    api_spreads,
+    bulk_quotes,
+    catalog_pairs,
+    chart_catalog,
+    funding_radar,
+    venue_funding_history,
+)
 
 CACHE_SECONDS = max(
     30.0,
@@ -331,7 +338,48 @@ def _current_value(route: dict[str, Any]) -> float | None:
     return None
 
 
-def _window_value(route: dict[str, Any], label: str) -> float | None:
+def _live_current_value(
+    route: dict[str, Any], funding: dict[str, dict[str, Any]]
+) -> float | None:
+    """Net daily carry from the current exact per-leg funding cache."""
+
+    daily: dict[str, float] = {}
+    has_futures = False
+    for side in ("long", "short"):
+        if str(route.get(f"{side}_market_type") or "") != "Futures":
+            daily[side] = 0.0
+            continue
+        has_futures = True
+        venue = str(route.get(f"{side}_venue") or "")
+        symbol = str(
+            route.get(f"{side}_market_symbol")
+            or route.get(f"{side}_symbol")
+            or ""
+        )
+        leg = funding.get(f"{venue}|{symbol}")
+        if not isinstance(leg, dict):
+            return None
+        rate = _number(leg.get("rate_pct"))
+        interval = _number(leg.get("interval_hours"))
+        if rate is None or interval is None or interval <= 0:
+            return None
+        daily[side] = rate * 24.0 / interval
+    return daily["short"] - daily["long"] if has_futures else None
+
+
+def _apply_live_current_value(route: dict[str, Any], value: float | None) -> None:
+    route["funding_daily_pct"] = value
+    route["funding_projected_24h_pct"] = value
+    route["funding_spread_pct"] = value
+    route["funding_apr_pct"] = value * 365.0 if value is not None else None
+
+
+def _window_value(
+    route: dict[str, Any],
+    label: str,
+    *,
+    exact_legs: dict[str, dict[str, float | None]] | None = None,
+) -> float | None:
     """Use an exact window already attached to this coherent generation."""
 
     # Production keeps exact venue settlements in a small independently
@@ -342,7 +390,7 @@ def _window_value(route: dict[str, Any], label: str) -> float | None:
         "web",
         "combined",
     }:
-        return funding_radar.window_value(route, label)
+        return funding_radar.window_value(route, label, exact_legs=exact_legs)
     attached = (
         route.get("settled_funding_windows")
         if isinstance(route.get("settled_funding_windows"), dict)
@@ -352,7 +400,7 @@ def _window_value(route: dict[str, Any], label: str) -> float | None:
         value = _number(attached.get(label))
         if value is not None:
             return value
-    return funding_radar.window_value(route, label)
+    return funding_radar.window_value(route, label, exact_legs=exact_legs)
 
 
 def _resident_live_overlay(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -366,42 +414,22 @@ def _resident_live_overlay(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     try:
         from spreadboard import warm_query_projection
 
-        current, status = warm_query_projection.LIVE_UNIVERSE.target_rows(
-            all_rows=True
-        )
+        updates, status = warm_query_projection.LIVE_UNIVERSE.update_snapshot()
     except Exception:  # noqa: BLE001 - durable catalogue stays available.
         return rows
-    if not status.get("ready") or not current:
+    if not status.get("ready") or not updates:
         return rows
-    by_key = {
-        str(route.get("route_key") or ""): route
-        for route in current
-        if route.get("route_key")
-    }
-    by_identity = {
-        catalog_pairs.route_identity(route): route for route in current
-    }
-    preserved_fields = (
-        "settled_funding_windows",
-        "catalog_history_loaded",
-        "radar_windows",
-        "radar_last_seen_at",
-        "radar_last_seen_age_min",
-        "radar_historical",
-    )
-    output: list[dict[str, Any]] = []
-    for route in rows:
-        live = by_key.get(str(route.get("route_key") or ""))
-        if live is None:
-            live = by_identity.get(catalog_pairs.route_identity(route))
-        if live is None:
-            output.append(route)
-            continue
-        preserved = {
-            field: route[field] for field in preserved_fields if field in route
-        }
-        output.append({**route, **live, **preserved})
-    return output
+    now = time.time()
+    return [
+        warm_query_projection._overlay(
+            route,
+            updates.get(str(route.get("route_key") or "")),
+            now=now,
+        )
+        if str(route.get("route_key") or "") in updates
+        else route
+        for route in rows
+    ]
 
 
 def _copy_route(route: dict[str, Any], *, historical: bool) -> dict[str, Any]:
@@ -427,10 +455,29 @@ def _all_routes(
     include_retained: bool,
     payloads: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    selected_payloads = payloads if payloads is not None else _complete_payloads()
+    if not include_retained:
+        # The bulk catalogue emits each exact leg pair once inside its token.
+        # Economic-identity dedupe is required only when retained radar rows
+        # are merged into a historical lane. Running that tuple construction
+        # over 100k current candidates added ~1.6 seconds to every Now request.
+        return [
+            _copy_route(route, historical=False)
+            for payload in selected_payloads.values()
+            for route in payload.get("routes") or []
+            if isinstance(route, dict)
+            and _common_eligible(
+                route,
+                route_kind=route_kind,
+                symbol=symbol,
+                exchange=exchange,
+                quote=quote,
+            )
+        ]
     rows: list[dict[str, Any]] = []
     live_identities: set[tuple[Any, ...]] = set()
     identity_indexes: dict[tuple[Any, ...], int] = {}
-    for payload in (payloads if payloads is not None else _complete_payloads()).values():
+    for payload in selected_payloads.values():
         for route in payload.get("routes") or []:
             if not isinstance(route, dict) or not _common_eligible(
                 route,
@@ -563,19 +610,41 @@ def page(
     )
     rows = _resident_live_overlay(rows)
     grouped: dict[str, list[tuple[float, dict[str, Any]]]] = {}
-    window_routes = {label: 0 for label in ("1d", "7d", "30d")}
-    window_tokens = {label: set() for label in ("1d", "7d", "30d")}
+    history_labels = ("1d", "7d", "30d")
+    window_routes = (
+        {label: 0 for label in history_labels} if selected_window != "now" else {}
+    )
+    window_tokens = (
+        {label: set() for label in history_labels}
+        if selected_window != "now"
+        else {}
+    )
+    production_reader = os.environ.get(
+        "SPREADBOARD_SERVICE_ROLE", ""
+    ).casefold() in {"web", "combined"}
+    current_funding = bulk_quotes.load_funding() if production_reader else None
+    if current_funding == {}:
+        # Keep the last complete catalogue useful during a transient atomic
+        # funding-handoff gap. Individual missing live legs remain unknown and
+        # are never backfilled from stale values once the cache is populated.
+        current_funding = None
+    exact_legs = (
+        venue_funding_history.load()
+        if production_reader and selected_window != "now"
+        else None
+    )
     for route in rows:
         token = str(route.get("token") or "").upper()
         if not token:
             continue
-        for label in window_routes:
-            value = _window_value(route, label)
-            if value is not None and value > 0:
-                window_routes[label] += 1
-                window_tokens[label].add(token)
+        current_value = (
+            _live_current_value(route, current_funding)
+            if current_funding is not None
+            else _current_value(route)
+        )
+        _apply_live_current_value(route, current_value)
         if selected_window == "now":
-            value = _current_value(route)
+            value = current_value
             if value is None or value <= 0:
                 continue
             if min_abs_funding_24h_pct is not None and abs(value) < float(min_abs_funding_24h_pct):
@@ -585,7 +654,15 @@ def page(
             ):
                 continue
         else:
-            value = _window_value(route, selected_window)
+            windows = {
+                label: _window_value(route, label, exact_legs=exact_legs)
+                for label in history_labels
+            }
+            for label, window_value in windows.items():
+                if window_value is not None and window_value > 0:
+                    window_routes[label] += 1
+                    window_tokens[label].add(token)
+            value = windows[selected_window]
             if value is None or value <= 0:
                 continue
         grouped.setdefault(token, []).append((float(value), route))

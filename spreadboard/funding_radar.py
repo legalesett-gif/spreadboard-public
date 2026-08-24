@@ -249,7 +249,12 @@ def kind_matches(route_kind: str, requested_kind: str) -> bool:
     return route_kind == requested_kind
 
 
-def window_value(route: dict[str, Any], label: str) -> float | None:
+def window_value(
+    route: dict[str, Any],
+    label: str,
+    *,
+    exact_legs: dict[str, dict[str, float | None]] | None = None,
+) -> float | None:
     """Settled carry for a live or retained route from exact venue events."""
     # Retention keeps the exact venue symbols, but its saved windows are only
     # the trailing totals observed when the route was last live. They must not
@@ -264,6 +269,10 @@ def window_value(route: dict[str, Any], label: str) -> float | None:
         for side in ("long", "short")
     )
     if has_exact_leg:
-        return _float_or_none(venue_funding_history.route_windows(route).get(label))
+        if exact_legs is None:
+            return _float_or_none(venue_funding_history.route_windows(route).get(label))
+        return _float_or_none(
+            venue_funding_history.route_windows(route, legs=exact_legs).get(label)
+        )
     radar = route.get("radar_windows") if isinstance(route.get("radar_windows"), dict) else {}
     return _float_or_none(radar.get(label))
