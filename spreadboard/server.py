@@ -67,6 +67,8 @@ from spreadboard import (  # noqa: E402
     telegram_bot,
     telegram_queries,
     token_rankings,
+    tracked_route_warmer,
+    warm_query_projection,
 )
 
 #: Same story as the board cache: intel takes ~24s to build and a 20s life meant
@@ -74,6 +76,9 @@ from spreadboard import (  # noqa: E402
 #: so it can live as long.
 _INTEL_CACHE_TTL_SECONDS = max(
     20.0, float(os.environ.get("SPREADBOARD_INTEL_CACHE_SECONDS", "900"))
+)
+_INTEL_LIVE_CACHE_TTL_SECONDS = max(
+    2.0, float(os.environ.get("SPREADBOARD_INTEL_LIVE_CACHE_SECONDS", "10"))
 )
 _INTEL_CACHE_LOCK = threading.Lock()
 _INTEL_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
@@ -95,6 +100,9 @@ _MARKET_CACHE_LOCK = threading.Lock()
 _MARKET_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 _MARKET_CACHE_INFLIGHT: dict[tuple[Any, ...], threading.Event] = {}
 _MATERIALIZED_VIEW_STORE = materialized_views.default_store()
+_LIVE_QUERY_RESULT_TTL_SECONDS = max(
+    2.0, float(os.environ.get("SPREADBOARD_LIVE_QUERY_RESULT_SECONDS", "10"))
+)
 
 
 class _MarketFreshnessGate:
@@ -2519,6 +2527,42 @@ def api_market_spreads(
         )
         if cached is not None:
             return _sync_telegram_client_universe(cached)
+        owns_refresh: bool | None = None
+        inflight: threading.Event | None = None
+        live_projection_request = not complete_funding_request and not historical_dex_request
+        if live_projection_request:
+            with _MARKET_CACHE_LOCK:
+                inflight = _MARKET_CACHE_INFLIGHT.get(cache_key)
+                if inflight is None:
+                    inflight = threading.Event()
+                    _MARKET_CACHE_INFLIGHT[cache_key] = inflight
+                    owns_refresh = True
+                else:
+                    owns_refresh = False
+            if owns_refresh:
+                template = warm_query_projection.LIVE_UNIVERSE.template()
+                if template is None:
+                    template = _MATERIALIZED_VIEW_STORE.payload_for(
+                        {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
+                        board_path=board_path,
+                    )
+                try:
+                    projected = (
+                        warm_query_projection.project(
+                            query,
+                            template=template,
+                            limit=limit,
+                            offset=offset,
+                            require_deliverable=True,
+                        )
+                        if template is not None
+                        else None
+                    )
+                except Exception:  # noqa: BLE001 - durable fallback remains valid.
+                    projected = None
+                if projected is not None and _market_payload_cacheable(projected):
+                    _market_cache_finish(cache_key, projected)
+                    return _sync_telegram_client_universe(projected)
         # A completed navigation generation survives process restarts and is
         # deliberately independent of the current file signatures.  Its rows
         # are structural candidates only: the same live-book/funding overlay
@@ -2526,18 +2570,20 @@ def api_market_spreads(
         # stale leaders and updating every currently quoted exact route.  This
         # makes a restart or an interrupted background rebuild an availability
         # event, never a multi-minute request owned by the member.
-        persisted = _MATERIALIZED_VIEW_STORE.payload_for(query, board_path=board_path)
-        if persisted is not None and _market_payload_cacheable(persisted):
-            _market_cache_finish(cache_key, persisted)
-            return _sync_telegram_client_universe(persisted)
-        with _MARKET_CACHE_LOCK:
-            inflight = _MARKET_CACHE_INFLIGHT.get(cache_key)
-            if inflight is None:
-                inflight = threading.Event()
-                _MARKET_CACHE_INFLIGHT[cache_key] = inflight
-                owns_refresh = True
-            else:
-                owns_refresh = False
+        if owns_refresh is not False:
+            persisted = _MATERIALIZED_VIEW_STORE.payload_for(query, board_path=board_path)
+            if persisted is not None and _market_payload_cacheable(persisted):
+                _market_cache_finish(cache_key, persisted)
+                return _sync_telegram_client_universe(persisted)
+        if owns_refresh is None:
+            with _MARKET_CACHE_LOCK:
+                inflight = _MARKET_CACHE_INFLIGHT.get(cache_key)
+                if inflight is None:
+                    inflight = threading.Event()
+                    _MARKET_CACHE_INFLIGHT[cache_key] = inflight
+                    owns_refresh = True
+                else:
+                    owns_refresh = False
         if not owns_refresh:
             # Someone else is already building this view. A waiter must never
             # build its own copy -- that is what turned one slow build into
@@ -2547,6 +2593,7 @@ def api_market_spreads(
             # answer with a query-only copy from an older snapshot. Expanded
             # routes outside the websocket set proved that "structural" stale
             # data can carry a materially wrong matched spread.
+            assert inflight is not None
             deadline = time.monotonic() + _MARKET_BUILD_WAIT_SECONDS
             while not inflight.wait(timeout=1.0) and time.monotonic() < deadline:
                 cached = _market_cache_get(
@@ -3567,6 +3614,13 @@ def _market_cache_get(
     now = time.monotonic()
     with _MARKET_CACHE_LOCK:
         cached = _MARKET_CACHE.get(cache_key)
+        if (
+            cached
+            and (cached[1].get("mode") == "materialized_live_query_projection")
+            and now - cached[0] > _LIVE_QUERY_RESULT_TTL_SECONDS
+        ):
+            _MARKET_CACHE.pop(cache_key, None)
+            cached = None
         if cached and now - cached[0] <= _MARKET_CACHE_TTL_SECONDS:
             return cached[1]
         if cached:
@@ -3592,6 +3646,7 @@ def _market_cache_get(
                 and key[4:6] == cache_key[4:6]
                 and key[9:] == cache_key[9:]
                 and now - value[0] <= _MARKET_CACHE_TTL_SECONDS
+                and value[1].get("mode") != "materialized_live_query_projection"
             ]
             if candidates:
                 return max(candidates, key=lambda item: item[1][0])[1][1]
@@ -3613,6 +3668,11 @@ def _market_cache_finish(cache_key: tuple[Any, ...], data: dict[str, Any] | None
 def _market_payload_cacheable(data: dict[str, Any]) -> bool:
     if data.get("status") == "warming":
         return False
+    # A complete materialized-universe projection can be genuinely empty (for
+    # example a typo in search). It is still a successful query and must never
+    # fall through to the broad discovery parser merely because it has no rows.
+    if data.get("mode") == "materialized_live_query_projection":
+        return True
     if data.get("groups"):
         return True
     canonical = ((data.get("source_health") or {}).get("canonical_api") or {})
@@ -3768,6 +3828,10 @@ def _health_with_fast_quote_state(payload: dict[str, Any]) -> dict[str, Any]:
         **materialized,
         "age_seconds": max(0.0, time.time() - built_at) if built_at is not None else None,
         "serving_contract": "last_complete_plus_live_overlay",
+        "live_query_universe": warm_query_projection.LIVE_UNIVERSE.status(),
+        "live_route_index": _MATERIALIZED_VIEW_STORE.live_route_index_status(),
+        "subscriber_route_warm": tracked_route_warmer.status(),
+        "complete_funding_catalog": funding_catalog.status(restore=False),
     }
     fast = api_spreads.fast_quote_health()
     if not fast:
@@ -3814,14 +3878,19 @@ def _live_book_status() -> dict[str, Any]:
 def api_intel(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
     query = query or {}
     params = _intel_params(query)
+    defaults = _intel_params({})
     if not (_query_bool(query, "refresh") or _query_bool(query, "no_cache")):
         key = _intel_cache_key(board_path, params)
         now = time.monotonic()
         with _INTEL_CACHE_LOCK:
             cached = _INTEL_CACHE.get(key)
-            if cached and now - cached[0] <= _INTEL_CACHE_TTL_SECONDS:
+            cache_seconds = (
+                _INTEL_CACHE_TTL_SECONDS
+                if params == defaults
+                else _INTEL_LIVE_CACHE_TTL_SECONDS
+            )
+            if cached and now - cached[0] <= cache_seconds:
                 return cached[1]
-        defaults = _intel_params({})
         if params == defaults:
             persisted = _MATERIALIZED_VIEW_STORE.extra("intel-default")
             if persisted is not None:
@@ -3836,7 +3905,31 @@ def api_intel(board_path: Path, query: dict[str, list[str]] | None = None) -> di
         if api_spreads.DEFAULT_API_DISCOVERY_PATH.exists()
         else board_path
     )
-    data = intel.build_intel(board_path=intel_board_path, **params)
+    symbol = str(params.get("symbol") or "").upper()
+    kind = api_spreads._normalize_kind_filter(params.get("kind"))
+    kinds = (
+        {"FUTURES-SPOT", "SPOT-FUTURES"}
+        if kind == "FUTURES-SPOT-PAIR"
+        else {kind}
+        if kind
+        else set()
+    )
+    warm_rows, warm_status = warm_query_projection.LIVE_UNIVERSE.target_rows(
+        tokens=[symbol] if symbol else (),
+        route_kinds=kinds if not symbol else (),
+        all_rows=not symbol and not kinds,
+    )
+    if kinds:
+        warm_rows = [
+            row
+            for row in warm_rows
+            if str(row.get("route_kind") or "").upper() in kinds
+        ]
+    data = intel.build_intel(
+        board_path=intel_board_path,
+        board_rows=warm_rows if warm_status.get("ready") else None,
+        **params,
+    )
     data["source_freshness"] = _sanitized_source_freshness(data.get("source_freshness"))
     attention = data["source_freshness"].get("telegram_events") or {}
     if attention.get("status") != "fresh":
@@ -4256,6 +4349,15 @@ def _watchlist_market_context(board_path: Path, symbols: list[str]) -> list[dict
     wanted = {str(symbol).upper() for symbol in symbols}
     market = telegram_queries.client_visible_payload()
     if not market:
+        warm_rows, warm_status = warm_query_projection.LIVE_UNIVERSE.target_rows(
+            tokens=wanted
+        )
+        market = {"rows": warm_rows} if warm_status.get("ready") else None
+    if not market:
+        # Standalone tooling and the very first generation retain the canonical
+        # fallback. A healthy production process always takes one of the two
+        # resident snapshots above and never lets a Watchlist request parse the
+        # full discovery catalogue.
         market = api_spreads.load_spreads(
             board_path=board_path,
             include_stale=False,
@@ -5007,7 +5109,13 @@ def _triage_source_item(name: str, item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def api_pair(route_key: str, board_path: Path, config: dict[str, Any]) -> dict[str, Any]:
+def api_pair(
+    route_key: str,
+    board_path: Path,
+    config: dict[str, Any],
+    *,
+    enrich: bool = True,
+) -> dict[str, Any]:
     canonical_row = _find_canonical_route(route_key, board_path)
     if canonical_row is not None:
         row_data = _canonical_pair_row(canonical_row)
@@ -5016,7 +5124,12 @@ def api_pair(route_key: str, board_path: Path, config: dict[str, Any]) -> dict[s
         if row is None:
             return {"ok": False, "error": "route_not_found", "route_key": route_key}
         row_data = _decorate_board_row(row)
-    return {"ok": True, **live.get_route_detail(row_data, config=config)}
+    detail = (
+        live.get_route_detail(row_data, config=config)
+        if enrich
+        else live.get_route_snapshot_detail(row_data)
+    )
+    return {"ok": True, **detail}
 
 
 def api_size_quote(
@@ -5547,9 +5660,24 @@ _ROUTE_INDEX_LOCK = threading.Lock()
 def restore_materialized_route_index(board_path: Path) -> int:
     """Install the last complete chart lookup without parsing discovery."""
 
-    rows = _MATERIALIZED_VIEW_STORE.route_index(board_path=board_path)
+    materialized_status = _MATERIALIZED_VIEW_STORE.status()
+    live_status = _MATERIALIZED_VIEW_STORE.live_route_index_status()
+    use_live = bool(live_status.get("ready")) and float(
+        live_status.get("built_at_unix") or 0.0
+    ) >= float(materialized_status.get("built_at_unix") or 0.0)
+    rows = (
+        _MATERIALIZED_VIEW_STORE.live_route_index(board_path=board_path)
+        if use_live
+        else _MATERIALIZED_VIEW_STORE.route_index(board_path=board_path)
+    )
+    if rows is None and use_live:
+        rows = _MATERIALIZED_VIEW_STORE.route_index(board_path=board_path)
     if rows is None:
         return 0
+    template = _MATERIALIZED_VIEW_STORE.payload_for(
+        {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
+        board_path=board_path,
+    )
     signature = (
         str(board_path),
         _file_signature(board_path),
@@ -5558,11 +5686,19 @@ def restore_materialized_route_index(board_path: Path) -> int:
     with _ROUTE_INDEX_LOCK:
         _ROUTE_INDEX["signature"] = signature
         _ROUTE_INDEX["rows"] = rows
+    warm_query_projection.LIVE_UNIVERSE.install(rows, template=template)
     return len(rows)
 
 
 def _route_index(board_path: Path) -> dict[str, dict[str, Any]]:
-    """Every route on the board keyed by route_key, rebuilt when it changes."""
+    """Every route keyed by route_key, atomically replaced by the watcher.
+
+    Once a complete generation exists, a file-signature change is never a
+    reason for an HTTP request to parse the full discovery snapshot. The web
+    process keeps the prior complete index for the short low-priority rebuild
+    window; ``restore_materialized_route_index`` swaps the new dictionary in
+    when its checksum-verified artifact is ready.
+    """
     signature = (
         str(board_path),
         _file_signature(board_path),
@@ -5570,6 +5706,13 @@ def _route_index(board_path: Path) -> dict[str, dict[str, Any]]:
     )
     with _ROUTE_INDEX_LOCK:
         if _ROUTE_INDEX["signature"] == signature:
+            return _ROUTE_INDEX["rows"]
+        retained_signature = _ROUTE_INDEX["signature"]
+        if (
+            _ROUTE_INDEX["rows"]
+            and retained_signature
+            and retained_signature[0] == str(board_path)
+        ):
             return _ROUTE_INDEX["rows"]
     market = api_spreads.load_spreads(
         board_path=board_path,
@@ -5588,6 +5731,13 @@ def _route_index(board_path: Path) -> dict[str, dict[str, Any]]:
     with _ROUTE_INDEX_LOCK:
         _ROUTE_INDEX["signature"] = signature
         _ROUTE_INDEX["rows"] = index
+    warm_query_projection.LIVE_UNIVERSE.install(
+        index,
+        template=_MATERIALIZED_VIEW_STORE.payload_for(
+            {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
+            board_path=board_path,
+        ),
+    )
     return index
 
 
@@ -5654,6 +5804,11 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
         except Exception:  # noqa: BLE001 - structural custom row remains usable.
             pass
         return indexed_match or custom
+    resident, live_status = warm_query_projection.LIVE_UNIVERSE.target_rows(
+        route_keys=(route_key,)
+    )
+    if live_status.get("ready") and resident:
+        return resident[0]
     # A discovery generation can change while somebody has a chart open. The
     # previous structural row remains sufficient to render the shell, and the
     # exact sampler revalidates both public books and funding immediately in
@@ -9951,7 +10106,11 @@ def render_board_page(board_path: Path, config: dict[str, Any], query: dict[str,
 
 
 def render_pair_page(route_key: str, board_path: Path, config: dict[str, Any]) -> str:
-    detail = api_pair(route_key, board_path, config)
+    # The route cockpit is complete from resident canonical books, funding and
+    # history. Public exchange OHLCV/market enrichment can take several seconds
+    # and belongs behind the existing on-demand funding-history request; it
+    # must never delay the HTML shell or make an otherwise warm page look cold.
+    detail = api_pair(route_key, board_path, config, enrich=False)
     if not detail.get("ok"):
         body = """
         <section class="detail-frame">

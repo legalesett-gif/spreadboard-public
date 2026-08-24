@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import time
 import urllib.parse
 
 from cryptography.fernet import Fernet
 
-from spreadboard import accounts, alerts, chart_catalog
+from spreadboard import accounts, alerts, chart_catalog, warm_query_projection
 
 
 def test_pushover_key_is_encrypted_and_never_returned(tmp_path, monkeypatch) -> None:
@@ -92,6 +93,84 @@ def test_route_alert_sends_once_then_rearms(tmp_path, monkeypatch) -> None:
     row["open_spread_pct"] = 6.0
     assert worker.check_once()["triggered"] == 1
     assert len(sent) == 2
+
+
+def test_route_alert_uses_resident_live_universe_without_board_rebuild(
+    tmp_path, monkeypatch
+) -> None:
+    """A healthy production alert poll must never parse the full discovery board."""
+
+    db_path = tmp_path / "accounts.sqlite3"
+    monkeypatch.setenv("SPREADBOARD_FIELD_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("SPREADBOARD_PUSHOVER_APP_TOKEN", "app-token")
+    accounts.initialize(db_path)
+    user = accounts.create_user(
+        email="resident-alert@example.test",
+        display_name="Resident Alert",
+        password="strong-resident-password",
+        subscription_status="active",
+        db_path=db_path,
+    )
+    accounts.save_notification_preferences(
+        user["id"],
+        {"pushover_user_key": "k" * 30, "pushover_enabled": True},
+        db_path=db_path,
+    )
+    route_key = "COTI|FUTURES|Gate|Futures|Bybit|Futures"
+    accounts.add_market_alert_rule(
+        user["id"],
+        {
+            "route_key": route_key,
+            "symbol": "COTI",
+            "type": "token_spread",
+            "direction": "above",
+            "threshold": 5,
+            "stability_seconds": 0,
+        },
+        db_path=db_path,
+    )
+    structural = {
+        "route_key": route_key,
+        "token": "COTI",
+        "symbol": "COTI",
+        "long_venue": "Gate",
+        "long_market_type": "Futures",
+        "short_venue": "Bybit",
+        "short_market_type": "Futures",
+        "displayed_open_spread_pct": 6.0,
+        "deliverable": True,
+    }
+    universe = warm_query_projection.LiveRouteUniverse()
+    universe.install({route_key: structural}, template={"ok": True})
+    monkeypatch.setattr(
+        warm_query_projection.api_spreads,
+        "live_route_updates_for",
+        lambda *_args, **_kwargs: {
+            route_key: (6.0, 0.1, int(time.time() * 1_000_000), "matched_vwap")
+        },
+    )
+    universe.refresh()
+    monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", universe)
+    monkeypatch.setattr(
+        alerts.api_spreads,
+        "load_spreads",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("full board rebuild")),
+    )
+    sent = []
+    monkeypatch.setattr(
+        alerts,
+        "send_pushover_message",
+        lambda **kwargs: sent.append(kwargs) or {"ok": True, "status": 200},
+    )
+
+    result = alerts.UserMarketAlertWorker(
+        board_path=tmp_path / "board.json",
+        accounts_path=db_path,
+        poll_seconds=5,
+    ).check_once()
+
+    assert result == {"evaluated": 1, "triggered": 1, "delivered": 1}
+    assert len(sent) == 1
 
 
 def test_custom_chart_alert_resolves_to_matching_live_board_route(tmp_path, monkeypatch) -> None:

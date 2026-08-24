@@ -31,6 +31,7 @@ from spreadboard import (
     api_spreads,
     board,
     crypto_watcher,
+    funding_catalog,
     market_history,
     materialized_views,
     portfolio,
@@ -40,6 +41,8 @@ from spreadboard import (
     telegram_bot,
     telegram_checkout,
     token_metadata,
+    tracked_route_warmer,
+    warm_query_projection,
     web_push,
 )  # noqa: E402
 from spreadboard.server import SpreadBoardHandler, SpreadBoardServer  # noqa: E402
@@ -599,6 +602,29 @@ def _materialized_sources_current() -> bool:
     return all(source.get(key) == value for key, value in expected.items())
 
 
+def _materialized_generation_ready() -> bool:
+    """Whether a complete durable fallback exists, regardless of live prices.
+
+    The resident universe reprices current routes and handles every arbitrary
+    query. Rebuilding all HTML/API views whenever a 60-90 second quote snapshot
+    changes is therefore waste: it kept a multi-minute Python child running
+    almost continuously and stole CPU from requests. The durable generation is
+    only the restart fallback; it needs replacement when absent/incomplete, not
+    for every price tick.
+    """
+
+    status = materialized_views.default_store().status()
+    source = status.get("source_signature")
+    expected_board = str(_board_path().resolve())
+    return bool(
+        status.get("ready")
+        and isinstance(source, dict)
+        and str(source.get("board_path") or expected_board) == expected_board
+        and int(status.get("view_count") or 0) >= len(_materialized_view_queries())
+        and int(status.get("route_count") or 0) > 0
+    )
+
+
 def _cleanup_abandoned_discovery_temps(
     *, max_age_seconds: float = 21_600.0, now: float | None = None
 ) -> dict[str, int]:
@@ -639,6 +665,17 @@ def _artifact_generation_kind(path: Path) -> str:
     except (OSError, json.JSONDecodeError, AttributeError):
         return "market"
     return str(payload.get("kind") or "market").strip().casefold()
+
+
+def _live_route_pointer_path() -> Path:
+    store = materialized_views.default_store()
+    return Path(
+        getattr(
+            store,
+            "live_route_pointer_path",
+            materialized_views.DEFAULT_ROOT / "live-route-index-current.json",
+        )
+    )
 
 
 class SharedArtifactWatcher(threading.Thread):
@@ -693,6 +730,9 @@ class SharedArtifactWatcher(threading.Thread):
         self.materialized_signature = _artifact_signature(
             materialized_views.default_store().pointer_path
         )
+        self.live_route_signature = _artifact_signature(
+            _live_route_pointer_path()
+        )
         self.warm_lock = threading.Lock()
         self.warm_pending = False
         self.funding_warm_pending = False
@@ -707,6 +747,17 @@ class SharedArtifactWatcher(threading.Thread):
             self.stop_event.wait(self.poll_seconds)
 
     def check_once(self) -> None:
+        live_route_signature = _artifact_signature(
+            _live_route_pointer_path()
+        )
+        if live_route_signature != self.live_route_signature:
+            self.live_route_signature = live_route_signature
+            from spreadboard import server as server_module
+
+            route_count = server_module.restore_materialized_route_index(_board_path())
+            if route_count:
+                warm_query_projection.LIVE_UNIVERSE.refresh()
+            _log(f"live route index installed routes={route_count}")
         materialized_signature = _artifact_signature(
             materialized_views.default_store().pointer_path
         )
@@ -719,7 +770,11 @@ class SharedArtifactWatcher(threading.Thread):
             server_module.restore_materialized_intel(_board_path())
             if route_count:
                 server_module.mark_historical_dex_archive_ready()
-            _log(f"materialized navigation generation installed routes={route_count}")
+                warm_query_projection.LIVE_UNIVERSE.refresh()
+            _log(
+                "materialized navigation generation installed "
+                f"routes={route_count} live_query={warm_query_projection.LIVE_UNIVERSE.status()}"
+            )
         generation = _artifact_signature(MARKET_GENERATION_PATH)
         if generation != self.generation_signature:
             self.generation_signature = generation
@@ -768,6 +823,14 @@ class SharedArtifactWatcher(threading.Thread):
             )
         snapshot = telegram_queries.payload_status()
         if snapshot["ready"] and snapshot.get("funding_ready"):
+            return
+        # The navigation generation already contains the complete principal
+        # spread/funding payloads. Rehydrate the bot from those atomic files in
+        # milliseconds before considering a multi-minute regeneration. This is
+        # also the correct restart path when a process-local snapshot was lost
+        # but the structural source did not change.
+        if _restore_telegram_from_materialized_generation():
+            _log("telegram snapshots reconstructed from materialized generation")
             return
         with self.warm_lock:
             if self.warm_pending or (
@@ -835,12 +898,22 @@ class SharedArtifactWatcher(threading.Thread):
                 funding_warm = self.funding_warm_pending
                 self.warm_pending = False
                 self.funding_warm_pending = False
+            built_full_generation = False
             if full_warm:
-                if _materialized_sources_current():
-                    _log("materialized navigation already covers structural generation")
+                _refresh_live_route_index()
+                if _materialized_generation_ready():
+                    _log(
+                        "materialized fallback retained; resident route universe "
+                        "covers current structural generation"
+                    )
                 else:
                     _refresh_materialized_views(force=True)
-            elif funding_warm:
+                    built_full_generation = True
+            # A discovery handoff and bulk-funding handoff can be coalesced in
+            # the same drain pass. Do not let the cheap structural refresh
+            # swallow the funding refresh, but also do not rebuild twice when
+            # the first-ever full generation already included funding.
+            if funding_warm and not built_full_generation:
                 _refresh_materialized_views(force=False)
 
     def stop(self) -> None:
@@ -848,6 +921,30 @@ class SharedArtifactWatcher(threading.Thread):
         self.join(timeout=5.0)
         if self.warm_thread is not None and self.warm_thread.is_alive():
             self.warm_thread.join(timeout=5.0)
+
+
+def _restore_telegram_from_materialized_generation() -> bool:
+    """Restore both Telegram universes without parsing public discovery."""
+
+    from spreadboard import telegram_queries
+
+    store = materialized_views.default_store()
+    spread = store.payload_for(
+        {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]}
+    )
+    funding_payloads = [
+        store.payload_for(query)
+        for query in WARM_QUERIES
+        if query.get("funding_only") and not query.get("funding_window")
+    ]
+    if not spread or not funding_payloads or not all(funding_payloads):
+        return False
+    telegram_queries.replace_payload(spread)
+    telegram_queries.replace_funding_payloads(
+        [payload for payload in funding_payloads if payload]
+    )
+    status = telegram_queries.payload_status()
+    return bool(status.get("ready") and status.get("funding_ready"))
 
 
 def _run_collector_service() -> int:
@@ -910,6 +1007,8 @@ def main() -> int:
     # columns before any warm thread or HTTP request can race the first writer.
     market_history.initialize()
     _seed_public_caches()
+    funding_cache = funding_catalog.restore_persisted_cache()
+    _log(f"complete funding catalogue restore {funding_cache}")
     restored_telegram = telegram_queries.restore_persisted_payloads()
     if restored_telegram["spread"] or restored_telegram["funding"]:
         _log(
@@ -980,11 +1079,33 @@ def main() -> int:
     restored_intel = server_module.restore_materialized_intel(board_path)
     if restored_routes:
         server_module.mark_historical_dex_archive_ready()
+        live_status = warm_query_projection.LIVE_UNIVERSE.refresh()
+    else:
+        live_status = warm_query_projection.LIVE_UNIVERSE.status()
     _log(
         "materialized startup restore "
         f"routes={restored_routes} intel={restored_intel} "
-        f"status={server_module._MATERIALIZED_VIEW_STORE.status()}"
+        f"status={server_module._MATERIALIZED_VIEW_STORE.status()} "
+        f"live_query={live_status}"
     )
+    live_route_worker = warm_query_projection.Worker(
+        service_stop_event,
+        interval_seconds=float(
+            os.environ.get("SPREADBOARD_LIVE_QUERY_REFRESH_SECONDS", "10")
+        ),
+    )
+    tracked_route_worker = tracked_route_warmer.Worker(
+        service_stop_event,
+        accounts_path=server.accounts_path,
+        route_resolver=lambda route_key: server_module._find_canonical_route(
+            route_key, board_path
+        ),
+        quote_scheduler=server_module._schedule_chart_route_refresh,
+        interval_seconds=float(
+            os.environ.get("SPREADBOARD_TRACKED_ROUTE_WARM_SECONDS", "10")
+        ),
+    )
+    server.tracked_route_worker = tracked_route_worker
 
     def stop_service(_signum: int, _frame: Any) -> None:
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -1001,6 +1122,8 @@ def main() -> int:
         refresh_loop.start()
     elif artifact_watcher is not None:
         artifact_watcher.start()
+    live_route_worker.start()
+    tracked_route_worker.start()
     MemoryWatchdog(service_stop_event).start()
     # Without this nothing watches the chain, so a member could send USDC and
     # the invoice would simply expire an hour later having credited nothing.
@@ -1053,6 +1176,8 @@ def main() -> int:
             refresh_loop.stop()
         if artifact_watcher is not None:
             artifact_watcher.stop()
+        live_route_worker.join(timeout=5.0)
+        tracked_route_worker.join(timeout=5.0)
         server.server_close()
     return 0
 
@@ -1461,6 +1586,20 @@ class MarketEvidenceLoop(threading.Thread):
             )
 
     def _sweep_once(self) -> None:
+        # Evidence and token rankings each expand the all-token catalogue into
+        # hundreds of megabytes. Running them together pushed the 4 GiB
+        # collector to 95% before current quote/funding workers even started.
+        # They are both deferred analytics, so serialize only these two while
+        # live market collection continues independently.
+        if not _BACKGROUND_ANALYTICS_LOCK.acquire(timeout=300.0):
+            _log("market evidence deferred; token ranking still active")
+            return
+        try:
+            self._run_isolated_sweep()
+        finally:
+            _BACKGROUND_ANALYTICS_LOCK.release()
+
+    def _run_isolated_sweep(self) -> None:
         result = _run_worker(
             [
                 *_low_priority_prefix(),
@@ -1514,6 +1653,55 @@ MATERIALIZED_VIEW_FAILURE_RETRY_SECONDS = max(
 _LAST_MATERIALIZED_VIEW_AT = 0.0
 _MATERIALIZED_VIEW_RETRY_AFTER = 0.0
 _MATERIALIZED_VIEW_BUILD_LOCK = threading.Lock()
+_LIVE_ROUTE_INDEX_BUILD_LOCK = threading.Lock()
+
+
+def _refresh_live_route_index() -> bool:
+    """Publish and install the latest complete query index in an isolated child."""
+
+    if not _LIVE_ROUTE_INDEX_BUILD_LOCK.acquire(blocking=False):
+        return False
+    try:
+        started = time.monotonic()
+        result = _run_worker(
+            [
+                *_low_priority_prefix(),
+                sys.executable,
+                str(ROOT / "scripts/live_route_index_worker.py"),
+                "--board-path",
+                str(_board_path()),
+                "--output-root",
+                str(materialized_views.DEFAULT_ROOT),
+            ],
+            timeout=float(
+                os.environ.get("SPREADBOARD_LIVE_ROUTE_INDEX_TIMEOUT_SECONDS", "180")
+            ),
+        )
+        if result.timed_out or result.returncode != 0:
+            _log(
+                "live route index retained previous generation "
+                f"timeout={result.timed_out} exit={result.returncode} "
+                f"detail={(result.stdout or result.stderr)[-300:]}"
+            )
+            return False
+        try:
+            summary = json.loads(result.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            _log("live route index produced no summary")
+            return False
+        from spreadboard import server as server_module
+
+        routes = server_module.restore_materialized_route_index(_board_path())
+        if routes:
+            warm_query_projection.LIVE_UNIVERSE.refresh()
+        _log(
+            "live route index ready "
+            f"routes={routes} child={summary.get('seconds')}s "
+            f"elapsed={time.monotonic() - started:.1f}s"
+        )
+        return bool(routes)
+    finally:
+        _LIVE_ROUTE_INDEX_BUILD_LOCK.release()
 
 
 def _refresh_materialized_views(*, force: bool) -> bool:
@@ -1727,6 +1915,7 @@ def _warm_board_cache(*, force: bool = False) -> None:
 
 
 _TOKEN_RANKING_REFRESH_LOCK = threading.Lock()
+_BACKGROUND_ANALYTICS_LOCK = threading.Lock()
 _LAST_TOKEN_RANKING_AT = 0.0
 TOKEN_RANKING_INTERVAL_SECONDS = max(
     30.0, float(os.environ.get("SPREADBOARD_TOKEN_RANKING_SECONDS", "120"))
@@ -1750,12 +1939,17 @@ def _refresh_token_rankings(*, force: bool = False) -> None:
 
     if not _TOKEN_RANKING_REFRESH_LOCK.acquire(blocking=False):
         return
+    analytics_acquired = False
     try:
         if (
             not force
             and time.monotonic() - _LAST_TOKEN_RANKING_AT
             < TOKEN_RANKING_INTERVAL_SECONDS
         ):
+            return
+        analytics_acquired = _BACKGROUND_ANALYTICS_LOCK.acquire(blocking=False)
+        if not analytics_acquired:
+            _log("token rankings deferred; market evidence active")
             return
         result = _run_worker(
             [
@@ -1785,6 +1979,8 @@ def _refresh_token_rankings(*, force: bool = False) -> None:
         )
         _LAST_TOKEN_RANKING_AT = time.monotonic()
     finally:
+        if analytics_acquired:
+            _BACKGROUND_ANALYTICS_LOCK.release()
         _TOKEN_RANKING_REFRESH_LOCK.release()
 
 

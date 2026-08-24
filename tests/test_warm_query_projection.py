@@ -1,0 +1,262 @@
+"""Arbitrary market filters stay on the continuously warm route universe."""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+import pytest
+
+from spreadboard import materialized_views, server, warm_query_projection
+
+
+def _route(
+    token: str,
+    *,
+    route_key: str,
+    long_venue: str = "Gate",
+    short_venue: str = "Mexc",
+    spread: float = 0.5,
+    funding: float = 0.1,
+) -> dict[str, object]:
+    now_us = int(time.time() * 1_000_000)
+    return {
+        "token": token,
+        "token_name": f"{token} Token",
+        "route_key": route_key,
+        "route_kind": "FUTURES",
+        "long_venue": long_venue,
+        "long_market_type": "Futures",
+        "short_venue": short_venue,
+        "short_market_type": "Futures",
+        "long_market_symbol": f"{token}/USDT:USDT",
+        "short_market_symbol": f"{token}/USDT:USDT",
+        "long_quote": "USDT",
+        "short_quote": "USDT",
+        "long_price": 1.0,
+        "short_price": 1.01,
+        "long_bid": 0.999,
+        "long_ask": 1.0,
+        "short_bid": 1.01,
+        "short_ask": 1.011,
+        "executable_spread_pct": spread,
+        "displayed_open_spread_pct": spread,
+        "depth_weighted_spread_pct": spread,
+        "depth_usd": 500.0,
+        "matched_size_notional_usd": 500.0,
+        "depth_unverified": False,
+        "funding_daily_pct": funding,
+        "funding_projected_24h_pct": funding,
+        "funding_apr_pct": funding * 365.0,
+        "long_funding_pct": 0.0,
+        "short_funding_pct": funding / 3.0,
+        "long_funding_interval_hours": 8.0,
+        "short_funding_interval_hours": 8.0,
+        "long_volume_24h_usd": 1_000_000.0,
+        "short_volume_24h_usd": 1_000_000.0,
+        "market_cap_usd": 10_000_000.0,
+        "fdv_usd": 12_000_000.0,
+        "listing_age_days": 30.0,
+        "asset_class": "crypto",
+        "freshness": "fresh",
+        "quote_ts_us": now_us,
+        "age_min": 0.0,
+        "href": f"/pair/{route_key}",
+        "deliverable": True,
+        "identity_mismatch": False,
+        "thin_book": False,
+        "mirage_guarded": False,
+        "live_book": True,
+        "spread_quote_current": True,
+        "tokenized_guard": {"rankable": True},
+    }
+
+
+def _template() -> dict[str, object]:
+    return {
+        "ok": True,
+        "source_health": {"canonical_api": {"status": "fresh", "row_count": 2}},
+        "exchange_options": ["Gate", "Mexc", "Bybit"],
+        "route_kind_counts": {"FUTURES": 2},
+        "asset_class_counts": {"crypto": 2},
+        "route_kind_token_counts": {"FUTURES": 2},
+        "lane_token_counts": {"FUTURES": 2},
+        "top_edges": [],
+        "top_funding": [],
+    }
+
+
+def _ready_universe(
+    monkeypatch: pytest.MonkeyPatch,
+    rows: dict[str, dict[str, object]],
+    updates: dict[str, tuple[object, ...]] | None = None,
+) -> warm_query_projection.LiveRouteUniverse:
+    universe = warm_query_projection.LiveRouteUniverse()
+    universe.install(rows)  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        warm_query_projection.api_spreads,
+        "live_route_updates_for",
+        lambda *_args, **_kwargs: updates
+        if updates is not None
+        else {
+            key: (
+                row["depth_weighted_spread_pct"],
+                row["funding_daily_pct"],
+                row["quote_ts_us"],
+                "matched_vwap",
+            )
+            for key, row in rows.items()
+        },
+    )
+    universe.refresh()
+    return universe
+
+
+def test_arbitrary_filters_project_from_one_live_atomic_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = {
+        "GUA-route": _route("GUA", route_key="GUA-route"),
+        "BTW-route": _route(
+            "BTW", route_key="BTW-route", long_venue="Bybit", spread=0.2
+        ),
+    }
+    universe = _ready_universe(
+        monkeypatch,
+        rows,
+        updates={
+            "GUA-route": (2.5, 0.3, int(time.time() * 1_000_000), "matched_vwap"),
+            "BTW-route": (0.2, 0.1, int(time.time() * 1_000_000), "matched_vwap"),
+        },
+    )
+    monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", universe)
+
+    payload = warm_query_projection.project(
+        {"q": ["gua"], "exchange": ["gate"], "min_spread_pct": ["2"]},
+        template=_template(),
+        limit=25,
+        offset=0,
+    )
+
+    assert payload is not None
+    assert payload["mode"] == "materialized_live_query_projection"
+    assert [group["token"] for group in payload["groups"]] == ["GUA"]
+    assert payload["groups"][0]["best_edge_pct"] == pytest.approx(2.5)
+    assert payload["materialized_live_universe"]["updated_route_count"] == 2
+
+
+def test_empty_search_is_a_complete_projection_not_a_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = {"GUA-route": _route("GUA", route_key="GUA-route")}
+    universe = _ready_universe(monkeypatch, rows)
+    monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", universe)
+
+    payload = warm_query_projection.project(
+        {"q": ["does-not-exist"]}, template=_template(), limit=25, offset=0
+    )
+
+    assert payload is not None
+    assert payload["groups"] == []
+    assert server._market_payload_cacheable(payload) is True
+
+
+def test_server_uses_live_projection_before_discovery_loader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rows = {"GUA-route": _route("GUA", route_key="GUA-route")}
+    store = materialized_views.Store(tmp_path / "materialized")
+    default_query = {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]}
+    writer = materialized_views.GenerationWriter(
+        store, required_queries=(default_query,), source_signature={}
+    )
+    template = _template()
+    template.update(
+        {
+            "filters": {"offset": 0, "limit": 500},
+            "summary": {"matching_rows": 1, "matching_tokens": 1},
+            "pagination": {"offset": 0, "limit": 500},
+            "groups": [],
+            "rows": [],
+        }
+    )
+    writer.write_view(default_query, template)
+    writer.write_route_index(rows)  # type: ignore[arg-type]
+    writer.publish()
+    universe = _ready_universe(monkeypatch, rows)
+    monkeypatch.setattr(server, "_MATERIALIZED_VIEW_STORE", store)
+    monkeypatch.setattr(server.warm_query_projection, "LIVE_UNIVERSE", universe)
+    monkeypatch.setattr(server, "_MARKET_CACHE", {})
+    monkeypatch.setattr(server, "_MARKET_CACHE_INFLIGHT", {})
+    monkeypatch.setattr(server, "_sync_telegram_client_universe", lambda value: value)
+    monkeypatch.setattr(
+        server.api_spreads,
+        "load_spreads",
+        lambda **_kwargs: pytest.fail("an arbitrary warm query must not parse discovery"),
+    )
+
+    result = server.api_market_spreads(
+        tmp_path / "board.jsonl", {"q": ["GUA"], "min_spread_pct": ["0.1"]}
+    )
+
+    assert result["mode"] == "materialized_live_query_projection"
+    assert result["groups"][0]["token"] == "GUA"
+
+
+def test_projection_failure_releases_single_flight_and_serves_durable_view(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = materialized_views.Store(tmp_path / "materialized")
+    query = {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]}
+    writer = materialized_views.GenerationWriter(
+        store, required_queries=(query,), source_signature={}
+    )
+    durable = {
+        **_template(),
+        "mode": "durable-fallback",
+        "groups": [{"token": "GUA", "routes": []}],
+        "rows": [],
+    }
+    writer.write_view(query, durable)
+    writer.write_route_index({})
+    writer.publish()
+    monkeypatch.setattr(server, "_MATERIALIZED_VIEW_STORE", store)
+    monkeypatch.setattr(server, "_MARKET_CACHE", {})
+    monkeypatch.setattr(server, "_MARKET_CACHE_INFLIGHT", {})
+    monkeypatch.setattr(server, "_sync_telegram_client_universe", lambda value: value)
+    monkeypatch.setattr(server.warm_query_projection.LIVE_UNIVERSE, "template", lambda: durable)
+    monkeypatch.setattr(
+        server.warm_query_projection,
+        "project",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("projection")),
+    )
+    monkeypatch.setattr(
+        server.api_spreads,
+        "load_spreads",
+        lambda **_kwargs: pytest.fail("durable fallback must avoid discovery"),
+    )
+
+    result = server.api_market_spreads(tmp_path / "board.jsonl", query)
+
+    assert result["mode"] == "durable-fallback"
+    assert server._MARKET_CACHE_INFLIGHT == {}
+
+
+def test_failed_refresh_retains_the_previous_complete_live_map(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = {"GUA-route": _route("GUA", route_key="GUA-route")}
+    universe = _ready_universe(monkeypatch, rows)
+    before = universe.snapshot()[1]
+
+    def fail(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("temporary sqlite handoff")
+
+    monkeypatch.setattr(
+        warm_query_projection.api_spreads, "live_route_updates_for", fail
+    )
+    status = universe.refresh()
+
+    assert universe.snapshot()[1] == before
+    assert status["ready"] is True
+    assert "temporary sqlite handoff" in str(status["last_error"])

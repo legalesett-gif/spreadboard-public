@@ -10,7 +10,7 @@ from spreadboard import funding_catalog, funding_radar, server
 
 
 def test_catalog_rebuild_serves_last_complete_generation_to_concurrent_reader(
-    monkeypatch,
+    monkeypatch, tmp_path,
 ) -> None:
     old = {"OLD": {"routes": [{"token": "OLD"}]}}
     new = {"NEW": {"routes": [{"token": "NEW"}]}}
@@ -19,6 +19,9 @@ def test_catalog_rebuild_serves_last_complete_generation_to_concurrent_reader(
     prior_payloads = funding_catalog._CACHE_PAYLOADS
     prior_at = funding_catalog._CACHE_AT
     prior_building = funding_catalog._CACHE_BUILDING
+    monkeypatch.setattr(
+        funding_catalog, "DEFAULT_CACHE_PATH", tmp_path / "complete-funding.json"
+    )
 
     monkeypatch.setattr(
         funding_catalog.chart_catalog,
@@ -56,6 +59,55 @@ def test_catalog_rebuild_serves_last_complete_generation_to_concurrent_reader(
         funding_catalog._CACHE_AT = prior_at
         funding_catalog._CACHE_BUILDING = prior_building
         funding_catalog._CACHE_BUILD_DONE.set()
+
+
+def test_persisted_complete_catalog_restores_without_a_cold_build(
+    monkeypatch, tmp_path
+) -> None:
+    path = tmp_path / "complete-funding.json"
+    payloads = {
+        "GUA": {
+            "routes": [
+                {
+                    "token": "GUA",
+                    "route_key": "GUA|FUTURES|Long|Futures|Short|Futures",
+                }
+            ]
+        }
+    }
+    prior = (
+        funding_catalog._CACHE_PAYLOADS,
+        funding_catalog._CACHE_AT,
+        funding_catalog._CACHE_RESTORE_ATTEMPTED,
+        funding_catalog._CACHE_SAVED_AT,
+    )
+    monkeypatch.setattr(funding_catalog, "DEFAULT_CACHE_PATH", path)
+    funding_catalog._persist_cache(payloads)
+    funding_catalog._CACHE_PAYLOADS = {}
+    funding_catalog._CACHE_AT = 0.0
+    funding_catalog._CACHE_RESTORE_ATTEMPTED = False
+    funding_catalog._CACHE_SAVED_AT = None
+    monkeypatch.setattr(
+        funding_catalog.catalog_pairs,
+        "for_tokens",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("reader owned cold build")
+        ),
+    )
+    try:
+        restored = funding_catalog._complete_payloads()
+        state = funding_catalog.status()
+        assert restored == payloads
+        assert state["ready"] is True
+        assert state["token_count"] == 1
+        assert state["age_seconds"] is not None
+    finally:
+        (
+            funding_catalog._CACHE_PAYLOADS,
+            funding_catalog._CACHE_AT,
+            funding_catalog._CACHE_RESTORE_ATTEMPTED,
+            funding_catalog._CACHE_SAVED_AT,
+        ) = prior
 
 
 def test_reader_never_owns_refresh_after_complete_generation_is_invalidated(
@@ -170,6 +222,54 @@ def test_current_ranking_happens_before_token_pagination(monkeypatch) -> None:
     assert page["matching_route_count"] == 2
     assert [group["token"] for group in page["groups"]] == ["STRONG"]
     assert page["groups"][0]["best_funding_route"]["route_key"] == "strong"
+
+
+def test_restored_catalog_now_uses_resident_live_carry(monkeypatch) -> None:
+    from spreadboard import warm_query_projection
+
+    stale = _route("GUA", "gua", current=0.1, one_day=0.2)
+    current = {
+        **stale,
+        "funding_daily_pct": 1.5,
+        "funding_projected_24h_pct": 1.5,
+    }
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setattr(
+        funding_catalog,
+        "_complete_payloads",
+        lambda: {"GUA": {"routes": [stale]}},
+    )
+    monkeypatch.setattr(
+        warm_query_projection.LIVE_UNIVERSE,
+        "target_rows",
+        lambda **_kwargs: ([current], {"ready": True}),
+    )
+
+    page = funding_catalog.page(route_kind="FUTURES", window="now")
+
+    assert page["largest_value"] == 1.5
+    assert page["groups"][0]["best_funding_route"]["funding_daily_pct"] == 1.5
+
+
+def test_production_historical_window_reads_current_exact_archive(monkeypatch) -> None:
+    stale = _route("GUA", "gua", current=0.1, one_day=9.9)
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setattr(
+        funding_catalog,
+        "_complete_payloads",
+        lambda: {"GUA": {"routes": [stale]}},
+    )
+    monkeypatch.setattr(funding_catalog, "_resident_live_overlay", lambda rows: rows)
+    monkeypatch.setattr(
+        funding_catalog.funding_radar,
+        "window_value",
+        lambda _route, label: 1.25 if label == "1d" else None,
+    )
+
+    page = funding_catalog.page(route_kind="FUTURES", window="1d")
+
+    assert page["largest_value"] == 1.25
+    assert page["groups"][0]["best_funding_window_pct"] == 1.25
 
 
 def test_every_eligible_route_for_a_returned_token_is_preserved(monkeypatch) -> None:

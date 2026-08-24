@@ -30,7 +30,11 @@ def test_worker_writes_views_route_index_and_intel_atomically(
     monkeypatch.setattr(worker.service, "_materialized_view_queries", lambda: queries)
     monkeypatch.setattr(worker, "source_signature", lambda _path: {"stable": True})
     monkeypatch.setattr(worker, "_release_memory", lambda **_kwargs: None)
-    monkeypatch.setattr(worker.server, "_route_index", lambda _path: {"route": {"route_key": "route"}})
+    monkeypatch.setattr(
+        worker.api_spreads,
+        "load_public_route_index",
+        lambda: ({"route": {"route_key": "route"}}, {}),
+    )
     monkeypatch.setattr(worker.server, "api_market_spreads", lambda _path, query: _payload((query.get("kind") or ["ALL"])[0]))
     monkeypatch.setattr(worker.server, "api_intel", lambda *_args, **_kwargs: {"ok": True, "intel": "ready"})
     monkeypatch.setattr(worker.server, "mark_historical_dex_archive_ready", lambda: None)
@@ -58,7 +62,7 @@ def test_worker_does_not_publish_a_generation_mixed_across_snapshots(
     monkeypatch.setattr(worker.service, "_materialized_view_queries", lambda: ({},))
     monkeypatch.setattr(worker, "source_signature", lambda _path: next(signatures))
     monkeypatch.setattr(worker, "_release_memory", lambda **_kwargs: None)
-    monkeypatch.setattr(worker.server, "_route_index", lambda _path: {})
+    monkeypatch.setattr(worker.api_spreads, "load_public_route_index", lambda: ({}, {}))
     monkeypatch.setattr(worker.server, "api_market_spreads", lambda *_args, **_kwargs: _payload("ONE"))
     monkeypatch.setattr(worker.server, "api_intel", lambda *_args, **_kwargs: {"ok": True})
     monkeypatch.setattr(worker.funding_catalog, "clear_cache", lambda: None)

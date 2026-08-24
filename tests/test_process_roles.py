@@ -118,7 +118,8 @@ def test_duplicate_structural_event_does_not_rebuild_a_generation_just_published
     monkeypatch,
 ) -> None:
     builds: list[bool] = []
-    monkeypatch.setattr(service, "_materialized_sources_current", lambda: True)
+    monkeypatch.setattr(service, "_materialized_generation_ready", lambda: True)
+    monkeypatch.setattr(service, "_refresh_live_route_index", lambda: True)
     monkeypatch.setattr(
         service, "_refresh_materialized_views", lambda *, force: builds.append(force)
     )
@@ -132,6 +133,49 @@ def test_duplicate_structural_event_does_not_rebuild_a_generation_just_published
     assert builds == []
 
 
+def test_missing_materialized_fallback_is_built_after_fast_route_index(
+    monkeypatch,
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        service, "_refresh_live_route_index", lambda: calls.append("live") or True
+    )
+    monkeypatch.setattr(service, "_materialized_generation_ready", lambda: False)
+    monkeypatch.setattr(
+        service,
+        "_refresh_materialized_views",
+        lambda *, force: calls.append(("materialized", force)),
+    )
+    watcher = service.SharedArtifactWatcher(
+        threading.Event(), initial_warm_delay_seconds=3600
+    )
+    watcher.warm_pending = True
+
+    watcher._drain_warms()
+
+    assert calls == ["live", ("materialized", True)]
+
+
+def test_coalesced_structural_and_funding_handoff_preserves_funding_refresh(
+    monkeypatch,
+) -> None:
+    builds: list[bool] = []
+    monkeypatch.setattr(service, "_refresh_live_route_index", lambda: True)
+    monkeypatch.setattr(service, "_materialized_generation_ready", lambda: True)
+    monkeypatch.setattr(
+        service, "_refresh_materialized_views", lambda *, force: builds.append(force)
+    )
+    watcher = service.SharedArtifactWatcher(
+        threading.Event(), initial_warm_delay_seconds=3600
+    )
+    watcher.warm_pending = True
+    watcher.funding_warm_pending = True
+
+    watcher._drain_warms()
+
+    assert builds == [False]
+
+
 def test_web_watcher_invalidates_prices_and_warms_structural_changes(
     tmp_path, monkeypatch
 ) -> None:
@@ -140,13 +184,20 @@ def test_web_watcher_invalidates_prices_and_warms_structural_changes(
     monkeypatch.setattr(service, "MARKET_GENERATION_PATH", generation)
     monkeypatch.setattr(service, "SNAPSHOT_PATH", snapshot)
     invalidations: list[bool] = []
-    warms: list[bool] = []
+    live_refreshes: list[bool] = []
+    full_builds: list[bool] = []
     monkeypatch.setattr(
         service, "_invalidate_market_price_caches", lambda: invalidations.append(True)
     )
     monkeypatch.setattr(
-        service, "_refresh_materialized_views", lambda *, force: warms.append(force)
+        service, "_refresh_materialized_views", lambda *, force: full_builds.append(force)
     )
+    monkeypatch.setattr(
+        service,
+        "_refresh_live_route_index",
+        lambda: live_refreshes.append(True) or True,
+    )
+    monkeypatch.setattr(service, "_materialized_generation_ready", lambda: True)
     watcher = service.SharedArtifactWatcher(
         threading.Event(),
         initial_warm_delay_seconds=3600,
@@ -161,7 +212,8 @@ def test_web_watcher_invalidates_prices_and_warms_structural_changes(
     watcher.check_once()
     assert watcher.warm_thread is not None
     watcher.warm_thread.join(timeout=2)
-    assert warms == [True]
+    assert live_refreshes == [True]
+    assert full_builds == []
 
 
 def test_web_watcher_rebuilds_only_funding_views_after_funding_generation(
@@ -180,6 +232,9 @@ def test_web_watcher_rebuilds_only_funding_views_after_funding_generation(
         service,
         "_refresh_materialized_views",
         lambda *, force: funding_warms.append(force),
+    )
+    monkeypatch.setattr(
+        service, "_restore_telegram_from_materialized_generation", lambda: False
     )
     watcher = service.SharedArtifactWatcher(
         threading.Event(),
@@ -207,6 +262,9 @@ def test_web_watcher_recovers_a_missing_funding_snapshot_when_spreads_are_live(
         telegram_queries,
         "payload_status",
         lambda: {"ready": True, "funding_ready": False},
+    )
+    monkeypatch.setattr(
+        service, "_restore_telegram_from_materialized_generation", lambda: False
     )
     watcher = service.SharedArtifactWatcher(
         threading.Event(),
@@ -255,6 +313,25 @@ def test_market_evidence_catch_up_is_start_to_start(monkeypatch) -> None:
     assert stop.waits == [0.0, 540.0]
 
 
+def test_token_ranking_defers_while_market_evidence_owns_memory_slot(
+    monkeypatch,
+) -> None:
+    workers: list[bool] = []
+    monkeypatch.setattr(service, "_LAST_TOKEN_RANKING_AT", 0.0)
+    monkeypatch.setattr(
+        service,
+        "_run_worker",
+        lambda *_args, **_kwargs: workers.append(True),
+    )
+    assert service._BACKGROUND_ANALYTICS_LOCK.acquire(blocking=False)
+    try:
+        service._refresh_token_rankings(force=True)
+    finally:
+        service._BACKGROUND_ANALYTICS_LOCK.release()
+
+    assert workers == []
+
+
 def test_web_watcher_coalesces_continuous_collector_generations(
     tmp_path, monkeypatch
 ) -> None:
@@ -289,14 +366,16 @@ def test_web_watcher_self_heals_a_missing_telegram_snapshot(monkeypatch) -> None
     """A lost resident snapshot must not wait for the next broad discovery."""
     from spreadboard import telegram_queries
 
-    warms: list[bool] = []
+    restores: list[bool] = []
     monkeypatch.setattr(
         telegram_queries,
         "payload_status",
         lambda: {"ready": False},
     )
     monkeypatch.setattr(
-        service, "_refresh_materialized_views", lambda *, force: warms.append(force)
+        service,
+        "_restore_telegram_from_materialized_generation",
+        lambda: restores.append(True) or True,
     )
     watcher = service.SharedArtifactWatcher(
         threading.Event(),
@@ -306,10 +385,8 @@ def test_web_watcher_self_heals_a_missing_telegram_snapshot(monkeypatch) -> None
     watcher.next_telegram_recovery_at = 0.0
 
     watcher.check_once()
-    assert watcher.warm_thread is not None
-    watcher.warm_thread.join(timeout=2)
-
-    assert warms == [True]
+    assert watcher.warm_thread is None
+    assert restores == [True]
 
 
 def test_materialized_builder_is_an_isolated_low_priority_worker(monkeypatch) -> None:

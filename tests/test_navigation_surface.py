@@ -113,7 +113,12 @@ def test_pair_page_has_one_main_landmark(monkeypatch) -> None:
         "funding": {},
         "route_health": {},
     }
-    monkeypatch.setattr(server, "api_pair", lambda *_args, **_kwargs: detail)
+    pair_calls = []
+    monkeypatch.setattr(
+        server,
+        "api_pair",
+        lambda *_args, **kwargs: pair_calls.append(kwargs) or detail,
+    )
     monkeypatch.setattr(
         server,
         "api_intel",
@@ -123,6 +128,7 @@ def test_pair_page_has_one_main_landmark(monkeypatch) -> None:
 
     html = server.render_pair_page("CUSTOM:pair", server.board.DEFAULT_BOARD_PATH, {})
 
+    assert pair_calls == [{"enrich": False}]
     assert html.count("<main") == 1
     assert '<div class="pair-main">' in html
     assert ".pair-cockpit .route-alert-btn" in server.APP_CSS

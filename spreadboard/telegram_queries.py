@@ -24,6 +24,7 @@ import re
 import tempfile
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
@@ -871,14 +872,49 @@ def _rows_for(symbol: str, board_path: Path | str) -> list[dict[str, Any]]:
 
 
 def _funding_rows_for(symbol: str) -> list[dict[str, Any]]:
-    """Current funding-tab rows, already filtered and warmed by the service."""
+    """Current funding-tab rows with the resident ten-second carry overlay."""
     with _WARM_QUERY_LOCK:
         groups = FUNDING_QUERY.get("groups") or []
-    rows: list[dict[str, Any]] = []
+    rows: dict[str, dict[str, Any]] = {}
     for group in groups:
         if str(group.get("token") or "").upper() == symbol:
-            rows.extend(route for route in group.get("routes") or [] if isinstance(route, dict))
-    return rows
+            for route in group.get("routes") or []:
+                if isinstance(route, dict):
+                    rows[str(route.get("route_key") or id(route))] = route
+    # Historical windows stay in the exact settled archive, but the ``Now``
+    # carry shown by Telegram must not wait up to fifteen minutes for a full
+    # funding-page materialization. Production's resident route universe is
+    # repriced off the same bulk funding cache as the website every ten
+    # seconds. Merge every verified futures route for this token so a newly
+    # positive carry appears immediately even if it was absent from the last
+    # durable Telegram fallback.
+    if os.environ.get("SPREADBOARD_SERVICE_ROLE", "").casefold() in {"web", "combined"}:
+        try:
+            from . import warm_query_projection
+
+            current, status = warm_query_projection.LIVE_UNIVERSE.target_rows(
+                tokens=(symbol,)
+            )
+            if status.get("ready"):
+                for route in current:
+                    guard = route.get("tokenized_guard") or {}
+                    if (
+                        _funding_value(route) is None
+                        or route.get("identity_mismatch")
+                        or route.get("mirage_guarded")
+                        or route.get("thin_book")
+                        or route.get("deliverable") is False
+                        or (isinstance(guard, dict) and guard.get("rankable") is False)
+                        or not any(
+                            str(route.get(f"{side}_market_type") or "") == "Futures"
+                            for side in ("long", "short")
+                        )
+                    ):
+                        continue
+                    rows[str(route.get("route_key") or id(route))] = route
+        except Exception:  # noqa: BLE001, S110 - durable snapshot remains available.
+            pass
+    return list(rows.values())
 
 
 def _current_funding_monitor(

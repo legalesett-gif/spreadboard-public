@@ -37,7 +37,9 @@ def test_the_board_is_built_once_and_then_indexed(monkeypatch: pytest.MonkeyPatc
     assert len(builds) == 1, "the second lookup must reuse the index"
 
 
-def test_a_new_snapshot_rebuilds_the_index(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_new_snapshot_retains_index_until_background_swap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     builds = []
     signature = {"value": "one"}
 
@@ -57,7 +59,7 @@ def test_a_new_snapshot_rebuilds_the_index(monkeypatch: pytest.MonkeyPatch) -> N
     signature["value"] = "two"
     server._route_index(board)
 
-    assert len(builds) == 2, "the background warmer must refresh a changed snapshot"
+    assert len(builds) == 1, "a request must never own the changed-snapshot rebuild"
 
 
 def test_existing_route_uses_retained_index_during_snapshot_rebuild(
@@ -79,6 +81,31 @@ def test_existing_route_uses_retained_index_during_snapshot_rebuild(
     row = server._find_canonical_route("A|X|Spot|Y|Spot", Path("new-board.jsonl"))
 
     assert row and row["token"] == "A"
+
+
+def test_standard_route_prefers_current_resident_overlay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        "route_key": "A|X|Spot|Y|Spot",
+        "token": "A",
+        "displayed_open_spread_pct": 3.25,
+    }
+    monkeypatch.setattr(server.chart_catalog, "route_from_key", lambda _k: None)
+    monkeypatch.setattr(
+        server.warm_query_projection.LIVE_UNIVERSE,
+        "target_rows",
+        lambda **_kwargs: ([current], {"ready": True}),
+    )
+    monkeypatch.setattr(
+        server,
+        "_route_index",
+        lambda _path: pytest.fail("resident route must not rebuild the board"),
+    )
+
+    selected = server._find_canonical_route(current["route_key"], Path("board.jsonl"))
+
+    assert selected is current
 
 
 def test_a_catalogue_route_short_circuits(monkeypatch: pytest.MonkeyPatch) -> None:

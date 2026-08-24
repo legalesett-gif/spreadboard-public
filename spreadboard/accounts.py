@@ -3986,6 +3986,42 @@ def list_saved_charts(
         connection.close()
 
 
+def all_tracked_route_keys(
+    *, db_path: Path | str = DEFAULT_DB_PATH
+) -> list[str]:
+    """Exact public routes needed by charts, alerts or open journals.
+
+    The result intentionally contains no user/account fields.  It lets the
+    public-data warm path prioritise subscriber-visible routes without
+    exposing who saved them or why.
+    """
+
+    connection = _connect(db_path)
+    try:
+        rows = connection.execute(
+            """
+            SELECT route_key, priority FROM (
+                SELECT route_key, 0 AS priority
+                  FROM positions
+                 WHERE status = 'open' AND route_key IS NOT NULL AND route_key != ''
+                UNION ALL
+                SELECT route_key, 1 AS priority
+                  FROM market_alert_rules
+                 WHERE enabled = 1 AND route_key NOT LIKE 'TOKEN:%'
+                UNION ALL
+                SELECT route_key, 2 AS priority
+                  FROM saved_charts
+                 WHERE route_key != ''
+            )
+            GROUP BY route_key
+            ORDER BY MIN(priority), route_key
+            """
+        ).fetchall()
+        return [str(row["route_key"]) for row in rows if row["route_key"]]
+    finally:
+        connection.close()
+
+
 def delete_saved_chart(
     user_id: int, route_key: str, *, db_path: Path | str = DEFAULT_DB_PATH
 ) -> bool:

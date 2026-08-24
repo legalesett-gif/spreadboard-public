@@ -27,6 +27,7 @@ from typing import Any
 import orjson
 
 SCHEMA = "spreadboard.materialized_views.v1"
+LIVE_ROUTE_SCHEMA = "spreadboard.live_route_index.v1"
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_ROOT = RUNTIME_DIR / "materialized_views"
@@ -212,6 +213,7 @@ class Store:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.pointer_path = self.root / "current.json"
+        self.live_route_pointer_path = self.root / "live-route-index-current.json"
         self._lock = threading.RLock()
         self._pointer_signature: tuple[int, int] | None = None
         self._manifest: dict[str, Any] | None = None
@@ -307,6 +309,91 @@ class Store:
         if manifest is None or not self._board_compatible(manifest, board_path):
             return None
         payload = self._read_verified_json(manifest, manifest.get("route_index") or {})
+        if not isinstance(payload, dict) or not all(
+            isinstance(key, str) and isinstance(value, dict)
+            for key, value in payload.items()
+        ):
+            return None
+        return payload
+
+    def write_live_route_index(
+        self,
+        rows: dict[str, dict[str, Any]],
+        *,
+        source_signature: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Atomically publish the fast structural index independently of views."""
+
+        payload = _json_bytes(rows)
+        identity = f"{time.time_ns()}-{uuid.uuid4().hex[:10]}"
+        filename = f"live-route-index-{identity}.json"
+        path = self.root / filename
+        meta = {
+            "schema": LIVE_ROUTE_SCHEMA,
+            "file": filename,
+            "bytes": len(payload),
+            "sha256": _sha256(payload),
+            "row_count": len(rows),
+            "built_at_unix": time.time(),
+            "source_signature": source_signature,
+        }
+        pointer = _json_bytes(meta)
+        pointer_temp = self.root / f".{self.live_route_pointer_path.name}.{uuid.uuid4().hex}.tmp"
+        _write_bytes(path, payload)
+        _write_bytes(pointer_temp, pointer)
+        os.replace(pointer_temp, self.live_route_pointer_path)
+        _fsync_directory(self.root)
+        self._remove_obsolete_live_route_indexes(keep=2)
+        return meta
+
+    def live_route_index_status(self) -> dict[str, Any]:
+        try:
+            meta = orjson.loads(self.live_route_pointer_path.read_bytes())
+        except (OSError, orjson.JSONDecodeError):
+            return {"ready": False, "built_at_unix": None, "row_count": 0}
+        if not isinstance(meta, dict) or meta.get("schema") != LIVE_ROUTE_SCHEMA:
+            return {"ready": False, "built_at_unix": None, "row_count": 0}
+        filename = str(meta.get("file") or "")
+        if not filename or Path(filename).name != filename:
+            return {"ready": False, "built_at_unix": None, "row_count": 0}
+        path = self.root / filename
+        try:
+            stat = path.stat()
+        except OSError:
+            return {"ready": False, "built_at_unix": None, "row_count": 0}
+        return {
+            **meta,
+            "ready": stat.st_size == int(meta.get("bytes") or -1),
+        }
+
+    def live_route_index(
+        self, *, board_path: Path | str | None = None
+    ) -> dict[str, dict[str, Any]] | None:
+        meta = self.live_route_index_status()
+        if not meta.get("ready"):
+            return None
+        if board_path is not None:
+            source = (
+                meta.get("source_signature")
+                if isinstance(meta.get("source_signature"), dict)
+                else {}
+            )
+            expected = str(source.get("board_path") or "")
+            if expected and expected != str(Path(board_path).resolve()):
+                return None
+        path = self.root / str(meta.get("file") or "")
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            return None
+        if len(raw) != int(meta.get("bytes") or -1) or _sha256(raw) != str(
+            meta.get("sha256") or ""
+        ):
+            return None
+        try:
+            payload = orjson.loads(raw)
+        except orjson.JSONDecodeError:
+            return None
         if not isinstance(payload, dict) or not all(
             isinstance(key, str) and isinstance(value, dict)
             for key, value in payload.items()
@@ -514,6 +601,30 @@ class Store:
         for _stamp, path in valid:
             if path not in retained:
                 shutil.rmtree(path)
+
+    def _remove_obsolete_live_route_indexes(self, *, keep: int) -> None:
+        current = str(self.live_route_index_status().get("file") or "")
+        try:
+            candidates = sorted(
+                (
+                    path
+                    for path in self.root.glob("live-route-index-*.json")
+                    if path.is_file() and not path.is_symlink()
+                ),
+                key=lambda path: path.stat().st_mtime_ns,
+                reverse=True,
+            )
+        except OSError:
+            return
+        retained = set(candidates[: max(1, keep)])
+        if current:
+            retained.add(self.root / current)
+        for path in candidates:
+            if path not in retained:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
 
 
 _DEFAULT_STORE: Store | None = None

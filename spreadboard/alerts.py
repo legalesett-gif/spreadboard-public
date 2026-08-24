@@ -406,18 +406,6 @@ class UserMarketAlertWorker:
         if not user_ids:
             self.last_run = run
             return {"evaluated": 0, "triggered": 0, "delivered": 0}
-        market = api_spreads.load_spreads(
-            board_path=self.board_path,
-            include_stale=False,
-            include_unverified=False,
-            limit=None,
-        )
-        board_rows = [
-            row
-            for row in market.get("rows") or []
-            if isinstance(row, dict) and row.get("route_key")
-        ]
-        rows = {str(row["route_key"]): row for row in board_rows}
         rules_by_user = {}
         for user_id in user_ids:
             rules = accounts.list_market_alert_rules(user_id, db_path=self.accounts_path)
@@ -432,6 +420,41 @@ class UserMarketAlertWorker:
             if rule.get("enabled")
             and accounts.token_from_alert_key(str(rule.get("route_key") or "")) is None
         }
+        token_targets = {
+            token
+            for rules in rules_by_user.values()
+            for rule in rules
+            if rule.get("enabled")
+            if (token := accounts.token_from_alert_key(str(rule.get("route_key") or "")))
+        }
+        # Production keeps one complete, continuously repriced route universe
+        # resident in the web process.  Alert evaluation asks it only for the
+        # exact routes/tokens members track.  The fallback retains standalone
+        # and fixture compatibility, but no healthy production poll parses or
+        # groups the 25k-route discovery snapshot.
+        from spreadboard import warm_query_projection
+
+        targeted, warm_status = warm_query_projection.LIVE_UNIVERSE.target_rows(
+            route_keys=chart_keys,
+            tokens=token_targets,
+        )
+        if warm_status.get("ready"):
+            structural_rows = targeted
+            board_rows = [row for row in targeted if _alert_row_verified(row)]
+        else:
+            market = api_spreads.load_spreads(
+                board_path=self.board_path,
+                include_stale=False,
+                include_unverified=False,
+                limit=None,
+            )
+            board_rows = [
+                row
+                for row in market.get("rows") or []
+                if isinstance(row, dict) and row.get("route_key")
+            ]
+            structural_rows = []
+        rows = {str(row["route_key"]): row for row in board_rows}
         # A saved chart can remain useful after its route cools, becomes stale,
         # or is temporarily held out of the normal verified board.  Preserve a
         # structural row for those keys, then take a fresh bounded exact quote
@@ -439,8 +462,7 @@ class UserMarketAlertWorker:
         missing_standard_keys = {
             key for key in chart_keys if not key.startswith("CUSTOM:") and key not in rows
         }
-        structural_rows: list[dict[str, Any]] = []
-        if missing_standard_keys:
+        if missing_standard_keys and not warm_status.get("ready"):
             structural = api_spreads.load_spreads(
                 board_path=self.board_path,
                 include_stale=True,
@@ -613,6 +635,25 @@ class UserMarketAlertWorker:
         return output
 
 
+def _alert_row_verified(row: dict[str, Any]) -> bool:
+    """Safe local evidence for price/spread alerts without a board rebuild.
+
+    Funding may remain current while basis cools, so freshness is deliberately
+    enforced by ``_rule_value`` for spread and by ``token_metrics`` for token
+    price.  Retaining the row here lets a funding alert keep working without
+    relabelling an old spread as live.
+    """
+
+    guard = row.get("tokenized_guard") or {}
+    return not (
+        row.get("identity_mismatch")
+        or row.get("mirage_guarded")
+        or row.get("thin_book")
+        or row.get("deliverable") is False
+        or (isinstance(guard, dict) and guard.get("rankable") is False)
+    )
+
+
 def send_user_test_alert(
     user_id: int, *, accounts_path: Path | str = accounts.DEFAULT_DB_PATH
 ) -> dict[str, Any]:
@@ -685,10 +726,16 @@ def token_metrics(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
         token = str(row.get("token") or "").upper()
         if not token:
             continue
-        for side in ("long", "short"):
-            value = _float(row.get(f"{side}_price"))
-            if value is not None and value > 0:
-                prices.setdefault(token, []).append(value)
+        price_is_current = (
+            "spread_quote_current" not in row
+            or row.get("spread_quote_current") is True
+            or api_spreads.spread_quote_current(row)
+        )
+        if price_is_current:
+            for side in ("long", "short"):
+                value = _float(row.get(f"{side}_price"))
+                if value is not None and value > 0:
+                    prices.setdefault(token, []).append(value)
         carry = _float(row.get("funding_daily_pct"))
         if carry is None:
             carry = _float(row.get("funding_projected_24h_pct"))

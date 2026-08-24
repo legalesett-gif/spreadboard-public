@@ -412,6 +412,42 @@ def test_explicit_funding_view_uses_the_current_funding_snapshot(board_file):
     assert status["funding_route_count"] == 1
 
 
+def test_funding_view_overlays_resident_now_without_full_snapshot_rebuild(
+    board_file, monkeypatch
+):
+    from spreadboard import warm_query_projection
+
+    route_key = "GUA|FUTURES|Binance|Futures|Aster|Futures"
+    stale = {
+        **route("GUA", "FUTURES", "Binance", "Aster", -0.11, 0.044, 16.1, 82_000),
+        "route_key": route_key,
+        "long_market_type": "Futures",
+        "short_market_type": "Futures",
+    }
+    current = {
+        **stale,
+        "funding_daily_pct": 0.250,
+        "funding_spread_pct": 0.250,
+        "funding_apr_pct": 91.25,
+    }
+    telegram_queries.replace_funding_payloads(
+        [{"groups": [{"token": "GUA", "routes": [stale]}]}]
+    )
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setattr(
+        warm_query_projection.LIVE_UNIVERSE,
+        "target_rows",
+        lambda **_kwargs: ([current], {"ready": True}),
+    )
+
+    body = telegram_queries.render(
+        telegram_queries.Query("funding", "GUA"), board_path=board_file
+    )
+
+    assert "+0.250%" in body
+    assert "+0.044%" not in body
+
+
 def test_radar_command_lists_retained_leaders(board_file, monkeypatch):
     monkeypatch.setattr(
         telegram_queries.funding_radar,

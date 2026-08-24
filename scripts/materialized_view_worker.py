@@ -77,13 +77,57 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     )
     started = time.monotonic()
     try:
-        # Charts need the full canonical lookup, not only the top 500 tokens.
-        route_index = server._route_index(board_path)
+        # Charts and arbitrary filters need the full canonical lookup, not only
+        # the top 500 tokens. Reuse the independently published fast index when
+        # it covers this exact structural source; otherwise build the same
+        # direct, ungrouped index and publish it immediately. The former
+        # ``load_spreads(limit=None)`` path spent minutes grouping and attaching
+        # funding history that an index never reads.
+        live_meta = store.live_route_index_status()
+        live_source = (
+            live_meta.get("source_signature")
+            if isinstance(live_meta.get("source_signature"), dict)
+            else {}
+        )
+        shared_keys = ("board_path", "board", "discovery", "metadata", "rails")
+        route_index = (
+            store.live_route_index(board_path=board_path)
+            if live_meta.get("ready")
+            and all(live_source.get(key) == initial_signature.get(key) for key in shared_keys)
+            else None
+        )
+        source_health: dict[str, Any] = {}
+        if route_index is None:
+            route_index, source_health = api_spreads.load_public_route_index()
+            store.write_live_route_index(
+                route_index,
+                source_signature={key: initial_signature.get(key) for key in shared_keys},
+            )
         writer.write_route_index(route_index)
-        del route_index
+        template = store.payload_for(
+            {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
+            board_path=board_path,
+        ) or {
+            "ok": True,
+            "source_health": {"canonical_api": source_health},
+            "exchange_options": [],
+            "route_kind_counts": {},
+            "asset_class_counts": {},
+            "route_kind_token_counts": {},
+            "lane_token_counts": {},
+            "top_edges": [],
+            "top_funding": [],
+        }
+        server.warm_query_projection.LIVE_UNIVERSE.install(
+            route_index,
+            template=template,
+        )
+        live_status = server.warm_query_projection.LIVE_UNIVERSE.refresh()
+        if route_index and not live_status.get("ready"):
+            raise RuntimeError(f"live_route_projection_unavailable:{live_status}")
         with server._ROUTE_INDEX_LOCK:
             server._ROUTE_INDEX["signature"] = None
-            server._ROUTE_INDEX["rows"] = {}
+            server._ROUTE_INDEX["rows"] = route_index
         _release_memory(keep_rows=True)
 
         # Current scanner lanes share one parsed discovery row cache. Write each

@@ -14,7 +14,11 @@ from __future__ import annotations
 import os
 import threading
 import time
+from contextlib import suppress
+from pathlib import Path
 from typing import Any
+
+import orjson
 
 from spreadboard import api_spreads, catalog_pairs, chart_catalog, funding_radar
 
@@ -32,6 +36,69 @@ _CACHE_PAYLOADS: dict[str, dict[str, Any]] = {}
 _CACHE_BUILDING = False
 _CACHE_BUILD_DONE = threading.Event()
 _CACHE_BUILD_DONE.set()
+PERSISTED_SCHEMA = "spreadboard.complete_funding_catalog.v1"
+DEFAULT_CACHE_PATH = Path(
+    os.environ.get(
+        "SPREADBOARD_COMPLETE_FUNDING_CATALOG_PATH",
+        str(chart_catalog.RUNTIME_DIR / "complete_funding_catalog.json"),
+    )
+)
+_CACHE_RESTORE_ATTEMPTED = False
+_CACHE_SAVED_AT: float | None = None
+_CACHE_PERSIST_ERROR: str | None = None
+
+
+def _restore_cache_unlocked() -> None:
+    global _CACHE_PAYLOADS, _CACHE_AT, _CACHE_RESTORE_ATTEMPTED, _CACHE_SAVED_AT
+    if _CACHE_RESTORE_ATTEMPTED:
+        return
+    _CACHE_RESTORE_ATTEMPTED = True
+    try:
+        envelope = orjson.loads(DEFAULT_CACHE_PATH.read_bytes())
+        payloads = envelope.get("payloads")
+        saved_at = float(envelope.get("saved_at_unix") or 0.0)
+    except (OSError, AttributeError, TypeError, ValueError, orjson.JSONDecodeError):
+        return
+    if (
+        not isinstance(envelope, dict)
+        or envelope.get("schema") != PERSISTED_SCHEMA
+        or not isinstance(payloads, dict)
+        or not payloads
+        or not all(
+            isinstance(key, str) and isinstance(value, dict)
+            for key, value in payloads.items()
+        )
+    ):
+        return
+    _CACHE_PAYLOADS = payloads
+    _CACHE_AT = time.monotonic()
+    _CACHE_SAVED_AT = saved_at or None
+
+
+def _persist_cache(payloads: dict[str, dict[str, Any]]) -> None:
+    """Atomically retain the all-token catalogue across app restarts."""
+
+    path = DEFAULT_CACHE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw = orjson.dumps(
+        {
+            "schema": PERSISTED_SCHEMA,
+            "saved_at_unix": time.time(),
+            "payloads": payloads,
+        }
+    )
+    temporary = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        with suppress(OSError):
+            temporary.unlink()
 
 
 def clear_cache() -> None:
@@ -57,9 +124,12 @@ def refresh_cache() -> dict[str, dict[str, Any]]:
 def _complete_payloads(*, force_refresh: bool = False) -> dict[str, dict[str, Any]]:
     """One coherent all-token generation from already-warm local artifacts."""
 
-    global _CACHE_AT, _CACHE_PAYLOADS, _CACHE_BUILDING
+    global _CACHE_AT, _CACHE_PAYLOADS, _CACHE_BUILDING, _CACHE_SAVED_AT
+    global _CACHE_PERSIST_ERROR
     now = time.monotonic()
     with _CACHE_LOCK:
+        if not _CACHE_PAYLOADS:
+            _restore_cache_unlocked()
         if _CACHE_PAYLOADS and now - _CACHE_AT <= CACHE_SECONDS:
             return _CACHE_PAYLOADS
         previous = _CACHE_PAYLOADS
@@ -112,14 +182,49 @@ def _complete_payloads(*, force_refresh: bool = False) -> dict[str, dict[str, An
         if not previous:
             raise
     finally:
+        if built:
+            try:
+                _persist_cache(built)
+                _CACHE_PERSIST_ERROR = None
+            except Exception as exc:  # noqa: BLE001 - memory generation still publishes.
+                # Persistence is an availability optimization. The coherent
+                # in-memory generation is still safe to publish when disk is
+                # temporarily unavailable.
+                _CACHE_PERSIST_ERROR = f"{type(exc).__name__}: {str(exc)[:160]}"
         with _CACHE_LOCK:
             if built:
                 _CACHE_PAYLOADS = built
                 _CACHE_AT = time.monotonic()
+                _CACHE_SAVED_AT = time.time()
             _CACHE_BUILDING = False
             _CACHE_BUILD_DONE.set()
     with _CACHE_LOCK:
         return _CACHE_PAYLOADS or previous
+
+
+def restore_persisted_cache() -> dict[str, Any]:
+    """Decode the last complete catalogue before the HTTP socket opens."""
+
+    return status(restore=True)
+
+
+def status(*, restore: bool = False) -> dict[str, Any]:
+    with _CACHE_LOCK:
+        if restore and not _CACHE_PAYLOADS:
+            _restore_cache_unlocked()
+        return {
+            "ready": bool(_CACHE_PAYLOADS),
+            "token_count": len(_CACHE_PAYLOADS),
+            "saved_at_unix": _CACHE_SAVED_AT,
+            "age_seconds": (
+                max(0.0, time.time() - _CACHE_SAVED_AT)
+                if _CACHE_SAVED_AT
+                else None
+            ),
+            "building": _CACHE_BUILDING,
+            "path": str(DEFAULT_CACHE_PATH),
+            "persist_error": _CACHE_PERSIST_ERROR,
+        }
 
 
 def _number(value: Any) -> float | None:
@@ -186,6 +291,15 @@ def _current_value(route: dict[str, Any]) -> float | None:
 def _window_value(route: dict[str, Any], label: str) -> float | None:
     """Use an exact window already attached to this coherent generation."""
 
+    # Production keeps exact venue settlements in a small independently
+    # refreshed archive. Read that current rolling window at request time so a
+    # durable catalogue restored after a restart never freezes yesterday's
+    # 24h/7d/30d total. An incomplete exact leg intentionally remains blank.
+    if os.environ.get("SPREADBOARD_SERVICE_ROLE", "").casefold() in {
+        "web",
+        "combined",
+    }:
+        return funding_radar.window_value(route, label)
     attached = (
         route.get("settled_funding_windows")
         if isinstance(route.get("settled_funding_windows"), dict)
@@ -196,6 +310,55 @@ def _window_value(route: dict[str, Any], label: str) -> float | None:
         if value is not None:
             return value
     return funding_radar.window_value(route, label)
+
+
+def _resident_live_overlay(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge ten-second books/carry into a durable structural catalogue."""
+
+    if os.environ.get("SPREADBOARD_SERVICE_ROLE", "").casefold() not in {
+        "web",
+        "combined",
+    }:
+        return rows
+    try:
+        from spreadboard import warm_query_projection
+
+        current, status = warm_query_projection.LIVE_UNIVERSE.target_rows(
+            all_rows=True
+        )
+    except Exception:  # noqa: BLE001 - durable catalogue stays available.
+        return rows
+    if not status.get("ready") or not current:
+        return rows
+    by_key = {
+        str(route.get("route_key") or ""): route
+        for route in current
+        if route.get("route_key")
+    }
+    by_identity = {
+        catalog_pairs.route_identity(route): route for route in current
+    }
+    preserved_fields = (
+        "settled_funding_windows",
+        "catalog_history_loaded",
+        "radar_windows",
+        "radar_last_seen_at",
+        "radar_last_seen_age_min",
+        "radar_historical",
+    )
+    output: list[dict[str, Any]] = []
+    for route in rows:
+        live = by_key.get(str(route.get("route_key") or ""))
+        if live is None:
+            live = by_identity.get(catalog_pairs.route_identity(route))
+        if live is None:
+            output.append(route)
+            continue
+        preserved = {
+            field: route[field] for field in preserved_fields if field in route
+        }
+        output.append({**route, **live, **preserved})
+    return output
 
 
 def _copy_route(route: dict[str, Any], *, historical: bool) -> dict[str, Any]:
@@ -355,6 +518,7 @@ def page(
         include_retained=selected_window != "now",
         payloads=payloads,
     )
+    rows = _resident_live_overlay(rows)
     grouped: dict[str, list[tuple[float, dict[str, Any]]]] = {}
     window_routes = {label: 0 for label in ("1d", "7d", "30d")}
     window_tokens = {label: set() for label in ("1d", "7d", "30d")}

@@ -153,6 +153,7 @@ def build_intel(
     strategy_prompts_path: Path | str = DEFAULT_STRATEGY_PROMPTS_PATH,
     private_preflight_path: Path | str = DEFAULT_PRIVATE_PREFLIGHT_PATH,
     digest_path: Path | str = DEFAULT_DIGEST_PATH,
+    board_rows: list[board.BoardRow | dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the Community Intel payload for the local dashboard."""
 
@@ -174,8 +175,12 @@ def build_intel(
         for event in events
         if _event_matches(event, window_hours=window_hours, kind=kind, symbol=symbol, topic=topic)
     ]
-    board_snapshot = board.load_board(board_path, include_stale=True, max_age_min=None, limit=None, now=now)
-    board_by_symbol = _board_by_symbol(board_snapshot.rows)
+    if board_rows is None:
+        board_snapshot = board.load_board(
+            board_path, include_stale=True, max_age_min=None, limit=None, now=now
+        )
+        board_rows = list(board_snapshot.rows)
+    board_by_symbol = _board_by_symbol(board_rows)
     latest_preflight = _latest_preflight_by_symbol(
         *(
             read_jsonl_tail(Path(path), max_rows=1500)
@@ -1128,7 +1133,7 @@ def _recent_events(events: list[dict[str, Any]], *, limit: int) -> dict[str, lis
 
 def _funding_watch(
     events: list[dict[str, Any]],
-    board_by_symbol: dict[str, list[board.BoardRow]],
+    board_by_symbol: dict[str, list[board.BoardRow | dict[str, Any]]],
     *,
     limit: int,
 ) -> list[dict[str, Any]]:
@@ -1148,17 +1153,25 @@ def _funding_watch(
                 }
             )
     for symbol, symbol_rows in board_by_symbol.items():
-        best = max(symbol_rows, key=lambda row: abs(row.funding_apr_pct or 0.0), default=None)
-        if best and best.funding_apr_pct is not None and abs(best.funding_apr_pct) >= 25:
+        best = max(
+            (_compact_board_row(row) for row in symbol_rows),
+            key=lambda row: abs(_float_or_none((row or {}).get("funding_apr_pct")) or 0.0),
+            default=None,
+        )
+        best_funding = _float_or_none((best or {}).get("funding_apr_pct"))
+        if best and best_funding is not None and abs(best_funding) >= 25:
+            age_min = _float_or_none(best.get("age_min"))
             rows.append(
                 {
                     "symbol": symbol,
-                    "kind": best.kind,
-                    "funding_apr_pct": best.funding_apr_pct,
-                    "funding_spread_pct": best.funding_spread_pct,
-                    "open_spread_pct": best.displayed_open_spread_pct,
-                    "age_min": best.age_min,
-                    "freshness": "fresh" if best.age_min is not None and best.age_min <= board.DEFAULT_FRESH_MAX_AGE_MIN else "stale",
+                    "kind": best.get("kind"),
+                    "funding_apr_pct": best_funding,
+                    "funding_spread_pct": best.get("funding_spread_pct"),
+                    "open_spread_pct": best.get("open_spread_pct"),
+                    "age_min": age_min,
+                    "freshness": "fresh"
+                    if age_min is not None and age_min <= board.DEFAULT_FRESH_MAX_AGE_MIN
+                    else "stale",
                     "source": "board",
                 }
             )
@@ -1285,16 +1298,21 @@ def _question_patterns(events: list[dict[str, Any]], *, limit: int) -> list[dict
 
 def _route_reality(
     symbol: str,
-    board_by_symbol: dict[str, list[board.BoardRow]],
+    board_by_symbol: dict[str, list[board.BoardRow | dict[str, Any]]],
     latest_preflight: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     routes = [_compact_board_row(row) for row in board_by_symbol.get(symbol, [])[:5]]
     blockers = []
     next_actions = []
     for row in board_by_symbol.get(symbol, [])[:5]:
-        blockers.extend(row.blockers or [])
-        if row.next_action:
-            next_actions.append(row.next_action)
+        blockers.extend(
+            (row.get("blockers") or [])
+            if isinstance(row, dict)
+            else (row.blockers or [])
+        )
+        next_action = row.get("next_action") if isinstance(row, dict) else row.next_action
+        if next_action:
+            next_actions.append(str(next_action))
     preflight = latest_preflight.get(symbol)
     if preflight:
         blockers.extend(_string_list(preflight.get("blockers")))
@@ -1455,26 +1473,95 @@ def _latest_preflight_by_symbol(*row_groups: list[dict[str, Any]]) -> dict[str, 
     return latest
 
 
-def _board_by_symbol(rows: list[board.BoardRow]) -> dict[str, list[board.BoardRow]]:
-    grouped: dict[str, list[board.BoardRow]] = defaultdict(list)
+def _board_by_symbol(
+    rows: list[board.BoardRow | dict[str, Any]],
+) -> dict[str, list[board.BoardRow | dict[str, Any]]]:
+    grouped: dict[str, list[board.BoardRow | dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        grouped[row.symbol].append(row)
+        symbol = (
+            str(row.get("symbol") or row.get("token") or "")
+            if isinstance(row, dict)
+            else row.symbol
+        )
+        if symbol:
+            grouped[symbol].append(row)
     for symbol_rows in grouped.values():
-        symbol_rows.sort(key=lambda row: (row.age_min or 999999, abs(row.displayed_open_spread_pct or row.spread_pct)), reverse=False)
+        symbol_rows.sort(
+            key=lambda row: (
+                _float_or_none(row.get("age_min")) or 999999
+                if isinstance(row, dict)
+                else row.age_min or 999999,
+                abs(
+                    (
+                        _float_or_none(row.get("displayed_open_spread_pct"))
+                        or _float_or_none(row.get("executable_spread_pct"))
+                        or 0.0
+                    )
+                    if isinstance(row, dict)
+                    else row.displayed_open_spread_pct or row.spread_pct
+                ),
+            ),
+            reverse=False,
+        )
     return dict(grouped)
 
 
-def _best_board_row(rows: list[board.BoardRow]) -> board.BoardRow | None:
+def _best_board_row(
+    rows: list[board.BoardRow | dict[str, Any]],
+) -> board.BoardRow | dict[str, Any] | None:
     if not rows:
         return None
-    return max(rows, key=lambda row: (abs(row.displayed_open_spread_pct if row.displayed_open_spread_pct is not None else row.spread_pct), abs(row.funding_apr_pct or 0.0)))
+    return max(
+        rows,
+        key=lambda row: (
+            abs(
+                (
+                    _float_or_none(row.get("displayed_open_spread_pct"))
+                    or _float_or_none(row.get("executable_spread_pct"))
+                    or 0.0
+                )
+                if isinstance(row, dict)
+                else row.displayed_open_spread_pct
+                if row.displayed_open_spread_pct is not None
+                else row.spread_pct
+            ),
+            abs(
+                (_float_or_none(row.get("funding_apr_pct")) or 0.0)
+                if isinstance(row, dict)
+                else row.funding_apr_pct or 0.0
+            ),
+        ),
+    )
 
 
 def _compact_board_row(row: board.BoardRow | dict[str, Any] | None) -> dict[str, Any] | None:
     if row is None:
         return None
     if isinstance(row, dict):
-        return row
+        route_key = str(row.get("route_key") or "")
+        return {
+            "symbol": row.get("symbol") or row.get("token"),
+            "kind": row.get("kind") or row.get("route_kind"),
+            "route_key": route_key,
+            "pair_url": row.get("pair_url") or row.get("href") or (
+                f"/pair/{board.route_key_url(route_key)}" if route_key else None
+            ),
+            "route_line": row.get("route_line")
+            or (
+                f"{row.get('long_venue') or '?'} {row.get('long_market_type') or '?'}"
+                f" -> {row.get('short_venue') or '?'} {row.get('short_market_type') or '?'}"
+            ),
+            "open_spread_pct": row.get("displayed_open_spread_pct")
+            if row.get("displayed_open_spread_pct") is not None
+            else row.get("executable_spread_pct"),
+            "executable_spread_pct": row.get("executable_spread_pct"),
+            "funding_apr_pct": row.get("funding_apr_pct"),
+            "funding_spread_pct": row.get("funding_spread_pct"),
+            "age_min": row.get("age_min"),
+            "freshness": row.get("freshness"),
+            "blockers": row.get("blockers") or [],
+            "next_action": row.get("next_action"),
+        }
     return {
         "symbol": row.symbol,
         "kind": row.kind,
