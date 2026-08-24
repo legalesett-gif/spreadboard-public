@@ -283,7 +283,15 @@ def build_snapshot(
     generated_at: str | None = None,
     mark_fetcher: Callable[[dict[str, Any], str, dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Allocate exact ledger rows to non-overlapping saved position windows."""
+    """Allocate exact ledger rows to saved position windows.
+
+    A venue exposes one account-level funding cashflow per market.  Separate
+    journal tranches on the same side of that market therefore share each
+    settlement in proportion to their saved quantities while their windows
+    overlap.  This preserves the exact account total without pretending that a
+    size added later earned the earlier settlements.  Opposite-direction or
+    otherwise unquantifiable overlaps remain ambiguous and fail closed.
+    """
 
     started = generated_at or utc_iso()
     legs_by_market: dict[tuple[str, str], list[tuple[dict[str, Any], str]]] = defaultdict(list)
@@ -325,7 +333,57 @@ def build_snapshot(
                     {"side": side, "venue": venue, "symbol": symbol, "status": "error"}
                 )
             continue
-        ambiguous = _overlapping_positions(legs)
+        ambiguous = _unallocatable_overlapping_positions(legs)
+        allocated: dict[tuple[int, str], dict[str, Any]] = {
+            (int(position["id"]), side): {
+                "amount": Decimal(),
+                "event_count": 0,
+                "latest": None,
+                "allocation_method": "direct",
+            }
+            for position, side in legs
+        }
+        for event in events:
+            event_timestamp = int(event["timestamp"])
+            active = [
+                (position, side)
+                for position, side in legs
+                if int(position["id"]) not in ambiguous
+                and _position_contains_timestamp(position, event_timestamp)
+            ]
+            if not active:
+                continue
+            # An ambiguous live leg contributes to the same account cashflow;
+            # removing it and allocating the remainder would over-credit the
+            # supposedly clean rows.  Withhold every row active at that event.
+            if any(
+                int(position["id"]) in ambiguous
+                and _position_contains_timestamp(position, event_timestamp)
+                for position, _side in legs
+            ):
+                ambiguous.update(int(position["id"]) for position, _side in active)
+                continue
+            quantities = [
+                dec(position.get(f"{side}_quantity")) or Decimal()
+                for position, side in active
+            ]
+            total_quantity = sum(quantities, Decimal())
+            if total_quantity <= 0:
+                ambiguous.update(int(position["id"]) for position, _side in active)
+                continue
+            event_amount = dec(event.get("amount")) or Decimal()
+            method = "quantity_pro_rata" if len(active) > 1 else "direct"
+            for (position, side), quantity in zip(active, quantities, strict=True):
+                bucket = allocated[(int(position["id"]), side)]
+                bucket["amount"] += event_amount * quantity / total_quantity
+                bucket["event_count"] += 1
+                bucket["latest"] = max(
+                    event_timestamp,
+                    int(bucket["latest"] or 0),
+                )
+                if method == "quantity_pro_rata":
+                    bucket["allocation_method"] = method
+
         for position, side in legs:
             key = f"{int(position['user_id'])}:{int(position['id'])}"
             item = result[key]
@@ -335,22 +393,17 @@ def build_snapshot(
                     {"side": side, "venue": venue, "symbol": symbol, "status": "ambiguous"}
                 )
                 continue
-            opened = timestamp_ms(position["opened_at"])
-            closed = timestamp_ms(position["closed_at"]) if position.get("closed_at") else None
-            selected = [
-                event
-                for event in events
-                if int(event["timestamp"]) >= opened
-                and (closed is None or int(event["timestamp"]) <= closed)
-            ]
-            amount = sum((dec(event.get("amount")) or Decimal("0")) for event in selected)
+            allocation = allocated[(int(position["id"]), side)]
+            amount = allocation["amount"]
             item["amount_usd"] = str((dec(item["amount_usd"]) or Decimal("0")) + amount)
-            item["event_count"] += len(selected)
-            latest = max((int(event["timestamp"]) for event in selected), default=None)
+            item["event_count"] += int(allocation["event_count"])
+            latest = allocation["latest"]
             if latest is not None:
                 previous = item.get("latest_event_at")
                 previous_ms = timestamp_ms(previous) if previous else 0
                 item["latest_event_at"] = utc_iso(max(previous_ms, latest))
+            if allocation["allocation_method"] == "quantity_pro_rata":
+                item["allocation_method"] = "quantity_pro_rata"
             item["legs"].append(
                 {
                     "side": side,
@@ -358,7 +411,8 @@ def build_snapshot(
                     "symbol": symbol,
                     "status": "ok",
                     "amount_usd": str(amount),
-                    "event_count": len(selected),
+                    "event_count": int(allocation["event_count"]),
+                    "allocation_method": allocation["allocation_method"],
                 }
             )
     # Current reference marks are deliberately last. A slow private-ledger
@@ -397,21 +451,38 @@ def build_snapshot(
     }
 
 
-def _overlapping_positions(
+def _position_contains_timestamp(position: dict[str, Any], timestamp: int) -> bool:
+    opened = timestamp_ms(position["opened_at"])
+    closed = timestamp_ms(position["closed_at"]) if position.get("closed_at") else None
+    return timestamp >= opened and (closed is None or timestamp <= closed)
+
+
+def _unallocatable_overlapping_positions(
     legs: list[tuple[dict[str, Any], str]],
 ) -> set[int]:
+    """Overlaps whose account cashflows cannot be split by saved quantity."""
+
     ambiguous: set[int] = set()
-    for index, (left, _) in enumerate(legs):
+    for index, (left, left_side) in enumerate(legs):
         left_start = timestamp_ms(left["opened_at"])
         left_end = timestamp_ms(left["closed_at"]) if left.get("closed_at") else 2**63 - 1
-        for right, _ in legs[index + 1 :]:
+        for right, right_side in legs[index + 1 :]:
             if int(left["id"]) == int(right["id"]):
                 ambiguous.add(int(left["id"]))
                 continue
             right_start = timestamp_ms(right["opened_at"])
             right_end = timestamp_ms(right["closed_at"]) if right.get("closed_at") else 2**63 - 1
             if max(left_start, right_start) <= min(left_end, right_end):
-                ambiguous.update((int(left["id"]), int(right["id"])))
+                left_quantity = dec(left.get(f"{left_side}_quantity"))
+                right_quantity = dec(right.get(f"{right_side}_quantity"))
+                if (
+                    left_side != right_side
+                    or left_quantity is None
+                    or left_quantity <= 0
+                    or right_quantity is None
+                    or right_quantity <= 0
+                ):
+                    ambiguous.update((int(left["id"]), int(right["id"])))
     return ambiguous
 
 

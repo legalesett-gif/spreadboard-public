@@ -14065,6 +14065,13 @@ def render_position_research_note(item: dict[str, Any]) -> str:
 
 def position_funding_note(item: dict[str, Any]) -> str:
     status = str(item.get("funding_sync_status") or "")
+    if status == "exact_allocated":
+        count = int(item.get("funding_event_count") or 0)
+        synced = str(item.get("funding_synced_at") or "")
+        return (
+            "Exact private account ledger, allocated by saved tranche quantity "
+            f"during overlap · {count} settlement{'s' if count != 1 else ''} · synced {synced}"
+        )
     if status == "exact":
         count = int(item.get("funding_event_count") or 0)
         synced = str(item.get("funding_synced_at") or "")

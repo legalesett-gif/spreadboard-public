@@ -286,6 +286,7 @@ def _hydrate_position(
             "total_pnl_excludes_funding": total_pnl is not None and not funding_known,
             "funding_source": settled_funding.get("source"),
             "funding_sync_status": settled_funding.get("status"),
+            "funding_allocation_method": settled_funding.get("allocation_method"),
             "funding_event_count": settled_funding.get("event_count"),
             "funding_synced_at": settled_funding.get("synced_at"),
             "funding_latest_event_at": settled_funding.get("latest_event_at"),

@@ -110,11 +110,18 @@ def exact_funding(
         event_count = int(item.get("event_count") or 0)
     except (TypeError, ValueError):
         return _legacy_or_unknown(position, status="invalid_snapshot", synced_at=synced_at)
+    allocation_method = str(item.get("allocation_method") or "direct")
+    allocated = allocation_method == "quantity_pro_rata"
     return {
         "known": True,
         "amount_usd": amount,
-        "status": "exact",
-        "source": "private_exchange_ledger",
+        "status": "exact_allocated" if allocated else "exact",
+        "source": (
+            "private_exchange_ledger_quantity_pro_rata"
+            if allocated
+            else "private_exchange_ledger"
+        ),
+        "allocation_method": allocation_method,
         "event_count": event_count,
         "synced_at": synced_at or None,
         "latest_event_at": item.get("latest_event_at"),

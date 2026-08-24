@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import io
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
+from decimal import Decimal
 
 from scripts import sync_portfolio_funding
 from spreadboard import portfolio_funding
@@ -159,9 +160,9 @@ def test_mexc_private_funding_uses_the_supported_page_size() -> None:
     assert rows == [{"timestamp": 1_001, "amount": "1.25", "code": "USDT"}]
 
 
-def test_overlapping_same_account_market_is_not_double_counted() -> None:
-    first = position()
-    second = position(id=9, opened_at="2026-08-11T23:30:00Z")
+def test_same_side_scale_in_allocates_exact_cashflows_by_active_quantity() -> None:
+    first = position(short_quantity=227_100)
+    second = position(id=9, short_quantity=48_400, opened_at="2026-08-12T00:30:00Z")
     snapshot = sync_portfolio_funding.build_snapshot(
         [first, second],
         lambda *_: [
@@ -169,8 +170,62 @@ def test_overlapping_same_account_market_is_not_double_counted() -> None:
                 "timestamp": sync_portfolio_funding.timestamp_ms("2026-08-12T00:00:00Z"),
                 "amount": "1",
                 "code": "USDT",
-            }
+            },
+            {
+                "timestamp": sync_portfolio_funding.timestamp_ms("2026-08-12T01:00:00Z"),
+                "amount": "2.755",
+                "code": "USDT",
+            },
         ],
+        generated_at="2026-08-12T01:05:00Z",
+    )
+    original = snapshot["positions"]["9:8"]
+    addition = snapshot["positions"]["9:9"]
+    assert original["status"] == "ok"
+    assert addition["status"] == "ok"
+    assert original["amount_usd"] == "3.271"
+    assert addition["amount_usd"] == "0.484"
+    assert original["event_count"] == 2
+    assert addition["event_count"] == 1
+    assert original["allocation_method"] == "quantity_pro_rata"
+    assert addition["allocation_method"] == "quantity_pro_rata"
+    assert sum(
+        Decimal(snapshot["positions"][key]["amount_usd"])
+        for key in ("9:8", "9:9")
+    ) == Decimal("3.755")
+
+    exact = portfolio_funding.exact_funding(
+        {**second, "user_id": 9, "status": "open"},
+        snapshot,
+        now=datetime(2026, 8, 12, 1, 6, tzinfo=UTC).timestamp(),
+    )
+    assert exact["known"] is True
+    assert exact["status"] == "exact_allocated"
+    assert exact["source"] == "private_exchange_ledger_quantity_pro_rata"
+
+
+def test_opposite_side_overlap_remains_ambiguous() -> None:
+    short = position()
+    long = position(
+        id=9,
+        long_venue="Aster",
+        long_market_type="Futures",
+        long_symbol="BTW/USDT:USDT",
+        opened_at="2026-08-11T23:30:00Z",
+        short_venue="Gate",
+        short_symbol="BTW/USDT:USDT",
+    )
+    snapshot = sync_portfolio_funding.build_snapshot(
+        [short, long],
+        lambda venue, *_: [
+            {
+                "timestamp": sync_portfolio_funding.timestamp_ms("2026-08-12T00:00:00Z"),
+                "amount": "1",
+                "code": "USDT",
+            }
+        ]
+        if venue == "Aster"
+        else [],
         generated_at="2026-08-12T00:05:00Z",
     )
     assert snapshot["positions"]["9:8"]["status"] == "ambiguous_overlapping_position"

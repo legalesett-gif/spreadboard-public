@@ -161,6 +161,16 @@ def test_portfolio_uses_edit_and_exact_funding_instead_of_manual_funding_button(
     assert "Edit position" in html
     assert "Add funding" not in html
 
+    allocated = server.render_position_card(
+        {
+            **item,
+            "funding_sync_status": "exact_allocated",
+            "funding_event_count": 2,
+            "funding_allocation_method": "quantity_pro_rata",
+        }
+    )
+    assert "allocated by saved tranche quantity during overlap" in allocated
+
 
 def test_closed_position_card_labels_realised_exit_basis() -> None:
     html = server.render_position_card(
