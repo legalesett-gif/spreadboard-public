@@ -179,6 +179,102 @@ def test_mexc_private_funding_uses_the_supported_page_size() -> None:
     assert rows == [{"timestamp": 1_001, "amount": "1.25", "code": "USDT"}]
 
 
+def test_hyperliquid_public_ledger_uses_xyz_namespace_signed_usdc_and_pagination(
+    monkeypatch,
+) -> None:
+    client = sync_portfolio_funding.HyperliquidPublicAccountClient(
+        "0xabcdef0123456789abcdef0123456789abcdef01"
+    )
+    calls = []
+    first_page = [
+        {
+            "time": 1_000 + index,
+            "delta": {
+                "type": "funding",
+                "coin": "xyz:SKHX" if index % 2 == 0 else "xyz:SKHY",
+                "usdc": "-0.125" if index == 0 else "0.01",
+            },
+        }
+        for index in range(500)
+    ]
+
+    def post(payload):
+        calls.append(payload)
+        return first_page if len(calls) == 1 else []
+
+    monkeypatch.setattr(client, "_post", post)
+    rows = sync_portfolio_funding.fetch_private_funding(
+        client, "XYZ-SKHX/USDC:USDC", 1_000
+    )
+
+    assert calls == [
+        {
+            "type": "userFunding",
+            "user": "0xabcdef0123456789abcdef0123456789abcdef01",
+            "startTime": 1_000,
+            "dex": "xyz",
+        },
+        {
+            "type": "userFunding",
+            "user": "0xabcdef0123456789abcdef0123456789abcdef01",
+            "startTime": 1_499,
+            "dex": "xyz",
+        },
+    ]
+    assert len(rows) == 250
+    assert rows[0] == {"timestamp": 1_000, "amount": "-0.125", "code": "USDC"}
+    assert all(row["timestamp"] % 2 == 0 for row in rows)
+
+
+def test_hyperliquid_build_never_requests_a_secret(monkeypatch) -> None:
+    requested = []
+
+    def keychain(name):
+        requested.append(name)
+        if name.endswith("/api_key"):
+            return "0xabcdef0123456789abcdef0123456789abcdef01"
+        raise AssertionError("Hyperliquid must not request a private credential")
+
+    monkeypatch.setattr(sync_portfolio_funding, "keychain", keychain)
+    exchange = sync_portfolio_funding.build_exchange("Hyperliquid")
+
+    assert isinstance(
+        exchange, sync_portfolio_funding.HyperliquidPublicAccountClient
+    )
+    assert requested == ["SPREADARB/hyperliquid/api_key"]
+
+
+def test_hyperliquid_public_mark_uses_exact_xyz_builder_context(monkeypatch) -> None:
+    client = sync_portfolio_funding.HyperliquidPublicAccountClient(
+        "0xabcdef0123456789abcdef0123456789abcdef01"
+    )
+    calls = []
+
+    def post(payload):
+        calls.append(payload)
+        return [
+            {"universe": [{"name": "xyz:SKHX"}, {"name": "xyz:SKHY"}]},
+            [
+                {"midPx": "1175.5", "markPx": "1176.25", "funding": "-0.00001"},
+                {"midPx": "154.5", "markPx": "154.64275", "funding": "0.00002"},
+            ],
+        ]
+
+    monkeypatch.setattr(client, "_post", post)
+    row = position(
+        short_venue="Hyperliquid",
+        short_symbol="XYZ-SKHY/USDC:USDC",
+        short_quantity=21.86,
+    )
+    mark = sync_portfolio_funding.fetch_cex_reference_mark(client, row, "short", {})
+
+    assert calls == [{"type": "metaAndAssetCtxs", "dex": "xyz"}]
+    assert mark["price_usd"] == "154.64275"
+    assert mark["quote_currency"] == "USDC"
+    assert mark["basis"] == "markPrice"
+    assert mark["source"] == "venue_mark_price"
+
+
 def test_same_side_scale_in_allocates_exact_cashflows_by_active_quantity() -> None:
     first = position(short_quantity=227_100)
     second = position(id=9, short_quantity=48_400, opened_at="2026-08-12T00:30:00Z")

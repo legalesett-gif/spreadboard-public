@@ -19,13 +19,14 @@ from pathlib import Path
 import shlex
 import subprocess
 import tempfile
+import time
 from typing import Any, Callable
 from urllib.request import Request, urlopen
 
 import ccxt
 
 from spreadarb.public_runtime import keychain
-from spreadboard import fair_price, portfolio_funding
+from spreadboard import exchange_credentials, fair_price, portfolio_funding
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,7 @@ DEFAULT_SSH_KEY = Path.home() / ".ssh" / "spreadboard_digitalocean"
 VENUES = {
     "Aster": ("aster", "aster"),
     "Gate": ("gate", "gate"),
+    "Hyperliquid": ("hyperliquid", "hyperliquid"),
     "Mexc": ("mexc", "mexc"),
     "Binance": ("binance", "binance"),
     "Bingx": ("bingx", "bingx"),
@@ -47,7 +49,10 @@ DEXSCREENER_CHAIN_NAMES = {56: "bsc"}
 # MEXC rejects its funding-ledger endpoint when ``pageSize`` exceeds 100.
 # Keep the larger default for venues which accept it, but make pagination a
 # provider contract instead of assuming every CCXT adapter has the same cap.
-FUNDING_HISTORY_PAGE_LIMITS = {"mexc": 100}
+FUNDING_HISTORY_PAGE_LIMITS = {"hyperliquid": 500, "mexc": 100}
+HYPERLIQUID_INFO_URL = "https://api.hyperliquid.xyz/info"
+HYPERLIQUID_PAGE_LIMIT = 500
+HYPERLIQUID_MAX_PAGES = 50
 
 
 def dec(value: Any) -> Decimal | None:
@@ -73,6 +78,166 @@ def timestamp_ms(value: Any) -> int:
     return int(parsed.timestamp() * 1000)
 
 
+class HyperliquidPublicAccountClient:
+    """Minimal public-only client for main and builder-DEX account ledgers.
+
+    Hyperliquid exposes funding cashflows and marks for any public account
+    address.  This adapter deliberately implements only the read methods used
+    by the accounting worker.  It has no signing, order, transfer or withdrawal
+    capability, and always carries an exact builder-DEX namespace when a saved
+    symbol is namespaced (for example ``XYZ-SKHX`` -> ``xyz:SKHX``).
+    """
+
+    id = "hyperliquid"
+
+    def __init__(self, account_address: str) -> None:
+        cleaned = exchange_credentials.clean_payload(
+            "hyperliquid",
+            {"api_key": account_address, "read_only_confirmed": True},
+        )
+        self.account_address = cleaned["api_key"]
+        self._funding_cache: dict[str, tuple[int, float, list[dict[str, Any]]]] = {}
+        self._context_cache: dict[str, tuple[float, dict[str, dict[str, Any]]]] = {}
+
+    @staticmethod
+    def _coin(symbol: str) -> str:
+        base = str(symbol or "").split("/", 1)[0].strip()
+        normalized = base.upper()
+        if normalized.startswith("XYZ-"):
+            return f"xyz:{normalized.removeprefix('XYZ-')}"
+        if normalized.startswith("XYZ:"):
+            return f"xyz:{normalized.removeprefix('XYZ:')}"
+        if not normalized:
+            raise RuntimeError("invalid_hyperliquid_symbol")
+        return normalized
+
+    @staticmethod
+    def _dex(coin: str) -> str:
+        return coin.split(":", 1)[0].casefold() if ":" in coin else ""
+
+    def _post(self, payload: dict[str, Any]) -> Any:
+        request = Request(
+            HYPERLIQUID_INFO_URL,
+            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": "SpreadBoard/1.0",
+            },
+            method="POST",
+        )
+        with urlopen(request, timeout=20) as response:
+            return json.load(response)
+
+    def _funding_rows(self, dex: str, since_ms: int) -> list[dict[str, Any]]:
+        cached = self._funding_cache.get(dex)
+        if cached and cached[0] <= since_ms and time.monotonic() - cached[1] < 60:
+            return [row for row in cached[2] if int(row.get("time") or 0) >= since_ms]
+
+        cursor = int(since_ms)
+        rows_by_identity: dict[tuple[int, str, str, str], dict[str, Any]] = {}
+        for _ in range(HYPERLIQUID_MAX_PAGES):
+            payload: dict[str, Any] = {
+                "type": "userFunding",
+                "user": self.account_address,
+                "startTime": cursor,
+            }
+            if dex:
+                payload["dex"] = dex
+            page = self._post(payload)
+            if not isinstance(page, list):
+                raise TypeError("invalid_hyperliquid_funding_response")
+            valid = [row for row in page if isinstance(row, dict)]
+            for row in valid:
+                delta = row.get("delta") if isinstance(row.get("delta"), dict) else {}
+                identity = (
+                    int(row.get("time") or 0),
+                    str(delta.get("coin") or ""),
+                    str(delta.get("usdc") or ""),
+                    str(delta.get("type") or ""),
+                )
+                rows_by_identity[identity] = row
+            if len(page) < HYPERLIQUID_PAGE_LIMIT:
+                break
+            latest = max((int(row.get("time") or 0) for row in valid), default=cursor)
+            if latest <= cursor:
+                raise RuntimeError("hyperliquid_funding_pagination_stalled")
+            # Funding for multiple markets can share one settlement timestamp.
+            # Keep the boundary inclusive and deduplicate above so a 500-row
+            # page cannot strand another event at the same millisecond.
+            cursor = latest
+        else:
+            raise RuntimeError("hyperliquid_funding_pagination_exhausted")
+        rows = [rows_by_identity[key] for key in sorted(rows_by_identity)]
+        self._funding_cache[dex] = (int(since_ms), time.monotonic(), rows)
+        return rows
+
+    def fetch_funding_history(
+        self, symbol: str, *, since: int, limit: int
+    ) -> list[dict[str, Any]]:
+        del limit  # The adapter exhausts the API's raw 500-row pages itself.
+        coin = self._coin(symbol)
+        rows = []
+        for row in self._funding_rows(self._dex(coin), int(since)):
+            delta = row.get("delta") if isinstance(row.get("delta"), dict) else {}
+            if str(delta.get("coin") or "").casefold() != coin.casefold():
+                continue
+            stamp = int(row.get("time") or 0)
+            amount = dec(delta.get("usdc"))
+            if stamp <= 0 or amount is None:
+                continue
+            rows.append({"timestamp": stamp, "amount": str(amount), "code": "USDC"})
+        return sorted(rows, key=lambda row: int(row["timestamp"]))
+
+    def _contexts(self, dex: str) -> dict[str, dict[str, Any]]:
+        cached = self._context_cache.get(dex)
+        if cached and time.monotonic() - cached[0] < 15:
+            return cached[1]
+        payload: dict[str, Any] = {"type": "metaAndAssetCtxs"}
+        if dex:
+            payload["dex"] = dex
+        response = self._post(payload)
+        if not isinstance(response, list) or len(response) < 2:
+            raise RuntimeError("invalid_hyperliquid_context_response")
+        meta = response[0] if isinstance(response[0], dict) else {}
+        universe = meta.get("universe") if isinstance(meta.get("universe"), list) else []
+        contexts = response[1] if isinstance(response[1], list) else []
+        indexed = {
+            str(market.get("name") or "").casefold(): context
+            for market, context in zip(universe, contexts)
+            if isinstance(market, dict) and isinstance(context, dict)
+        }
+        self._context_cache[dex] = (time.monotonic(), indexed)
+        return indexed
+
+    def _context(self, symbol: str) -> dict[str, Any]:
+        coin = self._coin(symbol)
+        context = self._contexts(self._dex(coin)).get(coin.casefold())
+        if context is None:
+            raise RuntimeError("hyperliquid_market_not_found")
+        return context
+
+    def market(self, _symbol: str) -> dict[str, str]:
+        return {"quote": "USDC"}
+
+    def fetch_ticker(self, symbol: str) -> dict[str, Any]:
+        context = self._context(symbol)
+        midpoint = context.get("midPx") or context.get("markPx")
+        return {
+            "bid": midpoint,
+            "ask": midpoint,
+            "mark": context.get("markPx"),
+            "info": context,
+        }
+
+    def fetch_funding_rate(self, symbol: str) -> dict[str, Any]:
+        context = self._context(symbol)
+        return {
+            "markPrice": context.get("markPx"),
+            "fundingRate": context.get("funding"),
+        }
+
+
 def build_exchange(venue: str, credentials: dict[str, str] | None = None) -> Any:
     spec = next(
         (item for label, item in VENUES.items() if label.casefold() == str(venue).casefold()),
@@ -84,6 +249,10 @@ def build_exchange(venue: str, credentials: dict[str, str] | None = None) -> Any
     api_key = str((credentials or {}).get("api_key") or "") or keychain(
         f"SPREADARB/{service}/api_key"
     )
+    if ccxt_id == "hyperliquid":
+        if not api_key:
+            raise RuntimeError(f"missing_credentials:{venue}")
+        return HyperliquidPublicAccountClient(api_key)
     secret = str((credentials or {}).get("secret") or "") or keychain(
         f"SPREADARB/{service}/secret"
     )

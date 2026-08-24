@@ -138,6 +138,31 @@ def test_connection_validation_requires_read_only_and_explicit_aster_consent() -
     ) == ["api_key", "secret"]
 
 
+def test_hyperliquid_connection_accepts_only_a_public_account_address() -> None:
+    address = "0xAbCdEf0123456789aBCDef0123456789abCDef01"
+    assert exchange_credentials.clean_payload(
+        "Hyperliquid Futures",
+        {"api_key": address, "read_only_confirmed": True},
+    ) == {"api_key": address.casefold()}
+    assert exchange_credentials.validate_consent(
+        "hyperliquid",
+        {"credential_fields": ["api_key"], "read_only_confirmed": True},
+    ) == ["api_key"]
+    with pytest.raises(ValueError, match="invalid_hyperliquid_account_address"):
+        exchange_credentials.clean_payload(
+            "hyperliquid",
+            {"api_key": "not-an-address", "read_only_confirmed": True},
+        )
+    catalog = next(
+        item
+        for item in exchange_credentials.public_catalog()
+        if item["slug"] == "hyperliquid"
+    )
+    assert catalog["fields"] == ["api_key"]
+    assert catalog["field_labels"]["api_key"] == "Public account address"
+    assert catalog["public_only"] is True
+
+
 def test_server_can_validate_but_not_decrypt_client_envelope(tmp_path, monkeypatch) -> None:
     private_pem, public_pem = credential_crypto.generate_key_pair()
     public_path = tmp_path / "public.pem"

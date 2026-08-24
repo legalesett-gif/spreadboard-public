@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
-TERMS_VERSION = "2026-08-12"
+TERMS_VERSION = "2026-08-24"
 VENUES: dict[str, dict[str, Any]] = {
     "aster": {
         "label": "Aster",
@@ -18,6 +19,16 @@ VENUES: dict[str, dict[str, Any]] = {
     "bitget": {"label": "Bitget", "fields": ("api_key", "secret", "passphrase")},
     "bybit": {"label": "Bybit", "fields": ("api_key", "secret")},
     "gate": {"label": "Gate", "fields": ("api_key", "secret")},
+    "hyperliquid": {
+        "label": "Hyperliquid",
+        # Hyperliquid account state and funding cashflows are public.  The
+        # worker needs only the account address, never an agent wallet or
+        # private key.  ``api_key`` is retained as the storage field name so
+        # this provider can use the existing encrypted connection envelope.
+        "fields": ("api_key",),
+        "field_labels": {"api_key": "Public account address"},
+        "public_only": True,
+    },
     "kucoin": {"label": "KuCoin", "fields": ("api_key", "secret", "passphrase")},
     "mexc": {"label": "MEXC", "fields": ("api_key", "secret")},
     "okx": {"label": "OKX", "fields": ("api_key", "secret", "passphrase")},
@@ -32,6 +43,7 @@ def normalize_venue(value: str) -> str:
         "bitgetfutures": "bitget",
         "gateio": "gate",
         "gatefutures": "gate",
+        "hyperliquidfutures": "hyperliquid",
         "kucoinfutures": "kucoin",
         "mexc": "mexc",
         "mexcfutures": "mexc",
@@ -54,6 +66,11 @@ def clean_payload(venue: str, payload: dict[str, Any]) -> dict[str, str]:
         if len(value) > 1024:
             raise ValueError(f"{field}_too_long")
         result[field] = value
+    if slug == "hyperliquid":
+        address = result["api_key"].casefold()
+        if re.fullmatch(r"0x[0-9a-f]{40}", address) is None:
+            raise ValueError("invalid_hyperliquid_account_address")
+        result["api_key"] = address
     if not payload.get("read_only_confirmed"):
         raise ValueError("read_only_api_permissions_confirmation_required")
     if spec.get("sensitive_signer") and not payload.get("sensitive_signer_confirmed"):
@@ -82,6 +99,7 @@ def public_catalog() -> list[dict[str, Any]]:
             "fields": list(spec["fields"]),
             "field_labels": spec.get("field_labels", {}),
             "sensitive_signer": bool(spec.get("sensitive_signer")),
+            "public_only": bool(spec.get("public_only")),
         }
         for slug, spec in VENUES.items()
     ]
