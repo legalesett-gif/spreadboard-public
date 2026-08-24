@@ -729,3 +729,50 @@ def test_canonical_dex_row_preserves_nested_provider_leg_evidence(monkeypatch) -
     assert row.dex_quote_ts_us == now_us
     assert row.matched_size_notional_usd == 500.0
     assert api_spreads.matched_probe_verified(row)
+
+    expanded_route = {
+        "token": "GUA",
+        "route_key": "CUSTOM:complete-dex-gate",
+        "route_kind": "DEX-FUTURES",
+        "source_kind": "dex_discovered",
+        "identity_key": f"eip155:56/erc20:{contract}",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "DEX",
+        "long_market_symbol": contract,
+        "long_quote": "USDT",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        "short_market_symbol": "GUA/USDT:USDT",
+        "short_quote": "USDT",
+        "long_price": 0.0502,
+        "short_price": 0.051,
+        "long_ask_vwap": 0.0502,
+        "short_bid_vwap": 0.0509,
+        "depth_weighted_spread_pct": 1.39,
+        "executable_spread_pct": 1.59,
+        "displayed_open_spread_pct": 1.59,
+        "target_notional_usd": 500.0,
+        "matched_size_notional_usd": 500.0,
+        "depth_usd": 500.0,
+        "quote_ts_us": now_us,
+        "dex_quote_ts_us": now_us,
+        "dex_chain": "56",
+        "dex_contract": contract,
+        "dex_bid_vwap": 0.0498,
+        "dex_ask_vwap": 0.0502,
+        "dex_quote_source": "okx_onchainos_swap_quote",
+        "blockers": [],
+    }
+    monkeypatch.setattr(
+        catalog_pairs,
+        "dex_futures_routes",
+        lambda *_args, **_kwargs: [expanded_route],
+    )
+
+    merged = api_spreads._expand_current_dex_futures_pairs(
+        [row], books={"ready": object()}, now=now, metadata={}, rails={}
+    )
+
+    assert len(merged) == 1
+    assert merged[0].route_key == "CUSTOM:complete-dex-gate"
+    assert merged[0].depth_usd == 500.0

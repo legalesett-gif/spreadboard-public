@@ -1269,7 +1269,16 @@ def _expand_current_dex_futures_pairs(
         )
         for route in expanded
     ]
-    return [*rows, *converted]
+    # Scanner and catalogue keys use different serialisations for the same
+    # economic legs. Keep every unique source row, then let the complete
+    # catalogue replacement win for an identical pair because it proves the
+    # canonical matched size and uses the freshest shared futures book.
+    deduplicated: dict[tuple[Any, ...], SpreadTerminalRow] = {}
+    for row in rows:
+        deduplicated[catalog_pairs.route_identity(row.to_dict())] = row
+    for row in converted:
+        deduplicated[catalog_pairs.route_identity(row.to_dict())] = row
+    return list(deduplicated.values())
 
 
 def _row_from_catalog_dex_route(
