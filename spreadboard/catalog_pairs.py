@@ -34,6 +34,7 @@ from spreadboard import (
     chart_catalog,
     exchange_links,
     live_book_cache,
+    probe_notional,
     public_rails,
     route_taxonomy,
     tokenized_assets,
@@ -42,7 +43,7 @@ from spreadboard import (
 
 
 MAX_PRICE_RATIO = 3.0
-TARGET_NOTIONAL_USD = float(os.environ.get("SPREADBOARD_LIVE_BOOK_NOTIONAL_USD", "500"))
+TARGET_NOTIONAL_USD = probe_notional.TARGET_NOTIONAL_USD
 MAX_BOOK_AGE_SECONDS = max(
     30.0, float(os.environ.get("SPREADBOARD_CATALOG_BOOK_AGE_SECONDS", "180"))
 )
@@ -297,6 +298,265 @@ def for_tokens(
     return output
 
 
+def dex_futures_routes(
+    dex_routes: list[dict[str, Any]],
+    *,
+    books: dict[str, live_book_cache.CachedBook],
+    include_history: bool = True,
+) -> list[dict[str, Any]]:
+    """Recombine each current exact OKX DEX quote with every fresh future.
+
+    The provider quote is directional and reusable for its exact chain and
+    contract. Pairing only the scanner row which happened to request it wastes
+    that quote and hides the other CEX futures venues. This expansion performs
+    no network request: it combines the already-paid $500 DEX VWAP with the
+    shared current futures-book catalogue and live funding cache.
+    """
+
+    current_sources: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for candidate in dex_routes:
+        if not isinstance(candidate, dict):
+            continue
+        if not api_spreads.matched_probe_verified(candidate):
+            continue
+        dex_side = next(
+            (
+                side
+                for side in ("long", "short")
+                if route_taxonomy.leg_is_dex(
+                    venue=candidate.get(f"{side}_venue"),
+                    market_type=candidate.get(f"{side}_market_type"),
+                )
+            ),
+            "",
+        )
+        token = _token(candidate.get("token"))
+        chain, contract = _dex_identity(candidate, dex_side)
+        dex_input = _route_input(candidate, dex_side)
+        dex_quote_ts_us = int(
+            _number(dex_input.get("quote_ts_us"))
+            or _number(candidate.get("dex_quote_ts_us"))
+            or 0
+        )
+        blockers = [str(item) for item in (candidate.get("blockers") or [])]
+        tokenized_unverified = (
+            str(candidate.get("asset_class") or "crypto") == "tokenized"
+            and candidate.get("tokenized_identity_verified") is not True
+        )
+        if (
+            not token
+            or not dex_side
+            or not chain
+            or not contract
+            or not dex_quote_ts_us
+            or candidate.get("mirage_guarded")
+            or any(item.startswith("mirage_guard:") for item in blockers)
+            or tokenized_unverified
+            or candidate.get("dex_expansion_verified") is False
+        ):
+            continue
+        if not api_spreads.spread_quote_current({"quote_ts_us": dex_quote_ts_us}):
+            continue
+        identity = (token, chain, contract, dex_side)
+        current = current_sources.get(identity)
+        current_ts = int((current or {}).get("_dex_quote_ts_us") or 0)
+        if current is None or dex_quote_ts_us >= current_ts:
+            current_sources[identity] = {
+                **candidate,
+                "_dex_chain": chain,
+                "_dex_contract": contract,
+                "_dex_side": dex_side,
+                "_dex_quote_ts_us": dex_quote_ts_us,
+                "_dex_input": dex_input,
+            }
+    if not current_sources:
+        return []
+
+    wanted = {identity[0] for identity in current_sources}
+    catalog = chart_catalog.load()
+    futures_by_token: dict[str, list[Leg]] = {}
+    seen_markets: set[tuple[str, str, str]] = set()
+    for item in catalog.get("markets") or []:
+        if not isinstance(item, dict) or str(item.get("market_type") or "") != "Futures":
+            continue
+        token = _token(item.get("token"))
+        venue = str(item.get("venue") or "")
+        symbol = str(item.get("symbol") or "")
+        identity = (venue, "Futures", symbol)
+        if token not in wanted or not venue or not symbol or identity in seen_markets:
+            continue
+        book = books.get(live_book_cache.cache_key(*identity))
+        if book is None:
+            continue
+        seen_markets.add(identity)
+        try:
+            contract_size = float(item.get("contract_size") or 1.0)
+        except (TypeError, ValueError):
+            contract_size = 1.0
+        futures_by_token.setdefault(token, []).append(
+            Leg(
+                token=token,
+                venue=venue,
+                market_type="Futures",
+                symbol=symbol,
+                quote=str(item.get("quote") or "").upper(),
+                contract_size=contract_size if contract_size > 0 else 1.0,
+                book=book,
+            )
+        )
+
+    funding = bulk_quotes.load_funding()
+    rails = public_rails.load_public_rails()
+    expanded: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for source in current_sources.values():
+        token = _token(source.get("token"))
+        dex_side = str(source["_dex_side"])
+        dex_input = source["_dex_input"]
+        price = _number(
+            dex_input.get("ask_vwap" if dex_side == "long" else "bid_vwap")
+        ) or _number(
+            source.get("dex_ask_vwap" if dex_side == "long" else "dex_bid_vwap")
+        )
+        quote_ts_us = int(source["_dex_quote_ts_us"])
+        if price is None or price <= 0 or quote_ts_us <= 0:
+            continue
+        amount = TARGET_NOTIONAL_USD / price
+        dex_leg = Leg(
+            token=token,
+            venue=str(source.get(f"{dex_side}_venue") or ""),
+            market_type="Spot",
+            symbol=str(
+                dex_input.get("symbol")
+                or source.get(f"{dex_side}_market_symbol")
+                or source["_dex_contract"]
+            ),
+            quote=str(
+                dex_input.get("quote")
+                or source.get(f"{dex_side}_quote")
+                or "USDT"
+            ).upper(),
+            contract_size=1.0,
+            book=live_book_cache.CachedBook(
+                bids=[[price, amount]],
+                asks=[[price, amount]],
+                quote_ts_us=quote_ts_us,
+                source="okx_dex_exact_matched_quote",
+            ),
+        )
+        for future in futures_by_token.get(token) or []:
+            long_leg, short_leg = (
+                (dex_leg, future) if dex_side == "long" else (future, dex_leg)
+            )
+            if _reject_reason(token, long_leg, short_leg, rails):
+                continue
+            row = _route(
+                token,
+                long_leg,
+                short_leg,
+                funding,
+                rails,
+                include_history=include_history,
+            )
+            source_blockers = [str(item) for item in (source.get("blockers") or [])]
+            route_blockers = [str(item) for item in (row.get("blockers") or [])]
+            blockers = list(dict.fromkeys([*source_blockers, *route_blockers]))
+            quote_source = dex_input.get("quote_source") or source.get("dex_quote_source")
+            route_plan = dex_input.get("route_plan") or source.get("dex_route_plan") or ()
+            row.update(
+                {
+                    "route_kind": "DEX-FUTURES",
+                    "source_name": "Complete OKX DEX quote x futures catalogue",
+                    "source_kind": "dex_discovered",
+                    "raw_source_kind": source.get("raw_source_kind") or "dex_discovered",
+                    "dex_chain": source["_dex_chain"],
+                    "dex_contract": source["_dex_contract"],
+                    "identity_key": _dex_identity_key(
+                        source["_dex_chain"], source["_dex_contract"]
+                    ),
+                    "dex_quote_ts_us": quote_ts_us,
+                    "matched_size_notional_usd": TARGET_NOTIONAL_USD,
+                    "target_notional_usd": TARGET_NOTIONAL_USD,
+                    "liquidity_evidence_kind": "matched_size_vwap",
+                    "dex_gas_estimate_usd": dex_input.get("gas_estimate_usd")
+                    or source.get("dex_gas_estimate_usd"),
+                    "dex_slippage_bps": dex_input.get("slippage_bps")
+                    or source.get("dex_slippage_bps"),
+                    "dex_price_impact_pct": dex_input.get("price_impact_pct")
+                    or source.get("dex_price_impact_pct"),
+                    "dex_quote_source": quote_source,
+                    "dex_mev_protection": dex_input.get("mev_protection")
+                    or source.get("dex_mev_protection"),
+                    "dex_transfer_time_seconds": dex_input.get("transfer_time_seconds")
+                    or source.get("dex_transfer_time_seconds"),
+                    "dex_route_plan": tuple(route_plan),
+                    "asset_class": source.get("asset_class") or "crypto",
+                    "token_name": source.get("token_name"),
+                    "market_cap_usd": source.get("market_cap_usd"),
+                    "fdv_usd": source.get("fdv_usd"),
+                    "metadata_volume_24h_usd": source.get("metadata_volume_24h_usd"),
+                    "listing_age_days": source.get("listing_age_days"),
+                    "listing_age_source": source.get("listing_age_source"),
+                    "blockers": blockers,
+                    "mirage_guarded": bool(source.get("mirage_guarded"))
+                    or any(item.startswith("mirage_guard:") for item in blockers),
+                }
+            )
+            # Restore the provider leg's public identity after _route used Spot
+            # internally to calculate cash-and-carry funding mechanics.
+            for suffix in (
+                "venue",
+                "market_type",
+                "market_symbol",
+                "quote",
+                "exchange_url",
+                "deposit_enabled",
+                "withdraw_enabled",
+                "volume_24h_usd",
+            ):
+                value = source.get(f"{dex_side}_{suffix}")
+                if value is not None:
+                    row[f"{dex_side}_{suffix}"] = value
+            for suffix in ("bid", "ask", "bid_vwap", "ask_vwap"):
+                value = dex_input.get(suffix)
+                if value is not None:
+                    row[f"{dex_side}_{suffix}"] = value
+            gas = _number(row.get("dex_gas_estimate_usd"))
+            matched = _number(row.get("depth_weighted_spread_pct"))
+            row["gas_adjusted_spread_pct"] = (
+                matched - gas / TARGET_NOTIONAL_USD * 100.0
+                if matched is not None and gas is not None
+                else matched
+            )
+            expanded[route_identity(row)] = row
+    return list(expanded.values())
+
+
+def _route_input(row: dict[str, Any], side: str) -> dict[str, Any]:
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+    nested = inputs.get(side) if isinstance(inputs.get(side), dict) else {}
+    return dict(nested)
+
+
+def _dex_identity(row: dict[str, Any], side: str) -> tuple[str, str]:
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    identities = notes.get("identity") if isinstance(notes.get("identity"), dict) else {}
+    identity = identities.get(side) if isinstance(identities.get(side), dict) else {}
+    chain = str(identity.get("chain_id") or row.get("dex_chain") or "").strip()
+    contract = str(
+        identity.get("token_address") or row.get("dex_contract") or ""
+    ).strip().casefold()
+    return chain, contract
+
+
+def _dex_identity_key(chain: str, contract: str) -> str:
+    return (
+        f"solana:501/token:{contract}"
+        if str(chain) == "501"
+        else f"eip155:{chain}/erc20:{contract.casefold()}"
+    )
+
+
 def filtered(
     payload: dict[str, Any],
     *,
@@ -536,7 +796,7 @@ def with_routes(
     for row in [*(payload.get("routes") or []), *extra_routes]:
         if not isinstance(row, dict):
             continue
-        identity = _merge_route_identity(row)
+        identity = route_identity(row)
         if identity in seen:
             existing = routes[seen[identity]]
             # The warm catalogue owns the current exact-book economics. The
@@ -576,7 +836,7 @@ def with_routes(
     return result
 
 
-def _merge_route_identity(row: dict[str, Any]) -> tuple[Any, ...]:
+def route_identity(row: dict[str, Any]) -> tuple[Any, ...]:
     """Exact economic leg identity, independent of route-key serialization."""
 
     route_key = str(row.get("route_key") or "")
@@ -601,10 +861,15 @@ def _merge_route_identity(row: dict[str, Any]) -> tuple[Any, ...]:
 
     return (
         str(row.get("token") or "").upper(),
-        row.get("route_kind"),
+        str(row.get("route_kind") or "").upper(),
         leg("long"),
         leg("short"),
     )
+
+
+# Compatibility for callers/tests which used the old private spelling. New
+# funding catalogues use the public name so every lane deduplicates identically.
+_merge_route_identity = route_identity
 
 
 def all_token_summaries(

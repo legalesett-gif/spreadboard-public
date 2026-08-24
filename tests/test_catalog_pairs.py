@@ -538,3 +538,194 @@ def test_native_perpetual_dex_is_catalogued_but_onchain_spot_is_provider_quoted(
     assert not catalog_pairs._is_onchain_spot(
         {"venue": "Aster", "market_type": "Futures"}
     )
+
+
+def test_nested_okx_quote_expands_across_every_fresh_future_at_canonical_size(
+    monkeypatch,
+) -> None:
+    now_us = int(time.time() * 1_000_000)
+    contract = "0x1111111111111111111111111111111111111111"
+    source = {
+        "token": "GUA",
+        "route_kind": "DEX-FUTURES",
+        "source_kind": "dex_discovered",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "DEX",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        # The route timestamp is deliberately older than the provider leg.
+        "quote_ts_us": now_us - 60_000_000,
+        "depth_weighted_spread_pct": 1.0,
+        "matched_size_notional_usd": 500.0,
+        "blockers": [],
+        "mirage_guarded": False,
+        "asset_class": "crypto",
+        "notes": {
+            "identity": {
+                "long": {"chain_id": "56", "token_address": contract},
+            },
+            "route_inputs": {
+                "long": {
+                    "symbol": contract,
+                    "quote": "USDT",
+                    "bid": 0.0499,
+                    "ask": 0.0501,
+                    "bid_vwap": 0.0498,
+                    "ask_vwap": 0.0502,
+                    "quote_ts_us": now_us,
+                    "quote_notional_usd": 500.0,
+                    "quote_source": "okx_onchainos_swap_quote",
+                    "gas_estimate_usd": 0.07,
+                    "price_impact_pct": 0.12,
+                    "route_plan": ["wallet", "router", "token"],
+                },
+                "short": {
+                    "symbol": "GUA/USDT:USDT",
+                    "quote": "USDT",
+                },
+            },
+        },
+    }
+    monkeypatch.setattr(
+        catalog_pairs.chart_catalog,
+        "load",
+        lambda: {
+            "markets": [
+                {
+                    "token": "GUA",
+                    "venue": "Gate",
+                    "market_type": "Futures",
+                    "symbol": "GUA/USDT:USDT",
+                    "quote": "USDT",
+                },
+                {
+                    "token": "GUA",
+                    "venue": "Aster",
+                    "market_type": "Futures",
+                    "symbol": "GUAUSDT",
+                    "quote": "USDT",
+                },
+            ]
+        },
+    )
+    books = {
+        live_book_cache.cache_key("Gate", "Futures", "GUA/USDT:USDT"): _book(
+            0.0510, 0.0511, stamp=now_us
+        ),
+        live_book_cache.cache_key("Aster", "Futures", "GUAUSDT"): _book(
+            0.0508, 0.0509, stamp=now_us
+        ),
+    }
+    monkeypatch.setattr(
+        catalog_pairs.bulk_quotes,
+        "load_funding",
+        lambda: {
+            "Gate|GUA/USDT:USDT": {"rate_pct": 0.02, "interval_hours": 4},
+            "Aster|GUAUSDT": {"rate_pct": 0.01, "interval_hours": 8},
+        },
+    )
+    monkeypatch.setattr(catalog_pairs.public_rails, "load_public_rails", dict)
+
+    routes = catalog_pairs.dex_futures_routes(
+        [source], books=books, include_history=False
+    )
+
+    assert {route["short_venue"] for route in routes} == {"Gate", "Aster"}
+    assert {route["short_market_symbol"] for route in routes} == {
+        "GUA/USDT:USDT",
+        "GUAUSDT",
+    }
+    assert all(route["long_venue"] == "OKX DEX 56" for route in routes)
+    assert all(route["dex_chain"] == "56" for route in routes)
+    assert all(route["dex_contract"] == contract for route in routes)
+    assert all(route["dex_quote_ts_us"] == now_us for route in routes)
+    assert all(route["long_ask_vwap"] == 0.0502 for route in routes)
+    assert all(route["matched_size_notional_usd"] == 500.0 for route in routes)
+    assert all(route["target_notional_usd"] == 500.0 for route in routes)
+    assert all(route["depth_usd"] == 500.0 for route in routes)
+    assert all(route["dex_quote_source"] == "okx_onchainos_swap_quote" for route in routes)
+    assert all(route["dex_route_plan"] == ("wallet", "router", "token") for route in routes)
+    assert all(route["mirage_guarded"] is False for route in routes)
+
+    guarded = {**source, "mirage_guarded": True}
+    unresolved = {
+        **source,
+        "notes": {
+            **source["notes"],
+            "identity": {"long": {"chain_id": "56"}},
+        },
+    }
+    wrong_direction = {
+        **source,
+        "notes": {
+            **source["notes"],
+            "route_inputs": {
+                **source["notes"]["route_inputs"],
+                "long": {
+                    **source["notes"]["route_inputs"]["long"],
+                    "ask_vwap": None,
+                },
+            },
+        },
+    }
+    assert catalog_pairs.dex_futures_routes([guarded], books=books) == []
+    assert catalog_pairs.dex_futures_routes([unresolved], books=books) == []
+    assert catalog_pairs.dex_futures_routes([wrong_direction], books=books) == []
+
+
+def test_canonical_dex_row_preserves_nested_provider_leg_evidence(monkeypatch) -> None:
+    now = time.time()
+    now_us = int(now * 1_000_000)
+    contract = "0x2222222222222222222222222222222222222222"
+    raw = {
+        "token": "GUA",
+        "source_kind": "dex_discovered",
+        "identity_key": f"eip155:56/erc20:{contract}",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "DEX",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        "depth_weighted_spread_pct": 1.0,
+        "target_notional_usd": 500.0,
+        "quote_ts_us": now_us - 30_000_000,
+        "notes": {
+            "identity": {
+                "long": {"chain_id": "56", "token_address": contract},
+            },
+            "route_inputs": {
+                "long": {
+                    "symbol": contract,
+                    "quote": "USDT",
+                    "bid": 0.0499,
+                    "ask": 0.0501,
+                    "bid_vwap": 0.0498,
+                    "ask_vwap": 0.0502,
+                    "quote_ts_us": now_us,
+                    "quote_notional_usd": 500.0,
+                    "quote_source": "okx_onchainos_swap_quote",
+                },
+                "short": {
+                    "symbol": "GUA/USDT:USDT",
+                    "quote": "USDT",
+                    "bid": 0.051,
+                    "ask": 0.0511,
+                    "bid_vwap": 0.0509,
+                    "ask_vwap": 0.0512,
+                    "quote_ts_us": now_us - 30_000_000,
+                    "current_funding_pct": 0.02,
+                    "funding_interval_hours": 4,
+                },
+            },
+        },
+    }
+    monkeypatch.setattr(api_spreads.tokenized_assets, "classify", lambda _row: {"asset_class": "crypto"})
+
+    row = api_spreads._row_from_api(raw, bucket="dex_discovered_rows", now=now)
+
+    assert row.dex_chain == "56"
+    assert row.dex_contract == contract
+    assert row.dex_ask_vwap == 0.0502
+    assert row.dex_bid_vwap == 0.0498
+    assert row.dex_quote_ts_us == now_us
+    assert row.matched_size_notional_usd == 500.0
+    assert api_spreads.matched_probe_verified(row)

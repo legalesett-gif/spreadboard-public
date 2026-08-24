@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 from spreadboard import funding_catalog, funding_radar, server
@@ -37,7 +38,7 @@ def test_catalog_rebuild_serves_last_complete_generation_to_concurrent_reader(
     funding_catalog._CACHE_BUILD_DONE.set()
     result: list[dict] = []
     worker = threading.Thread(
-        target=lambda: result.append(funding_catalog._complete_payloads())
+        target=lambda: result.append(funding_catalog.refresh_cache())
     )
     try:
         worker.start()
@@ -51,6 +52,66 @@ def test_catalog_rebuild_serves_last_complete_generation_to_concurrent_reader(
     finally:
         release.set()
         worker.join(timeout=2)
+        funding_catalog._CACHE_PAYLOADS = prior_payloads
+        funding_catalog._CACHE_AT = prior_at
+        funding_catalog._CACHE_BUILDING = prior_building
+        funding_catalog._CACHE_BUILD_DONE.set()
+
+
+def test_reader_never_owns_refresh_after_complete_generation_is_invalidated(
+    monkeypatch,
+) -> None:
+    old = {"OLD": {"routes": [{"token": "OLD"}]}}
+    prior_payloads = funding_catalog._CACHE_PAYLOADS
+    prior_at = funding_catalog._CACHE_AT
+    prior_building = funding_catalog._CACHE_BUILDING
+    builds: list[bool] = []
+    monkeypatch.setattr(
+        funding_catalog.catalog_pairs,
+        "for_tokens",
+        lambda *_args, **_kwargs: builds.append(True) or {},
+    )
+    funding_catalog._CACHE_PAYLOADS = old
+    funding_catalog._CACHE_AT = time.monotonic()
+    funding_catalog._CACHE_BUILDING = False
+    funding_catalog._CACHE_BUILD_DONE.set()
+    try:
+        funding_catalog.clear_cache()
+        assert funding_catalog._complete_payloads() is old
+        assert builds == []
+    finally:
+        funding_catalog._CACHE_PAYLOADS = prior_payloads
+        funding_catalog._CACHE_AT = prior_at
+        funding_catalog._CACHE_BUILDING = prior_building
+        funding_catalog._CACHE_BUILD_DONE.set()
+
+
+def test_fresh_process_reader_returns_warming_without_owning_catalog_build(
+    monkeypatch,
+) -> None:
+    prior_payloads = funding_catalog._CACHE_PAYLOADS
+    prior_at = funding_catalog._CACHE_AT
+    prior_building = funding_catalog._CACHE_BUILDING
+    builds: list[bool] = []
+    monkeypatch.setattr(
+        funding_catalog.catalog_pairs,
+        "for_tokens",
+        lambda *_args, **_kwargs: builds.append(True) or {},
+    )
+    funding_catalog._CACHE_PAYLOADS = {}
+    funding_catalog._CACHE_AT = 0.0
+    funding_catalog._CACHE_BUILDING = False
+    funding_catalog._CACHE_BUILD_DONE.set()
+    try:
+        started = time.monotonic()
+        page = funding_catalog.page(route_kind="FUTURES", window="7d")
+        elapsed = time.monotonic() - started
+
+        assert page["status"] == "warming"
+        assert page["matching_token_count"] is None
+        assert builds == []
+        assert elapsed < 0.1
+    finally:
         funding_catalog._CACHE_PAYLOADS = prior_payloads
         funding_catalog._CACHE_AT = prior_at
         funding_catalog._CACHE_BUILDING = prior_building
@@ -113,7 +174,10 @@ def test_current_ranking_happens_before_token_pagination(monkeypatch) -> None:
 
 def test_every_eligible_route_for_a_returned_token_is_preserved(monkeypatch) -> None:
     routes = [
-        _route("FULL", f"full-{index}", current=2.0 - index / 100, one_day=1.0)
+        {
+            **_route("FULL", f"full-{index}", current=2.0 - index / 100, one_day=1.0),
+            "short_venue": f"Short {index}",
+        }
         for index in range(75)
     ]
     monkeypatch.setattr(
@@ -127,6 +191,28 @@ def test_every_eligible_route_for_a_returned_token_is_preserved(monkeypatch) -> 
     assert page["matching_route_count"] == 75
     assert page["groups"][0]["route_count"] == 75
     assert len(page["groups"][0]["routes"]) == 75
+
+
+def test_live_and_retained_legacy_keys_dedupe_by_exact_economic_legs(monkeypatch) -> None:
+    live = _route("SAME", "legacy-key", current=1.0, one_day=2.0)
+    retained = {
+        **live,
+        "route_key": "CUSTOM|new-key-format",
+        "radar_historical": True,
+    }
+    monkeypatch.setattr(
+        funding_catalog,
+        "_complete_payloads",
+        lambda: {"SAME": {"routes": [live]}},
+    )
+    monkeypatch.setattr(funding_radar, "routes_for", lambda *args, **kwargs: [retained])
+
+    page = funding_catalog.page(route_kind="FUTURES", window="1d")
+
+    assert page["matching_token_count"] == 1
+    assert page["matching_route_count"] == 1
+    assert page["groups"][0]["route_count"] == 1
+    assert page["groups"][0]["best_funding_route"]["route_key"] == "legacy-key"
 
 
 def test_historical_ranking_uses_all_exact_routes_not_only_live_leaders(
@@ -359,6 +445,9 @@ def test_historical_page_requests_a_distinct_complete_window(monkeypatch) -> Non
             "classified_leg_count": 1,
             "pending_leg_count": 0,
             "retryable_error_leg_count": 0,
+            "window_leg_counts": {"1d": 1, "7d": 0, "30d": 0},
+            "window_coverage_pct": {"1d": 100.0, "7d": 0.0, "30d": 0.0},
+            "deep_history_pending_leg_count": 1,
         },
     )
     monkeypatch.setattr(
@@ -379,6 +468,65 @@ def test_historical_page_requests_a_distinct_complete_window(monkeypatch) -> Non
     assert "7d total" in html
     assert "They are not divided into daily averages" in html
     assert "Now is isolated" in html
+    assert "Complete trailing windows:" in html
+    assert "24h 1/1 (100.00%)" in html
+    assert "30d 0/1 (0.00%)" in html
+    assert "Deep-history backlog:</strong> 1 legs" in html
+    assert "does not mean every trailing window is complete" in html
+
+
+def test_historical_dex_page_and_export_request_the_same_selected_window(monkeypatch) -> None:
+    captured = {}
+
+    def fake_api(_path, query):
+        captured.update(query)
+        return {
+            "ok": True,
+            "groups": [],
+            "summary": {"matching_tokens": 41, "matching_rows": 63},
+            "source_health": {"canonical_api": {"status": "fresh"}},
+            "funding_catalog": {
+                "window": "7d",
+                "matching_token_count": 41,
+                "matching_route_count": 63,
+                "largest_value": 7.5,
+                "window_token_counts": {},
+            },
+        }
+
+    monkeypatch.setattr(server, "api_market_spreads", fake_api)
+    monkeypatch.setattr(
+        server,
+        "funding_history_health",
+        lambda: {
+            "attempted_leg_count": 1,
+            "catalog_leg_count": 1,
+            "classified_leg_count": 1,
+            "pending_leg_count": 0,
+            "retryable_error_leg_count": 0,
+        },
+    )
+    monkeypatch.setattr(
+        server.bulk_quotes,
+        "funding_health",
+        lambda: {"status": "fresh", "p95_age_seconds": 30.0},
+    )
+
+    html = server.render_funding_page(
+        Path("board.json"),
+        {},
+        {
+            "rank": ["7d"],
+            "farm": ["futures-dex"],
+            "offset": ["20"],
+            "limit": ["20"],
+        },
+    )
+
+    assert captured["funding_window"] == ["7d"]
+    assert captured["offset"] == ["20"]
+    assert captured["limit"] == ["20"]
+    assert "funding_window=7d" in html
 
 
 def test_live_overlay_does_not_reselect_or_remove_historical_leaders(monkeypatch) -> None:

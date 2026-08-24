@@ -19,7 +19,7 @@ import threading
 import time
 from typing import Any, Iterable
 
-from spreadboard import venue_funding_history
+from spreadboard import catalog_pairs, venue_funding_history
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", "data"))
 DEFAULT_CACHE_PATH = RUNTIME_DIR / "funding_radar.json"
@@ -53,6 +53,8 @@ _ROUTE_FIELDS = {
     "blockers",
     "requires_existing_spot_inventory",
     "execution_note",
+    "dex_chain",
+    "dex_contract",
 }
 
 _LEG_SUFFIXES = {
@@ -65,6 +67,8 @@ _LEG_SUFFIXES = {
     "funding_interval_assumed",
     "next_funding_ts_us",
     "exchange_url",
+    "dex_chain",
+    "dex_contract",
 }
 _LEG_FIELDS = {
     f"{side}_{suffix}" for side in ("long", "short") for suffix in _LEG_SUFFIXES
@@ -145,6 +149,19 @@ def refresh(
             if _float_or_none(record.get("last_seen_ts")) is not None
             and float(record["last_seen_ts"]) >= cutoff
         }
+        # Route-key serialization changed over time. Compact identical economic
+        # legs here so every radar consumer sees one route and breadth/counts
+        # cannot be inflated by legacy plus CUSTOM key spellings.
+        newest_by_identity: dict[tuple[Any, ...], tuple[str, dict[str, Any]]] = {}
+        for key, record in records.items():
+            route = record.get("route") if isinstance(record.get("route"), dict) else {}
+            identity = catalog_pairs.route_identity(route)
+            previous = newest_by_identity.get(identity)
+            if previous is None or float(record.get("last_seen_ts") or 0.0) >= float(
+                previous[1].get("last_seen_ts") or 0.0
+            ):
+                newest_by_identity[identity] = (key, record)
+        records = {key: record for key, record in newest_by_identity.values()}
         if len(records) > MAX_RECORDS:
             newest = sorted(
                 records.items(),
@@ -191,7 +208,7 @@ def routes_for(
     """Historical route snapshots, explicitly marked as non-live radar rows."""
     wanted = str(symbol or "").strip().upper()
     moment = time.time() if now is None else float(now)
-    output: list[dict[str, Any]] = []
+    selected: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
     for record in load_records(cache_path=cache_path).values():
         route = record.get("route") if isinstance(record.get("route"), dict) else {}
         if wanted and str(route.get("token") or "").upper() != wanted:
@@ -216,8 +233,12 @@ def routes_for(
                 "status": "radar",
             }
         )
-        output.append(row)
-    return output
+        identity = catalog_pairs.route_identity(row)
+        seen = selected.get(identity)
+        last_seen = float(record.get("last_seen_ts") or 0.0)
+        if seen is None or last_seen >= seen[0]:
+            selected[identity] = (last_seen, row)
+    return [row for _last_seen, row in selected.values()]
 
 
 def kind_matches(route_kind: str, requested_kind: str) -> bool:
@@ -230,11 +251,19 @@ def kind_matches(route_kind: str, requested_kind: str) -> bool:
 
 def window_value(route: dict[str, Any], label: str) -> float | None:
     """Settled carry for a live or retained route from exact venue events."""
+    # Retention keeps the exact venue symbols, but its saved windows are only
+    # the trailing totals observed when the route was last live. They must not
+    # masquerade as today's rolling 24h/7d/30d periods for another 30 days.
+    # Once a route has an identifiable CEX futures leg, the current exact
+    # archive is authoritative even when the selected window is incomplete.
+    has_exact_leg = any(
+        str(route.get(f"{side}_market_type") or "").casefold() == "futures"
+        and "dex" not in str(route.get(f"{side}_venue") or "").casefold()
+        and bool(route.get(f"{side}_venue"))
+        and bool(route.get(f"{side}_market_symbol") or route.get(f"{side}_symbol"))
+        for side in ("long", "short")
+    )
+    if has_exact_leg:
+        return _float_or_none(venue_funding_history.route_windows(route).get(label))
     radar = route.get("radar_windows") if isinstance(route.get("radar_windows"), dict) else {}
-    value = _float_or_none(radar.get(label))
-    if value is not None:
-        return value
-    value = _float_or_none(venue_funding_history.route_windows(route).get(label))
-    if value is not None:
-        return value
-    return None
+    return _float_or_none(radar.get(label))

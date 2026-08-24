@@ -20,6 +20,7 @@ from spreadboard import (
     board,
     exchange_links,
     market_events,
+    probe_notional,
     public_rails,
     route_taxonomy,
     token_metadata,
@@ -127,6 +128,9 @@ class SpreadTerminalRow:
     dex_slippage_bps: float | None = None
     dex_price_impact_pct: float | None = None
     dex_quote_source: str | None = None
+    dex_bid_vwap: float | None = None
+    dex_ask_vwap: float | None = None
+    dex_quote_ts_us: int | None = None
     dex_mev_protection: str | None = None
     dex_transfer_time_seconds: float | None = None
     dex_route_plan: tuple[str, ...] = ()
@@ -236,7 +240,16 @@ def load_spreads(
     board_rows, board_meta = _load_board_rows(board_path, now=current_time)
     # Applied per request rather than inside the row cache: a cached price is a
     # stale price, and this is the whole point of streaming the books.
-    api_rows = apply_live_books(api_rows, _live_books(), now=current_time)
+    live_books = _live_books()
+    api_rows = apply_live_books(api_rows, live_books, now=current_time)
+    if _normalize_kind_filter(kind) == "DEX-FUTURES":
+        api_rows = _expand_current_dex_futures_pairs(
+            api_rows,
+            books=live_books,
+            now=current_time,
+            metadata=metadata,
+            rails=rails,
+        )
     all_rows = _dedupe_rows(api_rows)
     # Product DEX diagnostics are OKX-only. Source provenance is intentionally
     # not counted here because several ordinary Futures/Spot venues still use
@@ -612,9 +625,7 @@ LIVE_BOOK_MAX_AGE_SECONDS = max(
     SPREAD_LEADER_MAX_AGE_MIN * 60.0,
     float(os.environ.get("SPREADBOARD_LIVE_BOOK_AGE_SECONDS", "90")),
 )
-LIVE_BOOK_TARGET_NOTIONAL_USD = float(
-    os.environ.get("SPREADBOARD_LIVE_BOOK_NOTIONAL_USD", "500")
-)
+LIVE_BOOK_TARGET_NOTIONAL_USD = probe_notional.TARGET_NOTIONAL_USD
 
 
 def quote_age_min(row: Any, *, now: float | None = None) -> float | None:
@@ -1210,6 +1221,120 @@ def apply_live_books(
             )
         )
     return updated
+
+
+def _expand_current_dex_futures_pairs(
+    rows: list[SpreadTerminalRow],
+    *,
+    books: dict[str, Any],
+    now: float,
+    metadata: dict[str, dict[str, Any]],
+    rails: dict[str, dict[str, Any]],
+) -> list[SpreadTerminalRow]:
+    """Fan each paid OKX quote out across every current futures catalogue leg."""
+
+    if not books:
+        return rows
+    from spreadboard import catalog_pairs
+
+    source_rows: list[dict[str, Any]] = []
+    for row in rows:
+        if row.route_kind != "DEX-FUTURES":
+            continue
+        source = row.to_dict()
+        source["dex_expansion_verified"] = bool(
+            lane_rankable(row)
+            and matched_probe_verified(row)
+            and spread_quote_current(
+                {"quote_ts_us": row.dex_quote_ts_us or 0}
+            )
+        )
+        source["tokenized_identity_verified"] = tokenized_route_rankable(row)
+        source_rows.append(source)
+    expanded = catalog_pairs.dex_futures_routes(
+        source_rows,
+        books=books,
+        # The selected historical window is read from the exact shared venue
+        # archive after grouping; do not perform per-route history work here.
+        include_history=False,
+    )
+    if not expanded:
+        return rows
+    converted = [
+        _row_from_catalog_dex_route(
+            route,
+            now=now,
+            metadata=metadata,
+            rails=rails,
+        )
+        for route in expanded
+    ]
+    return [*rows, *converted]
+
+
+def _row_from_catalog_dex_route(
+    route: dict[str, Any],
+    *,
+    now: float,
+    metadata: dict[str, dict[str, Any]],
+    rails: dict[str, dict[str, Any]],
+) -> SpreadTerminalRow:
+    """Adapt a no-network catalogue expansion into the canonical row type."""
+
+    raw = dict(route)
+    route_inputs: dict[str, dict[str, Any]] = {}
+    identities: dict[str, dict[str, Any]] = {}
+    for side in ("long", "short"):
+        route_inputs[side] = {
+            "symbol": route.get(f"{side}_market_symbol"),
+            "quote": route.get(f"{side}_quote"),
+            "current_funding_pct": route.get(f"{side}_funding_pct"),
+            "funding_interval_hours": route.get(f"{side}_funding_interval_hours"),
+            "next_funding_ts_us": route.get(f"{side}_next_funding_ts_us"),
+            "quote_notional_usd": route.get("matched_size_notional_usd"),
+        }
+        if route_taxonomy.leg_is_dex(
+            venue=route.get(f"{side}_venue"),
+            market_type=route.get(f"{side}_market_type"),
+        ):
+            identities[side] = {
+                "chain_id": route.get("dex_chain"),
+                "token_address": route.get("dex_contract"),
+            }
+            route_inputs[side].update(
+                {
+                    "gas_estimate_usd": route.get("dex_gas_estimate_usd"),
+                    "slippage_bps": route.get("dex_slippage_bps"),
+                    "price_impact_pct": route.get("dex_price_impact_pct"),
+                    "quote_source": route.get("dex_quote_source"),
+                    "mev_protection": route.get("dex_mev_protection"),
+                    "transfer_time_seconds": route.get("dex_transfer_time_seconds"),
+                    "route_plan": route.get("dex_route_plan") or (),
+                    "quote_ts_us": route.get("dex_quote_ts_us"),
+                    "bid_vwap": route.get(f"{side}_bid_vwap"),
+                    "ask_vwap": route.get(f"{side}_ask_vwap"),
+                }
+            )
+    raw["notes"] = {"route_inputs": route_inputs, "identity": identities}
+    converted = _row_from_api(
+        raw,
+        bucket="dex_discovered_rows",
+        now=now,
+        metadata=metadata,
+        rails=rails,
+    )
+    return replace(
+        converted,
+        route_key=str(route.get("route_key") or converted.route_key),
+        route_kind="DEX-FUTURES",
+        source_name=str(route.get("source_name") or "Complete OKX DEX pairs"),
+        depth_usd=_float_or_none(route.get("depth_usd")),
+        matched_size_notional_usd=_float_or_none(
+            route.get("matched_size_notional_usd")
+        ),
+        gas_adjusted_spread_pct=_float_or_none(route.get("gas_adjusted_spread_pct")),
+        live_book=True,
+    )
 
 
 def _fast_quote_delta_path(path: Path) -> Path:
@@ -2173,6 +2298,15 @@ def _row_from_api(
         ),
         dex_quote_source=_str_or_none(
             dex_input.get("quote_source") if isinstance(dex_input, dict) else None
+        ),
+        dex_bid_vwap=_float_or_none(
+            dex_input.get("bid_vwap") if isinstance(dex_input, dict) else None
+        ),
+        dex_ask_vwap=_float_or_none(
+            dex_input.get("ask_vwap") if isinstance(dex_input, dict) else None
+        ),
+        dex_quote_ts_us=_int_or_none(
+            dex_input.get("quote_ts_us") if isinstance(dex_input, dict) else None
         ),
         dex_mev_protection=_str_or_none(
             dex_input.get("mev_protection") if isinstance(dex_input, dict) else None

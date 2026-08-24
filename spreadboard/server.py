@@ -2488,6 +2488,7 @@ def api_market_spreads(
     )
     offset = max(0, int(_query_float(query, "offset", 0) or 0))
     complete_funding_request = _can_use_complete_funding_catalog(query)
+    historical_dex_request = _can_use_historical_dex_catalog(query)
     cache_key = None if _query_bool(query, "no_cache") else _market_cache_key(board_path, query)
     allow_previous_generation = not _market_build_is_background()
     if cache_key is not None:
@@ -2576,8 +2577,8 @@ def api_market_spreads(
                 require_deliverable=True,
                 sort_by=_query_first(query, "sort") or "edge",
                 direction=_query_first(query, "direction") or "desc",
-                offset=offset,
-                limit=limit,
+                offset=0 if historical_dex_request else offset,
+                limit=500 if historical_dex_request else limit,
             )
         )
         # Discovery is deliberately capped per token so its atomic snapshot
@@ -2587,7 +2588,11 @@ def api_market_spreads(
         # made here, and a failure leaves the original scanner payload intact.
         if complete_funding_request:
             data = _expand_complete_funding_groups(data, query, offset=offset, limit=limit)
-            if data.get("coverage_mode") != "complete_funding_catalogue_ranked_before_pagination":
+            if (
+                data.get("status") != "warming"
+                and data.get("coverage_mode")
+                != "complete_funding_catalogue_ranked_before_pagination"
+            ):
                 data = api_spreads.load_spreads(
                     board_path=board_path,
                     q=_query_first(query, "q"),
@@ -2605,6 +2610,13 @@ def api_market_spreads(
                     offset=offset,
                     limit=limit,
                 )
+        elif historical_dex_request:
+            data = _expand_historical_dex_groups(
+                data,
+                query,
+                offset=offset,
+                limit=limit,
+            )
         elif limit <= api_spreads.DEFAULT_LIMIT:
             data = _expand_visible_catalog_groups(data, query)
     except Exception:
@@ -2614,6 +2626,10 @@ def api_market_spreads(
     finally:
         if acquired:
             _MARKET_BUILD_SLOTS.release()
+    if data.get("status") == "warming":
+        if cache_key is not None:
+            _market_cache_finish(cache_key, None)
+        return data
     if cache_key is not None:
         _market_cache_finish(cache_key, data)
     return _sync_telegram_client_universe(data)
@@ -2629,6 +2645,31 @@ def _can_use_complete_funding_catalog(query: dict[str, list[str]]) -> bool:
         "FUTURES",
         "FUTURES-SPOT-PAIR",
     }:
+        return False
+    unsupported = (
+        "source",
+        "min_spread_pct",
+        "min_volume_24h_usd",
+        "min_market_cap_usd",
+        "max_market_cap_usd",
+        "min_fdv_usd",
+        "max_fdv_usd",
+        "max_listing_age_days",
+        "persistence",
+        "asset_class",
+    )
+    return not any(_query_first(query, key) for key in unsupported)
+
+
+def _can_use_historical_dex_catalog(query: dict[str, list[str]]) -> bool:
+    """The selected DEX window is a complete API dataset, not render glue."""
+
+    if (
+        not _query_bool(query, "funding_only")
+        or _query_first(query, "kind") != "DEX-FUTURES"
+        or (_query_first(query, "funding_window") or "now").casefold()
+        not in {"1d", "7d", "30d"}
+    ):
         return False
     unsupported = (
         "source",
@@ -2736,6 +2777,19 @@ def _expand_complete_funding_groups(
         )
     except Exception:  # noqa: BLE001 - preserve the last scanner generation.
         return data
+    if complete.get("status") == "warming":
+        result = dict(data)
+        result.update(
+            {
+                "ok": False,
+                "status": "warming",
+                "coverage_mode": complete.get("mode"),
+                "groups": [],
+                "rows": [],
+                "funding_catalog": complete,
+            }
+        )
+        return result
     if not complete.get("groups") and complete.get("matching_token_count") is None:
         return data
 
@@ -2802,6 +2856,61 @@ def _expand_complete_funding_groups(
     if isinstance(canonical_health, dict):
         canonical_health["row_count"] = int(complete.get("matching_route_count") or 0)
     result["ok"] = bool(groups)
+    return result
+
+
+def _expand_historical_dex_groups(
+    data: dict[str, Any],
+    query: dict[str, list[str]],
+    *,
+    offset: int,
+    limit: int,
+) -> dict[str, Any]:
+    """Publish one selected-window DEX dataset for HTML, API, and export."""
+
+    complete = _historical_funding_page(
+        list(data.get("groups") or []),
+        route_kind="DEX-FUTURES",
+        window=(_query_first(query, "funding_window") or "1d").casefold(),
+        offset=offset,
+        limit=limit,
+        symbol=_query_first(query, "q"),
+        exchange=_query_first(query, "exchange"),
+        quote_filter=_query_first(query, "quote"),
+    )
+    result = dict(data)
+    result.update(
+        {
+            "ok": bool(complete.get("groups")),
+            "groups": list(complete.get("groups") or []),
+            "rows": list(complete.get("rows") or []),
+            "coverage_mode": complete.get("mode"),
+            "funding_catalog": complete,
+        }
+    )
+    summary = dict(result.get("summary") or {})
+    summary.update(
+        {
+            "matching_tokens": int(complete.get("matching_token_count") or 0),
+            "returned_tokens": int(complete.get("returned_token_count") or 0),
+            "matching_rows": int(complete.get("matching_route_count") or 0),
+            "returned_rows": int(complete.get("returned_route_count") or 0),
+            "funding_rows": int(complete.get("matching_route_count") or 0),
+            "max_funding_24h_pct": _float_or_none(complete.get("largest_value")),
+        }
+    )
+    result["summary"] = summary
+    result["pagination"] = {
+        "offset": int(complete.get("offset") or 0),
+        "limit": int(complete.get("limit") or limit),
+        "matching_rows": int(complete.get("matching_route_count") or 0),
+        "returned_rows": int(complete.get("returned_route_count") or 0),
+        "matching_tokens": int(complete.get("matching_token_count") or 0),
+        "returned_tokens": int(complete.get("returned_token_count") or 0),
+    }
+    canonical_health = (result.get("source_health") or {}).get("canonical_api")
+    if isinstance(canonical_health, dict):
+        canonical_health["row_count"] = int(complete.get("matching_route_count") or 0)
     return result
 
 
@@ -8947,6 +9056,135 @@ def funding_rank_basis(row: dict[str, Any], selected_window: str = "now") -> str
     return "funding unavailable"
 
 
+def _historical_funding_page(
+    current_groups: list[dict[str, Any]],
+    *,
+    route_kind: str,
+    window: str,
+    offset: int,
+    limit: int,
+    symbol: str | None = None,
+    exchange: str | None = None,
+    quote_filter: str | None = None,
+) -> dict[str, Any]:
+    """Globally rank the complete positive DEX history before pagination.
+
+    ``Now`` never calls this function.  Historical routes are separate radar
+    records and remain visibly non-live, so retention cannot weaken any current
+    funding, freshness, book, identity, or deliverability gate. The selected
+    exact rolling window is evaluated for both current and retained routes;
+    frozen last-seen radar totals are never used for an identifiable CEX leg.
+    """
+    routes_by_identity: dict[tuple[Any, ...], dict[str, Any]] = {}
+    wanted_exchange = str(exchange or "").strip().casefold()
+    wanted_quote = str(quote_filter or "").strip().upper()
+
+    def eligible(route: dict[str, Any]) -> bool:
+        if wanted_exchange and wanted_exchange not in " ".join(
+            str(route.get(key) or "") for key in ("long_venue", "short_venue")
+        ).casefold():
+            return False
+        return not wanted_quote or wanted_quote in {
+            str(route.get("long_quote") or "").upper(),
+            str(route.get("short_quote") or "").upper(),
+        }
+
+    for original in current_groups:
+        for original_route in original.get("routes") or []:
+            route = dict(original_route)
+            if not eligible(route):
+                continue
+            route["radar_historical"] = False
+            identity = catalog_pairs.route_identity(route)
+            existing = routes_by_identity.get(identity)
+            if existing is None:
+                routes_by_identity[identity] = route
+            else:
+                for key, value in route.items():
+                    if key not in existing or existing.get(key) is None:
+                        existing[key] = value
+
+    # Do not ask routes_for() to filter by its frozen snapshot. Current exact
+    # venue history decides whether the rolling selected window is complete.
+    for retained in funding_radar.routes_for(symbol, route_kind=route_kind):
+        route = dict(retained)
+        if not eligible(route):
+            continue
+        identity = catalog_pairs.route_identity(route)
+        if identity in routes_by_identity:
+            continue
+        value = funding_radar.window_value(route, window)
+        if value is None or value <= 0:
+            continue
+        routes_by_identity[identity] = route
+
+    grouped: dict[str, list[tuple[float, dict[str, Any]]]] = {}
+    for route in routes_by_identity.values():
+        token = str(route.get("token") or "").upper()
+        value = funding_radar.window_value(route, window)
+        # Negative or incomplete selected-window routes must not inflate the
+        # breadth shown in a positive carry ranking, whether live or retained.
+        if not token or value is None or value <= 0:
+            continue
+        grouped.setdefault(token, []).append((float(value), route))
+
+    ranked: list[dict[str, Any]] = []
+    for token, candidates in grouped.items():
+        if not candidates:
+            continue
+        candidates.sort(key=lambda item: float(item[0]), reverse=True)
+        best_value, best = candidates[0]
+        routes = [route for _value, route in candidates]
+        ranked.append(
+            {
+                "token": token,
+                "token_name": best.get("token_name") or "Metadata pending",
+                "href": best.get("href") or f"/markets?q={quote(token)}&view=table",
+                "coverage_mode": "complete_dex_funding_radar",
+                "venues": sorted(
+                    {
+                        str(route.get(key))
+                        for route in routes
+                        for key in ("long_venue", "short_venue")
+                        if route.get(key)
+                    }
+                ),
+                "route_kinds": sorted(
+                    {str(route.get("route_kind") or "") for route in routes}
+                ),
+                "routes": routes,
+                "best_funding_route": best,
+                "best_funding_window_pct": best_value,
+                "best_funding_window_aggregate_pct": best_value,
+                "route_count": len(routes),
+                "displayed_route_count": len(routes),
+            }
+        )
+    ranked.sort(
+        key=lambda group: float(group.get("best_funding_window_pct") or float("-inf")), reverse=True
+    )
+    start = max(0, int(offset or 0))
+    page_limit = max(1, min(500, int(limit or 25)))
+    visible = ranked[start : start + page_limit]
+    return {
+        "ok": bool(visible),
+        "mode": "complete_dex_funding_radar_ranked_before_pagination",
+        "window": window,
+        "window_value_kind": "aggregate_exact_settlements",
+        "window_duration_days": {"1d": 1, "7d": 7, "30d": 30}.get(window),
+        "now_is_independent": True,
+        "groups": visible,
+        "rows": [route for group in visible for route in group.get("routes") or []],
+        "matching_token_count": len(ranked),
+        "matching_route_count": sum(int(group["route_count"]) for group in ranked),
+        "returned_token_count": len(visible),
+        "returned_route_count": sum(int(group["route_count"]) for group in visible),
+        "offset": start,
+        "limit": page_limit,
+        "largest_value": ranked[0].get("best_funding_window_pct") if ranked else None,
+    }
+
+
 def _historical_funding_groups(
     current_groups: list[dict[str, Any]],
     *,
@@ -8955,72 +9193,16 @@ def _historical_funding_groups(
     limit: int,
     symbol: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Union live groups with retained leaders, ranked on the chosen window.
+    """Compatibility wrapper for callers which only need the first page."""
 
-    ``Now`` never calls this function.  Historical routes are separate radar
-    records and remain visibly non-live, so retention cannot weaken any current
-    funding, freshness, book, identity, or deliverability gate.
-    """
-    groups: dict[str, dict[str, Any]] = {}
-    live_keys: set[str] = set()
-    for original in current_groups:
-        group = dict(original)
-        routes = []
-        for original_route in original.get("routes") or []:
-            route = dict(original_route)
-            route["radar_historical"] = False
-            routes.append(route)
-            if route.get("route_key"):
-                live_keys.add(str(route["route_key"]))
-        group["routes"] = routes
-        groups[str(group.get("token") or "").upper()] = group
-
-    for route in funding_radar.routes_for(symbol, route_kind=route_kind, window=window):
-        key = str(route.get("route_key") or "")
-        value = funding_radar.window_value(route, window)
-        # The radar is for opportunities which paid.  Negative historical
-        # carry remains queryable in raw history but should not displace a
-        # positive farm from this bounded client list.
-        if key in live_keys or value is None or value <= 0:
-            continue
-        token = str(route.get("token") or "").upper()
-        if not token:
-            continue
-        group = groups.setdefault(
-            token,
-            {
-                "token": token,
-                "token_name": route.get("token_name") or "Metadata pending",
-                "href": route.get("href") or f"/markets?q={quote(token)}&view=table",
-                "venues": sorted(
-                    value for value in (route.get("long_venue"), route.get("short_venue")) if value
-                ),
-                "route_kinds": [route.get("route_kind")],
-                "routes": [],
-            },
-        )
-        group["routes"].append(route)
-
-    ranked: list[dict[str, Any]] = []
-    for group in groups.values():
-        routes = group.get("routes") or []
-        candidates = [(funding_radar.window_value(route, window), route) for route in routes]
-        candidates = [(value, route) for value, route in candidates if value is not None]
-        if not candidates:
-            continue
-        candidates.sort(key=lambda item: float(item[0]), reverse=True)
-        best_value, best = candidates[0]
-        group["best_funding_route"] = best
-        group["best_funding_window_pct"] = best_value
-        group["route_count"] = len(routes)
-        group["routes"] = [route for _value, route in candidates] + [
-            route for route in routes if all(route is not item[1] for item in candidates)
-        ]
-        ranked.append(group)
-    ranked.sort(
-        key=lambda group: float(group.get("best_funding_window_pct") or float("-inf")), reverse=True
-    )
-    return ranked[: max(1, min(100, int(limit)))]
+    return _historical_funding_page(
+        current_groups,
+        route_kind=route_kind,
+        window=window,
+        offset=0,
+        limit=limit,
+        symbol=symbol,
+    )["groups"]
 
 
 def render_funding_page(
@@ -9038,9 +9220,11 @@ def render_funding_page(
     selected_window = (_query_first(query, "rank") or "now").casefold()
     if selected_window not in {value for value, _ in FUNDING_RANK_TABS}:
         selected_window = "now"
-    # `rank` and `farm` remain presentation names. Historical CEX lanes pass an
-    # explicit funding_window because their complete, globally ranked payload
-    # genuinely differs from Now; the old bounded payload did not.
+    page_offset = max(0, int(_query_float(query, "offset", 0) or 0))
+    page_limit = max(20, min(500, int(_query_float(query, "limit", 25) or 25)))
+    # `rank` and `farm` remain presentation names. Every historical lane passes
+    # an explicit funding_window so HTML, pagination, and Export JSON consume
+    # one complete selected-window dataset which genuinely differs from Now.
     data_query = {k: v for k, v in query.items() if k not in {"rank", "farm"}}
     funding_query = _query_lists_with(
         data_query,
@@ -9049,40 +9233,20 @@ def render_funding_page(
         # Signed, not magnitude: the best carry to collect belongs at the top.
         sort="funding",
         direction=_query_first(query, "direction") or "desc",
-        limit=_query_first(query, "limit") or "25",
+        limit=str(page_limit),
+        offset=str(page_offset),
     )
-    if selected_window != "now" and selected_farm != "futures-dex":
+    if selected_window != "now":
         funding_query = _query_lists_with(
             funding_query,
             funding_window=selected_window,
         )
     market_data = api_market_spreads(board_path, funding_query)
     funding_groups = market_data.get("groups") or []
-    # OKX DEX routes are scanner records rather than CEX catalogue pairs. Keep
-    # their exact retained union; CEX history was already globally ranked by
-    # the complete funding catalogue before this page received it.
-    if selected_window != "now" and selected_farm == "futures-dex":
-        funding_groups = _historical_funding_groups(
-            funding_groups,
-            route_kind=farm_kinds[selected_farm],
-            window=selected_window,
-            limit=int(_query_first(query, "limit") or 25),
-            symbol=_query_first(data_query, "q"),
-        )
     summary = market_data.get("summary") or {}
     funding_meta = market_data.get("funding_catalog") or {}
     displayed_assets = funding_meta.get("matching_token_count", summary.get("matching_tokens"))
     displayed_largest = funding_meta.get("largest_value", summary.get("max_funding_24h_pct"))
-    if selected_window != "now" and selected_farm == "futures-dex":
-        displayed_assets = len(funding_groups)
-        displayed_largest = max(
-            (
-                float(group.get("best_funding_window_pct"))
-                for group in funding_groups
-                if group.get("best_funding_window_pct") is not None
-            ),
-            default=None,
-        )
     displayed_largest_label = (
         "Largest now / 24h"
         if selected_window == "now"
@@ -9091,11 +9255,6 @@ def render_funding_page(
         else f"Largest {selected_window} total"
     )
     displayed_pairs = funding_meta.get("matching_route_count", summary.get("matching_rows"))
-    if selected_window != "now" and selected_farm == "futures-dex":
-        displayed_pairs = sum(
-            int(group.get("route_count") or len(group.get("routes") or []))
-            for group in funding_groups
-        )
     api_health_data = (market_data.get("source_health") or {}).get("canonical_api") or {}
     live_funding_health = bulk_quotes.funding_health()
     source_ready = (
@@ -9110,8 +9269,6 @@ def render_funding_page(
         ("futures-spot", "Futures-Spot"),
         ("futures-dex", "Futures-DEX"),
     ]
-    page_offset = max(0, int(_query_float(query, "offset", 0) or 0))
-    page_limit = max(20, min(500, int(_query_float(query, "limit", 25) or 25)))
     total_tokens = int(displayed_assets or 0)
     returned_tokens = len(funding_groups)
 
@@ -9160,6 +9317,27 @@ def render_funding_page(
         "A missing 30d value is never backfilled from the current rate or a partial archive.</p>"
         if funding_meta
         else ""
+    )
+    history_window_counts = history_health.get("window_leg_counts") or {}
+    history_window_pct = history_health.get("window_coverage_pct") or {}
+    history_total_legs = int(history_health.get("catalog_leg_count") or 0)
+
+    def history_window_stat(label: str) -> str:
+        count = int(history_window_counts.get(label) or 0)
+        coverage = _float_or_none(history_window_pct.get(label))
+        if coverage is None:
+            coverage = count / history_total_legs * 100.0 if history_total_legs else 100.0
+        return f"{count}/{history_total_legs} ({coverage:.2f}%)"
+
+    history_window_note = (
+        '<p class="funding-radar-note" data-history-window-coverage>'
+        '<strong>Complete trailing windows:</strong> '
+        f'24h {h(history_window_stat("1d"))} · '
+        f'7d {h(history_window_stat("7d"))} · '
+        f'30d {h(history_window_stat("30d"))}. '
+        f'<strong>Deep-history backlog:</strong> '
+        f'{h(int(history_health.get("deep_history_pending_leg_count") or 0))} legs. '
+        'Source-checked means a venue answered or was classified; it does not mean every trailing window is complete.</p>'
     )
     body = f"""
     <section class="funding-page terminal-page" data-refresh="{refresh_seconds}" data-refresh-silent="1">
@@ -9220,6 +9398,7 @@ def render_funding_page(
     } successfully classified; {h(history_health.get("pending_leg_count"))} not yet checked; {
         h(history_health.get("retryable_error_leg_count"))
     } awaiting a provider retry. Previously verified windows remain visible during temporary provider failures.</p>
+      {history_window_note}
       <section class="terminal-tape funding-tape" aria-label="Funding summary">
         {
         render_market_metric(

@@ -21,6 +21,7 @@ from spreadarb.api_discovery.models import spread_pct
 from spreadarb.api_discovery.orderbook import depth_weighted_price
 from spreadboard import (
     live_book_cache,
+    probe_notional,
     public_rails,
     route_taxonomy,
     token_metadata,
@@ -482,7 +483,7 @@ class FastQuoteRefresher:
         snapshot_path: Path,
         *,
         route_limit: int = 100,
-        target_notional_usd: float = 50.0,
+        target_notional_usd: float = probe_notional.TARGET_NOTIONAL_USD,
         deadline_seconds: float | None = None,
     ) -> dict[str, Any]:
         deadline = (
@@ -795,6 +796,8 @@ class FastQuoteRefresher:
         row["displayed_open_spread_pct"] = row["executable_spread_pct"]
         blockers = [item for item in blockers if item != "depth_unverified"]
         row["depth_usd"] = target_notional_usd
+        row["target_notional_usd"] = target_notional_usd
+        row["matched_size_notional_usd"] = target_notional_usd
         row["depth_unverified"] = False
         row["quote_ts_us"] = min(long_quote["quote_ts_us"], short_quote["quote_ts_us"])
         row["fast_quote_verified_at"] = _utc_now_iso()
@@ -846,7 +849,7 @@ class FastQuoteRefresher:
         self,
         row: dict[str, Any],
         *,
-        target_notional_usd: float = 50.0,
+        target_notional_usd: float = probe_notional.TARGET_NOTIONAL_USD,
     ) -> dict[str, Any]:
         """Reprice one exact route without changing the broad-board snapshot."""
 
@@ -911,6 +914,9 @@ class FastQuoteRefresher:
         quoted["depth_weighted_spread_pct"] = depth
         quoted["quote_ts_us"] = min(long_quote["quote_ts_us"], short_quote["quote_ts_us"])
         quoted["target_notional_usd"] = target_notional_usd
+        if depth is not None:
+            quoted["depth_usd"] = target_notional_usd
+            quoted["matched_size_notional_usd"] = target_notional_usd
         return {
             "status": "ok",
             "sample_source": "live_chart_exact_route",

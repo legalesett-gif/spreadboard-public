@@ -14,18 +14,30 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from spreadboard import api_spreads, catalog_pairs
+from spreadboard import api_spreads, catalog_pairs, fast_quotes, probe_notional
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_the_probe_is_five_hundred_dollars() -> None:
+    assert probe_notional.TARGET_NOTIONAL_USD == 500.0
     assert api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD == 500.0
 
 
 def test_the_pair_catalogue_probes_the_same_size() -> None:
     """Two different probe sizes would rank routes against different bars."""
     assert catalog_pairs.TARGET_NOTIONAL_USD == api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD
+
+
+def test_fast_quote_defaults_to_the_canonical_probe() -> None:
+    assert (
+        fast_quotes.FastQuoteRefresher.refresh.__kwdefaults__["target_notional_usd"]
+        == probe_notional.TARGET_NOTIONAL_USD
+    )
+    assert (
+        fast_quotes.FastQuoteRefresher.quote_route.__kwdefaults__["target_notional_usd"]
+        == probe_notional.TARGET_NOTIONAL_USD
+    )
 
 
 def test_no_module_hardcodes_the_old_fifty_dollar_probe() -> None:
@@ -36,6 +48,8 @@ def test_no_module_hardcodes_the_old_fifty_dollar_probe() -> None:
         "spreadboard/alerts.py",
         "spreadboard/server.py",
         "spreadboard/catalog_pairs.py",
+        "spreadboard/fast_quotes.py",
+        "scripts/fast_quote_worker.py",
         "scripts/route_quote_worker.py",
         "scripts/audit_spread_accuracy.py",
     ):
@@ -43,6 +57,17 @@ def test_no_module_hardcodes_the_old_fifty_dollar_probe() -> None:
         if re.search(r"target_notional_usd\s*=\s*50\.0", text):
             offenders.append(name)
     assert not offenders, f"hardcoded $50 probe still in: {offenders}"
+
+
+def test_fast_quote_worker_passes_the_canonical_probe_explicitly() -> None:
+    text = (ROOT / "scripts/fast_quote_worker.py").read_text(encoding="utf-8")
+    assert "target_notional_usd=probe_notional.TARGET_NOTIONAL_USD" in text
+
+
+def test_fast_quote_publication_persists_matched_size_evidence() -> None:
+    text = (ROOT / "spreadboard/fast_quotes.py").read_text(encoding="utf-8")
+    assert 'row["target_notional_usd"] = target_notional_usd' in text
+    assert 'row["matched_size_notional_usd"] = target_notional_usd' in text
 
 
 def test_the_page_does_not_quote_a_stale_probe_size_in_prose() -> None:

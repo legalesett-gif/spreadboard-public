@@ -14,7 +14,8 @@ while str(ROOT) in sys.path:
     sys.path.remove(str(ROOT))
 sys.path.insert(0, str(ROOT))
 
-from spreadboard.fast_quotes import FastQuoteRefresher  # noqa: E402
+from spreadboard import probe_notional
+from spreadboard.fast_quotes import FastQuoteRefresher
 
 
 def main() -> int:
@@ -31,6 +32,7 @@ def main() -> int:
         summary = refresher.refresh(
             args.snapshot_path,
             route_limit=args.route_limit,
+            target_notional_usd=probe_notional.TARGET_NOTIONAL_USD,
             deadline_seconds=args.deadline_seconds,
         )
     finally:

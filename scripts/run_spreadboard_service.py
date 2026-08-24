@@ -1006,6 +1006,21 @@ WARM_QUERIES: tuple[dict[str, list[str]], ...] = (
     {"funding_only": ["1"], "sort": ["funding"], "direction": ["desc"], "limit": ["500"]},
 )
 
+# Historical DEX ranking must archive more than the 25 routes visible in Now.
+# Keep this separate from WARM_QUERIES: Telegram intentionally consumes the
+# ordinary funding lanes only, while the collector uses this broad DEX lane to
+# retain and roll every currently eligible OKX DEX route.
+FUNDING_ARCHIVE_QUERIES: tuple[dict[str, list[str]], ...] = (
+    {
+        "funding_only": ["1"],
+        "kind": ["DEX-FUTURES"],
+        "sort": ["funding"],
+        "direction": ["desc"],
+        "limit": ["500"],
+        "offset": ["0"],
+    },
+)
+
 
 def _complete_telegram_funding_payloads(
     board_path: Path,
@@ -1094,6 +1109,7 @@ def _warm_funding_cache() -> None:
 
     started = time.monotonic()
     funding_catalog.clear_cache()
+    funding_catalog.refresh_cache()
     payloads = _complete_telegram_funding_payloads(_board_path())
     if payloads:
         telegram_queries.replace_funding_payloads(payloads)
@@ -1438,12 +1454,14 @@ def _warm_board_cache(*, force: bool = False) -> None:
     started = time.monotonic()
     _log("board cache warm starting")
     funding_catalog.clear_cache()
+    funding_catalog.refresh_cache()
     # A new discovery snapshot invalidates route links before it invalidates a
     # member's need to click them. Rebuild this small lookup first; the larger
     # navigation views can continue warming afterwards.
     _warm_route_index()
     _yield_to_requests()
-    for query in WARM_QUERIES:
+    warm_queries = (*WARM_QUERIES, *FUNDING_ARCHIVE_QUERIES)
+    for query in warm_queries:
         try:
             server.api_market_spreads(_board_path(), dict(query))
         except Exception as exc:  # noqa: BLE001 - warming is best effort.
@@ -1486,7 +1504,7 @@ def _warm_board_cache(*, force: bool = False) -> None:
     except Exception as exc:  # noqa: BLE001 - warming is best effort.
         _log(f"health warm skipped: {type(exc).__name__}: {exc}")
     _yield_to_requests()
-    _log(f"board cache warmed {len(WARM_QUERIES)} views in {time.monotonic() - started:.1f}s")
+    _log(f"board cache warmed {len(warm_queries)} views in {time.monotonic() - started:.1f}s")
     if _service_role() != "web":
         _refresh_token_rankings()
         _refresh_funding_windows()
@@ -1577,6 +1595,7 @@ def _refresh_funding_windows() -> None:
     just built, means the page only ever reads the answer.
     """
     from spreadboard import (
+        catalog_pairs,
         funding_catalog,
         funding_radar,
         market_history,
@@ -1588,7 +1607,7 @@ def _refresh_funding_windows() -> None:
         route_keys: list[str] = []
         leaders: list[dict[str, Any]] = []
         warm_routes: list[dict[str, Any]] = []
-        for query in WARM_QUERIES:
+        for query in (*WARM_QUERIES, *FUNDING_ARCHIVE_QUERIES):
             if not query.get("funding_only"):
                 continue
             payload = server.api_market_spreads(_board_path(), dict(query))
@@ -1611,12 +1630,12 @@ def _refresh_funding_windows() -> None:
         # A rate can lead for thirty minutes and cool before the next settlement
         # history refresh; that brief leader still belongs on the historical
         # radar, explicitly marked as no longer live.
-        radar_routes_by_key = {
-            str(route.get("route_key")): route
+        radar_routes_by_identity = {
+            catalog_pairs.route_identity(route): route
             for route in [*funding_catalog.archive_routes(), *warm_routes, *leaders]
             if route.get("route_key")
         }
-        radar_routes = list(radar_routes_by_key.values())
+        radar_routes = list(radar_routes_by_identity.values())
         radar_count = funding_radar.refresh(radar_routes)
         _log(
             f"funding radar retained {radar_count} complete-catalogue routes "
@@ -1692,7 +1711,7 @@ def _refresh_venue_funding_history(
             return
 
         priority_legs: list[tuple[str, str]] = []
-        for query in WARM_QUERIES:
+        for query in (*WARM_QUERIES, *FUNDING_ARCHIVE_QUERIES):
             if not query.get("funding_only"):
                 continue
             payload = server.api_market_spreads(_board_path(), dict(query))

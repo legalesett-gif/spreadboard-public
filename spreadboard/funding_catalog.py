@@ -48,7 +48,13 @@ def clear_cache() -> None:
         _CACHE_AT = 0.0
 
 
-def _complete_payloads() -> dict[str, dict[str, Any]]:
+def refresh_cache() -> dict[str, dict[str, Any]]:
+    """Build the replacement generation for a background service worker."""
+
+    return _complete_payloads(force_refresh=True)
+
+
+def _complete_payloads(*, force_refresh: bool = False) -> dict[str, dict[str, Any]]:
     """One coherent all-token generation from already-warm local artifacts."""
 
     global _CACHE_AT, _CACHE_PAYLOADS, _CACHE_BUILDING
@@ -57,6 +63,12 @@ def _complete_payloads() -> dict[str, dict[str, Any]]:
         if _CACHE_PAYLOADS and now - _CACHE_AT <= CACHE_SECONDS:
             return _CACHE_PAYLOADS
         previous = _CACHE_PAYLOADS
+        # HTTP readers never become the owner of a multi-minute refresh after
+        # a complete generation has been published. The service's explicit
+        # refresh_cache() call owns that work; readers keep the last immutable
+        # generation while it is replaced.
+        if not force_refresh:
+            return previous
         if _CACHE_BUILDING:
             owns_build = False
         else:
@@ -207,10 +219,12 @@ def _all_routes(
     exchange: str | None,
     quote: str | None,
     include_retained: bool,
+    payloads: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    live_keys: set[str] = set()
-    for payload in _complete_payloads().values():
+    live_identities: set[tuple[Any, ...]] = set()
+    identity_indexes: dict[tuple[Any, ...], int] = {}
+    for payload in (payloads if payloads is not None else _complete_payloads()).values():
         for route in payload.get("routes") or []:
             if not isinstance(route, dict) or not _common_eligible(
                 route,
@@ -221,16 +235,23 @@ def _all_routes(
             ):
                 continue
             copied = _copy_route(route, historical=False)
+            identity = catalog_pairs.route_identity(copied)
+            if identity in identity_indexes:
+                existing = rows[identity_indexes[identity]]
+                for key, value in copied.items():
+                    if key not in existing or existing.get(key) is None:
+                        existing[key] = value
+                continue
+            identity_indexes[identity] = len(rows)
+            live_identities.add(identity)
             rows.append(copied)
-            if copied.get("route_key"):
-                live_keys.add(str(copied["route_key"]))
     if include_retained:
         for route in funding_radar.routes_for(
             symbol,
             route_kind=route_kind,
         ):
-            key = str(route.get("route_key") or "")
-            if key in live_keys or not _common_eligible(
+            identity = catalog_pairs.route_identity(route)
+            if identity in live_identities or identity in identity_indexes or not _common_eligible(
                 route,
                 route_kind=route_kind,
                 symbol=symbol,
@@ -238,6 +259,7 @@ def _all_routes(
                 quote=quote,
             ):
                 continue
+            identity_indexes[identity] = len(rows)
             rows.append(_copy_route(route, historical=True))
     return rows
 
@@ -303,12 +325,35 @@ def page(
     selected_window = str(window or "now").casefold()
     if selected_window not in {"now", "1d", "7d", "30d"}:
         selected_window = "now"
+    payloads = _complete_payloads()
+    if not payloads:
+        return {
+            "ok": False,
+            "status": "warming",
+            "mode": "complete_funding_catalogue_background_warming",
+            "window": selected_window,
+            "window_value_kind": (
+                "current_rate_projected_24h"
+                if selected_window == "now"
+                else "aggregate_exact_settlements"
+            ),
+            "now_is_independent": True,
+            "groups": [],
+            "rows": [],
+            "matching_token_count": None,
+            "matching_route_count": None,
+            "returned_token_count": 0,
+            "returned_route_count": 0,
+            "offset": max(0, int(offset or 0)),
+            "limit": max(1, min(500, int(limit or 25))),
+        }
     rows = _all_routes(
         route_kind=route_kind,
         symbol=symbol,
         exchange=exchange,
         quote=quote,
         include_retained=selected_window != "now",
+        payloads=payloads,
     )
     grouped: dict[str, list[tuple[float, dict[str, Any]]]] = {}
     window_routes = {label: 0 for label in ("1d", "7d", "30d")}
