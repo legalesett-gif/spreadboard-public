@@ -131,6 +131,16 @@ _MARKET_FRESHNESS_GATE_MAX_ENTRIES = _MARKET_CACHE_MAX_ENTRIES * 2 + 8
 _MARKET_BUILD_SLOTS = threading.BoundedSemaphore(
     max(1, int(os.environ.get("SPREADBOARD_MARKET_BUILD_SLOTS", "1")))
 )
+# Historical DEX pages reuse one broad current exact-quote generation. A fresh
+# HTTP process must never make a member own that expensive expansion before the
+# background warmer has published it.
+_HISTORICAL_DEX_ARCHIVE_READY = threading.Event()
+
+
+def mark_historical_dex_archive_ready() -> None:
+    _HISTORICAL_DEX_ARCHIVE_READY.set()
+
+
 _CHART_SAMPLE_LOCK = threading.Lock()
 _CHART_SAMPLE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CHART_SAMPLE_INFLIGHT: dict[str, threading.Event] = {}
@@ -2489,6 +2499,16 @@ def api_market_spreads(
     offset = max(0, int(_query_float(query, "offset", 0) or 0))
     complete_funding_request = _can_use_complete_funding_catalog(query)
     historical_dex_request = _can_use_historical_dex_catalog(query)
+    if historical_dex_request and not _HISTORICAL_DEX_ARCHIVE_READY.is_set():
+        warming = _market_warming_payload()
+        warming["coverage_mode"] = "historical_dex_archive_background_warming"
+        warming["funding_catalog"] = {
+            "status": "warming",
+            "window": _query_first(query, "funding_window"),
+            "window_value_kind": "aggregate_exact_settlements",
+            "now_is_independent": True,
+        }
+        return warming
     cache_key = None if _query_bool(query, "no_cache") else _market_cache_key(board_path, query)
     allow_previous_generation = not _market_build_is_background()
     if cache_key is not None:

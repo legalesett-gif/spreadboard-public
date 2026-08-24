@@ -1466,10 +1466,15 @@ def _warm_board_cache(*, force: bool = False) -> None:
     # navigation views can continue warming afterwards.
     _warm_route_index()
     _yield_to_requests()
-    warm_queries = (*WARM_QUERIES, *FUNDING_ARCHIVE_QUERIES)
+    # Publish the one broad DEX generation first. Historical page 1, page 2,
+    # and Export JSON all reuse it; until it is complete their readers return
+    # an immediate honest warming payload instead of owning this build.
+    warm_queries = (*FUNDING_ARCHIVE_QUERIES, *WARM_QUERIES)
     for query in warm_queries:
         try:
-            server.api_market_spreads(_board_path(), dict(query))
+            payload = server.api_market_spreads(_board_path(), dict(query))
+            if query in FUNDING_ARCHIVE_QUERIES and payload.get("status") != "warming":
+                server.mark_historical_dex_archive_ready()
         except Exception as exc:  # noqa: BLE001 - warming is best effort.
             _log(f"board cache warm skipped {query}: {type(exc).__name__}: {exc}")
         _yield_to_requests()

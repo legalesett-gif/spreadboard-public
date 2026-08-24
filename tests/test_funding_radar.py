@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import threading
 from pathlib import Path
 
 from scripts import run_spreadboard_service as service
@@ -247,6 +248,9 @@ def test_dex_historical_api_exports_the_same_globally_ranked_page_two(monkeypatc
         }
 
     monkeypatch.setattr(server, "_historical_funding_page", historical_page)
+    ready = threading.Event()
+    ready.set()
+    monkeypatch.setattr(server, "_HISTORICAL_DEX_ARCHIVE_READY", ready)
 
     class UnrelatedBuildSlot:
         def acquire(self, **_kwargs):
@@ -307,3 +311,40 @@ def test_web_startup_explicitly_owns_the_cold_funding_generation() -> None:
     assert source.index("funding_catalog.refresh_cache()") < source.index(
         "_complete_telegram_funding_payloads"
     )
+
+
+def test_cold_dex_history_reader_returns_warming_without_loading_markets(
+    monkeypatch,
+) -> None:
+    ready = threading.Event()
+    monkeypatch.setattr(server, "_HISTORICAL_DEX_ARCHIVE_READY", ready)
+    monkeypatch.setattr(
+        server.api_spreads,
+        "load_spreads",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("reader owned the DEX archive build")
+        ),
+    )
+
+    payload = server.api_market_spreads(
+        Path("board.json"),
+        {
+            "funding_only": ["1"],
+            "kind": ["DEX-FUTURES"],
+            "funding_window": ["7d"],
+            "offset": ["20"],
+            "limit": ["20"],
+        },
+    )
+
+    assert payload["status"] == "warming"
+    assert payload["coverage_mode"] == "historical_dex_archive_background_warming"
+    assert payload["funding_catalog"]["window"] == "7d"
+    assert ready.is_set() is False
+
+
+def test_board_warm_prioritises_and_marks_the_dex_archive() -> None:
+    source = inspect.getsource(service._warm_board_cache)
+
+    assert "(*FUNDING_ARCHIVE_QUERIES, *WARM_QUERIES)" in source
+    assert "mark_historical_dex_archive_ready" in source
