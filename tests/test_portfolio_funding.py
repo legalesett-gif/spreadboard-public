@@ -2,11 +2,30 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 from datetime import UTC, datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 from scripts import sync_portfolio_funding
 from spreadboard import portfolio_funding
+
+
+def test_remote_position_loader_uses_container_virtualenv(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="[]\n", stderr="")
+
+    monkeypatch.setattr(sync_portfolio_funding.subprocess, "run", fake_run)
+    assert sync_portfolio_funding.remote_positions(
+        host="root@example.invalid",
+        ssh_key=Path("/tmp/key"),
+        user_id=9,
+        container="app-app-1",
+    ) == []
+    assert "/app/.venv/bin/python" in captured["command"]
 
 
 def position(**overrides):

@@ -517,7 +517,7 @@ print(json.dumps(payload))
             "exec",
             "-i",
             container,
-            "python",
+            "/app/.venv/bin/python",
             "-",
         ],
         input=code,
