@@ -3103,6 +3103,11 @@ def _catalog_route_sort_value(row: dict[str, Any], *, funding_only: bool) -> flo
 
 def _sync_telegram_client_universe(payload: dict[str, Any]) -> dict[str, Any]:
     """Make Telegram use the exact unfiltered all-token generation clients got."""
+    # A persisted 500-row lane can satisfy a small page such as /free. Project
+    # it before repricing so the request overlays only the rows it will render,
+    # not all 500 groups. Repricing the superset made the public page take
+    # 16-21 seconds whenever the live-overlay interval elapsed.
+    payload = materialized_views.finalize_projection(payload)
     # Warm structural payloads can outlive their quote. Recompute the
     # presentation boundary on every response so an instant cache hit cannot
     # keep a converged basis looking live until the next full rebuild.
@@ -3141,7 +3146,7 @@ def _sync_telegram_client_universe(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if full_page and first_page and unfiltered and safe_defaults:
         telegram_queries.replace_payload(payload)
-    return materialized_views.finalize_projection(payload)
+    return payload
 
 
 def _apply_spread_freshness_coalesced(payload: dict[str, Any]) -> dict[str, Any]:

@@ -131,6 +131,25 @@ def test_full_materialized_lane_serves_any_page_without_rebuilding(tmp_path: Pat
     assert page["summary"]["returned_tokens"] == 2
 
 
+def test_projected_page_is_sliced_before_live_overlay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A public 25-row page must not reprice its persisted 500-row superset."""
+
+    payload = _payload(["A", "B", "C", "D"])
+    payload["_materialized_projection"] = {"query": {"limit": ["2"]}}
+    overlaid_group_counts: list[int] = []
+    monkeypatch.setattr(
+        server,
+        "_apply_spread_freshness_coalesced",
+        lambda value: overlaid_group_counts.append(len(value.get("groups") or [])) or value,
+    )
+
+    result = server._sync_telegram_client_universe(payload)
+
+    assert overlaid_group_counts == [2]
+    assert [group["token"] for group in result["groups"]] == ["A", "B"]
+    assert "_materialized_projection" not in result
+
+
 def test_server_uses_last_complete_view_before_calling_expensive_loader(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
