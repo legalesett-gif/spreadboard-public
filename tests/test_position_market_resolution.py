@@ -325,6 +325,7 @@ def test_reference_book_uses_best_bid_and_ask_without_walking_depth() -> None:
     levels = [[10.0, 2.0], [11.0, 3.0]]
 
     assert portfolio._best_price(levels) == pytest.approx(10.0)
+    assert portfolio._best_price([[9.0, 0.0]]) == pytest.approx(9.0)
     assert portfolio._midpoint(10.0, 11.0) == pytest.approx(10.5)
     assert portfolio._midpoint(11.0, 10.0) is None
 

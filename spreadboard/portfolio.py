@@ -391,14 +391,20 @@ def _quote_position(
 
 
 def _best_price(levels: list[list[float]]) -> float | None:
-    """First valid positive price from an already side-sorted book."""
+    """First valid positive price from an already side-sorted book.
+
+    Several public adapters, including Hyperliquid HIP-3, expose a reliable
+    top price while the shared cache cannot normalize the venue-specific size
+    and records it as zero.  Position marking uses only the midpoint, never
+    the displayed size, so rejecting that price made an otherwise exact saved
+    market permanently unpriceable.
+    """
 
     for raw in levels:
-        if not isinstance(raw, (list, tuple)) or len(raw) < 2:
+        if not isinstance(raw, (list, tuple)) or not raw:
             continue
         price = _number(raw[0])
-        size = _number(raw[1])
-        if price is not None and size is not None and price > 0 and size > 0:
+        if price is not None and price > 0:
             return price
     return None
 
