@@ -41,6 +41,30 @@ def test_shared_generation_is_atomic_and_contains_no_market_data(
     assert list(tmp_path.glob(".market_generation.json.*")) == []
 
 
+def test_cleanup_removes_only_abandoned_discovery_temps(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(service, "RUNTIME_DIR", tmp_path)
+    old = tmp_path / ".api_discovery_refresh.json.old.tmp"
+    fresh = tmp_path / ".api_discovery_refresh.json.fresh.tmp"
+    unrelated = tmp_path / ".accounts.sqlite3.old.tmp"
+    for path in (old, fresh, unrelated):
+        path.write_bytes(b"123")
+    import os
+
+    os.utime(old, (1_000.0, 1_000.0))
+    os.utime(fresh, (10_000.0, 10_000.0))
+
+    cleanup = service._cleanup_abandoned_discovery_temps(
+        max_age_seconds=3_600, now=10_000.0
+    )
+
+    assert cleanup == {"removed": 1, "bytes": 3}
+    assert not old.exists()
+    assert fresh.exists()
+    assert unrelated.exists()
+
+
 def test_web_watcher_invalidates_prices_and_warms_structural_changes(
     tmp_path, monkeypatch
 ) -> None:
@@ -54,7 +78,7 @@ def test_web_watcher_invalidates_prices_and_warms_structural_changes(
         service, "_invalidate_market_price_caches", lambda: invalidations.append(True)
     )
     monkeypatch.setattr(
-        service, "_warm_board_cache", lambda *, force=False: warms.append(force)
+        service, "_refresh_materialized_views", lambda *, force: warms.append(force)
     )
     watcher = service.SharedArtifactWatcher(
         threading.Event(),
@@ -86,7 +110,9 @@ def test_web_watcher_rebuilds_only_funding_views_after_funding_generation(
         service, "_invalidate_market_price_caches", lambda: invalidations.append(True)
     )
     monkeypatch.setattr(
-        service, "_warm_funding_cache", lambda: funding_warms.append(True)
+        service,
+        "_refresh_materialized_views",
+        lambda *, force: funding_warms.append(force),
     )
     watcher = service.SharedArtifactWatcher(
         threading.Event(),
@@ -102,7 +128,7 @@ def test_web_watcher_rebuilds_only_funding_views_after_funding_generation(
     watcher.warm_thread.join(timeout=2)
 
     assert invalidations == [True]
-    assert funding_warms == [True]
+    assert funding_warms == [False]
 
 
 def test_web_watcher_recovers_a_missing_funding_snapshot_when_spreads_are_live(
@@ -203,7 +229,7 @@ def test_web_watcher_self_heals_a_missing_telegram_snapshot(monkeypatch) -> None
         lambda: {"ready": False},
     )
     monkeypatch.setattr(
-        service, "_warm_board_cache", lambda *, force=False: warms.append(force)
+        service, "_refresh_materialized_views", lambda *, force: warms.append(force)
     )
     watcher = service.SharedArtifactWatcher(
         threading.Event(),
@@ -217,6 +243,35 @@ def test_web_watcher_self_heals_a_missing_telegram_snapshot(monkeypatch) -> None
     watcher.warm_thread.join(timeout=2)
 
     assert warms == [True]
+
+
+def test_materialized_builder_is_an_isolated_low_priority_worker(monkeypatch) -> None:
+    seen = []
+    monkeypatch.setattr(service, "_LAST_MATERIALIZED_VIEW_AT", 0.0)
+    monkeypatch.setattr(
+        service,
+        "_run_worker",
+        lambda command, **kwargs: seen.append((command, kwargs))
+        or service.WorkerResult(
+            0,
+            '{"status":"ok","generation":"g1","views":19,"routes":100}\n',
+            "",
+            False,
+        ),
+    )
+    from spreadboard import server
+
+    monkeypatch.setattr(server._MATERIALIZED_VIEW_STORE, "invalidate", lambda: None)
+    monkeypatch.setattr(server, "restore_materialized_route_index", lambda _path: 100)
+    monkeypatch.setattr(server, "restore_materialized_intel", lambda _path: True)
+    monkeypatch.setattr(server, "mark_historical_dex_archive_ready", lambda: None)
+
+    assert service._refresh_materialized_views(force=True) is True
+
+    command, options = seen[0]
+    assert command[:3] == service._low_priority_prefix()
+    assert any(str(item).endswith("materialized_view_worker.py") for item in command)
+    assert options["timeout"] == 1800.0
 
 
 def _write_live_books(path: Path, *, quote_ts_us: int) -> None:

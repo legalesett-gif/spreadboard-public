@@ -304,13 +304,12 @@ def test_broad_dex_history_lane_is_archived_but_not_added_to_telegram_queries() 
     assert "FUNDING_ARCHIVE_QUERIES" in inspect.getsource(service._refresh_funding_windows)
 
 
-def test_web_startup_explicitly_owns_the_cold_funding_generation() -> None:
+def test_web_startup_restores_funding_without_owning_a_cold_generation() -> None:
     source = inspect.getsource(service._warm_telegram_payload_at_startup)
 
-    assert "funding_catalog.refresh_cache()" in source
-    assert source.index("funding_catalog.refresh_cache()") < source.index(
-        "_complete_telegram_funding_payloads"
-    )
+    assert "_MATERIALIZED_VIEW_STORE.payload_for" in source
+    assert "funding_catalog.refresh_cache()" not in source
+    assert "api_market_spreads" not in source
 
 
 def test_cold_dex_history_reader_returns_warming_without_loading_markets(

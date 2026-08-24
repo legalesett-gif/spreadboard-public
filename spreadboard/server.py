@@ -55,6 +55,7 @@ from spreadboard import (  # noqa: E402
     live_book_cache,
     mailer,
     margin_planner,
+    materialized_views,
     market_history,
     venue_funding_history,
     web_push,
@@ -93,6 +94,7 @@ _MARKET_CACHE_MAX_ENTRIES = max(4, int(os.environ.get("SPREADBOARD_MARKET_CACHE_
 _MARKET_CACHE_LOCK = threading.Lock()
 _MARKET_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 _MARKET_CACHE_INFLIGHT: dict[tuple[Any, ...], threading.Event] = {}
+_MATERIALIZED_VIEW_STORE = materialized_views.default_store()
 
 
 class _MarketFreshnessGate:
@@ -2517,6 +2519,17 @@ def api_market_spreads(
         )
         if cached is not None:
             return _sync_telegram_client_universe(cached)
+        # A completed navigation generation survives process restarts and is
+        # deliberately independent of the current file signatures.  Its rows
+        # are structural candidates only: the same live-book/funding overlay
+        # applied to an in-memory cache hit runs before this response, removing
+        # stale leaders and updating every currently quoted exact route.  This
+        # makes a restart or an interrupted background rebuild an availability
+        # event, never a multi-minute request owned by the member.
+        persisted = _MATERIALIZED_VIEW_STORE.payload_for(query, board_path=board_path)
+        if persisted is not None and _market_payload_cacheable(persisted):
+            _market_cache_finish(cache_key, persisted)
+            return _sync_telegram_client_universe(persisted)
         with _MARKET_CACHE_LOCK:
             inflight = _MARKET_CACHE_INFLIGHT.get(cache_key)
             if inflight is None:
@@ -3128,7 +3141,7 @@ def _sync_telegram_client_universe(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if full_page and first_page and unfiltered and safe_defaults:
         telegram_queries.replace_payload(payload)
-    return payload
+    return materialized_views.finalize_projection(payload)
 
 
 def _apply_spread_freshness_coalesced(payload: dict[str, Any]) -> dict[str, Any]:
@@ -3516,7 +3529,7 @@ def _market_cache_key(board_path: Path, query: dict[str, list[str]]) -> tuple[An
         sorted(
             (str(key), tuple(str(value) for value in values))
             for key, values in query.items()
-            if key != "no_cache"
+            if key not in materialized_views.NON_DATA_QUERY_KEYS
         )
     )
     return (
@@ -3743,10 +3756,17 @@ def api_source_health(board_path: Path, config: dict[str, Any]) -> dict[str, Any
 def _health_with_fast_quote_state(payload: dict[str, Any]) -> dict[str, Any]:
     """Overlay cheap current-cycle facts without rebuilding the market board."""
 
+    result = dict(payload)
+    materialized = _MATERIALIZED_VIEW_STORE.status()
+    built_at = _float_or_none(materialized.get("built_at_unix"))
+    result["materialized_views"] = {
+        **materialized,
+        "age_seconds": max(0.0, time.time() - built_at) if built_at is not None else None,
+        "serving_contract": "last_complete_plus_live_overlay",
+    }
     fast = api_spreads.fast_quote_health()
     if not fast:
-        return payload
-    result = dict(payload)
+        return result
     canonical = dict(result.get("canonical_api") or {})
     canonical["fast_quote_refresh"] = fast
     if fast.get("updated_at"):
@@ -3796,6 +3816,13 @@ def api_intel(board_path: Path, query: dict[str, list[str]] | None = None) -> di
             cached = _INTEL_CACHE.get(key)
             if cached and now - cached[0] <= _INTEL_CACHE_TTL_SECONDS:
                 return cached[1]
+        defaults = _intel_params({})
+        if params == defaults:
+            persisted = _MATERIALIZED_VIEW_STORE.extra("intel-default")
+            if persisted is not None:
+                with _INTEL_CACHE_LOCK:
+                    _INTEL_CACHE[key] = (now, persisted)
+                return persisted
     else:
         key = None
         now = time.monotonic()
@@ -4128,6 +4155,19 @@ def _intel_cache_key(board_path: Path, params: dict[str, Any]) -> tuple[Any, ...
         str(params.get("topic") or ""),
         int(params.get("limit") or intel.DEFAULT_LIMIT),
     )
+
+
+def restore_materialized_intel(board_path: Path) -> bool:
+    """Preload the default Intel screen from the last complete generation."""
+
+    payload = _MATERIALIZED_VIEW_STORE.extra("intel-default")
+    if payload is None:
+        return False
+    params = _intel_params({})
+    key = _intel_cache_key(board_path, params)
+    with _INTEL_CACHE_LOCK:
+        _INTEL_CACHE[key] = (time.monotonic(), payload)
+    return True
 
 
 def api_triage(board_path: Path, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
@@ -5497,6 +5537,23 @@ def _chart_stream_payload(route_key: str, board_path: Path, hours: float) -> dic
 #: every chart opened by route -- most of the thirty seconds a member waited.
 _ROUTE_INDEX: dict[str, Any] = {"signature": None, "rows": {}}
 _ROUTE_INDEX_LOCK = threading.Lock()
+
+
+def restore_materialized_route_index(board_path: Path) -> int:
+    """Install the last complete chart lookup without parsing discovery."""
+
+    rows = _MATERIALIZED_VIEW_STORE.route_index(board_path=board_path)
+    if rows is None:
+        return 0
+    signature = (
+        str(board_path),
+        _file_signature(board_path),
+        _file_signature(api_spreads.DEFAULT_API_DISCOVERY_PATH),
+    )
+    with _ROUTE_INDEX_LOCK:
+        _ROUTE_INDEX["signature"] = signature
+        _ROUTE_INDEX["rows"] = rows
+    return len(rows)
 
 
 def _route_index(board_path: Path) -> dict[str, dict[str, Any]]:

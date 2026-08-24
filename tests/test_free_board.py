@@ -645,24 +645,14 @@ def _production_setting(name: str) -> str:
     return match.group(1).strip()
 
 
-def test_the_warm_set_fits_the_board_cache_without_evicting_itself() -> None:
-    """Measured, not assumed: the thirteen warmed views cost ~471MB in total.
-
-    Most lane queries add almost nothing on top of the first build because they
-    share the parsed snapshot; only the first (+210MB) and the charts view at
-    limit=500 (+83MB) are substantial. So the bound exists to stop ad-hoc
-    traffic evicting warm entries, and to keep an unbounded tail from growing --
-    not because each entry is individually huge.
-    """
+def test_the_resident_cache_is_only_a_bounded_hot_set() -> None:
+    """Every principal view persists, while only recently used JSON stays decoded."""
     from scripts.run_spreadboard_service import WARM_QUERIES
 
     entries = int(_production_setting("SPREADBOARD_MARKET_CACHE_ENTRIES"))
 
-    # The warm pass must not evict its own earlier entries.
-    assert entries > len(WARM_QUERIES)
-    # ...and the tail stays bounded. The bound is applied twice, to
-    # the one bounded current-generation _MARKET_CACHE.
-    assert entries <= 24
+    assert 4 <= entries < len(WARM_QUERIES)
+    assert Path("spreadboard/materialized_views.py").exists()
 
 
 def test_the_alert_worker_builds_nothing_when_nobody_has_a_rule() -> None:
@@ -693,12 +683,19 @@ def test_telegram_snapshot_can_warm_before_the_first_quote_cycle(tmp_path, monke
     from scripts import run_spreadboard_service as service
     from spreadboard import server, telegram_queries
 
-    seen = []
     payload = {"groups": []}
+    seen = []
+
+    class Store:
+        def payload_for(self, query):
+            seen.append(query)
+            return payload
+
+    monkeypatch.setattr(server, "_MATERIALIZED_VIEW_STORE", Store())
     monkeypatch.setattr(
-        server,
-        "api_market_spreads",
-        lambda path, query: seen.append((Path(path), query)) or payload,
+        telegram_queries,
+        "restore_persisted_payloads",
+        lambda: {"spread": False, "funding": False},
     )
     monkeypatch.setattr(telegram_queries, "replace_payload", lambda value: value)
     installed_funding = []
@@ -713,9 +710,8 @@ def test_telegram_snapshot_can_warm_before_the_first_quote_cycle(tmp_path, monke
 
     funding_queries = [query for query in service.WARM_QUERIES if query.get("funding_only")]
     assert seen == [
-        (board_path, {}),
-        (board_path, {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]}),
-        *((board_path, query) for query in funding_queries),
+        {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
+        *funding_queries,
     ]
     assert installed_funding == [payload] * len(funding_queries)
 

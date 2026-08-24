@@ -32,6 +32,7 @@ from spreadboard import (
     board,
     crypto_watcher,
     market_history,
+    materialized_views,
     portfolio,
     rail_watch,
     route_taxonomy,
@@ -520,43 +521,30 @@ def _refresh_enrichment_subprocess() -> None:
 
 
 def _warm_telegram_payload_at_startup(board_path: Path) -> None:
-    """Make bot queries available without waiting for the first quote cycle.
-
-    A production restart already has a complete canonical snapshot on the
-    runtime volume. The first exchange refresh can take several minutes, so
-    tying bot readiness to that cycle made every deployment look like a broken
-    bot even while the website was healthy.
-    """
+    """Restore bot queries without rebuilding any market view in HTTP."""
     try:
-        from spreadboard import funding_catalog, server, telegram_queries
+        from spreadboard import server, telegram_queries
 
         started = time.monotonic()
-        # Markets is the first authenticated navigation view. Warm its exact
-        # default key before the larger Telegram catalogue so the first member
-        # after a deploy never pays a 15-20 second grouped-board build.
-        server.api_market_spreads(board_path, {})
-        _yield_to_requests()
-        payload = server.api_market_spreads(
-            board_path,
+        restored = telegram_queries.restore_persisted_payloads()
+        payload = server._MATERIALIZED_VIEW_STORE.payload_for(
             {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
         )
-        _yield_to_requests()
-        telegram_queries.replace_payload(payload)
-        # A fresh web process has no in-memory complete-pair generation. Start
-        # the sole explicit background build immediately at startup; HTTP
-        # readers return a bounded honest warming response and can never own or
-        # wait behind this multi-minute job.
-        funding_catalog.refresh_cache()
-        _yield_to_requests()
-        funding_payloads = _complete_telegram_funding_payloads(board_path)
-        if funding_payloads:
-            telegram_queries.replace_funding_payloads(funding_payloads)
+        if not restored["spread"] and payload:
+            telegram_queries.replace_payload(payload)
+        funding_payloads = [
+            server._MATERIALIZED_VIEW_STORE.payload_for(query)
+            for query in WARM_QUERIES
+            if query.get("funding_only") and not query.get("funding_window")
+        ]
+        if not restored["funding"] and funding_payloads and all(funding_payloads):
+            telegram_queries.replace_funding_payloads(
+                [item for item in funding_payloads if item]
+            )
         _log(
-            "telegram startup payload ready "
+            "telegram startup payload restored "
             f"in {time.monotonic() - started:.1f}s"
         )
-        if _service_role() != "web":
-            _refresh_token_rankings(force=True)
     except Exception as exc:  # noqa: BLE001 - the regular warmer retries later.
         _log(f"telegram startup payload skipped: {type(exc).__name__}: {exc}")
 
@@ -578,6 +566,38 @@ def _artifact_signature(path: Path) -> tuple[int, int] | None:
     except OSError:
         return None
     return stat.st_mtime_ns, stat.st_size
+
+
+def _cleanup_abandoned_discovery_temps(
+    *, max_age_seconds: float = 21_600.0, now: float | None = None
+) -> dict[str, int]:
+    """Delete only timed-out atomic discovery files older than six hours."""
+
+    moment = time.time() if now is None else float(now)
+    removed = 0
+    bytes_removed = 0
+    try:
+        entries = list(RUNTIME_DIR.iterdir())
+    except OSError:
+        return {"removed": 0, "bytes": 0}
+    for entry in entries:
+        if (
+            not entry.is_file()
+            or entry.is_symlink()
+            or not entry.name.startswith(".api_discovery_refresh.json.")
+            or not entry.name.endswith(".tmp")
+        ):
+            continue
+        try:
+            stat = entry.stat()
+            if moment - stat.st_mtime < max(60.0, max_age_seconds):
+                continue
+            entry.unlink()
+        except OSError:
+            continue
+        removed += 1
+        bytes_removed += stat.st_size
+    return {"removed": removed, "bytes": bytes_removed}
 
 
 def _artifact_generation_kind(path: Path) -> str:
@@ -637,6 +657,9 @@ class SharedArtifactWatcher(threading.Thread):
         )
         self.generation_signature = _artifact_signature(MARKET_GENERATION_PATH)
         self.snapshot_signature = _artifact_signature(SNAPSHOT_PATH)
+        self.materialized_signature = _artifact_signature(
+            materialized_views.default_store().pointer_path
+        )
         self.warm_lock = threading.Lock()
         self.warm_pending = False
         self.funding_warm_pending = False
@@ -651,6 +674,19 @@ class SharedArtifactWatcher(threading.Thread):
             self.stop_event.wait(self.poll_seconds)
 
     def check_once(self) -> None:
+        materialized_signature = _artifact_signature(
+            materialized_views.default_store().pointer_path
+        )
+        if materialized_signature != self.materialized_signature:
+            self.materialized_signature = materialized_signature
+            from spreadboard import server as server_module
+
+            server_module._MATERIALIZED_VIEW_STORE.invalidate()
+            route_count = server_module.restore_materialized_route_index(_board_path())
+            server_module.restore_materialized_intel(_board_path())
+            if route_count:
+                server_module.mark_historical_dex_archive_ready()
+            _log(f"materialized navigation generation installed routes={route_count}")
         generation = _artifact_signature(MARKET_GENERATION_PATH)
         if generation != self.generation_signature:
             self.generation_signature = generation
@@ -767,9 +803,9 @@ class SharedArtifactWatcher(threading.Thread):
                 self.warm_pending = False
                 self.funding_warm_pending = False
             if full_warm:
-                _warm_board_cache(force=True)
+                _refresh_materialized_views(force=True)
             elif funding_warm:
-                _warm_funding_cache()
+                _refresh_materialized_views(force=False)
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -819,6 +855,12 @@ def main() -> int:
     from spreadboard import telegram_queries
 
     role = _service_role()
+    cleanup = _cleanup_abandoned_discovery_temps()
+    if cleanup["removed"]:
+        _log(
+            "abandoned discovery temps removed "
+            f"files={cleanup['removed']} bytes={cleanup['bytes']}"
+        )
     if role == "collector":
         return _run_collector_service()
 
@@ -893,21 +935,20 @@ def main() -> int:
     )
     page_view_worker = accounts.PageViewWorker(db_path=server.accounts_path)
 
-    # Route links are a primary navigation path. Building their index on the
-    # first request cost 14-15 seconds and made the first chart after every
-    # deploy look broken. Pay that one-time cost inside Docker's startup grace
-    # period, before the service announces that it is serving traffic.
-    _warm_route_index()
-    # Build the member's default market view before the background Telegram and
-    # funding warm can occupy the only memory-safe grouping slot. Otherwise an
-    # early browser sees a false empty scanner even though the mounted snapshot
-    # and live books are already available.
-    try:
-        from spreadboard import server as server_module
-
-        server_module.api_market_spreads(board_path, {})
-    except Exception as exc:  # noqa: BLE001 - readiness still reports the failure.
-        _log(f"default market warm skipped: {type(exc).__name__}: {exc}")
+    # Install the last complete route/index and Intel generation before the
+    # socket opens. This is disk decoding, not market reconstruction, and keeps
+    # every chart/detail link available immediately after a restart. On the
+    # very first deployment the background materializer creates generation 1;
+    # no request is made responsible for doing so.
+    restored_routes = server_module.restore_materialized_route_index(board_path)
+    restored_intel = server_module.restore_materialized_intel(board_path)
+    if restored_routes:
+        server_module.mark_historical_dex_archive_ready()
+    _log(
+        "materialized startup restore "
+        f"routes={restored_routes} intel={restored_intel} "
+        f"status={server_module._MATERIALIZED_VIEW_STORE.status()}"
+    )
 
     def stop_service(_signum: int, _frame: Any) -> None:
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -984,32 +1025,49 @@ def main() -> int:
 #: and each costs a full rebuild. Warming only the default left a member opening
 #: Funding -> Futures-Spot waiting 59 seconds.
 WARM_QUERIES: tuple[dict[str, list[str]], ...] = (
-    {},
     # /charts builds its picker from 500 rows, which is its own cache key -- it
     # stayed at 27s while every other page came down.
     {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
-    {"kind": ["FUTURES"]},
-    {"kind": ["FUTURES-SPOT-PAIR"]},
-    {"kind": ["SPOT"]},
-    {"kind": ["DEX-FUTURES"]},
-    {"kind": ["DEX-SPOT"]},
+    {"kind": ["FUTURES"], "limit": ["500"]},
+    {"kind": ["FUTURES-SPOT-PAIR"], "limit": ["500"]},
+    {"kind": ["SPOT"], "limit": ["500"]},
+    {"kind": ["DEX-FUTURES"], "limit": ["500"]},
+    {"kind": ["DEX-SPOT"], "limit": ["500"]},
     # The funding page carries its `farm` parameter into the query, so warming
     # without it builds a different cache key and the tab stays cold -- which is
     # exactly what left /funding?farm=futures-spot at 27s while /funding was
     # 0.20s. Each tab is warmed as the page actually asks for it.
-    {"funding_only": ["1"], "kind": ["FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
+    {"funding_only": ["1"], "kind": ["FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["500"]},
     # No `farm` here. The funding page strips farm and rank before building its
     # query -- they are presentation, not data -- so warming WITH farm builds a
     # key the page never reads. Measured live: /funding?farm=futures-dex took
     # 16.7s against 0.11s for the tabs whose key actually matched.
-    {"funding_only": ["1"], "kind": ["FUTURES-SPOT-PAIR"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
-    {"funding_only": ["1"], "kind": ["DEX-FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["25"]},
+    {"funding_only": ["1"], "kind": ["FUTURES-SPOT-PAIR"], "sort": ["funding"], "direction": ["desc"], "limit": ["500"]},
+    {"funding_only": ["1"], "kind": ["DEX-FUTURES"], "sort": ["funding"], "direction": ["desc"], "limit": ["500"]},
     # Telegram needs the whole current funding universe, not only the 25 rows
     # currently leading each page tab. Otherwise a retained radar token could
     # still lose its current low rate after it cooled below rank 25. One
     # all-lane 500-row snapshot covers the live catalog without a per-message
     # rebuild or any relaxed filtering.
     {"funding_only": ["1"], "sort": ["funding"], "direction": ["desc"], "limit": ["500"]},
+)
+
+# Every historical Funding screen gets a full pre-ranked lane. Readers slice
+# this exact materialization for page 1, page 2, and Export JSON, so pagination
+# never creates another expensive cache key. Now remains independent and is
+# represented by WARM_QUERIES above.
+HISTORICAL_FUNDING_QUERIES: tuple[dict[str, list[str]], ...] = tuple(
+    {
+        "funding_only": ["1"],
+        "kind": [kind],
+        "funding_window": [window],
+        "sort": ["funding"],
+        "direction": ["desc"],
+        "limit": ["500"],
+        "offset": ["0"],
+    }
+    for kind in ("FUTURES", "FUTURES-SPOT-PAIR", "DEX-FUTURES")
+    for window in ("1d", "7d", "30d")
 )
 
 # Historical DEX ranking must archive more than the 25 routes visible in Now.
@@ -1026,6 +1084,20 @@ FUNDING_ARCHIVE_QUERIES: tuple[dict[str, list[str]], ...] = (
         "offset": ["0"],
     },
 )
+
+
+def _materialized_view_queries() -> tuple[dict[str, list[str]], ...]:
+    """All principal navigation queries, deduplicated by semantic identity."""
+
+    result: list[dict[str, list[str]]] = []
+    seen: set[str] = set()
+    for query in (*FUNDING_ARCHIVE_QUERIES, *WARM_QUERIES, *HISTORICAL_FUNDING_QUERIES):
+        identity = materialized_views.query_identity(query)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append(dict(query))
+    return tuple(result)
 
 
 def _complete_telegram_funding_payloads(
@@ -1391,6 +1463,82 @@ def _invalidate_market_price_caches() -> None:
 
 def _board_path() -> Path:
     return Path(os.environ.get("SPREADBOARD_BOARD_PATH", str(board.DEFAULT_BOARD_PATH)))
+
+
+MATERIALIZED_VIEW_MIN_INTERVAL_SECONDS = max(
+    300.0,
+    float(os.environ.get("SPREADBOARD_MATERIALIZED_VIEW_MIN_SECONDS", "900")),
+)
+_LAST_MATERIALIZED_VIEW_AT = 0.0
+_MATERIALIZED_VIEW_BUILD_LOCK = threading.Lock()
+
+
+def _refresh_materialized_views(*, force: bool) -> bool:
+    """Build a whole navigation generation outside the HTTP interpreter.
+
+    The child is nice/ionice constrained and writes every screen to a staging
+    directory. Only a complete, source-coherent generation becomes current;
+    until then the website and bot retain the previous one. Funding files can
+    advance every few minutes, so those requests are coalesced behind a bounded
+    cadence instead of keeping the host in a permanent warm cycle.
+    """
+
+    global _LAST_MATERIALIZED_VIEW_AT
+
+    now = time.monotonic()
+    if (
+        not force
+        and _LAST_MATERIALIZED_VIEW_AT
+        and now - _LAST_MATERIALIZED_VIEW_AT < MATERIALIZED_VIEW_MIN_INTERVAL_SECONDS
+    ):
+        return False
+    if not _MATERIALIZED_VIEW_BUILD_LOCK.acquire(blocking=False):
+        return False
+    try:
+        started = time.monotonic()
+        _log("materialized navigation build starting")
+        result = _run_worker(
+            [
+                *_low_priority_prefix(),
+                sys.executable,
+                str(ROOT / "scripts/materialized_view_worker.py"),
+                "--board-path",
+                str(_board_path()),
+                "--output-root",
+                str(materialized_views.DEFAULT_ROOT),
+            ],
+            timeout=float(
+                os.environ.get("SPREADBOARD_MATERIALIZED_VIEW_TIMEOUT_SECONDS", "1800")
+            ),
+        )
+        if result.timed_out or result.returncode != 0:
+            _log(
+                "materialized navigation build retained previous generation "
+                f"timeout={result.timed_out} exit={result.returncode} "
+                f"detail={(result.stdout or result.stderr)[-400:]}"
+            )
+            return False
+        try:
+            summary = json.loads(result.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            _log("materialized navigation build produced no summary")
+            return False
+        from spreadboard import server as server_module
+
+        server_module._MATERIALIZED_VIEW_STORE.invalidate()
+        routes = server_module.restore_materialized_route_index(_board_path())
+        server_module.restore_materialized_intel(_board_path())
+        server_module.mark_historical_dex_archive_ready()
+        _LAST_MATERIALIZED_VIEW_AT = time.monotonic()
+        _log(
+            "materialized navigation ready "
+            f"generation={summary.get('generation')} views={summary.get('views')} "
+            f"routes={routes} child={summary.get('seconds')}s "
+            f"elapsed={time.monotonic() - started:.1f}s"
+        )
+        return True
+    finally:
+        _MATERIALIZED_VIEW_BUILD_LOCK.release()
 
 
 #: A full pass costs 150-200s on two cores, and it used to run after every 60s

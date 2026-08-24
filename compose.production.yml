@@ -54,6 +54,12 @@ services:
       # that same generation moving between builds. Rebuilding all eleven views
       # every five minutes saturated both CPUs and made requests wait 50-78s.
       SPREADBOARD_WARM_INTERVAL_SECONDS: "900"
+      # Principal pages are built by a nice/ionice child into an atomic,
+      # persistent generation on the existing runtime volume. HTTP always
+      # serves the last complete generation with current books/funding overlaid;
+      # it never owns this CPU-heavy work and restarts do not make pages cold.
+      SPREADBOARD_MATERIALIZED_VIEW_MIN_SECONDS: "900"
+      SPREADBOARD_MATERIALIZED_VIEW_TIMEOUT_SECONDS: "1800"
       SPREADBOARD_TOKEN_RANKING_SECONDS: "120"
       # Live books still overlay every response immediately. Rebuilding the
       # entire structural/ranking cache on each 10-second quote generation held
@@ -67,16 +73,12 @@ services:
       # The SSE stream still takes over at 250ms after the HTML is delivered.
       SPREADBOARD_MARKET_FRESHNESS_SECONDS: "2"
       SPREADBOARD_RESULT_CACHE_SECONDS: "1200"
-      # Thirteen warmed views plus headroom for ad-hoc queries. Measured, the
-      # whole warm set costs ~471MB: the first build is +210MB and the charts
-      # view at limit=500 is +83MB, while every lane query after them adds
-      # 0-8MB because they share the parsed snapshot. The bound exists to stop
-      # ordinary traffic evicting what the warmer just built and to cap the
-      # tail while retaining every routinely warmed current-generation view.
-      # The warmer builds 11 views; 20 left ~9 tail entries churning on a box
-      # whose ceiling is 6g and which peaked at 5.1g. This is the code default
-      # and still holds every warmed view resident.
-      SPREADBOARD_MARKET_CACHE_ENTRIES: "14"
+      # The complete navigation set now lives on the runtime volume, not in
+      # Python RAM. Keep only the six most recently used decoded payloads; an
+      # eviction reloads verified JSON and never rebuilds the market universe.
+      # This leaves memory headroom for the isolated next-generation builder on
+      # the unchanged 8GB host.
+      SPREADBOARD_MARKET_CACHE_ENTRIES: "6"
       # Each structural build materialises the full live universe. Production
       # stack traces showed two at once while the cgroup was throttled, causing
       # intermittent page stalls and a rising memory tail. The previous
@@ -241,9 +243,9 @@ services:
     # It had not been OOM-killed yet, but only because reclaim was still just
     # winning, and the earlier OOM here took every scan down with it.
     #
-    # 2.4 is the largest ceiling this container can carry inside 4GiB. Going
-    # higher needs more RAM, not more cores, and the host has none to give:
-    # the mem_limits already sum above its 8GB. A bigger Droplet is the unlock.
+    # 2.4 is the largest safe ceiling for continuously live collection inside
+    # 4GiB. Subscriber navigation is now isolated from this work through the
+    # persistent materialized-view handoff, so no server resize is required.
     cpus: 2.4
     cpu_shares: 256
     logging:
