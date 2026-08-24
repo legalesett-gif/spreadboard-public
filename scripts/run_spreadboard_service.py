@@ -568,6 +568,37 @@ def _artifact_signature(path: Path) -> tuple[int, int] | None:
     return stat.st_mtime_ns, stat.st_size
 
 
+def _materialized_sources_current() -> bool:
+    """Whether the durable generation already covers every structural input.
+
+    Live books and current funding deliberately are not structural inputs: they
+    are overlaid on every response.  Avoiding a blind startup rebuild matters
+    because a complete generation is the warm state we are trying to preserve
+    across restarts.  The comparison also coalesces duplicate watcher events
+    that arrived while the just-completed generation was being built.
+    """
+
+    status = materialized_views.default_store().status()
+    source = status.get("source_signature")
+    if not status.get("ready") or not isinstance(source, dict):
+        return False
+
+    def encoded_signature(path: Path) -> list[int] | None:
+        signature = _artifact_signature(path)
+        return list(signature) if signature is not None else None
+
+    board_path = _board_path()
+    expected = {
+        "board_path": str(board_path.resolve()),
+        "board": encoded_signature(board_path),
+        "discovery": encoded_signature(SNAPSHOT_PATH),
+        "chart_catalog": encoded_signature(RUNTIME_DIR / "chart_market_catalog.json"),
+        "metadata": encoded_signature(api_spreads.token_metadata.DEFAULT_CACHE_PATH),
+        "rails": encoded_signature(api_spreads.public_rails.DEFAULT_CACHE_PATH),
+    }
+    return all(source.get(key) == value for key, value in expected.items())
+
+
 def _cleanup_abandoned_discovery_temps(
     *, max_age_seconds: float = 21_600.0, now: float | None = None
 ) -> dict[str, int]:
@@ -628,7 +659,9 @@ class SharedArtifactWatcher(threading.Thread):
         self.initial_warm_at = time.monotonic() + max(
             0.0, initial_warm_delay_seconds
         )
-        self.initial_warm_requested = False
+        # A restart is not a reason to rebuild. If every structural signature
+        # still matches, the last complete on-disk generation is already warm.
+        self.initial_warm_requested = _materialized_sources_current()
         self.invalidation_interval_seconds = max(
             1.0,
             float(
@@ -803,7 +836,10 @@ class SharedArtifactWatcher(threading.Thread):
                 self.warm_pending = False
                 self.funding_warm_pending = False
             if full_warm:
-                _refresh_materialized_views(force=True)
+                if _materialized_sources_current():
+                    _log("materialized navigation already covers structural generation")
+                else:
+                    _refresh_materialized_views(force=True)
             elif funding_warm:
                 _refresh_materialized_views(force=False)
 

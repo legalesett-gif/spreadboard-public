@@ -65,6 +65,73 @@ def test_cleanup_removes_only_abandoned_discovery_temps(
     assert unrelated.exists()
 
 
+def test_complete_materialized_generation_is_the_restart_warm_state(
+    tmp_path, monkeypatch
+) -> None:
+    board_path = tmp_path / "board.jsonl"
+    discovery = tmp_path / "api_discovery_latest.json"
+    chart_catalog = tmp_path / "chart_market_catalog.json"
+    metadata = tmp_path / "token_metadata.json"
+    rails = tmp_path / "public_transfer_rails.json"
+    for path in (board_path, discovery, chart_catalog, metadata, rails):
+        path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setenv("SPREADBOARD_BOARD_PATH", str(board_path))
+    monkeypatch.setattr(service, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(service, "SNAPSHOT_PATH", discovery)
+    monkeypatch.setattr(
+        service.api_spreads.token_metadata, "DEFAULT_CACHE_PATH", metadata
+    )
+    monkeypatch.setattr(service.api_spreads.public_rails, "DEFAULT_CACHE_PATH", rails)
+
+    def signature(path: Path) -> list[int]:
+        stat = path.stat()
+        return [stat.st_mtime_ns, stat.st_size]
+
+    class Store:
+        pointer_path = tmp_path / "current.json"
+
+        @staticmethod
+        def status() -> dict[str, object]:
+            return {
+                "ready": True,
+                "source_signature": {
+                    "board_path": str(board_path.resolve()),
+                    "board": signature(board_path),
+                    "discovery": signature(discovery),
+                    "chart_catalog": signature(chart_catalog),
+                    "metadata": signature(metadata),
+                    "rails": signature(rails),
+                },
+            }
+
+    monkeypatch.setattr(service.materialized_views, "default_store", Store)
+
+    assert service._materialized_sources_current() is True
+    watcher = service.SharedArtifactWatcher(
+        threading.Event(), initial_warm_delay_seconds=0
+    )
+    assert watcher.initial_warm_requested is True
+
+
+def test_duplicate_structural_event_does_not_rebuild_a_generation_just_published(
+    monkeypatch,
+) -> None:
+    builds: list[bool] = []
+    monkeypatch.setattr(service, "_materialized_sources_current", lambda: True)
+    monkeypatch.setattr(
+        service, "_refresh_materialized_views", lambda *, force: builds.append(force)
+    )
+    watcher = service.SharedArtifactWatcher(
+        threading.Event(), initial_warm_delay_seconds=3600
+    )
+    watcher.warm_pending = True
+
+    watcher._drain_warms()
+
+    assert builds == []
+
+
 def test_web_watcher_invalidates_prices_and_warms_structural_changes(
     tmp_path, monkeypatch
 ) -> None:
