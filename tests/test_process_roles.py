@@ -315,6 +315,7 @@ def test_web_watcher_self_heals_a_missing_telegram_snapshot(monkeypatch) -> None
 def test_materialized_builder_is_an_isolated_low_priority_worker(monkeypatch) -> None:
     seen = []
     monkeypatch.setattr(service, "_LAST_MATERIALIZED_VIEW_AT", 0.0)
+    monkeypatch.setattr(service, "_MATERIALIZED_VIEW_RETRY_AFTER", 0.0)
     monkeypatch.setattr(
         service,
         "_run_worker",
@@ -339,6 +340,27 @@ def test_materialized_builder_is_an_isolated_low_priority_worker(monkeypatch) ->
     assert command[:3] == service._low_priority_prefix()
     assert any(str(item).endswith("materialized_view_worker.py") for item in command)
     assert options["timeout"] == 1800.0
+
+
+def test_failed_materialized_build_has_a_bounded_retry_cooldown(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(service, "_LAST_MATERIALIZED_VIEW_AT", 0.0)
+    monkeypatch.setattr(service, "_MATERIALIZED_VIEW_RETRY_AFTER", 0.0)
+    monkeypatch.setattr(service.time, "monotonic", lambda: 1_000.0)
+    monkeypatch.setattr(
+        service,
+        "_run_worker",
+        lambda command, **kwargs: calls.append((command, kwargs))
+        or service.WorkerResult(1, '{"status":"failed"}\n', "", False),
+    )
+
+    assert service._refresh_materialized_views(force=True) is False
+    assert service._refresh_materialized_views(force=True) is False
+
+    assert len(calls) == 1
+    assert service._MATERIALIZED_VIEW_RETRY_AFTER == (
+        1_000.0 + service.MATERIALIZED_VIEW_FAILURE_RETRY_SECONDS
+    )
 
 
 def _write_live_books(path: Path, *, quote_ts_us: int) -> None:

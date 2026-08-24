@@ -1505,7 +1505,14 @@ MATERIALIZED_VIEW_MIN_INTERVAL_SECONDS = max(
     300.0,
     float(os.environ.get("SPREADBOARD_MATERIALIZED_VIEW_MIN_SECONDS", "900")),
 )
+MATERIALIZED_VIEW_FAILURE_RETRY_SECONDS = max(
+    60.0,
+    float(
+        os.environ.get("SPREADBOARD_MATERIALIZED_VIEW_FAILURE_RETRY_SECONDS", "300")
+    ),
+)
 _LAST_MATERIALIZED_VIEW_AT = 0.0
+_MATERIALIZED_VIEW_RETRY_AFTER = 0.0
 _MATERIALIZED_VIEW_BUILD_LOCK = threading.Lock()
 
 
@@ -1519,9 +1526,14 @@ def _refresh_materialized_views(*, force: bool) -> bool:
     cadence instead of keeping the host in a permanent warm cycle.
     """
 
-    global _LAST_MATERIALIZED_VIEW_AT
+    global _LAST_MATERIALIZED_VIEW_AT, _MATERIALIZED_VIEW_RETRY_AFTER
 
     now = time.monotonic()
+    # A failed source-coherent build keeps the last complete generation. A
+    # collector event queued during that attempt must not immediately start the
+    # same multi-minute work again; wait for the transient handoff to settle.
+    if now < _MATERIALIZED_VIEW_RETRY_AFTER:
+        return False
     if (
         not force
         and _LAST_MATERIALIZED_VIEW_AT
@@ -1548,6 +1560,9 @@ def _refresh_materialized_views(*, force: bool) -> bool:
             ),
         )
         if result.timed_out or result.returncode != 0:
+            _MATERIALIZED_VIEW_RETRY_AFTER = (
+                time.monotonic() + MATERIALIZED_VIEW_FAILURE_RETRY_SECONDS
+            )
             _log(
                 "materialized navigation build retained previous generation "
                 f"timeout={result.timed_out} exit={result.returncode} "
@@ -1557,6 +1572,9 @@ def _refresh_materialized_views(*, force: bool) -> bool:
         try:
             summary = json.loads(result.stdout.strip().splitlines()[-1])
         except (ValueError, IndexError):
+            _MATERIALIZED_VIEW_RETRY_AFTER = (
+                time.monotonic() + MATERIALIZED_VIEW_FAILURE_RETRY_SECONDS
+            )
             _log("materialized navigation build produced no summary")
             return False
         from spreadboard import server as server_module
@@ -1566,6 +1584,7 @@ def _refresh_materialized_views(*, force: bool) -> bool:
         server_module.restore_materialized_intel(_board_path())
         server_module.mark_historical_dex_archive_ready()
         _LAST_MATERIALIZED_VIEW_AT = time.monotonic()
+        _MATERIALIZED_VIEW_RETRY_AFTER = 0.0
         _log(
             "materialized navigation ready "
             f"generation={summary.get('generation')} views={summary.get('views')} "
