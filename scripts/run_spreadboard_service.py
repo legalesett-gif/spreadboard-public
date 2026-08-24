@@ -909,12 +909,14 @@ class SharedArtifactWatcher(threading.Thread):
                 else:
                     _refresh_materialized_views(force=True)
                     built_full_generation = True
-            # A discovery handoff and bulk-funding handoff can be coalesced in
-            # the same drain pass. Do not let the cheap structural refresh
-            # swallow the funding refresh, but also do not rebuild twice when
-            # the first-ever full generation already included funding.
-            if funding_warm and not built_full_generation:
-                _refresh_materialized_views(force=False)
+            # Current books and rates are already overlaid by the ten-second
+            # resident universe, while exact historical windows are read from
+            # the settlement archive. A bulk-funding handoff therefore must
+            # not launch the old whole-site materializer. Refresh only the
+            # persisted structural funding catalogue, at its bounded cadence;
+            # the first-ever full generation already includes it.
+            if (full_warm or funding_warm) and not built_full_generation:
+                _refresh_complete_funding_catalog(force=False)
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -1116,6 +1118,12 @@ def main() -> int:
         target=_warm_telegram_payload_at_startup,
         args=(board_path,),
         name="spreadboard-telegram-startup-warm",
+        daemon=True,
+    ).start()
+    threading.Thread(
+        target=_refresh_complete_funding_catalog,
+        kwargs={"force": False},
+        name="spreadboard-funding-catalog-startup",
         daemon=True,
     ).start()
     if refresh_loop is not None:
@@ -1654,6 +1662,20 @@ _LAST_MATERIALIZED_VIEW_AT = 0.0
 _MATERIALIZED_VIEW_RETRY_AFTER = 0.0
 _MATERIALIZED_VIEW_BUILD_LOCK = threading.Lock()
 _LIVE_ROUTE_INDEX_BUILD_LOCK = threading.Lock()
+_FUNDING_CATALOG_BUILD_LOCK = threading.Lock()
+FUNDING_CATALOG_REFRESH_SECONDS = max(
+    900.0,
+    float(os.environ.get("SPREADBOARD_FUNDING_CATALOG_REFRESH_SECONDS", "3600")),
+)
+FUNDING_CATALOG_FAILURE_RETRY_SECONDS = max(
+    60.0,
+    float(
+        os.environ.get(
+            "SPREADBOARD_FUNDING_CATALOG_FAILURE_RETRY_SECONDS", "300"
+        )
+    ),
+)
+_FUNDING_CATALOG_RETRY_AFTER = 0.0
 
 
 def _refresh_live_route_index() -> bool:
@@ -1702,6 +1724,78 @@ def _refresh_live_route_index() -> bool:
         return bool(routes)
     finally:
         _LIVE_ROUTE_INDEX_BUILD_LOCK.release()
+
+
+def _refresh_complete_funding_catalog(*, force: bool = False) -> bool:
+    """Publish the all-pair funding structure without rebuilding every page."""
+
+    global _FUNDING_CATALOG_RETRY_AFTER
+
+    now = time.monotonic()
+    if now < _FUNDING_CATALOG_RETRY_AFTER:
+        return False
+    state = funding_catalog.status(restore=True)
+    if not state.get("ready") and Path(str(state.get("path") or "")).exists():
+        state = funding_catalog.reload_persisted_cache()
+    age = state.get("age_seconds")
+    if (
+        not force
+        and state.get("ready")
+        and age is not None
+        and float(age) < FUNDING_CATALOG_REFRESH_SECONDS
+    ):
+        return False
+    if not _FUNDING_CATALOG_BUILD_LOCK.acquire(blocking=False):
+        return False
+    try:
+        started = time.monotonic()
+        result = _run_worker(
+            [
+                *_low_priority_prefix(),
+                sys.executable,
+                str(ROOT / "scripts/complete_funding_catalog_worker.py"),
+            ],
+            timeout=float(
+                os.environ.get(
+                    "SPREADBOARD_FUNDING_CATALOG_TIMEOUT_SECONDS", "1200"
+                )
+            ),
+        )
+        if result.timed_out or result.returncode != 0:
+            _FUNDING_CATALOG_RETRY_AFTER = (
+                time.monotonic() + FUNDING_CATALOG_FAILURE_RETRY_SECONDS
+            )
+            _log(
+                "complete funding catalogue retained previous generation "
+                f"timeout={result.timed_out} exit={result.returncode} "
+                f"detail={(result.stdout or result.stderr)[-300:]}"
+            )
+            return False
+        try:
+            summary = json.loads(result.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            _FUNDING_CATALOG_RETRY_AFTER = (
+                time.monotonic() + FUNDING_CATALOG_FAILURE_RETRY_SECONDS
+            )
+            _log("complete funding catalogue worker produced no summary")
+            return False
+        installed = funding_catalog.reload_persisted_cache()
+        if not installed.get("ready"):
+            _FUNDING_CATALOG_RETRY_AFTER = (
+                time.monotonic() + FUNDING_CATALOG_FAILURE_RETRY_SECONDS
+            )
+            _log(f"complete funding catalogue install failed {installed}")
+            return False
+        _FUNDING_CATALOG_RETRY_AFTER = 0.0
+        _log(
+            "complete funding catalogue ready "
+            f"tokens={installed.get('token_count')} bytes={summary.get('bytes')} "
+            f"child={summary.get('seconds')}s rss={summary.get('max_rss_mb')}MB "
+            f"elapsed={time.monotonic() - started:.1f}s"
+        )
+        return True
+    finally:
+        _FUNDING_CATALOG_BUILD_LOCK.release()
 
 
 def _refresh_materialized_views(*, force: bool) -> bool:
@@ -1771,6 +1865,7 @@ def _refresh_materialized_views(*, force: bool) -> bool:
         routes = server_module.restore_materialized_route_index(_board_path())
         server_module.restore_materialized_intel(_board_path())
         server_module.mark_historical_dex_archive_ready()
+        funding_catalog.reload_persisted_cache()
         _LAST_MATERIALIZED_VIEW_AT = time.monotonic()
         _MATERIALIZED_VIEW_RETRY_AFTER = 0.0
         _log(

@@ -48,17 +48,12 @@ _CACHE_SAVED_AT: float | None = None
 _CACHE_PERSIST_ERROR: str | None = None
 
 
-def _restore_cache_unlocked() -> None:
-    global _CACHE_PAYLOADS, _CACHE_AT, _CACHE_RESTORE_ATTEMPTED, _CACHE_SAVED_AT
-    if _CACHE_RESTORE_ATTEMPTED:
-        return
-    _CACHE_RESTORE_ATTEMPTED = True
-    try:
-        envelope = orjson.loads(DEFAULT_CACHE_PATH.read_bytes())
-        payloads = envelope.get("payloads")
-        saved_at = float(envelope.get("saved_at_unix") or 0.0)
-    except (OSError, AttributeError, TypeError, ValueError, orjson.JSONDecodeError):
-        return
+def _read_persisted_cache() -> tuple[dict[str, dict[str, Any]], float]:
+    """Decode and validate one atomically published catalogue envelope."""
+
+    envelope = orjson.loads(DEFAULT_CACHE_PATH.read_bytes())
+    payloads = envelope.get("payloads")
+    saved_at = float(envelope.get("saved_at_unix") or 0.0)
     if (
         not isinstance(envelope, dict)
         or envelope.get("schema") != PERSISTED_SCHEMA
@@ -69,6 +64,18 @@ def _restore_cache_unlocked() -> None:
             for key, value in payloads.items()
         )
     ):
+        raise ValueError("invalid_persisted_funding_catalog")
+    return payloads, saved_at
+
+
+def _restore_cache_unlocked() -> None:
+    global _CACHE_PAYLOADS, _CACHE_AT, _CACHE_RESTORE_ATTEMPTED, _CACHE_SAVED_AT
+    if _CACHE_RESTORE_ATTEMPTED:
+        return
+    _CACHE_RESTORE_ATTEMPTED = True
+    try:
+        payloads, saved_at = _read_persisted_cache()
+    except (OSError, AttributeError, TypeError, ValueError, orjson.JSONDecodeError):
         return
     _CACHE_PAYLOADS = payloads
     _CACHE_AT = time.monotonic()
@@ -130,7 +137,11 @@ def _complete_payloads(*, force_refresh: bool = False) -> dict[str, dict[str, An
     with _CACHE_LOCK:
         if not _CACHE_PAYLOADS:
             _restore_cache_unlocked()
-        if _CACHE_PAYLOADS and now - _CACHE_AT <= CACHE_SECONDS:
+        if (
+            _CACHE_PAYLOADS
+            and not force_refresh
+            and now - _CACHE_AT <= CACHE_SECONDS
+        ):
             return _CACHE_PAYLOADS
         previous = _CACHE_PAYLOADS
         # HTTP readers never become the owner of a multi-minute refresh after
@@ -175,7 +186,13 @@ def _complete_payloads(*, force_refresh: bool = False) -> dict[str, dict[str, An
             # refreshing; the stricter 90-second execution gate still controls
             # whether that basis is called current.
             max_age_seconds=api_spreads.DEFAULT_MAX_AGE_MIN * 60.0,
-            include_history=True,
+            # Exact 1d/7d/30d windows are looked up from the independently
+            # refreshed settlement archive at request time. Calling that
+            # lookup for every candidate pair made this structural catalogue
+            # take 9+ minutes and immediately froze its windows in a 200 MB
+            # file. Keep the catalogue current-only; historical completeness
+            # and blank-window semantics remain owned by funding_radar.
+            include_history=False,
             include_short_spot=True,
         )
     except Exception:
@@ -206,6 +223,32 @@ def restore_persisted_cache() -> dict[str, Any]:
     """Decode the last complete catalogue before the HTTP socket opens."""
 
     return status(restore=True)
+
+
+def reload_persisted_cache() -> dict[str, Any]:
+    """Atomically install a catalogue published by an isolated worker.
+
+    A web process can start before the first catalogue file exists. Its initial
+    restore attempt must not prevent a later background child from making the
+    completed file live without another app restart.
+    """
+
+    global _CACHE_PAYLOADS, _CACHE_AT, _CACHE_RESTORE_ATTEMPTED, _CACHE_SAVED_AT
+    global _CACHE_PERSIST_ERROR
+    try:
+        payloads, saved_at = _read_persisted_cache()
+    except (OSError, AttributeError, TypeError, ValueError, orjson.JSONDecodeError) as exc:
+        with _CACHE_LOCK:
+            _CACHE_PERSIST_ERROR = f"{type(exc).__name__}: {str(exc)[:160]}"
+        return status()
+    with _CACHE_LOCK:
+        if not _CACHE_BUILDING:
+            _CACHE_PAYLOADS = payloads
+            _CACHE_AT = time.monotonic()
+            _CACHE_RESTORE_ATTEMPTED = True
+            _CACHE_SAVED_AT = saved_at or None
+            _CACHE_PERSIST_ERROR = None
+    return status()
 
 
 def status(*, restore: bool = False) -> dict[str, Any]:

@@ -123,6 +123,12 @@ def test_duplicate_structural_event_does_not_rebuild_a_generation_just_published
     monkeypatch.setattr(
         service, "_refresh_materialized_views", lambda *, force: builds.append(force)
     )
+    catalogues: list[bool] = []
+    monkeypatch.setattr(
+        service,
+        "_refresh_complete_funding_catalog",
+        lambda *, force: catalogues.append(force),
+    )
     watcher = service.SharedArtifactWatcher(
         threading.Event(), initial_warm_delay_seconds=3600
     )
@@ -131,6 +137,7 @@ def test_duplicate_structural_event_does_not_rebuild_a_generation_just_published
     watcher._drain_warms()
 
     assert builds == []
+    assert catalogues == [False]
 
 
 def test_missing_materialized_fallback_is_built_after_fast_route_index(
@@ -160,10 +167,16 @@ def test_coalesced_structural_and_funding_handoff_preserves_funding_refresh(
     monkeypatch,
 ) -> None:
     builds: list[bool] = []
+    catalogues: list[bool] = []
     monkeypatch.setattr(service, "_refresh_live_route_index", lambda: True)
     monkeypatch.setattr(service, "_materialized_generation_ready", lambda: True)
     monkeypatch.setattr(
         service, "_refresh_materialized_views", lambda *, force: builds.append(force)
+    )
+    monkeypatch.setattr(
+        service,
+        "_refresh_complete_funding_catalog",
+        lambda *, force: catalogues.append(force),
     )
     watcher = service.SharedArtifactWatcher(
         threading.Event(), initial_warm_delay_seconds=3600
@@ -173,7 +186,8 @@ def test_coalesced_structural_and_funding_handoff_preserves_funding_refresh(
 
     watcher._drain_warms()
 
-    assert builds == [False]
+    assert builds == []
+    assert catalogues == [False]
 
 
 def test_web_watcher_invalidates_prices_and_warms_structural_changes(
@@ -186,6 +200,7 @@ def test_web_watcher_invalidates_prices_and_warms_structural_changes(
     invalidations: list[bool] = []
     live_refreshes: list[bool] = []
     full_builds: list[bool] = []
+    catalogues: list[bool] = []
     monkeypatch.setattr(
         service, "_invalidate_market_price_caches", lambda: invalidations.append(True)
     )
@@ -198,6 +213,11 @@ def test_web_watcher_invalidates_prices_and_warms_structural_changes(
         lambda: live_refreshes.append(True) or True,
     )
     monkeypatch.setattr(service, "_materialized_generation_ready", lambda: True)
+    monkeypatch.setattr(
+        service,
+        "_refresh_complete_funding_catalog",
+        lambda *, force: catalogues.append(force),
+    )
     watcher = service.SharedArtifactWatcher(
         threading.Event(),
         initial_warm_delay_seconds=3600,
@@ -214,9 +234,10 @@ def test_web_watcher_invalidates_prices_and_warms_structural_changes(
     watcher.warm_thread.join(timeout=2)
     assert live_refreshes == [True]
     assert full_builds == []
+    assert catalogues == [False]
 
 
-def test_web_watcher_rebuilds_only_funding_views_after_funding_generation(
+def test_web_watcher_refreshes_only_funding_catalog_after_funding_generation(
     tmp_path, monkeypatch
 ) -> None:
     generation = tmp_path / "market_generation.json"
@@ -230,8 +251,15 @@ def test_web_watcher_rebuilds_only_funding_views_after_funding_generation(
     )
     monkeypatch.setattr(
         service,
-        "_refresh_materialized_views",
+        "_refresh_complete_funding_catalog",
         lambda *, force: funding_warms.append(force),
+    )
+    monkeypatch.setattr(
+        service,
+        "_refresh_materialized_views",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("bulk funding must not rebuild the whole site")
+        ),
     )
     monkeypatch.setattr(
         service, "_restore_telegram_from_materialized_generation", lambda: False
@@ -410,6 +438,11 @@ def test_materialized_builder_is_an_isolated_low_priority_worker(monkeypatch) ->
     monkeypatch.setattr(server, "restore_materialized_route_index", lambda _path: 100)
     monkeypatch.setattr(server, "restore_materialized_intel", lambda _path: True)
     monkeypatch.setattr(server, "mark_historical_dex_archive_ready", lambda: None)
+    monkeypatch.setattr(
+        service.funding_catalog,
+        "reload_persisted_cache",
+        lambda: {"ready": True, "token_count": 100},
+    )
 
     assert service._refresh_materialized_views(force=True) is True
 
@@ -417,6 +450,48 @@ def test_materialized_builder_is_an_isolated_low_priority_worker(monkeypatch) ->
     assert command[:3] == service._low_priority_prefix()
     assert any(str(item).endswith("materialized_view_worker.py") for item in command)
     assert options["timeout"] == 1800.0
+
+
+def test_complete_funding_catalog_is_an_isolated_bounded_worker(
+    tmp_path, monkeypatch
+) -> None:
+    seen = []
+    monkeypatch.setattr(service, "_FUNDING_CATALOG_RETRY_AFTER", 0.0)
+    monkeypatch.setattr(
+        service.funding_catalog,
+        "status",
+        lambda **_kwargs: {
+            "ready": False,
+            "age_seconds": None,
+            "path": str(tmp_path / "missing.json"),
+        },
+    )
+    monkeypatch.setattr(
+        service.funding_catalog,
+        "reload_persisted_cache",
+        lambda: {"ready": True, "token_count": 900},
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_worker",
+        lambda command, **kwargs: seen.append((command, kwargs))
+        or service.WorkerResult(
+            0,
+            '{"status":"ok","tokens":900,"bytes":1000,"seconds":12.5,"max_rss_mb":500}\n',
+            "",
+            False,
+        ),
+    )
+
+    assert service._refresh_complete_funding_catalog(force=False) is True
+
+    command, options = seen[0]
+    assert command[:3] == service._low_priority_prefix()
+    assert any(
+        str(item).endswith("complete_funding_catalog_worker.py")
+        for item in command
+    )
+    assert options["timeout"] == 1200.0
 
 
 def test_failed_materialized_build_has_a_bounded_retry_cooldown(monkeypatch) -> None:

@@ -6,7 +6,31 @@ import threading
 import time
 from pathlib import Path
 
+from scripts import complete_funding_catalog_worker
 from spreadboard import funding_catalog, funding_radar, server
+
+
+def test_dedicated_worker_publishes_only_the_complete_catalogue(
+    monkeypatch, tmp_path
+) -> None:
+    path = tmp_path / "complete-funding.json"
+    path.write_bytes(b"{}")
+    monkeypatch.setattr(
+        complete_funding_catalog_worker.funding_catalog,
+        "refresh_cache",
+        lambda: {"GUA": {"routes": []}},
+    )
+    monkeypatch.setattr(
+        complete_funding_catalog_worker.funding_catalog,
+        "status",
+        lambda: {"ready": True, "path": str(path), "persist_error": None},
+    )
+
+    summary = complete_funding_catalog_worker.build()
+
+    assert summary["status"] == "ok"
+    assert summary["tokens"] == 1
+    assert summary["bytes"] == 2
 
 
 def test_catalog_rebuild_serves_last_complete_generation_to_concurrent_reader(
@@ -16,6 +40,7 @@ def test_catalog_rebuild_serves_last_complete_generation_to_concurrent_reader(
     new = {"NEW": {"routes": [{"token": "NEW"}]}}
     entered = threading.Event()
     release = threading.Event()
+    build_options: dict = {}
     prior_payloads = funding_catalog._CACHE_PAYLOADS
     prior_at = funding_catalog._CACHE_AT
     prior_building = funding_catalog._CACHE_BUILDING
@@ -29,14 +54,17 @@ def test_catalog_rebuild_serves_last_complete_generation_to_concurrent_reader(
         lambda: {"markets": [{"token": "NEW"}]},
     )
 
-    def slow_build(*_args, **_kwargs):
+    def slow_build(*_args, **kwargs):
+        build_options.update(kwargs)
         entered.set()
         assert release.wait(timeout=2)
         return new
 
     monkeypatch.setattr(funding_catalog.catalog_pairs, "for_tokens", slow_build)
     funding_catalog._CACHE_PAYLOADS = old
-    funding_catalog._CACHE_AT = 0.0
+    # The explicit background refresh owns a new generation even while the
+    # previous one is still inside its ordinary reader TTL.
+    funding_catalog._CACHE_AT = time.monotonic()
     funding_catalog._CACHE_BUILDING = False
     funding_catalog._CACHE_BUILD_DONE.set()
     result: list[dict] = []
@@ -52,6 +80,7 @@ def test_catalog_rebuild_serves_last_complete_generation_to_concurrent_reader(
         assert not worker.is_alive()
         assert result == [new]
         assert funding_catalog._complete_payloads() is new
+        assert build_options["include_history"] is False
     finally:
         release.set()
         worker.join(timeout=2)
@@ -59,6 +88,43 @@ def test_catalog_rebuild_serves_last_complete_generation_to_concurrent_reader(
         funding_catalog._CACHE_AT = prior_at
         funding_catalog._CACHE_BUILDING = prior_building
         funding_catalog._CACHE_BUILD_DONE.set()
+
+
+def test_background_persisted_catalog_can_be_installed_after_initial_miss(
+    monkeypatch, tmp_path
+) -> None:
+    path = tmp_path / "complete-funding.json"
+    old = {"OLD": {"routes": [{"token": "OLD"}]}}
+    new = {"NEW": {"routes": [{"token": "NEW"}]}}
+    prior = (
+        funding_catalog._CACHE_PAYLOADS,
+        funding_catalog._CACHE_AT,
+        funding_catalog._CACHE_RESTORE_ATTEMPTED,
+        funding_catalog._CACHE_SAVED_AT,
+        funding_catalog._CACHE_PERSIST_ERROR,
+    )
+    monkeypatch.setattr(funding_catalog, "DEFAULT_CACHE_PATH", path)
+    funding_catalog._CACHE_PAYLOADS = old
+    funding_catalog._CACHE_AT = 0.0
+    funding_catalog._CACHE_RESTORE_ATTEMPTED = True
+    funding_catalog._CACHE_SAVED_AT = None
+    funding_catalog._CACHE_PERSIST_ERROR = None
+    funding_catalog._persist_cache(new)
+    try:
+        state = funding_catalog.reload_persisted_cache()
+
+        assert funding_catalog._CACHE_PAYLOADS == new
+        assert state["ready"] is True
+        assert state["token_count"] == 1
+        assert state["persist_error"] is None
+    finally:
+        (
+            funding_catalog._CACHE_PAYLOADS,
+            funding_catalog._CACHE_AT,
+            funding_catalog._CACHE_RESTORE_ATTEMPTED,
+            funding_catalog._CACHE_SAVED_AT,
+            funding_catalog._CACHE_PERSIST_ERROR,
+        ) = prior
 
 
 def test_persisted_complete_catalog_restores_without_a_cold_build(
