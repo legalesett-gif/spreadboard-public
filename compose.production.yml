@@ -15,7 +15,11 @@ services:
       SPREADBOARD_AUTH_REQUIRED: "1"
       SPREADBOARD_PUBLIC_URL: "https://spreadarbitrage.ink"
       SPREADBOARD_LIGHTWEIGHT_MODE: "0"
-      SPREADBOARD_REFRESH_SECONDS: "1500"
+      # Structural venue/listing discovery is intentionally slower than live
+      # books and funding. Those continue every minute from the persisted full
+      # catalogue; a deep discovery pass runs every two hours and keeps
+      # serving the last complete generation while it works.
+      SPREADBOARD_REFRESH_SECONDS: "7200"
       # A route is a current executable claim, not an archive row. Discovery
       # may take longer, but the bulk/fast quote workers keep healthy legs
       # moving continuously; anything untouched for five minutes leaves the

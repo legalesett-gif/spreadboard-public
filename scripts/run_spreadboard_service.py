@@ -108,6 +108,23 @@ class RefreshLoop:
         self.pause_websocket_worker()
 
     def run(self) -> None:
+        # A deploy must not put deep venue discovery in front of the warm
+        # member views. If structural artifacts advanced while the collector
+        # was down, first compact the already-published last-complete snapshot;
+        # discovery can then run without making Funding cold in the meantime.
+        if not _materialized_sources_current():
+            self.pause_websocket_worker()
+            try:
+                with _COLLECTOR_HEAVY_LOCK:
+                    _refresh_materialized_views(force=True)
+            finally:
+                self.resume_websocket_worker()
+        initial_delay = _remaining_discovery_delay_seconds(
+            SNAPSHOT_PATH,
+            interval_seconds=self.interval_seconds,
+        )
+        if initial_delay and self.stop_event.wait(initial_delay):
+            return
         while not self.stop_event.is_set():
             self._ensure_websocket_worker()
             started = time.monotonic()
@@ -624,6 +641,28 @@ def _artifact_signature(path: Path) -> tuple[int, int] | None:
     except OSError:
         return None
     return stat.st_mtime_ns, stat.st_size
+
+
+def _remaining_discovery_delay_seconds(
+    snapshot_path: Path,
+    *,
+    interval_seconds: float,
+    now: float | None = None,
+) -> float:
+    """Keep a recent persisted catalogue warm across collector restarts.
+
+    Bulk books and funding start independently, so rerunning the most expensive
+    structural discovery immediately after every deploy only steals CPU from
+    member requests. A missing or expired snapshot still refreshes at once.
+    """
+
+    try:
+        modified_at = snapshot_path.stat().st_mtime
+    except OSError:
+        return 0.0
+    current = time.time() if now is None else float(now)
+    age = max(0.0, current - modified_at)
+    return max(0.0, float(interval_seconds) - age)
 
 
 def _materialized_sources_current() -> bool:
