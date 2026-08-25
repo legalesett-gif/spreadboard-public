@@ -215,7 +215,11 @@ services:
       SPREADBOARD_DISABLE_LOCAL_CACHE_WARM: "1"
       # Slow settled-history/radar publication runs in an isolated low-priority
       # worker after startup, never in the HTTP process or collector parent.
-      SPREADBOARD_MARKET_EVIDENCE_INITIAL_DELAY_SECONDS: "120"
+      # The persisted catalogue and live quote workers are available at
+      # restart. Repair exact settlement windows before any due deep structural
+      # discovery takes the collector's heavy-work lock.
+      SPREADBOARD_MARKET_EVIDENCE_INITIAL_DELAY_SECONDS: "0"
+      SPREADBOARD_STARTUP_EVIDENCE_WAIT_SECONDS: "600"
       # Structural discovery is deliberately broad and can span long venue and
       # OKX DEX cycles. Live truth has separate book/generation and exact-chain
       # quote gates; the structural universe must still advance within 72h.

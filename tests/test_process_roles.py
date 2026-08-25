@@ -473,6 +473,47 @@ def test_market_evidence_cycle_does_not_wait_for_navigation_materialization(
     service.MarketEvidenceLoop(threading.Event())._run_isolated_sweep()
 
 
+def test_structural_discovery_waits_for_initial_exact_evidence(
+    tmp_path, monkeypatch
+) -> None:
+    snapshot = tmp_path / "api_discovery_latest.json"
+    snapshot.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(service, "SNAPSHOT_PATH", snapshot)
+    monkeypatch.setenv("SPREADBOARD_STARTUP_EVIDENCE_WAIT_SECONDS", "2")
+    loop = service.RefreshLoop(30)
+    ready = threading.Event()
+    loop.startup_evidence_ready = ready
+    finished = threading.Event()
+
+    waiter = threading.Thread(
+        target=lambda: (loop._wait_for_startup_evidence(), finished.set()),
+        daemon=True,
+    )
+    waiter.start()
+
+    assert not finished.wait(0.05)
+    ready.set()
+    assert finished.wait(1.0)
+    waiter.join(timeout=1.0)
+
+
+def test_market_evidence_releases_startup_gate_after_first_sweep(
+    monkeypatch,
+) -> None:
+    stop = threading.Event()
+    loop = service.MarketEvidenceLoop(stop)
+    monkeypatch.setattr(loop, "INITIAL_DELAY_SECONDS", 0.0)
+
+    def complete_once() -> None:
+        stop.set()
+
+    monkeypatch.setattr(loop, "_sweep_once", complete_once)
+
+    loop.run()
+
+    assert loop.first_sweep_done.is_set()
+
+
 def test_complete_funding_catalog_is_an_isolated_bounded_worker(
     tmp_path, monkeypatch
 ) -> None:

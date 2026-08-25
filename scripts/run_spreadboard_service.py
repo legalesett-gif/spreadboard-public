@@ -88,6 +88,7 @@ class RefreshLoop:
         self.websocket_process: subprocess.Popen[str] | None = None
         self.websocket_lock = threading.Lock()
         self.websocket_paused = threading.Event()
+        self.startup_evidence_ready: threading.Event | None = None
 
     def start(self) -> None:
         self._ensure_websocket_worker()
@@ -119,6 +120,7 @@ class RefreshLoop:
                     _refresh_materialized_views(force=True)
             finally:
                 self.resume_websocket_worker()
+        self._wait_for_startup_evidence()
         initial_delay = _remaining_discovery_delay_seconds(
             SNAPSHOT_PATH,
             interval_seconds=self.interval_seconds,
@@ -132,6 +134,41 @@ class RefreshLoop:
                 self.refresh_once()
             elapsed = time.monotonic() - started
             self.stop_event.wait(max(15.0, self.interval_seconds - elapsed))
+
+    def _wait_for_startup_evidence(self) -> None:
+        """Repair exact settlements before a due deep discovery starts.
+
+        A persisted snapshot already serves the complete structural catalogue,
+        while current book and funding workers start independently. Starting a
+        ten-minute deep scan first therefore bought no visible availability but
+        held the heavy-work lock as rolling settlement windows expired. The
+        wait is bounded; the same lock still prevents overlap if evidence runs
+        longer than the gate.
+        """
+
+        ready = self.startup_evidence_ready
+        if ready is None or ready.is_set() or not SNAPSHOT_PATH.exists():
+            return
+        timeout = max(
+            0.0,
+            float(
+                os.environ.get(
+                    "SPREADBOARD_STARTUP_EVIDENCE_WAIT_SECONDS", "600"
+                )
+            ),
+        )
+        if timeout <= 0:
+            return
+        _log("structural discovery waiting for initial exact funding evidence")
+        deadline = time.monotonic() + timeout
+        while not ready.is_set() and not self.stop_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _log("initial funding evidence wait elapsed; discovery remains lock-safe")
+                return
+            ready.wait(min(1.0, remaining))
+        if ready.is_set():
+            _log("initial exact funding evidence complete; structural discovery may run")
 
     def run_chart_catalog(self) -> None:
         interval = max(
@@ -1196,6 +1233,7 @@ def _run_collector_service() -> int:
         refresh_loop.stop_event,
         refresh_loop=refresh_loop,
     )
+    refresh_loop.startup_evidence_ready = market_evidence_loop.first_sweep_done
     chart_history_loop = ChartHistoryWarmLoop(
         refresh_loop.stop_event,
         board_path=_board_path(),
@@ -1897,13 +1935,20 @@ class MarketEvidenceLoop(threading.Thread):
         super().__init__(name="market-evidence", daemon=True)
         self.stop_event = stop_event
         self.refresh_loop = refresh_loop
+        self.first_sweep_done = threading.Event()
 
     def run(self) -> None:
         if self.stop_event.wait(self.INITIAL_DELAY_SECONDS):
             return
+        first_sweep = True
         while not self.stop_event.is_set():
             started = time.monotonic()
-            self._sweep_once()
+            try:
+                self._sweep_once()
+            finally:
+                if first_sweep:
+                    self.first_sweep_done.set()
+                    first_sweep = False
             # Start-to-start cadence: the bounded history work itself can use
             # four minutes. Sleeping a further ten minutes made the advertised
             # catch-up interval fourteen minutes and prolonged initial archive
