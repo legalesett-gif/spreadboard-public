@@ -1952,9 +1952,11 @@ class MarketEvidenceLoop(threading.Thread):
             # Start-to-start cadence: the bounded history work itself can use
             # four minutes. Sleeping a further ten minutes made the advertised
             # catch-up interval fourteen minutes and prolonged initial archive
-            # coverage by many hours.
+            # coverage by many hours. Still yield briefly after an overrun so a
+            # due structural publication already waiting on the same heavy lock
+            # cannot be starved by immediate evidence re-acquisition.
             self.stop_event.wait(
-                max(0.0, self.INTERVAL_SECONDS - (time.monotonic() - started))
+                max(5.0, self.INTERVAL_SECONDS - (time.monotonic() - started))
             )
 
     def _sweep_once(self) -> None:

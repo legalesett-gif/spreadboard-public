@@ -514,6 +514,31 @@ def test_market_evidence_releases_startup_gate_after_first_sweep(
     assert loop.first_sweep_done.is_set()
 
 
+def test_overdue_market_evidence_cycle_yields_to_structural_work(
+    monkeypatch,
+) -> None:
+    stop = threading.Event()
+    loop = service.MarketEvidenceLoop(stop)
+    waits: list[float] = []
+    monkeypatch.setattr(loop, "INITIAL_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(loop, "INTERVAL_SECONDS", 300.0)
+    monotonic_values = iter((100.0, 405.0))
+    monkeypatch.setattr(service.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(loop, "_sweep_once", lambda: None)
+
+    def record_wait(seconds: float) -> bool:
+        waits.append(seconds)
+        if len(waits) > 1:
+            stop.set()
+        return len(waits) > 1
+
+    monkeypatch.setattr(stop, "wait", record_wait)
+
+    loop.run()
+
+    assert waits == [0.0, 5.0]
+
+
 def test_complete_funding_catalog_is_an_isolated_bounded_worker(
     tmp_path, monkeypatch
 ) -> None:
