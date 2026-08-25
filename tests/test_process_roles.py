@@ -658,6 +658,57 @@ def test_market_evidence_is_an_isolated_low_priority_worker(monkeypatch) -> None
     assert Path("scripts/market_evidence_worker.py").exists()
 
 
+def test_market_evidence_pauses_optional_websocket_fast_lane(monkeypatch) -> None:
+    events: list[str] = []
+
+    class Refresh:
+        def pause_websocket_worker(self) -> None:
+            events.append("pause")
+
+        def resume_websocket_worker(self) -> None:
+            events.append("resume")
+
+    monkeypatch.setattr(
+        service,
+        "_run_worker",
+        lambda *_args, **_kwargs: service.WorkerResult(-1, "", "timeout", True),
+    )
+    loop = service.MarketEvidenceLoop(
+        threading.Event(),
+        refresh_loop=Refresh(),  # type: ignore[arg-type]
+    )
+
+    loop._sweep_once()
+
+    assert events == ["pause", "resume"]
+
+
+def test_refresh_loop_pause_releases_websocket_process() -> None:
+    class Process:
+        def __init__(self) -> None:
+            self.terminated = False
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def wait(self, timeout: float) -> int:
+            assert timeout == 10
+            return 0
+
+    loop = service.RefreshLoop(300)
+    process = Process()
+    loop.websocket_process = process  # type: ignore[assignment]
+
+    loop.pause_websocket_worker()
+
+    assert process.terminated is True
+    assert loop.websocket_process is None
+    assert loop.websocket_paused.is_set() is True
+
+
 def test_production_compose_assigns_separate_roles_and_secret_sets() -> None:
     source = Path("compose.production.yml").read_text(encoding="utf-8")
     assert 'SPREADBOARD_SERVICE_ROLE: "web"' in source

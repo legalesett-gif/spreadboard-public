@@ -77,6 +77,8 @@ class RefreshLoop:
         )
         self.warm_thread: threading.Thread | None = None
         self.websocket_process: subprocess.Popen[str] | None = None
+        self.websocket_lock = threading.Lock()
+        self.websocket_paused = threading.Event()
 
     def start(self) -> None:
         self._ensure_websocket_worker()
@@ -94,12 +96,7 @@ class RefreshLoop:
             self.catalog_thread.join(timeout=5.0)
         if self.warm_thread is not None and self.warm_thread.is_alive():
             self.warm_thread.join(timeout=5.0)
-        if self.websocket_process is not None and self.websocket_process.poll() is None:
-            self.websocket_process.terminate()
-            try:
-                self.websocket_process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self.websocket_process.kill()
+        self.pause_websocket_worker()
 
     def run(self) -> None:
         while not self.stop_event.is_set():
@@ -130,18 +127,44 @@ class RefreshLoop:
     def _ensure_websocket_worker(self) -> None:
         if _env_bool("SPREADBOARD_DISABLE_WEBSOCKETS"):
             return
-        if self.websocket_process is not None and self.websocket_process.poll() is None:
+        with self.websocket_lock:
+            if self.websocket_paused.is_set() or self.stop_event.is_set():
+                return
+            if self.websocket_process is not None and self.websocket_process.poll() is None:
+                return
+            self.websocket_process = subprocess.Popen(
+                [
+                    *_live_worker_prefix(),
+                    sys.executable,
+                    str(ROOT / "scripts/websocket_book_worker.py"),
+                ],
+                cwd=ROOT,
+                text=True,
+            )
+            _log(f"websocket book worker pid={self.websocket_process.pid}")
+
+    def pause_websocket_worker(self) -> None:
+        """Release the optional fast-lane process during high-memory analytics."""
+
+        self.websocket_paused.set()
+        with self.websocket_lock:
+            process = self.websocket_process
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+            self.websocket_process = None
+
+    def resume_websocket_worker(self) -> None:
+        """Restore the fast lane after bulk quotes kept prices current."""
+
+        if self.stop_event.is_set():
             return
-        self.websocket_process = subprocess.Popen(
-            [
-                *_live_worker_prefix(),
-                sys.executable,
-                str(ROOT / "scripts/websocket_book_worker.py"),
-            ],
-            cwd=ROOT,
-            text=True,
-        )
-        _log(f"websocket book worker pid={self.websocket_process.pid}")
+        self.websocket_paused.clear()
+        self._ensure_websocket_worker()
 
     def refresh_once(self) -> None:
         lightweight_mode = _env_bool("SPREADBOARD_LIGHTWEIGHT_MODE")
@@ -961,7 +984,10 @@ def _run_collector_service() -> int:
     refresh_loop = RefreshLoop(interval)
     bulk_quote_loop = BulkQuoteLoop(refresh_loop.stop_event)
     bulk_funding_loop = BulkFundingLoop(refresh_loop.stop_event)
-    market_evidence_loop = MarketEvidenceLoop(refresh_loop.stop_event)
+    market_evidence_loop = MarketEvidenceLoop(
+        refresh_loop.stop_event,
+        refresh_loop=refresh_loop,
+    )
 
     def stop_collector(_signum: int, _frame: Any) -> None:
         refresh_loop.stop_event.set()
@@ -1618,9 +1644,15 @@ class MarketEvidenceLoop(threading.Thread):
         ),
     )
 
-    def __init__(self, stop_event: threading.Event) -> None:
+    def __init__(
+        self,
+        stop_event: threading.Event,
+        *,
+        refresh_loop: RefreshLoop | None = None,
+    ) -> None:
         super().__init__(name="market-evidence", daemon=True)
         self.stop_event = stop_event
+        self.refresh_loop = refresh_loop
 
     def run(self) -> None:
         if self.stop_event.wait(self.INITIAL_DELAY_SECONDS):
@@ -1651,14 +1683,26 @@ class MarketEvidenceLoop(threading.Thread):
             _BACKGROUND_ANALYTICS_LOCK.release()
 
     def _run_isolated_sweep(self) -> None:
-        result = _run_worker(
-            [
-                *_low_priority_prefix(),
-                sys.executable,
-                str(Path(__file__).with_name("market_evidence_worker.py")),
-            ],
-            timeout=self.TIMEOUT_SECONDS,
-        )
+        # The WebSocket worker is an optional low-latency layer over the bulk
+        # quote generation, but both it and the evidence catalogue retain more
+        # than a gigabyte of Python objects. Their overlap exceeded the 4 GiB
+        # collector cgroup and the kernel killed the WebSocket child. Pause the
+        # fast lane while exact historical work runs; venue-wide bulk quotes
+        # continue publishing current books, so pages retain correct prices.
+        if self.refresh_loop is not None:
+            self.refresh_loop.pause_websocket_worker()
+        try:
+            result = _run_worker(
+                [
+                    *_low_priority_prefix(),
+                    sys.executable,
+                    str(Path(__file__).with_name("market_evidence_worker.py")),
+                ],
+                timeout=self.TIMEOUT_SECONDS,
+            )
+        finally:
+            if self.refresh_loop is not None:
+                self.refresh_loop.resume_websocket_worker()
         if result.timed_out or result.returncode != 0:
             _log(
                 "market evidence unavailable "
