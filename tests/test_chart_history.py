@@ -591,6 +591,35 @@ def test_a_venue_without_ccxt_can_still_be_quoted_live() -> None:
     assert fast_quotes.supports_native_order_book("Nonesuch", "Futures") is False
 
 
+def test_native_non_ccxt_route_key_resolves_without_legacy_board_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = chart_catalog.custom_route_key(
+        "GUA",
+        {
+            "venue": "Ourbit",
+            "market_type": "Futures",
+            "symbol": "GUA/USDT:USDT",
+        },
+        {
+            "venue": "Gate",
+            "market_type": "Futures",
+            "symbol": "GUA/USDT:USDT",
+        },
+    )
+    monkeypatch.setattr(
+        server.api_spreads,
+        "load_spreads",
+        lambda **_kwargs: pytest.fail("a valid custom route must not scan the board"),
+    )
+
+    route = server._find_canonical_route(key, tmp_path / "board.jsonl")
+
+    assert route is not None
+    assert route["long_venue"] == "Ourbit"
+    assert route["short_venue"] == "Gate"
+
+
 def test_the_ccxt_fallback_is_not_attempted_without_an_adapter() -> None:
     """Reaching for a client that cannot exist would raise on every quote."""
     import inspect

@@ -326,7 +326,17 @@ def _validated_leg(value: Any, *, token: str) -> dict[str, str]:
     leg = _compact_leg(value)
     if not leg.get("symbol") or leg.get("market_type") not in {"Spot", "Futures"}:
         raise ValueError("invalid_leg")
-    if leg["venue"] in VENUE_IDS:
+    # Some production-native adapters (currently Ourbit futures) use direct
+    # REST rather than CCXT, so they deliberately have no VENUE_IDS entry.
+    # They are still valid chart legs and must not turn a self-contained key
+    # into the 20-second legacy-token compatibility path.
+    if leg["venue"] in VENUE_IDS or (
+        leg["market_type"] == "Futures"
+        and leg["venue"] in NATIVE_FUTURES_VENUES
+    ) or (
+        leg["market_type"] == "Spot"
+        and leg["venue"] in NATIVE_SPOT_VENUES
+    ):
         return leg
     known = next(
         (
