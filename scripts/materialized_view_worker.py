@@ -66,6 +66,32 @@ def _cacheable(payload: dict[str, Any]) -> bool:
     return payload.get("status") != "warming" and server._market_payload_cacheable(payload)
 
 
+def _compact_funding_navigation(payload: dict[str, Any]) -> dict[str, Any]:
+    """Persist only the exact-pair preview that normal Funding HTML renders."""
+
+    if not ((payload.get("filters") or {}).get("funding_only")):
+        return payload
+    compact = dict(payload)
+    groups: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+    for original in payload.get("groups") or []:
+        if not isinstance(original, dict):
+            continue
+        group = dict(original)
+        routes = list(group.get("routes") or [])
+        preview = routes[: server.FUNDING_PAIR_PREVIEW_LIMIT]
+        group["route_count"] = max(len(routes), int(group.get("route_count") or 0))
+        group["routes"] = preview
+        group["materialized_route_preview"] = True
+        groups.append(group)
+        rows.extend(preview)
+    compact["groups"] = groups
+    compact["rows"] = rows
+    compact["materialized_route_preview_limit"] = server.FUNDING_PAIR_PREVIEW_LIMIT
+    compact["materialized_exact_token_source"] = "complete_catalogue_plus_shared_books"
+    return compact
+
+
 def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     queries = service._materialized_view_queries()
     initial_signature = source_signature(board_path)
@@ -146,7 +172,7 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
             )
             if not _cacheable(payload):
                 raise RuntimeError(f"uncacheable_view:{query}")
-            writer.write_view(query, payload)
+            writer.write_view(query, _compact_funding_navigation(payload))
             del payload
             _release_memory(keep_rows=True)
 
@@ -162,7 +188,7 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
             )
             if not _cacheable(payload):
                 raise RuntimeError(f"uncacheable_view:{query}")
-            writer.write_view(query, payload)
+            writer.write_view(query, _compact_funding_navigation(payload))
             del payload
             _release_memory(keep_rows=False)
 

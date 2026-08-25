@@ -525,6 +525,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             "/account",
             "/portfolio",
             "/markets",
+            "/tokens",
             "/rankings",
             "/intel",
             "/triage",
@@ -914,7 +915,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         accounts_path=self.server.accounts_path,
                     )
                 )
-            elif parsed.path == "/rankings":
+            elif parsed.path in {"/tokens", "/rankings"}:
                 self._send_html(render_rankings_page(query))
             elif parsed.path == "/intel":
                 self._send_html(
@@ -2515,6 +2516,21 @@ def api_market_spreads(
     offset = max(0, int(_query_float(query, "offset", 0) or 0))
     complete_funding_request = _can_use_complete_funding_catalog(query)
     historical_dex_request = _can_use_historical_dex_catalog(query)
+    exact_catalog = _exact_catalog_market_projection(
+        query,
+        limit=limit,
+        offset=offset,
+    )
+    if (
+        exact_catalog is not None
+        and bool(exact_catalog.get("groups"))
+        and not historical_dex_request
+        and (
+            not complete_funding_request
+            or (_query_first(query, "funding_window") or "now").casefold() == "now"
+        )
+    ):
+        return _sync_telegram_client_universe(exact_catalog)
     if historical_dex_request and not _HISTORICAL_DEX_ARCHIVE_READY.is_set():
         warming = _market_warming_payload()
         warming["coverage_mode"] = "historical_dex_archive_background_warming"
@@ -2719,6 +2735,96 @@ def api_market_spreads(
     if cache_key is not None:
         _market_cache_finish(cache_key, data)
     return _sync_telegram_client_universe(data)
+
+
+def _exact_catalog_market_projection(
+    query: dict[str, list[str]],
+    *,
+    limit: int,
+    offset: int,
+) -> dict[str, Any] | None:
+    """Serve an exact token from its complete warm catalogue, not scanner quota.
+
+    Arbitrary search used to project only the bounded discovery universe.  A
+    valid same-venue spot/futures route such as Gate SPCX could therefore be in
+    the shared books and complete catalogue yet return zero rows on Markets.
+    This point lookup is local-only and normally reads a few dozen books.
+    """
+
+    raw = str(_query_first(query, "q") or "").strip().upper()
+    if not raw or not re.fullmatch(r"[A-Z0-9][A-Z0-9._:-]{0,39}", raw):
+        return None
+    payload = catalog_pairs.for_token(
+        raw,
+        limit=None,
+        include_short_spot=True,
+    )
+    selected = catalog_pairs.filtered(
+        payload,
+        kind=_query_first(query, "kind"),
+        exchange=_query_first(query, "exchange"),
+        quote=_query_first(query, "quote"),
+        funding_only=_query_bool(query, "funding_only"),
+        min_spread_pct=_query_float(query, "min_spread_pct"),
+        min_abs_funding_24h_pct=_query_float(query, "min_abs_funding_24h_pct"),
+        min_abs_funding_apr_pct=_query_float(query, "min_abs_funding_apr_pct"),
+        limit=None,
+    )
+    routes = list(selected.get("routes") or [])
+    page_routes = routes[offset : offset + limit]
+    page_payload = dict(selected)
+    page_payload["routes"] = page_routes
+    page_payload["returned_route_count"] = len(page_routes)
+    group = catalog_pairs.group(page_payload)
+    groups = [group] if group else []
+    return {
+        "ok": bool(groups),
+        "mode": "exact_token_complete_catalogue",
+        "coverage_mode": "exact_token_complete_catalogue",
+        "filters": {
+            "q": raw,
+            "kind": _query_first(query, "kind"),
+            "exchange": _query_first(query, "exchange"),
+            "quote": _query_first(query, "quote"),
+            "funding_only": _query_bool(query, "funding_only"),
+            "sort": _query_first(query, "sort") or "edge",
+            "direction": _query_first(query, "direction") or "desc",
+        },
+        "groups": groups,
+        "rows": page_routes,
+        "top_edges": page_routes[:10],
+        "top_funding": page_routes[:10],
+        "summary": {
+            "matching_tokens": 1 if routes else 0,
+            "returned_tokens": 1 if groups else 0,
+            "matching_rows": len(routes),
+            "returned_rows": len(page_routes),
+            "expanded_visible_route_count": int(selected.get("route_count") or 0),
+        },
+        "pagination": {
+            "offset": offset,
+            "limit": limit,
+            "matching_rows": len(routes),
+            "returned_rows": len(page_routes),
+        },
+        "source_health": {
+            "canonical_api": {
+                "status": "fresh" if page_payload.get("fresh_market_count") else "warming",
+                "row_count": len(routes),
+                "source": "complete_market_catalogue_plus_shared_live_books",
+            }
+        },
+        "exchange_options": sorted(
+            {
+                str(route.get(key) or "")
+                for route in routes
+                for key in ("long_venue", "short_venue")
+                if route.get(key)
+            }
+        ),
+        "route_kind_counts": {},
+        "asset_class_counts": {},
+    }
 
 
 CATALOG_ROUTES_PER_VISIBLE_TOKEN = max(
@@ -3402,6 +3508,21 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                 key=lambda group: api_spreads._group_sort_value(group, lane_sort),
                 reverse=lane_direction != "asc",
             )
+    if historical_funding_page:
+        selected_window = str(funding_catalog_state.get("window") or "1d")
+
+        def displayed_historical_value(group: dict[str, Any]) -> tuple[bool, float]:
+            route = group.get("best_funding_route") or group.get("best_route") or {}
+            value = funding_rank_value(route, selected_window)
+            return value is not None, value if value is not None else float("-inf")
+
+        # Exact settlement artifacts can advance between materialized builds.
+        # Sort by the value rendered now so a newer +8.85% row cannot remain
+        # below +8.62% merely because yesterday's persisted order said so.
+        (payload.get("groups") or []).sort(
+            key=displayed_historical_value,
+            reverse=direction != "asc",
+        )
     # The structural top-eight shortlist can itself be older than the live
     # books.  Repair it from the current visible universe so a cooled former
     # leader cannot leave the headline panel empty while current rows sit in
@@ -8004,7 +8125,7 @@ def render_rankings_page(query: dict[str, list[str]]) -> str:
     rows = data.get("rows") or []
     tabs = "".join(
         f'<a class="{"active" if value == metric else ""}" '
-        f'href="/rankings?{h(urlencode(_query_with(query, rank=value, limit=100)))}">{h(label)}</a>'
+        f'href="/tokens?{h(urlencode(_query_with(query, rank=value, limit=100)))}">{h(label)}</a>'
         for value, label in RANKING_TABS
     )
     body = f"""
@@ -8028,7 +8149,7 @@ def render_rankings_page(query: dict[str, list[str]]) -> str:
         <article><span>Pair coverage</span><strong>Complete catalogue capacity</strong><p>All exact spot, futures, and verified DEX market combinations known for the token, independent of the live top-route quota.</p></article>
       </section>
       <nav class="ranking-tabs" aria-label="Rank tokens by">{tabs}</nav>
-      <form class="ranking-filter" data-refresh-preserve="rankings-filters" method="get" action="/rankings">
+      <form class="ranking-filter" data-refresh-preserve="rankings-filters" method="get" action="/tokens">
         <input type="hidden" name="rank" value="{h(metric)}">
         <label><span>Token</span><input name="q" value="{h(_query_first(query, "q") or "")}" placeholder="GUA, SIREN, BTC"></label>
         <label><span>Status</span><select name="status">
@@ -8038,7 +8159,7 @@ def render_rankings_page(query: dict[str, list[str]]) -> str:
           <option value="catalogued" {"selected" if _query_first(query, "status") == "catalogued" else ""}>Catalogue only</option>
         </select></label>
         <button class="sheet-button primary" type="submit">Apply</button>
-        <a class="sheet-button" href="/rankings">Reset</a>
+        <a class="sheet-button" href="/tokens">Reset</a>
       </form>
       <section class="terminal-tape ranking-tape" aria-label="Token ranking summary">
         {render_market_metric("Tokens", summary.get("token_count"), "full market catalogue")}
@@ -8055,7 +8176,7 @@ def render_rankings_page(query: dict[str, list[str]]) -> str:
       <p class="ranking-footnote"><strong>Freshness boundary:</strong> current rankings are rebuilt after shared public-book updates. Historical windows are never extrapolated to fill missing venue history, and unverified identity remains visibly marked.</p>
     </section>
     """
-    return shell("Token Rankings - SpreadBoard", "rankings", body)
+    return shell("Tokens - SpreadBoard", "tokens", body)
 
 
 def render_token_ranking_row(index: int, row: dict[str, Any]) -> str:
@@ -9059,7 +9180,7 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
     )
     if not community_fresh:
         body = f"""
-        <section class="intel-page" data-refresh="180">
+        <section class="intel-page" data-refresh="180" data-refresh-silent="1">
           <div class="intel-hero">
             <div>
               <span class="page-kicker">Community Intel</span>
@@ -9086,7 +9207,7 @@ def render_intel_page(board_path: Path, config: dict[str, Any], query: dict[str,
         """
         return shell("Community Intel - SpreadBoard", "intel", body)
     body = f"""
-    <section class="intel-page" data-refresh="180">
+    <section class="intel-page" data-refresh="180" data-refresh-silent="1">
       <div class="intel-hero">
         <div>
           <span class="page-kicker">Community Intel</span>
@@ -9142,7 +9263,7 @@ def render_triage_page(
     summary = data.get("summary") or {}
     buckets = data.get("buckets") or {}
     body = f"""
-    <section class="triage-page" data-refresh="180">
+    <section class="triage-page" data-refresh="180" data-refresh-silent="1">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Triage</span>
@@ -9320,7 +9441,7 @@ def render_signals_page(
         empty_message="No subscriber lookups in this window.",
     )
     body = f"""
-    <section class="signals-page" data-refresh="120">
+    <section class="signals-page" data-refresh="120" data-refresh-silent="1">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Signals</span>
@@ -9875,7 +9996,7 @@ def render_funding_page(
             <h2>{h(dict(tabs).get(selected_farm))} Farms</h2>
             <p>Positive net values mean the displayed long-short pair receives funding under the exchange sign convention. Ranking uses the complete pair catalogue before this token page is sliced.</p>
           </div>
-          {render_json_export_control("/api/spreads?" + urlencode(_query_with(funding_query, limit=page_limit, offset=page_offset)))}
+          {render_json_export_control("/api/spreads?" + urlencode(_query_with(funding_query, limit=page_limit, offset=page_offset, export=1)))}
         </div>
         <div class="funding-ledger-head" aria-hidden="true">
           <span>Token</span><span>Best farm</span><span>{h("Net now / 24h" if selected_window == "now" else "Settled 24h total" if selected_window == "1d" else f"Settled {selected_window} total")}</span><span>Payouts</span>
@@ -9952,7 +10073,7 @@ def render_funding_token_group(
         if best.get("route_key")
         else f"/charts?token={quote(str(group.get('token') or ''))}"
     )
-    token_url = token_routes_url or best_chart_url
+    token_url = f"/token/{quote(str(group.get('token') or ''), safe='')}"
     status_badge = (
         f'<span class="funding-radar-badge">Cooled now · seen {fmt_age(best.get("radar_last_seen_age_min"))} ago</span>'
         if historical
@@ -9979,7 +10100,7 @@ def render_funding_token_group(
     overflow_note = (
         '<p class="funding-pair-overflow">'
         f'Showing the best {h(len(visible_routes))} of {h(total_routes)} exact pairs. '
-        f'{h(hidden_routes)} more are included in this token page\'s Export JSON with the same rank and period filters.'
+        f'{h(hidden_routes)} more are included in this token page\'s Export JSON and available from the token overview with the same rank and period filters.'
         "</p>"
         if hidden_routes
         else ""
@@ -10002,6 +10123,7 @@ def render_funding_token_group(
       <div class="funding-pair-list">
         {"".join(render_funding_pair(route, selected_window=selected_window) for route in visible_routes)}
         {overflow_note}
+        {f'<a class="funding-token-all-routes" href="{h(token_routes_url)}">Open all funding routes for {h(group.get("token"))}</a>' if token_routes_url else ''}
       </div>
     </details>
     """
@@ -10101,6 +10223,11 @@ def render_alert_draft_button(
         return ""
     if alert_type == "funding":
         current_value = funding_rank_value(row, "now")
+    elif alert_type in {"price", "token_funding"}:
+        token_values = alerts.token_metrics([row]).get(str(symbol).upper(), {})
+        current_value = token_values.get(
+            "token_price" if alert_type == "price" else "token_funding_24h_pct"
+        )
     elif alert_type == "token_spread" and not spread_current:
         current_value = None
     else:
@@ -10111,7 +10238,13 @@ def render_alert_draft_button(
             if row.get("executable_spread_pct") is not None
             else row.get("spread_pct")
         )
-    button_label = label or ("Funding alert" if alert_type == "funding" else "Spread alert")
+    default_labels = {
+        "funding": "Funding alert",
+        "token_spread": "Spread alert",
+        "price": "Token price alert",
+        "token_funding": "Best token funding alert",
+    }
+    button_label = label or default_labels.get(alert_type, "Alert")
     compact_class = " compact" if compact else ""
     return (
         f'<button class="route-alert-btn js-alert-draft{compact_class}" type="button" '
@@ -10139,7 +10272,7 @@ def render_community_page(
     window_hours = _float_or_none((data.get("filters") or {}).get("window_hours")) or 6.0
     window_actions = render_intel_window_actions("/community", window_hours)
     body = f"""
-    <section class="community-page" data-refresh="180">
+    <section class="community-page" data-refresh="180" data-refresh-silent="1">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Community</span>
@@ -10182,7 +10315,7 @@ def render_playbook_page(
     data = api_playbook(board_path, query)
     source_note = data.get("source_note") or {}
     body = f"""
-    <section class="playbook-page" data-refresh="180">
+    <section class="playbook-page" data-refresh="180" data-refresh-silent="1">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Community Playbook</span>
@@ -10704,6 +10837,7 @@ def render_charts_page(
       </header>
       {render_saved_charts_panel(user, selected_route, accounts_path)}
       {render_chart_builder(markets, selected_row, catalogue, selected_token=builder_token)}
+      {render_token_quick_alerts(builder_token, selected_row) if builder_token else ""}
       {render_selected_chart(selected_row, detail, history, window, history_payload.get("meta") or {}, window_config=window_config, position_opened_at=position_opened_at, position_since_us=position_since_us) if selected_row and detail else render_chart_blank_state()}
       {render_funding_history_dialog(detail) if detail else ""}
     </section>
@@ -10744,6 +10878,21 @@ def render_chart_builder(
         <input type="hidden" name="route_key" data-chart-route-key>
         <button class="chart-create-button" type="submit" data-chart-create disabled>Create chart</button>
       </form>
+    </section>
+    """
+
+
+def render_token_quick_alerts(
+    symbol: str,
+    row: dict[str, Any] | None = None,
+) -> str:
+    payload = dict(row or {})
+    payload.setdefault("token", symbol)
+    return f"""
+    <section class="chart-token-alerts" aria-label="Token-wide alerts">
+      <div><strong>{h(symbol)} alerts</strong><span>These watch the token across venues and do not require a selected pair.</span></div>
+      {render_alert_draft_button(payload, alert_type="price")}
+      {render_alert_draft_button(payload, alert_type="token_funding")}
     </section>
     """
 
@@ -11026,6 +11175,8 @@ def render_selected_chart(
           <a href="/pair/{h(route_key)}">Open full pair details</a>
           {render_alert_draft_button(row, alert_type="token_spread", allow_unquoted=True)}
           {render_alert_draft_button(row, alert_type="funding")}
+          {render_alert_draft_button(row, alert_type="price")}
+          {render_alert_draft_button(row, alert_type="token_funding")}
         </div>
         <span data-chart-observation-count>{h(len(history))} observations · {coverage_note}</span>
       </footer>
@@ -11970,7 +12121,7 @@ def render_token_page(symbol: str, board_path: Path) -> str:
     # no capped 28-route source, and no request-time board rebuild.
     rankings_payload = token_rankings.load()
     pair_data = catalog_pairs.with_routes(
-        catalog_pairs.for_token(symbol, limit=None),
+        catalog_pairs.for_token(symbol, limit=None, include_short_spot=True),
         token_rankings.dex_routes_for(rankings_payload, symbol),
         limit=500,
     )
@@ -11987,6 +12138,8 @@ def render_token_page(symbol: str, board_path: Path) -> str:
         {},
     )
     token_name = ranking.get("token_name") or "Metadata pending"
+    intelligence = render_token_intelligence(symbol, pair_data, group)
+    token_alerts = render_token_quick_alerts(symbol, group.get("best_route") if group else None)
     body = f"""
     <section class="intro compact">
       <div>
@@ -11995,16 +12148,65 @@ def render_token_page(symbol: str, board_path: Path) -> str:
         <p>Every currently quoteable catalogue pair for this asset, including combinations omitted by the scanner's ranking quota.</p>
       </div>
       <div class="intel-actions">
+        <a class="secondary" href="/tokens">All tokens</a>
         <a class="secondary" href="/charts?token={h(symbol)}">Charts</a>
         <a class="secondary" href="/signals?symbol={h(symbol)}">Signals</a>
       </div>
     </section>
+      {token_alerts}
+      {intelligence}
       <section class="token-canonical-routes">
         {render_market_token_group(group) if group else render_catalog_pair_empty(pair_data)}
       </section>
 	    {render_warm_token_coverage(pair_data, ranking)}
 	    """
     return shell(f"{symbol} - SpreadBoard", "board", body)
+
+
+def render_token_intelligence(
+    symbol: str,
+    pair_data: dict[str, Any],
+    group: dict[str, Any],
+) -> str:
+    """Compact local evidence for one asset; never calls an exchange."""
+
+    routes = list(pair_data.get("routes") or [])
+    metrics = alerts.token_metrics(routes).get(symbol.upper(), {})
+    spread_route = group.get("best_route") or group.get("best_spread_route") or {}
+    funding_route = group.get("best_funding_route") or spread_route
+
+    def score(route: dict[str, Any]) -> dict[str, Any]:
+        if not route:
+            return research_score.evaluate(None)
+        history = market_history.load_history(
+            route_key=str(route.get("route_key") or ""),
+            max_points=720,
+        )
+        return research_score.evaluate(
+            route,
+            windows=venue_funding_history.route_windows(route),
+            history=history,
+        )
+
+    spread_evidence = score(spread_route)
+    funding_evidence = score(funding_route)
+    risk = spread_evidence.get("risk_estimate") or {}
+    basis = risk.get("route_basis") or {}
+    stability = (funding_evidence.get("risk_estimate") or {}).get("funding_stability") or {}
+    return f"""
+    <section class="panel token-intelligence">
+      <div class="panel-head"><div><h2>Token intelligence</h2><p>Token-wide price and routes, plus deterministic historical evidence for the best current spread and funding routes.</p></div><span class="status-pill fresh">Local evidence</span></div>
+      <div class="terminal-kpis compact-kpis">
+        {render_market_metric("Median token price", fmt_price(metrics.get("token_price")), "fresh cross-venue marks")}
+        {render_market_metric("Best spread", fmt_pct(group.get("best_edge_pct")), "matched current route")}
+        {render_market_metric("Best funding / 24h", fmt_signed_pct(metrics.get("token_funding_24h_pct"), digits=3), "current-rate projection")}
+        {render_market_metric("Basis volatility / 24h", fmt_pct(basis.get("volatility_24h_pct_points")), "observed route history")}
+        {render_market_metric("Adverse basis p95", fmt_pct(basis.get("adverse_24h_p95_pct_points")), "observed 24h widening")}
+        {render_market_metric("Funding stability", fmt_pct((stability.get("positive_ratio") or 0) * 100 if stability.get("positive_ratio") is not None else None), f"{stability.get('samples') or 0} samples positive")}
+      </div>
+      <p class="small">Spread and funding are scored separately. Missing history remains unavailable; the figures are research evidence, not a liquidation or convergence prediction.</p>
+    </section>
+    """
 
 
 def render_catalog_pair_empty(payload: dict[str, Any]) -> str:
@@ -12342,7 +12544,7 @@ def render_sources_page(board_path: Path, config: dict[str, Any]) -> str:
     market = health.get("market") or {}
     reconciliation = health.get("reconciliation") or {}
     body = f"""
-    <section class="sources-page" data-refresh="180">
+    <section class="sources-page" data-refresh="180" data-refresh-silent="1">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">System</span>
@@ -15420,7 +15622,7 @@ def render_alerts_page(
     )
     live_rule_count = len(accounts.list_market_alert_rules(user.id)) if user is not None else 0
     body = f"""
-    <section class="alerts-page" data-refresh="180">
+    <section class="alerts-page" data-refresh="180" data-refresh-silent="1">
       {render_member_alert_rules(board_path)}
       <div class="intel-hero compact-hero">
         <div>
@@ -15476,7 +15678,7 @@ def render_watchlist_page(
     )
     body = (
         f"""
-    <section class="watchlist-page" data-refresh="120">
+    <section class="watchlist-page" data-refresh="120" data-refresh-silent="1">
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Watchlist</span>
@@ -18605,7 +18807,7 @@ _VISITOR_NAV: tuple[tuple[str, str, str], ...] = (
 _MEMBER_NAV: tuple[tuple[str, str, str], ...] = (
     ("markets", "/", "Arbitrage"),
     ("funding", "/funding", "Funding"),
-    ("rankings", "/rankings", "Rankings"),
+    ("rankings", "/tokens", "Tokens"),
     ("fair", "/fair", "Fair price"),
     ("charts", "/charts", "Charts"),
     # Intel is built but carries no data yet (empty hot symbols, funding watch
@@ -19971,6 +20173,10 @@ body.alert-modal-open { overflow: hidden; }
 .chart-builder-form label, .chart-leg-picker { display: grid; gap: 6px; min-width: 0; }
 .chart-builder-form label > span, .chart-leg-picker > span { color: var(--terminal-muted); font-size: 9px; font-weight: 900; text-transform: uppercase; }
 .chart-builder-form select, .chart-builder-form input { width: 100%; min-height: 40px; padding: 0 10px; border: 1px solid var(--terminal-line); border-radius: 6px; background: var(--terminal-row); color: var(--terminal-text); font: inherit; font-size: 12px; font-weight: 800; }
+.chart-token-alerts { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:10px 14px; border:1px solid var(--terminal-line); border-top:0; background:var(--terminal-panel); }
+.chart-token-alerts > div { display:grid; gap:2px; margin-right:auto; }
+.chart-token-alerts > div strong { color:var(--terminal-text); font-size:12px; }
+.chart-token-alerts > div span { color:var(--terminal-muted); font-size:10px; }
 .chart-leg-picker.long > span { color: var(--terminal-accent); }
 .chart-leg-picker.short > span { color: var(--terminal-danger); }
 .chart-quote-preview { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 5px; }
@@ -20055,6 +20261,7 @@ body.alert-modal-open { overflow: hidden; }
 .dual-chart-lines polyline.exit { stroke: var(--terminal-danger); }
 .chart-data-empty { min-height: 150px; display: grid; place-items: center; border: 1px dashed var(--terminal-line); color: var(--terminal-muted); font-size: 11px; }
 .selected-chart-foot { min-height: 46px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px; border-top: 1px solid var(--terminal-line); color: var(--terminal-muted); font-size: 10px; }
+.selected-chart-alerts { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
 .selected-chart-foot a { color: var(--terminal-accent); font-weight: 900; }
 .funding-history-dialog { width: min(860px,calc(100vw - 30px)); max-height: calc(100vh - 40px); padding: 0; border: 1px solid var(--terminal-line); border-radius: 7px; background: var(--terminal-panel); color: var(--terminal-text); box-shadow: 0 22px 70px rgba(0,0,0,.35); }
 .funding-history-dialog::backdrop { background: rgba(3,9,8,.72); }

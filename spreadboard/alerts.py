@@ -720,7 +720,7 @@ def token_metrics(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     Funding is the best net 24h carry available on the token, because that is
     the one a member would actually put on.
     """
-    prices: dict[str, list[float]] = {}
+    prices: dict[str, dict[tuple[str, str, str], float]] = {}
     funding: dict[str, float] = {}
     for row in rows:
         token = str(row.get("token") or "").upper()
@@ -735,7 +735,16 @@ def token_metrics(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
             for side in ("long", "short"):
                 value = _float(row.get(f"{side}_price"))
                 if value is not None and value > 0:
-                    prices.setdefault(token, []).append(value)
+                    identity = (
+                        str(row.get(f"{side}_venue") or "").casefold(),
+                        str(row.get(f"{side}_market_type") or "").casefold(),
+                        str(
+                            row.get(f"{side}_market_symbol")
+                            or row.get(f"{side}_symbol")
+                            or side
+                        ).upper(),
+                    )
+                    prices.setdefault(token, {})[identity] = value
         carry = _float(row.get("funding_daily_pct"))
         if carry is None:
             carry = _float(row.get("funding_projected_24h_pct"))
@@ -745,7 +754,8 @@ def token_metrics(rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
             funding[token] = max(funding.get(token, float("-inf")), carry)
 
     metrics: dict[str, dict[str, float]] = {}
-    for token, values in prices.items():
+    for token, market_prices in prices.items():
+        values = list(market_prices.values())
         ordered = sorted(values)
         middle = len(ordered) // 2
         median = (

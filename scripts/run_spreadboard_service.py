@@ -58,6 +58,12 @@ REFRESH_SNAPSHOT_PATH = RUNTIME_DIR / "api_discovery_refresh.json"
 GENERATED_IDENTITY_PATH = RUNTIME_DIR / "api_discovery_identity_registry.generated.json"
 MARKET_GENERATION_PATH = RUNTIME_DIR / "market_generation.json"
 
+# Discovery, exact funding evidence, and materialized navigation each expand
+# tens of thousands of markets into large Python object graphs.  The collector
+# has enough memory for any one of them, but not for two at once.  Keep current
+# quote workers independent while serializing only these heavy publications.
+_COLLECTOR_HEAVY_LOCK = threading.Lock()
+
 
 class RefreshLoop:
     def __init__(self, interval_seconds: float) -> None:
@@ -105,7 +111,8 @@ class RefreshLoop:
         while not self.stop_event.is_set():
             self._ensure_websocket_worker()
             started = time.monotonic()
-            self.refresh_once()
+            with _COLLECTOR_HEAVY_LOCK:
+                self.refresh_once()
             elapsed = time.monotonic() - started
             self.stop_event.wait(max(15.0, self.interval_seconds - elapsed))
 
@@ -351,6 +358,12 @@ class RefreshLoop:
 
     def _start_board_warm(self) -> None:
         """Warm request caches without delaying the next market-price pass."""
+        # In production the collector publishes atomic materialized views and
+        # the web process installs them.  Running the legacy in-process warm in
+        # the collector retained the full 200MB funding catalogue in its parent
+        # and overlapped the next child generation until the 4GB cgroup OOMed.
+        if _service_role() == "collector":
+            return
         if self.warm_thread is not None and self.warm_thread.is_alive():
             return
         self.warm_thread = threading.Thread(
@@ -818,7 +831,10 @@ class SharedArtifactWatcher(threading.Thread):
         funding_catalog_signature = _artifact_signature(
             funding_catalog.DEFAULT_CACHE_PATH
         )
-        if funding_catalog_signature != self.funding_catalog_signature:
+        if (
+            funding_catalog_signature != self.funding_catalog_signature
+            and _service_role() != "web"
+        ):
             self.funding_catalog_signature = funding_catalog_signature
             installed = funding_catalog.reload_persisted_cache()
             _log(
@@ -1180,8 +1196,11 @@ def main() -> int:
     # columns before any warm thread or HTTP request can race the first writer.
     market_history.initialize()
     _seed_public_caches()
-    funding_cache = funding_catalog.restore_persisted_cache()
-    _log(f"complete funding catalogue restore {funding_cache}")
+    if role == "combined":
+        funding_cache = funding_catalog.restore_persisted_cache()
+        _log(f"complete funding catalogue restore {funding_cache}")
+    else:
+        _log("complete funding catalogue restore skipped in web role")
     restored_telegram = telegram_queries.restore_persisted_payloads()
     if restored_telegram["spread"] or restored_telegram["funding"]:
         _log(
@@ -1833,7 +1852,13 @@ class MarketEvidenceLoop(threading.Thread):
             _log("market evidence deferred; token ranking still active")
             return
         try:
-            self._run_isolated_sweep()
+            if not _COLLECTOR_HEAVY_LOCK.acquire(timeout=300.0):
+                _log("market evidence deferred; structural publication active")
+                return
+            try:
+                self._run_isolated_sweep()
+            finally:
+                _COLLECTOR_HEAVY_LOCK.release()
         finally:
             _BACKGROUND_ANALYTICS_LOCK.release()
 
@@ -1866,6 +1891,10 @@ class MarketEvidenceLoop(threading.Thread):
             return
         summary = (result.stdout or result.stderr).strip().splitlines()
         _log(summary[-1] if summary else "market evidence completed")
+        # Settlement totals shown in historical Funding views must be rebuilt
+        # after the evidence artifact changes.  Otherwise a persisted ordering
+        # can be rendered with newer totals and look visibly out of order.
+        _refresh_materialized_views(force=True)
 
 
 def _invalidate_market_price_caches() -> None:

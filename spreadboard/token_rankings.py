@@ -349,12 +349,14 @@ def ranked(
 
     page_limit = max(1, min(500, int(limit)))
     sort_rows(rows)
-    # For spread, allow a broad buffer to move after the latest matched books;
-    # for all other metrics the order is independent of spread, so only the
-    # rows actually rendered need their spread cell refreshed.
+    # Spread is a live ordering metric. A fixed 500-row candidate cut can leave
+    # nearly all of that slice stale and then omit valid current leaders that
+    # happened to sit at artifact row 501+. Resolve every compact best-route
+    # key in one shared-book query before taking the page. Other metrics are
+    # independent of current spread, so only their visible rows need overlay.
     overlay_limit = min(
         len(rows),
-        max(page_limit, 500 if normalized_metric == "spread" else page_limit),
+        len(rows) if normalized_metric == "spread" else page_limit,
     )
     candidates = rows[:overlay_limit]
     candidate_routes = [

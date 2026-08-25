@@ -51,7 +51,7 @@ CACHE_SECONDS = max(0.25, float(os.environ.get("SPREADBOARD_CATALOG_PAIR_CACHE_S
 LEVERAGED_TOKEN_PATTERN = re.compile(r"^[A-Z0-9]+[2-5][LS]$")
 
 _CACHE_LOCK = threading.Lock()
-_CACHE: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
+_CACHE: dict[tuple[str, int, bool], tuple[float, dict[str, Any]]] = {}
 
 
 def clear_cache() -> None:
@@ -86,6 +86,7 @@ def for_token(
     max_age_seconds: float = MAX_BOOK_AGE_SECONDS,
     limit: int | None = None,
     use_cache: bool = True,
+    include_short_spot: bool = False,
 ) -> dict[str, Any]:
     """Return every currently quoteable CEX pair for one catalogue token.
 
@@ -100,7 +101,7 @@ def for_token(
     if not symbol:
         return _empty(symbol, "invalid_token")
     now = time.monotonic()
-    cache_key = (symbol, int(max_age_seconds))
+    cache_key = (symbol, int(max_age_seconds), bool(include_short_spot))
     if use_cache:
         with _CACHE_LOCK:
             cached = _CACHE.get(cache_key)
@@ -171,7 +172,9 @@ def for_token(
     }
     for left_index, left in enumerate(legs):
         for right in legs[left_index + 1 :]:
-            for long_leg, short_leg in _directions(left, right):
+            for long_leg, short_leg in _directions(
+                left, right, include_short_spot=include_short_spot
+            ):
                 reason = _reject_reason(symbol, long_leg, short_leg, rails)
                 if reason:
                     rejected[reason] += 1
