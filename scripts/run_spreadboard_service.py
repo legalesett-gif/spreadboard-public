@@ -271,6 +271,11 @@ class RefreshLoop:
             f"funding={enriched.get('funding')} status={published.get('refresh_status')}"
         )
         _publish_shared_market_generation("discovery")
+        # Heavy structural products are published by the collector. The web
+        # watcher atomically installs them from the shared runtime volume and
+        # never competes with subscriber requests for CPU.
+        _refresh_live_route_index(install=False)
+        _refresh_complete_funding_catalog(force=True)
         _refresh_enrichment_subprocess()
         if not lightweight_mode and not _env_bool("SPREADBOARD_DISABLE_LOCAL_CACHE_WARM"):
             self._refresh_verified_identity_registry(snapshot_path=SNAPSHOT_PATH)
@@ -556,6 +561,12 @@ def _warm_telegram_payload_at_startup(board_path: Path) -> None:
 
         started = time.monotonic()
         restored = telegram_queries.restore_persisted_payloads()
+        if restored["spread"] and restored["funding"]:
+            _log(
+                "telegram startup payload already restored "
+                f"in {time.monotonic() - started:.1f}s"
+            )
+            return
         payload = server._MATERIALIZED_VIEW_STORE.payload_for(
             {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
         )
@@ -759,6 +770,9 @@ class SharedArtifactWatcher(threading.Thread):
         self.live_route_signature = _artifact_signature(
             _live_route_pointer_path()
         )
+        self.funding_catalog_signature = _artifact_signature(
+            funding_catalog.DEFAULT_CACHE_PATH
+        )
         self.warm_lock = threading.Lock()
         self.warm_pending = False
         self.funding_warm_pending = False
@@ -800,6 +814,16 @@ class SharedArtifactWatcher(threading.Thread):
             _log(
                 "materialized navigation generation installed "
                 f"routes={route_count} live_query={warm_query_projection.LIVE_UNIVERSE.status()}"
+            )
+        funding_catalog_signature = _artifact_signature(
+            funding_catalog.DEFAULT_CACHE_PATH
+        )
+        if funding_catalog_signature != self.funding_catalog_signature:
+            self.funding_catalog_signature = funding_catalog_signature
+            installed = funding_catalog.reload_persisted_cache()
+            _log(
+                "complete funding catalogue installed "
+                f"tokens={installed.get('token_count')}"
             )
         generation = _artifact_signature(MARKET_GENERATION_PATH)
         if generation != self.generation_signature:
@@ -1896,8 +1920,11 @@ FUNDING_CATALOG_FAILURE_RETRY_SECONDS = max(
 _FUNDING_CATALOG_RETRY_AFTER = 0.0
 
 
-def _refresh_live_route_index() -> bool:
+def _refresh_live_route_index(*, install: bool = True) -> bool:
     """Publish and install the latest complete query index in an isolated child."""
+
+    if _service_role() == "web":
+        return False
 
     if not _LIVE_ROUTE_INDEX_BUILD_LOCK.acquire(blocking=False):
         return False
@@ -1929,13 +1956,15 @@ def _refresh_live_route_index() -> bool:
         except (ValueError, IndexError):
             _log("live route index produced no summary")
             return False
-        from spreadboard import server as server_module
+        routes = int(summary.get("routes") or 0)
+        if install:
+            from spreadboard import server as server_module
 
-        routes = server_module.restore_materialized_route_index(_board_path())
-        if routes:
-            warm_query_projection.LIVE_UNIVERSE.refresh()
+            routes = server_module.restore_materialized_route_index(_board_path())
+            if routes:
+                warm_query_projection.LIVE_UNIVERSE.refresh()
         _log(
-            "live route index ready "
+            f"live route index {'ready' if install else 'published'} "
             f"routes={routes} child={summary.get('seconds')}s "
             f"elapsed={time.monotonic() - started:.1f}s"
         )
@@ -1948,6 +1977,9 @@ def _refresh_complete_funding_catalog(*, force: bool = False) -> bool:
     """Publish the all-pair funding structure without rebuilding every page."""
 
     global _FUNDING_CATALOG_RETRY_AFTER
+
+    if _service_role() == "web":
+        return False
 
     now = time.monotonic()
     if now < _FUNDING_CATALOG_RETRY_AFTER:
@@ -2327,6 +2359,7 @@ def _refresh_funding_windows() -> None:
     )
 
     try:
+        _refresh_complete_funding_catalog(force=False)
         route_keys: list[str] = []
         leaders: list[dict[str, Any]] = []
         warm_routes: list[dict[str, Any]] = []
