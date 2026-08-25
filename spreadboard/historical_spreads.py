@@ -92,6 +92,7 @@ def load_or_fetch(
     hours: float,
     max_points: int = 1200,
     blocking: bool = True,
+    start_fetch: bool = True,
 ) -> dict[str, Any]:
     """Return full-window indicative history without presenting candles as books.
 
@@ -121,6 +122,19 @@ def load_or_fetch(
         result = _build_route_payload(row, cache_hours, cached_legs)
         _atomic_json(cache_path, result)
         return _with_window(result, hours=hours, max_points=max_points)
+    if not start_fetch:
+        if cached:
+            result = _with_window(cached, hours=hours, max_points=max_points)
+            result["stale"] = True
+            result["refresh_requested"] = True
+            return result
+        return {
+            "status": "warming",
+            "started": False,
+            "refresh_requested": True,
+            "rows": [],
+            "timeframe": timeframe_for(hours),
+        }
     if not blocking:
         started = _claim_warming(cache_path, row, cache_hours)
         if started:

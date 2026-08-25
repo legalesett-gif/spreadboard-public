@@ -5477,11 +5477,23 @@ def api_history(
     # Fetching two legs of candles takes several seconds. Doing it inline held
     # the chart request open for that long; doing it in the background lets the
     # page render now and the client poll until the window fills.
-    proxy = (
-        historical_spreads.load_or_fetch(current, hours=hours, max_points=points, blocking=False)
-        if current is not None
-        else {"status": "not_applicable", "rows": []}
-    )
+    if current is not None:
+        chart_warm_demand.enqueue(
+            [_chart_link_route_key(current)],
+            hours=hours,
+        )
+        proxy = historical_spreads.load_or_fetch(
+            current,
+            hours=hours,
+            max_points=points,
+            blocking=False,
+            # Production web workers only read the shared cache. Provider
+            # candle downloads belong to the isolated collector process.
+            start_fetch=os.environ.get("SPREADBOARD_SERVICE_ROLE", "combined")
+            != "web",
+        )
+    else:
+        proxy = {"status": "not_applicable", "rows": []}
     proxy_rows = proxy.get("rows") or []
     if proxy_rows:
         public_rows = _merge_history_rows(

@@ -34,6 +34,7 @@ from spreadboard import (
     crypto_watcher,
     funding_catalog,
     funding_history_demand,
+    historical_spreads,
     market_history,
     materialized_views,
     portfolio,
@@ -974,6 +975,118 @@ def _restore_telegram_from_materialized_generation() -> bool:
     return bool(status.get("ready") and status.get("funding_ready"))
 
 
+class ChartHistoryWarmLoop(threading.Thread):
+    """Fill member-visible chart proxies in the isolated collector process."""
+
+    def __init__(
+        self,
+        stop_event: threading.Event,
+        *,
+        board_path: Path,
+        interval_seconds: float | None = None,
+        batch: int | None = None,
+    ) -> None:
+        super().__init__(name="chart-history-warm", daemon=True)
+        self.stop_event = stop_event
+        self.board_path = board_path
+        self.interval_seconds = max(
+            5.0,
+            float(
+                interval_seconds
+                if interval_seconds is not None
+                else os.environ.get("SPREADBOARD_CHART_HISTORY_WARM_SECONDS", "10")
+            ),
+        )
+        self.batch = max(
+            1,
+            int(
+                batch
+                if batch is not None
+                else os.environ.get("SPREADBOARD_CHART_HISTORY_WARM_BATCH", "4")
+            ),
+        )
+        self.next_at: dict[tuple[str, float], float] = {}
+        self.last_run: dict[str, Any] = {
+            "ready": False,
+            "requested": 0,
+            "priority": 0,
+            "started": 0,
+            "error": None,
+        }
+
+    def run(self) -> None:
+        if self.stop_event.wait(5.0):
+            return
+        while not self.stop_event.is_set():
+            started = time.monotonic()
+            try:
+                self.last_run = self.check_once()
+            except Exception as exc:  # noqa: BLE001 - charts retain live books.
+                self.last_run = {
+                    **self.last_run,
+                    "ready": False,
+                    "error": f"{type(exc).__name__}: {str(exc)[:160]}",
+                }
+            self.stop_event.wait(
+                max(0.0, self.interval_seconds - (time.monotonic() - started))
+            )
+
+    def check_once(self) -> dict[str, Any]:
+        from spreadboard import server as server_module
+
+        requested = chart_warm_demand.requests()
+        priority = [
+            (key, 24.0)
+            for key in _priority_funding_chart_route_keys()
+        ]
+        candidates: list[tuple[str, float]] = []
+        seen: set[tuple[str, float]] = set()
+        for key, hours in (*requested, *priority):
+            horizon = historical_spreads.cache_horizon_for(hours)
+            identity = (key, horizon)
+            if not key or identity in seen:
+                continue
+            seen.add(identity)
+            candidates.append((key, hours))
+
+        now = time.monotonic()
+        attempted = 0
+        started_count = 0
+        for key, hours in candidates:
+            identity = (key, historical_spreads.cache_horizon_for(hours))
+            if now < self.next_at.get(identity, 0.0):
+                continue
+            row = server_module._find_canonical_route(key, self.board_path)
+            if row is None:
+                self.next_at[identity] = now + 300.0
+                continue
+            result = historical_spreads.load_or_fetch(
+                row,
+                hours=hours,
+                max_points=1,
+                blocking=False,
+            )
+            attempted += 1
+            if result.get("status") == "warming" and not result.get("started"):
+                self.next_at[identity] = now + self.interval_seconds
+                break
+            if result.get("status") == "warming":
+                started_count += 1
+                self.next_at[identity] = now + 120.0
+            else:
+                self.next_at[identity] = now + historical_spreads.CACHE_SECONDS
+            if attempted >= self.batch:
+                break
+        return {
+            "ready": True,
+            "requested": len(requested),
+            "priority": len(priority),
+            "attempted": attempted,
+            "started": started_count,
+            "error": None,
+        }
+
+
 def _run_collector_service() -> int:
     """Own exchange I/O and artifact publication without accepting HTTP."""
 
@@ -990,6 +1103,10 @@ def _run_collector_service() -> int:
         refresh_loop.stop_event,
         refresh_loop=refresh_loop,
     )
+    chart_history_loop = ChartHistoryWarmLoop(
+        refresh_loop.stop_event,
+        board_path=_board_path(),
+    )
 
     def stop_collector(_signum: int, _frame: Any) -> None:
         refresh_loop.stop_event.set()
@@ -1000,6 +1117,7 @@ def _run_collector_service() -> int:
     bulk_quote_loop.start()
     bulk_funding_loop.start()
     market_evidence_loop.start()
+    chart_history_loop.start()
     MemoryWatchdog(refresh_loop.stop_event).start()
     _log("collector role started")
     try:
@@ -1010,6 +1128,7 @@ def _run_collector_service() -> int:
         bulk_quote_loop.join(timeout=5.0)
         bulk_funding_loop.join(timeout=5.0)
         market_evidence_loop.join(timeout=5.0)
+        chart_history_loop.join(timeout=5.0)
     return 0
 
 
@@ -1131,7 +1250,10 @@ def main() -> int:
             route_key, board_path
         ),
         quote_scheduler=server_module._schedule_chart_route_refresh,
-        proxy_route_keys_provider=_priority_funding_chart_route_keys,
+        # Historical candles are fetched by the isolated collector via the
+        # shared demand lane. The web process only schedules current books.
+        proxy_route_keys_provider=None,
+        warm_history_proxies=False,
         interval_seconds=float(
             os.environ.get("SPREADBOARD_TRACKED_ROUTE_WARM_SECONDS", "10")
         ),
@@ -1315,10 +1437,11 @@ def _priority_funding_chart_route_keys() -> list[str]:
     global _PRIORITY_CHART_KEYS_AT, _PRIORITY_CHART_KEYS
 
     now = time.monotonic()
-    demanded = chart_warm_demand.route_keys()
     with _PRIORITY_CHART_KEYS_LOCK:
         if _PRIORITY_CHART_KEYS and now - _PRIORITY_CHART_KEYS_AT < 300.0:
-            return list(dict.fromkeys([*demanded, *_PRIORITY_CHART_KEYS]))
+            return list(_PRIORITY_CHART_KEYS)
+        from spreadboard import server as server_module
+
         keys: list[str] = []
         store = materialized_views.default_store()
         for query in _materialized_view_queries():
@@ -1334,14 +1457,14 @@ def _priority_funding_chart_route_keys() -> list[str]:
                 # every exact pair revealed by that token.  Warming only the
                 # best route left the remaining pair links with one point.
                 for route in (best, *routes):
-                    key = str(route.get("route_key") or "")
+                    key = server_module._chart_link_route_key(route)
                     if key:
                         keys.append(key)
         maximum = max(
             256,
             int(os.environ.get("SPREADBOARD_PRIORITY_CHART_ROUTE_LIMIT", "2400")),
         )
-        _PRIORITY_CHART_KEYS = list(dict.fromkeys([*demanded, *keys]))[:maximum]
+        _PRIORITY_CHART_KEYS = list(dict.fromkeys(keys))[:maximum]
         _PRIORITY_CHART_KEYS_AT = now
         return list(_PRIORITY_CHART_KEYS)
 

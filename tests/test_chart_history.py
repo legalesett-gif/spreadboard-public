@@ -136,6 +136,28 @@ def test_warm_legs_make_a_new_pair_available_without_provider_calls(
     assert len(result["rows"]) >= 50
 
 
+def test_cache_only_reader_never_claims_provider_backfill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claimed: list[bool] = []
+    monkeypatch.setattr(
+        historical_spreads,
+        "_claim_warming",
+        lambda *_args, **_kwargs: claimed.append(True) or True,
+    )
+
+    result = historical_spreads.load_or_fetch(
+        CEX_ROUTE,
+        hours=24,
+        blocking=False,
+        start_fetch=False,
+    )
+
+    assert result["status"] == "warming"
+    assert result["refresh_requested"] is True
+    assert claimed == []
+
+
 def test_chart_cache_uses_three_reusable_horizons() -> None:
     assert historical_spreads.cache_horizon_for(1 / 60) == 24
     assert historical_spreads.cache_horizon_for(24) == 24

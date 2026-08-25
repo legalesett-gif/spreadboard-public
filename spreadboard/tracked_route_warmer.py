@@ -38,6 +38,7 @@ class Worker(threading.Thread):
         persist_batch: int = 64,
         exact_batch: int = 6,
         proxy_batch: int = 4,
+        warm_history_proxies: bool = True,
     ) -> None:
         super().__init__(name="subscriber-route-warm", daemon=True)
         self.stop_event = stop_event
@@ -49,6 +50,7 @@ class Worker(threading.Thread):
         self.persist_batch = max(1, int(persist_batch))
         self.exact_batch = max(1, int(exact_batch))
         self.proxy_batch = max(1, int(proxy_batch))
+        self.warm_history_proxies = bool(warm_history_proxies)
         self._persist_cursor = 0
         self._exact_cursor = 0
         self._proxy_cursor = 0
@@ -133,7 +135,11 @@ class Worker(threading.Thread):
         if keys:
             self._exact_cursor = (self._exact_cursor + max(1, inspected)) % len(keys)
 
-        proxy_started = self._warm_proxies(proxy_keys, by_key)
+        proxy_started = (
+            self._warm_proxies(proxy_keys, by_key)
+            if self.warm_history_proxies
+            else 0
+        )
         return {
             "ready": bool(universe.get("ready")),
             "tracked_routes": len(keys),
