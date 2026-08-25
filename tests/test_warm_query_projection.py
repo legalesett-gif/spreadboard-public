@@ -203,6 +203,34 @@ def test_server_uses_live_projection_before_discovery_loader(
     assert result["groups"][0]["token"] == "GUA"
 
 
+def test_research_projection_ranks_by_current_top_book_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    low = _route("SPCX", route_key="low", spread=0.1)
+    low.update({"depth_weighted_spread_pct": None, "depth_unverified": True})
+    high = _route("SPCX", route_key="high", spread=7.8)
+    high.update(
+        {
+            "depth_weighted_spread_pct": None,
+            "depth_unverified": True,
+            "mirage_guarded": True,
+        }
+    )
+    universe = _ready_universe(monkeypatch, {"low": low, "high": high})
+    monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", universe)
+
+    projected = warm_query_projection.project(
+        {"q": ["SPCX"], "evidence": ["research"], "include_unverified": ["1"]},
+        template=_template(),
+        limit=25,
+        offset=0,
+    )
+
+    assert projected is not None
+    assert projected["groups"][0]["best_route"]["route_key"] == "high"
+    assert projected["groups"][0]["best_edge_pct"] == 7.8
+
+
 def test_projection_failure_releases_single_flight_and_serves_durable_view(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

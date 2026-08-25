@@ -2816,6 +2816,7 @@ def _exact_catalog_market_projection(
     page_payload = dict(selected)
     page_payload["routes"] = page_routes
     page_payload["returned_route_count"] = len(page_routes)
+    page_payload["evidence_view"] = "all" if funding_only else evidence
     group = catalog_pairs.group(page_payload)
     groups = [group] if group else []
     return {
@@ -12223,6 +12224,7 @@ def render_token_page(
     visible_pair_data["routes"] = visible_routes
     visible_pair_data["displayed_route_count"] = len(visible_routes)
     visible_pair_data["returned_route_count"] = len(visible_routes)
+    visible_pair_data["evidence_view"] = evidence
     group = catalog_pairs.group(visible_pair_data)
     ranking_rows = token_rankings.ranked(
         rankings_payload, metric="token", query=symbol, limit=20

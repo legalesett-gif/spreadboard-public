@@ -727,10 +727,12 @@ def group(payload: dict[str, Any]) -> dict[str, Any]:
     routes = list(payload.get("routes") or [])
     if not routes:
         return {}
+    research_view = str(payload.get("evidence_view") or "") == "research"
     current_spread_routes = [
         row
         for row in routes
-        if api_spreads.spread_quote_current(row) and not row.get("mirage_guarded")
+        if api_spreads.spread_quote_current(row)
+        and (research_view or not row.get("mirage_guarded"))
     ]
     spread_route = max(
         current_spread_routes or routes,

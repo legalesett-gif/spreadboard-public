@@ -240,7 +240,7 @@ def project(
     sort_by = str(filters["sort"])
     reverse = filters["direction"] == "desc"
     filtered.sort(key=lambda row: api_spreads._route_dict_sort_value(row, sort_by), reverse=reverse)
-    groups = _group_rows(filtered)
+    groups = _group_rows(filtered, evidence=str(filters.get("evidence") or "verified"))
     for group in groups:
         (group.get("routes") or []).sort(
             key=lambda row: api_spreads._route_dict_sort_value(row, sort_by),
@@ -592,7 +592,9 @@ def _current_rankable(row: dict[str, Any]) -> bool:
     )
 
 
-def _group_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _group_rows(
+    rows: list[dict[str, Any]], *, evidence: str = "verified"
+) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(str(row.get("token") or ""), []).append(row)
@@ -607,6 +609,7 @@ def _group_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             ),
             reverse=True,
         )
+        research_view = evidence == "research"
         tradeable = [row for row in token_rows if _current_rankable(row)]
         quotable = [
             row
@@ -618,7 +621,7 @@ def _group_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             )
         ]
         best = max(
-            tradeable or quotable or token_rows,
+            (quotable if research_view else tradeable) or quotable or token_rows,
             key=api_spreads._entrance_spread_dict,
         )
         funding_rows = [
@@ -653,7 +656,11 @@ def _group_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 ),
                 "route_kinds": sorted({str(row.get("route_kind") or "") for row in token_rows}),
                 "best_route": best,
-                "best_edge_pct": api_spreads._entrance_spread_dict(best) if tradeable else None,
+                "best_edge_pct": (
+                    api_spreads._entrance_spread_dict(best)
+                    if tradeable or (research_view and quotable)
+                    else None
+                ),
                 "best_funding_route": best_funding,
                 "best_funding_apr_pct": daily * 365.0 if daily is not None else None,
                 "best_funding_24h_pct": daily,

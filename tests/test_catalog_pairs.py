@@ -408,6 +408,34 @@ def test_spread_evidence_separates_matched_and_top_book_without_touching_funding
     assert research["funding_daily_pct"] == 0.5
 
 
+def test_research_group_heads_with_its_largest_explicit_signal() -> None:
+    now_us = int(time.time() * 1_000_000)
+    low = {
+        "token": "SPCX",
+        "route_key": "low",
+        "route_kind": "FUTURES",
+        "long_venue": "Gate",
+        "short_venue": "Bitget",
+        "executable_spread_pct": 0.1,
+        "depth_unverified": True,
+        "quote_ts_us": now_us,
+    }
+    high = {
+        **low,
+        "route_key": "high",
+        "short_venue": "Gate",
+        "executable_spread_pct": 7.8,
+        "mirage_guarded": True,
+    }
+
+    group = catalog_pairs.group(
+        {"token": "SPCX", "routes": [low, high], "evidence_view": "research"}
+    )
+
+    assert group["best_route"]["route_key"] == "high"
+    assert group["best_edge_pct"] == 7.8
+
+
 def test_spread_and_funding_catalogue_filters_are_economically_independent(monkeypatch) -> None:
     monkeypatch.setattr(
         catalog_pairs.venue_funding_history,
