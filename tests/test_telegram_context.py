@@ -21,9 +21,9 @@ and nothing gets tagged.
 from __future__ import annotations
 
 import pytest
+from spreadboard.telegram_queries import Query, parse_query
 
 from spreadboard import telegram_queries
-from spreadboard.telegram_queries import Query, parse_query
 
 CHAT = -1004373383074
 

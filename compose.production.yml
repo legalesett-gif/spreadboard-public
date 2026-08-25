@@ -113,11 +113,11 @@ services:
       # A provider failure may keep the last good rate through one rotation,
       # but never indefinitely. The reader independently enforces this age.
       SPREADBOARD_FUNDING_MAX_AGE_SECONDS: "600"
-      SPREADBOARD_VENUE_HISTORY_PRIORITY_SECONDS: "600"
+      SPREADBOARD_VENUE_HISTORY_PRIORITY_SECONDS: "300"
       # While the exact settlement archive is incomplete, give it a bounded
-      # ten-minute start-to-start catch-up pass. Completed catalog legs retain
+      # five-minute start-to-start catch-up pass. Completed catalog legs retain
       # the three-hour maintenance gate inside the worker.
-      SPREADBOARD_MARKET_EVIDENCE_SECONDS: "600"
+      SPREADBOARD_MARKET_EVIDENCE_SECONDS: "300"
       # Complete token pages read the shared catalogue, not the capped scanner.
       # The bound matches a measured whole-catalogue quote rotation.
       SPREADBOARD_CATALOG_BOOK_AGE_SECONDS: "180"

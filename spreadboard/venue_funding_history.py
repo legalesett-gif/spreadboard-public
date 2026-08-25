@@ -55,6 +55,64 @@ HISTORY_PAGE_SIZE = 100
 PRIORITY_HISTORY_PAGES = 10
 
 
+def _window_expiry_ms(status: dict[str, Any] | None, label: str) -> int | None:
+    """Return the first instant when a cached rolling total stops being exact."""
+
+    detail = ((status or {}).get("window_details") or {}).get(label) or {}
+    if not detail.get("complete"):
+        return None
+    try:
+        latest_event_at = int(detail["latest_event_at"])
+        interval_ms = int(float(detail["inferred_interval_hours"]) * 3_600_000)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    if latest_event_at <= 0 or interval_ms <= 0:
+        return None
+    return latest_event_at + interval_ms
+
+
+def _current_leg_windows(
+    values: dict[str, float | None] | None,
+    status: dict[str, Any] | None,
+    *,
+    now_ms: int,
+    live_leg: dict[str, Any] | None = None,
+) -> tuple[dict[str, float | None], int | None]:
+    """Fail closed when an exact aggregate crosses its next settlement."""
+
+    current: dict[str, float | None] = {}
+    next_expiry: int | None = None
+    source = values or {}
+    for label in ("1d", "7d", "30d"):
+        value = source.get(label)
+        expiry = _window_expiry_ms(status, label)
+        detail = ((status or {}).get("window_details") or {}).get(label) or {}
+        if live_leg and expiry is not None:
+            try:
+                live_next_ms = int(live_leg["next_funding_ts_us"]) // 1000
+                live_interval_ms = int(float(live_leg["interval_hours"]) * 3_600_000)
+                exact_latest_ms = int(detail["latest_event_at"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                pass
+            else:
+                # A live venue schedule can tighten before the historical
+                # series has enough rows to infer it. If a newer scheduled
+                # settlement is already missing, the aggregate is stale now;
+                # otherwise it expires at the earlier of both schedules.
+                if live_interval_ms > 0 and live_next_ms > exact_latest_ms:
+                    last_scheduled_ms = live_next_ms - live_interval_ms
+                    if exact_latest_ms < last_scheduled_ms:
+                        expiry = min(expiry, last_scheduled_ms)
+                    else:
+                        expiry = min(expiry, live_next_ms)
+        if value is None or expiry is None or now_ms >= expiry:
+            current[label] = None
+            continue
+        current[label] = value
+        next_expiry = expiry if next_expiry is None else min(next_expiry, expiry)
+    return current, next_expiry
+
+
 def realised_window_details(
     entries: list[dict[str, Any]], *, now_ms: int | None = None
 ) -> dict[str, Any]:
@@ -530,6 +588,56 @@ def _status_was_attempted(status: dict[str, Any] | None) -> bool:
     )
 
 
+def _priority_refresh_due(
+    status: dict[str, Any] | None,
+    values: dict[str, float | None] | None,
+    *,
+    now_ms: int,
+) -> bool:
+    """Whether a subscriber-visible leg needs another provider check now."""
+
+    if not _status_was_attempted(status):
+        return True
+    outcome = str(
+        (status or {}).get("last_attempt_status")
+        or (status or {}).get("status")
+        or ""
+    )
+    if outcome in RETRYABLE_STATUSES:
+        return True
+    if outcome != "ok":
+        return False
+    expiries = [
+        expiry
+        for label in ("1d", "7d", "30d")
+        if (values or {}).get(label) is not None
+        for expiry in [_window_expiry_ms(status, label)]
+        if expiry is not None
+    ]
+    if not expiries:
+        # A successful but incomplete archive receives one deep priority pass;
+        # after that it advances only at the next known settlement.
+        if not (status or {}).get("deep_history_checked_at"):
+            return True
+        latest = (status or {}).get("latest_event_at")
+        details = (status or {}).get("window_details") or {}
+        intervals = [
+            float(detail.get("inferred_interval_hours") or 0.0)
+            for detail in details.values()
+            if isinstance(detail, dict)
+        ]
+        interval_hours = max(intervals, default=0.0)
+        try:
+            return bool(
+                latest
+                and interval_hours > 0
+                and now_ms >= int(latest) + int(interval_hours * 3_600_000)
+            )
+        except (TypeError, ValueError, OverflowError):
+            return False
+    return now_ms >= min(expiries)
+
+
 def build(
     legs: list[tuple[str, str]],
     *,
@@ -571,6 +679,16 @@ def build(
         1, len(priorities)
     )
     rotated_priorities = priorities[priority_start:] + priorities[:priority_start]
+    now_ms = int(time.time() * 1000)
+    due_priorities = [
+        item
+        for item in rotated_priorities
+        if _priority_refresh_due(
+            leg_status.get(f"{item[0]}|{item[1]}"),
+            windows.get(f"{item[0]}|{item[1]}"),
+            now_ms=now_ms,
+        )
+    ]
     retryable_or_pending = [
         item
         for item in ordered
@@ -584,7 +702,7 @@ def build(
     ]
     leading = list(dict.fromkeys([*priorities, *retryable_or_pending]))
     rotated = (
-        rotated_priorities
+        due_priorities
         if priority_only
         else leading
         + [item for item in ordered[start:] + ordered[:start] if item not in leading]
@@ -653,6 +771,20 @@ def build(
             prior_status = leg_status.get(key) or {}
             was_classified = _status_is_classified(prior_status)
             leg_status[key] = {
+                **{
+                    field: prior_status.get(field)
+                    for field in (
+                        "history_pages",
+                        "deep_history_checked_at",
+                        "oldest_event_at",
+                        "latest_event_at",
+                        "window_details",
+                        "discarded_invalid_count",
+                        "discarded_future_count",
+                        "discarded_duplicate_count",
+                    )
+                    if prior_status.get(field) is not None
+                },
                 # A v4 classification remains valid through a temporary outage.
                 # Legacy cached windows have no proven source outcome, so they
                 # remain explicitly unclassified until a provider answers.
@@ -673,16 +805,17 @@ def build(
                 ),
             }
         else:
-            cached = windows.get(key) or {}
+            # A definitive source response that no longer resolves a market is
+            # not permission to keep presenting an old opportunity.
+            windows.pop(key, None)
+            leg_updated_at.pop(key, None)
             leg_status[key] = {
-                "status": "ok_cached" if cached else outcome_status,
-                "updated_at": leg_updated_at.get(key),
+                "status": outcome_status,
+                "updated_at": None,
                 "last_attempt_at": refreshed_at,
                 "last_attempt_status": outcome_status,
                 "settlement_count": 0,
-                "available_windows": sum(
-                    cached.get(label) is not None for label in ("1d", "7d", "30d")
-                ),
+                "available_windows": 0,
             }
         if not is_priority:
             background_attempted += 1
@@ -693,12 +826,18 @@ def build(
     catalog_classified = sum(
         _status_is_classified(leg_status.get(key)) for key in catalog_keys
     )
+    current_windows = {
+        key: _current_leg_windows(
+            windows.get(key), leg_status.get(key), now_ms=int(time.time() * 1000)
+        )[0]
+        for key in catalog_keys
+    }
     window_leg_counts = {
-        label: sum((windows.get(key) or {}).get(label) is not None for key in catalog_keys)
+        label: sum((current_windows.get(key) or {}).get(label) is not None for key in catalog_keys)
         for label in ("1d", "7d", "30d")
     }
     fully_complete = sum(
-        all((windows.get(key) or {}).get(label) is not None for label in ("1d", "7d", "30d"))
+        all((current_windows.get(key) or {}).get(label) is not None for label in ("1d", "7d", "30d"))
         for key in catalog_keys
     )
     deep_history_pending = sum(
@@ -785,12 +924,28 @@ def coverage_summary(
         for key in keys
     )
     values = payload.get("legs") or {} if payload.get("schema") == SCHEMA else {}
-    window_leg_counts = {
+    now_ms = int(time.time() * 1000)
+    live_legs: dict[str, dict[str, Any]] = {}
+    if Path(cache_path).resolve() == Path(DEFAULT_CACHE_PATH).resolve():
+        from spreadboard import bulk_quotes
+
+        live_legs = bulk_quotes.load_funding()
+    current_values = {
+        key: _current_leg_windows(
+            values.get(key), statuses.get(key), now_ms=now_ms, live_leg=live_legs.get(key)
+        )[0]
+        for key in keys
+    }
+    stored_window_leg_counts = {
         label: sum((values.get(key) or {}).get(label) is not None for key in keys)
         for label in ("1d", "7d", "30d")
     }
+    window_leg_counts = {
+        label: sum((current_values.get(key) or {}).get(label) is not None for key in keys)
+        for label in ("1d", "7d", "30d")
+    }
     fully_complete = sum(
-        all((values.get(key) or {}).get(label) is not None for label in ("1d", "7d", "30d"))
+        all((current_values.get(key) or {}).get(label) is not None for label in ("1d", "7d", "30d"))
         for key in keys
     )
     deep_history_pending = sum(
@@ -813,6 +968,11 @@ def coverage_summary(
         "coverage_pct": round((classified / total * 100.0) if total else 100.0, 2),
         "source_check_pct": round((attempted / total * 100.0) if total else 100.0, 2),
         "window_leg_counts": window_leg_counts,
+        "stored_window_leg_counts": stored_window_leg_counts,
+        "overdue_window_leg_counts": {
+            label: max(0, stored_window_leg_counts[label] - window_leg_counts[label])
+            for label in ("1d", "7d", "30d")
+        },
         "window_coverage_pct": {
             label: round((count / total * 100.0) if total else 100.0, 2)
             for label, count in window_leg_counts.items()
@@ -824,7 +984,15 @@ def coverage_summary(
     }
 
 
-_CACHE: dict[str, Any] = {"stamp": None, "legs": {}, "leg_status": {}, "leg_updated_at": {}}
+_CACHE: dict[str, Any] = {
+    "stamp": None,
+    "legs": {},
+    "current_legs": {},
+    "current_until_ms": None,
+    "funding_stamp": None,
+    "leg_status": {},
+    "leg_updated_at": {},
+}
 
 
 def load(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, dict[str, float | None]]:
@@ -841,6 +1009,7 @@ def load(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, dict[str, 
             return {}
         if payload.get("schema") != SCHEMA:
             _CACHE["legs"] = {}
+            _CACHE["current_legs"] = {}
             _CACHE["leg_status"] = {}
             _CACHE["leg_updated_at"] = {}
         else:
@@ -848,12 +1017,44 @@ def load(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, dict[str, 
             _CACHE["leg_status"] = payload.get("leg_status") or {}
             _CACHE["leg_updated_at"] = payload.get("leg_updated_at") or {}
         _CACHE["stamp"] = stamp
-    return _CACHE["legs"]
+        _CACHE["current_until_ms"] = None
+    now_ms = int(time.time() * 1000)
+    live_legs: dict[str, dict[str, Any]] = {}
+    if path.resolve() == Path(DEFAULT_CACHE_PATH).resolve():
+        from spreadboard import bulk_quotes
+
+        try:
+            funding_stamp = bulk_quotes.FUNDING_CACHE_PATH.stat().st_mtime_ns
+        except OSError:
+            funding_stamp = None
+        if _CACHE.get("funding_stamp") != funding_stamp:
+            _CACHE["funding_stamp"] = funding_stamp
+            _CACHE["current_until_ms"] = None
+        live_legs = bulk_quotes.load_funding()
+    if (
+        _CACHE.get("current_until_ms") is None
+        or now_ms >= int(_CACHE["current_until_ms"])
+    ):
+        current_legs: dict[str, dict[str, float | None]] = {}
+        expiries: list[int] = []
+        for key, values in _CACHE["legs"].items():
+            current, expiry = _current_leg_windows(
+                values,
+                _CACHE["leg_status"].get(key),
+                now_ms=now_ms,
+                live_leg=live_legs.get(key),
+            )
+            current_legs[key] = current
+            if expiry is not None:
+                expiries.append(expiry)
+        _CACHE["current_legs"] = current_legs
+        _CACHE["current_until_ms"] = min(expiries) if expiries else 2**63 - 1
+    return _CACHE["current_legs"]
 
 
 def route_history_status(route: dict[str, Any]) -> dict[str, Any]:
     """Explain blank windows without confusing token age with API coverage."""
-    load()
+    current_legs = load()
     sides: dict[str, Any] = {}
     for side in ("long", "short"):
         venue = str(route.get(f"{side}_venue") or "")
@@ -863,12 +1064,23 @@ def route_history_status(route: dict[str, Any]) -> dict[str, Any]:
             continue
         key = f"{venue}|{symbol}"
         status = dict(_CACHE["leg_status"].get(key) or {})
-        values = _CACHE["legs"].get(key) or {}
+        values = current_legs.get(key) or {}
+        details = {
+            label: dict(detail)
+            for label, detail in (status.get("window_details") or {}).items()
+            if isinstance(detail, dict)
+        }
+        raw_values = _CACHE["legs"].get(key) or {}
+        for label in ("1d", "7d", "30d"):
+            if raw_values.get(label) is not None and values.get(label) is None:
+                details.setdefault(label, {})["complete"] = False
+                details[label]["incomplete_reason"] = "settlement_refresh_overdue"
         status.update(
             {
                 "status": status.get("status") or ("collecting" if key not in _CACHE["legs"] else "partial"),
                 "available_windows": sum(values.get(label) is not None for label in ("1d", "7d", "30d")),
                 "updated_at": _CACHE["leg_updated_at"].get(key) or status.get("updated_at"),
+                "window_details": details,
             }
         )
         sides[side] = status
@@ -881,6 +1093,7 @@ def route_history_status(route: dict[str, Any]) -> dict[str, Any]:
         "start_boundary_not_covered": "does not reach the beginning of the trailing window",
         "latest_settlement_too_old": "has not exposed a recent enough settlement",
         "internal_settlement_gap": "contains a gap larger than the venue's ordinary funding cadence",
+        "settlement_refresh_overdue": "is awaiting the next exact settlement refresh",
     }
     for label in ("1d", "7d", "30d"):
         gaps: list[str] = []

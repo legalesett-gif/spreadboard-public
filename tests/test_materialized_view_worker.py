@@ -72,3 +72,74 @@ def test_worker_does_not_publish_a_generation_mixed_across_snapshots(
         worker.build(board, tmp_path / "materialized")
 
     assert not (tmp_path / "materialized" / "current.json").exists()
+
+
+def test_funding_warm_view_prioritises_every_visible_exact_futures_leg() -> None:
+    payload = {
+        "filters": {"funding_only": True},
+        "groups": [
+            {
+                "best_funding_route": {
+                    "long_venue": "Gate",
+                    "long_market_type": "Futures",
+                    "long_market_symbol": "ONE/USDT:USDT",
+                    "short_venue": "Mexc",
+                    "short_market_type": "Futures",
+                    "short_market_symbol": "ONE/USDT:USDT",
+                },
+                "routes": [
+                    {
+                        "long_venue": "Aster",
+                        "long_market_type": "Futures",
+                        "long_market_symbol": "ONE/USDT:USDT",
+                        "short_venue": "Kraken",
+                        "short_market_type": "Spot",
+                        "short_market_symbol": "ONE/USD",
+                    }
+                ],
+            }
+        ],
+    }
+
+    assert worker._funding_priority_legs(payload) == [
+        ("Gate", "ONE/USDT:USDT"),
+        ("Mexc", "ONE/USDT:USDT"),
+        ("Aster", "ONE/USDT:USDT"),
+    ]
+
+
+def test_collector_restart_seeds_history_demand_from_last_complete_view(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from scripts import run_spreadboard_service as service
+
+    payload = {
+        "filters": {"funding_only": True},
+        "groups": [
+            {
+                "routes": [
+                    {
+                        "long_venue": "Gate",
+                        "long_market_type": "Futures",
+                        "long_market_symbol": "ONE/USDT:USDT",
+                        "short_market_type": "Spot",
+                    }
+                ]
+            }
+        ],
+    }
+
+    class Store:
+        def payload_for(self, _query, **_kwargs):
+            return payload
+
+    monkeypatch.setattr(service.materialized_views, "default_store", Store)
+    monkeypatch.setattr(
+        service, "_materialized_view_queries", lambda: ({"funding_only": ["1"]},)
+    )
+    monkeypatch.setattr(
+        service.funding_history_demand, "DEFAULT_PATH", tmp_path / "demand.json"
+    )
+
+    assert service._seed_funding_history_demand() == 1
+    assert service.funding_history_demand.legs() == [("Gate", "ONE/USDT:USDT")]

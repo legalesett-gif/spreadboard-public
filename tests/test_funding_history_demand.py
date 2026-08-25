@@ -35,3 +35,39 @@ def test_expired_demand_is_not_returned(tmp_path: Path, monkeypatch) -> None:
     )
 
     assert funding_history_demand.legs(path=path) == []
+
+
+def test_complete_payload_preserves_all_exported_futures_legs(tmp_path: Path) -> None:
+    path = tmp_path / "demand.json"
+    payload = {
+        "filters": {"funding_only": True},
+        "groups": [
+            {
+                "best_funding_route": {
+                    "long_venue": "Gate",
+                    "long_market_type": "Futures",
+                    "long_market_symbol": "ONE/USDT:USDT",
+                    "short_venue": "Mexc",
+                    "short_market_type": "Spot",
+                },
+                "routes": [
+                    {
+                        "long_venue": "Aster",
+                        "long_market_type": "Futures",
+                        "long_market_symbol": "ONE/USDT:USDT",
+                        "short_venue": "Bybit",
+                        "short_market_type": "Futures",
+                        "short_market_symbol": "ONE/USDT:USDT",
+                    }
+                ],
+            }
+        ],
+    }
+
+    funding_history_demand.enqueue_payload(payload, path=path)
+
+    assert set(funding_history_demand.legs(path=path)) == {
+        ("Gate", "ONE/USDT:USDT"),
+        ("Aster", "ONE/USDT:USDT"),
+        ("Bybit", "ONE/USDT:USDT"),
+    }

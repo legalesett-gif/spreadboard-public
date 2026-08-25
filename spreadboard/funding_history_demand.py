@@ -9,12 +9,50 @@ import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", "data"))
 DEFAULT_PATH = RUNTIME_DIR / "funding_history_demand.json"
 _LOCK = threading.Lock()
 _TTL_SECONDS = 21_600.0
-_MAX_LEGS = 500
+# Warm Funding pages contain every exact pair in their JSON/export even though
+# HTML previews only three. Routes are combinatorial but their futures legs are
+# heavily shared; five thousand entries comfortably covers all principal views
+# plus recent exact-token, watchlist and portfolio demand.
+_MAX_LEGS = 5_000
+
+
+def payload_legs(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """Exact futures legs represented by one complete Funding payload."""
+
+    if not ((payload.get("filters") or {}).get("funding_only")):
+        return []
+    selected: list[tuple[str, str]] = []
+    for group in payload.get("groups") or []:
+        if not isinstance(group, dict):
+            continue
+        routes = [group.get("best_funding_route"), *(group.get("routes") or [])]
+        for route in routes:
+            if not isinstance(route, dict):
+                continue
+            for side in ("long", "short"):
+                if str(route.get(f"{side}_market_type") or "") != "Futures":
+                    continue
+                venue = str(route.get(f"{side}_venue") or "")
+                symbol = str(
+                    route.get(f"{side}_market_symbol")
+                    or route.get(f"{side}_symbol")
+                    or ""
+                )
+                if venue and symbol:
+                    selected.append((venue, symbol))
+    return list(dict.fromkeys(selected))
+
+
+def enqueue_payload(payload: dict[str, Any], *, path: Path | str | None = None) -> int:
+    """Persist a warm view's exact legs without contacting a provider."""
+
+    return enqueue(payload_legs(payload), path=path)
 
 
 def enqueue(

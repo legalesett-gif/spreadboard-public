@@ -22,10 +22,21 @@ from scripts import run_spreadboard_service as service
 from spreadboard import (
     api_spreads,
     funding_catalog,
+    funding_history_demand,
     materialized_views,
     server,
     telegram_queries,
 )
+
+
+def _funding_priority_legs(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """Exact legs behind every route a member can see in a warm Funding view."""
+
+    return funding_history_demand.payload_legs(payload)
+
+
+def _enqueue_funding_priority(payload: dict[str, Any]) -> None:
+    funding_history_demand.enqueue_payload(payload)
 
 
 def _signature(path: Path | str) -> list[int] | None:
@@ -172,6 +183,7 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
             )
             if not _cacheable(payload):
                 raise RuntimeError(f"uncacheable_view:{query}")
+            _enqueue_funding_priority(payload)
             writer.write_view(query, _compact_funding_navigation(payload))
             del payload
             _release_memory(keep_rows=True)
@@ -188,6 +200,7 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
             )
             if not _cacheable(payload):
                 raise RuntimeError(f"uncacheable_view:{query}")
+            _enqueue_funding_priority(payload)
             writer.write_view(query, _compact_funding_navigation(payload))
             del payload
             _release_memory(keep_rows=False)

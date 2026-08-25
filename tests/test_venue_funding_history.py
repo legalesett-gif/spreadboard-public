@@ -90,6 +90,101 @@ def test_incomplete_windows_explain_the_exact_evidence_gap() -> None:
     )
 
 
+def test_cached_total_expires_at_the_next_exact_settlement_boundary(tmp_path, monkeypatch) -> None:
+    now_ms = 1_800_000_000_000
+    entries = _settlements(90, 0.0001, now_ms=now_ms)
+    details = vfh.realised_window_details(entries, now_ms=now_ms)
+    path = tmp_path / "funding.json"
+    path.write_text(
+        __import__("json").dumps(
+            {
+                "schema": vfh.SCHEMA,
+                "legs": {"Gate|ONE": details["windows"]},
+                "leg_status": {
+                    "Gate|ONE": {
+                        "status": "ok",
+                        "window_details": details["window_details"],
+                    }
+                },
+            }
+        )
+    )
+    monkeypatch.setitem(vfh._CACHE, "stamp", None)
+    monkeypatch.setattr(vfh.time, "time", lambda: (now_ms + 8 * 3_600_000 - 1) / 1000)
+
+    assert vfh.load(cache_path=path)["Gate|ONE"]["1d"] == pytest.approx(0.03)
+
+    monkeypatch.setattr(vfh.time, "time", lambda: (now_ms + 8 * 3_600_000) / 1000)
+    assert vfh.load(cache_path=path)["Gate|ONE"] == {
+        "1d": None,
+        "7d": None,
+        "30d": None,
+    }
+
+
+def test_coverage_counts_only_current_complete_windows(tmp_path, monkeypatch) -> None:
+    now_ms = 1_800_000_000_000
+    details = vfh.realised_window_details(
+        _settlements(90, 0.0001, now_ms=now_ms), now_ms=now_ms
+    )
+    path = tmp_path / "funding.json"
+    path.write_text(
+        __import__("json").dumps(
+            {
+                "schema": vfh.SCHEMA,
+                "legs": {"Gate|ONE": details["windows"]},
+                "leg_status": {
+                    "Gate|ONE": {
+                        "status": "ok",
+                        "window_details": details["window_details"],
+                    }
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(vfh.time, "time", lambda: (now_ms + 8 * 3_600_000) / 1000)
+
+    summary = vfh.coverage_summary([("Gate", "ONE")], cache_path=path)
+
+    assert summary["classified_leg_count"] == 1
+    assert summary["window_leg_counts"] == {"1d": 0, "7d": 0, "30d": 0}
+    assert summary["fully_complete_leg_count"] == 0
+
+
+def test_live_tighter_schedule_expires_history_at_the_real_earlier_boundary() -> None:
+    status = {
+        "window_details": {
+            label: {
+                "complete": True,
+                "latest_event_at": 1_000_000,
+                "inferred_interval_hours": 8.0,
+            }
+            for label in ("1d", "7d", "30d")
+        }
+    }
+    values = {"1d": 1.0, "7d": 7.0, "30d": 30.0}
+    live_leg = {
+        "interval_hours": 4.0,
+        "next_funding_ts_us": (1_000_000 + 4 * 3_600_000) * 1000,
+    }
+
+    before, _expiry = vfh._current_leg_windows(
+        values,
+        status,
+        now_ms=1_000_000 + 4 * 3_600_000 - 1,
+        live_leg=live_leg,
+    )
+    at_boundary, _expiry = vfh._current_leg_windows(
+        values,
+        status,
+        now_ms=1_000_000 + 4 * 3_600_000,
+        live_leg=live_leg,
+    )
+
+    assert before == values
+    assert at_boundary == {"1d": None, "7d": None, "30d": None}
+
+
 def test_route_status_exposes_a_per_window_provider_evidence_note(monkeypatch) -> None:
     monkeypatch.setattr(
         vfh,
@@ -339,6 +434,8 @@ def test_coverage_distinguishes_unattempted_from_an_honest_empty_result(tmp_path
         "coverage_pct": 66.67,
         "source_check_pct": 66.67,
         "window_leg_counts": {"1d": 0, "7d": 0, "30d": 0},
+        "stored_window_leg_counts": {"1d": 0, "7d": 0, "30d": 0},
+        "overdue_window_leg_counts": {"1d": 0, "7d": 0, "30d": 0},
         "window_coverage_pct": {"1d": 0.0, "7d": 0.0, "30d": 0.0},
         "fully_complete_leg_count": 0,
         "deep_history_pending_leg_count": 1,
@@ -390,6 +487,8 @@ def test_empty_catalog_is_already_caught_up(tmp_path) -> None:
         "coverage_pct": 100.0,
         "source_check_pct": 100.0,
         "window_leg_counts": {"1d": 0, "7d": 0, "30d": 0},
+        "stored_window_leg_counts": {"1d": 0, "7d": 0, "30d": 0},
+        "overdue_window_leg_counts": {"1d": 0, "7d": 0, "30d": 0},
         "window_coverage_pct": {"1d": 100.0, "7d": 100.0, "30d": 100.0},
         "fully_complete_leg_count": 0,
         "deep_history_pending_leg_count": 0,
@@ -655,6 +754,26 @@ def test_incomplete_or_multi_page_history_keeps_a_deep_refresh_budget() -> None:
     ) == 1
 
 
+def test_priority_refresh_waits_until_the_next_settlement() -> None:
+    status = {
+        "status": "ok",
+        "last_attempt_status": "ok",
+        "deep_history_checked_at": "now",
+        "window_details": {
+            label: {
+                "complete": True,
+                "latest_event_at": 1_000_000,
+                "inferred_interval_hours": 1.0,
+            }
+            for label in ("1d", "7d", "30d")
+        },
+    }
+    values = {"1d": 1.0, "7d": 7.0, "30d": 30.0}
+
+    assert not vfh._priority_refresh_due(status, values, now_ms=4_599_999)
+    assert vfh._priority_refresh_due(status, values, now_ms=4_600_000)
+
+
 def test_failed_cached_client_is_retried_after_backoff(monkeypatch) -> None:
     exchange_id = "retry-test"
     vfh._CLIENTS.pop(exchange_id, None)
@@ -698,6 +817,68 @@ def test_retryable_refresh_retains_v5_classification_and_cached_windows(
     assert payload["catalog_attempted_leg_count"] == 1
     assert payload["catalog_classified_leg_count"] == 1
     assert payload["catalog_pending_leg_count"] == 0
+
+
+def test_retryable_refresh_preserves_the_exact_expiry_evidence(tmp_path, monkeypatch) -> None:
+    now_ms = 1_800_000_000_000
+    details = vfh.realised_window_details(
+        _settlements(90, 0.0001, now_ms=now_ms), now_ms=now_ms
+    )
+    path = tmp_path / "funding.json"
+    path.write_text(
+        __import__("json").dumps(
+            {
+                "schema": vfh.SCHEMA,
+                "legs": {"A|ONE": details["windows"]},
+                "leg_status": {
+                    "A|ONE": {
+                        "status": "ok",
+                        "latest_event_at": details["latest_event_at"],
+                        "window_details": details["window_details"],
+                    }
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(
+        vfh,
+        "leg_history_outcome",
+        lambda *_args, **_kwargs: {
+            "status": "api_error",
+            "entries": [],
+            "error_type": "TimeoutError",
+        },
+    )
+
+    vfh.build([("A", "ONE")], cache_path=path, budget_seconds=5)
+    status = __import__("json").loads(path.read_text())["leg_status"]["A|ONE"]
+
+    assert status["status"] == "ok_cached"
+    assert status["window_details"] == details["window_details"]
+
+
+def test_definitive_missing_market_clears_old_rolling_totals(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "funding.json"
+    path.write_text(
+        __import__("json").dumps(
+            {
+                "schema": vfh.SCHEMA,
+                "legs": {"A|ONE": {"1d": 1.0, "7d": 2.0, "30d": 3.0}},
+                "leg_status": {"A|ONE": {"status": "ok"}},
+            }
+        )
+    )
+    monkeypatch.setattr(
+        vfh,
+        "leg_history_outcome",
+        lambda *_args, **_kwargs: {"status": "symbol_not_indexed", "entries": []},
+    )
+
+    result = vfh.build([("A", "ONE")], cache_path=path, budget_seconds=5)
+    payload = __import__("json").loads(path.read_text())
+
+    assert "A|ONE" not in result
+    assert payload["leg_status"]["A|ONE"]["status"] == "symbol_not_indexed"
 
 
 def test_retryable_refresh_does_not_verify_legacy_cached_windows(
