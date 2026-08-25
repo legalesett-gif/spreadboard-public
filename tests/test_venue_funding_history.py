@@ -74,6 +74,64 @@ def test_duplicate_future_and_sparse_rows_cannot_inflate_a_window() -> None:
     assert vfh.realised_windows(
         [complete[0], complete[-1]], now_ms=now
     ) == {"1d": None, "7d": None, "30d": None}
+    assert details["window_details"]["30d"]["incomplete_reason"] is None
+
+
+def test_incomplete_windows_explain_the_exact_evidence_gap() -> None:
+    now = int(time.time() * 1000)
+    details = vfh.realised_window_details(
+        _settlements(30, 0.0001, now_ms=now), now_ms=now
+    )
+
+    assert details["window_details"]["1d"]["incomplete_reason"] is None
+    assert (
+        details["window_details"]["30d"]["incomplete_reason"]
+        == "insufficient_event_coverage"
+    )
+
+
+def test_route_status_exposes_a_per_window_provider_evidence_note(monkeypatch) -> None:
+    monkeypatch.setattr(
+        vfh,
+        "load",
+        lambda **_kwargs: {"Gate|GUA/USDT:USDT": {"1d": 0.1, "7d": 0.7, "30d": None}},
+    )
+    monkeypatch.setitem(
+        vfh._CACHE,
+        "leg_status",
+        {
+            "Gate|GUA/USDT:USDT": {
+                "status": "ok",
+                "window_details": {
+                    "30d": {
+                        "incomplete_reason": "insufficient_event_coverage",
+                        "event_count": 100,
+                        "expected_event_count": 180,
+                    }
+                },
+            }
+        },
+    )
+    monkeypatch.setitem(
+        vfh._CACHE,
+        "legs",
+        {"Gate|GUA/USDT:USDT": {"1d": 0.1, "7d": 0.7, "30d": None}},
+    )
+    route = {
+        "long_venue": "Mexc",
+        "long_market_type": "Spot",
+        "long_market_symbol": "GUA/USDT",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        "short_market_symbol": "GUA/USDT:USDT",
+    }
+
+    status = vfh.route_history_status(route)
+
+    assert status["window_notes"]["30d"] == (
+        "Gate returned fewer exact settlements than the complete window requires "
+        "(100/180 events)."
+    )
 
 
 def test_a_spot_leg_contributes_zero_not_unknown(monkeypatch) -> None:
@@ -465,6 +523,62 @@ def test_gate_starts_from_the_latest_page_before_walking_backwards() -> None:
     assert calls[0]["since"] is None
     assert "params" not in calls[0]
     assert calls[1]["params"]["until"] == 899
+
+
+@pytest.mark.parametrize("venue", ["Bingx", "Coinbase International", "Bybit"])
+def test_newest_first_adapters_use_their_bounded_native_paginators(venue: str) -> None:
+    calls: list[dict] = []
+
+    class Paginated:
+        def fetch_funding_rate_history(self, _symbol, **kwargs):
+            calls.append(kwargs)
+            return [
+                {"timestamp": index + 1, "fundingRate": 0.001}
+                for index in range(250)
+            ]
+
+    rows, pages = vfh._history_pages(
+        Paginated(), venue, "ONE", since=1, now_ms=2000, max_pages=3
+    )
+
+    assert len(rows) == 250
+    assert pages == 3
+    assert calls == [
+        {
+            "since": 1,
+            "limit": 300,
+            "params": {"paginate": True, "paginationCalls": 3},
+        }
+    ]
+
+
+def test_xt_walks_backwards_with_the_oldest_native_row_id() -> None:
+    calls: list[dict] = []
+
+    class XTArchive:
+        def fetch_funding_rate_history(self, _symbol, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return [
+                    {
+                        "timestamp": 900,
+                        "fundingRate": 0.001,
+                        "info": {"id": "oldest-id"},
+                    },
+                    {
+                        "timestamp": 1000,
+                        "fundingRate": 0.001,
+                        "info": {"id": "newest-id"},
+                    },
+                ]
+            return []
+
+    vfh._history_pages(
+        XTArchive(), "XT", "ONE", since=1, now_ms=2000, max_pages=2
+    )
+
+    assert calls[0]["since"] is None
+    assert calls[1]["params"]["id"] == "oldest-id"
 
 
 def test_gate_two_page_archive_proves_gua_and_siren_style_four_hour_windows() -> None:

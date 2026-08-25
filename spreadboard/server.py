@@ -9334,8 +9334,11 @@ def render_funding_windows(route: dict[str, Any] | None, route_key: Any) -> str:
     for label in ("1d", "7d", "30d"):
         value = funding_radar.window_value(route or {}, label)
         if value is None:
+            window_title = (coverage.get("window_notes") or {}).get(
+                label, coverage_title
+            )
             cells.append(
-                f'<span class="funding-window unknown" title="{h(coverage_title)}"><em>{display_labels[label]} total</em><strong>—</strong></span>'
+                f'<span class="funding-window unknown" title="{h(window_title)}"><em>{display_labels[label]} total</em><strong>—</strong></span>'
             )
         else:
             tone = "positive" if value > 0 else "negative" if value < 0 else "flat"
@@ -9592,6 +9595,13 @@ def render_funding_page(
     ]
     total_tokens = int(displayed_assets or 0)
     returned_tokens = len(funding_groups)
+    search_token = str(_query_first(query, "q") or "").strip().upper()
+    exact_search_tokens = {
+        str(group.get("token") or "").strip().upper()
+        for group in funding_groups
+        if search_token
+        and str(group.get("token") or "").strip().upper() == search_token
+    }
 
     def funding_page_href(
         *,
@@ -9614,9 +9624,14 @@ def render_funding_page(
 
     page_start = page_offset + 1 if returned_tokens else 0
     page_end = page_offset + returned_tokens
+    route_preview_note = (
+        "all exact pairs shown for the exact token match"
+        if exact_search_tokens
+        else f"top {FUNDING_PAIR_PREVIEW_LIMIT} pairs previewed per token; this page's Export JSON includes every pair for these tokens"
+    )
     pagination_html = (
         '<nav class="funding-pagination" aria-label="Funding results pages">'
-        f'<span>Showing {h(page_start)}–{h(page_end)} of {h(total_tokens)} tokens · top {h(FUNDING_PAIR_PREVIEW_LIMIT)} pairs previewed per token; this page\'s Export JSON includes every pair for these tokens</span>'
+        f'<span>Showing {h(page_start)}–{h(page_end)} of {h(total_tokens)} tokens · {route_preview_note}</span>'
         + (
             f'<a href="{h(funding_page_href(offset=max(0, page_offset - page_limit)))}">Previous</a>'
             if page_offset > 0
@@ -9764,7 +9779,23 @@ def render_funding_page(
             render_funding_token_group(
                 group,
                 selected_window=selected_window,
-                route_limit=FUNDING_PAIR_PREVIEW_LIMIT,
+                route_limit=(
+                    None
+                    if str(group.get("token") or "").strip().upper()
+                    in exact_search_tokens
+                    else FUNDING_PAIR_PREVIEW_LIMIT
+                ),
+                token_routes_url=(
+                    "/funding?"
+                    + urlencode(
+                        {
+                            "farm": selected_farm,
+                            "rank": selected_window,
+                            "limit": page_limit,
+                            "q": str(group.get("token") or "").strip().upper(),
+                        }
+                    )
+                ),
             )
             for group in funding_groups
         )
@@ -9790,6 +9821,7 @@ def render_funding_token_group(
     *,
     selected_window: str = "now",
     route_limit: int | None = None,
+    token_routes_url: str | None = None,
 ) -> str:
     best = group.get("best_funding_route") or group.get("best_route") or {}
     historical = bool(best.get("radar_historical"))
@@ -9812,6 +9844,7 @@ def render_funding_token_group(
         if best.get("route_key")
         else f"/charts?token={quote(str(group.get('token') or ''))}"
     )
+    token_url = token_routes_url or best_chart_url
     status_badge = (
         f'<span class="funding-radar-badge">Cooled now · seen {fmt_age(best.get("radar_last_seen_age_min"))} ago</span>'
         if historical
@@ -9848,7 +9881,7 @@ def render_funding_token_group(
       <summary>
         <div class="asset-identity">
           <span class="asset-monogram">{h(str(group.get("token") or "?")[:2])}</span>
-          <span><a class="asset-chart-symbol" href="{h(best_chart_url)}" onclick="event.stopPropagation()" title="Open the best funding-pair chart">{h(group.get("token"))}</a><em>{h(name)}</em>{status_badge}</span>
+          <span><a class="asset-chart-symbol" href="{h(token_url)}" onclick="event.stopPropagation()" title="Show every exact route for this token">{h(group.get("token"))}</a><em>{h(name)}</em>{status_badge}</span>
         </div>
         <div><span>Best farm</span><strong>{h(best.get("long_venue"))} → {h(best.get("short_venue"))}</strong></div>
         <div><span>{h(metric_label)}</span><strong{funding_live_hook}>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)}</em></div>

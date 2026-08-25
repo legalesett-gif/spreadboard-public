@@ -312,10 +312,12 @@ def test_restored_catalog_now_uses_current_exact_leg_carry(monkeypatch) -> None:
             "Long|GUA/USDT:USDT": {
                 "rate_pct": 0.0,
                 "interval_hours": 8.0,
+                "age_seconds": 12.0,
             },
             "Short|GUA/USDT:USDT": {
                 "rate_pct": 0.5,
                 "interval_hours": 8.0,
+                "age_seconds": 42.0,
             },
         },
     )
@@ -331,6 +333,7 @@ def test_restored_catalog_now_uses_current_exact_leg_carry(monkeypatch) -> None:
 
     assert page["largest_value"] == 1.5
     assert page["groups"][0]["best_funding_route"]["funding_daily_pct"] == 1.5
+    assert page["groups"][0]["best_funding_route"]["funding_age_min"] == 0.7
     assert page["window_route_counts"] == {}
     assert page["window_token_counts"] == {}
 

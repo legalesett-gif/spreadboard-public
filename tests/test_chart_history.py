@@ -68,6 +68,48 @@ def test_a_one_hour_window_is_backfilled(monkeypatch: pytest.MonkeyPatch) -> Non
     assert len(result["rows"]) >= 50, "a one hour chart must have enough points to draw a line"
 
 
+def test_a_24h_warm_serves_the_default_1h_window_without_another_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now_ms = int(time.time() * 1000)
+    start = now_ms - 24 * 3600 * 1000
+    calls: list[str] = []
+
+    def fake_leg(
+        row: dict[str, Any], side: str, timeframe: str, since_ms: int
+    ) -> list[list[float]]:
+        calls.append(side)
+        return _candles(
+            1440,
+            start_ms=start,
+            step_ms=60_000,
+            price=1.0 if side == "long" else 1.01,
+        )
+
+    monkeypatch.setattr(historical_spreads, "_fetch_leg", fake_leg)
+    warmed = historical_spreads.load_or_fetch(CEX_ROUTE, hours=24, max_points=1800)
+    assert warmed["status"] == "ok"
+    assert calls == ["long", "short"]
+
+    monkeypatch.setattr(
+        historical_spreads,
+        "_fetch_leg",
+        lambda *_args, **_kwargs: pytest.fail("the canonical 24h cache should be reused"),
+    )
+    one_hour = historical_spreads.load_or_fetch(CEX_ROUTE, hours=1, max_points=1200)
+
+    assert one_hour["status"] == "ok"
+    assert len(one_hour["rows"]) >= 50
+
+
+def test_chart_cache_uses_three_reusable_horizons() -> None:
+    assert historical_spreads.cache_horizon_for(1 / 60) == 24
+    assert historical_spreads.cache_horizon_for(24) == 24
+    assert historical_spreads.cache_horizon_for(72) == 72
+    assert historical_spreads.cache_horizon_for(168) == 720
+    assert historical_spreads.cache_horizon_for(720) == 720
+
+
 @pytest.mark.parametrize("hours", [1 / 60, 5 / 60, 0.5, 1.0, 4.0, 12.0, 24.0, 72.0, 168.0])
 def test_no_window_is_refused_outright(hours: float, monkeypatch: pytest.MonkeyPatch) -> None:
     """Every window the UI offers must at least attempt a backfill."""

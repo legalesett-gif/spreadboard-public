@@ -110,3 +110,62 @@ def test_group_renderer_remains_complete_without_an_explicit_preview_limit(
 
     assert html.count('<article class="funding-pair-row') == 5
     assert "funding-pair-overflow" not in html
+
+
+def test_exact_token_search_renders_every_route_and_token_links_to_that_ledger(
+    monkeypatch,
+) -> None:
+    routes = [_route("GUA", index) for index in range(12)]
+    group = {
+        "token": "GUA",
+        "token_name": "GUA",
+        "routes": routes,
+        "best_funding_route": routes[0],
+        "route_count": len(routes),
+    }
+    monkeypatch.setattr(
+        server,
+        "api_market_spreads",
+        lambda _path, _query: {
+            "ok": True,
+            "groups": [group],
+            "summary": {"matching_tokens": 1, "matching_rows": 12},
+            "source_health": {"canonical_api": {"status": "fresh"}},
+            "funding_catalog": {
+                "matching_token_count": 1,
+                "matching_route_count": 12,
+                "largest_value": 1.0,
+                "window_token_counts": {"1d": 1, "7d": 1, "30d": 1},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        server,
+        "funding_history_health",
+        lambda: {
+            "attempted_leg_count": 1,
+            "catalog_leg_count": 1,
+            "classified_leg_count": 1,
+            "pending_leg_count": 0,
+            "retryable_error_leg_count": 0,
+            "window_leg_counts": {"1d": 1, "7d": 1, "30d": 1},
+            "window_coverage_pct": {"1d": 100.0, "7d": 100.0, "30d": 100.0},
+            "deep_history_pending_leg_count": 0,
+        },
+    )
+    monkeypatch.setattr(
+        server.bulk_quotes,
+        "funding_health",
+        lambda: {"status": "fresh", "p95_age_seconds": 30.0},
+    )
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+
+    exact = server.render_funding_page(
+        Path("board.json"), {}, {"q": ["GUA"], "rank": ["now"]}
+    )
+    overview = server.render_funding_page(Path("board.json"), {}, {})
+
+    assert exact.count('<article class="funding-pair-row') == 12
+    assert "all exact pairs shown for the exact token match" in exact
+    assert 'href="/funding?farm=futures-futures&amp;rank=now&amp;limit=25&amp;q=GUA"' in overview
+    assert "Show every exact route for this token" in overview

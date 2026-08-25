@@ -1103,6 +1103,7 @@ def main() -> int:
             route_key, board_path
         ),
         quote_scheduler=server_module._schedule_chart_route_refresh,
+        proxy_route_keys_provider=_priority_funding_chart_route_keys,
         interval_seconds=float(
             os.environ.get("SPREADBOARD_TRACKED_ROUTE_WARM_SECONDS", "10")
         ),
@@ -1267,6 +1268,48 @@ def _materialized_view_queries() -> tuple[dict[str, list[str]], ...]:
         seen.add(identity)
         result.append(dict(query))
     return tuple(result)
+
+
+_PRIORITY_CHART_KEYS_LOCK = threading.Lock()
+_PRIORITY_CHART_KEYS_AT = 0.0
+_PRIORITY_CHART_KEYS: list[str] = []
+
+
+def _priority_funding_chart_route_keys() -> list[str]:
+    """Best routes on every Funding screen, from the persisted warm views.
+
+    This never rebuilds a market view and never calls an exchange. The route
+    warmer uses the keys one at a time, so the charts a subscriber can reach
+    from the first page are prepared continuously instead of making the first
+    click own an OHLCV download.
+    """
+
+    global _PRIORITY_CHART_KEYS_AT, _PRIORITY_CHART_KEYS
+
+    now = time.monotonic()
+    with _PRIORITY_CHART_KEYS_LOCK:
+        if _PRIORITY_CHART_KEYS and now - _PRIORITY_CHART_KEYS_AT < 300.0:
+            return list(_PRIORITY_CHART_KEYS)
+        keys: list[str] = []
+        store = materialized_views.default_store()
+        for query in _materialized_view_queries():
+            if not query.get("funding_only"):
+                continue
+            payload = store.payload_for(query)
+            if not isinstance(payload, dict):
+                continue
+            for group in list(payload.get("groups") or [])[:25]:
+                best = (
+                    group.get("best_funding_route")
+                    or group.get("best_route")
+                    or {}
+                )
+                key = str(best.get("route_key") or "")
+                if key:
+                    keys.append(key)
+        _PRIORITY_CHART_KEYS = list(dict.fromkeys(keys))
+        _PRIORITY_CHART_KEYS_AT = now
+        return list(_PRIORITY_CHART_KEYS)
 
 
 def _complete_telegram_funding_payloads(

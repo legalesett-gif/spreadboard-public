@@ -94,19 +94,34 @@ def _persist_cache(payloads: dict[str, dict[str, Any]]) -> None:
 
     path = DEFAULT_CACHE_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    raw = orjson.dumps(
-        {
-            "schema": PERSISTED_SCHEMA,
-            "saved_at_unix": time.time(),
-            "payloads": payloads,
-        }
-    )
+    saved_at = time.time()
     temporary = path.with_name(
         f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
     )
     try:
         with temporary.open("xb") as handle:
-            handle.write(raw)
+            # The catalogue is roughly 200 MB encoded and much larger as
+            # Python objects. Serialising the whole envelope made another
+            # 200 MB copy while the complete object graph was resident, which
+            # pushed the bounded collector child over its cgroup limit. Each
+            # token is an independent JSON value, so stream the envelope one
+            # token at a time without changing its schema or reader contract.
+            handle.write(
+                b'{"schema":'
+                + orjson.dumps(PERSISTED_SCHEMA)
+                + b',"saved_at_unix":'
+                + orjson.dumps(saved_at)
+                + b',"payloads":{'
+            )
+            first = True
+            for token, payload in payloads.items():
+                if not first:
+                    handle.write(b",")
+                first = False
+                handle.write(orjson.dumps(str(token)))
+                handle.write(b":")
+                handle.write(orjson.dumps(payload))
+            handle.write(b"}}")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
@@ -372,6 +387,31 @@ def _apply_live_current_value(route: dict[str, Any], value: float | None) -> Non
     route["funding_projected_24h_pct"] = value
     route["funding_spread_pct"] = value
     route["funding_apr_pct"] = value * 365.0 if value is not None else None
+
+
+def _live_current_age(
+    route: dict[str, Any], funding: dict[str, dict[str, Any]]
+) -> float | None:
+    """Oldest exact futures-leg funding observation, in minutes."""
+
+    ages: list[float] = []
+    for side in ("long", "short"):
+        if str(route.get(f"{side}_market_type") or "") != "Futures":
+            continue
+        venue = str(route.get(f"{side}_venue") or "")
+        symbol = str(
+            route.get(f"{side}_market_symbol")
+            or route.get(f"{side}_symbol")
+            or ""
+        )
+        leg = funding.get(f"{venue}|{symbol}")
+        if not isinstance(leg, dict):
+            return None
+        age = _number(leg.get("age_seconds"))
+        if age is None:
+            return None
+        ages.append(max(0.0, age) / 60.0)
+    return max(ages) if ages else None
 
 
 def _window_value(
@@ -643,6 +683,11 @@ def page(
             else _current_value(route)
         )
         _apply_live_current_value(route, current_value)
+        route["funding_age_min"] = (
+            _live_current_age(route, current_funding)
+            if current_funding is not None
+            else route.get("funding_age_min")
+        )
         if selected_window == "now":
             value = current_value
             if value is None or value <= 0:

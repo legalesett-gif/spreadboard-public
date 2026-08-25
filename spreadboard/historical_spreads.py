@@ -25,7 +25,13 @@ _WARMING: dict[str, float] = {}
 _WARMING_LOCK = threading.Lock()
 
 #: How long a completed backfill is trusted before it is fetched again.
-CACHE_SECONDS = 300.0
+#:
+#: The exact live-book sample remains independent and arrives every few
+#: seconds. Re-downloading an entire candle window every five minutes did not
+#: make that live point fresher; it only kept the exchange clients and the web
+#: process busy. Six hours keeps the indicative shape warm while exact books
+#: continue to own the current edge.
+CACHE_SECONDS = 21_600.0
 
 #: How long a warm-up may run before another reader is allowed to retry it.
 WARMING_TIMEOUT_SECONDS = 90.0
@@ -52,6 +58,22 @@ def timeframe_for(hours: float) -> str:
     return "15m"
 
 
+def cache_horizon_for(hours: float) -> float:
+    """Return the reusable candle horizon which covers ``hours``.
+
+    A tracked route was warmed for 24h, but the default chart requested 1h and
+    therefore used a different cache filename. The member still paid for the
+    same two exchange histories. Three canonical horizons make every shorter
+    window a cheap slice of an already-warm artifact.
+    """
+
+    if hours <= 24:
+        return 24.0
+    if hours <= 72:
+        return 72.0
+    return 720.0
+
+
 def load_or_fetch(
     row: dict[str, Any],
     *,
@@ -74,21 +96,28 @@ def load_or_fetch(
     if _is_dex(row):
         return {"status": "not_applicable", "rows": []}
     route_key = str(row.get("route_key") or "")
-    cache_path = _cache_path(route_key, hours)
+    cache_hours = cache_horizon_for(hours)
+    cache_path = _cache_path(route_key, cache_hours)
     cached = _read_cache(cache_path)
     if cached and time.time() - float(cached.get("cached_at") or 0) <= CACHE_SECONDS:
-        return _with_sampled_rows(cached, max_points=max_points)
+        return _with_window(cached, hours=hours, max_points=max_points)
     if not blocking:
-        if _claim_warming(cache_path, row, hours):
+        if _claim_warming(cache_path, row, cache_hours):
             return {"status": "warming", "rows": [], "timeframe": timeframe_for(hours)}
         # Someone else is already fetching it. Serve the stale copy meanwhile so
         # the chart shows the shape of the window instead of going blank.
         if cached:
-            result = _with_sampled_rows(cached, max_points=max_points)
+            result = _with_window(cached, hours=hours, max_points=max_points)
             result["stale"] = True
             return result
         return {"status": "warming", "rows": [], "timeframe": timeframe_for(hours)}
-    return _fetch_and_cache(row, hours=hours, max_points=max_points, cache_path=cache_path)
+    return _fetch_and_cache(
+        row,
+        hours=cache_hours,
+        requested_hours=hours,
+        max_points=max_points,
+        cache_path=cache_path,
+    )
 
 
 def _claim_warming(cache_path: Path, row: dict[str, Any], hours: float) -> bool:
@@ -103,7 +132,13 @@ def _claim_warming(cache_path: Path, row: dict[str, Any], hours: float) -> bool:
 
     def run() -> None:
         try:
-            _fetch_and_cache(row, hours=hours, max_points=1, cache_path=cache_path)
+            _fetch_and_cache(
+                row,
+                hours=hours,
+                requested_hours=hours,
+                max_points=1,
+                cache_path=cache_path,
+            )
         except Exception:  # noqa: BLE001 - history is a supplement to live books.
             pass
         finally:
@@ -118,6 +153,7 @@ def _fetch_and_cache(
     row: dict[str, Any],
     *,
     hours: float,
+    requested_hours: float,
     max_points: int,
     cache_path: Path,
 ) -> dict[str, Any]:
@@ -149,7 +185,30 @@ def _fetch_and_cache(
         "cached_at": time.time(),
     }
     _atomic_json(cache_path, result)
-    return _with_sampled_rows(result, max_points=max_points)
+    return _with_window(result, hours=requested_hours, max_points=max_points)
+
+
+def _with_window(
+    payload: dict[str, Any], *, hours: float, max_points: int
+) -> dict[str, Any]:
+    """Slice a canonical warm horizon into the exact requested chart window."""
+
+    result = dict(payload)
+    rows = list(payload.get("rows") or [])
+    latest_us = max((int(item.get("quote_ts_us") or 0) for item in rows), default=0)
+    # Anchor the slice to the latest retained candle. A stale cache is still
+    # useful while its refresh is in flight; anchoring to wall time would turn
+    # that honest retained shape into an empty chart.
+    cutoff_us = latest_us - int(max(1 / 60, float(hours)) * 3_600_000_000)
+    result["rows"] = evenly_sample(
+        [
+            item
+            for item in rows
+            if int(item.get("quote_ts_us") or 0) >= cutoff_us
+        ],
+        max_points=max_points,
+    )
+    return result
 
 
 def _with_sampled_rows(payload: dict[str, Any], *, max_points: int) -> dict[str, Any]:

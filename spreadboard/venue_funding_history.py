@@ -135,9 +135,24 @@ def realised_window_details(
             and (max_gap is None or max_gap <= interval_ms * MAX_INTERNAL_GAP_INTERVALS)
         )
         if complete:
+            incomplete_reason = None
+        elif not points:
+            incomplete_reason = "no_settlements_in_window"
+        elif not interval_ms or not expected:
+            incomplete_reason = "settlement_cadence_unresolved"
+        elif len(points) < math.ceil(expected * MIN_EVENT_COVERAGE):
+            incomplete_reason = "insufficient_event_coverage"
+        elif start_gap is None or start_gap > interval_ms * MAX_BOUNDARY_INTERVALS:
+            incomplete_reason = "start_boundary_not_covered"
+        elif end_gap is None or end_gap > interval_ms * MAX_BOUNDARY_INTERVALS:
+            incomplete_reason = "latest_settlement_too_old"
+        else:
+            incomplete_reason = "internal_settlement_gap"
+        if complete:
             output[label] = sum(rate for _timestamp, rate in points) * 100.0
         windows[label] = {
             "complete": complete,
+            "incomplete_reason": incomplete_reason,
             "event_count": len(points),
             "expected_event_count": expected,
             "coverage_pct": round(coverage_pct, 2),
@@ -270,9 +285,27 @@ def _history_pages(
     native cursor is supplied.  Keep these rules explicit and stop on any
     repeated page so a provider quirk cannot create an infinite loop.
     """
+    # These adapters expose provider-specific pagination through CCXT. Their
+    # first page is the newest slice, so the old generic forward cursor simply
+    # requested that same slice again and left 30d blank even for established
+    # contracts. Let each adapter use its documented cursor/deterministic
+    # strategy, with both calls and total rows still bounded here.
+    if venue in {"Bingx", "Coinbase International", "Bybit"}:
+        limit = max(1, int(max_pages)) * HISTORY_PAGE_SIZE
+        page = client.fetch_funding_rate_history(
+            symbol,
+            since=since,
+            limit=limit,
+            params={
+                "paginate": True,
+                "paginationCalls": max(1, int(max_pages)),
+            },
+        ) or []
+        return list(page), min(max(1, int(max_pages)), max(1, math.ceil(len(page) / HISTORY_PAGE_SIZE)))
+
     rows: list[dict[str, Any]] = []
     fingerprints: set[tuple[int, int]] = set()
-    cursor: int | None = None
+    cursor: int | str | None = None
     pages = 0
     for page_number in range(1, max(1, int(max_pages)) + 1):
         params: dict[str, Any] = {}
@@ -281,6 +314,13 @@ def _history_pages(
             params["page_num"] = page_number
         elif venue == "Bitget":
             params["pageNo"] = page_number
+        elif venue == "XT":
+            # XT ignores ``since`` and returns the newest 100 rows. Its native
+            # cursor is the oldest row id from the previous response; CCXT's
+            # generic helper selects the newest id and repeats the same page.
+            request_since = None
+            if cursor is not None:
+                params["id"] = str(cursor)
         elif venue == "Gate":
             # Gate treats ``since`` as a lower bound and returns the *oldest*
             # rows after it.  Combining that with a backwards ``until`` cursor
@@ -322,10 +362,19 @@ def _history_pages(
         fingerprints.add(fingerprint)
         pages += 1
         rows.extend(page)
-        if venue in {"Gate", "OKX", "WhiteBIT", "Mexc", "Bitget"} and timestamps[0] <= since:
+        if venue in {"Gate", "OKX", "WhiteBIT", "Mexc", "Bitget", "XT"} and timestamps[0] <= since:
             break
-        if venue in {"Gate", "OKX", "WhiteBIT", "Mexc", "Bitget"}:
-            cursor = timestamps[0]
+        if venue in {"Gate", "OKX", "WhiteBIT", "Mexc", "Bitget", "XT"}:
+            if venue == "XT":
+                oldest = min(
+                    page,
+                    key=lambda item: int(item.get("timestamp") or now_ms),
+                )
+                cursor = str((oldest.get("info") or {}).get("id") or "") or None
+                if cursor is None:
+                    break
+            else:
+                cursor = timestamps[0]
         else:
             # A generic adapter that returned only recent rows despite a past
             # since cursor cannot be safely back-paged without venue semantics.
@@ -824,6 +873,35 @@ def route_history_status(route: dict[str, Any]) -> dict[str, Any]:
         )
         sides[side] = status
     windows = route_windows(route)
+    window_notes: dict[str, str] = {}
+    reason_labels = {
+        "no_settlements_in_window": "returned no settlements in the trailing window",
+        "settlement_cadence_unresolved": "did not expose enough events to resolve its settlement cadence",
+        "insufficient_event_coverage": "returned fewer exact settlements than the complete window requires",
+        "start_boundary_not_covered": "does not reach the beginning of the trailing window",
+        "latest_settlement_too_old": "has not exposed a recent enough settlement",
+        "internal_settlement_gap": "contains a gap larger than the venue's ordinary funding cadence",
+    }
+    for label in ("1d", "7d", "30d"):
+        gaps: list[str] = []
+        for side, status in sides.items():
+            if status.get("status") == "not_applicable":
+                continue
+            detail = (status.get("window_details") or {}).get(label) or {}
+            reason = str(detail.get("incomplete_reason") or "")
+            if not reason:
+                continue
+            venue = str(route.get(f"{side}_venue") or side.title())
+            count = detail.get("event_count")
+            expected = detail.get("expected_event_count")
+            evidence = (
+                f" ({count}/{expected} events)"
+                if count is not None and expected is not None
+                else ""
+            )
+            gaps.append(f"{venue} {reason_labels.get(reason, reason.replace('_', ' '))}{evidence}")
+        if gaps:
+            window_notes[label] = "; ".join(gaps) + "."
     outcomes = {
         str(item.get("last_attempt_status") or item.get("status") or "")
         for item in sides.values()
@@ -847,6 +925,7 @@ def route_history_status(route: dict[str, Any]) -> dict[str, Any]:
         "status": "complete" if all(windows.get(label) is not None for label in ("1d", "7d", "30d")) else "partial",
         "available_windows": sum(windows.get(label) is not None for label in ("1d", "7d", "30d")),
         "sides": sides,
+        "window_notes": window_notes,
         "note": note,
     }
 

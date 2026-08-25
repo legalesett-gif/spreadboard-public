@@ -19,6 +19,7 @@ from spreadboard import (
 
 RouteResolver = Callable[[str], dict[str, Any] | None]
 QuoteScheduler = Callable[[dict[str, Any]], dict[str, Any]]
+RouteKeyProvider = Callable[[], list[str]]
 _LAST_STATUS: dict[str, Any] = {}
 
 
@@ -32,6 +33,7 @@ class Worker(threading.Thread):
         accounts_path: Path | str,
         route_resolver: RouteResolver,
         quote_scheduler: QuoteScheduler,
+        proxy_route_keys_provider: RouteKeyProvider | None = None,
         interval_seconds: float = 10.0,
         persist_batch: int = 64,
         exact_batch: int = 6,
@@ -41,6 +43,7 @@ class Worker(threading.Thread):
         self.accounts_path = Path(accounts_path)
         self.route_resolver = route_resolver
         self.quote_scheduler = quote_scheduler
+        self.proxy_route_keys_provider = proxy_route_keys_provider
         self.interval_seconds = max(5.0, float(interval_seconds))
         self.persist_batch = max(1, int(persist_batch))
         self.exact_batch = max(1, int(exact_batch))
@@ -70,10 +73,16 @@ class Worker(threading.Thread):
 
     def check_once(self) -> dict[str, Any]:
         keys = accounts.all_tracked_route_keys(db_path=self.accounts_path)
-        if not keys:
+        proxy_priority_keys = (
+            self.proxy_route_keys_provider()
+            if self.proxy_route_keys_provider is not None
+            else []
+        )
+        proxy_keys = list(dict.fromkeys([*keys, *proxy_priority_keys]))
+        if not proxy_keys:
             return {**_empty_status(), "ready": True}
         current, universe = warm_query_projection.LIVE_UNIVERSE.target_rows(
-            route_keys=keys
+            route_keys=proxy_keys
         )
         by_key = {
             str(row.get("route_key") or ""): row
@@ -81,7 +90,8 @@ class Worker(threading.Thread):
             if row.get("route_key")
         }
         persist_keys = _rotated(keys, self._persist_cursor, self.persist_batch)
-        self._persist_cursor = (self._persist_cursor + len(persist_keys)) % len(keys)
+        if keys:
+            self._persist_cursor = (self._persist_cursor + len(persist_keys)) % len(keys)
         recordable = [
             by_key[key]
             for key in persist_keys
@@ -118,12 +128,14 @@ class Worker(threading.Thread):
             scheduled += 1
             if scheduled >= self.exact_batch:
                 break
-        self._exact_cursor = (self._exact_cursor + max(1, inspected)) % len(keys)
+        if keys:
+            self._exact_cursor = (self._exact_cursor + max(1, inspected)) % len(keys)
 
-        proxy_started = self._warm_one_proxy(keys, by_key)
+        proxy_started = self._warm_one_proxy(proxy_keys, by_key)
         return {
             "ready": bool(universe.get("ready")),
             "tracked_routes": len(keys),
+            "priority_chart_routes": len(proxy_priority_keys),
             "resident_routes": len(by_key),
             "recorded_routes": inserted,
             "exact_refreshes_scheduled": scheduled,
@@ -177,6 +189,7 @@ def _empty_status() -> dict[str, Any]:
     return {
         "ready": False,
         "tracked_routes": 0,
+        "priority_chart_routes": 0,
         "resident_routes": 0,
         "recorded_routes": 0,
         "exact_refreshes_scheduled": 0,

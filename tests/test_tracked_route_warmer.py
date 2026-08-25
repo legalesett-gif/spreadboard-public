@@ -118,3 +118,40 @@ def test_worker_records_resident_route_and_schedules_only_cold_route(
     assert proxies
     assert status["tracked_routes"] == 2
     assert status["resident_routes"] == 2
+
+
+def test_priority_funding_chart_is_warmed_without_becoming_an_exact_subscriber_route(
+    tmp_path: Path, monkeypatch
+) -> None:
+    priority = _route("PRIORITY", "GUA")
+    universe = warm_query_projection.LiveRouteUniverse()
+    universe.install({"PRIORITY": priority})
+    monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", universe)
+    monkeypatch.setattr(
+        tracked_route_warmer.accounts,
+        "all_tracked_route_keys",
+        lambda **_kwargs: [],
+    )
+    proxies: list[str] = []
+    scheduled: list[str] = []
+    monkeypatch.setattr(
+        tracked_route_warmer.historical_spreads,
+        "load_or_fetch",
+        lambda row, **_kwargs: proxies.append(str(row["route_key"]))
+        or {"status": "warming"},
+    )
+    worker = tracked_route_warmer.Worker(
+        threading.Event(),
+        accounts_path=tmp_path / "accounts.sqlite3",
+        route_resolver=lambda _key: priority,
+        quote_scheduler=lambda row: scheduled.append(str(row["route_key"]))
+        or {"status": "warming"},
+        proxy_route_keys_provider=lambda: ["PRIORITY"],
+    )
+
+    status = worker.check_once()
+
+    assert proxies == ["PRIORITY"]
+    assert scheduled == []
+    assert status["tracked_routes"] == 0
+    assert status["priority_chart_routes"] == 1
