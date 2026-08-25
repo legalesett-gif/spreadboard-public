@@ -284,6 +284,11 @@ class RefreshLoop:
         _refresh_live_route_index(install=False)
         _refresh_complete_funding_catalog(force=True)
         _refresh_enrichment_subprocess()
+        # Publish the compact navigation generation immediately after its
+        # structural universe and complete funding catalogue agree. Waiting
+        # for the later evidence sweep left a restarted site serving the old
+        # 100MB-per-window views for up to fifteen minutes.
+        _refresh_materialized_views(force=True)
         if not lightweight_mode and not _env_bool("SPREADBOARD_DISABLE_LOCAL_CACHE_WARM"):
             self._refresh_verified_identity_registry(snapshot_path=SNAPSHOT_PATH)
             # A broad discovery publishes a new structural universe, so this is
@@ -1282,8 +1287,9 @@ def main() -> int:
     )
     live_route_worker = warm_query_projection.Worker(
         service_stop_event,
-        interval_seconds=float(
-            os.environ.get("SPREADBOARD_LIVE_QUERY_REFRESH_SECONDS", "10")
+        interval_seconds=max(
+            30.0,
+            float(os.environ.get("SPREADBOARD_LIVE_QUERY_REFRESH_SECONDS", "30")),
         ),
     )
     tracked_route_worker = tracked_route_warmer.Worker(
@@ -1894,7 +1900,7 @@ class MarketEvidenceLoop(threading.Thread):
         # Settlement totals shown in historical Funding views must be rebuilt
         # after the evidence artifact changes.  Otherwise a persisted ordering
         # can be rendered with newer totals and look visibly out of order.
-        _refresh_materialized_views(force=True)
+        _refresh_materialized_views(force=False)
 
 
 def _invalidate_market_price_caches() -> None:
