@@ -15,7 +15,7 @@ import pytest
 from spreadboard import server
 
 
-def test_the_board_is_built_once_and_then_indexed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_legacy_request_builds_one_token_then_reuses_it(monkeypatch: pytest.MonkeyPatch) -> None:
     builds = []
 
     def build(**_kwargs):
@@ -25,6 +25,7 @@ def test_the_board_is_built_once_and_then_indexed(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(server.api_spreads, "load_spreads", build)
     monkeypatch.setattr(server, "_file_signature", lambda _p: "sig")
     monkeypatch.setattr(server.chart_catalog, "route_from_key", lambda _k: None)
+    monkeypatch.setattr(server.funding_radar, "route_for_key", lambda _key: None)
     with server._ROUTE_INDEX_LOCK:
         server._ROUTE_INDEX["signature"] = None
         server._ROUTE_INDEX["rows"] = {}
@@ -34,7 +35,7 @@ def test_the_board_is_built_once_and_then_indexed(monkeypatch: pytest.MonkeyPatc
     second = server._find_canonical_route("B|X|Spot|Y|Spot", board)
 
     assert first and second
-    assert len(builds) == 1, "the second lookup must reuse the index"
+    assert builds == [1], "the second exact route must reuse the token-scoped index"
 
 
 def test_a_new_snapshot_retains_index_until_background_swap(
@@ -59,7 +60,10 @@ def test_a_new_snapshot_retains_index_until_background_swap(
     signature["value"] = "two"
     server._route_index(board)
 
-    assert len(builds) == 1, "a request must never own the changed-snapshot rebuild"
+    assert len(builds) == 2, (
+        "the request builds one token; the explicit background path then owns "
+        "the complete changed-snapshot rebuild"
+    )
 
 
 def test_existing_route_uses_retained_index_during_snapshot_rebuild(
@@ -132,18 +136,11 @@ def test_catalogue_route_rejoins_the_exact_warm_pair(
         "short_market_type": "Futures",
         "short_market_symbol": "ONG/USDT:USDT",
     }
-    warm = {
-        **custom,
-        "executable_spread_pct": 2.9,
-        "displayed_open_spread_pct": 2.9,
-        "depth_weighted_spread_pct": 2.8,
-        "quote_ts_us": 1_800_000_000_000_000,
-    }
     monkeypatch.setattr(server.chart_catalog, "route_from_key", lambda _k: custom)
     monkeypatch.setattr(
         server.catalog_pairs,
         "for_token",
-        lambda *_args, **_kwargs: {"routes": [warm]},
+        lambda *_args, **_kwargs: pytest.fail("chart navigation must not query the catalogue"),
     )
     monkeypatch.setattr(
         server.token_rankings,
@@ -165,8 +162,7 @@ def test_catalogue_route_rejoins_the_exact_warm_pair(
 
     selected = server._find_canonical_route("CUSTOM:ong", Path("board.jsonl"))
 
-    assert selected is warm
-    assert selected["depth_weighted_spread_pct"] == pytest.approx(2.8)
+    assert selected is custom
 
 
 def test_catalogue_route_replaces_stale_index_economics_but_keeps_history_key(
@@ -217,8 +213,34 @@ def test_catalogue_route_replaces_stale_index_economics_but_keeps_history_key(
 
     assert selected["route_key"] == stale_index["route_key"]
     assert selected["notes"] == {"history": "preserve"}
-    assert selected["quote_ts_us"] == current_catalogue["quote_ts_us"]
-    assert selected["depth_weighted_spread_pct"] == pytest.approx(2.8)
+    assert selected["quote_ts_us"] == stale_index["quote_ts_us"]
+    assert selected["depth_weighted_spread_pct"] == pytest.approx(0.9)
+
+
+def test_historical_route_uses_indexed_radar_without_board_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    retained = {
+        "route_key": "GUA|Bingx|Futures|Kucoin Futures|Futures",
+        "token": "GUA",
+    }
+    monkeypatch.setattr(server.chart_catalog, "route_from_key", lambda _k: None)
+    monkeypatch.setattr(
+        server.warm_query_projection.LIVE_UNIVERSE,
+        "target_rows",
+        lambda **_kwargs: ([], {"ready": True}),
+    )
+    monkeypatch.setattr(server.funding_radar, "route_for_key", lambda _key: retained)
+    monkeypatch.setattr(
+        server,
+        "_route_index",
+        lambda _path: pytest.fail("radar chart must not rebuild the board"),
+    )
+    with server._ROUTE_INDEX_LOCK:
+        server._ROUTE_INDEX["signature"] = None
+        server._ROUTE_INDEX["rows"] = {}
+
+    assert server._find_canonical_route(retained["route_key"], Path("board")) is retained
 
 
 def test_pair_row_calls_matched_size_spread_executable() -> None:

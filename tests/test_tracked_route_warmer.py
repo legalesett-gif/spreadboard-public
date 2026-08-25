@@ -99,7 +99,8 @@ def test_worker_records_resident_route_and_schedules_only_cold_route(
     monkeypatch.setattr(
         tracked_route_warmer.historical_spreads,
         "load_or_fetch",
-        lambda row, **_kwargs: proxies.append(row["route_key"]) or {"status": "warming"},
+        lambda row, **_kwargs: proxies.append(row["route_key"])
+        or {"status": "warming", "started": True},
     )
     scheduled = []
     worker = tracked_route_warmer.Worker(
@@ -138,14 +139,14 @@ def test_priority_funding_chart_is_warmed_without_becoming_an_exact_subscriber_r
         tracked_route_warmer.historical_spreads,
         "load_or_fetch",
         lambda row, **_kwargs: proxies.append(str(row["route_key"]))
-        or {"status": "warming"},
+        or {"status": "warming", "started": True},
     )
     worker = tracked_route_warmer.Worker(
         threading.Event(),
         accounts_path=tmp_path / "accounts.sqlite3",
         route_resolver=lambda _key: priority,
         quote_scheduler=lambda row: scheduled.append(str(row["route_key"]))
-        or {"status": "warming"},
+        or {"status": "warming", "started": True},
         proxy_route_keys_provider=lambda: ["PRIORITY"],
     )
 
@@ -155,3 +156,66 @@ def test_priority_funding_chart_is_warmed_without_becoming_an_exact_subscriber_r
     assert scheduled == []
     assert status["tracked_routes"] == 0
     assert status["priority_chart_routes"] == 1
+
+
+def test_proxy_batch_starts_multiple_visible_routes(tmp_path: Path, monkeypatch) -> None:
+    routes = {f"R{index}": _route(f"R{index}", "GUA") for index in range(6)}
+    universe = warm_query_projection.LiveRouteUniverse()
+    universe.install(routes)
+    monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", universe)
+    monkeypatch.setattr(
+        tracked_route_warmer.accounts,
+        "all_tracked_route_keys",
+        lambda **_kwargs: [],
+    )
+    warmed: list[str] = []
+    monkeypatch.setattr(
+        tracked_route_warmer.historical_spreads,
+        "load_or_fetch",
+        lambda row, **_kwargs: warmed.append(str(row["route_key"]))
+        or {"status": "warming", "started": True},
+    )
+    worker = tracked_route_warmer.Worker(
+        threading.Event(),
+        accounts_path=tmp_path / "accounts.sqlite3",
+        route_resolver=lambda key: routes[key],
+        quote_scheduler=lambda _row: {"status": "unused"},
+        proxy_route_keys_provider=lambda: list(routes),
+        proxy_batch=4,
+    )
+
+    status = worker.check_once()
+
+    assert warmed == ["R0", "R1", "R2", "R3"]
+    assert status["history_proxies_started"] == 4
+
+
+def test_saturated_proxy_pool_is_retried_next_pass(tmp_path: Path, monkeypatch) -> None:
+    route = _route("WAIT", "GUA")
+    universe = warm_query_projection.LiveRouteUniverse()
+    universe.install({"WAIT": route})
+    monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", universe)
+    monkeypatch.setattr(
+        tracked_route_warmer.accounts,
+        "all_tracked_route_keys",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        tracked_route_warmer.historical_spreads,
+        "load_or_fetch",
+        lambda *_args, **_kwargs: {"status": "warming", "started": False},
+    )
+    worker = tracked_route_warmer.Worker(
+        threading.Event(),
+        accounts_path=tmp_path / "accounts.sqlite3",
+        route_resolver=lambda _key: route,
+        quote_scheduler=lambda _row: {"status": "unused"},
+        proxy_route_keys_provider=lambda: ["WAIT"],
+    )
+
+    first = worker.check_once()
+    second = worker.check_once()
+
+    assert first["history_proxies_started"] == 0
+    assert second["history_proxies_started"] == 0
+    assert worker._proxy_warmed_at == {}

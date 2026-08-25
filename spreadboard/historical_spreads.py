@@ -18,11 +18,20 @@ from spreadboard.fast_quotes import VENUE_IDS
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 CACHE_DIR = RUNTIME_DIR / "historical_spread_cache"
+LEG_CACHE_DIR = RUNTIME_DIR / "historical_leg_cache"
 
 
 #: Backfills already running, so N readers of one cold chart cause one fetch.
 _WARMING: dict[str, float] = {}
 _WARMING_LOCK = threading.Lock()
+
+# Route history is a cross-product, but exchange candles are not.  Cache and
+# single-flight each exact venue/market leg so Gate GUA is downloaded once and
+# can be reused immediately for every Gate-vs-* chart.  Without this layer the
+# background warmer repeated the same provider request for every pair and
+# could never keep the client-visible universe hot.
+_LEG_FETCH_LOCKS: dict[str, threading.Lock] = {}
+_LEG_FETCH_LOCKS_GUARD = threading.Lock()
 
 #: How long a completed backfill is trusted before it is fetched again.
 #:
@@ -35,6 +44,9 @@ CACHE_SECONDS = 21_600.0
 
 #: How long a warm-up may run before another reader is allowed to retry it.
 WARMING_TIMEOUT_SECONDS = 90.0
+MAX_CONCURRENT_BACKFILLS = max(
+    1, int(os.environ.get("SPREADBOARD_CHART_BACKFILL_CONCURRENCY", "4"))
+)
 
 
 def _is_dex(row: dict[str, Any]) -> bool:
@@ -95,22 +107,41 @@ def load_or_fetch(
     """
     if _is_dex(row):
         return {"status": "not_applicable", "rows": []}
-    route_key = str(row.get("route_key") or "")
+    route_key = _route_cache_identity(row)
     cache_hours = cache_horizon_for(hours)
     cache_path = _cache_path(route_key, cache_hours)
     cached = _read_cache(cache_path)
     if cached and time.time() - float(cached.get("cached_at") or 0) <= CACHE_SECONDS:
         return _with_window(cached, hours=hours, max_points=max_points)
+    # A new pair made from already-warm legs is a cheap local alignment, not a
+    # provider warm-up.  Build it synchronously so the very first chart request
+    # receives a useful line instead of one current point.
+    cached_legs = _cached_legs(row, cache_hours)
+    if cached_legs is not None:
+        result = _build_route_payload(row, cache_hours, cached_legs)
+        _atomic_json(cache_path, result)
+        return _with_window(result, hours=hours, max_points=max_points)
     if not blocking:
-        if _claim_warming(cache_path, row, cache_hours):
-            return {"status": "warming", "rows": [], "timeframe": timeframe_for(hours)}
+        started = _claim_warming(cache_path, row, cache_hours)
+        if started:
+            return {
+                "status": "warming",
+                "started": True,
+                "rows": [],
+                "timeframe": timeframe_for(hours),
+            }
         # Someone else is already fetching it. Serve the stale copy meanwhile so
         # the chart shows the shape of the window instead of going blank.
         if cached:
             result = _with_window(cached, hours=hours, max_points=max_points)
             result["stale"] = True
             return result
-        return {"status": "warming", "rows": [], "timeframe": timeframe_for(hours)}
+        return {
+            "status": "warming",
+            "started": False,
+            "rows": [],
+            "timeframe": timeframe_for(hours),
+        }
     return _fetch_and_cache(
         row,
         hours=cache_hours,
@@ -127,6 +158,12 @@ def _claim_warming(cache_path: Path, row: dict[str, Any], hours: float) -> bool:
     with _WARMING_LOCK:
         started = _WARMING.get(key)
         if started is not None and now - started < WARMING_TIMEOUT_SECONDS:
+            return False
+        active = [
+            value for value in _WARMING.values()
+            if now - value < WARMING_TIMEOUT_SECONDS
+        ]
+        if len(active) >= MAX_CONCURRENT_BACKFILLS:
             return False
         _WARMING[key] = now
 
@@ -161,14 +198,35 @@ def _fetch_and_cache(
     since_ms = int((time.time() - hours * 3600) * 1000)
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = {
-            side: pool.submit(_fetch_leg, row, side, timeframe, since_ms)
+            side: pool.submit(
+                _load_or_fetch_leg,
+                row,
+                side,
+                timeframe,
+                since_ms,
+                hours,
+            )
             for side in ("long", "short")
         }
         legs = {side: future.result() for side, future in futures.items()}
-    if not legs["long"] or not legs["short"]:
-        result = {"status": "unavailable", "rows": [], "timeframe": timeframe, "cached_at": time.time()}
-        _atomic_json(cache_path, result)
-        return result
+    result = _build_route_payload(row, hours, legs)
+    _atomic_json(cache_path, result)
+    return _with_window(result, hours=requested_hours, max_points=max_points)
+
+
+def _build_route_payload(
+    row: dict[str, Any],
+    hours: float,
+    legs: dict[str, list[list[float]]],
+) -> dict[str, Any]:
+    timeframe = timeframe_for(hours)
+    if not legs.get("long") or not legs.get("short"):
+        return {
+            "status": "unavailable",
+            "rows": [],
+            "timeframe": timeframe,
+            "cached_at": time.time(),
+        }
     long_multiplier, short_multiplier = _relative_value_multipliers(row)
     rows = _align(
         legs["long"],
@@ -184,8 +242,72 @@ def _fetch_and_cache(
         "rows": rows,
         "cached_at": time.time(),
     }
-    _atomic_json(cache_path, result)
-    return _with_window(result, hours=requested_hours, max_points=max_points)
+    return result
+
+
+def _leg_cache_identity(row: dict[str, Any], side: str, hours: float) -> str:
+    return "|".join(
+        (
+            str(row.get(f"{side}_venue") or ""),
+            str(row.get(f"{side}_market_type") or ""),
+            _symbol(row, side),
+            f"{hours:g}",
+        )
+    )
+
+
+def _leg_cache_path(row: dict[str, Any], side: str, hours: float) -> Path:
+    digest = hashlib.sha256(_leg_cache_identity(row, side, hours).encode()).hexdigest()
+    return LEG_CACHE_DIR / f"{digest}.json"
+
+
+def _read_leg_cache(
+    row: dict[str, Any], side: str, hours: float
+) -> list[list[float]] | None:
+    payload = _read_cache(_leg_cache_path(row, side, hours))
+    if not payload or time.time() - float(payload.get("cached_at") or 0) > CACHE_SECONDS:
+        return None
+    rows = payload.get("rows")
+    return rows if isinstance(rows, list) else None
+
+
+def _cached_legs(
+    row: dict[str, Any], hours: float
+) -> dict[str, list[list[float]]] | None:
+    legs = {side: _read_leg_cache(row, side, hours) for side in ("long", "short")}
+    if any(value is None for value in legs.values()):
+        return None
+    return {side: value or [] for side, value in legs.items()}
+
+
+def _leg_fetch_lock(identity: str) -> threading.Lock:
+    with _LEG_FETCH_LOCKS_GUARD:
+        return _LEG_FETCH_LOCKS.setdefault(identity, threading.Lock())
+
+
+def _load_or_fetch_leg(
+    row: dict[str, Any],
+    side: str,
+    timeframe: str,
+    since_ms: int,
+    hours: float,
+) -> list[list[float]]:
+    identity = _leg_cache_identity(row, side, hours)
+    with _leg_fetch_lock(identity):
+        cached = _read_leg_cache(row, side, hours)
+        if cached is not None:
+            return cached
+        rows = _fetch_leg(row, side, timeframe, since_ms)
+        _atomic_json(
+            _leg_cache_path(row, side, hours),
+            {
+                "status": "ok" if rows else "unavailable",
+                "timeframe": timeframe,
+                "cached_at": time.time(),
+                "rows": rows,
+            },
+        )
+        return rows
 
 
 def _with_window(
@@ -392,6 +514,25 @@ def _symbol(row: dict[str, Any], side: str) -> str:
     inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
     leg = inputs.get(side) if isinstance(inputs.get(side), dict) else {}
     return str(leg.get("symbol") or row.get(f"{side}_market_symbol") or row.get(f"{side}_symbol") or "")
+
+
+def _route_cache_identity(row: dict[str, Any]) -> str:
+    """Stable pair identity shared by canonical and CUSTOM chart links."""
+
+    long_multiplier, short_multiplier = _relative_value_multipliers(row)
+    parts = [str(row.get("token") or "").upper()]
+    for side in ("long", "short"):
+        parts.extend(
+            (
+                str(row.get(f"{side}_venue") or ""),
+                str(row.get(f"{side}_market_type") or ""),
+                _symbol(row, side),
+                str(row.get(f"{side}_dex_chain") or row.get("dex_chain") or ""),
+                str(row.get(f"{side}_dex_contract") or row.get("dex_contract") or "").casefold(),
+            )
+        )
+    parts.extend((f"{long_multiplier:g}", f"{short_multiplier:g}"))
+    return "|".join(parts)
 
 
 def _cache_path(route_key: str, hours: float) -> Path:

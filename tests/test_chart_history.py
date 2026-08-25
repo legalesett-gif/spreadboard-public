@@ -42,7 +42,9 @@ DEX_ROUTE = {
 @pytest.fixture(autouse=True)
 def _isolate_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(historical_spreads, "CACHE_DIR", tmp_path / "history_cache")
+    monkeypatch.setattr(historical_spreads, "LEG_CACHE_DIR", tmp_path / "leg_history_cache")
     historical_spreads._WARMING.clear()
+    historical_spreads._LEG_FETCH_LOCKS.clear()
 
 
 def _candles(count: int, *, start_ms: int, step_ms: int, price: float) -> list[list[float]]:
@@ -89,7 +91,7 @@ def test_a_24h_warm_serves_the_default_1h_window_without_another_fetch(
     monkeypatch.setattr(historical_spreads, "_fetch_leg", fake_leg)
     warmed = historical_spreads.load_or_fetch(CEX_ROUTE, hours=24, max_points=1800)
     assert warmed["status"] == "ok"
-    assert calls == ["long", "short"]
+    assert sorted(calls) == ["long", "short"]
 
     monkeypatch.setattr(
         historical_spreads,
@@ -100,6 +102,38 @@ def test_a_24h_warm_serves_the_default_1h_window_without_another_fetch(
 
     assert one_hour["status"] == "ok"
     assert len(one_hour["rows"]) >= 50
+
+
+def test_warm_legs_make_a_new_pair_available_without_provider_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now_ms = int(time.time() * 1000)
+    start = now_ms - 24 * 3600 * 1000
+
+    def fake_leg(
+        row: dict[str, Any], side: str, timeframe: str, since_ms: int
+    ) -> list[list[float]]:
+        return _candles(
+            1440,
+            start_ms=start,
+            step_ms=60_000,
+            price=1.0 if side == "long" else 1.01,
+        )
+
+    first = {**CEX_ROUTE, "route_key": "first"}
+    second = {**CEX_ROUTE, "route_key": "second"}
+    monkeypatch.setattr(historical_spreads, "_fetch_leg", fake_leg)
+    assert historical_spreads.load_or_fetch(first, hours=24)["status"] == "ok"
+    monkeypatch.setattr(
+        historical_spreads,
+        "_fetch_leg",
+        lambda *_args, **_kwargs: pytest.fail("warm exact legs must be reused"),
+    )
+
+    result = historical_spreads.load_or_fetch(second, hours=1, blocking=False)
+
+    assert result["status"] == "ok"
+    assert len(result["rows"]) >= 50
 
 
 def test_chart_cache_uses_three_reusable_horizons() -> None:

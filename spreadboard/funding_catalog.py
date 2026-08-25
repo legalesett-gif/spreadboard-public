@@ -496,6 +496,12 @@ def _all_routes(
     payloads: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     selected_payloads = payloads if payloads is not None else _complete_payloads()
+    wanted_symbol = str(symbol or "").strip().upper()
+    if wanted_symbol and wanted_symbol in selected_payloads:
+        # Exact token detail is an O(routes-for-one-token) lookup.  Walking the
+        # whole 100k-pair catalogue made a GUA page take 7-12 seconds even
+        # though the required token payload was already resident.
+        selected_payloads = {wanted_symbol: selected_payloads[wanted_symbol]}
     if not include_retained:
         # The bulk catalogue emits each exact leg pair once inside its token.
         # Economic-identity dedupe is required only when retained radar rows
@@ -559,11 +565,14 @@ def _all_routes(
 
 def _group(
     token: str,
-    routes: list[tuple[float, dict[str, Any]]],
+    routes: list[tuple[float | None, dict[str, Any]]],
     *,
     window: str,
 ) -> dict[str, Any]:
-    routes.sort(key=lambda item: item[0], reverse=True)
+    routes.sort(
+        key=lambda item: item[0] if item[0] is not None else float("-inf"),
+        reverse=True,
+    )
     best_value, best = routes[0]
     rows = [route for _value, route in routes]
     venues = sorted(
@@ -591,7 +600,9 @@ def _group(
         group.update(
             {
                 "best_funding_24h_pct": best_value,
-                "best_funding_apr_pct": best_value * 365.0,
+                "best_funding_apr_pct": (
+                    best_value * 365.0 if best_value is not None else None
+                ),
                 "best_funding_24h_basis": "projected_current_rate",
             }
         )
@@ -640,16 +651,18 @@ def page(
             "offset": max(0, int(offset or 0)),
             "limit": max(1, min(500, int(limit or 25))),
         }
+    wanted_symbol = str(symbol or "").strip().upper()
+    exact_symbol_detail = bool(wanted_symbol and wanted_symbol in payloads)
     rows = _all_routes(
         route_kind=route_kind,
         symbol=symbol,
         exchange=exchange,
         quote=quote,
-        include_retained=selected_window != "now",
+        include_retained=selected_window != "now" or exact_symbol_detail,
         payloads=payloads,
     )
     rows = _resident_live_overlay(rows)
-    grouped: dict[str, list[tuple[float, dict[str, Any]]]] = {}
+    grouped: dict[str, list[tuple[float | None, dict[str, Any]]]] = {}
     history_labels = ("1d", "7d", "30d")
     window_routes = (
         {label: 0 for label in history_labels} if selected_window != "now" else {}
@@ -690,12 +703,18 @@ def page(
         )
         if selected_window == "now":
             value = current_value
-            if value is None or value <= 0:
+            if not exact_symbol_detail and (value is None or value <= 0):
                 continue
-            if min_abs_funding_24h_pct is not None and abs(value) < float(min_abs_funding_24h_pct):
+            if (
+                not exact_symbol_detail
+                and min_abs_funding_24h_pct is not None
+                and abs(value) < float(min_abs_funding_24h_pct)
+            ):
                 continue
-            if min_abs_funding_apr_pct is not None and abs(value) * 365.0 < float(
-                min_abs_funding_apr_pct
+            if (
+                not exact_symbol_detail
+                and min_abs_funding_apr_pct is not None
+                and abs(value) * 365.0 < float(min_abs_funding_apr_pct)
             ):
                 continue
         else:
@@ -708,9 +727,9 @@ def page(
                     window_routes[label] += 1
                     window_tokens[label].add(token)
             value = windows[selected_window]
-            if value is None or value <= 0:
+            if not exact_symbol_detail and (value is None or value <= 0):
                 continue
-        grouped.setdefault(token, []).append((float(value), route))
+        grouped.setdefault(token, []).append((value, route))
 
     groups = [
         _group(token, candidates, window=selected_window)
@@ -737,6 +756,7 @@ def page(
             else {"1d": 1, "7d": 7, "30d": 30}[selected_window]
         ),
         "now_is_independent": True,
+        "exact_symbol_detail": exact_symbol_detail,
         "groups": visible,
         "rows": [route for group in visible for route in group.get("routes") or []],
         "matching_token_count": len(groups),

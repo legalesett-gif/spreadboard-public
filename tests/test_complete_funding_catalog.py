@@ -550,6 +550,57 @@ def test_missing_exact_thirty_day_history_stays_blank(monkeypatch) -> None:
     assert page["matching_route_count"] == 0
 
 
+def test_exact_token_detail_keeps_the_same_route_universe_in_every_window(
+    monkeypatch,
+) -> None:
+    routes = [
+        {
+            **_route(
+                "GUA",
+                f"gua-{index}",
+                current=current,
+                one_day=one_day,
+                seven_day=seven_day,
+                thirty_day=thirty_day,
+            ),
+            "short_venue": f"Short {index}",
+        }
+        for index, (current, one_day, seven_day, thirty_day) in enumerate(
+            (
+                (0.5, 0.4, 2.0, 6.0),
+                (-0.2, 0.1, 1.0, None),
+                (0.0, None, None, None),
+            )
+        )
+    ]
+    monkeypatch.setattr(
+        funding_catalog,
+        "_complete_payloads",
+        lambda: {"GUA": {"routes": routes}, "GUARD": {"routes": []}},
+    )
+    monkeypatch.setattr(funding_radar, "routes_for", lambda *args, **kwargs: [])
+
+    pages = {
+        window: funding_catalog.page(
+            route_kind="FUTURES", window=window, symbol="GUA"
+        )
+        for window in ("now", "1d", "7d", "30d")
+    }
+
+    for page in pages.values():
+        assert page["exact_symbol_detail"] is True
+        assert page["matching_route_count"] == 3
+        assert {route["route_key"] for route in page["groups"][0]["routes"]} == {
+            "gua-0",
+            "gua-1",
+            "gua-2",
+        }
+    assert pages["30d"]["groups"][0]["best_funding_window_pct"] == 6.0
+    assert pages["30d"]["groups"][0]["routes"][-1][
+        "settled_funding_windows"
+    ]["30d"] is None
+
+
 def test_negative_futures_funding_can_form_an_inventory_backed_reverse_pair() -> None:
     from spreadboard.catalog_pairs import Leg, _directions
 

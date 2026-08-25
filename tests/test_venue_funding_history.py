@@ -407,7 +407,9 @@ def test_service_reserves_separate_priority_and_catalog_budgets() -> None:
 
     assert "priority_only=True" in source
     assert "priority_legs=[]" in source
-    assert source.count("budget_seconds=120.0") == 2
+    assert "budget_seconds=30.0" in source
+    assert "budget_seconds=90.0 if demanded_legs else 120.0" in source
+    assert source.count("budget_seconds=120.0") == 1
     assert "[:120]" not in source
     assert 'before["history_catch_up_complete"]' in source
 

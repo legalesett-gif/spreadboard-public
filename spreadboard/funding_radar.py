@@ -30,7 +30,7 @@ MAX_RECORDS = max(
 SCHEMA = "spreadboard.funding_radar.v2"
 
 _LOCK = threading.Lock()
-_CACHE: dict[str, Any] = {"stamp": None, "records": {}}
+_CACHE: dict[str, Any] = {"stamp": None, "records": {}, "routes_by_key": {}}
 
 # Route fields needed by the funding page, Telegram, charts, and the explicit
 # research warning.  Prefix fields retain exact leg symbols/URLs/cadence while
@@ -180,21 +180,65 @@ def refresh(
         temporary.replace(path)
         _CACHE["stamp"] = None
         _CACHE["records"] = {}
+        _CACHE["routes_by_key"] = {}
     return len(records)
 
 
 def load_records(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, dict[str, Any]]:
     """Load the immutable last complete radar generation."""
+    _ensure_records(cache_path)
+    with _LOCK:
+        return dict(_CACHE["records"])
+
+
+def _ensure_records(cache_path: Path | str) -> None:
     path = Path(cache_path)
     try:
         stamp = path.stat().st_mtime_ns
     except OSError:
-        return {}
+        return
     with _LOCK:
         if _CACHE["stamp"] != (str(path), stamp):
             _CACHE["records"] = _read(path).get("records") or {}
+            _CACHE["routes_by_key"] = {
+                str(route.get("route_key")): record
+                for record in _CACHE["records"].values()
+                if isinstance(record, dict)
+                and isinstance((route := record.get("route")), dict)
+                and route.get("route_key")
+            }
             _CACHE["stamp"] = (str(path), stamp)
-        return dict(_CACHE["records"])
+
+
+def route_for_key(
+    route_key: str,
+    *,
+    cache_path: Path | str = DEFAULT_CACHE_PATH,
+    now: float | None = None,
+) -> dict[str, Any] | None:
+    """Return one retained exact route without scanning the whole radar."""
+
+    # Ensure the immutable generation is installed. Subsequent lookups are a
+    # dictionary read and do not copy all 75k records.
+    _ensure_records(cache_path)
+    with _LOCK:
+        record = (_CACHE.get("routes_by_key") or {}).get(str(route_key or ""))
+        if not isinstance(record, dict):
+            return None
+        route = record.get("route") if isinstance(record.get("route"), dict) else {}
+        windows = record.get("windows") if isinstance(record.get("windows"), dict) else {}
+        moment = time.time() if now is None else float(now)
+        return {
+            **route,
+            "radar_historical": True,
+            "radar_windows": dict(windows),
+            "radar_last_seen_at": record.get("last_seen_at"),
+            "radar_last_seen_age_min": max(
+                0.0, (moment - float(record.get("last_seen_ts") or moment)) / 60.0
+            ),
+            "freshness": "historical",
+            "status": "radar",
+        }
 
 
 def routes_for(

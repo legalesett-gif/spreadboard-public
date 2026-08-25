@@ -41,6 +41,7 @@ from spreadboard import (  # noqa: E402
     bulk_quotes,
     catalog_pairs,
     chart_catalog,
+    chart_warm_demand,
     crypto_billing,
     crypto_watcher,
     credential_crypto,
@@ -48,6 +49,7 @@ from spreadboard import (  # noqa: E402
     executor_boundary,
     fair_price,
     funding_catalog,
+    funding_history_demand,
     funding_radar,
     historical_spreads,
     intel,
@@ -5658,6 +5660,7 @@ def _chart_stream_payload(route_key: str, board_path: Path, hours: float) -> dic
 #: the entire twelve-thousand-row board and then scan it, which cost 14.6s on
 #: every chart opened by route -- most of the thirty seconds a member waited.
 _ROUTE_INDEX: dict[str, Any] = {"signature": None, "rows": {}}
+_ROUTE_COMPAT_PATHS: dict[str, str] = {}
 _ROUTE_INDEX_LOCK = threading.Lock()
 
 
@@ -5690,6 +5693,7 @@ def restore_materialized_route_index(board_path: Path) -> int:
     with _ROUTE_INDEX_LOCK:
         _ROUTE_INDEX["signature"] = signature
         _ROUTE_INDEX["rows"] = rows
+        _ROUTE_COMPAT_PATHS.clear()
     warm_query_projection.LIVE_UNIVERSE.install(rows, template=template)
     return len(rows)
 
@@ -5735,6 +5739,7 @@ def _route_index(board_path: Path) -> dict[str, dict[str, Any]]:
     with _ROUTE_INDEX_LOCK:
         _ROUTE_INDEX["signature"] = signature
         _ROUTE_INDEX["rows"] = index
+        _ROUTE_COMPAT_PATHS.clear()
     warm_query_projection.LIVE_UNIVERSE.install(
         index,
         template=_MATERIALIZED_VIEW_STORE.payload_for(
@@ -5777,36 +5782,10 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
             ),
             None,
         )
-        # Token pages use the complete warm catalogue rather than the bounded
-        # scanner. Rejoin their CUSTOM Details links to that same exact row so
-        # top-book, matched-size, funding, rails, and timestamps survive the
-        # handoff. This is a bounded per-token cache/SQLite read; it does not
-        # rebuild the 12k-row board that the fast-path above deliberately
-        # avoids.
-        try:
-            token = str(custom.get("token") or "")
-            catalog = catalog_pairs.with_routes(
-                catalog_pairs.for_token(token, limit=None),
-                token_rankings.dex_routes_for(token_rankings.load(), token),
-                limit=None,
-            )
-            for candidate in catalog.get("routes") or []:
-                if isinstance(candidate, dict) and _same_chart_route(candidate, custom):
-                    if indexed_match is None:
-                        return candidate
-                    # Preserve the canonical route key and history-bearing
-                    # scanner evidence, but let the complete token catalogue
-                    # replace its older quote economics. A changed discovery
-                    # generation can otherwise leave a fresh-looking stored
-                    # age beside an old absolute timestamp and blank the pair.
-                    return {
-                        **indexed_match,
-                        **candidate,
-                        "route_key": indexed_match.get("route_key")
-                        or candidate.get("route_key"),
-                    }
-        except Exception:  # noqa: BLE001 - structural custom row remains usable.
-            pass
+        # A complete per-token catalogue read can take 7-12 seconds when its
+        # SQLite generation is cold.  A chart needs only the exact structural
+        # legs; its live sampler supplies current books asynchronously.  Never
+        # make navigation own that catalogue read.
         return indexed_match or custom
     resident, live_status = warm_query_projection.LIVE_UNIVERSE.target_rows(
         route_keys=(route_key,)
@@ -5822,12 +5801,48 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
         retained_signature = _ROUTE_INDEX["signature"]
         retained = (
             _ROUTE_INDEX["rows"].get(route_key)
-            if retained_signature and retained_signature[0] == str(board_path)
+            if (
+                retained_signature
+                and retained_signature[0] == str(board_path)
+            )
+            or _ROUTE_COMPAT_PATHS.get(route_key) == str(board_path)
             else None
         )
     if retained is not None:
         return retained
-    return _route_index(board_path).get(route_key)
+    # Historical Funding rows can outlive the current route index. Their radar
+    # record retains exact symbols and is sufficient for both the candle proxy
+    # and a fresh book attempt. This is an indexed local lookup, not a board
+    # rebuild.
+    radar_route = funding_radar.route_for_key(route_key)
+    if radar_route is not None:
+        return radar_route
+    # Preserve old bookmarks and pair-detail links without rebuilding the
+    # entire board. The token prefix narrows the durable snapshot to one asset;
+    # generated client links use self-contained CUSTOM keys and never reach
+    # this compatibility path.
+    token = str(route_key or "").split("|", 1)[0].strip().upper()
+    if not token:
+        return None
+    market = api_spreads.load_spreads(
+        board_path=board_path,
+        q=token,
+        include_stale=True,
+        include_unverified=True,
+        limit=None,
+    )
+    indexed = {
+        str(row.get("route_key") or ""): row
+        for row in market.get("rows") or []
+        if row.get("route_key")
+    }
+    if indexed:
+        with _ROUTE_INDEX_LOCK:
+            _ROUTE_INDEX["rows"].update(indexed)
+            _ROUTE_COMPAT_PATHS.update(
+                {key: str(board_path) for key in indexed}
+            )
+    return indexed.get(route_key)
 
 
 def _chart_leg_symbol(row: dict[str, Any], side: str) -> str:
@@ -5877,6 +5892,43 @@ def _chart_history_route_key(row: dict[str, Any]) -> str:
             str(row.get("short_market_type") or "?"),
         ]
     )
+
+
+def _chart_link_route_key(row: dict[str, Any]) -> str:
+    """Self-contained chart key which never needs a broad route lookup."""
+
+    current = str(row.get("route_key") or "")
+    if current.startswith("CUSTOM:"):
+        return current
+    legs: dict[str, dict[str, Any]] = {}
+    for side in ("long", "short"):
+        leg = {
+            "venue": row.get(f"{side}_venue"),
+            "market_type": row.get(f"{side}_market_type"),
+            "symbol": _chart_leg_symbol(row, side),
+        }
+        if "okx dex" in str(leg["venue"] or "").casefold():
+            leg["dex_chain"] = row.get(f"{side}_dex_chain") or row.get("dex_chain")
+            leg["dex_contract"] = row.get(f"{side}_dex_contract") or row.get(
+                "dex_contract"
+            )
+        legs[side] = leg
+    if not all(
+        leg.get("venue") and leg.get("market_type") and leg.get("symbol")
+        for leg in legs.values()
+    ):
+        return current
+    long_multiplier, short_multiplier = historical_spreads._relative_value_multipliers(row)
+    try:
+        return chart_catalog.custom_route_key(
+            str(row.get("token") or ""),
+            legs["long"],
+            legs["short"],
+            long_multiplier=long_multiplier,
+            short_multiplier=short_multiplier,
+        )
+    except (TypeError, ValueError):
+        return current
 
 
 def _schedule_chart_route_refresh(row: dict[str, Any]) -> dict[str, Any]:
@@ -7762,7 +7814,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
     best = group.get("best_route") or {}
     spread_current = api_spreads.spread_quote_current(best)
     best_chart_url = (
-        f"/charts?route_key={board.route_key_url(str(best.get('route_key') or ''))}"
+        f"/charts?route_key={board.route_key_url(_chart_link_route_key(best))}"
         if best.get("route_key")
         else f"/charts?token={quote(str(group.get('token') or ''))}"
     )
@@ -9400,6 +9452,7 @@ def _historical_funding_page(
     frozen last-seen radar totals are never used for an identifiable CEX leg.
     """
     routes_by_identity: dict[tuple[Any, ...], dict[str, Any]] = {}
+    wanted_symbol = str(symbol or "").strip().upper()
     wanted_exchange = str(exchange or "").strip().casefold()
     wanted_quote = str(quote_filter or "").strip().upper()
 
@@ -9438,25 +9491,44 @@ def _historical_funding_page(
         if identity in routes_by_identity:
             continue
         value = funding_radar.window_value(route, window)
-        if value is None or value <= 0:
+        exact_symbol_detail = bool(
+            wanted_symbol and str(route.get("token") or "").upper() == wanted_symbol
+        )
+        if not exact_symbol_detail and (value is None or value <= 0):
             continue
         routes_by_identity[identity] = route
 
-    grouped: dict[str, list[tuple[float, dict[str, Any]]]] = {}
+    exact_symbol_detail = bool(
+        wanted_symbol
+        and any(
+            str(route.get("token") or "").upper() == wanted_symbol
+            for route in routes_by_identity.values()
+        )
+    )
+    grouped: dict[str, list[tuple[float | None, dict[str, Any]]]] = {}
     for route in routes_by_identity.values():
         token = str(route.get("token") or "").upper()
         value = funding_radar.window_value(route, window)
         # Negative or incomplete selected-window routes must not inflate the
         # breadth shown in a positive carry ranking, whether live or retained.
-        if not token or value is None or value <= 0:
+        if (
+            not token
+            or (
+                not exact_symbol_detail
+                and (value is None or value <= 0)
+            )
+        ):
             continue
-        grouped.setdefault(token, []).append((float(value), route))
+        grouped.setdefault(token, []).append((value, route))
 
     ranked: list[dict[str, Any]] = []
     for token, candidates in grouped.items():
         if not candidates:
             continue
-        candidates.sort(key=lambda item: float(item[0]), reverse=True)
+        candidates.sort(
+            key=lambda item: item[0] if item[0] is not None else float("-inf"),
+            reverse=True,
+        )
         best_value, best = candidates[0]
         routes = [route for _value, route in candidates]
         ranked.append(
@@ -9497,6 +9569,7 @@ def _historical_funding_page(
         "window_value_kind": "aggregate_exact_settlements",
         "window_duration_days": {"1d": 1, "7d": 7, "30d": 30}.get(window),
         "now_is_independent": True,
+        "exact_symbol_detail": exact_symbol_detail,
         "groups": visible,
         "rows": [route for group in visible for route in group.get("routes") or []],
         "matching_token_count": len(ranked),
@@ -9602,6 +9675,29 @@ def render_funding_page(
         if search_token
         and str(group.get("token") or "").strip().upper() == search_token
     }
+    if exact_search_tokens:
+        exact_routes = [
+            route
+            for group in funding_groups
+            for route in group.get("routes") or []
+        ]
+        chart_warm_demand.enqueue(
+            _chart_link_route_key(route)
+            for route in exact_routes
+        )
+        funding_history_demand.enqueue(
+            (
+                str(route.get(f"{side}_venue") or ""),
+                str(
+                    route.get(f"{side}_market_symbol")
+                    or route.get(f"{side}_symbol")
+                    or ""
+                ),
+            )
+            for route in exact_routes
+            for side in ("long", "short")
+            if str(route.get(f"{side}_market_type") or "") == "Futures"
+        )
 
     def funding_page_href(
         *,
@@ -9840,7 +9936,7 @@ def render_funding_token_group(
     )
     name = group.get("token_name") or "Metadata pending"
     best_chart_url = (
-        f"/charts?route_key={board.route_key_url(str(best.get('route_key') or ''))}"
+        f"/charts?route_key={board.route_key_url(_chart_link_route_key(best))}"
         if best.get("route_key")
         else f"/charts?token={quote(str(group.get('token') or ''))}"
     )
@@ -9938,14 +10034,15 @@ def render_funding_pair(row: dict[str, Any], *, selected_window: str = "now") ->
         if selected_window == "1d"
         else f"Settled {selected_window} total"
     )
+    chart_key = _chart_link_route_key(row)
     return f"""
     <article class="funding-pair-row {"historical-radar" if historical else ""}" data-route-key="{h(row.get("route_key") or "")}">
       <div><span>Long</span>{render_exchange_link(row, "long", include_market_type=True)}{long_funding}</div>
       <div><span>Short</span>{render_exchange_link(row, "short", include_market_type=True)}{short_funding}{inventory_note}</div>
       <div><span>{h(metric_label)}</span><strong{funding_live_hook}>{fmt_signed_pct(funding_24h, digits=3)}</strong><em>{h(funding_basis)} · {h(funding_cadence_pair(row))}</em></div>
       <div><span>{"Last basis / VWAP" if historical else "Basis / VWAP" if basis_current else "Basis refreshing"}</span><strong data-live-spread>{fmt_pct(row.get("executable_spread_pct"))}</strong><em>{fmt_pct(row.get("depth_weighted_spread_pct"))}</em></div>
-      <div><span>{"Last seen" if historical else "Updated"}</span><strong>{fmt_age(row.get("radar_last_seen_age_min") if historical else row.get("age_min"))}</strong></div>
-      <div class="route-actions">{"" if historical else render_alert_draft_button(row, alert_type="funding", compact=True)}{"" if historical else f'<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a>'}<a href="/charts?route_key={h(board.route_key_url(str(row.get("route_key") or "")))}">Chart</a></div>
+      <div><span>{"Last opportunity seen" if historical else "Price quote age"}</span><strong>{fmt_age(row.get("radar_last_seen_age_min") if historical else row.get("age_min"))}</strong></div>
+      <div class="route-actions">{"" if historical else render_alert_draft_button(row, alert_type="funding", compact=True)}{"" if historical else f'<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a>'}<a href="/charts?route_key={h(board.route_key_url(chart_key))}">Chart</a></div>
     </article>
     """
 

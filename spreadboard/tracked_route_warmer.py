@@ -37,6 +37,7 @@ class Worker(threading.Thread):
         interval_seconds: float = 10.0,
         persist_batch: int = 64,
         exact_batch: int = 6,
+        proxy_batch: int = 4,
     ) -> None:
         super().__init__(name="subscriber-route-warm", daemon=True)
         self.stop_event = stop_event
@@ -47,6 +48,7 @@ class Worker(threading.Thread):
         self.interval_seconds = max(5.0, float(interval_seconds))
         self.persist_batch = max(1, int(persist_batch))
         self.exact_batch = max(1, int(exact_batch))
+        self.proxy_batch = max(1, int(proxy_batch))
         self._persist_cursor = 0
         self._exact_cursor = 0
         self._proxy_cursor = 0
@@ -131,7 +133,7 @@ class Worker(threading.Thread):
         if keys:
             self._exact_cursor = (self._exact_cursor + max(1, inspected)) % len(keys)
 
-        proxy_started = self._warm_one_proxy(proxy_keys, by_key)
+        proxy_started = self._warm_proxies(proxy_keys, by_key)
         return {
             "ready": bool(universe.get("ready")),
             "tracked_routes": len(keys),
@@ -139,20 +141,22 @@ class Worker(threading.Thread):
             "resident_routes": len(by_key),
             "recorded_routes": inserted,
             "exact_refreshes_scheduled": scheduled,
-            "history_proxy_started": proxy_started,
+            "history_proxies_started": proxy_started,
+            "history_proxy_started": proxy_started > 0,
             "universe_age_seconds": universe.get("age_seconds"),
             "error": None,
         }
 
-    def _warm_one_proxy(
+    def _warm_proxies(
         self, keys: list[str], by_key: dict[str, dict[str, Any]]
-    ) -> bool:
+    ) -> int:
         minimum_age = max(
             300.0,
             float(os.environ.get("SPREADBOARD_TRACKED_PROXY_REFRESH_SECONDS", "900")),
         )
         now = time.monotonic()
         inspected = 0
+        started = 0
         for key in _rotated(keys, self._proxy_cursor, len(keys)):
             inspected += 1
             if now - self._proxy_warmed_at.get(key, 0.0) < minimum_age:
@@ -160,17 +164,23 @@ class Worker(threading.Thread):
             row = by_key.get(key) or self.route_resolver(key)
             if row is None:
                 continue
-            self._proxy_warmed_at[key] = now
-            historical_spreads.load_or_fetch(
+            result = historical_spreads.load_or_fetch(
                 row,
                 hours=24.0,
                 max_points=1,
                 blocking=False,
             )
-            self._proxy_cursor = (self._proxy_cursor + inspected) % len(keys)
-            return True
+            if result.get("status") == "warming" and not result.get("started"):
+                # The global backfill pool is occupied (or this route is
+                # already in flight). Retry on the next pass instead of
+                # falsely suppressing it for fifteen minutes.
+                break
+            self._proxy_warmed_at[key] = now
+            started += 1
+            if started >= self.proxy_batch:
+                break
         self._proxy_cursor = (self._proxy_cursor + max(1, inspected)) % len(keys)
-        return False
+        return started
 
 
 def status() -> dict[str, Any]:
@@ -194,6 +204,7 @@ def _empty_status() -> dict[str, Any]:
         "recorded_routes": 0,
         "exact_refreshes_scheduled": 0,
         "history_proxy_started": False,
+        "history_proxies_started": 0,
         "universe_age_seconds": None,
         "error": None,
     }

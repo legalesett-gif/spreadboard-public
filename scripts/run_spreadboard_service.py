@@ -30,8 +30,10 @@ from spreadboard import (
     alerts,
     api_spreads,
     board,
+    chart_warm_demand,
     crypto_watcher,
     funding_catalog,
+    funding_history_demand,
     market_history,
     materialized_views,
     portfolio,
@@ -1313,9 +1315,10 @@ def _priority_funding_chart_route_keys() -> list[str]:
     global _PRIORITY_CHART_KEYS_AT, _PRIORITY_CHART_KEYS
 
     now = time.monotonic()
+    demanded = chart_warm_demand.route_keys()
     with _PRIORITY_CHART_KEYS_LOCK:
         if _PRIORITY_CHART_KEYS and now - _PRIORITY_CHART_KEYS_AT < 300.0:
-            return list(_PRIORITY_CHART_KEYS)
+            return list(dict.fromkeys([*demanded, *_PRIORITY_CHART_KEYS]))
         keys: list[str] = []
         store = materialized_views.default_store()
         for query in _materialized_view_queries():
@@ -1325,15 +1328,20 @@ def _priority_funding_chart_route_keys() -> list[str]:
             if not isinstance(payload, dict):
                 continue
             for group in list(payload.get("groups") or [])[:25]:
-                best = (
-                    group.get("best_funding_route")
-                    or group.get("best_route")
-                    or {}
-                )
-                key = str(best.get("route_key") or "")
-                if key:
-                    keys.append(key)
-        _PRIORITY_CHART_KEYS = list(dict.fromkeys(keys))
+                routes = list(group.get("routes") or [])
+                best = group.get("best_funding_route") or group.get("best_route") or {}
+                # Put the route a member sees in the collapsed row first, then
+                # every exact pair revealed by that token.  Warming only the
+                # best route left the remaining pair links with one point.
+                for route in (best, *routes):
+                    key = str(route.get("route_key") or "")
+                    if key:
+                        keys.append(key)
+        maximum = max(
+            256,
+            int(os.environ.get("SPREADBOARD_PRIORITY_CHART_ROUTE_LIMIT", "2400")),
+        )
+        _PRIORITY_CHART_KEYS = list(dict.fromkeys([*demanded, *keys]))[:maximum]
         _PRIORITY_CHART_KEYS_AT = now
         return list(_PRIORITY_CHART_KEYS)
 
@@ -2302,6 +2310,7 @@ def _refresh_venue_funding_history(
         if not priority_due and not catalog_due:
             return
 
+        demanded_legs = funding_history_demand.legs()
         priority_legs: list[tuple[str, str]] = []
         for query in (*WARM_QUERIES, *FUNDING_ARCHIVE_QUERIES):
             if not query.get("funding_only"):
@@ -2348,14 +2357,27 @@ def _refresh_venue_funding_history(
         # Putting all priority legs at the head of every catch-up generation
         # could otherwise consume the entire 240 seconds and leave the same
         # thousands of background legs pending forever.
-        if priority_due and priority_legs:
-            windows = venue_funding_history.build(
-                list(dict.fromkeys(catalog_legs)),
-                priority_legs=priority_legs,
-                priority_only=True,
-                budget_seconds=120.0,
-            )
-            modes.append("priority")
+        if priority_due and (priority_legs or demanded_legs):
+            if demanded_legs:
+                windows = venue_funding_history.build(
+                    list(dict.fromkeys(catalog_legs)),
+                    priority_legs=demanded_legs,
+                    priority_only=True,
+                    budget_seconds=30.0,
+                )
+                modes.append("demand")
+            demanded_set = set(demanded_legs)
+            ordinary_priorities = [
+                leg for leg in priority_legs if leg not in demanded_set
+            ]
+            if ordinary_priorities:
+                windows = venue_funding_history.build(
+                    list(dict.fromkeys(catalog_legs)),
+                    priority_legs=ordinary_priorities,
+                    priority_only=True,
+                    budget_seconds=90.0 if demanded_legs else 120.0,
+                )
+                modes.append("priority")
         if catalog_due:
             windows = venue_funding_history.build(
                 list(dict.fromkeys(catalog_legs)),

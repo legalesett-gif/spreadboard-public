@@ -113,8 +113,13 @@ def test_group_renderer_remains_complete_without_an_explicit_preview_limit(
 
 
 def test_exact_token_search_renders_every_route_and_token_links_to_that_ledger(
-    monkeypatch,
+    monkeypatch, tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(
+        server.funding_history_demand,
+        "DEFAULT_PATH",
+        tmp_path / "funding-demand.json",
+    )
     routes = [_route("GUA", index) for index in range(12)]
     group = {
         "token": "GUA",
@@ -166,6 +171,8 @@ def test_exact_token_search_renders_every_route_and_token_links_to_that_ledger(
     overview = server.render_funding_page(Path("board.json"), {}, {})
 
     assert exact.count('<article class="funding-pair-row') == 12
+    assert exact.count('/charts?route_key=CUSTOM%3A') == 12
     assert "all exact pairs shown for the exact token match" in exact
     assert 'href="/funding?farm=futures-futures&amp;rank=now&amp;limit=25&amp;q=GUA"' in overview
     assert "Show every exact route for this token" in overview
+    assert server.funding_history_demand.legs() == [("Gate", "GUA/USDT:USDT")]
