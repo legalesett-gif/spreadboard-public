@@ -210,20 +210,29 @@ def test_radar_routes_dedupe_legacy_and_custom_keys_by_economic_legs(
 
 
 def test_dex_historical_api_exports_the_same_globally_ranked_page_two(monkeypatch) -> None:
-    loaded: list[dict] = []
     expanded: list[dict] = []
     page_two = _dex_route("PAGE2", "page-two", value=2.0)
 
     monkeypatch.setattr(
         server.api_spreads,
         "load_spreads",
-        lambda **kwargs: loaded.append(kwargs)
-        or {
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("historical DEX must rank the durable radar without a broad scan")
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "_funding_catalog_seed_payload",
+        lambda *_args, **_kwargs: {
             "ok": True,
-            "groups": [{"token": "CURRENT", "routes": []}],
+            "filters": {"funding_only": True},
+            "groups": [],
             "rows": [],
             "summary": {},
+            "pagination": {},
             "source_health": {"canonical_api": {"status": "fresh"}},
+            "top_edges": [],
+            "top_funding": [],
         },
     )
 
@@ -275,8 +284,7 @@ def test_dex_historical_api_exports_the_same_globally_ranked_page_two(monkeypatc
         },
     )
 
-    assert loaded[0]["offset"] == 0
-    assert loaded[0]["limit"] == 500
+    assert expanded[0]["groups"] == []
     assert expanded[0]["offset"] == 20
     assert expanded[0]["limit"] == 20
     assert expanded[0]["window"] == "7d"

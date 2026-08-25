@@ -2602,7 +2602,16 @@ def api_market_spreads(
         # stale leaders and updating every currently quoted exact route.  This
         # makes a restart or an interrupted background rebuild an availability
         # event, never a multi-minute request owned by the member.
-        if owns_refresh is not False:
+        # Persisted navigation is a structural fallback, not historical
+        # funding truth. Exact settlement windows roll whenever a venue pays;
+        # serving the last materialized Funding ordering after that file moves
+        # can put a now-blank or lower route above a newly complete leader.
+        # Complete CEX Funding has its own persisted catalogue and historical
+        # DEX can be rebuilt from the small durable radar, so both readers stay
+        # request-local/O(1) without accepting an old ranked page.
+        if owns_refresh is not False and not (
+            complete_funding_request or historical_dex_request
+        ):
             persisted = _MATERIALIZED_VIEW_STORE.payload_for(query, board_path=board_path)
             if persisted is not None and _market_payload_cacheable(persisted):
                 _market_cache_finish(cache_key, persisted)
@@ -2661,7 +2670,7 @@ def api_market_spreads(
         min_funding_apr = _query_float(query, "min_abs_funding_apr_pct")
         data = (
             _funding_catalog_seed_payload(query, offset=offset, limit=limit)
-            if complete_funding_request
+            if complete_funding_request or historical_dex_request
             else api_spreads.load_spreads(
                 board_path=board_path,
                 q=_query_first(query, "q"),
@@ -2697,8 +2706,8 @@ def api_market_spreads(
                 require_deliverable=True,
                 sort_by=_query_first(query, "sort") or "edge",
                 direction=_query_first(query, "direction") or "desc",
-                offset=0 if historical_dex_request else offset,
-                limit=500 if historical_dex_request else limit,
+                offset=offset,
+                limit=limit,
             )
         )
         # Discovery is deliberately capped per token so its atomic snapshot

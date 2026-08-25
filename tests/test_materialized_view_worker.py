@@ -143,3 +143,53 @@ def test_collector_restart_seeds_history_demand_from_last_complete_view(
 
     assert service._seed_funding_history_demand() == 1
     assert service.funding_history_demand.legs() == [("Gate", "ONE/USDT:USDT")]
+
+
+def test_worker_archives_every_dex_route_before_compacting_navigation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board = tmp_path / "board.jsonl"
+    board.write_text("", encoding="utf-8")
+    query = {
+        "funding_only": ["1"],
+        "kind": ["DEX-FUTURES"],
+        "sort": ["funding"],
+        "direction": ["desc"],
+        "limit": ["500"],
+        "offset": ["0"],
+    }
+    routes = [
+        {
+            "route_key": f"DEX-{index}",
+            "token": "GUA",
+            "route_kind": "DEX-FUTURES",
+        }
+        for index in range(5)
+    ]
+    payload = {
+        "ok": True,
+        "filters": {"funding_only": True},
+        "groups": [{"token": "GUA", "routes": routes, "route_count": 5}],
+        "rows": routes,
+        "source_health": {"canonical_api": {"row_count": 5}},
+    }
+    archived: list[dict] = []
+    monkeypatch.setattr(worker.service, "_materialized_view_queries", lambda: (query,))
+    monkeypatch.setattr(worker.service, "FUNDING_ARCHIVE_QUERIES", (query,))
+    monkeypatch.setattr(worker, "source_signature", lambda _path: {"stable": True})
+    monkeypatch.setattr(worker, "_release_memory", lambda **_kwargs: None)
+    monkeypatch.setattr(worker.api_spreads, "load_public_route_index", lambda: ({}, {}))
+    monkeypatch.setattr(worker.server, "api_market_spreads", lambda *_args, **_kwargs: payload)
+    monkeypatch.setattr(worker.server, "api_intel", lambda *_args, **_kwargs: {"ok": True})
+    monkeypatch.setattr(worker.funding_catalog, "clear_cache", lambda: None)
+    monkeypatch.setattr(worker.funding_catalog, "refresh_cache", dict)
+    monkeypatch.setattr(worker.funding_radar, "refresh", lambda value: archived.extend(value) or len(archived))
+    monkeypatch.setattr(worker.telegram_queries, "replace_payload", lambda _payload: None)
+    monkeypatch.setattr(worker.telegram_queries, "replace_funding_payloads", lambda _payloads: None)
+
+    worker.build(board, tmp_path / "materialized")
+    stored = materialized_views.Store(tmp_path / "materialized").payload_for(query)
+
+    assert [route["route_key"] for route in archived] == [f"DEX-{index}" for index in range(5)]
+    assert len(stored["groups"][0]["routes"]) == 3
+    assert stored["groups"][0]["route_count"] == 5

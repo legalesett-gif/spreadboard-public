@@ -23,6 +23,7 @@ from spreadboard import (
     api_spreads,
     funding_catalog,
     funding_history_demand,
+    funding_radar,
     materialized_views,
     server,
     telegram_queries,
@@ -113,6 +114,7 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         source_signature=initial_signature,
     )
     started = time.monotonic()
+    dex_archive_routes: list[dict[str, Any]] = []
     try:
         # Charts and arbitrary filters need the full canonical lookup, not only
         # the top 500 tokens. Reuse the independently published fast index when
@@ -184,6 +186,14 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
             if not _cacheable(payload):
                 raise RuntimeError(f"uncacheable_view:{query}")
             _enqueue_funding_priority(payload)
+            if query in service.FUNDING_ARCHIVE_QUERIES:
+                dex_archive_routes.extend(
+                    route
+                    for group in payload.get("groups") or []
+                    if isinstance(group, dict)
+                    for route in group.get("routes") or []
+                    if isinstance(route, dict)
+                )
             writer.write_view(query, _compact_funding_navigation(payload))
             del payload
             _release_memory(keep_rows=True)
@@ -213,6 +223,13 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         if final_signature != initial_signature:
             raise RuntimeError("source_generation_changed_during_build")
         manifest = writer.publish()
+        if dex_archive_routes:
+            # The compact navigation payload previews three pairs per token,
+            # but exact historical re-ranking needs every eligible OKX DEX
+            # direction. Publish the full small DEX universe only after the
+            # source-coherent generation succeeds; radar retention then keeps
+            # cooled leaders discoverable without a request-owned broad scan.
+            funding_radar.refresh(dex_archive_routes)
 
         # Telegram already has durable snapshots; replace them only after the
         # new website generation is complete so a failed build cannot publish a

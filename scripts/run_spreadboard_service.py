@@ -1961,10 +1961,11 @@ class MarketEvidenceLoop(threading.Thread):
             return
         summary = (result.stdout or result.stderr).strip().splitlines()
         _log(summary[-1] if summary else "market evidence completed")
-        # Settlement totals shown in historical Funding views must be rebuilt
-        # after the evidence artifact changes.  Otherwise a persisted ordering
-        # can be rendered with newer totals and look visibly out of order.
-        _refresh_materialized_views(force=False)
+        # Historical CEX readers rank the persisted complete catalogue against
+        # the exact settlement file, while DEX readers rank the durable radar.
+        # Neither needs the 19-view navigation generation rebuilt after every
+        # five-minute evidence slice. Keeping that multi-minute build here
+        # blocked the next provider catch-up cycle and prolonged blank windows.
 
 
 def _invalidate_market_price_caches() -> None:

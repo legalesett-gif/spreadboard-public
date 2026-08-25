@@ -269,6 +269,83 @@ def _route(
     }
 
 
+def test_complete_funding_reader_never_uses_a_persisted_rank_after_history_moves(
+    monkeypatch,
+) -> None:
+    fresh = _route("FRESH", "fresh", current=1.0, one_day=2.5)
+
+    class StaleNavigationStore:
+        def payload_for(self, *_args, **_kwargs):
+            raise AssertionError("historical Funding must not use a materialized ordering")
+
+    monkeypatch.setattr(server, "_MATERIALIZED_VIEW_STORE", StaleNavigationStore())
+    monkeypatch.setattr(server, "_MARKET_CACHE", {})
+    monkeypatch.setattr(server, "_MARKET_CACHE_INFLIGHT", {})
+    monkeypatch.setattr(server, "_exact_catalog_market_projection", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        server,
+        "_funding_catalog_seed_payload",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "filters": {"funding_only": True, "sort": "funding", "direction": "desc"},
+            "summary": {},
+            "pagination": {},
+            "source_health": {"canonical_api": {"status": "fresh"}},
+            "top_edges": [],
+            "top_funding": [],
+            "groups": [],
+            "rows": [],
+        },
+    )
+    monkeypatch.setattr(
+        funding_catalog,
+        "page",
+        lambda **_kwargs: {
+            "ok": True,
+            "mode": "complete_funding_catalogue_ranked_before_pagination",
+            "window": "1d",
+            "window_value_kind": "aggregate_exact_settlements",
+            "window_duration_days": 1,
+            "now_is_independent": True,
+            "groups": [
+                {
+                    "token": "FRESH",
+                    "routes": [fresh],
+                    "best_funding_route": fresh,
+                    "best_funding_window_pct": 2.5,
+                    "route_count": 1,
+                }
+            ],
+            "rows": [fresh],
+            "matching_token_count": 1,
+            "matching_route_count": 1,
+            "returned_token_count": 1,
+            "returned_route_count": 1,
+            "offset": 0,
+            "limit": 25,
+            "largest_value": 2.5,
+            "window_route_counts": {"1d": 1, "7d": 1, "30d": 1},
+            "window_token_counts": {"1d": 1, "7d": 1, "30d": 1},
+        },
+    )
+    monkeypatch.setattr(server, "_sync_telegram_client_universe", lambda value: value)
+
+    payload = server.api_market_spreads(
+        Path("board.json"),
+        {
+            "funding_only": ["1"],
+            "kind": ["FUTURES"],
+            "funding_window": ["1d"],
+            "sort": ["funding"],
+            "direction": ["desc"],
+            "limit": ["25"],
+        },
+    )
+
+    assert [group["token"] for group in payload["groups"]] == ["FRESH"]
+    assert payload["funding_catalog"]["largest_value"] == 2.5
+
+
 def test_current_ranking_happens_before_token_pagination(monkeypatch) -> None:
     """A strong route outside the bounded scanner must still lead Funding."""
     weak = _route("WEAK", "weak", current=0.2, one_day=0.1)

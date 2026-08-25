@@ -452,6 +452,27 @@ def test_materialized_builder_is_an_isolated_low_priority_worker(monkeypatch) ->
     assert options["timeout"] == 1800.0
 
 
+def test_market_evidence_cycle_does_not_wait_for_navigation_materialization(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        service,
+        "_run_worker",
+        lambda *_args, **_kwargs: service.WorkerResult(
+            0, '{"status":"ok","artifact":"market_evidence"}\n', "", False
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_refresh_materialized_views",
+        lambda **_kwargs: pytest.fail(
+            "exact-history cadence must not block on the multi-view builder"
+        ),
+    )
+
+    service.MarketEvidenceLoop(threading.Event())._run_isolated_sweep()
+
+
 def test_complete_funding_catalog_is_an_isolated_bounded_worker(
     tmp_path, monkeypatch
 ) -> None:
