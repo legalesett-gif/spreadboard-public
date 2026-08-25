@@ -134,6 +134,16 @@ class RefreshLoop:
             self.stop_event.wait(max(15.0, self.interval_seconds - elapsed))
 
     def run_chart_catalog(self) -> None:
+        interval = max(
+            900.0,
+            float(os.environ.get("SPREADBOARD_CHART_CATALOG_SECONDS", "21600")),
+        )
+        initial_delay = _remaining_discovery_delay_seconds(
+            RUNTIME_DIR / "chart_market_catalog.json",
+            interval_seconds=interval,
+        )
+        if initial_delay and self.stop_event.wait(initial_delay):
+            return
         while not self.stop_event.is_set():
             # 22,309 markets means a loaded ccxt client per venue; that belongs
             # in a process that exits, not in the one serving pages.
@@ -147,9 +157,7 @@ class RefreshLoop:
                     f"chart catalog markets={summary.get('markets', 0)} "
                     f"tokens={summary.get('tokens', 0)}"
                 )
-            self.stop_event.wait(
-                max(900.0, float(os.environ.get("SPREADBOARD_CHART_CATALOG_SECONDS", "21600")))
-            )
+            self.stop_event.wait(interval)
 
     def _ensure_websocket_worker(self) -> None:
         if _env_bool("SPREADBOARD_DISABLE_WEBSOCKETS"):

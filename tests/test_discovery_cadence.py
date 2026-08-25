@@ -53,3 +53,12 @@ def test_stale_member_views_are_compacted_before_deep_discovery() -> None:
     assert materialize < delay < discovery
     assert "self.pause_websocket_worker()" in source
     assert "self.resume_websocket_worker()" in source
+
+
+def test_recent_chart_catalog_does_not_race_startup_materialization() -> None:
+    source = inspect.getsource(service.RefreshLoop.run_chart_catalog)
+
+    delay = source.index("_remaining_discovery_delay_seconds")
+    build = source.index("_artifact_worker")
+    assert delay < build
+    assert 'RUNTIME_DIR / "chart_market_catalog.json"' in source
