@@ -982,7 +982,13 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 )
             elif parsed.path.startswith("/token/"):
                 symbol = _clean_symbol(parsed.path.removeprefix("/token/"))
-                self._send_html(render_token_page(symbol, self.server.board_path))
+                self._send_html(
+                    render_token_page(
+                        symbol,
+                        self.server.board_path,
+                        parse_qs(parsed.query),
+                    )
+                )
             elif parsed.path == "/api/board":
                 self._send_json(api_board(self.server.board_path, query))
             elif parsed.path == "/api/spreads":
@@ -2523,7 +2529,11 @@ def api_market_spreads(
     )
     if (
         exact_catalog is not None
-        and bool(exact_catalog.get("groups"))
+        and (
+            bool(exact_catalog.get("groups"))
+            or int((exact_catalog.get("summary") or {}).get("verified_route_count") or 0)
+            or int((exact_catalog.get("summary") or {}).get("research_route_count") or 0)
+        )
         and not historical_dex_request
         and (
             not complete_funding_request
@@ -2671,6 +2681,14 @@ def api_market_spreads(
                 persistence=_query_first(query, "persistence"),
                 asset_class=_query_first(query, "asset_class"),
                 funding_only=_query_bool(query, "funding_only"),
+                spread_evidence=(
+                    None
+                    if _query_bool(query, "funding_only")
+                    else "research"
+                    if (_query_first(query, "evidence") or "").casefold()
+                    == "research"
+                    else "verified"
+                ),
                 include_stale=_market_include_stale(query),
                 include_unverified=_query_bool(query, "include_unverified"),
                 # The board is a list of trades to consider; a route whose rail is
@@ -2759,6 +2777,11 @@ def _exact_catalog_market_projection(
         limit=None,
         include_short_spot=True,
     )
+    resident_routes, resident = warm_query_projection.LIVE_UNIVERSE.target_rows(
+        tokens=(raw,)
+    )
+    if payload.get("routes") and resident.get("ready") and resident_routes:
+        payload = catalog_pairs.with_routes(payload, resident_routes, limit=None)
     selected = catalog_pairs.filtered(
         payload,
         kind=_query_first(query, "kind"),
@@ -2770,7 +2793,25 @@ def _exact_catalog_market_projection(
         min_abs_funding_apr_pct=_query_float(query, "min_abs_funding_apr_pct"),
         limit=None,
     )
-    routes = list(selected.get("routes") or [])
+    all_routes = list(selected.get("routes") or [])
+    evidence = str(_query_first(query, "evidence") or "verified").casefold()
+    funding_only = _query_bool(query, "funding_only")
+    evidence_counts = {
+        state: sum(
+            api_spreads.spread_evidence_state(route) == state for route in all_routes
+        )
+        for state in ("verified", "research")
+    }
+    routes = (
+        all_routes
+        if funding_only
+        else [
+            route
+            for route in all_routes
+            if api_spreads.spread_evidence_state(route)
+            == ("research" if evidence == "research" else "verified")
+        ]
+    )
     page_routes = routes[offset : offset + limit]
     page_payload = dict(selected)
     page_payload["routes"] = page_routes
@@ -2787,6 +2828,7 @@ def _exact_catalog_market_projection(
             "exchange": _query_first(query, "exchange"),
             "quote": _query_first(query, "quote"),
             "funding_only": _query_bool(query, "funding_only"),
+            "evidence": "all" if funding_only else evidence,
             "sort": _query_first(query, "sort") or "edge",
             "direction": _query_first(query, "direction") or "desc",
         },
@@ -2800,6 +2842,8 @@ def _exact_catalog_market_projection(
             "matching_rows": len(routes),
             "returned_rows": len(page_routes),
             "expanded_visible_route_count": int(selected.get("route_count") or 0),
+            "verified_route_count": evidence_counts["verified"],
+            "research_route_count": evidence_counts["research"],
         },
         "pagination": {
             "offset": offset,
@@ -7087,6 +7131,7 @@ def render_markets_page(
     api_health_data = source_health.get("canonical_api") or {}
     pagination = data.get("pagination") or {}
     pro_view = (_query_first(query, "view") or "grouped") == "table"
+    research_view = (_query_first(query, "evidence") or "").casefold() == "research"
     generation_warming = data.get("status") == "warming"
     source_ready = data.get("ok") and api_health_data.get("status") == "fresh"
     market_wide_sidebar = _query_bool(query, "funding_only") or any(
@@ -7117,7 +7162,7 @@ def render_markets_page(
         <div>
           <span class="page-kicker">Arbitrage</span>
           <h1>One asset, every live route</h1>
-          <p>Executable public order-book prices grouped by token. Expand an asset to compare every venue pair, funding leg, transfer rail, and chart.</p>
+          <p>Matched-size public order-book prices grouped by token. Research candidates remain available in a separate evidence view and never lead the verified ranking.</p>
         </div>
         <div class="terminal-live-box {"live" if source_ready else "unavailable"}">
           <span>{"Live" if source_ready else "Preparing" if generation_warming else "Reconnecting"}</span>
@@ -7210,7 +7255,7 @@ def render_markets_page(
           <script>document.addEventListener('click',async event=>{{const button=event.target.closest('[data-share-market]');if(!button)return;try{{await navigator.clipboard.writeText(location.href);button.textContent='Link copied';}}catch(error){{button.textContent='Copy unavailable';}}}});</script>
         </div>
         <aside class="market-side">
-          {render_market_lane("Top Arbitrage Edges", data.get("top_edges") or [], "edge", market_wide=market_wide_sidebar)}
+          {render_market_lane("Top Research Signals" if research_view else "Top Arbitrage Edges", groups if research_view else data.get("top_edges") or [], "edge", market_wide=market_wide_sidebar, evidence="research" if research_view else "verified")}
           {render_market_lane("Top Funding Pairs", data.get("top_funding") or [], "funding", market_wide=market_wide_sidebar)}
           <section class="market-side-panel chart-purpose">
             <div class="panel-head flat"><div><h2>Why Charts</h2><p>See whether an edge is persistent, converging, or a single print.</p></div></div>
@@ -8264,8 +8309,10 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         else fmt_signed_pct(row.get(f"{side}_funding_pct"), digits=4)
         for side in ("long", "short")
     )
+    evidence_state = api_spreads.spread_evidence_state(row)
+    evidence_note = " · ".join(api_spreads.spread_evidence_reasons(row))
     return f"""
-    <article class="route-detail-row" data-route-key="{h(row.get("route_key") or "")}">
+    <article class="route-detail-row {h(evidence_state)}" data-route-key="{h(row.get("route_key") or "")}" data-evidence="{h(evidence_state)}">
       <div class="route-leg buy">
         <span>Buy</span>{render_exchange_link(row, "long")}<em>{h(leg_market_label(row.get("long_venue"), row.get("long_market_type")))}</em>
       </div>
@@ -8278,6 +8325,7 @@ def render_market_group_route(row: dict[str, Any]) -> str:
       <div class="route-edge">
         <strong class="{spread_class(displayed_edge)}" data-live-spread>{fmt_pct(displayed_edge)}</strong>
         <span data-live-spread-basis>{h(spread_detail)}</span>
+        <em class="spread-evidence-label {h(evidence_state)}">{h("Verified $500" if evidence_state == "verified" else "Research only")}{f" · {h(evidence_note)}" if evidence_state != "verified" else ""}</em>
       </div>
       <div class="route-funding">
         <strong{funding_live_hook}>{fmt_signed_pct(shown_funding, digits=3) if shown_funding is not None else "—"}</strong>
@@ -8325,6 +8373,7 @@ def render_market_filter_bar(
     selected_quote = (_query_first(query, "quote") or "").upper()
     selected_persistence = (_query_first(query, "persistence") or "").casefold()
     selected_asset_class = (_query_first(query, "asset_class") or "").casefold()
+    selected_evidence = (_query_first(query, "evidence") or "verified").casefold()
     advanced_open = any(
         _query_first(query, key)
         for key in (
@@ -8366,6 +8415,13 @@ def render_market_filter_bar(
         <div class="market-tabs route-tabs" aria-label="Display mode">
           <a class="market-tab {"active" if selected_view != "table" else ""}" href="/markets?{h(urlencode(_query_with(query, view=None, offset=None)))}"><span>Grouped assets</span></a>
           <a class="market-tab {"active" if selected_view == "table" else ""}" href="/markets?{h(urlencode(_query_with(query, view="table", offset=None)))}"><span>Pro Table</span></a>
+        </div>
+      </div>
+      <div class="terminal-filter-row evidence-row">
+        <span>Evidence</span>
+        <div class="market-tabs route-tabs" aria-label="Spread evidence">
+          <a class="market-tab {"active" if selected_evidence != "research" else ""}" href="/markets?{h(urlencode(_query_with(query, evidence=None, offset=None)))}"><span>Verified only</span></a>
+          <a class="market-tab {"active" if selected_evidence == "research" else ""}" href="/markets?{h(urlencode(_query_with(query, evidence="research", include_unverified=1, offset=None)))}"><span>Research candidates</span></a>
         </div>
       </div>
       <div class="terminal-filter-row asset-row">
@@ -8412,6 +8468,8 @@ def render_market_filter_bar(
         <input type="hidden" name="kind" value="{h(selected_kind)}">
         <input type="hidden" name="asset_class" value="{h(selected_asset_class)}">
         <input type="hidden" name="view" value="{h(selected_view if selected_view == "table" else "")}">
+        <input type="hidden" name="evidence" value="{h("research" if selected_evidence == "research" else "")}">
+        <input type="hidden" name="include_unverified" value="{h("1" if selected_evidence == "research" else "")}">
         <label class="market-check"><input type="checkbox" name="funding_only" value="1" {"checked" if _query_bool(query, "funding_only") else ""}> Funding</label>
         <button class="sheet-button primary" type="submit">Apply</button>
         <a class="sheet-button" href="/markets">Reset</a>
@@ -8532,7 +8590,19 @@ def render_carry_windows(row: dict[str, Any]) -> str:
 def render_pro_market_table(rows: list[dict[str, Any]]) -> str:
     def render_row(row: dict[str, Any]) -> str:
         spread_current = api_spreads.spread_quote_current(row)
-        matched = row.get("depth_weighted_spread_pct") if spread_current else None
+        evidence_state = api_spreads.spread_evidence_state(row)
+        matched = (
+            row.get("depth_weighted_spread_pct")
+            if spread_current and evidence_state == "verified"
+            else None
+        )
+        shown_spread = (
+            matched
+            if matched is not None
+            else row.get("executable_spread_pct")
+            if spread_current
+            else None
+        )
         top_book = (
             f"{fmt_pct(row.get('executable_spread_pct'))} top book"
             if spread_current
@@ -8550,7 +8620,7 @@ def render_pro_market_table(rows: list[dict[str, Any]]) -> str:
           <td data-label="Market evidence">{render_route_market_metadata(row)}</td>
           <td data-label="Buy"><strong>{h(row.get("long_venue"))}</strong><small>{h(leg_market_label(row.get("long_venue"), row.get("long_market_type")))} · {fmt_price(row.get("long_price"))}</small></td>
           <td data-label="Sell"><strong>{h(row.get("short_venue"))}</strong><small>{h(leg_market_label(row.get("short_venue"), row.get("short_market_type")))} · {fmt_price(row.get("short_price"))}</small></td>
-          <td data-label="Matched edge"><strong class="{spread_class(matched)}" data-live-spread>{fmt_pct(matched)}</strong><small data-live-spread-basis>{h(top_book)}</small></td>
+          <td data-label="Spread evidence"><strong class="{spread_class(shown_spread)}" data-live-spread>{fmt_pct(shown_spread)}</strong><small data-live-spread-basis>{h(top_book)}</small><small class="spread-evidence-label {h(evidence_state)}">{h("Verified $500" if evidence_state == "verified" else "Research only · " + " · ".join(api_spreads.spread_evidence_reasons(row)))}</small></td>
           <td data-label="Funding 24h"><strong>{fmt_signed_pct(funding_24h_value(row), digits=3)}</strong><small>{h(funding_24h_basis(row))} · {h(funding_cadence_pair(row))}</small>{render_persistence_badge(row)}</td>
           {render_carry_windows(row)}
           <td data-label="Depth"><strong>{fmt_money(row.get("depth_usd"))}</strong><small>{"matched" if not row.get("depth_unverified") else "unverified"}</small></td>
@@ -8567,8 +8637,8 @@ def render_pro_market_table(rows: list[dict[str, Any]]) -> str:
     return f"""
     <div class="pro-market-wrap" role="region" aria-label="Pro Table" tabindex="0">
       <table class="pro-market-table">
-        <caption>Pro Table · matched executable route evidence</caption>
-        <thead><tr><th>Asset</th><th>Market evidence</th><th>Buy</th><th>Sell</th><th>Matched edge</th><th>Funding 24h</th><th>1d</th><th>7d</th><th>30d</th><th>Depth</th><th>Rail</th><th>Actions</th></tr></thead>
+        <caption>Pro Table · verified matched quotes and separately labelled research signals</caption>
+        <thead><tr><th>Asset</th><th>Market evidence</th><th>Buy</th><th>Sell</th><th>Matched edge / research signal</th><th>Funding 24h</th><th>1d</th><th>7d</th><th>30d</th><th>Depth</th><th>Rail</th><th>Actions</th></tr></thead>
         <tbody>{body}</tbody>
       </table>
     </div>
@@ -9060,10 +9130,13 @@ def render_market_lane(
     kind: str,
     *,
     market_wide: bool = False,
+    evidence: str = "verified",
 ) -> str:
     shown_title = title.replace("Top ", "Market-wide ", 1) if market_wide else title
     description = (
-        "Unique assets ranked by matched " + PROBE_LABEL + " VWAP edge"
+        "Unique assets ranked by current top-book signal; matched depth remains unverified"
+        if kind == "edge" and evidence == "research"
+        else "Unique assets ranked by matched " + PROBE_LABEL + " VWAP edge"
         if kind == "edge"
         else "Unique assets ranked by paired carry"
     )
@@ -9090,6 +9163,8 @@ def render_market_mini(row: dict[str, Any], kind: str) -> str:
     else:
         best = row.get("best_route") or row
         primary = row.get("best_edge_pct")
+        if primary is None:
+            primary = api_spreads._entrance_spread_dict(best)
         suffix = ""
         digits = 0
     return f"""
@@ -10068,11 +10143,6 @@ def render_funding_token_group(
         else ""
     )
     name = group.get("token_name") or "Metadata pending"
-    best_chart_url = (
-        f"/charts?route_key={board.route_key_url(_chart_link_route_key(best))}"
-        if best.get("route_key")
-        else f"/charts?token={quote(str(group.get('token') or ''))}"
-    )
     token_url = f"/token/{quote(str(group.get('token') or ''), safe='')}"
     status_badge = (
         f'<span class="funding-radar-badge">Cooled now · seen {fmt_age(best.get("radar_last_seen_age_min"))} ago</span>'
@@ -12113,19 +12183,47 @@ def render_sparkline(
     )
 
 
-def render_token_page(symbol: str, board_path: Path) -> str:
+def render_token_page(
+    symbol: str,
+    board_path: Path,
+    query: dict[str, list[str]] | None = None,
+) -> str:
     # A token URL used to create a brand-new heavy board cache key. The first
     # person opening an obscure asset therefore waited 10-25 seconds even
     # though its exact books were already in the shared store. Derive its full
     # catalogue combinations from those warm books instead: no public API call,
     # no capped 28-route source, and no request-time board rebuild.
     rankings_payload = token_rankings.load()
+    query = query or {}
     pair_data = catalog_pairs.with_routes(
         catalog_pairs.for_token(symbol, limit=None, include_short_spot=True),
         token_rankings.dex_routes_for(rankings_payload, symbol),
         limit=500,
     )
-    group = catalog_pairs.group(pair_data)
+    resident_routes, resident = warm_query_projection.LIVE_UNIVERSE.target_rows(
+        tokens=(symbol,)
+    )
+    if resident.get("ready") and resident_routes:
+        pair_data = catalog_pairs.with_routes(pair_data, resident_routes, limit=500)
+    evidence = str(_query_first(query, "evidence") or "verified").casefold()
+    evidence = "research" if evidence == "research" else "verified"
+    evidence_counts = {
+        state: sum(
+            api_spreads.spread_evidence_state(route) == state
+            for route in pair_data.get("routes") or []
+        )
+        for state in ("verified", "research")
+    }
+    visible_pair_data = dict(pair_data)
+    visible_routes = [
+        route
+        for route in pair_data.get("routes") or []
+        if api_spreads.spread_evidence_state(route) == evidence
+    ]
+    visible_pair_data["routes"] = visible_routes
+    visible_pair_data["displayed_route_count"] = len(visible_routes)
+    visible_pair_data["returned_route_count"] = len(visible_routes)
+    group = catalog_pairs.group(visible_pair_data)
     ranking_rows = token_rankings.ranked(
         rankings_payload, metric="token", query=symbol, limit=20
     )
@@ -12138,8 +12236,18 @@ def render_token_page(symbol: str, board_path: Path) -> str:
         {},
     )
     token_name = ranking.get("token_name") or "Metadata pending"
-    intelligence = render_token_intelligence(symbol, pair_data, group)
-    token_alerts = render_token_quick_alerts(symbol, group.get("best_route") if group else None)
+    all_group = catalog_pairs.group(pair_data)
+    intelligence = render_token_intelligence(symbol, pair_data, all_group)
+    token_alerts = render_token_quick_alerts(
+        symbol, (group or all_group or {}).get("best_route")
+    )
+    evidence_tabs = f"""
+      <nav class="ranking-tabs token-evidence-tabs" aria-label="Spread evidence">
+        <a class="{"active" if evidence == "verified" else ""}" href="/token/{h(symbol)}">Verified only <strong>{h(evidence_counts['verified'])}</strong></a>
+        <a class="{"active" if evidence == "research" else ""}" href="/token/{h(symbol)}?evidence=research">Research candidates <strong>{h(evidence_counts['research'])}</strong></a>
+      </nav>
+      <p class="small evidence-explainer">Verified routes fill the current {PROBE_LABEL} matched-size probe. Research candidates are current top-book leads with incomplete depth, identity, or execution evidence.</p>
+    """
     body = f"""
     <section class="intro compact">
       <div>
@@ -12155,12 +12263,27 @@ def render_token_page(symbol: str, board_path: Path) -> str:
     </section>
       {token_alerts}
       {intelligence}
+      {evidence_tabs}
       <section class="token-canonical-routes">
-        {render_market_token_group(group) if group else render_catalog_pair_empty(pair_data)}
+        {render_market_token_group(group) if group else render_evidence_route_empty(symbol, evidence, evidence_counts)}
       </section>
 	    {render_warm_token_coverage(pair_data, ranking)}
 	    """
     return shell(f"{symbol} - SpreadBoard", "board", body)
+
+
+def render_evidence_route_empty(
+    symbol: str, evidence: str, counts: dict[str, int]
+) -> str:
+    other = "research" if evidence == "verified" else "verified"
+    label = "Research candidates" if other == "research" else "Verified only"
+    return f"""
+    <section class="market-empty evidence-empty">
+      <strong>No {h(evidence)} spread route is available now.</strong>
+      <span>{h(counts.get(other) or 0)} route(s) are available under the separate {h(label)} view. Funding evidence remains independent.</span>
+      <a class="secondary" href="/token/{h(symbol)}{('?evidence=research' if other == 'research' else '')}">Open {h(label)}</a>
+    </section>
+    """
 
 
 def render_token_intelligence(
@@ -20443,6 +20566,13 @@ pre { background: var(--dark); color: white; padding: 14px; border-radius: 8px; 
 .route-prices { display: flex; gap: 6px; align-items: center; font-size: 11px; }
 .route-prices span { color: var(--terminal-muted); }
 .route-edge strong, .route-funding strong { font-size: 14px; }
+.route-edge em.spread-evidence-label { display:block; margin-top:2px; color:var(--terminal-muted); font-size:8px; font-style:normal; line-height:1.35; }
+.route-edge em.spread-evidence-label.verified { color:var(--terminal-accent); }
+.route-edge em.spread-evidence-label.research { color:var(--terminal-warning); }
+.token-evidence-tabs { margin:14px 0 0; }
+.token-evidence-tabs a strong { margin-left:7px; font-size:10px; }
+.evidence-explainer { margin:7px 0 0; }
+.evidence-empty a { width:fit-content; margin:8px auto 0; }
 .route-rails { display: grid; gap: 3px; color: var(--terminal-muted); font-size: 9px; }
 .rail-na { color: var(--terminal-muted); }
 .route-actions { display: flex; justify-content: flex-end; gap: 5px; align-items: center; }

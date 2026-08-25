@@ -363,6 +363,7 @@ def _filters(
         "persistence": _first(query, "persistence"),
         "asset_class": _first(query, "asset_class"),
         "funding_only": _truthy(query, "funding_only"),
+        "evidence": str(_first(query, "evidence") or "verified").casefold(),
         "include_stale": _truthy(query, "include_stale"),
         "include_unverified": _truthy(query, "include_unverified"),
         "max_age_min": _number(query, "max_age_min"),
@@ -501,6 +502,14 @@ def _presentable(
     require_deliverable: bool,
     unverifiable_outliers: set[str],
 ) -> bool:
+    funding_only = bool(filters.get("funding_only"))
+    evidence = str(filters.get("evidence") or "verified")
+    if not funding_only:
+        state = api_spreads.spread_evidence_state(row)
+        if evidence == "research":
+            return state == "research"
+        if state != "verified":
+            return False
     if filters.get("include_unverified"):
         return True
     if (

@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import tempfile
 import threading
 import time
 from collections.abc import Iterable
-
+from pathlib import Path
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", "data"))
 DEFAULT_PATH = RUNTIME_DIR / "funding_history_demand.json"

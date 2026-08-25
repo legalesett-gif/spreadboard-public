@@ -796,12 +796,26 @@ def with_routes(
 
     routes: list[dict[str, Any]] = []
     seen: dict[tuple[Any, ...], int] = {}
-    for row in [*(payload.get("routes") or []), *extra_routes]:
+    combined = [*(payload.get("routes") or []), *extra_routes]
+    structural_counts: dict[tuple[Any, ...], int] = {}
+    for candidate in combined:
+        if isinstance(candidate, dict):
+            identity = _structural_route_identity(candidate)
+            structural_counts[identity] = structural_counts.get(identity, 0) + 1
+    structural_seen: dict[tuple[Any, ...], int] = {}
+    for row in combined:
         if not isinstance(row, dict):
             continue
         identity = route_identity(row)
-        if identity in seen:
-            existing = routes[seen[identity]]
+        route_index = seen.get(identity)
+        structural_identity = _structural_route_identity(row)
+        # Some discovery adapters omit exact symbols while the warm catalogue
+        # has them. Merge only when this venue/type shape is unique across the
+        # combined evidence; otherwise two genuine contracts could collapse.
+        if route_index is None and structural_counts.get(structural_identity) == 2:
+            route_index = structural_seen.get(structural_identity)
+        if route_index is not None:
+            existing = routes[route_index]
             # The warm catalogue owns the current exact-book economics. The
             # bounded scanner can still carry evidence the catalogue does not,
             # notably settled 1d/7d/30d windows and provider metadata. Fill
@@ -810,8 +824,10 @@ def with_routes(
             for key, value in row.items():
                 if key not in existing or existing.get(key) is None:
                     existing[key] = value
+            _merge_conservative_route_evidence(existing, row)
             continue
         seen[identity] = len(routes)
+        structural_seen[structural_identity] = len(routes)
         routes.append(dict(row))
     routes.sort(
         key=lambda row: (
@@ -837,6 +853,48 @@ def with_routes(
         }
     )
     return result
+
+
+def _structural_route_identity(row: dict[str, Any]) -> tuple[Any, ...]:
+    """Symbol-free fallback used only when one route shape is unambiguous."""
+
+    return (
+        str(row.get("token") or "").upper(),
+        str(row.get("route_kind") or "").upper(),
+        str(row.get("long_venue") or "").casefold(),
+        str(row.get("long_market_type") or "").casefold(),
+        str(row.get("short_venue") or "").casefold(),
+        str(row.get("short_market_type") or "").casefold(),
+    )
+
+
+def _merge_conservative_route_evidence(
+    target: dict[str, Any], source: dict[str, Any]
+) -> None:
+    """Keep stronger safety evidence without replacing fresher economics."""
+
+    target_blockers = [str(item) for item in (target.get("blockers") or [])]
+    source_blockers = [str(item) for item in (source.get("blockers") or [])]
+    # A current matched catalogue book supersedes an older missing-depth flag,
+    # but identity and execution warnings remain relevant until disproved.
+    if api_spreads.matched_probe_verified(target):
+        source_blockers = [item for item in source_blockers if item != "depth_unverified"]
+    blockers = list(dict.fromkeys([*target_blockers, *source_blockers]))
+    if blockers:
+        target["blockers"] = blockers
+    for key in ("mirage_guarded", "identity_warning", "identity_mismatch", "thin_book"):
+        if source.get(key) is True:
+            target[key] = True
+    if source.get("deliverable") is False:
+        target["deliverable"] = False
+    source_guard = source.get("tokenized_guard")
+    target_guard = target.get("tokenized_guard")
+    if (
+        isinstance(source_guard, dict)
+        and source_guard.get("rankable") is False
+        and not (isinstance(target_guard, dict) and target_guard.get("rankable") is False)
+    ):
+        target["tokenized_guard"] = dict(source_guard)
 
 
 def route_identity(row: dict[str, Any]) -> tuple[Any, ...]:

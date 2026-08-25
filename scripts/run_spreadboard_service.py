@@ -2521,7 +2521,13 @@ def _refresh_venue_funding_history(
     """Pull each venue's settled funding for the legs the board is showing."""
     global _LAST_VENUE_HISTORY_PRIORITY_AT, _LAST_VENUE_HISTORY_CATALOG_AT
 
-    from spreadboard import accounts, chart_catalog, funding_radar, server, venue_funding_history
+    from spreadboard import (
+        accounts,
+        chart_catalog,
+        funding_radar,
+        server,
+        venue_funding_history,
+    )
 
     try:
         catalog = chart_catalog.load()

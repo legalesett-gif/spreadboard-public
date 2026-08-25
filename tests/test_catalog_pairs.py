@@ -337,6 +337,77 @@ def test_catalogue_merge_deduplicates_the_same_exact_legs_across_key_formats() -
     assert merged["routes"][0]["settled_funding_windows"]["7d"] == 1.2
 
 
+def test_catalogue_merge_preserves_unique_symbol_less_safety_evidence() -> None:
+    catalogue = {
+        "token": "SPCX",
+        "routes": [
+            {
+                "token": "SPCX",
+                "route_key": "CUSTOM:spcx",
+                "route_kind": "SPOT-FUTURES",
+                "long_venue": "Gate",
+                "long_market_type": "Spot",
+                "long_market_symbol": "SPCX/USDT",
+                "short_venue": "Gate",
+                "short_market_type": "Futures",
+                "short_market_symbol": "SPCX/USDT:USDT",
+                "executable_spread_pct": 7.0,
+                "depth_weighted_spread_pct": None,
+                "depth_unverified": True,
+                "quote_ts_us": int(time.time() * 1_000_000),
+            }
+        ],
+    }
+    scanner = {
+        "token": "SPCX",
+        "route_key": "SPCX|Gate|Spot|Gate|Futures",
+        "route_kind": "SPOT-FUTURES",
+        "long_venue": "Gate",
+        "long_market_type": "Spot",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        "executable_spread_pct": 7.0,
+        "blockers": [
+            "depth_unverified",
+            "identity_unverified",
+            "mirage_guard:high_dislocation_identity_unverified",
+            "route_feasibility_unproven",
+        ],
+        "mirage_guarded": True,
+    }
+
+    merged = catalog_pairs.with_routes(catalogue, [scanner])
+
+    assert merged["route_count"] == 1
+    route = merged["routes"][0]
+    assert route["mirage_guarded"] is True
+    assert "identity_unverified" in route["blockers"]
+    assert api_spreads.spread_evidence_state(route) == "research"
+
+
+def test_spread_evidence_separates_matched_and_top_book_without_touching_funding() -> None:
+    now_us = int(time.time() * 1_000_000)
+    verified = {
+        "executable_spread_pct": 1.2,
+        "depth_weighted_spread_pct": 1.1,
+        "target_notional_usd": 500.0,
+        "depth_usd": 500.0,
+        "catalog_pair": True,
+        "quote_ts_us": now_us,
+    }
+    research = {
+        "executable_spread_pct": 7.0,
+        "depth_weighted_spread_pct": None,
+        "depth_unverified": True,
+        "quote_ts_us": now_us,
+        "funding_daily_pct": 0.5,
+    }
+
+    assert api_spreads.spread_evidence_state(verified) == "verified"
+    assert api_spreads.spread_evidence_state(research) == "research"
+    assert research["funding_daily_pct"] == 0.5
+
+
 def test_spread_and_funding_catalogue_filters_are_economically_independent(monkeypatch) -> None:
     monkeypatch.setattr(
         catalog_pairs.venue_funding_history,

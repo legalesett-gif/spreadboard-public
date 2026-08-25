@@ -5,7 +5,6 @@ import threading
 from scripts import run_spreadboard_service
 from spreadboard import chart_warm_demand, historical_spreads, server
 
-
 ROUTE = {
     "route_key": "GUA|Gate|Futures|Mexc|Futures",
     "token": "GUA",
@@ -30,7 +29,7 @@ def test_collector_chart_loop_prioritises_persisted_member_demand(
     monkeypatch.setattr(
         run_spreadboard_service,
         "_priority_funding_chart_route_keys",
-        lambda: [],
+        list,
     )
     monkeypatch.setattr(server, "_find_canonical_route", lambda *_args: ROUTE)
     fetched: list[tuple[float, bool]] = []

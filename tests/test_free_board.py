@@ -754,7 +754,11 @@ def test_nothing_that_loads_a_venue_or_a_snapshot_runs_in_the_server() -> None:
     """
     import inspect
 
-    from scripts.run_spreadboard_service import BulkFundingLoop, BulkQuoteLoop, RefreshLoop
+    from scripts.run_spreadboard_service import (
+        BulkFundingLoop,
+        BulkQuoteLoop,
+        RefreshLoop,
+    )
 
     catalog = inspect.getsource(RefreshLoop.run_chart_catalog)
     assert "chart_catalog.refresh" not in catalog

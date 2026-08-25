@@ -14,7 +14,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from spreadboard import accounts, billing, crypto_billing, telegram_checkout, telegram_queries
+from spreadboard import (
+    accounts,
+    billing,
+    crypto_billing,
+    telegram_checkout,
+    telegram_queries,
+)
 
 
 class TelegramBotError(RuntimeError):

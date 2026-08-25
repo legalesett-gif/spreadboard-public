@@ -4,14 +4,14 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
-from dataclasses import replace
 import fcntl
 import json
-from pathlib import Path
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +19,10 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from spreadarb.api_discovery.models import clean_error, utc_now_iso  # noqa: E402
-from spreadarb.api_discovery.worker import default_groups, run_grouped_discovery  # noqa: E402
+from spreadarb.api_discovery.worker import (  # noqa: E402
+    default_groups,
+    run_grouped_discovery,
+)
 
 DEFAULT_RUNTIME_DB = ROOT / "runtime/market-history.db"
 DEFAULT_LOCK_PATH = Path("/tmp/spreadarb-api-discovery-worker.lock")

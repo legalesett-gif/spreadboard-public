@@ -13,9 +13,8 @@ real exposure.
 
 from __future__ import annotations
 
-from spreadboard.telegram_queries import Query
-
 from spreadboard import telegram_queries
+from spreadboard.telegram_queries import Query
 
 
 def _payload() -> dict:

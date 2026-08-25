@@ -200,6 +200,7 @@ def load_spreads(
     persistence: str | None = None,
     asset_class: str | None = None,
     funding_only: bool = False,
+    spread_evidence: str | None = None,
     include_stale: bool = False,
     require_deliverable: bool = False,
     # A route we cannot depth-verify was hidden outright, so UNITREE carried
@@ -235,7 +236,7 @@ def load_spreads(
         str(api_path), str(board_path), q, exchange, kind, source, min_spread_pct,
         min_abs_funding_24h_pct, min_abs_funding_apr_pct, quote, min_volume_24h_usd,
         min_market_cap_usd, max_market_cap_usd, min_fdv_usd, max_fdv_usd,
-        max_listing_age_days, persistence, asset_class, funding_only, include_stale,
+        max_listing_age_days, persistence, asset_class, funding_only, spread_evidence, include_stale,
         include_unverified, require_deliverable, max_age_min, sort_by, direction, offset, limit,
     )
     try:
@@ -428,6 +429,13 @@ def load_spreads(
                 if getattr(row, "route_kind", None) not in TRANSFER_ROUTE_KINDS
                 or route_deliverable(row) is not False
             ]
+    normalized_evidence = str(spread_evidence or "").casefold()
+    if not funding_only and normalized_evidence in {"verified", "research"}:
+        filtered = [
+            row
+            for row in filtered
+            if spread_evidence_state(row) == normalized_evidence
+        ]
     normalized_sort = _normalize_sort(sort_by)
     normalized_direction = "asc" if str(direction).casefold() == "asc" else "desc"
     filtered.sort(
@@ -489,6 +497,7 @@ def load_spreads(
             "persistence": persistence,
             "asset_class": asset_class,
             "funding_only": funding_only,
+            "evidence": normalized_evidence or None,
             "include_stale": include_stale,
             "include_unverified": include_unverified,
             "max_age_min": max_age_min,
@@ -730,6 +739,90 @@ def matched_probe_verified(row: Any) -> bool:
     return max((value or 0.0 for value in proofs), default=0.0) >= (
         LIVE_BOOK_TARGET_NOTIONAL_USD
     )
+
+
+def spread_evidence_state(row: Any, *, now: float | None = None) -> str:
+    """Classify a current spread without confusing a ticker lead with a quote.
+
+    ``verified`` means both legs fill the product's current matched-size probe.
+    ``research`` means the top-book dislocation is current and structurally
+    plausible, but one or more execution/identity gates remain unresolved.
+    Known-bad or stale rows are ``excluded`` rather than promoted into a
+    catch-all audit lane.
+
+    Funding is deliberately not part of this classification. A valid funding
+    observation must not disappear merely because the opening spread lacks a
+    matched-size book probe.
+    """
+
+    getter = (
+        row.get
+        if isinstance(row, dict)
+        else lambda key, default=None: getattr(row, key, default)
+    )
+    if not spread_quote_current(row, now=now):
+        return "excluded"
+    spread = _float_or_none(getter("executable_spread_pct"))
+    if spread is None or spread <= 0:
+        return "excluded"
+    if (
+        bool(getter("identity_mismatch"))
+        or bool(getter("thin_book"))
+        or getter("deliverable") is False
+        or bool(getter("quote_mismatch"))
+    ):
+        return "excluded"
+    guard = getter("tokenized_guard") or {}
+    guard_rankable = not isinstance(guard, dict) or guard.get("rankable") is not False
+    blockers = [str(item) for item in (getter("blockers", []) or [])]
+    safety_blocked = any(
+        item in {
+            "identity_mismatch",
+            "price_ratio_implausible",
+            "quote_basis_mismatch",
+            "thin_book",
+            "closed_rail",
+        }
+        for item in blockers
+    )
+    if safety_blocked:
+        return "excluded"
+    if (
+        matched_probe_verified(row)
+        and not bool(getter("mirage_guarded"))
+        and not bool(getter("identity_warning"))
+        and guard_rankable
+    ):
+        return "verified"
+    return "research"
+
+
+def spread_evidence_reasons(row: Any) -> list[str]:
+    """Short, stable explanations for the research-candidate UI."""
+
+    getter = (
+        row.get
+        if isinstance(row, dict)
+        else lambda key, default=None: getattr(row, key, default)
+    )
+    reasons: list[str] = []
+    blockers = [str(item) for item in (getter("blockers", []) or [])]
+    if not matched_probe_verified(row):
+        reasons.append(f"${LIVE_BOOK_TARGET_NOTIONAL_USD:,.0f} depth not verified")
+    if bool(getter("mirage_guarded")) or bool(getter("identity_warning")) or any(
+        item.startswith("mirage_guard:") or item == "identity_unverified"
+        for item in blockers
+    ):
+        reasons.append("token identity unresolved")
+    if any(
+        item in {"route_feasibility_unproven", "executor_attestation_missing"}
+        for item in blockers
+    ):
+        reasons.append("execution path unproven")
+    guard = getter("tokenized_guard") or {}
+    if isinstance(guard, dict) and guard.get("rankable") is False:
+        reasons.append("tokenized identity unverified")
+    return list(dict.fromkeys(reasons or ["matched execution evidence incomplete"]))
 
 
 def _live_books() -> dict[str, Any]:

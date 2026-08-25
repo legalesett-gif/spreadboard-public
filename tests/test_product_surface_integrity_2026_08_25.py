@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 from scripts import materialized_view_worker, run_spreadboard_service
 from spreadboard import alerts, catalog_pairs, server, token_rankings
@@ -23,6 +24,8 @@ def _route(**overrides):
         "short_price": 138.0,
         "executable_spread_pct": 7.85,
         "depth_weighted_spread_pct": 7.80,
+        "target_notional_usd": 500.0,
+        "depth_usd": 500.0,
         "funding_daily_pct": 0.005,
         "age_min": 0.0,
         "spread_quote_current": True,
@@ -72,6 +75,11 @@ def test_exact_token_projection_uses_complete_catalogue(monkeypatch) -> None:
         "filtered",
         lambda source, **_kwargs: {**source, "routes": list(source["routes"])},
     )
+    monkeypatch.setattr(
+        server.warm_query_projection.LIVE_UNIVERSE,
+        "target_rows",
+        lambda **_kwargs: ([], {"ready": False}),
+    )
     result = server._exact_catalog_market_projection(
         {"q": ["SPCX"], "kind": ["FUTURES-SPOT-PAIR"]},
         limit=25,
@@ -81,6 +89,86 @@ def test_exact_token_projection_uses_complete_catalogue(monkeypatch) -> None:
     assert result["mode"] == "exact_token_complete_catalogue"
     assert result["rows"][0]["long_venue"] == "Gate"
     assert result["rows"][0]["short_venue"] == "Gate"
+
+
+def test_exact_token_projection_defaults_to_verified_and_counts_research(
+    monkeypatch,
+) -> None:
+    verified = _route(target_notional_usd=500.0, depth_usd=500.0)
+    research = _route(
+        route_key="SPCX|Gate|Spot|Gate|Futures|research",
+        short_venue="Aster",
+        depth_weighted_spread_pct=None,
+        depth_unverified=True,
+    )
+    payload = {"token": "SPCX", "fresh_market_count": 3, "routes": [research, verified]}
+    monkeypatch.setattr(catalog_pairs, "for_token", lambda *_args, **_kwargs: payload)
+    monkeypatch.setattr(
+        catalog_pairs,
+        "filtered",
+        lambda source, **_kwargs: {**source, "routes": list(source["routes"])},
+    )
+    monkeypatch.setattr(
+        server.warm_query_projection.LIVE_UNIVERSE,
+        "target_rows",
+        lambda **_kwargs: ([], {"ready": False}),
+    )
+
+    verified_result = server._exact_catalog_market_projection(
+        {"q": ["SPCX"]}, limit=25, offset=0
+    )
+    research_result = server._exact_catalog_market_projection(
+        {"q": ["SPCX"], "evidence": ["research"]}, limit=25, offset=0
+    )
+
+    assert [row["route_key"] for row in verified_result["rows"]] == [
+        verified["route_key"]
+    ]
+    assert [row["route_key"] for row in research_result["rows"]] == [
+        research["route_key"]
+    ]
+    assert verified_result["summary"]["verified_route_count"] == 1
+    assert verified_result["summary"]["research_route_count"] == 1
+
+
+def test_token_page_exposes_separate_verified_and_research_views(monkeypatch) -> None:
+    verified = _route(target_notional_usd=500.0, depth_usd=500.0)
+    research = _route(
+        route_key="research",
+        short_venue="Aster",
+        depth_weighted_spread_pct=None,
+        depth_unverified=True,
+    )
+    monkeypatch.setattr(
+        catalog_pairs,
+        "for_token",
+        lambda *_args, **_kwargs: {"token": "SPCX", "routes": [verified, research]},
+    )
+    monkeypatch.setattr(server.token_rankings, "load", lambda: {"records": []})
+    monkeypatch.setattr(server.token_rankings, "dex_routes_for", lambda *_args: [])
+    monkeypatch.setattr(server.token_rankings, "ranked", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        server.warm_query_projection.LIVE_UNIVERSE,
+        "target_rows",
+        lambda **_kwargs: ([], {"ready": False}),
+    )
+    monkeypatch.setattr(
+        server.venue_funding_history,
+        "route_windows",
+        lambda _route: {"1d": None, "7d": None, "30d": None},
+    )
+    monkeypatch.setattr(server.market_history, "load_history", lambda **_kwargs: [])
+
+    default_html = server.render_token_page("SPCX", Path("board.json"), {})
+    research_html = server.render_token_page(
+        "SPCX", Path("board.json"), {"evidence": ["research"]}
+    )
+
+    assert "Verified only <strong>1</strong>" in default_html
+    assert 'data-route-key="research"' not in default_html
+    assert "Research candidates <strong>1</strong>" in research_html
+    assert 'data-route-key="research"' in research_html
+    assert "Research only" in research_html
 
 
 def test_funding_materialization_keeps_counts_but_only_html_preview() -> None:
