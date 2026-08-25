@@ -149,6 +149,8 @@ def test_coverage_counts_only_current_complete_windows(tmp_path, monkeypatch) ->
     assert summary["classified_leg_count"] == 1
     assert summary["window_leg_counts"] == {"1d": 0, "7d": 0, "30d": 0}
     assert summary["fully_complete_leg_count"] == 0
+    assert summary["current_window_catch_up_complete"] is False
+    assert summary["history_catch_up_complete"] is False
 
 
 def test_live_tighter_schedule_expires_history_at_the_real_earlier_boundary() -> None:
@@ -440,6 +442,7 @@ def test_coverage_distinguishes_unattempted_from_an_honest_empty_result(tmp_path
         "fully_complete_leg_count": 0,
         "deep_history_pending_leg_count": 1,
         "catch_up_complete": False,
+        "current_window_catch_up_complete": True,
         "history_catch_up_complete": False,
     }
 
@@ -493,6 +496,7 @@ def test_empty_catalog_is_already_caught_up(tmp_path) -> None:
         "fully_complete_leg_count": 0,
         "deep_history_pending_leg_count": 0,
         "catch_up_complete": True,
+        "current_window_catch_up_complete": True,
         "history_catch_up_complete": True,
     }
 

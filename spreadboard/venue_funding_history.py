@@ -959,6 +959,11 @@ def coverage_summary(
     )
     total = len(keys)
     pending = max(0, total - attempted)
+    overdue_window_leg_counts = {
+        label: max(0, stored_window_leg_counts[label] - window_leg_counts[label])
+        for label in ("1d", "7d", "30d")
+    }
+    current_window_catch_up_complete = not any(overdue_window_leg_counts.values())
     return {
         "catalog_leg_count": total,
         "attempted_leg_count": attempted,
@@ -969,10 +974,7 @@ def coverage_summary(
         "source_check_pct": round((attempted / total * 100.0) if total else 100.0, 2),
         "window_leg_counts": window_leg_counts,
         "stored_window_leg_counts": stored_window_leg_counts,
-        "overdue_window_leg_counts": {
-            label: max(0, stored_window_leg_counts[label] - window_leg_counts[label])
-            for label in ("1d", "7d", "30d")
-        },
+        "overdue_window_leg_counts": overdue_window_leg_counts,
         "window_coverage_pct": {
             label: round((count / total * 100.0) if total else 100.0, 2)
             for label, count in window_leg_counts.items()
@@ -980,7 +982,12 @@ def coverage_summary(
         "fully_complete_leg_count": fully_complete,
         "deep_history_pending_leg_count": deep_history_pending,
         "catch_up_complete": pending == 0,
-        "history_catch_up_complete": pending == 0 and deep_history_pending == 0,
+        "current_window_catch_up_complete": current_window_catch_up_complete,
+        "history_catch_up_complete": (
+            pending == 0
+            and deep_history_pending == 0
+            and current_window_catch_up_complete
+        ),
     }
 
 
