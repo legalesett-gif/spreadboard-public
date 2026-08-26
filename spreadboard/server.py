@@ -7091,6 +7091,17 @@ def render_board_stream_script(
         });
       };
       connect();
+      const disconnect = () => {
+        if (!source) return;
+        source.close();
+        source = null;
+      };
+      // Chrome may keep the old document in its back/forward cache while a
+      // member moves between tabs. EventSource is not useful there, and an
+      // unclosed one leaves the server repricing an invisible page. Close it
+      // explicitly instead of relying on socket teardown heuristics.
+      window.addEventListener("pagehide", disconnect);
+      window.addEventListener("beforeunload", disconnect);
       document.addEventListener("spreadboard:structure-refreshed", connect);
     })();
     </script>""".replace("__SUFFIX__", suffix).replace("__ENDPOINT__", endpoint).replace("__PROBE__", PROBE_LABEL)
