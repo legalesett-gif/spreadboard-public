@@ -823,6 +823,7 @@ def test_historical_page_requests_a_distinct_complete_window(monkeypatch) -> Non
     assert "Blank history is explicit" not in html
     assert "Complete trailing windows:" not in html
     assert "Settlement archive coverage:" not in html
+    assert "/api/stream/board" not in html
 
 
 def test_historical_dex_page_and_export_request_the_same_selected_window(monkeypatch) -> None:
@@ -877,6 +878,7 @@ def test_historical_dex_page_and_export_request_the_same_selected_window(monkeyp
     assert captured["offset"] == ["20"]
     assert captured["limit"] == ["20"]
     assert "funding_window=7d" in html
+    assert "/api/stream/board" not in html
     assert (
         'data-export-url="/api/spreads?offset=20&amp;limit=20&amp;funding_only=1'
         in html

@@ -84,6 +84,7 @@ def test_complete_page_previews_three_pairs_per_token_without_bloating_html(
 
     html = server.render_funding_page(Path("board.json"), {}, {})
 
+    assert "/api/stream/board" in html
     assert html.count('<article class="funding-pair-row') == 75
     assert html.count("Showing the best 3 of 100 exact pairs") == 25
     assert "97 more are included in this token page's Export JSON" in html

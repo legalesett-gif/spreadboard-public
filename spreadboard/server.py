@@ -10029,9 +10029,18 @@ def render_funding_page(
         )
         + "</nav>"
     )
+    # Settled windows are immutable evidence projections.  Subscribing them to
+    # the live board stream both used the wrong (Now) semantics and left an
+    # expensive half-second worker behind while members moved between tabs.
+    # The page-level refresh below installs the next atomic background
+    # generation; only the genuinely live Now lane needs SSE price/funding
+    # ticks.
+    funding_stream = (
+        render_board_stream_script(funding_query) if selected_window == "now" else ""
+    )
     body = f"""
     <section class="funding-page terminal-page" data-refresh="{refresh_seconds}" data-refresh-silent="1">
-      {render_board_stream_script(funding_query)}
+      {funding_stream}
       <div class="terminal-heading">
         <div>
           <span class="page-kicker">Funding</span>
