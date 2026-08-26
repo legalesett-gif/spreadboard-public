@@ -73,7 +73,9 @@ def test_a_historical_tab_shows_the_exact_window_it_ranked() -> None:
     assert "settled 7d" in html
     assert "Settled 7d" in html
     assert "<span>Net 24h</span>" not in html
-    assert "+3.301%" not in html
+    assert "Now projected" in html
+    assert "+3.301%" in html
+    assert "7d settled" in html
 
 
 def test_the_page_passes_its_selected_window_into_every_row(
@@ -110,7 +112,8 @@ def test_the_page_passes_its_selected_window_into_every_row(
 
     assert "Settled 7d" in html
     assert "+9.060%" in html
-    assert "+3.301%" not in html
+    assert "Now projected" in html
+    assert "+3.301%" in html
     assert "radar routes" in html
     assert "Funding pairs" in html
 

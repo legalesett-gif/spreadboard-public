@@ -430,11 +430,14 @@ def load_spreads(
                 or route_deliverable(row) is not False
             ]
     normalized_evidence = str(spread_evidence or "").casefold()
-    if not funding_only and normalized_evidence in {"verified", "research"}:
+    if not funding_only and normalized_evidence in {"verified", "research", "all"}:
+        accepted_states = (
+            {"verified", "research"}
+            if normalized_evidence == "all"
+            else {normalized_evidence}
+        )
         filtered = [
-            row
-            for row in filtered
-            if spread_evidence_state(row) == normalized_evidence
+            row for row in filtered if spread_evidence_state(row) in accepted_states
         ]
     normalized_sort = _normalize_sort(sort_by)
     normalized_direction = "asc" if str(direction).casefold() == "asc" else "desc"

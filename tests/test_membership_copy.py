@@ -240,7 +240,7 @@ def test_pro_table_keeps_execution_evidence_and_route_actions() -> None:
         "long_deposit_enabled": True, "long_withdraw_enabled": True,
         "short_deposit_enabled": True, "short_withdraw_enabled": True,
     }])
-    for expected in ("Pro Table", "Matched edge", "Funding 24h", "SIREN", "Details", "Chart"):
+    for expected in ("Pro Table", "Spread signal / basis", "Funding 24h", "SIREN", "Details", "Chart"):
         assert expected in html
 
 

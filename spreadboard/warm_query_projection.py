@@ -240,7 +240,7 @@ def project(
     sort_by = str(filters["sort"])
     reverse = filters["direction"] == "desc"
     filtered.sort(key=lambda row: api_spreads._route_dict_sort_value(row, sort_by), reverse=reverse)
-    groups = _group_rows(filtered, evidence=str(filters.get("evidence") or "verified"))
+    groups = _group_rows(filtered, evidence=str(filters.get("evidence") or "all"))
     for group in groups:
         (group.get("routes") or []).sort(
             key=lambda row: api_spreads._route_dict_sort_value(row, sort_by),
@@ -363,7 +363,7 @@ def _filters(
         "persistence": _first(query, "persistence"),
         "asset_class": _first(query, "asset_class"),
         "funding_only": _truthy(query, "funding_only"),
-        "evidence": str(_first(query, "evidence") or "verified").casefold(),
+        "evidence": str(_first(query, "evidence") or "all").casefold(),
         "include_stale": _truthy(query, "include_stale"),
         "include_unverified": _truthy(query, "include_unverified"),
         "max_age_min": _number(query, "max_age_min"),
@@ -503,12 +503,14 @@ def _presentable(
     unverifiable_outliers: set[str],
 ) -> bool:
     funding_only = bool(filters.get("funding_only"))
-    evidence = str(filters.get("evidence") or "verified")
+    evidence = str(filters.get("evidence") or "all")
     if not funding_only:
         state = api_spreads.spread_evidence_state(row)
         if evidence == "research":
             return state == "research"
-        if state != "verified":
+        if evidence == "verified":
+            return state == "verified"
+        if state not in {"verified", "research"}:
             return False
     if filters.get("include_unverified"):
         return True
@@ -593,7 +595,7 @@ def _current_rankable(row: dict[str, Any]) -> bool:
 
 
 def _group_rows(
-    rows: list[dict[str, Any]], *, evidence: str = "verified"
+    rows: list[dict[str, Any]], *, evidence: str = "all"
 ) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -610,6 +612,7 @@ def _group_rows(
             reverse=True,
         )
         research_view = evidence == "research"
+        combined_view = evidence == "all"
         tradeable = [row for row in token_rows if _current_rankable(row)]
         quotable = [
             row
@@ -621,7 +624,9 @@ def _group_rows(
             )
         ]
         best = max(
-            (quotable if research_view else tradeable) or quotable or token_rows,
+            (quotable if research_view or combined_view else tradeable)
+            or quotable
+            or token_rows,
             key=api_spreads._entrance_spread_dict,
         )
         funding_rows = [
@@ -658,7 +663,7 @@ def _group_rows(
                 "best_route": best,
                 "best_edge_pct": (
                     api_spreads._entrance_spread_dict(best)
-                    if tradeable or (research_view and quotable)
+                    if tradeable or ((research_view or combined_view) and quotable)
                     else None
                 ),
                 "best_funding_route": best_funding,

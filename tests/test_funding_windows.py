@@ -148,14 +148,13 @@ def test_presentation_parameters_do_not_fragment_the_cache() -> None:
     assert 'k not in {"rank", "farm"}' in source
 
 
-def test_realised_windows_have_three_cells_and_an_explicit_summary_column() -> None:
-    """The page used to render eight fields into seven grid columns, which
-    pushed 7d/30d returns beyond the right edge at desktop widths."""
+def test_funding_windows_have_four_cells_and_an_explicit_summary_column() -> None:
+    """Now plus exact 24h/7d/30d stay inside the full-width summary column."""
     from spreadboard import server
 
     page = server.shell("Funding", "funding", "")
 
-    assert "grid-template-columns: repeat(3,minmax(0,1fr))" in server.APP_CSS
+    assert "grid-template-columns: repeat(4,minmax(0,1fr))" in server.APP_CSS
     assert (
         "grid-template-columns: minmax(150px,1.3fr) minmax(140px,1.15fr) "
         "minmax(82px,.62fr) minmax(82px,.68fr) minmax(76px,.58fr) "

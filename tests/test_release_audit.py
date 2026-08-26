@@ -3391,10 +3391,10 @@ def test_funding_page_explains_rate_truth_and_execution_evidence(
     html = server.render_funding_page(tmp_path / "board.jsonl", {}, {})
 
     assert "A rate is real market evidence, not proof the pair can be entered" in html
-    assert "Verified rows prove the canonical $500 depth check" in html
+    assert "every route stays in one list" in html
 
 
-def test_funding_group_labels_research_execution_evidence() -> None:
+def test_funding_group_keeps_indicative_execution_evidence_in_one_list() -> None:
     route = {
         "route_key": "GUA|Mexc|Futures|Gate|Futures",
         "token": "GUA",
@@ -3410,7 +3410,8 @@ def test_funding_group_labels_research_execution_evidence() -> None:
         {"token": "GUA", "best_funding_route": route, "routes": [route]}
     )
 
-    assert "Research only" in html
+    assert "Indicative spread · DD" in html
+    assert "Research only" not in html
     assert "$500 depth not verified" in html
 
 

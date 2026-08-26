@@ -1518,11 +1518,6 @@ WARM_QUERIES: tuple[dict[str, list[str]], ...] = (
     {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
     {"kind": ["FUTURES"], "limit": ["500"]},
     {"kind": ["FUTURES-SPOT-PAIR"], "limit": ["500"]},
-    # UACryptoInvest-style top-book dislocations often cannot fill the board's
-    # canonical $500 probe. Keep them in a separately labelled, persisted
-    # Research lane instead of hiding them or weakening the Verified ranking.
-    {"kind": ["FUTURES"], "evidence": ["research"], "include_unverified": ["1"], "limit": ["500"]},
-    {"kind": ["FUTURES-SPOT-PAIR"], "evidence": ["research"], "include_unverified": ["1"], "limit": ["500"]},
     {"kind": ["SPOT"], "limit": ["500"]},
     {"kind": ["DEX-FUTURES"], "limit": ["500"]},
     {"kind": ["DEX-SPOT"], "limit": ["500"]},

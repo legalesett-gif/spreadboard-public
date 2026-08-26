@@ -91,7 +91,7 @@ def test_exact_token_projection_uses_complete_catalogue(monkeypatch) -> None:
     assert result["rows"][0]["short_venue"] == "Gate"
 
 
-def test_exact_token_projection_defaults_to_verified_and_counts_research(
+def test_exact_token_projection_defaults_to_one_safe_combined_list(
     monkeypatch,
 ) -> None:
     verified = _route(target_notional_usd=500.0, depth_usd=500.0)
@@ -114,24 +114,54 @@ def test_exact_token_projection_defaults_to_verified_and_counts_research(
         lambda **_kwargs: ([], {"ready": False}),
     )
 
-    verified_result = server._exact_catalog_market_projection(
+    combined_result = server._exact_catalog_market_projection(
         {"q": ["SPCX"]}, limit=25, offset=0
     )
     research_result = server._exact_catalog_market_projection(
         {"q": ["SPCX"], "evidence": ["research"]}, limit=25, offset=0
     )
 
-    assert [row["route_key"] for row in verified_result["rows"]] == [
-        verified["route_key"]
-    ]
+    assert {row["route_key"] for row in combined_result["rows"]} == {
+        verified["route_key"],
+        research["route_key"],
+    }
     assert [row["route_key"] for row in research_result["rows"]] == [
         research["route_key"]
     ]
-    assert verified_result["summary"]["verified_route_count"] == 1
-    assert verified_result["summary"]["research_route_count"] == 1
+    assert combined_result["summary"]["verified_route_count"] == 1
+    assert combined_result["summary"]["research_route_count"] == 1
+    assert combined_result["filters"]["evidence"] == "all"
 
 
-def test_token_page_exposes_separate_verified_and_research_views(monkeypatch) -> None:
+def test_public_markets_ignore_retired_evidence_lane_parameters(
+    monkeypatch, tmp_path: Path
+) -> None:
+    captured = {}
+
+    def exact_projection(query, **_kwargs):
+        captured.update(query)
+        return {
+            "ok": True,
+            "groups": [{"token": "SPCX", "routes": [_route()]}],
+            "rows": [_route()],
+            "summary": {},
+            "source_health": {"canonical_api": {"status": "fresh"}},
+        }
+
+    monkeypatch.setattr(server, "_exact_catalog_market_projection", exact_projection)
+    monkeypatch.setattr(server, "_sync_telegram_client_universe", lambda value: value)
+
+    result = server.api_market_spreads(
+        tmp_path / "board.json",
+        {"q": ["SPCX"], "evidence": ["research"], "include_unverified": ["1"]},
+    )
+
+    assert result["ok"] is True
+    assert "evidence" not in captured
+    assert "include_unverified" not in captured
+
+
+def test_token_page_exposes_one_combined_spread_view(monkeypatch) -> None:
     verified = _route(target_notional_usd=500.0, depth_usd=500.0)
     research = _route(
         route_key="research",
@@ -160,15 +190,46 @@ def test_token_page_exposes_separate_verified_and_research_views(monkeypatch) ->
     monkeypatch.setattr(server.market_history, "load_history", lambda **_kwargs: [])
 
     default_html = server.render_token_page("SPCX", Path("board.json"), {})
-    research_html = server.render_token_page(
+    legacy_research_url_html = server.render_token_page(
         "SPCX", Path("board.json"), {"evidence": ["research"]}
     )
 
-    assert "Verified only <strong>1</strong>" in default_html
-    assert 'data-route-key="research"' not in default_html
-    assert "Research candidates <strong>1</strong>" in research_html
-    assert 'data-route-key="research"' in research_html
-    assert "Research only" in research_html
+    for html in (default_html, legacy_research_url_html):
+        assert 'data-route-key="research"' in html
+        assert 'data-route-key="SPCX|Gate|Spot|Gate|Futures"' in html
+        assert "One current spread list" in html
+        assert "Research only" not in html
+        assert "Verified only" not in html
+
+
+def test_expanded_funding_pair_shows_now_and_exact_settled_windows(monkeypatch) -> None:
+    route = _route(
+        funding_daily_pct=0.12,
+        funding_projected_24h_pct=0.12,
+        funding_navigation_windows={"1d": 0.08, "7d": 0.71, "30d": None},
+    )
+    monkeypatch.setattr(
+        server.venue_funding_history,
+        "route_history_status",
+        lambda _route: {
+            "status": "partial",
+            "note": "30d cadence incomplete.",
+            "window_notes": {"30d": "30d cadence incomplete."},
+        },
+    )
+
+    html = server.render_funding_pair(route)
+
+    assert "Now est. / settled history" in html
+    assert "Now is projected 24-hour carry" in html
+    assert "+0.120%" in html
+    assert "<em>24h</em>" in html
+    assert "+0.08%" in html
+    assert "<em>7d</em>" in html
+    assert "+0.71%" in html
+    assert "<em>30d</em>" in html
+    assert "30d cadence incomplete." in html
+    assert "<em>30d</em><strong>—</strong>" in html
 
 
 def test_funding_materialization_keeps_counts_but_only_html_preview() -> None:

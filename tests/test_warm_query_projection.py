@@ -231,6 +231,33 @@ def test_research_projection_ranks_by_current_top_book_signal(
     assert projected["groups"][0]["best_edge_pct"] == 7.8
 
 
+def test_default_projection_merges_matched_and_indicative_spreads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    matched = _route("SPCX", route_key="matched", spread=0.4)
+    indicative = _route("SPCX", route_key="indicative", spread=1.2)
+    indicative.update({"depth_weighted_spread_pct": None, "depth_unverified": True})
+    excluded = _route("SPCX", route_key="excluded", spread=9.0)
+    excluded.update({"identity_mismatch": True})
+    universe = _ready_universe(
+        monkeypatch,
+        {"matched": matched, "indicative": indicative, "excluded": excluded},
+    )
+    monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", universe)
+
+    projected = warm_query_projection.project(
+        {"q": ["SPCX"]}, template=_template(), limit=25, offset=0
+    )
+
+    assert projected is not None
+    assert projected["filters"]["evidence"] == "all"
+    assert {row["route_key"] for row in projected["rows"]} == {
+        "matched",
+        "indicative",
+    }
+    assert projected["groups"][0]["best_route"]["route_key"] == "indicative"
+
+
 def test_projection_failure_releases_single_flight_and_serves_durable_view(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

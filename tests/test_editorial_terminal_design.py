@@ -57,7 +57,7 @@ def test_markets_and_funding_have_explicit_ledger_headers(monkeypatch) -> None:
 
     assert 'class="token-route-ledger-head"' in markets
     assert (
-        "<span>Token</span><span>Best route</span><span>Spread evidence</span>"
+        "<span>Token</span><span>Best route</span><span>Spread signal / basis</span>"
         in markets
     )
     assert "Best-route funding" in markets

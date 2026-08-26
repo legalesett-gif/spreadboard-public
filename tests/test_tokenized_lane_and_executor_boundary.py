@@ -165,9 +165,9 @@ def test_tokenized_guard_reaches_api_and_both_market_views(monkeypatch):
     payload = api_spreads._public_row(tokenized)
 
     assert payload["tokenized_guard"]["status"] == "blocked"
-    assert "research only" in server.render_tokenized_guard_badge(payload).casefold()
+    assert "dd pending" in server.render_tokenized_guard_badge(payload).casefold()
     detail = server.render_pair_tokenized_guard(payload)
-    assert "Research only" in detail
+    assert "Due diligence pending" in detail
     assert "Oracle / reference" in detail
     assert "matching equity ticker" in detail
 
@@ -181,7 +181,7 @@ def test_tokenized_guard_reaches_api_and_both_market_views(monkeypatch):
         "age_min": 1,
         "best_route": payload,
     }
-    assert "Tokenized · research only" in server.render_market_token_group(group)
+    assert "Tokenized · DD pending" in server.render_market_token_group(group)
 
 
 def test_market_filter_and_executor_attestation_are_explicit(monkeypatch):
