@@ -3369,6 +3369,51 @@ def test_alerts_page_has_one_primary_heading_before_saved_rules(tmp_path, monkey
     assert html.index("<h1>Market alerts</h1>") < html.index("<h2>No saved rules</h2>")
 
 
+def test_funding_page_explains_rate_truth_and_execution_evidence(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        server,
+        "api_market_spreads",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "groups": [],
+            "summary": {},
+            "source_health": {"canonical_api": {"status": "fresh"}},
+        },
+    )
+    monkeypatch.setattr(
+        server.bulk_quotes,
+        "funding_health",
+        lambda: {"status": "fresh", "p95_age_seconds": 1.0},
+    )
+
+    html = server.render_funding_page(tmp_path / "board.jsonl", {}, {})
+
+    assert "A rate is real market evidence, not proof the pair can be entered" in html
+    assert "Verified rows prove the canonical $500 depth check" in html
+
+
+def test_funding_group_labels_research_execution_evidence() -> None:
+    route = {
+        "route_key": "GUA|Mexc|Futures|Gate|Futures",
+        "token": "GUA",
+        "long_venue": "Mexc",
+        "short_venue": "Gate",
+        "route_kind": "FUTURES",
+        "funding_projected_24h_pct": 0.5,
+        "funding_age_min": 0.1,
+        "depth_unverified": True,
+    }
+
+    html = server.render_funding_token_group(
+        {"token": "GUA", "best_funding_route": route, "routes": [route]}
+    )
+
+    assert "Research only" in html
+    assert "$500 depth not verified" in html
+
+
 def test_dark_alert_panels_use_terminal_colours() -> None:
     source = Path("spreadboard/server.py").read_text(encoding="utf-8")
 

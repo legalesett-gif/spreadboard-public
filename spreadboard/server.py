@@ -10036,7 +10036,7 @@ def render_funding_page(
         <div>
           <span class="page-kicker">Funding</span>
           <h1>Paired carry farms</h1>
-          <p>Funding is ranked as a hedge pair, never as a floating single contract. Now stays strictly live; 24h, 7d, and 30d retain cooled leaders as a clearly labelled research radar.</p>
+          <p>Funding is ranked as a hedge pair, never as a floating single contract. Now stays strictly live; 24h, 7d, and 30d retain cooled leaders as a clearly labelled research radar. A rate is real market evidence, not proof the pair can be entered: Verified rows prove the canonical $500 depth check; Research rows still require execution checks.</p>
         </div>
         <div class="terminal-live-box">
           <span>{"Live" if source_ready else "Updating"}</span>
@@ -10180,6 +10180,13 @@ def render_funding_token_group(
         f'<span class="funding-radar-badge">Cooled now · seen {fmt_age(best.get("radar_last_seen_age_min"))} ago</span>'
         if historical
         else f'<span class="funding-live-badge">Live now · funding {fmt_age(best.get("funding_age_min"))} old</span>'
+    )
+    evidence_state = api_spreads.spread_evidence_state(best)
+    evidence_note = " · ".join(api_spreads.spread_evidence_reasons(best))
+    status_badge += (
+        '<span class="spread-evidence-label verified">Verified $500 depth</span>'
+        if evidence_state == "verified"
+        else f'<span class="spread-evidence-label research">Research only · {h(evidence_note)}</span>'
     )
     if best.get("requires_existing_spot_inventory"):
         status_badge += '<span class="funding-inventory-badge">Short-spot inventory required</span>'
