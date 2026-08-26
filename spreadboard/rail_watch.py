@@ -9,11 +9,12 @@ window is the product: members need to know inside minutes, not at the next scan
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
 import json
 import os
 import threading
+import time
+from pathlib import Path
+from typing import Any
 
 from spreadboard import api_spreads, public_rails
 
@@ -116,11 +117,22 @@ class RailReopenWatcher:
         poll_seconds: float = 300.0,
         min_edge_pct: float = DEFAULT_MIN_EDGE_PCT,
         notify: Any = None,
+        cooldown_seconds: float | None = None,
+        now_fn: Any = time.time,
     ) -> None:
         self.state_path = Path(state_path)
         self.poll_seconds = max(60.0, float(poll_seconds))
         self.min_edge_pct = float(min_edge_pct)
         self.notify = notify
+        self.cooldown_seconds = max(
+            60.0,
+            float(
+                cooldown_seconds
+                if cooldown_seconds is not None
+                else os.environ.get("SPREADBOARD_RAIL_REOPEN_COOLDOWN_SECONDS", "86400")
+            ),
+        )
+        self.now_fn = now_fn
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._run, name="spreadboard-rail-reopen", daemon=True
@@ -152,24 +164,40 @@ class RailReopenWatcher:
         current = public_rails.load_public_rails()
         if not current:
             return {"status": "no_rail_data", "reopened": 0, "alerted": 0}
-        previous = self._load_state()
+        state = self._load_state_payload()
+        previous = state["rails"]
+        alerted_at = state["alerted_at"]
         # First run has no baseline. Record it and stay quiet rather than
         # announcing every open rail on the board as a fresh reopening.
         if not previous:
-            self._save_state(current)
+            self._save_state(current, alerted_at)
             return {"status": "baseline_recorded", "reopened": 0, "alerted": 0}
         reopens = detect_reopens(previous, current)
         alerts: list[dict[str, Any]] = []
+        suppressed_cooldown = 0
         if reopens:
             market = api_spreads.load_spreads(limit=None, include_stale=True)
-            alerts = alertable_reopens(reopens, market, min_edge_pct=self.min_edge_pct)
-            for alert in alerts:
-                self._announce(alert)
-        self._save_state(current)
+            candidates = alertable_reopens(reopens, market, min_edge_pct=self.min_edge_pct)
+            now = float(self.now_fn())
+            for alert in candidates:
+                key = _alert_key(alert)
+                last = _float(alerted_at.get(key)) or 0.0
+                if key in alerted_at and now - last < self.cooldown_seconds:
+                    suppressed_cooldown += 1
+                    continue
+                alerted_at[key] = now
+                alerts.append(alert)
+        # Advance the transition baseline and the durable cooldown before any
+        # network send. A process crash after Pushover/Telegram accepts the
+        # message must not replay the same reopen on restart.
+        self._save_state(current, alerted_at)
+        for alert in alerts:
+            self._announce(alert)
         return {
             "status": "ok",
             "reopened": len(reopens),
             "alerted": len(alerts),
+            "suppressed_cooldown": suppressed_cooldown,
             "tokens": sorted({str(alert["token"]) for alert in alerts}),
         }
 
@@ -179,7 +207,7 @@ class RailReopenWatcher:
             self.notify(message)
             return
         delivered = self._push_to_members(alert, message)
-        chat_id = _group_chat_id()
+        chat_id = _group_chat_id() if _env_enabled("SPREADBOARD_RAIL_TELEGRAM_GROUP") else None
         if chat_id:
             from spreadboard import telegram_bot
 
@@ -228,18 +256,32 @@ class RailReopenWatcher:
             delivered += int(bool(result.get("ok")))
         return delivered
 
-    def _load_state(self) -> dict[str, dict[str, Any]]:
+    def _load_state_payload(self) -> dict[str, dict[str, Any]]:
         try:
             payload = json.loads(self.state_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return {}
+            return {"rails": {}, "alerted_at": {}}
         rails = payload.get("rails") if isinstance(payload, dict) else None
-        return rails if isinstance(rails, dict) else {}
+        alerted_at = payload.get("alerted_at") if isinstance(payload, dict) else None
+        return {
+            "rails": rails if isinstance(rails, dict) else {},
+            "alerted_at": alerted_at if isinstance(alerted_at, dict) else {},
+        }
 
-    def _save_state(self, rails: dict[str, dict[str, Any]]) -> None:
+    def _load_state(self) -> dict[str, dict[str, Any]]:
+        return self._load_state_payload()["rails"]
+
+    def _save_state(
+        self,
+        rails: dict[str, dict[str, Any]],
+        alerted_at: dict[str, Any] | None = None,
+    ) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.state_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps({"rails": rails}, sort_keys=True), encoding="utf-8")
+        temporary.write_text(
+            json.dumps({"rails": rails, "alerted_at": alerted_at or {}}, sort_keys=True),
+            encoding="utf-8",
+        )
         temporary.replace(self.state_path)
 
 
@@ -263,6 +305,20 @@ def _group_chat_id() -> str | None:
         return None
     chat_id = community.get("chat_id")
     return str(chat_id) if chat_id else None
+
+
+def _env_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def _alert_key(alert: dict[str, Any]) -> str:
+    return "|".join(
+        (
+            str(alert.get("venue") or "").casefold(),
+            str(alert.get("token") or "").upper(),
+            str(alert.get("direction") or "").casefold(),
+        )
+    )
 
 
 def _float(value: Any) -> float | None:

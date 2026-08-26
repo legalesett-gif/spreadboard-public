@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -86,6 +87,9 @@ def send_pushover_message(
     url: str | None = None,
     device: str | None = None,
     sound: str | None = None,
+    priority: int | None = None,
+    retry: int | None = None,
+    expire: int | None = None,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
     payload = {
@@ -100,6 +104,15 @@ def send_pushover_message(
         payload["device"] = device
     if sound:
         payload["sound"] = sound
+    if priority is not None:
+        normalized_priority = max(-2, min(2, int(priority)))
+        payload["priority"] = normalized_priority
+        if normalized_priority == 2:
+            # Pushover's emergency contract requires both values. Native apps
+            # repeat the selected sound until the member taps Acknowledge (or
+            # the bounded expiry is reached).
+            payload["retry"] = max(30, int(retry or 60))
+            payload["expire"] = max(1, min(10800, int(expire or 10800)))
     body = urllib.parse.urlencode(payload).encode("utf-8")
     request = urllib.request.Request(
         PUSHOVER_URL,
@@ -344,7 +357,7 @@ class UserMarketAlertWorker:
     ) -> None:
         self.board_path = Path(board_path)
         self.accounts_path = Path(accounts_path)
-        self.poll_seconds = max(5.0, float(poll_seconds))
+        self.poll_seconds = max(1.0, float(poll_seconds))
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._run, name="spreadboard-market-alerts", daemon=True
@@ -378,7 +391,7 @@ class UserMarketAlertWorker:
             self._thread.join(timeout=5.0)
 
     def _run(self) -> None:
-        self._stop.wait(5.0)
+        self._stop.wait(2.0)
         while not self._stop.is_set():
             try:
                 self.check_once()
@@ -549,7 +562,10 @@ class UserMarketAlertWorker:
                         message=notification["body"],
                         url=_notification_url(public_url, rule, token),
                         device=delivery.get("device"),
-                        sound=delivery.get("sound"),
+                        sound="siren",
+                        priority=2,
+                        retry=60,
+                        expire=10800,
                     )
                     delivered += int(bool(result.get("ok")))
                     if not result.get("ok"):
@@ -622,8 +638,25 @@ class UserMarketAlertWorker:
             offset = self._custom_quote_cursor % len(unresolved)
             unresolved = unresolved[offset:] + unresolved[:offset]
             self._custom_quote_cursor += limit
-        for route_key, route in unresolved[:limit]:
-            quoted = _quote_custom_alert_route(route)
+        selected = unresolved[:limit]
+        quoted_by_key: dict[str, dict[str, Any] | None] = {}
+        if selected:
+            # An exact provider quote can take several seconds. Running four
+            # unrelated watched routes serially made the fourth alert arrive a
+            # minute late even though every threshold had already crossed.
+            with ThreadPoolExecutor(max_workers=min(4, len(selected))) as executor:
+                future_routes = {
+                    executor.submit(_quote_custom_alert_route, route): route_key
+                    for route_key, route in selected
+                }
+                for future in as_completed(future_routes):
+                    route_key = future_routes[future]
+                    try:
+                        quoted_by_key[route_key] = future.result()
+                    except Exception:  # noqa: BLE001 - one provider must not block other alerts.
+                        quoted_by_key[route_key] = None
+        for route_key, _route in selected:
+            quoted = quoted_by_key.get(route_key)
             if quoted is not None:
                 quoted = {**quoted, "route_key": route_key}
                 output[route_key] = quoted

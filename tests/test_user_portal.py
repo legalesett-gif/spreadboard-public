@@ -6,8 +6,9 @@ import sqlite3
 import threading
 
 import pytest
+from cryptography.fernet import Fernet
 
-from spreadboard import accounts, billing, portfolio
+from spreadboard import accounts, alerts, billing, portfolio
 from spreadboard.server import (
     TERMS_VERSION,
     SpreadBoardHandler,
@@ -357,10 +358,12 @@ def test_position_correction_converts_all_local_timestamps_to_utc() -> None:
     assert "new Date(payload[field]).toISOString()" in script
 
 
-def test_background_position_alerts_trigger_once_and_rearm(
+def test_background_position_alert_fires_once_and_disables_itself(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db_path = tmp_path / "accounts.sqlite3"
+    monkeypatch.setenv("SPREADBOARD_FIELD_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("SPREADBOARD_PUSHOVER_APP_TOKEN", "app-token")
     accounts.initialize(db_path)
     user = accounts.create_user(
         email="alerts@example.test",
@@ -368,6 +371,11 @@ def test_background_position_alerts_trigger_once_and_rearm(
         password="alerts-password-strong",
         subscription_status="active",
         subscription_days=30,
+        db_path=db_path,
+    )
+    accounts.save_notification_preferences(
+        user["id"],
+        {"pushover_user_key": "k" * 30, "pushover_enabled": True},
         db_path=db_path,
     )
     position = accounts.create_position(
@@ -422,6 +430,12 @@ def test_background_position_alerts_trigger_once_and_rearm(
             "position_quote_source": "resident_book_midpoint",
         },
     )
+    sent = []
+    monkeypatch.setattr(
+        alerts,
+        "send_pushover_message",
+        lambda **kwargs: sent.append(kwargs) or {"ok": True, "status": 200},
+    )
     worker = portfolio.PositionAlertWorker(
         board_path=tmp_path / "board",
         accounts_path=db_path,
@@ -430,11 +444,18 @@ def test_background_position_alerts_trigger_once_and_rearm(
     worker.check_once()
     worker.check_once()
     assert len(accounts.list_notifications(user["id"], db_path=db_path)) == 1
+    saved = accounts.list_positions(user["id"], db_path=db_path)[0]["alert_rules"][0]
+    assert saved["enabled"] == 0
 
     market.update(long_bid=100, short_ask=110)
     worker.check_once()
     market.update(long_bid=105, short_ask=102)
     worker.check_once()
-    assert len(accounts.list_notifications(user["id"], db_path=db_path)) == 2
-    assert accounts.mark_notifications_read(user["id"], db_path=db_path) == 2
+    assert len(accounts.list_notifications(user["id"], db_path=db_path)) == 1
+    assert len(sent) == 1
+    assert sent[0]["priority"] == 2
+    assert sent[0]["retry"] == 60
+    assert sent[0]["expire"] == 10800
+    assert sent[0]["sound"] == "siren"
+    assert accounts.mark_notifications_read(user["id"], db_path=db_path) == 1
     assert all(item["read_at"] for item in accounts.list_notifications(user["id"], db_path=db_path))

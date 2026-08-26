@@ -776,6 +776,7 @@ def _evaluate_position_alerts(
     user_id: int, position: dict[str, Any], *, accounts_path: Path | str
 ) -> int:
     created = 0
+    app_token = os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
     # ``exit_spread_pct`` is the legacy persisted metric name. Its Portfolio
     # meaning is now current marked spread; saved rules continue to work while
     # the UI labels the accounting basis accurately.
@@ -801,6 +802,24 @@ def _evaluate_position_alerts(
             body=f"{str(rule.get('metric')).replace('_', ' ')} is {value:.4f}; rule {rule.get('operator')} {threshold:.4f}.",
             db_path=accounts_path,
         )
+        if notification is not None and app_token:
+            delivery = accounts.notification_delivery(user_id, db_path=accounts_path)
+            if delivery:
+                # Local import avoids making the Portfolio/accounting module
+                # depend on alert transport at import time.
+                from spreadboard import alerts as alerts_module
+
+                alerts_module.send_pushover_message(
+                    app_token=app_token,
+                    user_key=delivery["user_key"],
+                    title=notification["title"],
+                    message=notification["body"],
+                    device=delivery.get("device"),
+                    sound="siren",
+                    priority=2,
+                    retry=60,
+                    expire=10800,
+                )
         created += int(notification is not None)
     return created
 
@@ -813,12 +832,12 @@ class PositionAlertWorker:
         *,
         board_path: Path,
         accounts_path: Path | str = accounts.DEFAULT_DB_PATH,
-        poll_seconds: float = 30.0,
+        poll_seconds: float = 2.0,
         quote_scheduler: Any = None,
     ) -> None:
         self.board_path = board_path
         self.accounts_path = Path(accounts_path)
-        self.poll_seconds = max(10.0, float(poll_seconds))
+        self.poll_seconds = max(1.0, float(poll_seconds))
         self.quote_scheduler = quote_scheduler
         self._stop = threading.Event()
         self._thread = threading.Thread(
@@ -839,7 +858,7 @@ class PositionAlertWorker:
             self._thread.join(timeout=5.0)
 
     def _run(self) -> None:
-        self._stop.wait(10.0)
+        self._stop.wait(2.0)
         while not self._stop.is_set():
             try:
                 summary = self.check_once()

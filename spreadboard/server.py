@@ -9878,7 +9878,6 @@ def render_funding_page(
         and live_funding_health.get("status") == "fresh"
     )
     refresh_seconds = 300 if source_ready else 5
-    history_health = funding_history_health()
     tabs = [
         ("futures-futures", "Futures-Futures"),
         ("futures-spot", "Futures-Spot"),
@@ -9958,37 +9957,6 @@ def render_funding_page(
         )
         + "</nav>"
     )
-    window_token_counts = funding_meta.get("window_token_counts") or {}
-    exact_window_note = (
-        '<p class="funding-radar-note" data-exact-window-counts><strong>Exact positive-route coverage:</strong> '
-        f'24h {h(window_token_counts.get("1d", "—"))} tokens · '
-        f'7d {h(window_token_counts.get("7d", "—"))} · '
-        f'30d {h(window_token_counts.get("30d", "—"))}. '
-        "A missing 30d value is never backfilled from the current rate or a partial archive.</p>"
-        if funding_meta
-        else ""
-    )
-    history_window_counts = history_health.get("window_leg_counts") or {}
-    history_window_pct = history_health.get("window_coverage_pct") or {}
-    history_total_legs = int(history_health.get("catalog_leg_count") or 0)
-
-    def history_window_stat(label: str) -> str:
-        count = int(history_window_counts.get(label) or 0)
-        coverage = _float_or_none(history_window_pct.get(label))
-        if coverage is None:
-            coverage = count / history_total_legs * 100.0 if history_total_legs else 100.0
-        return f"{count}/{history_total_legs} ({coverage:.2f}%)"
-
-    history_window_note = (
-        '<p class="funding-radar-note" data-history-window-coverage>'
-        '<strong>Complete trailing windows:</strong> '
-        f'24h {h(history_window_stat("1d"))} · '
-        f'7d {h(history_window_stat("7d"))} · '
-        f'30d {h(history_window_stat("30d"))}. '
-        f'<strong>Deep-history backlog:</strong> '
-        f'{h(int(history_health.get("deep_history_pending_leg_count") or 0))} legs. '
-        'Source-checked means a venue answered or was classified; it does not mean every trailing window is complete.</p>'
-    )
     body = f"""
     <section class="funding-page terminal-page" data-refresh="{refresh_seconds}" data-refresh-silent="1">
       {render_board_stream_script(funding_query)}
@@ -10031,24 +9999,6 @@ def render_funding_page(
         <button type="submit">Search</button>
         {f'<a href="{h(funding_page_href(offset=0, include_search=False))}">Clear</a>' if _query_first(query, "q") else ""}
       </form>
-      {
-        (
-            '<p class="funding-radar-note"><strong>Historical radar:</strong> cooled rows remain discoverable for 30 days. Their rate and basis are the last live observation, not a current entry quote.</p>'
-            if selected_window != "now"
-            else ""
-        )
-    }
-      <p class="funding-radar-note"><strong>Blank history is explicit:</strong> 1d, 7d or 30d appears only after the exact venue symbols provide enough settled events. A token can be older than seven days while a venue API exposes less history; member Watchlist and Portfolio legs are now prioritised by the collector.</p>
-      <p class="funding-radar-note" data-window-semantics><strong>Period totals:</strong> 24h, 7d and 30d are separate aggregate sums of the exact settlements inside each complete trailing period. They are not divided into daily averages. <strong>Now is isolated</strong>: a live-rate change can re-rank Now, but cannot rewrite any historical total.</p>
-      {exact_window_note}
-      <p class="funding-radar-note" data-history-coverage><strong>Settlement archive coverage:</strong> {
-        h(history_health.get("attempted_leg_count"))
-    }/{h(history_health.get("catalog_leg_count"))} exact futures legs source-checked; {
-        h(history_health.get("classified_leg_count"))
-    } successfully classified; {h(history_health.get("pending_leg_count"))} not yet checked; {
-        h(history_health.get("retryable_error_leg_count"))
-    } awaiting a provider retry. Previously verified windows remain visible during temporary provider failures.</p>
-      {history_window_note}
       <section class="terminal-tape funding-tape" aria-label="Funding summary">
         {
         render_market_metric(
@@ -15502,7 +15452,7 @@ def render_token_alert_form() -> str:
             <option value="below">At or below</option>
           </select></label>
           <label><span>Level</span><input name="threshold" type="number" step="any" placeholder="0.25" required></label>
-          <label><span>Hold for, sec</span><input name="stability_seconds" type="number" min="0" max="3600" value="30"></label>
+          <label><span>Hold for, sec</span><input name="stability_seconds" type="number" min="0" max="3600" value="0"></label>
           <button class="sheet-button primary" type="submit">Create alert</button>
           <span class="token-alert-status" role="status" data-token-alert-status></span>
         </form>
@@ -15552,6 +15502,7 @@ def render_member_alert_rules(board_path: Path) -> str:
         for row in market_rows
     }
     current_tokens = alerts.token_metrics(market_rows)
+    active_rule_count = sum(bool(rule.get("enabled")) for rule in rules)
     cards = "".join(
         render_member_alert_card(
             rule,
@@ -15563,9 +15514,9 @@ def render_member_alert_rules(board_path: Path) -> str:
     return f"""
     <section class="member-alerts">
       <div class="profile-section-title">
-        <div><span class="page-kicker">My alerts</span><h2>{len(rules)} alert{"s" if len(rules) != 1 else ""} armed</h2>
+        <div><span class="page-kicker">My alerts</span><h2>{active_rule_count} active · {len(rules)} saved</h2>
         <p>{h(delivery_note)} An alert fires once when the level holds for its stability
-           window, and re-arms after the market moves back.</p></div>
+           window, then turns itself off. Toggle Enabled back on to re-arm it.</p></div>
       </div>
       {render_token_alert_form()}
       <div class="member-alert-grid">{cards}</div>
@@ -15597,7 +15548,8 @@ def render_member_alert_card(
     enabled = bool(rule.get("enabled"))
     live = _float_or_none(value)
     met = live is not None and ((live >= threshold) if above else (live <= threshold))
-    state = "armed" if enabled else "paused"
+    triggered = not enabled and bool(rule.get("last_triggered_at"))
+    state = "armed" if enabled else "triggered" if triggered else "paused"
     token_wide = accounts.token_from_alert_key(str(rule.get("route_key") or "")) is not None
     if live is None:
         current_display = "no live quote"
@@ -15618,7 +15570,7 @@ def render_member_alert_card(
     return f"""
     <article class="member-alert-card {h(state)} {"met" if met and enabled else ""}" data-alert-id="{h(rule.get("id"))}">
       <div class="member-alert-head">
-        <span class="member-alert-state">{"Armed" if enabled else "Paused"}</span>
+        <span class="member-alert-state">{"Armed" if enabled else "Triggered" if triggered else "Paused"}</span>
         <span class="member-alert-kind">{h(label)}</span>
       </div>
       <strong class="member-alert-token">{h(rule.get("symbol"))}</strong>
@@ -15777,7 +15729,7 @@ def render_alerts_page(
         <article class="chart-summary-card"><span>Phone delivery</span><strong>{"Ready" if pushover_ready else "Setup needed"}</strong><em>per-account Pushover settings</em></article>
       </section>
       <section class="community-panel">
-        <div class="panel-head flat"><div><h2>Live alert types</h2><p>Create token alerts above, or use the Alert action on a current route. Each crossing is recorded in Portfolio and optionally sent through Pushover.</p></div></div>
+        <div class="panel-head flat"><div><h2>Live alert types</h2><p>Create token alerts above, or use the Alert action on a current route. Each one-shot trigger is recorded in Portfolio, turns itself off, and is optionally sent through Pushover.</p></div></div>
         <div class="alert-template-grid">
           {render_alert_template("Route spread", "Fires when the exact route open spread holds at or above or below your threshold.", "Live")}
           {render_alert_template("Route funding", "Fires when the exact route 24-hour funding value holds at your threshold.", "Live")}
@@ -18778,7 +18730,7 @@ def render_alert_draft_script() -> str:
       currentValue,
       threshold: currentValue === null ? (data.alertType === "funding" ? 0.1 : 5) : currentValue,
       direction: currentValue !== null && currentValue < 0 ? "below" : "above",
-      stabilitySeconds: 10,
+      stabilitySeconds: 0,
       enabled: true
     };
   }
@@ -18817,7 +18769,7 @@ def render_alert_draft_script() -> str:
           <label><span>Token</span><input name="symbol" autocomplete="off" placeholder="Token symbol"></label>
           <label><span>Direction</span><select name="direction"><option value="above">Crosses above</option><option value="below">Crosses below</option></select></label>
           <label><span>Threshold</span><input name="threshold" type="number" step="any" required></label>
-          <label><span>Stability check, seconds</span><input name="stability" type="number" min="0" step="1" value="10"></label>
+          <label><span>Stability check, seconds</span><input name="stability" type="number" min="0" step="1" value="0"></label>
           <label class="alert-modal-switch"><span>Enabled</span><input name="enabled" type="checkbox" checked></label>
           <p>Saved to your account. Fresh server rows are evaluated continuously; Pushover delivery uses your account settings.</p>
           <footer><button class="sheet-button" type="button" data-alert-close>Cancel</button><button class="sheet-button primary" type="submit">Save alert</button></footer>
@@ -18836,7 +18788,7 @@ def render_alert_draft_script() -> str:
     symbol.value = draft.symbol || "";
     direction.value = draft.direction || "above";
     threshold.value = draft.threshold ?? "";
-    stability.value = draft.stabilitySeconds ?? 10;
+    stability.value = draft.stabilitySeconds ?? 0;
     enabled.checked = draft.enabled !== false;
     backdrop.querySelector("[data-alert-symbol]").textContent = draft.symbol || "Any token";
     backdrop.querySelector("[data-alert-route]").textContent = routeLine(draft);
@@ -19147,8 +19099,6 @@ main { max-width: none; margin: 0; padding: 32px 24px 0; }
 .funding-window-tabs a { font-size: 11px; padding: 3px 9px; border-radius: 999px; text-decoration: none;
   background: rgba(255,255,255,0.05); color: inherit; }
 .funding-window-tabs a.active { background: #7dd3c0; color: #04211b; font-weight: 700; }
-.funding-radar-note { margin: 8px 0 2px; padding: 8px 11px; border: 1px solid rgba(250,204,21,.28); border-radius: 7px; background: rgba(250,204,21,.06); color: var(--terminal-muted); font-size: 11px; }
-.funding-radar-note strong { color: #facc15; }
 .funding-window-strip { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 5px; align-items: stretch; width: 100%; min-width: 0; }
 .funding-window { display: flex; flex-direction: column; gap: 1px; padding: 2px 6px; border-radius: 6px;
   background: rgba(255,255,255,0.04); line-height: 1.15; min-width: 0; }
@@ -19453,6 +19403,8 @@ main { max-width: none; margin: 0; padding: 32px 24px 0; }
 .member-alert-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
 .member-alert-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 12px; border: 1px solid var(--terminal-line); background: var(--terminal-panel); color: var(--terminal-text); }
 .member-alert-card.paused { opacity: 1; background: var(--terminal-panel-2); }
+.member-alert-card.triggered { border-color: var(--terminal-danger, #ef4444); }
+.member-alert-card.triggered .member-alert-state { color: var(--terminal-danger, #ef4444); }
 .member-alert-card.met { border-color: var(--terminal-accent); box-shadow: 0 0 0 2px var(--terminal-accent-soft); }
 .member-alert-head { display: flex; justify-content: space-between; font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--terminal-muted); }
 .member-alert-state { font-weight: 700; }
@@ -21225,7 +21177,6 @@ main { padding:22px 24px 56px; }
 .funding-farm-tabs { gap:0; padding:0; border:0; border-bottom:1px solid var(--terminal-line); border-radius:0; background:transparent; }
 .funding-window-tabs { gap:0; margin:0; border-bottom:1px solid var(--terminal-line); }
 .funding-window-tabs span { margin-right:8px; }
-.funding-radar-note { margin:0; padding:9px 12px; border:0; border-left:2px solid var(--terminal-warning); border-radius:0; background:transparent; font-size:10px; }
 .funding-terminal-panel { gap:0; padding:0; border:0; border-top:1px solid var(--terminal-line); border-radius:0; background:transparent; }
 .funding-token-group.historical-radar { background:linear-gradient(90deg,rgba(250,204,21,.035),transparent 24%); }
 .funding-pair-row { min-height:54px; }

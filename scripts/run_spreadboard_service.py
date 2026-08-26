@@ -1331,7 +1331,7 @@ def main() -> int:
     position_alert_worker = portfolio.PositionAlertWorker(
         board_path=board_path,
         accounts_path=server.accounts_path,
-        poll_seconds=float(os.environ.get("SPREADBOARD_POSITION_ALERT_SECONDS", "30")),
+        poll_seconds=float(os.environ.get("SPREADBOARD_POSITION_ALERT_SECONDS", "2")),
         quote_scheduler=server_module._schedule_chart_route_refresh,
     )
     server.position_alert_worker = position_alert_worker
@@ -1353,7 +1353,7 @@ def main() -> int:
     market_alert_worker = alerts.UserMarketAlertWorker(
         board_path=board_path,
         accounts_path=server.accounts_path,
-        poll_seconds=float(os.environ.get("SPREADBOARD_MARKET_ALERT_SECONDS", "10")),
+        poll_seconds=float(os.environ.get("SPREADBOARD_MARKET_ALERT_SECONDS", "2")),
     )
     web_push_worker = web_push.Worker(
         accounts_path=server.accounts_path,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 import urllib.parse
 
@@ -39,7 +40,7 @@ def test_pushover_key_is_encrypted_and_never_returned(tmp_path, monkeypatch) -> 
     assert accounts.notification_delivery(user["id"], db_path=db_path)["user_key"] == key
 
 
-def test_route_alert_sends_once_then_rearms(tmp_path, monkeypatch) -> None:
+def test_route_alert_fires_once_and_disables_itself(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "accounts.sqlite3"
     monkeypatch.setenv("SPREADBOARD_FIELD_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setenv("SPREADBOARD_PUSHOVER_APP_TOKEN", "app-token")
@@ -87,12 +88,19 @@ def test_route_alert_sends_once_then_rearms(tmp_path, monkeypatch) -> None:
         board_path=tmp_path / "board.json", accounts_path=db_path, poll_seconds=5
     )
     assert worker.check_once()["triggered"] == 1
+    saved = accounts.list_market_alert_rules(user["id"], db_path=db_path)[0]
+    assert saved["enabled"] == 0
+    assert saved["last_triggered_at"]
     assert worker.check_once()["triggered"] == 0
     row["open_spread_pct"] = 4.0
     worker.check_once()
     row["open_spread_pct"] = 6.0
-    assert worker.check_once()["triggered"] == 1
-    assert len(sent) == 2
+    assert worker.check_once()["triggered"] == 0
+    assert len(sent) == 1
+    assert sent[0]["priority"] == 2
+    assert sent[0]["retry"] == 60
+    assert sent[0]["expire"] == 10800
+    assert sent[0]["sound"] == "siren"
 
 
 def test_route_alert_uses_resident_live_universe_without_board_rebuild(
@@ -171,6 +179,72 @@ def test_route_alert_uses_resident_live_universe_without_board_rebuild(
 
     assert result == {"evaluated": 1, "triggered": 1, "delivered": 1}
     assert len(sent) == 1
+    assert sent[0]["priority"] == 2
+    assert sent[0]["sound"] == "siren"
+
+
+def test_emergency_pushover_payload_repeats_until_acknowledged(monkeypatch) -> None:
+    captured = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"status":1,"receipt":"receipt-id"}'
+
+    def fake_urlopen(request, *, timeout):
+        captured.update(urllib.parse.parse_qs(request.data.decode("utf-8")))
+        assert timeout == 10.0
+        return Response()
+
+    monkeypatch.setattr(alerts.urllib.request, "urlopen", fake_urlopen)
+
+    result = alerts.send_pushover_message(
+        app_token="app",
+        user_key="user",
+        title="Urgent",
+        message="Threshold crossed",
+        sound="siren",
+        priority=2,
+        retry=10,
+        expire=20000,
+    )
+
+    assert result["ok"] is True
+    assert captured["priority"] == ["2"]
+    assert captured["retry"] == ["30"]
+    assert captured["expire"] == ["10800"]
+    assert captured["sound"] == ["siren"]
+
+
+def test_unresolved_custom_alert_quotes_run_in_parallel(tmp_path, monkeypatch) -> None:
+    routes = {
+        "CUSTOM:ONE": {"token": "ONE", "route_kind": "FUTURES"},
+        "CUSTOM:TWO": {"token": "TWO", "route_kind": "FUTURES"},
+    }
+    barrier = threading.Barrier(2)
+    monkeypatch.setattr(chart_catalog, "route_from_key", lambda key: routes.get(key))
+
+    def quote(route):
+        barrier.wait(timeout=1.0)
+        return {**route, "displayed_open_spread_pct": 1.0, "spread_quote_current": True}
+
+    monkeypatch.setattr(alerts, "_quote_custom_alert_route", quote)
+    worker = alerts.UserMarketAlertWorker(
+        board_path=tmp_path / "board.json",
+        accounts_path=tmp_path / "accounts.sqlite3",
+        poll_seconds=2,
+    )
+
+    rows = worker._custom_alert_rows(set(routes), [])
+
+    assert set(rows) == set(routes)
 
 
 def test_custom_chart_alert_resolves_to_matching_live_board_route(tmp_path, monkeypatch) -> None:

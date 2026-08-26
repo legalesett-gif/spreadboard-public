@@ -598,9 +598,8 @@ def test_a_member_can_edit_and_delete_their_own_alert(tmp_path, monkeypatch) -> 
     assert accounts.get_market_alert_rule(uid, rule["id"], db_path=db) is None
 
 
-def test_editing_an_alert_rearms_it(tmp_path, monkeypatch) -> None:
-    """A rule edited while its condition was already met would otherwise stay
-    silent until it lapsed and re-armed itself."""
+def test_triggered_alert_requires_explicit_reenable(tmp_path, monkeypatch) -> None:
+    """A one-shot trigger stays disabled until the member deliberately re-arms it."""
     db, user = _alert_user(tmp_path, monkeypatch)
     uid = user["id"] if isinstance(user, dict) else user.id
     rule = accounts.add_market_alert_rule(
@@ -619,9 +618,18 @@ def test_editing_an_alert_rearms_it(tmp_path, monkeypatch) -> None:
     accounts.record_market_alert_evaluation(
         uid, rule["id"], value=9.0, title="t", body="b", db_path=db
     )
-    assert accounts.get_market_alert_rule(uid, rule["id"], db_path=db)["last_condition_met"] == 1
+    triggered = accounts.get_market_alert_rule(uid, rule["id"], db_path=db)
+    assert triggered["last_condition_met"] == 1
+    assert triggered["enabled"] == 0
+    assert triggered["last_triggered_at"]
     updated = accounts.update_market_alert_rule(uid, rule["id"], {"threshold": 6.0}, db_path=db)
-    assert updated["last_condition_met"] == 0 and updated["condition_since"] is None
+    assert updated["enabled"] == 0
+    assert updated["last_triggered_at"]
+    rearmed = accounts.update_market_alert_rule(uid, rule["id"], {"enabled": True}, db_path=db)
+    assert rearmed["enabled"] == 1
+    assert rearmed["last_condition_met"] == 0
+    assert rearmed["condition_since"] is None
+    assert rearmed["last_triggered_at"] is None
 
 
 def test_a_member_cannot_touch_someone_elses_alert(tmp_path, monkeypatch) -> None:

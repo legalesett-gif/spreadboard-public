@@ -84,7 +84,13 @@ def test_watcher_announces_a_reopen_that_still_pays(tmp_path, monkeypatch) -> No
     sent: list[str] = []
     watcher = rail_watch.RailReopenWatcher(state_path=tmp_path / "state.json", notify=sent.append)
     summary = watcher.check_once()
-    assert summary == {"status": "ok", "reopened": 1, "alerted": 1, "tokens": ["SIREN"]}
+    assert summary == {
+        "status": "ok",
+        "reopened": 1,
+        "alerted": 1,
+        "suppressed_cooldown": 0,
+        "tokens": ["SIREN"],
+    }
     assert "RAIL REOPENED" in sent[0] and "Kucoin" in sent[0]
 
 
@@ -99,6 +105,39 @@ def test_the_same_reopen_is_not_announced_twice(tmp_path, monkeypatch) -> None:
     assert len(sent) == 1, "state must advance so a steady-open rail stays quiet"
 
 
+def test_flapping_rail_is_suppressed_by_durable_cooldown(tmp_path, monkeypatch) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"rails": _rails(deposit=False)}))
+    current = [_rails(deposit=True)]
+    clock = [1000.0]
+    monkeypatch.setattr(rail_watch.public_rails, "load_public_rails", lambda *a, **k: current[0])
+    monkeypatch.setattr(rail_watch.api_spreads, "load_spreads", lambda **k: _market())
+    sent: list[str] = []
+    watcher = rail_watch.RailReopenWatcher(
+        state_path=state_path,
+        notify=sent.append,
+        cooldown_seconds=3600,
+        now_fn=lambda: clock[0],
+    )
+
+    assert watcher.check_once()["alerted"] == 1
+    current[0] = _rails(deposit=False)
+    watcher.check_once()
+    clock[0] += 100
+    current[0] = _rails(deposit=True)
+    suppressed = watcher.check_once()
+    assert suppressed["alerted"] == 0
+    assert suppressed["suppressed_cooldown"] == 1
+    assert len(sent) == 1
+
+    current[0] = _rails(deposit=False)
+    watcher.check_once()
+    clock[0] += 3601
+    current[0] = _rails(deposit=True)
+    assert watcher.check_once()["alerted"] == 1
+    assert len(sent) == 2
+
+
 def test_the_watcher_is_actually_wired_into_the_service() -> None:
     """A watcher nobody starts is a watcher that never fires."""
     import inspect
@@ -110,17 +149,31 @@ def test_the_watcher_is_actually_wired_into_the_service() -> None:
     assert "rail_reopen_worker.stop()" in source
 
 
-def test_reopen_alerts_reach_the_configured_subscriber_group(monkeypatch) -> None:
-    """The group is already configured by the Telegram setup flow. Requiring a
-    separate env var meant the watcher ran and reached nobody."""
+def test_reopen_group_delivery_requires_explicit_operator_opt_in(monkeypatch) -> None:
     monkeypatch.delenv("SPREADBOARD_TELEGRAM_GROUP_CHAT_ID", raising=False)
-    from spreadboard import accounts
+    monkeypatch.delenv("SPREADBOARD_RAIL_TELEGRAM_GROUP", raising=False)
+    from spreadboard import accounts, telegram_bot
 
     monkeypatch.setattr(
         accounts, "telegram_community",
         lambda *a, **k: {"chat_id": -1004373383074, "title": "Spread", "active": 1},
     )
     assert rail_watch._group_chat_id() == "-1004373383074"
+
+    sent = []
+    monkeypatch.setattr(telegram_bot, "send_group_message", lambda *args: sent.append(args))
+    watcher = rail_watch.RailReopenWatcher(notify=None)
+    monkeypatch.setattr(watcher, "_push_to_members", lambda *_args: 0)
+    alert = rail_watch.alertable_reopens(
+        [{"venue": "Kucoin", "token": "SIREN", "direction": "deposit"}],
+        _market(),
+    )[0]
+    watcher._announce(alert)
+    assert sent == []
+
+    monkeypatch.setenv("SPREADBOARD_RAIL_TELEGRAM_GROUP", "1")
+    watcher._announce(alert)
+    assert sent and sent[0][0] == "-1004373383074"
 
     monkeypatch.setattr(accounts, "telegram_community", lambda *a, **k: None)
     assert rail_watch._group_chat_id() is None

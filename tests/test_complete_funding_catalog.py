@@ -802,16 +802,7 @@ def test_historical_page_requests_a_distinct_complete_window(monkeypatch) -> Non
     monkeypatch.setattr(
         server,
         "funding_history_health",
-        lambda: {
-            "attempted_leg_count": 1,
-            "catalog_leg_count": 1,
-            "classified_leg_count": 1,
-            "pending_leg_count": 0,
-            "retryable_error_leg_count": 0,
-            "window_leg_counts": {"1d": 1, "7d": 0, "30d": 0},
-            "window_coverage_pct": {"1d": 100.0, "7d": 0.0, "30d": 0.0},
-            "deep_history_pending_leg_count": 1,
-        },
+        lambda: (_ for _ in ()).throw(AssertionError("warning-only health lookup")),
     )
     monkeypatch.setattr(
         server.bulk_quotes,
@@ -827,15 +818,11 @@ def test_historical_page_requests_a_distinct_complete_window(monkeypatch) -> Non
 
     assert captured["funding_window"] == ["7d"]
     assert "Ranking uses the complete pair catalogue before this token page is sliced" in html
-    assert "A missing 30d value is never backfilled" in html
     assert "7d total" in html
-    assert "They are not divided into daily averages" in html
-    assert "Now is isolated" in html
-    assert "Complete trailing windows:" in html
-    assert "24h 1/1 (100.00%)" in html
-    assert "30d 0/1 (0.00%)" in html
-    assert "Deep-history backlog:</strong> 1 legs" in html
-    assert "does not mean every trailing window is complete" in html
+    assert "funding-radar-note" not in html
+    assert "Blank history is explicit" not in html
+    assert "Complete trailing windows:" not in html
+    assert "Settlement archive coverage:" not in html
 
 
 def test_historical_dex_page_and_export_request_the_same_selected_window(monkeypatch) -> None:

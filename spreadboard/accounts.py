@@ -343,7 +343,7 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 )),
                 operator TEXT NOT NULL CHECK (operator IN ('lte', 'gte')),
                 threshold REAL NOT NULL,
-                stability_seconds INTEGER NOT NULL DEFAULT 10,
+                stability_seconds INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 condition_since TEXT,
                 last_condition_met INTEGER NOT NULL DEFAULT 0,
@@ -1720,8 +1720,8 @@ def update_market_alert_rule(
 ) -> dict[str, Any] | None:
     """Edit a member's own alert: threshold, direction, stability, on/off.
 
-    Changing what an alert watches resets its trigger state, otherwise a rule
-    edited while already met would stay silent until it lapsed and re-armed.
+    Changing what an alert watches resets its condition state. A fired one-shot
+    remains visibly triggered until the member explicitly enables it again.
     """
     fields: list[str] = []
     values: list[Any] = []
@@ -1739,7 +1739,13 @@ def update_market_alert_rule(
         values.append(int(bool(payload["enabled"])))
     if not fields:
         return get_market_alert_rule(user_id, rule_id, db_path=db_path)
-    fields.extend(["condition_since = NULL", "last_condition_met = 0", "updated_at = ?"])
+    fields.extend(["condition_since = NULL", "last_condition_met = 0"])
+    # A fired rule is one-shot and retains its trigger timestamp while it is
+    # disabled.  Turning it back on is the explicit acknowledgement/re-arm
+    # action, so only that transition clears the prior trigger marker.
+    if "enabled" in payload and bool(payload["enabled"]):
+        fields.append("last_triggered_at = NULL")
+    fields.append("updated_at = ?")
     values.append(_utc_iso())
     connection = _connect(db_path)
     try:
@@ -1892,12 +1898,14 @@ def record_market_alert_evaluation(
         connection.execute(
             """UPDATE market_alert_rules SET condition_since = ?, last_condition_met = ?,
                    last_triggered_at = CASE WHEN ? THEN ? ELSE last_triggered_at END,
+                   enabled = CASE WHEN ? THEN 0 ELSE enabled END,
                    last_value = ?, updated_at = ? WHERE id = ?""",
             (
                 condition_since,
                 int(condition and (should_trigger or bool(row["last_condition_met"]))),
                 int(should_trigger),
                 now,
+                int(should_trigger),
                 value,
                 now,
                 int(rule_id),
@@ -3428,7 +3436,8 @@ def record_alert_trigger(
             (user_id, rule_id, row["position_id"], title[:160], body[:1000], now),
         )
         connection.execute(
-            "UPDATE position_alert_rules SET last_triggered_at = ?, updated_at = ? WHERE id = ?",
+            """UPDATE position_alert_rules SET last_triggered_at = ?, enabled = 0,
+               last_condition_met = 1, updated_at = ? WHERE id = ?""",
             (now, now, rule_id),
         )
         connection.commit()
@@ -3449,7 +3458,7 @@ def record_alert_evaluation(
     body: str,
     db_path: Path | str = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
-    """Persist one notification per false-to-true threshold crossing."""
+    """Persist one notification and atomically disable the one-shot rule."""
 
     connection = _connect(db_path)
     try:
@@ -3477,8 +3486,16 @@ def record_alert_evaluation(
         connection.execute(
             """UPDATE position_alert_rules SET last_condition_met = ?,
                last_triggered_at = CASE WHEN ? THEN ? ELSE last_triggered_at END,
+               enabled = CASE WHEN ? THEN 0 ELSE enabled END,
                updated_at = ? WHERE id = ?""",
-            (int(condition_met), int(bool(created)), now, now, rule_id),
+            (
+                int(condition_met),
+                int(bool(created)),
+                now,
+                int(bool(created)),
+                now,
+                rule_id,
+            ),
         )
         connection.commit()
         if created is None:
@@ -3744,7 +3761,7 @@ def _widen_market_alert_metrics(connection: sqlite3.Connection) -> None:
             )),
             operator TEXT NOT NULL CHECK (operator IN ('lte', 'gte')),
             threshold REAL NOT NULL,
-            stability_seconds INTEGER NOT NULL DEFAULT 10,
+            stability_seconds INTEGER NOT NULL DEFAULT 0,
             enabled INTEGER NOT NULL DEFAULT 1,
             condition_since TEXT,
             last_condition_met INTEGER NOT NULL DEFAULT 0,
