@@ -63,16 +63,20 @@ def test_board_stream_emits_a_board_event(
         assert response.status == 200
         assert response.headers["Content-Type"].startswith("text/event-stream")
 
+        saw_comment = False
         saw_event = False
         payload: dict = {}
         for _ in range(12):
             line = response.fp.readline().decode("utf-8").strip()
-            if line == "event: board":
+            if line == ": tick":
+                saw_comment = True
+            elif line == "event: board":
                 saw_event = True
             elif saw_event and line.startswith("data:"):
                 payload = json.loads(line[len("data:") :].strip())
                 break
 
+        assert saw_comment, "the stream did not install its disconnect heartbeat"
         assert saw_event, "the stream never emitted a board event"
         assert payload["updated_at"].endswith("Z")
         assert payload["max_spread_pct"] is None

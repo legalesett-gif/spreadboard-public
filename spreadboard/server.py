@@ -2350,6 +2350,15 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"retry: 3000\n\n")
             self.wfile.flush()
             for _ in range(20_000):
+                # Write before doing any re-pricing work.  When a member moves
+                # to another tab an unchanged stream otherwise has nothing to
+                # write, so the server cannot notice the closed socket and the
+                # orphan keeps rebuilding its lane twice a second.  A comment
+                # is ignored by EventSource but makes disconnect detection
+                # immediate and keeps abandoned streams from consuming the web
+                # CPU needed by the next page.
+                self.wfile.write(b": tick\n\n")
+                self.wfile.flush()
                 rows = _shared_stream_rows(
                     self.server.board_path,
                     query,
