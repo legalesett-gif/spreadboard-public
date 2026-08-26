@@ -2355,6 +2355,14 @@ def _refresh_materialized_views(*, force: bool) -> bool:
 
     global _LAST_MATERIALIZED_VIEW_AT, _MATERIALIZED_VIEW_RETRY_AFTER
 
+    # The web process is a reader.  On a query-matrix change both roles can
+    # detect a stale persisted generation at startup; allowing web to spawn a
+    # second multi-gigabyte builder defeats the cgroup isolation and can OOM an
+    # otherwise healthy subscriber service.  Collector publication plus the
+    # shared-artifact watcher is the only production ownership path.
+    if _service_role() == "web":
+        return False
+
     now = time.monotonic()
     # A failed source-coherent build keeps the last complete generation. A
     # collector event queued during that attempt must not immediately start the

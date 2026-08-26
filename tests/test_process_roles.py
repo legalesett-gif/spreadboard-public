@@ -462,6 +462,19 @@ def test_materialized_builder_is_an_isolated_low_priority_worker(
     assert len(catalogue_reloads) == expected_catalogue_reloads
 
 
+def test_web_role_never_owns_materialized_navigation_build(monkeypatch) -> None:
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setattr(
+        service,
+        "_run_worker",
+        lambda *_args, **_kwargs: pytest.fail(
+            "web must only install collector-published navigation"
+        ),
+    )
+
+    assert service._refresh_materialized_views(force=True) is False
+
+
 def test_market_evidence_cycle_does_not_wait_for_navigation_materialization(
     monkeypatch,
 ) -> None:
