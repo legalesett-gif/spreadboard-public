@@ -7073,7 +7073,11 @@ def render_board_stream_script(
             const liveScope = row.matches("details")
               ? (row.querySelector(":scope > summary") || row)
               : row;
-            for (const funding of liveScope.querySelectorAll("[data-live-funding]")) {
+            const fundingNodes = [
+              ...liveScope.querySelectorAll("[data-live-funding]"),
+              ...liveScope.querySelectorAll(".funding-window.current strong")
+            ];
+            for (const funding of fundingNodes) {
               if (carry && funding.textContent.trim() !== carry) {
                 funding.textContent = carry;
                 flash(funding);
@@ -9702,9 +9706,22 @@ def render_funding_windows(
     )
     cells = []
     current_label = "Now" if compact else "Now projected"
-    current_value = (
-        None if route.get("radar_historical") else funding_rank_value(route, "now")
-    )
+    # A precomputed navigation generation can be a few minutes old while its
+    # successor ranks the full catalogue. Expanded route evidence must not
+    # inherit that lag: Now comes from the latest exact-leg funding sweep and
+    # the settled windows below come from the current rolling archive. The
+    # group rank remains atomic and visibly age-stamped, while the values a
+    # member opens for DD fail closed at settlement boundaries.
+    current_value = None
+    if not route.get("radar_historical"):
+        current_value = api_spreads._stream_funding_daily(
+            route, bulk_quotes.load_funding()
+        )
+        if current_value is None:
+            # Preserve the coherent current-rate value already attached to the
+            # active route when a just-rotated bulk file has not indexed that
+            # exact leg yet. Historical radar rows never receive this fallback.
+            current_value = funding_rank_value(route, "now")
     if current_value is None:
         cells.append(
             f'<span class="funding-window current unknown"><em>{current_label}</em><strong>—</strong></span>'
@@ -9715,11 +9732,12 @@ def render_funding_windows(
         )
         cells.append(
             f'<span class="funding-window current {current_tone}"><em>{current_label}</em>'
-            f"<strong>{fmt_signed_pct(current_value, digits=3)}</strong></span>"
+            f'<strong>{fmt_signed_pct(current_value, digits=3)}</strong></span>'
         )
     display_labels = {"1d": "24h", "7d": "7d", "30d": "30d"}
+    current_windows = venue_funding_history.route_windows(route)
     for label in ("1d", "7d", "30d"):
-        value = funding_radar.window_value(route, label)
+        value = _float_or_none(current_windows.get(label))
         if value is None:
             window_title = (coverage.get("window_notes") or {}).get(
                 label, coverage_title

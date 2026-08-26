@@ -217,16 +217,32 @@ def test_expanded_funding_pair_shows_now_and_exact_settled_windows(monkeypatch) 
             "window_notes": {"30d": "30d cadence incomplete."},
         },
     )
+    monkeypatch.setattr(
+        server.venue_funding_history,
+        "route_windows",
+        lambda _route: {"1d": 0.07, "7d": 0.69, "30d": None},
+    )
+    monkeypatch.setattr(
+        server.bulk_quotes,
+        "load_funding",
+        lambda: {
+            "Gate|SPCX/USDT:USDT": {
+                "rate_pct": 0.04,
+                "interval_hours": 8.0,
+            }
+        },
+    )
 
     html = server.render_funding_pair(route)
 
     assert "Now est. / settled history" in html
     assert "Now is projected 24-hour carry" in html
     assert "+0.120%" in html
+    assert "data-live-funding" in html
     assert "<em>24h</em>" in html
-    assert "+0.08%" in html
+    assert "+0.07%" in html
     assert "<em>7d</em>" in html
-    assert "+0.71%" in html
+    assert "+0.69%" in html
     assert "<em>30d</em>" in html
     assert "30d cadence incomplete." in html
     assert "<em>30d</em><strong>—</strong>" in html
