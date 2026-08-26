@@ -3187,6 +3187,58 @@ def test_a_builder_market_must_agree_with_the_price_the_cex_quotes(monkeypatch) 
     assert symbols == {"xyz:MU"}, f"only the market that agrees on price may pair, got {symbols}"
 
 
+def test_builder_identity_uses_every_exact_cex_anchor_not_iteration_order(monkeypatch) -> None:
+    """GIGADEV was dropped because the first CEX quote was just over 5% away
+    even though two other exact CEX markets corroborated the builder price."""
+    from spreadarb.api_discovery.models import MarketQuote
+
+    source = sources.HyperliquidBuilderDexSource()
+    monkeypatch.setattr(
+        source,
+        "_info",
+        lambda payload, _timeout: (
+            [{"name": "xyz"}]
+            if payload["type"] == "perpDexs"
+            else [
+                {"universe": [{"name": "xyz:GIGADEV"}]},
+                [{"midPx": "59.38", "funding": "0.00001", "dayNtlVlm": "90000"}],
+            ]
+        ),
+    )
+    ts = int(time.time() * 1_000_000)
+
+    def reference(venue: str, price: float) -> MarketQuote:
+        return MarketQuote(
+            token="GIGADEV",
+            venue=venue,
+            market_type="Futures",
+            bid=price,
+            ask=price,
+            bid_vwap=price,
+            ask_vwap=price,
+            quote_ts_us=ts,
+            source_name="cex",
+            symbol="GIGADEV/USDT:USDT",
+        )
+
+    ctx = sources.DiscoveryContext(
+        tokens=(),
+        watchlist={},
+        deadline_monotonic=None,
+        reference_quotes=(
+            reference("Kucoin", 63.40),  # first and >5% away
+            reference("Gate", 62.03),    # corroborates within the guard
+            reference("Binance", 62.02),
+        ),
+        min_spread_pct=0.05,
+        min_funding_apr_pct=0.01,
+    )
+
+    result = source.collect(ctx)
+
+    assert {quote.symbol for quote in result.quotes} == {"xyz:GIGADEV"}
+
+
 def test_an_equity_gap_of_ten_percent_is_a_different_instrument() -> None:
     """Real cross-venue gaps on a tokenized equity run 0.1-0.5%. A 25% bound
     admitted cash:AMZN at 241.75 against MEXC's 273.36 and printed a 13% spread."""
@@ -3295,6 +3347,26 @@ def test_alerts_page_reports_real_per_member_pushover_readiness(tmp_path, monkey
 
     assert "in-app and Pushover enabled" in html
     assert "Add and enable a Pushover key" not in html
+
+
+def test_alerts_page_has_one_primary_heading_before_saved_rules(tmp_path, monkeypatch) -> None:
+    user = SimpleNamespace(
+        id=7,
+        display_name="Alex",
+        is_admin=True,
+        csrf_token="csrf",
+        subscription_tier="research_pro",
+        subscription_active=True,
+    )
+    monkeypatch.setattr(server.accounts, "current_user", lambda *a, **k: user)
+    monkeypatch.setattr(server.accounts, "notification_preferences", lambda *a, **k: {})
+    monkeypatch.setattr(server.accounts, "list_market_alert_rules", lambda *a, **k: [])
+
+    html = server.render_alerts_page(tmp_path / "board.jsonl", {}, {})
+
+    assert html.count("<h1>") == 1
+    assert "<h1>Market alerts</h1>" in html
+    assert html.index("<h1>Market alerts</h1>") < html.index("<h2>No saved rules</h2>")
 
 
 def test_dark_alert_panels_use_terminal_colours() -> None:

@@ -888,11 +888,11 @@ class HyperliquidBuilderDexSource:
         # the same price. Pairing the wrong one against MEXC's MUSTOCK invented a
         # 27% spread where the real gap is 0.1%. Same asset means same price, so
         # anchor on what the CEX side is quoting and reject the rest.
-        reference_price: dict[str, float] = {}
+        reference_prices: dict[str, list[float]] = {}
         for quote in context.reference_quotes:
             mid = _quote_mid(quote)
             if mid:
-                reference_price.setdefault(quote.token.upper(), mid)
+                reference_prices.setdefault(quote.token.upper(), []).append(mid)
         dex_names: list[str] = []
         try:
             for entry in self._info({"type": "perpDexs"}, context.remaining_timeout(15.0)) or []:
@@ -929,8 +929,17 @@ class HyperliquidBuilderDexSource:
                 mid = as_float(asset.get("midPx")) or as_float(asset.get("markPx"))
                 if not mid or mid <= 0:
                     continue
-                anchor = reference_price.get(token)
-                if anchor and abs(mid / anchor - 1.0) > BUILDER_DEX_PRICE_TOLERANCE:
+                anchors = reference_prices.get(token) or []
+                # Reference iteration order must not decide whether an exact
+                # market exists. A genuine venue dislocation can be within the
+                # identity guard of Binance/Gate while just over it versus a
+                # thinner KuCoin quote. Accept only when at least one exact
+                # CEX market corroborates the builder instrument; wrong
+                # same-ticker products still disagree with every anchor.
+                if anchors and all(
+                    abs(mid / anchor - 1.0) > BUILDER_DEX_PRICE_TOLERANCE
+                    for anchor in anchors
+                ):
                     errors.append(f"{self.venue}:{symbol}:price_disagrees_with_{token}")
                     continue
                 funding_rate = as_float(asset.get("funding"))

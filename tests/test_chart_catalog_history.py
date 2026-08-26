@@ -12,7 +12,7 @@ from spreadboard import chart_catalog, historical_spreads, market_history, serve
 def test_catalog_load_is_cached_until_the_atomic_artifact_changes(tmp_path, monkeypatch) -> None:
     path = tmp_path / "catalog.json"
     path.write_text(json.dumps({"markets": [{"token": "ONE", "venue": "A", "market_type": "Spot", "symbol": "ONE/USDT"}]}))
-    monkeypatch.setattr(chart_catalog, "dex_market_entries", lambda: [])
+    monkeypatch.setattr(chart_catalog, "dex_market_entries", list)
     chart_catalog._LOAD_CACHE.update({"key": None, "payload": None})
 
     first = chart_catalog.load(path)
@@ -268,6 +268,22 @@ def test_catalog_refresh_retains_last_successful_venue(tmp_path, monkeypatch) ->
     ]
     assert payload["health"]["Gate|Spot"]["status"] == "stale_cache"
     assert payload["health"]["Gate|Spot"]["catalogued_at"] == "2026-07-31T10:00:00Z"
+
+
+def test_catalog_refresh_includes_native_only_ourbit_futures(tmp_path, monkeypatch) -> None:
+    seen: list[tuple[str, str]] = []
+
+    def fake_load(venue: str, market_type: str):
+        seen.append((venue, market_type))
+        return []
+
+    monkeypatch.setattr(chart_catalog, "_load_job_subprocess", fake_load)
+    monkeypatch.setattr(chart_catalog, "dex_market_entries", lambda: [])
+
+    chart_catalog.refresh(path=tmp_path / "catalog.json", workers=2)
+
+    assert ("Ourbit", "Futures") in seen
+    assert ("Ourbit", "Spot") not in seen
 
 
 def test_catalog_excludes_inverse_perpetuals_from_stablecoin_chart_path() -> None:

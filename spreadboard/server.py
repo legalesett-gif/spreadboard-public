@@ -49,6 +49,7 @@ from spreadboard import (  # noqa: E402
     executor_boundary,
     fair_price,
     funding_catalog,
+    funding_navigation,
     funding_history_demand,
     funding_radar,
     historical_spreads,
@@ -102,6 +103,7 @@ _MARKET_CACHE_LOCK = threading.Lock()
 _MARKET_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 _MARKET_CACHE_INFLIGHT: dict[tuple[Any, ...], threading.Event] = {}
 _MATERIALIZED_VIEW_STORE = materialized_views.default_store()
+_FUNDING_NAVIGATION_STORE = funding_navigation.store()
 _LIVE_QUERY_RESULT_TTL_SECONDS = max(
     2.0, float(os.environ.get("SPREADBOARD_LIVE_QUERY_RESULT_SECONDS", "10"))
 )
@@ -2522,6 +2524,34 @@ def api_market_spreads(
     offset = max(0, int(_query_float(query, "offset", 0) or 0))
     complete_funding_request = _can_use_complete_funding_catalog(query)
     historical_dex_request = _can_use_historical_dex_catalog(query)
+    if complete_funding_request and _can_use_persisted_funding_navigation(
+        query, limit=limit, offset=offset
+    ):
+        persisted = _FUNDING_NAVIGATION_STORE.payload_for(
+            query, board_path=board_path
+        )
+        if (
+            persisted is not None
+            and bool(persisted.get("groups"))
+            and _market_payload_cacheable(persisted)
+        ):
+            state = funding_navigation.status()
+            navigation = dict(persisted.get("funding_navigation") or {})
+            built_at = _float_or_none(state.get("built_at_unix"))
+            navigation.update(
+                {
+                    "generation": state.get("generation"),
+                    "built_at_unix": built_at,
+                    "age_seconds": (
+                        max(0.0, time.time() - built_at)
+                        if built_at is not None
+                        else None
+                    ),
+                    "request_owned_exchange_work": False,
+                }
+            )
+            persisted["funding_navigation"] = navigation
+            return _sync_telegram_client_universe(persisted)
     exact_catalog = _exact_catalog_market_projection(
         query,
         limit=limit,
@@ -2762,6 +2792,34 @@ def api_market_spreads(
     if cache_key is not None:
         _market_cache_finish(cache_key, data)
     return _sync_telegram_client_universe(data)
+
+
+def _can_use_persisted_funding_navigation(
+    query: dict[str, list[str]], *, limit: int, offset: int
+) -> bool:
+    """Keep the principal Funding tabs on their atomic background ranking."""
+
+    if _query_bool(query, "no_cache") or _query_bool(query, "export"):
+        return False
+    if offset + limit > funding_navigation.MAX_TOKENS:
+        return False
+    if (_query_first(query, "kind") or "").upper() not in funding_navigation.KINDS:
+        return False
+    window = (_query_first(query, "funding_window") or "now").casefold()
+    if window not in funding_navigation.WINDOWS:
+        return False
+    if (_query_first(query, "direction") or "desc").casefold() != "desc":
+        return False
+    unsupported = (
+        "q",
+        "exchange",
+        "quote",
+        "min_abs_funding_24h_pct",
+        "min_abs_funding_apr_pct",
+        "include_stale",
+        "include_unverified",
+    )
+    return not any(_query_first(query, key) for key in unsupported)
 
 
 def _exact_catalog_market_projection(
@@ -3023,6 +3081,17 @@ def _expand_complete_funding_groups(
         )
     except Exception:  # noqa: BLE001 - preserve the last scanner generation.
         return data
+    return _merge_complete_funding_page(data, complete, limit=limit)
+
+
+def _merge_complete_funding_page(
+    data: dict[str, Any],
+    complete: dict[str, Any],
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    """Apply one exact-ranked Funding page to the lightweight API shell."""
+
     if complete.get("status") == "warming":
         result = dict(data)
         result.update(
@@ -4013,6 +4082,7 @@ def _health_with_fast_quote_state(payload: dict[str, Any]) -> dict[str, Any]:
         "live_route_index": _MATERIALIZED_VIEW_STORE.live_route_index_status(),
         "subscriber_route_warm": tracked_route_warmer.status(),
         "complete_funding_catalog": funding_catalog.status(restore=False),
+        "funding_navigation": funding_navigation.status(),
     }
     fast = api_spreads.fast_quote_health()
     if not fast:
@@ -9872,6 +9942,8 @@ def render_funding_page(
     displayed_pairs = funding_meta.get("matching_route_count", summary.get("matching_rows"))
     api_health_data = (market_data.get("source_health") or {}).get("canonical_api") or {}
     live_funding_health = bulk_quotes.funding_health()
+    navigation_meta = market_data.get("funding_navigation") or {}
+    navigation_age_seconds = _float_or_none(navigation_meta.get("age_seconds"))
     source_ready = (
         bool(market_data.get("ok"))
         and api_health_data.get("status") == "fresh"
@@ -9969,7 +10041,7 @@ def render_funding_page(
         <div class="terminal-live-box">
           <span>{"Live" if source_ready else "Updating"}</span>
           <strong>{fmt_age((_float_or_none(live_funding_health.get("p95_age_seconds")) or 0.0) / 60.0 if live_funding_health.get("p95_age_seconds") is not None else None)}</strong>
-          <em>current funding · p95 age</em>
+          <em>current funding · p95 age{f' · ranks {fmt_age(navigation_age_seconds / 60.0)} old' if navigation_age_seconds is not None else ''}</em>
         </div>
       </div>
       <nav class="funding-farm-tabs" aria-label="Funding farm type">
@@ -15487,8 +15559,8 @@ def render_member_alert_rules(board_path: Path) -> str:
     if not rules:
         return f"""
     <section class="member-alerts">
-      <div class="profile-section-title"><div><span class="page-kicker">My alerts</span>
-        <h2>You have no alerts yet</h2>
+      <div class="profile-section-title"><div><span class="page-kicker">Rules</span>
+        <h2>No saved rules</h2>
         <p>Create a token price or funding alert here, or open any route and use "Alert"
            to watch its spread, funding, deposit/withdrawal status or quote freshness.
            {h(delivery_note)}</p></div></div>
@@ -15514,7 +15586,7 @@ def render_member_alert_rules(board_path: Path) -> str:
     return f"""
     <section class="member-alerts">
       <div class="profile-section-title">
-        <div><span class="page-kicker">My alerts</span><h2>{active_rule_count} active · {len(rules)} saved</h2>
+        <div><span class="page-kicker">Rules</span><h2>{active_rule_count} active · {len(rules)} saved</h2>
         <p>{h(delivery_note)} An alert fires once when the level holds for its stability
            window, then turns itself off. Toggle Enabled back on to re-arm it.</p></div>
       </div>
@@ -15709,11 +15781,10 @@ def render_alerts_page(
     live_rule_count = len(accounts.list_market_alert_rules(user.id)) if user is not None else 0
     body = f"""
     <section class="alerts-page" data-refresh="180" data-refresh-silent="1">
-      {render_member_alert_rules(board_path)}
       <div class="intel-hero compact-hero">
         <div>
           <span class="page-kicker">Alerts</span>
-          <h1>Your alerts</h1>
+          <h1>Market alerts</h1>
           <p>Watch token prices and funding, exact-route spreads, transfer rails and quote freshness. Get a push on your own phone when the condition holds.</p>
         </div>
         <div class="intel-actions">
@@ -15722,6 +15793,7 @@ def render_alerts_page(
           <a class="secondary" href="/intel">Intel</a>
         </div>
       </div>
+      {render_member_alert_rules(board_path)}
       <section class="alert-status-grid">
         <article class="chart-summary-card"><span>Delivery</span><strong>Live</strong><em>{h(delivery_detail)}</em></article>
         <article class="chart-summary-card"><span>Saved rules</span><strong>{h(live_rule_count)}</strong><em>evaluated continuously</em></article>

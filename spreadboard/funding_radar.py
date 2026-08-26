@@ -300,6 +300,18 @@ def window_value(
     exact_legs: dict[str, dict[str, float | None]] | None = None,
 ) -> float | None:
     """Settled carry for a live or retained route from exact venue events."""
+    navigation = (
+        route.get("funding_navigation_windows")
+        if isinstance(route.get("funding_navigation_windows"), dict)
+        else None
+    )
+    if navigation is not None and label in navigation:
+        # Persisted Funding navigation is ranked and rendered from one atomic
+        # exact-settlement generation.  Reading a newer archive value for the
+        # same card before its background re-rank would display a number in the
+        # wrong position, so the embedded selected generation is authoritative
+        # for these compact rows only.
+        return _float_or_none(navigation.get(label))
     # Retention keeps the exact venue symbols, but its saved windows are only
     # the trailing totals observed when the route was last live. They must not
     # masquerade as today's rolling 24h/7d/30d periods for another 30 days.

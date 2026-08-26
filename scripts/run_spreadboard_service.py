@@ -34,6 +34,7 @@ from spreadboard import (
     crypto_watcher,
     funding_catalog,
     funding_history_demand,
+    funding_navigation,
     historical_spreads,
     market_history,
     materialized_views,
@@ -345,6 +346,7 @@ class RefreshLoop:
         # never competes with subscriber requests for CPU.
         _refresh_live_route_index(install=False)
         _refresh_complete_funding_catalog(force=True)
+        _refresh_funding_navigation(force=True)
         _refresh_enrichment_subprocess()
         # Publish the compact navigation generation immediately after its
         # structural universe and complete funding catalogue agree. Waiting
@@ -875,6 +877,9 @@ class SharedArtifactWatcher(threading.Thread):
         self.funding_catalog_signature = _artifact_signature(
             funding_catalog.DEFAULT_CACHE_PATH
         )
+        self.funding_navigation_signature = _artifact_signature(
+            funding_navigation.store().pointer_path
+        )
         self.warm_lock = threading.Lock()
         self.warm_pending = False
         self.funding_warm_pending = False
@@ -920,15 +925,27 @@ class SharedArtifactWatcher(threading.Thread):
         funding_catalog_signature = _artifact_signature(
             funding_catalog.DEFAULT_CACHE_PATH
         )
-        if (
-            funding_catalog_signature != self.funding_catalog_signature
-            and _service_role() != "web"
-        ):
+        if funding_catalog_signature != self.funding_catalog_signature:
             self.funding_catalog_signature = funding_catalog_signature
-            installed = funding_catalog.reload_persisted_cache()
+            if _service_role() == "collector":
+                _log("complete funding catalogue publication observed")
+            else:
+                installed = funding_catalog.reload_persisted_cache()
+                _log(
+                    "complete funding catalogue installed "
+                    f"tokens={installed.get('token_count')}"
+                )
+        funding_navigation_signature = _artifact_signature(
+            funding_navigation.store().pointer_path
+        )
+        if funding_navigation_signature != self.funding_navigation_signature:
+            self.funding_navigation_signature = funding_navigation_signature
+            from spreadboard import server as server_module
+
+            server_module._FUNDING_NAVIGATION_STORE.invalidate()
             _log(
-                "complete funding catalogue installed "
-                f"tokens={installed.get('token_count')}"
+                "exact-ranked funding navigation installed "
+                f"status={funding_navigation.status()}"
             )
         generation = _artifact_signature(MARKET_GENERATION_PATH)
         if generation != self.generation_signature:
@@ -1501,6 +1518,11 @@ WARM_QUERIES: tuple[dict[str, list[str]], ...] = (
     {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
     {"kind": ["FUTURES"], "limit": ["500"]},
     {"kind": ["FUTURES-SPOT-PAIR"], "limit": ["500"]},
+    # UACryptoInvest-style top-book dislocations often cannot fill the board's
+    # canonical $500 probe. Keep them in a separately labelled, persisted
+    # Research lane instead of hiding them or weakening the Verified ranking.
+    {"kind": ["FUTURES"], "evidence": ["research"], "include_unverified": ["1"], "limit": ["500"]},
+    {"kind": ["FUTURES-SPOT-PAIR"], "evidence": ["research"], "include_unverified": ["1"], "limit": ["500"]},
     {"kind": ["SPOT"], "limit": ["500"]},
     {"kind": ["DEX-FUTURES"], "limit": ["500"]},
     {"kind": ["DEX-SPOT"], "limit": ["500"]},
@@ -1904,6 +1926,7 @@ class BulkFundingLoop(threading.Thread):
         )
         if (funding.get("legs") or 0) > 0:
             _publish_shared_market_generation("bulk_funding")
+            _schedule_funding_navigation()
 
 
 class MarketEvidenceLoop(threading.Thread):
@@ -2008,6 +2031,7 @@ class MarketEvidenceLoop(threading.Thread):
             return
         summary = (result.stdout or result.stderr).strip().splitlines()
         _log(summary[-1] if summary else "market evidence completed")
+        _refresh_funding_navigation(force=True)
         # Historical CEX readers rank the persisted complete catalogue against
         # the exact settlement file, while DEX readers rank the durable radar.
         # Neither needs the 19-view navigation generation rebuilt after every
@@ -2052,6 +2076,8 @@ _MATERIALIZED_VIEW_RETRY_AFTER = 0.0
 _MATERIALIZED_VIEW_BUILD_LOCK = threading.Lock()
 _LIVE_ROUTE_INDEX_BUILD_LOCK = threading.Lock()
 _FUNDING_CATALOG_BUILD_LOCK = threading.Lock()
+_FUNDING_NAVIGATION_BUILD_LOCK = threading.Lock()
+_FUNDING_NAVIGATION_SCHEDULE_LOCK = threading.Lock()
 FUNDING_CATALOG_REFRESH_SECONDS = max(
     900.0,
     float(os.environ.get("SPREADBOARD_FUNDING_CATALOG_REFRESH_SECONDS", "900")),
@@ -2065,6 +2091,20 @@ FUNDING_CATALOG_FAILURE_RETRY_SECONDS = max(
     ),
 )
 _FUNDING_CATALOG_RETRY_AFTER = 0.0
+FUNDING_NAVIGATION_REFRESH_SECONDS = max(
+    120.0,
+    float(os.environ.get("SPREADBOARD_FUNDING_NAVIGATION_SECONDS", "300")),
+)
+FUNDING_NAVIGATION_FAILURE_RETRY_SECONDS = max(
+    60.0,
+    float(
+        os.environ.get(
+            "SPREADBOARD_FUNDING_NAVIGATION_FAILURE_RETRY_SECONDS", "180"
+        )
+    ),
+)
+_LAST_FUNDING_NAVIGATION_AT = 0.0
+_FUNDING_NAVIGATION_RETRY_AFTER = 0.0
 
 
 def _refresh_live_route_index(*, install: bool = True) -> bool:
@@ -2131,8 +2171,16 @@ def _refresh_complete_funding_catalog(*, force: bool = False) -> bool:
     now = time.monotonic()
     if now < _FUNDING_CATALOG_RETRY_AFTER:
         return False
-    state = funding_catalog.status(restore=True)
-    if not state.get("ready") and Path(str(state.get("path") or "")).exists():
+    state = (
+        funding_catalog.persisted_status()
+        if _service_role() == "collector"
+        else funding_catalog.status(restore=True)
+    )
+    if (
+        _service_role() != "collector"
+        and not state.get("ready")
+        and Path(str(state.get("path") or "")).exists()
+    ):
         state = funding_catalog.reload_persisted_cache()
     age = state.get("age_seconds")
     if (
@@ -2176,7 +2224,18 @@ def _refresh_complete_funding_catalog(*, force: bool = False) -> bool:
             )
             _log("complete funding catalogue worker produced no summary")
             return False
-        installed = funding_catalog.reload_persisted_cache()
+        # The collector publishes this 200 MB file for the web process but
+        # must not decode and retain its ~1.5 GB Python object graph itself.
+        # Doing so immediately before the materializer loaded a second copy is
+        # what repeatedly exceeded the 4 GiB cgroup. Combined/local mode still
+        # installs it because that process is also the reader.
+        if _service_role() == "collector":
+            installed = {
+                "ready": int(summary.get("tokens") or 0) > 0,
+                "token_count": int(summary.get("tokens") or 0),
+            }
+        else:
+            installed = funding_catalog.reload_persisted_cache()
         if not installed.get("ready"):
             _FUNDING_CATALOG_RETRY_AFTER = (
                 time.monotonic() + FUNDING_CATALOG_FAILURE_RETRY_SECONDS
@@ -2193,6 +2252,95 @@ def _refresh_complete_funding_catalog(*, force: bool = False) -> bool:
         return True
     finally:
         _FUNDING_CATALOG_BUILD_LOCK.release()
+
+
+def _refresh_funding_navigation(*, force: bool = False) -> bool:
+    """Publish all twelve exact Funding tabs outside subscriber requests."""
+
+    global _LAST_FUNDING_NAVIGATION_AT, _FUNDING_NAVIGATION_RETRY_AFTER
+
+    if _service_role() == "web":
+        return False
+    now = time.monotonic()
+    if now < _FUNDING_NAVIGATION_RETRY_AFTER:
+        return False
+    if (
+        not force
+        and _LAST_FUNDING_NAVIGATION_AT
+        and now - _LAST_FUNDING_NAVIGATION_AT
+        < FUNDING_NAVIGATION_REFRESH_SECONDS
+    ):
+        return False
+    if not _FUNDING_NAVIGATION_BUILD_LOCK.acquire(blocking=False):
+        return False
+    try:
+        started = time.monotonic()
+        result = _run_worker(
+            [
+                *_low_priority_prefix(),
+                sys.executable,
+                str(ROOT / "scripts/funding_navigation_worker.py"),
+                str(_board_path()),
+            ],
+            timeout=float(
+                os.environ.get("SPREADBOARD_FUNDING_NAVIGATION_TIMEOUT_SECONDS", "900")
+            ),
+        )
+        if result.timed_out or result.returncode != 0:
+            _FUNDING_NAVIGATION_RETRY_AFTER = (
+                time.monotonic() + FUNDING_NAVIGATION_FAILURE_RETRY_SECONDS
+            )
+            _log(
+                "exact-ranked funding navigation retained previous generation "
+                f"timeout={result.timed_out} exit={result.returncode} "
+                f"detail={(result.stdout or result.stderr)[-350:]}"
+            )
+            return False
+        try:
+            summary = json.loads(result.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            _FUNDING_NAVIGATION_RETRY_AFTER = (
+                time.monotonic() + FUNDING_NAVIGATION_FAILURE_RETRY_SECONDS
+            )
+            _log("exact-ranked funding navigation produced no summary")
+            return False
+        if int(summary.get("views") or 0) != len(funding_navigation.QUERIES):
+            _FUNDING_NAVIGATION_RETRY_AFTER = (
+                time.monotonic() + FUNDING_NAVIGATION_FAILURE_RETRY_SECONDS
+            )
+            _log(f"exact-ranked funding navigation incomplete {summary}")
+            return False
+        _LAST_FUNDING_NAVIGATION_AT = time.monotonic()
+        _FUNDING_NAVIGATION_RETRY_AFTER = 0.0
+        _log(
+            "exact-ranked funding navigation ready "
+            f"generation={summary.get('generation')} views={summary.get('views')} "
+            f"child={summary.get('seconds')}s rss={summary.get('max_rss_mb')}MB "
+            f"elapsed={time.monotonic() - started:.1f}s"
+        )
+        return True
+    finally:
+        _FUNDING_NAVIGATION_BUILD_LOCK.release()
+
+
+def _schedule_funding_navigation() -> None:
+    """Coalesce a funding tick behind any in-progress structural publication."""
+
+    if not _FUNDING_NAVIGATION_SCHEDULE_LOCK.acquire(blocking=False):
+        return
+
+    def build() -> None:
+        try:
+            with _COLLECTOR_HEAVY_LOCK:
+                _refresh_funding_navigation(force=False)
+        finally:
+            _FUNDING_NAVIGATION_SCHEDULE_LOCK.release()
+
+    threading.Thread(
+        target=build,
+        name="funding-navigation-publish",
+        daemon=True,
+    ).start()
 
 
 def _refresh_materialized_views(*, force: bool) -> bool:
@@ -2262,7 +2410,8 @@ def _refresh_materialized_views(*, force: bool) -> bool:
         routes = server_module.restore_materialized_route_index(_board_path())
         server_module.restore_materialized_intel(_board_path())
         server_module.mark_historical_dex_archive_ready()
-        funding_catalog.reload_persisted_cache()
+        if _service_role() != "collector":
+            funding_catalog.reload_persisted_cache()
         _LAST_MATERIALIZED_VIEW_AT = time.monotonic()
         _MATERIALIZED_VIEW_RETRY_AFTER = 0.0
         _log(

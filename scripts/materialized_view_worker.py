@@ -202,7 +202,9 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         # discovery parse first so the two universes never peak together.
         _release_memory(keep_rows=False)
         funding_catalog.clear_cache()
-        funding_catalog.refresh_cache()
+        restored_funding = funding_catalog.restore_persisted_cache()
+        if not restored_funding.get("ready"):
+            raise RuntimeError("persisted_complete_funding_catalog_unavailable")
         server.mark_historical_dex_archive_ready()
         for query in funding:
             payload = server.api_market_spreads(

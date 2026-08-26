@@ -417,8 +417,16 @@ def test_web_watcher_self_heals_a_missing_telegram_snapshot(monkeypatch) -> None
     assert restores == [True]
 
 
-def test_materialized_builder_is_an_isolated_low_priority_worker(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("role", "expected_catalogue_reloads"),
+    (("combined", 1), ("collector", 0)),
+)
+def test_materialized_builder_is_an_isolated_low_priority_worker(
+    monkeypatch, role: str, expected_catalogue_reloads: int
+) -> None:
     seen = []
+    catalogue_reloads = []
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     monkeypatch.setattr(service, "_LAST_MATERIALIZED_VIEW_AT", 0.0)
     monkeypatch.setattr(service, "_MATERIALIZED_VIEW_RETRY_AFTER", 0.0)
     monkeypatch.setattr(
@@ -441,7 +449,8 @@ def test_materialized_builder_is_an_isolated_low_priority_worker(monkeypatch) ->
     monkeypatch.setattr(
         service.funding_catalog,
         "reload_persisted_cache",
-        lambda: {"ready": True, "token_count": 100},
+        lambda: catalogue_reloads.append(True)
+        or {"ready": True, "token_count": 100},
     )
 
     assert service._refresh_materialized_views(force=True) is True
@@ -450,6 +459,7 @@ def test_materialized_builder_is_an_isolated_low_priority_worker(monkeypatch) ->
     assert command[:3] == service._low_priority_prefix()
     assert any(str(item).endswith("materialized_view_worker.py") for item in command)
     assert options["timeout"] == 1800.0
+    assert len(catalogue_reloads) == expected_catalogue_reloads
 
 
 def test_market_evidence_cycle_does_not_wait_for_navigation_materialization(
@@ -579,6 +589,60 @@ def test_complete_funding_catalog_is_an_isolated_bounded_worker(
         for item in command
     )
     assert options["timeout"] == 1200.0
+
+
+def test_collector_publishes_funding_catalog_without_retaining_giant_decode(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "collector")
+    monkeypatch.setattr(service, "_FUNDING_CATALOG_RETRY_AFTER", 0.0)
+    monkeypatch.setattr(
+        service.funding_catalog,
+        "persisted_status",
+        lambda: {
+            "ready": False,
+            "age_seconds": None,
+            "path": str(tmp_path / "complete.json"),
+        },
+    )
+    monkeypatch.setattr(
+        service.funding_catalog,
+        "reload_persisted_cache",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("collector must not retain the 1.5 GB decoded catalogue")
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_worker",
+        lambda *_args, **_kwargs: service.WorkerResult(
+            0,
+            '{"status":"ok","tokens":5335,"bytes":211930101,"seconds":26.7,"max_rss_mb":1559.3}\n',
+            "",
+            False,
+        ),
+    )
+
+    assert service._refresh_complete_funding_catalog(force=True) is True
+
+
+def test_collector_artifact_watcher_never_decodes_complete_catalogue(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "collector")
+    path = tmp_path / "complete.json"
+    monkeypatch.setattr(service.funding_catalog, "DEFAULT_CACHE_PATH", path)
+    watcher = service.SharedArtifactWatcher(threading.Event())
+    path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        service.funding_catalog,
+        "reload_persisted_cache",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("collector watcher must not decode the catalogue")
+        ),
+    )
+
+    watcher.check_once()
 
 
 def test_failed_materialized_build_has_a_bounded_retry_cooldown(monkeypatch) -> None:

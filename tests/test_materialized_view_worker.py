@@ -39,7 +39,7 @@ def test_worker_writes_views_route_index_and_intel_atomically(
     monkeypatch.setattr(worker.server, "api_intel", lambda *_args, **_kwargs: {"ok": True, "intel": "ready"})
     monkeypatch.setattr(worker.server, "mark_historical_dex_archive_ready", lambda: None)
     monkeypatch.setattr(worker.funding_catalog, "clear_cache", lambda: None)
-    monkeypatch.setattr(worker.funding_catalog, "refresh_cache", dict)
+    monkeypatch.setattr(worker.funding_catalog, "restore_persisted_cache", lambda: {"ready": True})
     monkeypatch.setattr(worker.telegram_queries, "replace_payload", lambda _payload: None)
     monkeypatch.setattr(worker.telegram_queries, "replace_funding_payloads", lambda _payloads: None)
 
@@ -66,7 +66,7 @@ def test_worker_does_not_publish_a_generation_mixed_across_snapshots(
     monkeypatch.setattr(worker.server, "api_market_spreads", lambda *_args, **_kwargs: _payload("ONE"))
     monkeypatch.setattr(worker.server, "api_intel", lambda *_args, **_kwargs: {"ok": True})
     monkeypatch.setattr(worker.funding_catalog, "clear_cache", lambda: None)
-    monkeypatch.setattr(worker.funding_catalog, "refresh_cache", dict)
+    monkeypatch.setattr(worker.funding_catalog, "restore_persisted_cache", lambda: {"ready": True})
 
     with pytest.raises(RuntimeError, match="source_generation_changed"):
         worker.build(board, tmp_path / "materialized")
@@ -182,7 +182,7 @@ def test_worker_archives_every_dex_route_before_compacting_navigation(
     monkeypatch.setattr(worker.server, "api_market_spreads", lambda *_args, **_kwargs: payload)
     monkeypatch.setattr(worker.server, "api_intel", lambda *_args, **_kwargs: {"ok": True})
     monkeypatch.setattr(worker.funding_catalog, "clear_cache", lambda: None)
-    monkeypatch.setattr(worker.funding_catalog, "refresh_cache", dict)
+    monkeypatch.setattr(worker.funding_catalog, "restore_persisted_cache", lambda: {"ready": True})
     monkeypatch.setattr(worker.funding_radar, "refresh", lambda value: archived.extend(value) or len(archived))
     monkeypatch.setattr(worker.telegram_queries, "replace_payload", lambda _payload: None)
     monkeypatch.setattr(worker.telegram_queries, "replace_funding_payloads", lambda _payloads: None)

@@ -273,6 +273,37 @@ def reload_persisted_cache() -> dict[str, Any]:
     return status()
 
 
+def persisted_status() -> dict[str, Any]:
+    """Describe the published catalogue without decoding its large payload.
+
+    The collector owns publication but never reads catalogue rows.  A stat-only
+    readiness check prevents that process from retaining roughly 1.5 GB of
+    Python objects merely to decide whether the atomic file is due for refresh.
+    """
+
+    try:
+        stat = DEFAULT_CACHE_PATH.stat()
+    except OSError:
+        return {
+            "ready": False,
+            "token_count": None,
+            "saved_at_unix": None,
+            "age_seconds": None,
+            "building": False,
+            "path": str(DEFAULT_CACHE_PATH),
+            "persist_error": None,
+        }
+    return {
+        "ready": stat.st_size > 0,
+        "token_count": None,
+        "saved_at_unix": stat.st_mtime,
+        "age_seconds": max(0.0, time.time() - stat.st_mtime),
+        "building": False,
+        "path": str(DEFAULT_CACHE_PATH),
+        "persist_error": None,
+    }
+
+
 def status(*, restore: bool = False) -> dict[str, Any]:
     with _CACHE_LOCK:
         if restore and not _CACHE_PAYLOADS:
@@ -769,6 +800,157 @@ def page(
         "window_route_counts": dict(window_routes),
         "window_token_counts": {label: len(tokens) for label, tokens in window_tokens.items()},
     }
+
+
+def build_navigation_pages(
+    *,
+    limit: int = 500,
+    preview_limit: int = 3,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Build every principal Funding lane in one exact all-route pass.
+
+    Calling :func:`page` for twelve farm/window combinations walks the same
+    100k-ish structural routes twelve times.  This collector-only builder loads
+    live funding and exact settlements once, decorates each economic route
+    once, then shares it between the four rankings for its farm.  Only the
+    compact HTML preview is retained; exact token lookups and JSON export keep
+    using the complete catalogue.
+    """
+
+    payloads = _complete_payloads()
+    if not payloads:
+        return {}
+    kinds = ("FUTURES", "FUTURES-SPOT-PAIR", "DEX-FUTURES")
+    rows = [
+        route
+        for kind in kinds
+        for route in _all_routes(
+            route_kind=kind,
+            symbol=None,
+            exchange=None,
+            quote=None,
+            include_retained=True,
+            payloads=payloads,
+        )
+    ]
+    current_funding = bulk_quotes.load_funding()
+    if not current_funding:
+        return {}
+    exact_legs = venue_funding_history.load()
+    windows = ("now", "1d", "7d", "30d")
+    lanes: dict[
+        tuple[str, str], dict[str, list[tuple[float | None, dict[str, Any]]]]
+    ] = {(kind, window): {} for kind in kinds for window in windows}
+    window_route_counts = {
+        kind: {label: 0 for label in windows[1:]} for kind in kinds
+    }
+    window_tokens = {
+        kind: {label: set() for label in windows[1:]} for kind in kinds
+    }
+
+    for route in rows:
+        kind = next(
+            (
+                candidate
+                for candidate in kinds
+                if funding_radar.kind_matches(
+                    str(route.get("route_kind") or ""), candidate
+                )
+            ),
+            None,
+        )
+        token = str(route.get("token") or "").strip().upper()
+        if kind is None or not token:
+            continue
+        current_value = _live_current_value(route, current_funding)
+        _apply_live_current_value(route, current_value)
+        route["funding_age_min"] = _live_current_age(route, current_funding)
+        realised = {
+            label: _window_value(route, label, exact_legs=exact_legs)
+            for label in windows[1:]
+        }
+        # Preserve the exact generation used for ranking so rendering and the
+        # selected headline cannot disagree during an atomic archive handoff.
+        route["funding_navigation_windows"] = dict(realised)
+        if not route.get("radar_historical") and current_value is not None and current_value > 0:
+            lanes[(kind, "now")].setdefault(token, []).append(
+                (current_value, route)
+            )
+        for label, value in realised.items():
+            if value is None or value <= 0:
+                continue
+            window_route_counts[kind][label] += 1
+            window_tokens[kind][label].add(token)
+            lanes[(kind, label)].setdefault(token, []).append((value, route))
+
+    page_limit = max(1, min(10_000, int(limit or 500)))
+    route_preview = max(1, min(20, int(preview_limit or 3)))
+    pages: dict[tuple[str, str], dict[str, Any]] = {}
+    for kind in kinds:
+        for window in windows:
+            groups: list[dict[str, Any]] = []
+            matching_routes = 0
+            for token, candidates in lanes[(kind, window)].items():
+                if not candidates:
+                    continue
+                group = _group(token, candidates, window=window)
+                routes = list(group.get("routes") or [])
+                matching_routes += len(routes)
+                group["route_count"] = len(routes)
+                group["displayed_route_count"] = min(len(routes), route_preview)
+                group["routes"] = routes[:route_preview]
+                group["materialized_route_preview"] = True
+                groups.append(group)
+            rank_field = (
+                "best_funding_24h_pct"
+                if window == "now"
+                else "best_funding_window_pct"
+            )
+            groups.sort(
+                key=lambda group: float(
+                    group.get(rank_field) or float("-inf")
+                ),
+                reverse=True,
+            )
+            visible = groups[:page_limit]
+            pages[(kind, window)] = {
+                "ok": bool(visible),
+                "mode": "persisted_exact_funding_ranked_before_pagination",
+                "window": window,
+                "window_value_kind": (
+                    "current_rate_projected_24h"
+                    if window == "now"
+                    else "aggregate_exact_settlements"
+                ),
+                "window_duration_days": (
+                    None
+                    if window == "now"
+                    else {"1d": 1, "7d": 7, "30d": 30}[window]
+                ),
+                "now_is_independent": True,
+                "exact_symbol_detail": False,
+                "groups": visible,
+                "rows": [
+                    route
+                    for group in visible
+                    for route in group.get("routes") or []
+                ],
+                "matching_token_count": len(groups),
+                "matching_route_count": matching_routes,
+                "returned_token_count": len(visible),
+                "returned_route_count": sum(
+                    len(group.get("routes") or []) for group in visible
+                ),
+                "offset": 0,
+                "limit": page_limit,
+                "largest_value": groups[0].get(rank_field) if groups else None,
+                "window_route_counts": dict(window_route_counts[kind]),
+                "window_token_counts": {
+                    label: len(tokens)
+                    for label, tokens in window_tokens[kind].items()
+                },
+            }
+    return pages
 
 
 def archive_routes() -> list[dict[str, Any]]:
