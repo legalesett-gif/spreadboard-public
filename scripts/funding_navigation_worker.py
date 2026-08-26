@@ -83,8 +83,7 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
                 "request_owned_exchange_work": False,
             }
             writer.write_view(query, payload)
-        if source_signature(board_path) != initial_signature:
-            raise RuntimeError("funding_source_generation_changed_during_build")
+        final_signature = source_signature(board_path)
         manifest = writer.publish()
     except Exception:
         writer.abort()
@@ -97,6 +96,12 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         "status": "ok",
         "generation": manifest["generation"],
         "views": len(manifest["views"]),
+        # Every source file and its decoded object is atomic. A newer funding
+        # handoff during this bounded build does not make the loaded snapshot
+        # internally inconsistent; aborting here could starve publication
+        # forever because live rates advance every 30 seconds. The next
+        # five-minute generation will incorporate the newer handoff.
+        "source_advanced_during_build": final_signature != initial_signature,
         "seconds": round(time.monotonic() - started, 3),
         "max_rss_mb": round(max_rss_mb, 1),
     }

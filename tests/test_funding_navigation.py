@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from scripts import funding_navigation_worker
 from spreadboard import funding_catalog, funding_navigation, server
 
 
@@ -136,3 +137,70 @@ def test_navigation_query_matrix_is_complete() -> None:
     }
 
     assert len(identities) == 12
+
+
+def test_worker_publishes_loaded_snapshot_when_live_source_advances(
+    monkeypatch, tmp_path: Path
+) -> None:
+    signatures = iter(({"funding": [1, 1]}, {"funding": [2, 2]}))
+    monkeypatch.setattr(
+        funding_navigation_worker,
+        "source_signature",
+        lambda _path: next(signatures),
+    )
+    monkeypatch.setattr(
+        funding_navigation_worker.funding_catalog,
+        "restore_persisted_cache",
+        lambda: {"ready": True},
+    )
+    pages = {
+        (
+            str((query.get("kind") or [""])[0]),
+            str((query.get("funding_window") or ["now"])[0]),
+        ): {"groups": [], "rows": []}
+        for query in funding_navigation.QUERIES
+    }
+    monkeypatch.setattr(
+        funding_navigation_worker.funding_catalog,
+        "build_navigation_pages",
+        lambda **_kwargs: pages,
+    )
+    monkeypatch.setattr(
+        funding_navigation_worker.server,
+        "_funding_catalog_seed_payload",
+        lambda *_args, **_kwargs: {"ok": True},
+    )
+    monkeypatch.setattr(
+        funding_navigation_worker.server,
+        "_merge_complete_funding_page",
+        lambda shell, *_args, **_kwargs: dict(shell),
+    )
+
+    class Writer:
+        def __init__(self, *_args, **_kwargs):
+            self.views = []
+
+        def write_route_index(self, _routes):
+            return None
+
+        def write_view(self, query, _payload):
+            self.views.append(query)
+
+        def publish(self):
+            return {"generation": "g1", "views": self.views}
+
+        def abort(self):
+            return None
+
+    monkeypatch.setattr(
+        funding_navigation_worker.materialized_views,
+        "GenerationWriter",
+        Writer,
+    )
+
+    result = funding_navigation_worker.build(
+        tmp_path / "board.jsonl", tmp_path / "navigation"
+    )
+
+    assert result["views"] == 12
+    assert result["source_advanced_during_build"] is True
