@@ -111,6 +111,55 @@ def test_principal_funding_request_uses_persisted_ranking_before_dynamic_catalog
     assert result["funding_navigation"]["request_owned_exchange_work"] is False
 
 
+def test_historical_dex_request_uses_persisted_ranking_before_archive_warm_gate(
+    monkeypatch, tmp_path: Path
+) -> None:
+    query = {
+        "funding_only": ["1"],
+        "kind": ["DEX-FUTURES"],
+        "funding_window": ["7d"],
+        "sort": ["funding"],
+        "direction": ["desc"],
+        "limit": ["25"],
+        "offset": ["0"],
+    }
+    payload = {
+        "ok": True,
+        "filters": {"funding_only": True},
+        "groups": [
+            {"token": "GUA", "routes": [_route("GUA", "DEX-FUTURES")]}
+        ],
+        "rows": [_route("GUA", "DEX-FUTURES")],
+        "summary": {},
+        "pagination": {"limit": 500, "offset": 0},
+        "source_health": {"canonical_api": {"status": "fresh"}},
+    }
+
+    class Store:
+        def payload_for(self, _query, **_kwargs):
+            return payload
+
+    monkeypatch.setattr(server, "_FUNDING_NAVIGATION_STORE", Store())
+    monkeypatch.setattr(
+        server.funding_navigation,
+        "status",
+        lambda: {"generation": "ready", "built_at_unix": 1.0},
+    )
+    monkeypatch.setattr(server, "_sync_telegram_client_universe", lambda value: value)
+    monkeypatch.setattr(
+        server,
+        "_expand_historical_dex_groups",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("historical DEX request must use persisted ranking")
+        ),
+    )
+
+    result = server.api_market_spreads(tmp_path / "board.jsonl", query)
+
+    assert result["groups"][0]["token"] == "GUA"
+    assert result["funding_navigation"]["request_owned_exchange_work"] is False
+
+
 def test_export_and_exact_token_keep_complete_dynamic_route_expansion() -> None:
     base = {
         "funding_only": ["1"],

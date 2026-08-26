@@ -2524,9 +2524,9 @@ def api_market_spreads(
     offset = max(0, int(_query_float(query, "offset", 0) or 0))
     complete_funding_request = _can_use_complete_funding_catalog(query)
     historical_dex_request = _can_use_historical_dex_catalog(query)
-    if complete_funding_request and _can_use_persisted_funding_navigation(
-        query, limit=limit, offset=offset
-    ):
+    if (
+        complete_funding_request or historical_dex_request
+    ) and _can_use_persisted_funding_navigation(query, limit=limit, offset=offset):
         persisted = _FUNDING_NAVIGATION_STORE.payload_for(
             query, board_path=board_path
         )
