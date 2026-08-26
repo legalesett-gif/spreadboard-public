@@ -78,7 +78,9 @@ def test_complete_page_previews_three_pairs_per_token_without_bloating_html(
         "funding_health",
         lambda: {"status": "fresh", "p95_age_seconds": 30.0},
     )
-    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(
+        server.api_spreads, "spread_quote_current", lambda _row, **_kwargs: True
+    )
 
     html = server.render_funding_page(Path("board.json"), {}, {})
 
@@ -96,7 +98,9 @@ def test_group_renderer_remains_complete_without_an_explicit_preview_limit(
     monkeypatch,
 ) -> None:
     routes = [_route("FULL", index) for index in range(5)]
-    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(
+        server.api_spreads, "spread_quote_current", lambda _row, **_kwargs: True
+    )
 
     html = server.render_funding_token_group(
         {
@@ -163,7 +167,9 @@ def test_exact_token_search_renders_every_route_and_token_links_to_that_ledger(
         "funding_health",
         lambda: {"status": "fresh", "p95_age_seconds": 30.0},
     )
-    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(
+        server.api_spreads, "spread_quote_current", lambda _row, **_kwargs: True
+    )
 
     exact = server.render_funding_page(
         Path("board.json"), {}, {"q": ["GUA"], "rank": ["now"]}
