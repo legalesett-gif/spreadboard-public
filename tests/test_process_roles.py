@@ -521,6 +521,7 @@ def test_live_pair_publisher_coalesces_and_never_installs_in_collector(
     assert result["requested_generation"] == 2
     assert result["published_generation"] == 2
     assert lifecycle == ["pause", "publish:False", "resume"]
+    assert publisher.has_recent_publication(max_age_seconds=30) is True
 
 
 def test_startup_route_index_request_waits_for_complete_bulk_books(monkeypatch) -> None:
@@ -1033,6 +1034,10 @@ def test_market_evidence_yields_to_pending_complete_route_index(monkeypatch) -> 
         def has_pending(self) -> bool:
             return True
 
+        def has_recent_publication(self, *, max_age_seconds: float) -> bool:
+            assert max_age_seconds == loop.INTERVAL_SECONDS
+            return False
+
     monkeypatch.setattr(
         service,
         "_run_worker",
@@ -1046,6 +1051,35 @@ def test_market_evidence_yields_to_pending_complete_route_index(monkeypatch) -> 
     loop._sweep_once()
 
     assert workers == []
+
+
+def test_recent_route_index_does_not_starve_demanded_funding_history(
+    monkeypatch,
+) -> None:
+    workers: list[bool] = []
+
+    class RecentlyPublished:
+        def has_pending(self) -> bool:
+            return True
+
+        def has_recent_publication(self, *, max_age_seconds: float) -> bool:
+            assert max_age_seconds == loop.INTERVAL_SECONDS
+            return True
+
+    monkeypatch.setattr(
+        service,
+        "_run_worker",
+        lambda *_args, **_kwargs: workers.append(True)
+        or service.WorkerResult(0, '{"status":"ok"}\n', "", False),
+    )
+    loop = service.MarketEvidenceLoop(
+        threading.Event(),
+        route_index_publisher=RecentlyPublished(),  # type: ignore[arg-type]
+    )
+
+    loop._sweep_once()
+
+    assert workers == [True]
 
 
 def test_refresh_loop_pause_releases_websocket_process() -> None:

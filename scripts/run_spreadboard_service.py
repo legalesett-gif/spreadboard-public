@@ -1864,6 +1864,7 @@ class LiveRouteIndexPublisher(threading.Thread):
         self._requested_generation = 0
         self._ready_generation = 0
         self._published_generation = 0
+        self._published_at = 0.0
         self._next_allowed_at = 0.0
         self.last_result: dict[str, Any] = {
             "status": "idle",
@@ -1891,6 +1892,21 @@ class LiveRouteIndexPublisher(threading.Thread):
 
         with self._request_lock:
             return self._requested_generation > self._published_generation
+
+    def has_recent_publication(self, *, max_age_seconds: float) -> bool:
+        """Whether evidence work can safely use a recently published index.
+
+        Bulk quote passes continuously request the next structural generation.
+        Treating any pending request as a hard blocker starves settled funding
+        history forever even when the prior complete index is only seconds old.
+        """
+
+        with self._request_lock:
+            published_at = self._published_at
+        return bool(
+            published_at
+            and time.monotonic() - published_at <= max(0.0, max_age_seconds)
+        )
 
     def check_once(self) -> dict[str, Any]:
         """Publish one due generation without blocking another heavy owner."""
@@ -1948,6 +1964,7 @@ class LiveRouteIndexPublisher(threading.Thread):
             # next bounded pass; this published generation covers everything
             # that was complete when the child began.
             self._published_generation = max(self._published_generation, requested)
+            self._published_at = time.monotonic()
             published = self._published_generation
         self._next_allowed_at = time.monotonic() + self.min_interval_seconds
         self.last_result = {
@@ -2199,6 +2216,9 @@ class MarketEvidenceLoop(threading.Thread):
             if (
                 self.route_index_publisher is not None
                 and self.route_index_publisher.has_pending()
+                and not self.route_index_publisher.has_recent_publication(
+                    max_age_seconds=self.INTERVAL_SECONDS
+                )
             ):
                 _log("market evidence deferred; current route index pending")
                 return
