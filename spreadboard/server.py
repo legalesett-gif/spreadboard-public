@@ -10143,12 +10143,31 @@ def render_funding_page(
         if search_token
         and str(group.get("token") or "").strip().upper() == search_token
     }
+    # Every route actually rendered on Funding is subscriber-visible demand,
+    # not merely the routes reached through an exact-token search. Promote its
+    # futures legs ahead of the 10k-leg archive rotation so an hourly/4-hourly
+    # settlement cannot leave a top row blank for most of a day.
+    visible_routes = [
+        route
+        for group in funding_groups
+        for route in group.get("routes") or []
+        if isinstance(route, dict)
+    ]
+    funding_history_demand.enqueue(
+        (
+            str(route.get(f"{side}_venue") or ""),
+            str(
+                route.get(f"{side}_market_symbol")
+                or route.get(f"{side}_symbol")
+                or ""
+            ),
+        )
+        for route in visible_routes
+        for side in ("long", "short")
+        if str(route.get(f"{side}_market_type") or "") == "Futures"
+    )
     if exact_search_tokens:
-        exact_routes = [
-            route
-            for group in funding_groups
-            for route in group.get("routes") or []
-        ]
+        exact_routes = visible_routes
         chart_warm_demand.enqueue(
             _chart_link_route_key(route)
             for route in exact_routes
@@ -10773,6 +10792,22 @@ def render_pair_page(route_key: str, board_path: Path, config: dict[str, Any]) -
         """
         return shell("Route not found - SpreadBoard", "board", body)
     row = detail["board_row"]
+    # A route opened from Funding must retain the same four-period evidence as
+    # its expanded Funding row. These values come from the current exact venue
+    # settlement archive; incomplete or overdue windows remain blank.
+    row["settled_funding_windows"] = venue_funding_history.route_windows(row)
+    funding_history_demand.enqueue(
+        (
+            str(row.get(f"{side}_venue") or ""),
+            str(
+                row.get(f"{side}_market_symbol")
+                or row.get(f"{side}_symbol")
+                or ""
+            ),
+        )
+        for side in ("long", "short")
+        if str(row.get(f"{side}_market_type") or "") == "Futures"
+    )
     legs = detail.get("legs") or {}
     pair_intel = api_intel(board_path, {"symbol": [str(row.get("symbol") or "")], "limit": ["6"]})
     history = api_history(route_key, board_path, {"max_points": ["1440"]}).get("rows") or []
@@ -18448,6 +18483,7 @@ def render_volatility_card(detail: dict[str, Any]) -> str:
 
 def render_funding_card(detail: dict[str, Any]) -> str:
     funding = detail.get("funding") or {}
+    route = detail.get("board_row") or {}
     legs = detail.get("legs") or {}
     long_leg = legs.get("long") or {}
     short_leg = legs.get("short") or {}
@@ -18457,6 +18493,7 @@ def render_funding_card(detail: dict[str, Any]) -> str:
       <div class="kv-row"><span>Net 24h</span><strong>{fmt_signed_pct(funding.get("net_24h_pct"), digits=4)}</strong></div>
       <div class="kv-row"><span>Long 24h</span><strong>{fmt_signed_pct(funding.get("long_24h_pct"), digits=4)}</strong></div>
       <div class="kv-row"><span>Short 24h</span><strong>{fmt_signed_pct(funding.get("short_24h_pct"), digits=4)}</strong></div>
+      <div class="pair-funding-windows"><span>Route returns</span>{render_funding_windows(route, route.get("route_key"), compact=True)}</div>
       <div class="kv-row"><span>Long payout</span><strong>{h(funding_interval_label(long_leg.get("funding_interval_hours"), long_leg.get("funding_interval_assumed")))}</strong></div>
       <div class="kv-row"><span>Short payout</span><strong>{h(funding_interval_label(short_leg.get("funding_interval_hours"), short_leg.get("funding_interval_assumed")))}</strong></div>
       <button class="funding-history-open" type="button" data-funding-open>Funding history</button>

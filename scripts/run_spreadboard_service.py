@@ -131,8 +131,14 @@ class RefreshLoop:
         while not self.stop_event.is_set():
             self._ensure_websocket_worker()
             started = time.monotonic()
-            with _COLLECTOR_HEAVY_LOCK:
-                self.refresh_once()
+            # The provider scan is network-bound and writes only to its staging
+            # snapshot. Holding the publication lock around that entire job
+            # blocked the compact current-pair index for 45-60 minutes, even
+            # though completed bulk books were already available. Only the
+            # memory-heavy registry/finalization/publication stages below own
+            # the lock; live-pair publication can proceed while venue discovery
+            # waits on remote APIs.
+            self.refresh_once()
             elapsed = time.monotonic() - started
             self.stop_event.wait(max(15.0, self.interval_seconds - elapsed))
 
@@ -246,9 +252,12 @@ class RefreshLoop:
                 shutil.copyfile(SNAPSHOT_PATH, REFRESH_SNAPSHOT_PATH)
             else:
                 REFRESH_SNAPSHOT_PATH.unlink(missing_ok=True)
-        self._refresh_verified_identity_registry(
-            snapshot_path=SNAPSHOT_PATH if SNAPSHOT_PATH.exists() else REFRESH_SNAPSHOT_PATH
-        )
+        with _COLLECTOR_HEAVY_LOCK:
+            self._refresh_verified_identity_registry(
+                snapshot_path=(
+                    SNAPSHOT_PATH if SNAPSHOT_PATH.exists() else REFRESH_SNAPSHOT_PATH
+                )
+            )
         command = [
             *_low_priority_prefix(),
             sys.executable,
@@ -316,51 +325,59 @@ class RefreshLoop:
         if result.returncode != 0 and not partial_after_timeout:
             _log(f"refresh failed ({result.returncode}): {result.stderr[-500:]}")
             return
-        # Every step below used to parse the 40MB snapshot here, in the web
-        # server: the staging copy and the published one at the same time so the
-        # merge could see both, then again for the identity registry. That is
-        # roughly a gigabyte of Python objects per copy, and it took the process
-        # to 4.31GB five minutes after every start until the kernel killed it --
-        # taking the site down and losing the very scan it had just finished.
-        # It all happens in a process that exits now.
-        enriched = _finalize_snapshot("enrich")
-        if enriched is None:
-            return
-        # The discovery worker writes to a staging snapshot so it cannot block
-        # or overwrite fast quote cycles while the broad venue scan is running.
-        # The publish stage is short, and the locks are held across it exactly
-        # as they were when the merge and write happened inline.
-        with self.quote_cycle_lock, self.snapshot_lock:
-            published = _finalize_snapshot("publish")
-        if published is None:
-            return
-        _log(
-            ("refresh partial complete " if partial_after_timeout else "refresh complete ")
-            + f"routes={published.get('routes')} "
-            f"history_inserted={published.get('history_inserted')} "
-            f"funding={enriched.get('funding')} status={published.get('refresh_status')}"
-        )
-        _publish_shared_market_generation("discovery")
-        # Heavy structural products are published by the collector. The web
-        # watcher atomically installs them from the shared runtime volume and
-        # never competes with subscriber requests for CPU.
-        _refresh_live_route_index(install=False)
-        _refresh_complete_funding_catalog(force=True)
-        _refresh_funding_navigation(force=True)
-        _refresh_enrichment_subprocess()
-        # Publish the compact navigation generation immediately after its
-        # structural universe and complete funding catalogue agree. Waiting
-        # for the later evidence sweep left a restarted site serving the old
-        # 100MB-per-window views for up to fifteen minutes.
-        _refresh_materialized_views(force=True)
-        if not lightweight_mode and not _env_bool("SPREADBOARD_DISABLE_LOCAL_CACHE_WARM"):
-            self._refresh_verified_identity_registry(snapshot_path=SNAPSHOT_PATH)
-            # A broad discovery publishes a new structural universe, so this is
-            # the useful point to rebuild every navigable view.  Fast quote
-            # deltas only replace prices in that universe and arrive roughly
-            # once a minute; warming all eleven grouped views after those deltas
-            # held the GIL for minutes and made the supposedly warm site slower.
-            self._start_board_warm()
+        with _COLLECTOR_HEAVY_LOCK:
+            # Every step below used to parse the 40MB snapshot here, in the web
+            # server: the staging copy and the published one at the same time so the
+            # merge could see both, then again for the identity registry. That is
+            # roughly a gigabyte of Python objects per copy, and it took the process
+            # to 4.31GB five minutes after every start until the kernel killed it --
+            # taking the site down and losing the very scan it had just finished.
+            # It all happens in a process that exits now.
+            enriched = _finalize_snapshot("enrich")
+            if enriched is None:
+                return
+            # The discovery worker writes to a staging snapshot so it cannot block
+            # or overwrite fast quote cycles while the broad venue scan is running.
+            # The publish stage is short, and the locks are held across it exactly
+            # as they were when the merge and write happened inline.
+            with self.quote_cycle_lock, self.snapshot_lock:
+                published = _finalize_snapshot("publish")
+            if published is None:
+                return
+            _log(
+                (
+                    "refresh partial complete "
+                    if partial_after_timeout
+                    else "refresh complete "
+                )
+                + f"routes={published.get('routes')} "
+                f"history_inserted={published.get('history_inserted')} "
+                f"funding={enriched.get('funding')} "
+                f"status={published.get('refresh_status')}"
+            )
+            _publish_shared_market_generation("discovery")
+            # Heavy structural products are published by the collector. The web
+            # watcher atomically installs them from the shared runtime volume and
+            # never competes with subscriber requests for CPU.
+            _refresh_live_route_index(install=False)
+            _refresh_complete_funding_catalog(force=True)
+            _refresh_funding_navigation(force=True)
+            _refresh_enrichment_subprocess()
+            # Publish the compact navigation generation immediately after its
+            # structural universe and complete funding catalogue agree. Waiting
+            # for the later evidence sweep left a restarted site serving the old
+            # 100MB-per-window views for up to fifteen minutes.
+            _refresh_materialized_views(force=True)
+            if not lightweight_mode and not _env_bool(
+                "SPREADBOARD_DISABLE_LOCAL_CACHE_WARM"
+            ):
+                self._refresh_verified_identity_registry(snapshot_path=SNAPSHOT_PATH)
+                # A broad discovery publishes a new structural universe, so this is
+                # the useful point to rebuild every navigable view.  Fast quote
+                # deltas only replace prices in that universe and arrive roughly
+                # once a minute; warming all eleven grouped views after those deltas
+                # held the GIL for minutes and made the supposedly warm site slower.
+                self._start_board_warm()
         _return_freed_memory()
 
     def _refresh_verified_identity_registry(self, *, snapshot_path: Path) -> None:
@@ -1272,7 +1289,14 @@ def _run_collector_service() -> int:
     _seed_public_caches()
     _seed_funding_history_demand()
     refresh_loop = RefreshLoop(interval)
-    bulk_quote_loop = BulkQuoteLoop(refresh_loop.stop_event)
+    route_index_publisher = LiveRouteIndexPublisher(
+        refresh_loop.stop_event,
+        refresh_loop=refresh_loop,
+    )
+    bulk_quote_loop = BulkQuoteLoop(
+        refresh_loop.stop_event,
+        route_index_publisher=route_index_publisher,
+    )
     bulk_funding_loop = BulkFundingLoop(refresh_loop.stop_event)
     market_evidence_loop = MarketEvidenceLoop(
         refresh_loop.stop_event,
@@ -1290,6 +1314,7 @@ def _run_collector_service() -> int:
     signal.signal(signal.SIGTERM, stop_collector)
     signal.signal(signal.SIGINT, stop_collector)
     refresh_loop.start()
+    route_index_publisher.start()
     bulk_quote_loop.start()
     bulk_funding_loop.start()
     market_evidence_loop.start()
@@ -1301,6 +1326,7 @@ def _run_collector_service() -> int:
             pass
     finally:
         refresh_loop.stop()
+        route_index_publisher.join(timeout=5.0)
         bulk_quote_loop.join(timeout=5.0)
         bulk_funding_loop.join(timeout=5.0)
         market_evidence_loop.join(timeout=5.0)
@@ -1795,6 +1821,125 @@ def _live_worker_prefix() -> list[str]:
     return ["nice", "-n", str(max(0, min(19, value)))]
 
 
+class LiveRouteIndexPublisher(threading.Thread):
+    """Publish the complete current-pair index after completed bulk books.
+
+    The all-venue quote sweep is the point at which the shared book store is
+    most complete.  Previously only the long structural discovery path called
+    the route-index worker, while a collector-only unit test exercised a
+    watcher that production never started.  This small coordinator is wired to
+    the real bulk loop, coalesces bursts, and serializes the memory-heavy child
+    with the other artifact publishers.  The web process installs the atomic
+    pointer; the collector never retains the route dictionary itself.
+    """
+
+    def __init__(
+        self,
+        stop_event: threading.Event,
+        *,
+        refresh_loop: RefreshLoop | None = None,
+        min_interval_seconds: float | None = None,
+    ) -> None:
+        super().__init__(name="live-route-index-publisher", daemon=True)
+        self.stop_event = stop_event
+        self.refresh_loop = refresh_loop
+        self.min_interval_seconds = max(
+            30.0,
+            float(
+                min_interval_seconds
+                if min_interval_seconds is not None
+                else os.environ.get(
+                    "SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS", "120"
+                )
+            ),
+        )
+        self._request_lock = threading.Lock()
+        self._requested_generation = 0
+        self._published_generation = 0
+        self._next_allowed_at = 0.0
+        self.last_result: dict[str, Any] = {
+            "status": "idle",
+            "requested_generation": 0,
+            "published_generation": 0,
+        }
+
+    def request(self) -> int:
+        """Coalesce one completed all-venue book generation."""
+
+        with self._request_lock:
+            self._requested_generation += 1
+            generation = self._requested_generation
+            self.last_result = {
+                **self.last_result,
+                "status": "pending",
+                "requested_generation": generation,
+            }
+            return generation
+
+    def check_once(self) -> dict[str, Any]:
+        """Publish one due generation without blocking another heavy owner."""
+
+        with self._request_lock:
+            requested = self._requested_generation
+            published = self._published_generation
+        if requested <= published:
+            return dict(self.last_result)
+        now = time.monotonic()
+        if now < self._next_allowed_at:
+            self.last_result = {
+                **self.last_result,
+                "status": "cadence_wait",
+                "retry_in_seconds": round(self._next_allowed_at - now, 3),
+            }
+            return dict(self.last_result)
+        if not _COLLECTOR_HEAVY_LOCK.acquire(blocking=False):
+            self.last_result = {
+                **self.last_result,
+                "status": "publication_slot_busy",
+            }
+            return dict(self.last_result)
+        paused = False
+        try:
+            if self.refresh_loop is not None:
+                self.refresh_loop.pause_websocket_worker()
+                paused = True
+            ok = _refresh_live_route_index(install=False)
+        finally:
+            if paused and self.refresh_loop is not None:
+                self.refresh_loop.resume_websocket_worker()
+            _COLLECTOR_HEAVY_LOCK.release()
+        if not ok:
+            # A failed child must not be relaunched every second. Keep the
+            # generation pending, but yield CPU and memory for a bounded retry.
+            self._next_allowed_at = time.monotonic() + min(
+                30.0, self.min_interval_seconds
+            )
+            self.last_result = {
+                **self.last_result,
+                "status": "publish_failed",
+                "retry_in_seconds": min(30.0, self.min_interval_seconds),
+            }
+            return dict(self.last_result)
+        with self._request_lock:
+            # Requests which arrived during the build remain pending for the
+            # next bounded pass; this published generation covers everything
+            # that was complete when the child began.
+            self._published_generation = max(self._published_generation, requested)
+            published = self._published_generation
+        self._next_allowed_at = time.monotonic() + self.min_interval_seconds
+        self.last_result = {
+            "status": "published",
+            "requested_generation": self._requested_generation,
+            "published_generation": published,
+        }
+        return dict(self.last_result)
+
+    def run(self) -> None:
+        while not self.stop_event.is_set():
+            self.check_once()
+            self.stop_event.wait(1.0)
+
+
 class BulkQuoteLoop(threading.Thread):
     """Re-price the whole board from one bulk call per venue.
 
@@ -1812,9 +1957,15 @@ class BulkQuoteLoop(threading.Thread):
         120.0, float(os.environ.get("SPREADBOARD_BULK_QUOTE_TIMEOUT_SECONDS", "420"))
     )
 
-    def __init__(self, stop_event: threading.Event) -> None:
+    def __init__(
+        self,
+        stop_event: threading.Event,
+        *,
+        route_index_publisher: LiveRouteIndexPublisher | None = None,
+    ) -> None:
         super().__init__(name="bulk-quotes", daemon=True)
         self.stop_event = stop_event
+        self.route_index_publisher = route_index_publisher
 
     def run(self) -> None:
         from spreadboard import bulk_quotes
@@ -1867,6 +2018,8 @@ class BulkQuoteLoop(threading.Thread):
         if (quotes.get("quotes") or 0) > 0:
             _publish_shared_market_generation("bulk_quotes")
             _invalidate_market_price_caches()
+            if self.route_index_publisher is not None:
+                self.route_index_publisher.request()
             # The rankings read the complete shared catalogue, so publish a new
             # atomic generation immediately after its prices move. This worker
             # is isolated and low-priority; HTTP readers keep serving the last

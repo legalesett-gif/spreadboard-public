@@ -125,11 +125,39 @@ def test_pair_page_has_one_main_landmark(monkeypatch) -> None:
         lambda *_args, **_kwargs: {"recent_events": {}, "hot_symbols": []},
     )
     monkeypatch.setattr(server, "api_history", lambda *_args, **_kwargs: {"rows": []})
+    monkeypatch.setattr(
+        server.venue_funding_history,
+        "route_windows",
+        lambda _route: {"1d": 0.12, "7d": 0.54, "30d": None},
+    )
+    monkeypatch.setattr(
+        server.venue_funding_history,
+        "route_history_status",
+        lambda _route: {
+            "status": "partial",
+            "note": "30d exact settlement cadence is incomplete.",
+            "window_notes": {
+                "30d": "30d exact settlement cadence is incomplete."
+            },
+        },
+    )
+    monkeypatch.setattr(server.bulk_quotes, "load_funding", dict)
+    demanded: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        server.funding_history_demand,
+        "enqueue",
+        lambda legs: demanded.extend(legs) or len(demanded),
+    )
 
     html = server.render_pair_page("CUSTOM:pair", server.board.DEFAULT_BOARD_PATH, {})
 
     assert pair_calls == [{"enrich": False}]
     assert html.count("<main") == 1
     assert '<div class="pair-main">' in html
+    assert "Route returns" in html
+    assert "<em>24h</em><strong>+0.12%</strong>" in html
+    assert "<em>7d</em><strong>+0.54%</strong>" in html
+    assert "<em>30d</em><strong>—</strong>" in html
+    assert demanded == [("Bybit", "ONG/USDT:USDT")]
     assert ".pair-cockpit .route-alert-btn" in server.APP_CSS
     assert ".pair-cockpit .route-alert-btn:hover" in server.APP_CSS

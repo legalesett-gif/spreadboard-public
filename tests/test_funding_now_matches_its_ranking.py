@@ -81,8 +81,18 @@ def test_a_historical_tab_shows_the_exact_window_it_ranked() -> None:
 def test_the_page_passes_its_selected_window_into_every_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    group = _group()
+    group = _group(
+        long_market_symbol="ONG/USDT:USDT",
+        short_market_symbol="ONGUSDT",
+        funding_navigation_windows={"1d": 2.371, "7d": 9.06, "30d": 14.2},
+    )
     group["best_funding_window_pct"] = 9.06
+    demanded: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        server.funding_history_demand,
+        "enqueue",
+        lambda legs: demanded.extend(legs) or len(demanded),
+    )
     monkeypatch.setattr(
         server,
         "api_market_spreads",
@@ -116,6 +126,10 @@ def test_the_page_passes_its_selected_window_into_every_row(
     assert "+3.301%" in html
     assert "radar routes" in html
     assert "Funding pairs" in html
+    assert demanded == [
+        ("Mexc", "ONG/USDT:USDT"),
+        ("Bybit", "ONGUSDT"),
+    ]
 
 
 def test_funding_alert_draft_and_worker_use_the_current_projection() -> None:

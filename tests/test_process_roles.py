@@ -420,6 +420,133 @@ def test_collector_republishes_complete_live_pair_index_at_bounded_cadence(
     assert watcher.next_live_route_refresh_at > 0.0
 
 
+def test_network_discovery_does_not_monopolize_heavy_publication_slot(
+    tmp_path, monkeypatch
+) -> None:
+    snapshot = tmp_path / "api_discovery_latest.json"
+    refresh = tmp_path / "api_discovery_refresh.json"
+    snapshot.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(service, "SNAPSHOT_PATH", snapshot)
+    monkeypatch.setattr(service, "REFRESH_SNAPSHOT_PATH", refresh)
+    loop = service.RefreshLoop(300)
+    monkeypatch.setattr(
+        loop, "_refresh_verified_identity_registry", lambda **_kwargs: None
+    )
+    publication_slot_available: list[bool] = []
+
+    def discovery(*_args, **_kwargs):
+        acquired = service._COLLECTOR_HEAVY_LOCK.acquire(blocking=False)
+        publication_slot_available.append(acquired)
+        if acquired:
+            service._COLLECTOR_HEAVY_LOCK.release()
+        return service.WorkerResult(1, "", "bounded test stop", False)
+
+    monkeypatch.setattr(service, "_run_worker", discovery)
+
+    loop.refresh_once()
+
+    assert publication_slot_available == [True]
+
+
+def test_completed_bulk_books_request_current_pair_publication(monkeypatch) -> None:
+    requests: list[bool] = []
+
+    class Publisher:
+        @staticmethod
+        def request() -> int:
+            requests.append(True)
+            return len(requests)
+
+    loop = service.BulkQuoteLoop(
+        threading.Event(),
+        route_index_publisher=Publisher(),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_worker",
+        lambda *_args, **_kwargs: service.WorkerResult(
+            0,
+            json.dumps(
+                {
+                    "quotes": {
+                        "quotes": 23_000,
+                        "venues": 18,
+                        "seconds": 80.0,
+                    }
+                }
+            ),
+            "",
+            False,
+        ),
+    )
+    monkeypatch.setattr(service, "_publish_shared_market_generation", lambda _kind: None)
+    monkeypatch.setattr(service, "_invalidate_market_price_caches", lambda: None)
+    monkeypatch.setattr(service, "_schedule_token_rankings", lambda: None)
+
+    loop._sweep_once()
+
+    assert requests == [True]
+
+
+def test_live_pair_publisher_coalesces_and_never_installs_in_collector(
+    monkeypatch,
+) -> None:
+    lifecycle: list[str] = []
+
+    class Refresh:
+        @staticmethod
+        def pause_websocket_worker() -> None:
+            lifecycle.append("pause")
+
+        @staticmethod
+        def resume_websocket_worker() -> None:
+            lifecycle.append("resume")
+
+    monkeypatch.setattr(
+        service,
+        "_refresh_live_route_index",
+        lambda *, install: lifecycle.append(f"publish:{install}") or True,
+    )
+    publisher = service.LiveRouteIndexPublisher(
+        threading.Event(),
+        refresh_loop=Refresh(),  # type: ignore[arg-type]
+        min_interval_seconds=30,
+    )
+    publisher.request()
+    publisher.request()
+
+    result = publisher.check_once()
+
+    assert result["status"] == "published"
+    assert result["requested_generation"] == 2
+    assert result["published_generation"] == 2
+    assert lifecycle == ["pause", "publish:False", "resume"]
+
+
+def test_live_pair_publisher_backs_off_after_a_failed_child(monkeypatch) -> None:
+    attempts: list[bool] = []
+    clock = [100.0]
+    monkeypatch.setattr(service.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        service,
+        "_refresh_live_route_index",
+        lambda *, install: attempts.append(install) or False,
+    )
+    publisher = service.LiveRouteIndexPublisher(
+        threading.Event(),
+        min_interval_seconds=120,
+    )
+    publisher.request()
+
+    failed = publisher.check_once()
+    waiting = publisher.check_once()
+
+    assert failed["status"] == "publish_failed"
+    assert failed["retry_in_seconds"] == 30.0
+    assert waiting["status"] == "cadence_wait"
+    assert attempts == [False]
+
+
 def test_web_watcher_self_heals_a_missing_telegram_snapshot(monkeypatch) -> None:
     """A lost resident snapshot must not wait for the next broad discovery."""
     from spreadboard import telegram_queries
