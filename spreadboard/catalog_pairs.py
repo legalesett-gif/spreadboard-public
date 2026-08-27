@@ -928,14 +928,19 @@ def route_identity(row: dict[str, Any]) -> tuple[Any, ...]:
         venue = str(row.get(f"{side}_venue") or "").casefold()
         market_type = str(row.get(f"{side}_market_type") or "").casefold()
         symbol = str(row.get(f"{side}_market_symbol") or "").upper()
-        if symbol:
-            locator: tuple[Any, ...] = ("symbol", symbol)
-        elif "dex" in venue:
+        # Provider rows may label the same on-chain asset with its ticker while
+        # catalogue expansion uses the contract address as the display symbol.
+        # DEX economic identity is the chain/contract, never that mutable label;
+        # otherwise the stale scanner row and its fresh expanded replacement
+        # survive as two routes and the stale one can win lookup by route key.
+        if "dex" in venue and row.get("dex_chain") and row.get("dex_contract"):
             locator = (
                 "contract",
                 str(row.get("dex_chain") or "").casefold(),
                 str(row.get("dex_contract") or "").casefold(),
             )
+        elif symbol:
+            locator = ("symbol", symbol)
         else:
             # Incomplete identities must never collapse merely because both
             # omitted a symbol; fall back to their own route key.

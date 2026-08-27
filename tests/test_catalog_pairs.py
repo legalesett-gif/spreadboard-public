@@ -772,6 +772,34 @@ def test_nested_okx_quote_expands_across_every_fresh_future_at_canonical_size(
     assert catalog_pairs.dex_futures_routes([wrong_direction], books=books) == []
 
 
+def test_dex_route_identity_uses_chain_contract_not_mutable_display_symbol() -> None:
+    common = {
+        "token": "TRX",
+        "route_kind": "DEX-FUTURES",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "Spot",
+        "short_venue": "Aster",
+        "short_market_type": "Futures",
+        "short_market_symbol": "TRX/USDT:USDT",
+        "dex_chain": "56",
+        "dex_contract": "0xce7de646e7208a4ef112cb6ed5038fa6cc6b12e3",
+    }
+    scanner = {
+        **common,
+        "route_key": "TRX|OKX DEX 56|Spot|Aster|Futures",
+        "long_market_symbol": "TRX",
+    }
+    expanded = {
+        **common,
+        "route_key": "CUSTOM:fresh-expanded-route",
+        "long_market_symbol": common["dex_contract"],
+    }
+
+    assert catalog_pairs.route_identity(scanner) == catalog_pairs.route_identity(
+        expanded
+    )
+
+
 def test_canonical_dex_row_preserves_nested_provider_leg_evidence(monkeypatch) -> None:
     now = time.time()
     now_us = int(now * 1_000_000)
