@@ -103,7 +103,10 @@ services:
       # One fetch_tickers per venue re-prices the full catalogue. Six bounded
       # independent venue calls give the production pass headroom inside the
       # 90-second truth boundary even while other warmers are active.
-      SPREADBOARD_BULK_QUOTE_SECONDS: "10"
+      # Three steady-state passes completed in 80.6-82.8 seconds. A five-second
+      # breath keeps their start-to-start cadence below the 90-second route
+      # boundary while avoiding a permanently tight worker loop.
+      SPREADBOARD_BULK_QUOTE_SECONDS: "5"
       # Re-evaluate the complete positive pair universe after each bounded
       # price pass, no less often than every two minutes. Five minutes was long
       # enough for a 20% DEX/Aster dislocation to converge materially before it
