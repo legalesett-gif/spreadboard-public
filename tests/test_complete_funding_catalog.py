@@ -399,11 +399,18 @@ def test_restored_catalog_now_uses_current_exact_leg_carry(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
+        funding_catalog.venue_funding_history,
+        "load",
+        lambda: {"exact": {}},
+    )
+    history_reads = []
+    monkeypatch.setattr(
         funding_catalog.funding_radar,
         "window_value",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("Now must not read historical windows")
-        ),
+        lambda _route, label, **kwargs: history_reads.append(
+            (label, kwargs.get("exact_legs"))
+        )
+        or {"1d": 0.2, "7d": 1.4, "30d": None}[label],
     )
 
     page = funding_catalog.page(route_kind="FUTURES", window="now")
@@ -411,6 +418,16 @@ def test_restored_catalog_now_uses_current_exact_leg_carry(monkeypatch) -> None:
     assert page["largest_value"] == 1.5
     assert page["groups"][0]["best_funding_route"]["funding_daily_pct"] == 1.5
     assert page["groups"][0]["best_funding_route"]["funding_age_min"] == 0.7
+    assert page["groups"][0]["best_funding_route"]["settled_funding_windows"] == {
+        "1d": 0.2,
+        "7d": 1.4,
+        "30d": None,
+    }
+    assert history_reads == [
+        ("1d", {"exact": {}}),
+        ("7d", {"exact": {}}),
+        ("30d", {"exact": {}}),
+    ]
     assert page["window_route_counts"] == {}
     assert page["window_token_counts"] == {}
 
@@ -481,7 +498,66 @@ def test_production_historical_window_reads_current_exact_archive(monkeypatch) -
 
     assert page["largest_value"] == 1.25
     assert page["groups"][0]["best_funding_window_pct"] == 1.25
+    assert page["groups"][0]["routes"][0]["settled_funding_windows"] == {
+        "1d": 1.25,
+        "7d": 2.5,
+        "30d": 5.0,
+    }
     assert loads == [True]
+
+
+def test_production_now_enriches_only_visible_routes_with_exact_windows(
+    monkeypatch,
+) -> None:
+    from spreadboard import warm_query_projection
+
+    hidden = _route("HIDDEN", "hidden", current=0.5, one_day=99.0)
+    visible = _route("VISIBLE", "visible", current=1.0, one_day=99.0)
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setattr(
+        funding_catalog,
+        "_complete_payloads",
+        lambda: {
+            "HIDDEN": {"routes": [hidden]},
+            "VISIBLE": {"routes": [visible]},
+        },
+    )
+    monkeypatch.setattr(
+        warm_query_projection.LIVE_UNIVERSE,
+        "update_snapshot",
+        lambda: ({}, {"ready": True}),
+    )
+    monkeypatch.setattr(funding_catalog.bulk_quotes, "load_funding", lambda: None)
+    loads = []
+    monkeypatch.setattr(
+        funding_catalog.venue_funding_history,
+        "load",
+        lambda: loads.append(True) or {"generation": {}},
+    )
+    observed = []
+
+    def exact_window(route, label, **kwargs):
+        observed.append((route["token"], label, kwargs.get("exact_legs")))
+        return {
+            "1d": 0.2,
+            "7d": 1.4,
+            "30d": None,
+        }[label]
+
+    monkeypatch.setattr(funding_catalog, "_window_value", exact_window)
+
+    result = funding_catalog.page(route_kind="FUTURES", window="now", limit=1)
+
+    assert [group["token"] for group in result["groups"]] == ["VISIBLE"]
+    assert result["largest_value"] == 1.0
+    assert result["groups"][0]["routes"][0]["settled_funding_windows"] == {
+        "1d": 0.2,
+        "7d": 1.4,
+        "30d": None,
+    }
+    assert loads == [True]
+    assert {token for token, _label, _legs in observed} == {"VISIBLE"}
+    assert all(legs == {"generation": {}} for _token, _label, legs in observed)
 
 
 def test_every_eligible_route_for_a_returned_token_is_preserved(monkeypatch) -> None:

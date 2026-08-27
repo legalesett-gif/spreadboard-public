@@ -753,6 +753,12 @@ def page(
                 label: _window_value(route, label, exact_legs=exact_legs)
                 for label in history_labels
             }
+            # Keep the route detail self-contained. The selected ranking and
+            # the values shown when a member expands that exact pair must come
+            # from the same exact-settlement generation. Unknown/incomplete
+            # windows deliberately remain ``None`` rather than being filled
+            # from the current rate or a partial history sample.
+            route["settled_funding_windows"] = dict(windows)
             for label, window_value in windows.items():
                 if window_value is not None and window_value > 0:
                     window_routes[label] += 1
@@ -772,6 +778,23 @@ def page(
     start = max(0, int(offset or 0))
     page_limit = max(1, min(500, int(limit or 25)))
     visible = groups[start : start + page_limit]
+    if production_reader and selected_window == "now" and visible:
+        # Ranking Now must stay live-only and cheap across the complete route
+        # universe. Once pagination has selected the visible tokens, enrich
+        # only those expanded routes with exact realised windows. This avoids
+        # a full-catalogue archive join on every Now request while ensuring an
+        # opened pair shows Now, 24h, 7d and 30d together.
+        visible_exact_legs = venue_funding_history.load()
+        for group in visible:
+            for route in group.get("routes") or []:
+                route["settled_funding_windows"] = {
+                    label: _window_value(
+                        route,
+                        label,
+                        exact_legs=visible_exact_legs,
+                    )
+                    for label in history_labels
+                }
     return {
         "ok": bool(visible),
         "mode": "complete_funding_catalogue_ranked_before_pagination",
@@ -872,6 +895,7 @@ def build_navigation_pages(
         # Preserve the exact generation used for ranking so rendering and the
         # selected headline cannot disagree during an atomic archive handoff.
         route["funding_navigation_windows"] = dict(realised)
+        route["settled_funding_windows"] = dict(realised)
         if not route.get("radar_historical") and current_value is not None and current_value > 0:
             lanes[(kind, "now")].setdefault(token, []).append(
                 (current_value, route)

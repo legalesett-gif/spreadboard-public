@@ -63,6 +63,9 @@ def test_navigation_build_ranks_now_and_exact_windows_in_one_generation(monkeypa
     assert pages[("FUTURES", "30d")]["groups"][0]["routes"][0][
         "funding_navigation_windows"
     ] == history["PERSIST"]
+    assert pages[("FUTURES", "now")]["groups"][0]["routes"][0][
+        "settled_funding_windows"
+    ] == history["FAST"]
 
 
 def test_principal_funding_request_uses_persisted_ranking_before_dynamic_catalog(
