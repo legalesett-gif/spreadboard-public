@@ -1319,7 +1319,7 @@ def _run_collector_service() -> int:
     # slow evidence thread can acquire the shared heavy slot; the publisher
     # uses the already-persisted books immediately, then bulk quote completion
     # requests the next bounded generation as usual.
-    route_index_publisher.request()
+    route_index_publisher.request(source_ready=False)
     refresh_loop.start()
     route_index_publisher.start()
     bulk_quote_loop.start()
@@ -1862,6 +1862,7 @@ class LiveRouteIndexPublisher(threading.Thread):
         )
         self._request_lock = threading.Lock()
         self._requested_generation = 0
+        self._ready_generation = 0
         self._published_generation = 0
         self._next_allowed_at = 0.0
         self.last_result: dict[str, Any] = {
@@ -1870,12 +1871,14 @@ class LiveRouteIndexPublisher(threading.Thread):
             "published_generation": 0,
         }
 
-    def request(self) -> int:
+    def request(self, *, source_ready: bool = True) -> int:
         """Coalesce one completed all-venue book generation."""
 
         with self._request_lock:
             self._requested_generation += 1
             generation = self._requested_generation
+            if source_ready:
+                self._ready_generation = generation
             self.last_result = {
                 **self.last_result,
                 "status": "pending",
@@ -1894,8 +1897,15 @@ class LiveRouteIndexPublisher(threading.Thread):
 
         with self._request_lock:
             requested = self._requested_generation
+            ready = self._ready_generation
             published = self._published_generation
         if requested <= published:
+            return dict(self.last_result)
+        if ready <= published:
+            self.last_result = {
+                **self.last_result,
+                "status": "awaiting_current_bulk_books",
+            }
             return dict(self.last_result)
         now = time.monotonic()
         if now < self._next_allowed_at:

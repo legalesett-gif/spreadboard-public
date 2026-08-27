@@ -523,6 +523,25 @@ def test_live_pair_publisher_coalesces_and_never_installs_in_collector(
     assert lifecycle == ["pause", "publish:False", "resume"]
 
 
+def test_startup_route_index_request_waits_for_complete_bulk_books(monkeypatch) -> None:
+    publications: list[bool] = []
+    monkeypatch.setattr(
+        service,
+        "_refresh_live_route_index",
+        lambda *, install: publications.append(install) or True,
+    )
+    publisher = service.LiveRouteIndexPublisher(threading.Event())
+
+    publisher.request(source_ready=False)
+    waiting = publisher.check_once()
+    publisher.request()
+    published = publisher.check_once()
+
+    assert waiting["status"] == "awaiting_current_bulk_books"
+    assert published["status"] == "published"
+    assert publications == [False]
+
+
 def test_live_pair_publisher_backs_off_after_a_failed_child(monkeypatch) -> None:
     attempts: list[bool] = []
     clock = [100.0]
@@ -941,7 +960,7 @@ def test_collector_role_contains_no_subscriber_or_payment_workers() -> None:
     assert "BulkQuoteLoop" in source
     assert "BulkFundingLoop" in source
     assert "MarketEvidenceLoop" in source
-    assert source.index("route_index_publisher.request()") < source.index(
+    assert source.index("route_index_publisher.request(source_ready=False)") < source.index(
         "route_index_publisher.start()"
     )
     for forbidden in (
