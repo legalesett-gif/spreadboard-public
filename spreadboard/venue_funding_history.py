@@ -645,6 +645,7 @@ def build(
     cache_path: Path | str = DEFAULT_CACHE_PATH,
     budget_seconds: float = 240.0,
     priority_only: bool = False,
+    priority_recency_order: bool = False,
 ) -> dict[str, dict[str, float | None]]:
     """Realised windows for each (venue, symbol), written where the board reads.
 
@@ -675,8 +676,15 @@ def build(
     ordered = list(dict.fromkeys(legs))
     start = int(previous.get("next_cursor") or 0) % max(1, len(ordered))
     priorities = list(dict.fromkeys(priority_legs or []))
-    priority_start = int(previous.get("priority_next_cursor") or 0) % max(
-        1, len(priorities)
+    # Cross-process subscriber demand is already sorted newest-first. Reusing
+    # a cursor from the previous ordering can jump into the middle of the new
+    # list and leave the route the member just opened overdue. Once a recent
+    # leg is refreshed it is removed by `_priority_refresh_due` until its next
+    # settlement, so starting at the front does not starve remaining due legs.
+    priority_start = (
+        0
+        if priority_recency_order
+        else int(previous.get("priority_next_cursor") or 0) % max(1, len(priorities))
     )
     rotated_priorities = priorities[priority_start:] + priorities[:priority_start]
     now_ms = int(time.time() * 1000)
@@ -858,7 +866,11 @@ def build(
             else (start + background_attempted) % max(1, len(ordered))
         ),
         "priority_next_cursor": (
-            (priority_start + priority_attempted) % max(1, len(priorities))
+            (
+                0
+                if priority_recency_order
+                else (priority_start + priority_attempted) % max(1, len(priorities))
+            )
             if priority_only
             else int(previous.get("priority_next_cursor") or 0)
         ),

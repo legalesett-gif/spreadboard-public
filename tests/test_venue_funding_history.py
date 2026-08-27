@@ -7,6 +7,7 @@ publish what actually settled, roughly 30 days of it, in well under a second.
 
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
@@ -511,6 +512,7 @@ def test_service_reserves_separate_priority_and_catalog_budgets() -> None:
     assert "priority_only=True" in source
     assert "priority_legs=[]" in source
     assert "budget_seconds=30.0" in source
+    assert "priority_recency_order=True" in source
     assert "budget_seconds=90.0 if demanded_legs else 120.0" in source
     assert source.count("budget_seconds=120.0") == 1
     assert "[:120]" not in source
@@ -776,6 +778,43 @@ def test_priority_refresh_waits_until_the_next_settlement() -> None:
 
     assert not vfh._priority_refresh_due(status, values, now_ms=4_599_999)
     assert vfh._priority_refresh_due(status, values, now_ms=4_600_000)
+
+
+def test_recent_demand_ignores_a_cursor_from_the_previous_ordering(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "funding.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": vfh.SCHEMA,
+                "priority_next_cursor": 2,
+                "legs": {},
+                "leg_status": {},
+                "leg_updated_at": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    observed: list[tuple[str, str]] = []
+
+    def outcome(venue: str, symbol: str, **_kwargs):
+        observed.append((venue, symbol))
+        return {"status": "no_history_rows", "entries": []}
+
+    monkeypatch.setattr(vfh, "leg_history_outcome", outcome)
+
+    vfh.build(
+        [("A", "ONE"), ("B", "TWO"), ("C", "THREE")],
+        priority_legs=[("A", "ONE"), ("B", "TWO"), ("C", "THREE")],
+        priority_only=True,
+        priority_recency_order=True,
+        cache_path=path,
+        budget_seconds=30,
+    )
+
+    assert observed == [("A", "ONE"), ("B", "TWO"), ("C", "THREE")]
+    assert json.loads(path.read_text(encoding="utf-8"))["priority_next_cursor"] == 0
 
 
 def test_failed_cached_client_is_retried_after_backoff(monkeypatch) -> None:

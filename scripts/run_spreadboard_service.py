@@ -3006,6 +3006,7 @@ def _refresh_venue_funding_history(
                     list(dict.fromkeys(catalog_legs)),
                     priority_legs=demanded_legs,
                     priority_only=True,
+                    priority_recency_order=True,
                     budget_seconds=30.0,
                 )
                 modes.append("demand")
