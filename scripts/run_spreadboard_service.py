@@ -1301,6 +1301,7 @@ def _run_collector_service() -> int:
     market_evidence_loop = MarketEvidenceLoop(
         refresh_loop.stop_event,
         refresh_loop=refresh_loop,
+        route_index_publisher=route_index_publisher,
     )
     refresh_loop.startup_evidence_ready = market_evidence_loop.first_sweep_done
     chart_history_loop = ChartHistoryWarmLoop(
@@ -1876,6 +1877,12 @@ class LiveRouteIndexPublisher(threading.Thread):
             }
             return generation
 
+    def has_pending(self) -> bool:
+        """Whether a completed book generation still needs publication."""
+
+        with self._request_lock:
+            return self._requested_generation > self._published_generation
+
     def check_once(self) -> dict[str, Any]:
         """Publish one due generation without blocking another heavy owner."""
 
@@ -2130,10 +2137,12 @@ class MarketEvidenceLoop(threading.Thread):
         stop_event: threading.Event,
         *,
         refresh_loop: RefreshLoop | None = None,
+        route_index_publisher: LiveRouteIndexPublisher | None = None,
     ) -> None:
         super().__init__(name="market-evidence", daemon=True)
         self.stop_event = stop_event
         self.refresh_loop = refresh_loop
+        self.route_index_publisher = route_index_publisher
         self.first_sweep_done = threading.Event()
 
     def run(self) -> None:
@@ -2168,6 +2177,15 @@ class MarketEvidenceLoop(threading.Thread):
             _log("market evidence deferred; token ranking still active")
             return
         try:
+            # Current spreads are the quote sweep's truth boundary. Publish
+            # that already-requested atomic index before another multi-minute
+            # history pass can reacquire the same heavy slot.
+            if (
+                self.route_index_publisher is not None
+                and self.route_index_publisher.has_pending()
+            ):
+                _log("market evidence deferred; current route index pending")
+                return
             if not _COLLECTOR_HEAVY_LOCK.acquire(timeout=300.0):
                 _log("market evidence deferred; structural publication active")
                 return

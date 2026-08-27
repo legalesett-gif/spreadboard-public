@@ -1004,6 +1004,28 @@ def test_market_evidence_pauses_optional_websocket_fast_lane(monkeypatch) -> Non
     assert events == ["pause", "resume"]
 
 
+def test_market_evidence_yields_to_pending_complete_route_index(monkeypatch) -> None:
+    workers: list[bool] = []
+
+    class PendingPublisher:
+        def has_pending(self) -> bool:
+            return True
+
+    monkeypatch.setattr(
+        service,
+        "_run_worker",
+        lambda *_args, **_kwargs: workers.append(True),
+    )
+    loop = service.MarketEvidenceLoop(
+        threading.Event(),
+        route_index_publisher=PendingPublisher(),  # type: ignore[arg-type]
+    )
+
+    loop._sweep_once()
+
+    assert workers == []
+
+
 def test_refresh_loop_pause_releases_websocket_process() -> None:
     class Process:
         def __init__(self) -> None:
