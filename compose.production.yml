@@ -93,9 +93,13 @@ services:
       # admitted current build; no second build or stale fallback is allowed.
       SPREADBOARD_MARKET_BUILD_WAIT_SECONDS: "5"
       SPREADBOARD_MARKET_BUILD_SLOT_WAIT_SECONDS: "1.5"
-      # Live collectors keep the strict quote cadence but yield CPU to HTTP and
-      # the one admitted structural build when the four-vCPU host is busy.
-      SPREADBOARD_LIVE_WORKER_NICE: "8"
+      # The web and collector already have separate cgroup ceilings and the web
+      # receives eight times the collector's CPU share. An additional nice=8
+      # penalty stretched otherwise 40-second quote passes to the full
+      # 90-second truth boundary whenever a route-index build overlapped.
+      # Keep live prices at normal priority inside the collector's own cgroup;
+      # deep discovery/ranking/history workers remain nice=19.
+      SPREADBOARD_LIVE_WORKER_NICE: "0"
       # One fetch_tickers per venue re-prices the full catalogue. Six bounded
       # independent venue calls give the production pass headroom inside the
       # 90-second truth boundary even while other warmers are active.
