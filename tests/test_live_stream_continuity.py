@@ -113,6 +113,26 @@ def test_a_thin_live_tick_identifies_itself_as_top_book(
     assert update[3] == "top_book"
 
 
+def test_two_fresh_top_books_renew_only_an_indicative_cex_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Indicative is a live evidence class, not a 90-second build artifact."""
+    _books(monkeypatch)
+    route = _route(
+        quote_ts_us=1_600_000_000_000_000,
+        depth_usd=None,
+        depth_weighted_spread_pct=None,
+        depth_unverified=True,
+    )
+
+    update = api_spreads.live_route_updates_for([route], include_basis=True)[
+        route["route_key"]
+    ]
+
+    assert update[2] == 1_700_000_100_000_000
+    assert update[3] == "top_book"
+
+
 def test_current_exact_500_quote_outranks_a_thin_resident_top_book(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

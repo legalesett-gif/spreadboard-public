@@ -1316,8 +1316,24 @@ def live_route_updates_for(
             spread_basis = "top_book"
         if measured_depth_spread is None:
             # A top-only tick may retain a still-current prior $500 quote, but
-            # it cannot renew that proof.  Preserve the quote's own timestamp.
-            quote_ts_us = int(_float_or_none(route.get("quote_ts_us")) or 0) or None
+            # it cannot renew that proof. The same is true for a DEX route:
+            # its independently timestamped on-chain leg remains the freshness
+            # boundary. A CEX route which was already explicitly indicative is
+            # different: two fresh top books are new top-book evidence and must
+            # renew that *indicative* timestamp. Keeping the structural build
+            # time made every research/DD row disappear exactly 90 seconds
+            # after the route-index worker, even while both books kept moving.
+            if prior_depth_verified or _route_has_dex_leg(route):
+                quote_ts_us = (
+                    int(_float_or_none(route.get("quote_ts_us")) or 0) or None
+                )
+            else:
+                stamps = [
+                    int(book.quote_ts_us)
+                    for book in (long_book, short_book)
+                    if book is not None and getattr(book, "quote_ts_us", None)
+                ]
+                quote_ts_us = min(stamps) if stamps else None
         else:
             stamps = [
                 int(book.quote_ts_us)
