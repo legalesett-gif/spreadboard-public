@@ -43,16 +43,36 @@ def source_signature(board_path: Path) -> dict[str, Any]:
 def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     started = time.monotonic()
     initial = source_signature(board_path)
+    store = materialized_views.Store(output_root)
+    previous_meta = store.live_route_index_status()
+    previous_rows: dict[str, dict[str, Any]] = {}
+    if (
+        previous_meta.get("ready")
+        and previous_meta.get("source_signature") == initial
+    ):
+        previous_rows = store.live_route_index(board_path=board_path) or {}
     rows, source_health = api_spreads.load_public_route_index()
     final = source_signature(board_path)
     if final != initial:
         raise RuntimeError("source_generation_changed_during_live_index_build")
-    meta = materialized_views.Store(output_root).write_live_route_index(
+    current_route_count = len(rows)
+    if previous_rows:
+        # Bulk venues finish at different moments and the isolated build takes
+        # tens of seconds. A thin timing slice must update current rows, never
+        # erase thousands of structurally valid lookups from the same
+        # discovery/catalogue generation. Foreground rendering independently
+        # rechecks the real quote timestamp, so retaining the lookup cannot
+        # turn an old price into a current opportunity. A changed structural
+        # source signature starts clean and permits genuine removals.
+        rows = {**previous_rows, **rows}
+    meta = store.write_live_route_index(
         rows, source_signature=initial
     )
     return {
         "status": "ok",
         "routes": len(rows),
+        "current_routes": current_route_count,
+        "retained_routes": max(0, len(rows) - current_route_count),
         "seconds": round(time.monotonic() - started, 3),
         "source_updated_at": source_health.get("updated_at"),
         "artifact": meta.get("file"),

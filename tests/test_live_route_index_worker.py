@@ -57,6 +57,51 @@ def test_source_change_during_fast_build_keeps_previous_pointer(
     assert not (tmp_path / "materialized" / "live-route-index-current.json").exists()
 
 
+def test_same_structural_generation_cannot_replace_complete_index_with_thin_slice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board_path = tmp_path / "board.jsonl"
+    board_path.write_text("", encoding="utf-8")
+    output_root = tmp_path / "materialized"
+    signature = {
+        "board_path": str(board_path.resolve()),
+        "discovery": [1, 10],
+        "chart_catalog": [2, 20],
+    }
+    previous = {
+        "old": {"route_key": "old", "token": "OLD", "value": 1},
+        "updated": {"route_key": "updated", "token": "GUA", "value": 1},
+    }
+    materialized_views.Store(output_root).write_live_route_index(
+        previous,
+        source_signature=signature,
+    )
+    monkeypatch.setattr(
+        live_route_index_worker, "source_signature", lambda _path: signature
+    )
+    monkeypatch.setattr(
+        live_route_index_worker.api_spreads,
+        "load_public_route_index",
+        lambda: (
+            {"updated": {"route_key": "updated", "token": "GUA", "value": 2}},
+            {"updated_at": "2026-08-27T21:00:00Z"},
+        ),
+    )
+
+    summary = live_route_index_worker.build(board_path, output_root)
+    stored = materialized_views.Store(output_root).live_route_index(
+        board_path=board_path
+    )
+
+    assert summary["routes"] == 2
+    assert summary["current_routes"] == 1
+    assert summary["retained_routes"] == 1
+    assert stored == {
+        "old": previous["old"],
+        "updated": {"route_key": "updated", "token": "GUA", "value": 2},
+    }
+
+
 def test_server_prefers_newer_fast_index_over_older_full_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
