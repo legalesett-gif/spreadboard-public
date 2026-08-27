@@ -8106,21 +8106,70 @@ def render_funding_farm_empty(selected_farm: str, health: dict[str, Any]) -> str
 
 
 def render_market_token_group(group: dict[str, Any]) -> str:
-    best = group.get("best_route") or {}
-    spread_current = api_spreads.spread_quote_current(best)
+    render_now = time.time()
+    requested_best = group.get("best_route") or {}
+    source_routes = list(group.get("routes") or ([requested_best] if requested_best else []))
+    visible_routes: list[tuple[dict[str, Any], str]] = []
+    for route in source_routes:
+        state = api_spreads.spread_evidence_state(route, now=render_now)
+        # Only absolute timestamps can cross the freshness boundary between
+        # the API filter and this renderer. Legacy/test fixtures with no quote
+        # timestamp retain their historical rendering contract; product rows
+        # all carry quote_ts_us and fail closed if that evidence expires.
+        if route.get("quote_ts_us") and state == "excluded":
+            continue
+        visible_routes.append(
+            (route, state if state in {"verified", "research"} else "research")
+        )
+    if not visible_routes:
+        return ""
+    visible_by_key = {
+        str(route.get("route_key") or ""): (route, state)
+        for route, state in visible_routes
+    }
+    best, _best_state = visible_by_key.get(
+        str(requested_best.get("route_key") or ""), visible_routes[0]
+    )
+    spread_current = api_spreads.spread_quote_current(best, now=render_now)
     best_chart_url = (
         f"/charts?route_key={board.route_key_url(_chart_link_route_key(best))}"
         if best.get("route_key")
         else f"/charts?token={quote(str(group.get('token') or ''))}"
     )
     name = group.get("token_name") or "Metadata pending"
-    venues = group.get("venues") or []
-    kinds = group.get("route_kinds") or []
+    venues = sorted(
+        {
+            str(route.get(key) or "")
+            for route, _state in visible_routes
+            for key in ("long_venue", "short_venue")
+            if route.get(key)
+        }
+    )
+    kinds = sorted(
+        {
+            str(route.get("route_kind") or "")
+            for route, _state in visible_routes
+            if route.get("route_kind")
+        }
+    )
     catalog_coverage = group.get("coverage_mode") == "catalog_live_books"
-    funding_route = group.get("best_funding_route") or best
-    funding = group.get("best_funding_24h_pct")
-    if funding is None:
-        funding = funding_rank_value(funding_route, "now")
+    requested_funding = group.get("best_funding_route") or {}
+    requested_funding_state = api_spreads.spread_evidence_state(
+        requested_funding, now=render_now
+    )
+    if requested_funding and not (
+        requested_funding.get("quote_ts_us")
+        and requested_funding_state == "excluded"
+    ):
+        funding_route = requested_funding
+    else:
+        funding_route, _funding_state = max(
+            visible_routes,
+            key=lambda item: funding_rank_value(item[0], "now")
+            if funding_rank_value(item[0], "now") is not None
+            else float("-inf"),
+        )
+    funding = funding_rank_value(funding_route, "now")
     group_funding_basis = str(group.get("best_funding_24h_basis") or "")
     funding_basis = (
         "settled 24h"
@@ -8202,7 +8251,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         </div>
         <div class="group-routes">
           <span>Routes</span>
-          <strong>{h(group.get("route_count") or 0)}</strong>
+          <strong>{h(len(visible_routes))}</strong>
           <em>{h(len(venues))} venues · {h(len(kinds))} types</em>
         </div>
         <div class="group-age"><strong>{fmt_age(group.get("age_min"))}</strong><span aria-hidden="true">⌄</span></div>
@@ -8220,7 +8269,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
             <span>Buy leg</span><span>Sell leg</span><span>Quoted prices</span><span>Spread / basis</span>
             <span>Funding 24h</span><span>D/W rails</span><span></span>
           </div>
-          {"".join(render_market_group_route(route) for route in group.get("routes") or [])}
+          {"".join(render_market_group_route(route, evidence_state=state, now=render_now) for route, state in visible_routes)}
         </div>
       </div>
     </details>
@@ -8389,8 +8438,13 @@ def _ranking_funding_basis(row: dict[str, Any]) -> str:
     return "settled 24h" if basis == "settled_public_events" else "24h at current rate"
 
 
-def render_market_group_route(row: dict[str, Any]) -> str:
-    spread_current = api_spreads.spread_quote_current(row)
+def render_market_group_route(
+    row: dict[str, Any],
+    *,
+    evidence_state: str | None = None,
+    now: float | None = None,
+) -> str:
+    spread_current = api_spreads.spread_quote_current(row, now=now)
     shown_funding = funding_rank_value(row, "now")
     funding_basis = funding_rank_basis(row, "now")
     funding_live_hook = (
@@ -8426,7 +8480,7 @@ def render_market_group_route(row: dict[str, Any]) -> str:
         else fmt_signed_pct(row.get(f"{side}_funding_pct"), digits=4)
         for side in ("long", "short")
     )
-    evidence_state = api_spreads.spread_evidence_state(row)
+    evidence_state = evidence_state or api_spreads.spread_evidence_state(row, now=now)
     evidence_note = " · ".join(api_spreads.spread_evidence_reasons(row))
     return f"""
     <article class="route-detail-row {h(evidence_state)}" data-route-key="{h(row.get("route_key") or "")}" data-evidence="{h(evidence_state)}">
@@ -8695,9 +8749,16 @@ def render_carry_windows(row: dict[str, Any]) -> str:
 
 
 def render_pro_market_table(rows: list[dict[str, Any]]) -> str:
-    def render_row(row: dict[str, Any]) -> str:
-        spread_current = api_spreads.spread_quote_current(row)
-        evidence_state = api_spreads.spread_evidence_state(row)
+    render_now = time.time()
+
+    def renderable_state(row: dict[str, Any]) -> str | None:
+        state = api_spreads.spread_evidence_state(row, now=render_now)
+        if row.get("quote_ts_us") and state == "excluded":
+            return None
+        return state if state in {"verified", "research"} else "research"
+
+    def render_row(row: dict[str, Any], evidence_state: str) -> str:
+        spread_current = api_spreads.spread_quote_current(row, now=render_now)
         matched = (
             row.get("depth_weighted_spread_pct")
             if spread_current and evidence_state == "verified"
@@ -8737,7 +8798,9 @@ def render_pro_market_table(rows: list[dict[str, Any]]) -> str:
         """
 
     body = "".join(
-        render_row(row) for row in rows
+        render_row(row, evidence_state)
+        for row in rows
+        if (evidence_state := renderable_state(row)) is not None
     )
     if not body:
         return '<p class="empty market-empty">No live routes match these filters.</p>'

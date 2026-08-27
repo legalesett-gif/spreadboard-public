@@ -146,6 +146,7 @@ def test_tokenized_guard_reaches_api_and_both_market_views(monkeypatch):
         short_market_symbol="xyz:AMZN",
         asset_class="tokenized",
         route_kind="DEX-FUTURES",
+        quote_ts_us=int(server.time.time() * 1_000_000),
     )
     monkeypatch.setattr(
         tokenized_assets,

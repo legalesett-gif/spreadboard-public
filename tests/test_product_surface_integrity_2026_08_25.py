@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import time
 from pathlib import Path
 
 from scripts import materialized_view_worker, run_spreadboard_service
@@ -200,6 +201,35 @@ def test_token_page_exposes_one_combined_spread_view(monkeypatch) -> None:
         assert "One current spread list" in html
         assert "Research only" not in html
         assert "Verified only" not in html
+
+
+def test_group_render_drops_a_route_that_expires_after_api_filtering() -> None:
+    expired = _route(
+        route_key="expired",
+        quote_ts_us=int((time.time() - 3_600) * 1_000_000),
+    )
+    current = _route(
+        route_key="current",
+        short_venue="Aster",
+        quote_ts_us=int(time.time() * 1_000_000),
+    )
+    group = {
+        "token": "SPCX",
+        "token_name": "SPCX",
+        "best_route": expired,
+        "best_funding_route": expired,
+        "routes": [expired, current],
+        "venues": ["Gate", "Aster"],
+        "route_kinds": ["SPOT-FUTURES"],
+        "route_count": 2,
+    }
+
+    html = server.render_market_token_group(group)
+
+    assert 'data-route-key="current"' in html
+    assert 'data-route-key="expired"' not in html
+    assert 'data-evidence="excluded"' not in html
+    assert "<strong>1</strong>" in html
 
 
 def test_expanded_funding_pair_shows_now_and_exact_settled_windows(monkeypatch) -> None:
