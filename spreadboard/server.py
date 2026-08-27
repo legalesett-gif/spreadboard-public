@@ -8105,13 +8105,52 @@ def render_funding_farm_empty(selected_farm: str, health: dict[str, Any]) -> str
     return render_market_lane_empty("DEX-FUTURES", health)
 
 
+MARKET_RENDER_FRESHNESS_GRACE_MIN = 0.5
+
+
+def _market_render_evidence_state(
+    route: dict[str, Any], *, now: float
+) -> str:
+    """Freeze a just-valid API row across bounded HTML construction.
+
+    A full grouped page can take 10-20 seconds to assemble. A route accepted
+    inside the 90-second API boundary must not disappear merely because it
+    crosses that boundary before its HTML is emitted. The grace applies only
+    to freshness: a copy with a zero age must still pass every identity,
+    liquidity, rail, quote and instrument gate, and the result is downgraded to
+    an indicative/refreshing row rather than a verified matched-size claim.
+    """
+
+    state = api_spreads.spread_evidence_state(route, now=now)
+    if state != "excluded":
+        return state
+    age = api_spreads.quote_age_min(route, now=now)
+    if (
+        not route.get("quote_ts_us")
+        or age is None
+        or age
+        > api_spreads.SPREAD_LEADER_MAX_AGE_MIN
+        + MARKET_RENDER_FRESHNESS_GRACE_MIN
+    ):
+        return state
+    structural = dict(route)
+    structural["quote_ts_us"] = None
+    structural["age_min"] = 0.0
+    if api_spreads.spread_evidence_state(structural, now=now) in {
+        "verified",
+        "research",
+    }:
+        return "research"
+    return state
+
+
 def render_market_token_group(group: dict[str, Any]) -> str:
     render_now = time.time()
     requested_best = group.get("best_route") or {}
     source_routes = list(group.get("routes") or ([requested_best] if requested_best else []))
     visible_routes: list[tuple[dict[str, Any], str]] = []
     for route in source_routes:
-        state = api_spreads.spread_evidence_state(route, now=render_now)
+        state = _market_render_evidence_state(route, now=render_now)
         # Only absolute timestamps can cross the freshness boundary between
         # the API filter and this renderer. Legacy/test fixtures with no quote
         # timestamp retain their historical rendering contract; product rows
@@ -8154,7 +8193,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
     )
     catalog_coverage = group.get("coverage_mode") == "catalog_live_books"
     requested_funding = group.get("best_funding_route") or {}
-    requested_funding_state = api_spreads.spread_evidence_state(
+    requested_funding_state = _market_render_evidence_state(
         requested_funding, now=render_now
     )
     if requested_funding and not (
@@ -8752,7 +8791,7 @@ def render_pro_market_table(rows: list[dict[str, Any]]) -> str:
     render_now = time.time()
 
     def renderable_state(row: dict[str, Any]) -> str | None:
-        state = api_spreads.spread_evidence_state(row, now=render_now)
+        state = _market_render_evidence_state(row, now=render_now)
         if row.get("quote_ts_us") and state == "excluded":
             return None
         return state if state in {"verified", "research"} else "research"

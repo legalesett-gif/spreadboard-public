@@ -232,6 +232,27 @@ def test_group_render_drops_a_route_that_expires_after_api_filtering() -> None:
     assert "<strong>1</strong>" in html
 
 
+def test_group_render_keeps_a_just_expired_safe_route_as_indicative() -> None:
+    route = _route(
+        route_key="boundary",
+        quote_ts_us=int((time.time() - 100) * 1_000_000),
+    )
+    group = {
+        "token": "SPCX",
+        "token_name": "SPCX",
+        "best_route": route,
+        "routes": [route],
+        "route_count": 1,
+    }
+
+    html = server.render_market_token_group(group)
+
+    assert 'data-route-key="boundary"' in html
+    assert 'data-evidence="research"' in html
+    assert "quote refreshing" in html
+    assert 'data-evidence="excluded"' not in html
+
+
 def test_expanded_funding_pair_shows_now_and_exact_settled_windows(monkeypatch) -> None:
     route = _route(
         funding_daily_pct=0.12,
