@@ -102,6 +102,63 @@ def test_same_structural_generation_cannot_replace_complete_index_with_thin_slic
     }
 
 
+def test_current_dex_contract_replaces_retained_route_key_twin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board_path = tmp_path / "board.jsonl"
+    board_path.write_text("", encoding="utf-8")
+    output_root = tmp_path / "materialized"
+    signature = {
+        "board_path": str(board_path.resolve()),
+        "discovery": [1, 10],
+        "chart_catalog": [2, 20],
+    }
+    common = {
+        "token": "TRX",
+        "route_kind": "DEX-FUTURES",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "Spot",
+        "short_venue": "Aster",
+        "short_market_type": "Futures",
+        "short_market_symbol": "TRX/USDT:USDT",
+        "dex_chain": "56",
+        "dex_contract": "0xce7de646e7208a4ef112cb6ed5038fa6cc6b12e3",
+    }
+    stale = {
+        **common,
+        "route_key": "TRX|OKX DEX 56|Spot|Aster|Futures",
+        "long_market_symbol": "TRX",
+        "quote_ts_us": 100,
+    }
+    fresh = {
+        **common,
+        "route_key": "CUSTOM:fresh-expanded-route",
+        "long_market_symbol": common["dex_contract"],
+        "quote_ts_us": 200,
+    }
+    materialized_views.Store(output_root).write_live_route_index(
+        {stale["route_key"]: stale},
+        source_signature=signature,
+    )
+    monkeypatch.setattr(
+        live_route_index_worker, "source_signature", lambda _path: signature
+    )
+    monkeypatch.setattr(
+        live_route_index_worker.api_spreads,
+        "load_public_route_index",
+        lambda: ({fresh["route_key"]: fresh}, {}),
+    )
+
+    summary = live_route_index_worker.build(board_path, output_root)
+    stored = materialized_views.Store(output_root).live_route_index(
+        board_path=board_path
+    )
+
+    assert summary["routes"] == 1
+    assert summary["retained_routes"] == 0
+    assert stored == {fresh["route_key"]: fresh}
+
+
 def test_new_structural_generation_retains_only_still_listed_cex_routes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -152,7 +209,10 @@ def test_new_structural_generation_retains_only_still_listed_cex_routes(
         board_path=board_path
     )
 
-    assert set(stored or {}) == {"listed", "new"}
+    # The still-listed route is structurally retained, but the current build's
+    # serialization of the same exact legs replaces it rather than duplicating
+    # the economic route under two keys.
+    assert set(stored or {}) == {"new"}
 
 
 def test_server_prefers_newer_fast_index_over_older_full_generation(

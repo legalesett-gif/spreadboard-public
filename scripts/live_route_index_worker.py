@@ -16,7 +16,7 @@ for import_path in (ROOT / "src", ROOT):
         sys.path.remove(str(import_path))
     sys.path.insert(0, str(import_path))
 
-from spreadboard import api_spreads, chart_catalog, materialized_views
+from spreadboard import api_spreads, catalog_pairs, chart_catalog, materialized_views
 
 
 def _signature(path: Path | str) -> list[int] | None:
@@ -72,6 +72,34 @@ def _retained_structural_cex_rows(
     return retained
 
 
+def _merge_by_economic_identity(
+    previous: dict[str, dict[str, Any]],
+    current: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Let a current leg pair replace any retained serialization of it.
+
+    OKX provider rows and catalogue fan-out rows intentionally use different
+    route keys. Retaining by key alone kept the old scanner serialization next
+    to the fresh chain/contract-identical route, so a direct lookup could still
+    find the stale twin. Structural continuity is about economic legs, not the
+    spelling of their key.
+    """
+
+    selected: dict[tuple[Any, ...], tuple[int, int, str, dict[str, Any]]] = {}
+    for priority, rows in enumerate((previous, current)):
+        for key, row in rows.items():
+            identity = catalog_pairs.route_identity(row)
+            try:
+                quote_ts_us = int(row.get("quote_ts_us") or 0)
+            except (TypeError, ValueError):
+                quote_ts_us = 0
+            existing = selected.get(identity)
+            candidate = (priority, quote_ts_us, key, row)
+            if existing is None or candidate[:2] >= existing[:2]:
+                selected[identity] = candidate
+    return {key: row for _priority, _stamp, key, row in selected.values()}
+
+
 def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     started = time.monotonic()
     initial = source_signature(board_path)
@@ -100,7 +128,7 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         # rechecks the real quote timestamp, so retaining the lookup cannot
         # turn an old price into a current opportunity. A changed structural
         # source signature starts clean and permits genuine removals.
-        rows = {**previous_rows, **rows}
+        rows = _merge_by_economic_identity(previous_rows, rows)
     meta = store.write_live_route_index(
         rows, source_signature=initial
     )
