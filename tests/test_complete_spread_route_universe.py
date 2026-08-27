@@ -125,6 +125,11 @@ def test_complete_route_index_merges_all_catalogue_pairs_and_reverse_spot_leg(
         long_market_type="Spot",
         long_market_symbol="0x123",
     )
+    stale_cex_mirror = _evidence_route(
+        token="OLD",
+        route_key="OLD|Gate|Futures|Mexc|Futures",
+        quote_ts_us=1,
+    )
     spot_future = _evidence_route(
         route_key="CUSTOM:spot-future",
         route_kind="SPOT-FUTURES",
@@ -178,7 +183,7 @@ def test_complete_route_index_merges_all_catalogue_pairs_and_reverse_spot_leg(
     monkeypatch.setattr(catalog_pairs, "for_tokens", fake_for_tokens)
 
     rows, health = api_spreads._complete_current_catalogue_rows(
-        [discovery_dex],
+        [discovery_dex, stale_cex_mirror],
         metadata={"GUA": {"name": "GUA Token"}},
     )
 
@@ -192,6 +197,9 @@ def test_complete_route_index_merges_all_catalogue_pairs_and_reverse_spot_leg(
     }
     assert health["catalogue_route_count"] == 2
     assert health["merged_route_count"] == 3
+    assert health["discovery_input_route_count"] == 2
+    assert health["discovery_route_count"] == 1
+    assert health["discovery_pruned_route_count"] == 1
 
 
 def test_bulk_catalogue_discards_negative_mirrors_before_global_retention(

@@ -390,6 +390,36 @@ def test_web_watcher_coalesces_continuous_collector_generations(
     assert watcher.invalidation_pending is False
 
 
+def test_collector_republishes_complete_live_pair_index_at_bounded_cadence(
+    tmp_path, monkeypatch
+) -> None:
+    generation = tmp_path / "market_generation.json"
+    snapshot = tmp_path / "api_discovery_latest.json"
+    monkeypatch.setattr(service, "MARKET_GENERATION_PATH", generation)
+    monkeypatch.setattr(service, "SNAPSHOT_PATH", snapshot)
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "collector")
+    monkeypatch.setattr(service, "_invalidate_market_price_caches", lambda: None)
+    watcher = service.SharedArtifactWatcher(
+        threading.Event(),
+        initial_warm_delay_seconds=3600,
+        invalidation_interval_seconds=1,
+        live_route_refresh_interval_seconds=120,
+    )
+    watcher.next_live_route_refresh_at = 0.0
+    route_warms: list[bool] = []
+    monkeypatch.setattr(watcher, "request_warm", lambda: route_warms.append(True))
+
+    generation.write_text(json.dumps({"kind": "bulk_quotes"}), encoding="utf-8")
+    watcher.check_once()
+    generation.write_text(
+        json.dumps({"kind": "bulk_quotes", "generation": 2}), encoding="utf-8"
+    )
+    watcher.check_once()
+
+    assert route_warms == [True]
+    assert watcher.next_live_route_refresh_at > 0.0
+
+
 def test_web_watcher_self_heals_a_missing_telegram_snapshot(monkeypatch) -> None:
     """A lost resident snapshot must not wait for the next broad discovery."""
     from spreadboard import telegram_queries

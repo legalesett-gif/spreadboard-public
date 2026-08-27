@@ -829,6 +829,7 @@ class SharedArtifactWatcher(threading.Thread):
         poll_seconds: float = 1.0,
         initial_warm_delay_seconds: float = 30.0,
         invalidation_interval_seconds: float | None = None,
+        live_route_refresh_interval_seconds: float | None = None,
         telegram_recovery_interval_seconds: float | None = None,
     ) -> None:
         super().__init__(name="shared-market-artifact-watcher", daemon=True)
@@ -853,6 +854,19 @@ class SharedArtifactWatcher(threading.Thread):
         self.last_invalidation_at = 0.0
         self.invalidation_pending = False
         self.pending_generation_kinds: set[str] = set()
+        self.live_route_refresh_interval_seconds = max(
+            120.0,
+            float(
+                live_route_refresh_interval_seconds
+                if live_route_refresh_interval_seconds is not None
+                else os.environ.get(
+                    "SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS", "300"
+                )
+            ),
+        )
+        self.next_live_route_refresh_at = (
+            time.monotonic() + self.live_route_refresh_interval_seconds
+        )
         self.telegram_recovery_interval_seconds = max(
             30.0,
             float(
@@ -1030,6 +1044,20 @@ class SharedArtifactWatcher(threading.Thread):
         self.invalidation_pending = False
         self.pending_generation_kinds.clear()
         self.last_invalidation_at = now
+        # Current positive CEX pairings are derived from the full live-book
+        # catalogue, not the two-hour structural discovery quota. Rebuild only
+        # the compact route index after a completed price generation and at a
+        # bounded five-minute cadence. The collector owns the isolated worker;
+        # the web process merely installs its atomic pointer.
+        if (
+            _service_role() != "web"
+            and kinds.intersection({"bulk_quotes", "fast_quotes"})
+            and now >= self.next_live_route_refresh_at
+        ):
+            self.next_live_route_refresh_at = (
+                now + self.live_route_refresh_interval_seconds
+            )
+            self.request_warm()
         if "bulk_funding" in kinds:
             self.request_funding_warm()
 

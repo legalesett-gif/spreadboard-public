@@ -272,19 +272,41 @@ def _complete_current_catalogue_rows(
                     row[key] = token_entry.get(key)
             catalogue_rows.append(row)
 
+    # The discovery snapshot retains old CEX candidates so a temporarily
+    # unavailable market can recover without another broad venue scan. Keeping
+    # all of those mirrors in the resident query index, however, inflated the
+    # production universe from 26k to 50k rows and made its ten-second live-book
+    # overlay permanently busy. The complete catalogue above is the current
+    # CEX source of truth, so retain only discovery CEX rows that still pass the
+    # same public evidence boundary. DEX/provider rows remain structural: their
+    # contract identity and quote evidence cannot be reconstructed from the CEX
+    # chart catalogue and must survive until a fresh provider quote replaces
+    # them.
+    discovery_input_count = len(discovery_rows)
+    admissible_discovery_rows = [
+        row
+        for row in discovery_rows
+        if str(row.get("route_kind") or "").startswith("DEX-")
+        or spread_evidence_state(row) in {"verified", "research"}
+    ]
+
     # Catalogue rows come first so their exact, same-generation books own the
     # economics. Discovery contributes DEX/provider-only routes plus stronger
     # identity, rail and execution warnings through the conservative merger.
     merged = catalog_pairs.with_routes(
         {"routes": catalogue_rows},
-        discovery_rows,
+        admissible_discovery_rows,
         limit=None,
     )
     output = [row for row in merged.get("routes") or [] if isinstance(row, dict)]
     kinds = Counter(str(row.get("route_kind") or "") for row in catalogue_rows)
     return output, {
         "status": "complete_current_cex_plus_discovery",
-        "discovery_route_count": len(discovery_rows),
+        "discovery_input_route_count": discovery_input_count,
+        "discovery_route_count": len(admissible_discovery_rows),
+        "discovery_pruned_route_count": (
+            discovery_input_count - len(admissible_discovery_rows)
+        ),
         "catalogue_route_count": len(catalogue_rows),
         "merged_route_count": len(output),
         "catalogue_token_count": len(payloads),
