@@ -190,6 +190,7 @@ def test_complete_route_index_merges_all_catalogue_pairs_and_reverse_spot_leg(
     assert captured["include_short_spot"] is True
     assert captured["include_history"] is False
     assert captured["admissible_spreads_only"] is True
+    assert captured["max_age_seconds"] == catalog_pairs.MAX_BOOK_AGE_SECONDS
     assert {row["route_kind"] for row in rows} == {
         "SPOT-FUTURES",
         "FUTURES-SPOT",

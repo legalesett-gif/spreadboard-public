@@ -232,7 +232,14 @@ def _complete_current_catalogue_rows(
         }
         payloads = catalog_pairs.for_tokens(
             tokens,
-            max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS,
+            # This is a structural lookup index, not a current-spread claim.
+            # A full venue sweep plus this isolated build can exceed the
+            # 90-second leader boundary, so reading only leader-current books
+            # made early-venue pairs disappear before publication. Retain the
+            # catalogue's bounded 180-second books here; response/render paths
+            # still recompute quote age and enforce the unchanged 90-second
+            # current-spread gate before presenting an opportunity as live.
+            max_age_seconds=catalog_pairs.MAX_BOOK_AGE_SECONDS,
             include_history=False,
             include_short_spot=True,
             admissible_spreads_only=True,
