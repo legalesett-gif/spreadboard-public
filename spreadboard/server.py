@@ -305,7 +305,7 @@ PLAYBOOK_DEFS = [
         "category": "D/W and transfer rails",
         "title": "Deposit, withdraw, chain, and contract checks",
         "why": "Spot and DEX routes can look profitable while being impossible because transfer rails, chain, or contract identity are unresolved.",
-        "answer": "Treat DEX and transfer rows as research-only until exact chain, contract, venue symbols, and D/W direction are known.",
+        "answer": "Keep DEX and transfer rows in the same opportunity list, but require explicit DD until exact chain, contract, venue symbols, and D/W direction are known.",
         "checks": [
             "Open the pair cockpit and inspect D/W and DEX gates.",
             "Use the route age and exact API rail fields to confirm current availability.",

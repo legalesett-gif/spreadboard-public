@@ -100,15 +100,15 @@ services:
       # independent venue calls give the production pass headroom inside the
       # 90-second truth boundary even while other warmers are active.
       SPREADBOARD_BULK_QUOTE_SECONDS: "10"
-      # Re-evaluate the complete positive pair universe from those fresh books
-      # every five minutes. This adds newly opened routes without waiting for
-      # the two-hour structural venue scan, while keeping the isolated index
-      # worker below a measured ten-percent duty cycle.
-      SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS: "300"
+      # Re-evaluate the complete positive pair universe after each bounded
+      # price pass, no less often than every two minutes. Five minutes was long
+      # enough for a 20% DEX/Aster dislocation to converge materially before it
+      # could enter the structural universe.
+      SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS: "120"
       # Independent venue adapters refresh concurrently; each venue writes its
       # result in one SQLite transaction. This keeps the complete catalogue
       # inside the 90-second current-spread truth window without raising it.
-      SPREADBOARD_BULK_QUOTE_WORKERS: "6"
+      SPREADBOARD_BULK_QUOTE_WORKERS: "8"
       # Funding has its own isolated worker. A slow funding provider must never
       # postpone a current-price pass or make a valid spread disappear.
       SPREADBOARD_BULK_FUNDING_SECONDS: "30"

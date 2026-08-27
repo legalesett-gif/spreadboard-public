@@ -175,7 +175,20 @@ def load_public_route_index(
         metadata=metadata,
         rails=rails,
     )
-    rows = apply_live_books(rows, _live_books(), now=current_time)
+    live_books = _live_books()
+    rows = apply_live_books(rows, live_books, now=current_time)
+    # OKX DEX discovery stores one or a few scanner-selected futures partners.
+    # The product route universe must instead pair every fresh exact-chain DEX
+    # quote with every current futures leg before ranking and pagination. Doing
+    # this only after a DEX tab was chosen made a fleeting TRX DEX -> Aster
+    # opportunity impossible to discover from the default list or Telegram.
+    rows = _expand_current_dex_futures_pairs(
+        rows,
+        books=live_books,
+        now=current_time,
+        metadata=metadata,
+        rails=rails,
+    )
     rows = [
         row
         for row in _dedupe_rows(rows)
@@ -423,14 +436,13 @@ def load_spreads(
     # stale price, and this is the whole point of streaming the books.
     live_books = _live_books()
     api_rows = apply_live_books(api_rows, live_books, now=current_time)
-    if _normalize_kind_filter(kind) == "DEX-FUTURES":
-        api_rows = _expand_current_dex_futures_pairs(
-            api_rows,
-            books=live_books,
-            now=current_time,
-            metadata=metadata,
-            rails=rails,
-        )
+    api_rows = _expand_current_dex_futures_pairs(
+        api_rows,
+        books=live_books,
+        now=current_time,
+        metadata=metadata,
+        rails=rails,
+    )
     all_rows = _dedupe_rows(api_rows)
     # Product DEX diagnostics are OKX-only. Source provenance is intentionally
     # not counted here because several ordinary Futures/Spot venues still use

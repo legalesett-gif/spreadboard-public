@@ -203,6 +203,118 @@ def test_complete_route_index_merges_all_catalogue_pairs_and_reverse_spot_leg(
     assert health["discovery_pruned_route_count"] == 1
 
 
+def test_public_route_index_expands_dex_against_every_current_futures_leg(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """DEX discovery must happen before ranking, not after choosing its tab.
+
+    Otherwise the default Markets universe can never discover a fleeting
+    OKX-DEX -> Aster route: only a request that already knows to filter the DEX
+    lane performs the fan-out.
+    """
+
+    dex_payload = _evidence_route(
+        token="TRX",
+        route_key="TRX|OKX DEX 56|DEX|Gate|Futures",
+        route_kind="DEX-FUTURES",
+        long_venue="OKX DEX 56",
+        long_market_type="DEX",
+        long_market_symbol="0xtrx",
+        short_venue="Gate",
+        short_market_type="Futures",
+        short_market_symbol="TRX/USDT:USDT",
+    )
+    dex = SimpleNamespace(**dex_payload)
+    dex.to_dict = lambda: dict(dex_payload)
+    expanded_payload = _evidence_route(
+        token="TRX",
+        route_key="TRX|OKX DEX 56|DEX|Aster|Futures",
+        route_kind="DEX-FUTURES",
+        long_venue="OKX DEX 56",
+        long_market_type="DEX",
+        long_market_symbol="0xtrx",
+        short_venue="Aster",
+        short_market_type="Futures",
+        short_market_symbol="TRX/USDT:USDT",
+    )
+    expanded = SimpleNamespace(**expanded_payload)
+    expanded.to_dict = lambda: dict(expanded_payload)
+    monkeypatch.setattr(
+        api_spreads,
+        "_load_api_discovery_rows",
+        lambda *_args, **_kwargs: ([dex], {"status": "fresh"}),
+    )
+    monkeypatch.setattr(api_spreads, "_live_books", lambda: {"book": object()})
+    monkeypatch.setattr(api_spreads, "apply_live_books", lambda rows, *_a, **_k: rows)
+    monkeypatch.setattr(api_spreads, "_dedupe_rows", lambda rows: rows)
+    monkeypatch.setattr(
+        api_spreads,
+        "_expand_current_dex_futures_pairs",
+        lambda rows, **_kwargs: [*rows, expanded],
+    )
+    monkeypatch.setattr(
+        api_spreads,
+        "_complete_current_catalogue_rows",
+        lambda rows, **_kwargs: (rows, {"status": "ok"}),
+    )
+    monkeypatch.setattr(api_spreads.token_metadata, "load_token_metadata", dict)
+    monkeypatch.setattr(api_spreads.public_rails, "load_public_rails", dict)
+
+    rows, _health = api_spreads.load_public_route_index(
+        api_path=tmp_path / "discovery.json",
+        now=time.time(),
+    )
+
+    assert "TRX|OKX DEX 56|DEX|Aster|Futures" in rows
+
+
+def test_unfiltered_spread_query_expands_dex_before_kind_filtering(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    dex = SimpleNamespace(**_evidence_route(
+        token="TRX",
+        route_key="TRX|OKX DEX 56|DEX|Gate|Futures",
+        route_kind="DEX-FUTURES",
+        long_venue="OKX DEX 56",
+        long_market_type="DEX",
+        long_market_symbol="0xtrx",
+    ))
+    calls: list[int] = []
+
+    monkeypatch.setattr(
+        api_spreads,
+        "_load_api_discovery_rows",
+        lambda *_args, **_kwargs: ([dex], {"status": "fresh"}),
+    )
+    monkeypatch.setattr(
+        api_spreads,
+        "_load_board_rows",
+        lambda *_args, **_kwargs: ([], {"status": "unused"}),
+    )
+    monkeypatch.setattr(api_spreads, "_live_books", lambda: {"book": object()})
+    monkeypatch.setattr(api_spreads, "apply_live_books", lambda rows, *_a, **_k: rows)
+    monkeypatch.setattr(api_spreads, "_dedupe_rows", lambda _rows: [])
+    monkeypatch.setattr(
+        api_spreads,
+        "_expand_current_dex_futures_pairs",
+        lambda rows, **_kwargs: calls.append(len(rows)) or rows,
+    )
+    monkeypatch.setattr(api_spreads.token_metadata, "load_token_metadata", dict)
+    monkeypatch.setattr(api_spreads.public_rails, "load_public_rails", dict)
+    monkeypatch.setattr(api_spreads, "_RESULT_CACHE", {})
+
+    api_spreads.load_spreads(
+        api_path=tmp_path / "discovery.json",
+        board_path=tmp_path / "board.json",
+        kind=None,
+        include_stale=True,
+        limit=10,
+        now=time.time(),
+    )
+
+    assert calls == [1]
+
+
 def test_bulk_catalogue_discards_negative_mirrors_before_global_retention(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

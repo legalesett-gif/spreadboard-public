@@ -147,6 +147,134 @@ def test_aster_native_bulk_prices_every_usdt_family_without_private_credentials(
     assert all(row["source"] == "native_bulk_ticker" for row in books)
 
 
+def test_binance_native_bulk_keeps_spot_and_futures_separate() -> None:
+    payloads = {
+        "api.binance.com": [
+            {
+                "symbol": "TRXUSDT",
+                "bidPrice": "0.30",
+                "bidQty": "1000",
+                "askPrice": "0.31",
+                "askQty": "900",
+            }
+        ],
+        "fapi.binance.com": [
+            {
+                "symbol": "TRXUSDT",
+                "bidPrice": "0.35",
+                "bidQty": "800",
+                "askPrice": "0.36",
+                "askQty": "700",
+                "time": 1_787_453_992_200,
+            }
+        ],
+    }
+
+    books = bulk_quotes._native_bulk_books(
+        "Binance",
+        fetcher=lambda url: payloads[
+            "fapi.binance.com" if "fapi.binance.com" in url else "api.binance.com"
+        ],
+    )
+
+    assert [(row["market_type"], row["symbol"]) for row in books] == [
+        ("Spot", "TRX/USDT"),
+        ("Futures", "TRX/USDT:USDT"),
+    ]
+    assert books[1]["bids"] == [[0.35, 800.0]]
+
+
+def test_kucoin_native_bulk_applies_contract_multiplier() -> None:
+    payloads = {
+        "allTickers": {
+            "data": [
+                {
+                    "symbol": "XBTUSDTM",
+                    "bestBidPrice": "80000",
+                    "bestBidSize": "5",
+                    "bestAskPrice": "80001",
+                    "bestAskSize": "6",
+                    "ts": 1_787_453_992_200_000_000,
+                }
+            ]
+        },
+        "contracts": {
+            "data": [
+                {
+                    "symbol": "XBTUSDTM",
+                    "baseCurrency": "XBT",
+                    "quoteCurrency": "USDT",
+                    "multiplier": "0.001",
+                    "isInverse": False,
+                    "status": "Open",
+                }
+            ]
+        },
+    }
+
+    books = bulk_quotes._native_bulk_books(
+        "Kucoin Futures",
+        fetcher=lambda url: payloads[
+            "allTickers" if "allTickers" in url else "contracts"
+        ],
+    )
+
+    assert books[0]["symbol"] == "BTC/USDT:USDT"
+    assert books[0]["bids"] == [[80000.0, 0.005]]
+    assert books[0]["asks"] == [[80001.0, 0.006]]
+
+
+def test_native_futures_ticker_without_size_stays_indicative() -> None:
+    books = bulk_quotes._native_bulk_books(
+        "Phemex",
+        fetcher=lambda _url: {
+            "result": [
+                {
+                    "symbol": "TRXUSDT",
+                    "bidRp": "0.35",
+                    "askRp": "0.36",
+                    "timestamp": 1_787_453_992_200_000_000,
+                }
+            ]
+        },
+    )
+
+    assert books[0]["symbol"] == "TRX/USDT:USDT"
+    assert books[0]["bids"] == [[0.35, 0.0]]
+    assert books[0]["asks"] == [[0.36, 0.0]]
+
+
+def test_native_bulk_venue_is_written_without_slow_ccxt_fallback() -> None:
+    store = _Store()
+    native = [
+        {
+            "venue": "Kucoin Futures",
+            "market_type": "Futures",
+            "symbol": "TRX/USDT:USDT",
+            "bids": [[0.35, 100.0]],
+            "asks": [[0.36, 100.0]],
+            "quote_ts_us": 1_787_453_992_200_000,
+            "source": "native_bulk_ticker",
+        }
+    ]
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(bulk_quotes, "_native_bulk_books", lambda _venue: native)
+        monkeypatch.setattr(
+            bulk_quotes,
+            "_client",
+            lambda *_args: pytest.fail("native-complete venue must not load CCXT"),
+        )
+        written = bulk_quotes.sweep_venue("Kucoin Futures", store=store)
+
+    assert written == 1
+    assert store.written[0][:3] == (
+        "Kucoin Futures",
+        "Futures",
+        "TRX/USDT:USDT",
+    )
+
+
 def test_a_venue_whose_ticker_carries_no_quotes_is_not_called_each_cycle() -> None:
     """Coinbase returns 528 symbols with neither bid nor ask."""
     assert "Coinbase" in bulk_quotes.SKIP_VENUES
@@ -159,6 +287,7 @@ def test_a_failing_venue_does_not_stop_the_sweep(monkeypatch: pytest.MonkeyPatch
         raise RuntimeError("venue down")
 
     monkeypatch.setattr(bulk_quotes, "_client", explode)
+    monkeypatch.setattr(bulk_quotes, "_native_bulk_books", lambda _venue: [])
 
     # sweep_venue swallows it; the sweep keeps going to the next venue.
     assert bulk_quotes.sweep_venue("Binance", store=store) == 0

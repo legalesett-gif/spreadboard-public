@@ -172,6 +172,193 @@ def _native_aster_books(*, fetcher: Any = None) -> list[dict[str, Any]]:
     return output
 
 
+_NATIVE_COMPLETE_BULK_VENUES = {"Binance", "Kucoin Futures"}
+_NATIVE_PARTIAL_BULK_VENUES = {"Phemex", "WhiteBIT"}
+_NATIVE_LINEAR_QUOTES = ("USDT", "USDC", "USD")
+
+
+def _native_bulk_books(venue: str, *, fetcher: Any = None) -> list[dict[str, Any]]:
+    """Fast first-party BBO snapshots for adapters CCXT leaves one-sided.
+
+    Production's generic sweep had no Binance futures or KuCoin Futures books
+    at all, and its Phemex/WhiteBIT futures coverage depended on whichever side
+    of a 90+ second CCXT rotation happened to finish last. These public venue
+    endpoints return the complete family in one request. A provider that does
+    not publish size remains a useful current top-book lead with amount zero;
+    downstream depth verification deliberately fails closed for that row.
+    """
+
+    get_json = fetcher or _public_json
+    now_us = int(time.time() * 1_000_000)
+    output: list[dict[str, Any]] = []
+
+    def pair(compact: Any, *, perpetual: bool) -> tuple[str, str] | None:
+        value = str(compact or "").upper().replace("-", "").replace("_", "")
+        if perpetual and value.endswith("PERP"):
+            value = value[:-4] + "USDT"
+        for quote in _NATIVE_LINEAR_QUOTES:
+            if value.endswith(quote) and len(value) > len(quote):
+                return value[: -len(quote)], quote
+        return None
+
+    def append(
+        *,
+        market_type: str,
+        base: Any,
+        quote: Any,
+        bid: Any,
+        ask: Any,
+        bid_size: Any = 0.0,
+        ask_size: Any = 0.0,
+        timestamp_us: Any = None,
+    ) -> None:
+        normalized_base = {"XBT": "BTC", "XDG": "DOGE"}.get(
+            str(base or "").upper(), str(base or "").upper()
+        )
+        normalized_quote = str(quote or "").upper()
+        try:
+            bid_value = float(bid or 0.0)
+            ask_value = float(ask or 0.0)
+            bid_amount = max(0.0, float(bid_size or 0.0))
+            ask_amount = max(0.0, float(ask_size or 0.0))
+            quote_ts_us = int(timestamp_us or now_us)
+        except (TypeError, ValueError):
+            return
+        if (
+            not normalized_base
+            or normalized_quote not in _NATIVE_LINEAR_QUOTES
+            or bid_value <= 0
+            or ask_value <= 0
+        ):
+            return
+        symbol = f"{normalized_base}/{normalized_quote}"
+        if market_type == "Futures":
+            symbol += f":{normalized_quote}"
+        output.append(
+            {
+                "venue": venue,
+                "market_type": market_type,
+                "symbol": symbol,
+                "bids": [[bid_value, bid_amount]],
+                "asks": [[ask_value, ask_amount]],
+                "quote_ts_us": quote_ts_us,
+                "source": "native_bulk_ticker",
+            }
+        )
+
+    if venue == "Binance":
+        endpoints = (
+            ("Spot", "https://api.binance.com/api/v3/ticker/bookTicker"),
+            ("Futures", "https://fapi.binance.com/fapi/v1/ticker/bookTicker"),
+        )
+        for market_type, endpoint in endpoints:
+            payload = get_json(endpoint)
+            for item in payload if isinstance(payload, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                identity = pair(item.get("symbol"), perpetual=market_type == "Futures")
+                if identity is None:
+                    continue
+                timestamp_ms = _float(item.get("time"))
+                append(
+                    market_type=market_type,
+                    base=identity[0],
+                    quote=identity[1],
+                    bid=item.get("bidPrice"),
+                    ask=item.get("askPrice"),
+                    bid_size=item.get("bidQty"),
+                    ask_size=item.get("askQty"),
+                    timestamp_us=(int(timestamp_ms * 1000) if timestamp_ms else now_us),
+                )
+        return output
+
+    if venue == "Kucoin Futures":
+        tickers = get_json("https://api-futures.kucoin.com/api/v1/allTickers")
+        contracts = get_json("https://api-futures.kucoin.com/api/v1/contracts/active")
+        contract_rows = contracts.get("data") if isinstance(contracts, dict) else []
+        if isinstance(contract_rows, dict):
+            contract_rows = [contract_rows]
+        contract_by_id = {
+            str(item.get("symbol") or "").upper(): item
+            for item in contract_rows or []
+            if isinstance(item, dict)
+        }
+        ticker_rows = tickers.get("data") if isinstance(tickers, dict) else []
+        for item in ticker_rows or []:
+            if not isinstance(item, dict):
+                continue
+            market_id = str(item.get("symbol") or "").upper()
+            contract = contract_by_id.get(market_id) or {}
+            if contract.get("isInverse") is True:
+                continue
+            if str(contract.get("status") or "Open").casefold() not in {
+                "open",
+                "trading",
+            }:
+                continue
+            base = contract.get("baseCurrency")
+            quote = contract.get("quoteCurrency")
+            if not base or not quote:
+                compact = market_id.removesuffix("M")
+                identity = pair(compact, perpetual=True)
+                if identity is None:
+                    continue
+                base, quote = identity
+            multiplier = abs(_float(contract.get("multiplier")) or 1.0)
+            timestamp_ns = _float(item.get("ts"))
+            append(
+                market_type="Futures",
+                base=base,
+                quote=quote,
+                bid=item.get("bestBidPrice"),
+                ask=item.get("bestAskPrice"),
+                bid_size=(_float(item.get("bestBidSize")) or 0.0) * multiplier,
+                ask_size=(_float(item.get("bestAskSize")) or 0.0) * multiplier,
+                timestamp_us=(int(timestamp_ns / 1000) if timestamp_ns else now_us),
+            )
+        return output
+
+    if venue == "Phemex":
+        payload = get_json("https://api.phemex.com/md/v3/ticker/24hr/all")
+        rows = payload.get("result") if isinstance(payload, dict) else []
+        for item in rows or []:
+            if not isinstance(item, dict):
+                continue
+            identity = pair(item.get("symbol"), perpetual=True)
+            if identity is None:
+                continue
+            timestamp_ns = _float(item.get("timestamp"))
+            append(
+                market_type="Futures",
+                base=identity[0],
+                quote=identity[1],
+                bid=item.get("bidRp"),
+                ask=item.get("askRp"),
+                timestamp_us=(int(timestamp_ns / 1000) if timestamp_ns else now_us),
+            )
+        return output
+
+    if venue == "WhiteBIT":
+        payload = get_json("https://whitebit.com/api/v4/public/futures")
+        rows = payload.get("result") if isinstance(payload, dict) else payload
+        for item in rows or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("product_type") or "Perpetual").casefold() != "perpetual":
+                continue
+            append(
+                market_type="Futures",
+                base=item.get("stock_currency")
+                or str(item.get("ticker_id") or "").removesuffix("_PERP"),
+                quote=item.get("money_currency") or "USDT",
+                bid=item.get("bid"),
+                ask=item.get("ask"),
+            )
+        return output
+
+    return output
+
+
 def _write_books(store: live_book_cache.LiveBookStore, books: list[dict[str, Any]]) -> int:
     put_many = getattr(store, "put_many", None)
     if callable(put_many):
@@ -210,8 +397,27 @@ def sweep_venue(
         native_books = _native_aster_books()
         if native_books:
             return _write_books(store, native_books)
+    native_written = 0
+    if (
+        client_factory is None
+        and venue in (_NATIVE_COMPLETE_BULK_VENUES | _NATIVE_PARTIAL_BULK_VENUES)
+    ):
+        try:
+            native_books = _native_bulk_books(venue)
+        except Exception:  # The generic adapter remains a fallback.
+            LOGGER.warning("%s native bulk sweep failed", venue, exc_info=True)
+            native_books = []
+        if native_books:
+            native_written = _write_books(store, native_books)
+            if venue in _NATIVE_COMPLETE_BULK_VENUES:
+                return native_written
     pending_books: list[dict[str, Any]] = []
-    for market_type in ("Spot", "Futures"):
+    market_types = (
+        ("Spot",)
+        if native_written and venue in _NATIVE_PARTIAL_BULK_VENUES
+        else ("Spot", "Futures")
+    )
+    for market_type in market_types:
         try:
             client = (client_factory or _client)(venue, market_type)
             if client is None or not getattr(client, "has", {}).get("fetchTickers"):
@@ -266,7 +472,7 @@ def sweep_venue(
                 })
             except (TypeError, ValueError):
                 continue
-    return _write_books(store, pending_books)
+    return native_written + _write_books(store, pending_books)
 
 
 #: Where the last sweep stopped. Without this every pass starts at the same
