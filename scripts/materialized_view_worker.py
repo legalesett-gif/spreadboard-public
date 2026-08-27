@@ -128,7 +128,14 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
             if isinstance(live_meta.get("source_signature"), dict)
             else {}
         )
-        shared_keys = ("board_path", "board", "discovery", "metadata", "rails")
+        shared_keys = (
+            "board_path",
+            "board",
+            "discovery",
+            "chart_catalog",
+            "metadata",
+            "rails",
+        )
         route_index = (
             store.live_route_index(board_path=board_path)
             if live_meta.get("ready")

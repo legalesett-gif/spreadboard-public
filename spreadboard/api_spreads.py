@@ -38,6 +38,15 @@ DEFAULT_API_DISCOVERY_PATH = RUNTIME_DIR / "api_discovery_latest.json"
 DEFAULT_MAX_AGE_MIN = float(os.environ.get("SPREADBOARD_LIVE_MAX_AGE_MIN", "4"))
 DEFAULT_LIMIT = 25
 
+
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    """Read one route field identically before and after public serialization."""
+
+    if isinstance(row, dict):
+        return row.get(key, default)
+    return getattr(row, key, default)
+
+
 # Spot-DEX is outside the current public product. Spot-Spot remains a first-class
 # arbitrage lane and must participate in grouping and top-25 ranking.
 # Spot-DEX was retired, which zeroed a lane uacryptoinvest populates with 20+
@@ -173,10 +182,115 @@ def load_public_route_index(
         if row.route_kind not in RETIRED_ROUTE_KINDS
         and not quote_basis_mismatch(row)
     ]
-    return (
-        {row.route_key: _public_row(row) for row in rows},
-        source_meta,
+    discovery_public = [_public_row(row) for row in rows]
+    complete_public, catalogue_meta = _complete_current_catalogue_rows(
+        discovery_public,
+        metadata=metadata,
     )
+    merged_meta = dict(source_meta)
+    merged_meta["complete_catalogue"] = catalogue_meta
+    return (
+        {
+            str(row.get("route_key") or ""): row
+            for row in complete_public
+            if str(row.get("route_key") or "")
+        },
+        merged_meta,
+    )
+
+
+def _complete_current_catalogue_rows(
+    discovery_rows: list[dict[str, Any]],
+    *,
+    metadata: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Merge every fresh exact CEX pair into the structural route universe.
+
+    The discovery file is deliberately bounded per token. It is a useful token
+    finder, but cannot be the source of truth for a pair browser. The complete
+    chart catalogue and shared live-book store already contain the missing
+    exact markets, so the disposable route-index worker expands them once and
+    publishes one atomic structure for web, alerts, Telegram and charts.
+
+    Both Spot/Futures directions are retained. Long-futures/short-spot rows are
+    conditional research leads (inventory or borrow required), not silently
+    discarded. Presentation still requires a positive current spread and the
+    common evidence classifier, so storing both directions does not fabricate
+    an opportunity.
+    """
+
+    try:
+        from spreadboard import catalog_pairs, chart_catalog
+
+        tokens = {
+            str(item.get("token") or "").upper().strip()
+            for item in (chart_catalog.load().get("markets") or [])
+            if isinstance(item, dict)
+            and str(item.get("market_type") or "") in {"Spot", "Futures"}
+            and not catalog_pairs._is_onchain_spot(item)
+            and str(item.get("token") or "").strip()
+        }
+        payloads = catalog_pairs.for_tokens(
+            tokens,
+            max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS,
+            include_history=False,
+            include_short_spot=True,
+            admissible_spreads_only=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - retain canonical discovery fallback.
+        LOGGER.warning("complete catalogue route-index expansion unavailable: %s", exc)
+        return discovery_rows, {
+            "status": "fallback_discovery_only",
+            "error": type(exc).__name__,
+            "discovery_route_count": len(discovery_rows),
+            "catalogue_route_count": 0,
+        }
+
+    catalogue_rows: list[dict[str, Any]] = []
+    for token, payload in payloads.items():
+        token_entry = metadata.get(str(token).upper()) or {}
+        for original in payload.get("routes") or []:
+            if not isinstance(original, dict):
+                continue
+            row = dict(original)
+            guard = row.get("tokenized_guard")
+            row.setdefault("token_name", token_metadata.token_name(token, metadata))
+            row.setdefault(
+                "asset_class",
+                str(guard.get("asset_class") or "crypto")
+                if isinstance(guard, dict)
+                else "crypto",
+            )
+            for key in (
+                "market_cap_usd",
+                "fdv_usd",
+                "metadata_volume_24h_usd",
+                "listing_age_days",
+                "listing_age_source",
+            ):
+                if row.get(key) is None and token_entry.get(key) is not None:
+                    row[key] = token_entry.get(key)
+            catalogue_rows.append(row)
+
+    # Catalogue rows come first so their exact, same-generation books own the
+    # economics. Discovery contributes DEX/provider-only routes plus stronger
+    # identity, rail and execution warnings through the conservative merger.
+    merged = catalog_pairs.with_routes(
+        {"routes": catalogue_rows},
+        discovery_rows,
+        limit=None,
+    )
+    output = [row for row in merged.get("routes") or [] if isinstance(row, dict)]
+    kinds = Counter(str(row.get("route_kind") or "") for row in catalogue_rows)
+    return output, {
+        "status": "complete_current_cex_plus_discovery",
+        "discovery_route_count": len(discovery_rows),
+        "catalogue_route_count": len(catalogue_rows),
+        "merged_route_count": len(output),
+        "catalogue_token_count": len(payloads),
+        "catalogue_kind_counts": dict(sorted(kinds.items())),
+        "include_short_spot": True,
+    }
 
 
 def load_spreads(
@@ -758,21 +872,31 @@ def spread_evidence_state(row: Any, *, now: float | None = None) -> str:
     matched-size book probe.
     """
 
-    getter = (
-        row.get
-        if isinstance(row, dict)
-        else lambda key, default=None: getattr(row, key, default)
-    )
+    getter = lambda key, default=None: _row_value(row, key, default)
     if not spread_quote_current(row, now=now):
         return "excluded"
-    spread = _float_or_none(getter("executable_spread_pct"))
+    spread = (
+        _entrance_spread_dict(row)
+        if isinstance(row, dict)
+        else _entrance_spread(row)
+    )
     if spread is None or spread <= 0:
         return "excluded"
+    route_kind = str(getter("route_kind") or "").upper()
+    deliverable = getter("deliverable")
+    if deliverable is None:
+        deliverable = route_deliverable(row)
     if (
         bool(getter("identity_mismatch"))
+        or price_ratio_implausible(row)
         or bool(getter("thin_book"))
-        or getter("deliverable") is False
+        or leg_volume_too_thin(row)
         or bool(getter("quote_mismatch"))
+        or quote_basis_mismatch(row)
+        or is_venue_specific_leveraged_token(row)
+        or is_non_perpetual_or_inverse(row)
+        or spread_is_untrustworthy(row)
+        or (route_kind in TRANSFER_ROUTE_KINDS and deliverable is False)
     ):
         return "excluded"
     guard = getter("tokenized_guard") or {}
@@ -2780,8 +2904,8 @@ MAX_CROSS_VENUE_PRICE_RATIO = 3.0
 
 def price_ratio_implausible(row: "SpreadTerminalRow") -> bool:
     """True when the two legs are too far apart to be the same asset."""
-    long_price = _float_or_none(getattr(row, "long_price", None))
-    short_price = _float_or_none(getattr(row, "short_price", None))
+    long_price = _float_or_none(_row_value(row, "long_price"))
+    short_price = _float_or_none(_row_value(row, "short_price"))
     if not long_price or not short_price or long_price <= 0 or short_price <= 0:
         return False
     ratio = max(long_price, short_price) / min(long_price, short_price)
@@ -2798,8 +2922,8 @@ def quote_basis_mismatch(row: "SpreadTerminalRow") -> bool:
     left untouched until their conversion path is explicitly modelled.
     """
 
-    long_quote = str(getattr(row, "long_quote", "") or "").upper().strip()
-    short_quote = str(getattr(row, "short_quote", "") or "").upper().strip()
+    long_quote = str(_row_value(row, "long_quote", "") or "").upper().strip()
+    short_quote = str(_row_value(row, "short_quote", "") or "").upper().strip()
     return bool(long_quote and short_quote and long_quote != short_quote)
 
 
@@ -2824,11 +2948,11 @@ def requires_existing_spot_inventory(row: "SpreadTerminalRow") -> bool:
     your own wallet -- the same constraint as FUTURES-SPOT, under a kind name
     that does not say so. Decide on the leg market types.
     """
-    if getattr(row, "route_kind", None) in SHORT_SPOT_ROUTE_KINDS:
+    if _row_value(row, "route_kind") in SHORT_SPOT_ROUTE_KINDS:
         return True
     return (
-        getattr(row, "short_market_type", None) == "Spot"
-        and getattr(row, "long_market_type", None) == "Futures"
+        _row_value(row, "short_market_type") == "Spot"
+        and _row_value(row, "long_market_type") == "Futures"
     )
 
 # A price from a book with almost no turnover is noise. U2U ranked at 124%
@@ -2846,8 +2970,8 @@ def leg_volume_too_thin(row: "SpreadTerminalRow") -> bool:
     consensus test instead, which needs no volume to spot a lone bad quote.
     """
     for value in (
-        getattr(row, "long_volume_24h_usd", None),
-        getattr(row, "short_volume_24h_usd", None),
+        _row_value(row, "long_volume_24h_usd"),
+        _row_value(row, "short_volume_24h_usd"),
     ):
         volume = _float_or_none(value)
         if volume is not None and 0.0 < volume < MIN_LEG_VOLUME_24H_USD:
@@ -2878,11 +3002,11 @@ LEVERAGED_TOKEN_PATTERN = re.compile(r"^[A-Z0-9]+[2-5][LS]$")
 
 def is_venue_specific_leveraged_token(row: "SpreadTerminalRow") -> bool:
     """True for a leveraged product that only exists inside one venue."""
-    token = str(getattr(row, "token", "") or "").upper()
+    token = str(_row_value(row, "token", "") or "").upper()
     if not LEVERAGED_TOKEN_PATTERN.match(token):
         return False
     # Same venue, both legs: a venue's own spot against its own perp is fine.
-    return getattr(row, "long_venue", None) != getattr(row, "short_venue", None)
+    return _row_value(row, "long_venue") != _row_value(row, "short_venue")
 
 
 #: `BASE/QUOTE:SETTLE` settles in a stablecoin or dollar for a linear contract.
@@ -2904,15 +3028,23 @@ def is_non_perpetual_or_inverse(row: "SpreadTerminalRow") -> bool:
     the reference product.
     """
     for side in ("long", "short"):
-        if str(getattr(row, f"{side}_market_type", "") or "") != "Futures":
+        if str(_row_value(row, f"{side}_market_type", "") or "") != "Futures":
             continue
-        symbol = str(getattr(row, f"{side}_market_symbol", "") or "")
+        symbol = str(_row_value(row, f"{side}_market_symbol", "") or "")
         if not symbol:
             continue
         if DATED_CONTRACT_PATTERN.search(symbol):
             return True
         _, separator, settle = symbol.partition(":")
-        if separator and settle and settle.upper() not in LINEAR_SETTLE_ASSETS:
+        # CCXT linear/inverse notation is BASE/QUOTE:SETTLE. Hyperliquid HIP-3
+        # markets use namespace:SYMBOL (for example xyz:AMZN); treating that
+        # suffix as a settlement asset silently removed valid tokenized pairs.
+        if (
+            "/" in symbol
+            and separator
+            and settle
+            and settle.upper() not in LINEAR_SETTLE_ASSETS
+        ):
             return True
     return False
 
@@ -2930,8 +3062,8 @@ TICKER_PRICE_TRUST_LIMIT_PCT = float(
 def spread_is_ticker_derived(row: "SpreadTerminalRow") -> bool:
     """True when a leg is priced off a last trade rather than a book."""
     for side in ("long", "short"):
-        bid = _float_or_none(getattr(row, f"{side}_bid", None))
-        ask = _float_or_none(getattr(row, f"{side}_ask", None))
+        bid = _float_or_none(_row_value(row, f"{side}_bid"))
+        ask = _float_or_none(_row_value(row, f"{side}_ask"))
         if bid is not None and ask is not None and bid == ask:
             return True
     return False
@@ -2952,7 +3084,12 @@ def spread_is_untrustworthy(row: "SpreadTerminalRow") -> bool:
     """
     if not spread_is_ticker_derived(row):
         return False
-    return abs(_entrance_spread(row)) > TICKER_PRICE_TRUST_LIMIT_PCT
+    spread = (
+        _entrance_spread_dict(row)
+        if isinstance(row, dict)
+        else _entrance_spread(row)
+    )
+    return abs(spread) > TICKER_PRICE_TRUST_LIMIT_PCT
 
 
 def pays_something(row: "SpreadTerminalRow") -> bool:
@@ -2967,7 +3104,7 @@ def pays_something(row: "SpreadTerminalRow") -> bool:
     -53% open with +138% APR -- while a spread trade can be worth taking with
     funding against it. Only a route where both are against you is dead.
     """
-    spread = _float_or_none(getattr(row, "executable_spread_pct", None))
+    spread = _float_or_none(_row_value(row, "executable_spread_pct"))
     if spread is not None and spread > 0:
         return True
     carry = _effective_funding_24h(row)
@@ -3055,19 +3192,19 @@ def route_deliverable(row: "SpreadTerminalRow") -> bool | None:
     with a byte-identical BEP20 contract purely because Kucoin deposits were
     shut. Returns None when the rail status is unknown.
     """
-    long_venue = getattr(row, "long_venue", None)
-    if long_venue and long_venue == getattr(row, "short_venue", None):
+    long_venue = _row_value(row, "long_venue")
+    if long_venue and long_venue == _row_value(row, "short_venue"):
         # Cash-and-carry inside one account: there is nothing to deliver anywhere.
         return True
-    kind = getattr(row, "route_kind", None)
+    kind = _row_value(row, "route_kind")
     if kind in SHORT_SPOT_ROUTE_KINDS:
         # Only the short spot leg needs delivering into.
-        dest_in = getattr(row, "short_deposit_enabled", None)
+        dest_in = _row_value(row, "short_deposit_enabled")
         return None if dest_in is None else bool(dest_in)
     if kind not in TRANSFER_ROUTE_KINDS:
         return True
-    source_out = getattr(row, "long_withdraw_enabled", None)
-    dest_in = getattr(row, "short_deposit_enabled", None)
+    source_out = _row_value(row, "long_withdraw_enabled")
+    dest_in = _row_value(row, "short_deposit_enabled")
     if source_out is None and dest_in is None:
         return None
     # A single known-shut rail is enough to block the trade, even if the other

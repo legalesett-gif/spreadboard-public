@@ -32,6 +32,9 @@ def source_signature(board_path: Path) -> dict[str, Any]:
         "board_path": str(board_path.resolve()),
         "board": _signature(board_path),
         "discovery": _signature(api_spreads.DEFAULT_API_DISCOVERY_PATH),
+        "chart_catalog": _signature(
+            api_spreads.RUNTIME_DIR / "chart_market_catalog.json"
+        ),
         "metadata": _signature(api_spreads.token_metadata.DEFAULT_CACHE_PATH),
         "rails": _signature(api_spreads.public_rails.DEFAULT_CACHE_PATH),
     }

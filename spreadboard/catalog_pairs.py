@@ -219,6 +219,7 @@ def for_tokens(
     limit_per_token: int | None = None,
     include_history: bool = False,
     include_short_spot: bool = False,
+    admissible_spreads_only: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Build current CEX pair catalogues for several tokens from one book read.
 
@@ -297,6 +298,25 @@ def for_tokens(
             include_history=include_history,
             include_short_spot=include_short_spot,
         )
+        if admissible_spreads_only:
+            # The global route index needs every current positive pair, not
+            # every negative mirror direction. Filtering inside this per-token
+            # loop avoids retaining 100k+ temporary route dictionaries while
+            # preserving the uncapped exact-token builder used by detail pages.
+            routes = [
+                row
+                for row in payload.get("routes") or []
+                if api_spreads.spread_evidence_state(row)
+                in {"verified", "research"}
+            ]
+            payload = {
+                **payload,
+                "ok": bool(routes),
+                "route_count": len(routes),
+                "displayed_route_count": len(routes),
+                "routes": routes,
+                "admissible_spreads_only": True,
+            }
         output[token] = _limited(payload, limit_per_token)
     return output
 

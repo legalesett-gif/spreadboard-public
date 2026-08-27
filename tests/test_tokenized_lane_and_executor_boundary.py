@@ -144,6 +144,9 @@ def test_tokenized_guard_reaches_api_and_both_market_views(monkeypatch):
         short_market_type="Futures",
         long_market_symbol="AMZNSTOCK/USDT:USDT",
         short_market_symbol="xyz:AMZN",
+        # This test isolates the tokenized-identity badge. A cross-quote pair
+        # is independently rejected by the Markets safety boundary.
+        short_quote="USDC",
         asset_class="tokenized",
         route_kind="DEX-FUTURES",
         quote_ts_us=int(server.time.time() * 1_000_000),

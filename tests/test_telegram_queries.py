@@ -491,6 +491,33 @@ def test_server_full_client_universe_atomically_replaces_bot_snapshot(monkeypatc
     assert seen == [payload]
 
 
+def test_server_unified_indicative_universe_replaces_bot_snapshot(monkeypatch):
+    from spreadboard import server
+
+    seen = []
+    monkeypatch.setattr(
+        telegram_queries,
+        "replace_payload",
+        lambda value: seen.append(value) or value,
+    )
+    payload = {
+        "filters": {
+            "q": None,
+            "funding_only": False,
+            "include_stale": False,
+            "include_unverified": True,
+            "evidence": "all",
+            "sort": "edge",
+            "direction": "desc",
+        },
+        "pagination": {"offset": 0, "limit": 500},
+        "groups": [{"token": "GUA", "routes": []}],
+    }
+
+    assert server._sync_telegram_client_universe(payload) is payload
+    assert seen == [payload]
+
+
 def test_server_does_not_replace_snapshot_from_a_filtered_page(monkeypatch):
     from spreadboard import server
 

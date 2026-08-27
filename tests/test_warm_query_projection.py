@@ -251,6 +251,7 @@ def test_default_projection_merges_matched_and_indicative_spreads(
 
     assert projected is not None
     assert projected["filters"]["evidence"] == "all"
+    assert projected["filters"]["include_unverified"] is True
     assert {row["route_key"] for row in projected["rows"]} == {
         "matched",
         "indicative",

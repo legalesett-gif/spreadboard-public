@@ -365,7 +365,14 @@ def _filters(
         "funding_only": _truthy(query, "funding_only"),
         "evidence": str(_first(query, "evidence") or "all").casefold(),
         "include_stale": _truthy(query, "include_stale"),
-        "include_unverified": _truthy(query, "include_unverified"),
+        # Markets has one admissible list: both matched and indicative rows are
+        # visible after the shared evidence classifier rejects known-bad data.
+        # This internal switch is retained only for funding/legacy callers.
+        "include_unverified": (
+            True
+            if not _truthy(query, "funding_only")
+            else _truthy(query, "include_unverified")
+        ),
         "max_age_min": _number(query, "max_age_min"),
         "sort": sort_by,
         "direction": "asc" if str(_first(query, "direction") or "desc").casefold() == "asc" else "desc",
@@ -512,6 +519,10 @@ def _presentable(
             return state == "verified"
         if state not in {"verified", "research"}:
             return False
+        # The evidence classifier is the single visibility boundary for the
+        # unified Markets list. The retired include_unverified branch below
+        # must not silently recreate two lists inside the warm projection.
+        return str(row.get("route_key") or "") not in unverifiable_outliers
     if filters.get("include_unverified"):
         return True
     if (

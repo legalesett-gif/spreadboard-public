@@ -2746,7 +2746,14 @@ def api_market_spreads(
                     )
                 ),
                 include_stale=_market_include_stale(query),
-                include_unverified=_query_bool(query, "include_unverified"),
+                # Markets exposes one list containing verified and indicative
+                # candidates. Known-bad rows are removed by spread_evidence;
+                # a retired URL flag must not re-enable the old hidden lane.
+                include_unverified=(
+                    True
+                    if not _query_bool(query, "funding_only")
+                    else _query_bool(query, "include_unverified")
+                ),
                 # The board is a list of trades to consider; a route whose rail is
                 # shut is not one. The reopen watcher reads load_spreads directly
                 # and still sees them.
@@ -3293,6 +3300,7 @@ def _expand_visible_catalog_groups(
             # every other current spread on the board.
             max_age_seconds=api_spreads.LIVE_BOOK_MAX_AGE_SECONDS,
             include_history=False,
+            include_short_spot=True,
         )
     except Exception:  # noqa: BLE001 - the scanner remains a valid fallback.
         return data
@@ -3445,7 +3453,7 @@ def _sync_telegram_client_universe(payload: dict[str, Any]) -> dict[str, Any]:
     safe_defaults = (
         not bool(filters.get("funding_only"))
         and not bool(filters.get("include_stale"))
-        and not bool(filters.get("include_unverified"))
+        and str(filters.get("evidence") or "all") == "all"
         and str(filters.get("sort") or "edge") == "edge"
         and str(filters.get("direction") or "desc") == "desc"
     )
