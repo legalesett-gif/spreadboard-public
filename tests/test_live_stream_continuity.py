@@ -273,3 +273,98 @@ def test_fast_quote_delta_corrects_an_expanded_route_without_resident_books(
     assert update[0] == pytest.approx(0.5568672572)
     assert update[1] is None, "an old fast-price artefact must not renew expired funding"
     assert update[3] == "matched_vwap"
+
+
+def test_fresh_dex_leg_quote_reprices_every_expanded_futures_partner(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One paid chain/contract quote is reusable across all fresh CEX legs.
+
+    The structural DEX->Aster route can be older than 90 seconds by the time a
+    complete route-index build finishes. A fresh DEX->XT fast row for the same
+    contract must therefore reprice Aster directly in the live overlay.
+    """
+
+    now_us = 1_787_300_000_000_000
+    contract = "0xce7de646e7208a4ef112cb6ed5038fa6cc6b12e3"
+    snapshot = tmp_path / "api_discovery_latest.json"
+    snapshot.write_text("{}")
+    (tmp_path / "api_discovery_fast_quotes.json").write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {
+                        "token": "TRX",
+                        "long_venue": "OKX DEX 56",
+                        "long_market_type": "Spot",
+                        "short_venue": "XT",
+                        "short_market_type": "Futures",
+                        "quote_ts_us": now_us,
+                        "depth_weighted_spread_pct": 4.0,
+                        "matched_size_notional_usd": 500.0,
+                        "notes": {
+                            "identity": {
+                                "long": {
+                                    "chain_id": "56",
+                                    "token_address": contract,
+                                }
+                            },
+                            "route_inputs": {
+                                "long": {
+                                    "symbol": "TRX",
+                                    "ask_vwap": 0.32,
+                                    "bid_vwap": 0.319,
+                                    "quote_ts_us": now_us,
+                                    "quote_notional_usd": 500.0,
+                                },
+                                "short": {"symbol": "TRX/USDT:USDT"},
+                            },
+                        },
+                    }
+                ]
+            }
+        )
+    )
+    short_key = live_book_cache.cache_key(
+        "Aster", "Futures", "TRX/USDT:USDT"
+    )
+    short_book = live_book_cache.CachedBook(
+        bids=[[0.336, 10_000.0]],
+        asks=[[0.337, 10_000.0]],
+        quote_ts_us=now_us + 5_000_000,
+    )
+    monkeypatch.setattr(api_spreads, "DEFAULT_API_DISCOVERY_PATH", snapshot)
+    monkeypatch.setattr(api_spreads.time, "time", lambda: now_us / 1_000_000 + 30)
+    monkeypatch.setattr(
+        live_book_cache,
+        "load_live_books_by_keys",
+        lambda *_args, **_kwargs: {short_key: short_book},
+    )
+    monkeypatch.setattr("spreadboard.bulk_quotes.load_funding", dict)
+    api_spreads._FAST_ROUTE_UPDATE_CACHE.update(
+        {"key": None, "exact": {}, "simple": {}, "dex": {}}
+    )
+    route = {
+        "route_key": "TRX|OKX DEX 56|Spot|Aster|Futures",
+        "token": "TRX",
+        "route_kind": "DEX-FUTURES",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "Spot",
+        "long_market_symbol": "TRX",
+        "short_venue": "Aster",
+        "short_market_type": "Futures",
+        "short_market_symbol": "TRX/USDT:USDT",
+        "dex_chain": "56",
+        "dex_contract": contract,
+        "quote_ts_us": now_us - 600_000_000,
+        "depth_weighted_spread_pct": 16.0,
+        "matched_size_notional_usd": 500.0,
+    }
+
+    update = api_spreads.live_route_updates_for([route], include_basis=True)[
+        route["route_key"]
+    ]
+
+    assert update[0] == pytest.approx((0.336 / 0.32 - 1.0) * 100.0)
+    assert update[2] == now_us
+    assert update[3] == "matched_vwap"

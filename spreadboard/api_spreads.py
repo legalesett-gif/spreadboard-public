@@ -1078,8 +1078,42 @@ def _route_has_dex_leg(route: Any) -> bool:
             else getattr(route, f"{side}_market_type", "")
         ).casefold()
         == "dex"
+        or route_taxonomy.leg_is_dex(
+            venue=(
+                route.get(f"{side}_venue")
+                if isinstance(route, dict)
+                else getattr(route, f"{side}_venue", "")
+            ),
+            market_type=(
+                route.get(f"{side}_market_type")
+                if isinstance(route, dict)
+                else getattr(route, f"{side}_market_type", "")
+            ),
+        )
         for side in ("long", "short")
     )
+
+
+def _route_dex_side(route: Any) -> str:
+    """Operational on-chain side, including legacy explicit ``DEX`` rows."""
+
+    for side in ("long", "short"):
+        venue = (
+            route.get(f"{side}_venue")
+            if isinstance(route, dict)
+            else getattr(route, f"{side}_venue", "")
+        )
+        market_type = (
+            route.get(f"{side}_market_type")
+            if isinstance(route, dict)
+            else getattr(route, f"{side}_market_type", "")
+        )
+        if str(market_type).casefold() == "dex" or route_taxonomy.leg_is_dex(
+            venue=venue,
+            market_type=market_type,
+        ):
+            return side
+    return ""
 
 
 def _stream_funding_daily(
@@ -1121,6 +1155,7 @@ _FAST_ROUTE_UPDATE_CACHE: dict[str, Any] = {
     "key": None,
     "exact": {},
     "simple": {},
+    "dex": {},
 }
 
 
@@ -1133,6 +1168,44 @@ def _fast_route_identity(row: dict[str, Any]) -> tuple[str, ...]:
         str(row.get("short_venue") or ""),
         str(row.get("short_market_type") or ""),
         str(row.get("short_market_symbol") or ""),
+    )
+
+
+def _fast_dex_leg_identity(row: dict[str, Any]) -> tuple[str, ...] | None:
+    """Exact reusable provider-leg identity for a DEX route."""
+
+    side = next(
+        (
+            candidate
+            for candidate in ("long", "short")
+            if route_taxonomy.leg_is_dex(
+                venue=row.get(f"{candidate}_venue"),
+                market_type=row.get(f"{candidate}_market_type"),
+            )
+        ),
+        "",
+    )
+    if not side:
+        return None
+    notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+    identities = (
+        notes.get("identity") if isinstance(notes.get("identity"), dict) else {}
+    )
+    identity = (
+        identities.get(side) if isinstance(identities.get(side), dict) else {}
+    )
+    chain = str(identity.get("chain_id") or row.get("dex_chain") or "").strip()
+    contract = str(
+        identity.get("token_address") or row.get("dex_contract") or ""
+    ).strip().casefold()
+    if not chain or not contract:
+        return None
+    return (
+        str(row.get("token") or "").upper(),
+        str(row.get(f"{side}_venue") or "").casefold(),
+        side,
+        chain.casefold(),
+        contract,
     )
 
 
@@ -1160,6 +1233,7 @@ def _fast_quote_updates_for(
                 payload = {}
             exact: dict[tuple[str, ...], tuple[Any, ...]] = {}
             simple_candidates: dict[tuple[str, ...], list[tuple[Any, ...]]] = {}
+            dex: dict[tuple[str, ...], tuple[float, int, bool]] = {}
             now = time.time()
             for item in payload.get("rows") or []:
                 if not isinstance(item, dict):
@@ -1204,13 +1278,52 @@ def _fast_quote_updates_for(
                     exact[identity] = update
                 simple_key = identity[:3] + identity[4:6]
                 simple_candidates.setdefault(simple_key, []).append(update)
+                dex_identity = _fast_dex_leg_identity(raw)
+                if dex_identity is not None:
+                    dex_side = dex_identity[2]
+                    dex_input = (
+                        long_input if dex_side == "long" else short_input
+                    )
+                    dex_ts_us = (
+                        _int_or_none(dex_input.get("quote_ts_us"))
+                        or _int_or_none(raw.get("dex_quote_ts_us"))
+                        or quote_ts_us
+                    )
+                    dex_price = _float_or_none(
+                        dex_input.get(
+                            "ask_vwap" if dex_side == "long" else "bid_vwap"
+                        )
+                    )
+                    dex_notional = max(
+                        (
+                            _float_or_none(dex_input.get("quote_notional_usd"))
+                            or 0.0,
+                            _float_or_none(raw.get("matched_size_notional_usd"))
+                            or 0.0,
+                            _float_or_none(raw.get("target_notional_usd")) or 0.0,
+                        )
+                    )
+                    dex_age_seconds = max(0.0, now - dex_ts_us / 1_000_000)
+                    if (
+                        dex_price is not None
+                        and dex_price > 0
+                        and dex_age_seconds <= LIVE_BOOK_MAX_AGE_SECONDS
+                    ):
+                        candidate = (
+                            dex_price,
+                            dex_ts_us,
+                            dex_notional >= LIVE_BOOK_TARGET_NOTIONAL_USD,
+                        )
+                        prior = dex.get(dex_identity)
+                        if prior is None or prior[1] <= dex_ts_us:
+                            dex[dex_identity] = candidate
             simple = {
                 candidate_key: updates[0]
                 for candidate_key, updates in simple_candidates.items()
                 if len(updates) == 1
             }
             _FAST_ROUTE_UPDATE_CACHE.update(
-                {"key": key, "exact": exact, "simple": simple}
+                {"key": key, "exact": exact, "simple": simple, "dex": dex}
             )
     updates: dict[str, tuple[Any, ...]] = {}
     for route in routes:
@@ -1261,6 +1374,9 @@ def live_route_updates_for(
         wanted_keys,
         max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS,
     )
+    fast_route_updates = _fast_quote_updates_for(routes)
+    with _FAST_ROUTE_UPDATE_LOCK:
+        fast_dex_quotes = dict(_FAST_ROUTE_UPDATE_CACHE.get("dex") or {})
     out: dict[str, tuple[Any, ...]] = {}
     funding_legs = bulk_quotes.load_funding() if include_funding else {}
     for route in routes:
@@ -1274,30 +1390,53 @@ def live_route_updates_for(
                 str(route.get("short_venue") or ""), str(route.get("short_market_type") or ""),
                 str(route.get("short_market_symbol") or ""))
         )
+        dex_identity = _fast_dex_leg_identity(route)
+        dex_quote = fast_dex_quotes.get(dex_identity) if dex_identity else None
+        if dex_quote is not None and not spread_quote_current(
+            {"quote_ts_us": dex_quote[1]}
+        ):
+            dex_quote = None
+        dex_side = (
+            dex_identity[2]
+            if dex_identity is not None
+            else _route_dex_side(route)
+        )
         # Mixing one current CEX book with one older quote can manufacture a
         # spread that never existed. CEX routes therefore move only when both
         # books are live. A DEX leg has no websocket by definition, so those
         # routes may still reprice their one streamable CEX leg.
         price_is_live = not (long_book is None and short_book is None)
-        if price_is_live and not _route_has_dex_leg(route):
+        if not _route_has_dex_leg(route):
             price_is_live = long_book is not None and short_book is not None
-        # A current CEX book cannot renew an old on-chain quote. The DEX leg's
-        # own timestamp remains the freshness boundary for the mixed route.
-        if price_is_live and _route_has_dex_leg(route):
-            price_is_live = spread_quote_current(route)
+        else:
+            other_book = short_book if dex_side == "long" else long_book
+            # A current CEX book cannot renew an old on-chain quote. Reuse the
+            # current exact chain/contract provider leg from any fast route;
+            # otherwise the structural route's own DEX timestamp remains the
+            # boundary. This keeps every expanded futures partner live without
+            # waiting for a 60-second all-route index rebuild.
+            price_is_live = other_book is not None and (
+                dex_quote is not None or spread_quote_current(route)
+            )
         funding_daily = _stream_funding_daily(route, funding_legs) if include_funding else None
         if not price_is_live:
             if funding_daily is not None:
                 update = (None, funding_daily, None, None)
                 out[str(route["route_key"])] = update if include_basis else update[:3]
             continue
-        prior_depth_verified = matched_probe_verified(route)
-        if long_book is not None:
+        prior_depth_verified = matched_probe_verified(route) and dex_quote is None
+        if dex_side == "long" and dex_quote is not None:
+            ask = dex_quote[0]
+            ask_vwap = ask if dex_quote[2] else None
+        elif long_book is not None:
             ask, ask_vwap = _book_side(long_book, "ask")
         else:
             ask = _float_or_none(route.get("long_ask")) or _float_or_none(route.get("long_price"))
             ask_vwap = ask if prior_depth_verified else None
-        if short_book is not None:
+        if dex_side == "short" and dex_quote is not None:
+            bid = dex_quote[0]
+            bid_vwap = bid if dex_quote[2] else None
+        elif short_book is not None:
             bid, bid_vwap = _book_side(short_book, "bid")
         else:
             bid = _float_or_none(route.get("short_bid")) or _float_or_none(route.get("short_price"))
@@ -1344,7 +1483,9 @@ def live_route_updates_for(
             # after the route-index worker, even while both books kept moving.
             if prior_depth_verified or _route_has_dex_leg(route):
                 quote_ts_us = (
-                    int(_float_or_none(route.get("quote_ts_us")) or 0) or None
+                    dex_quote[1]
+                    if dex_quote is not None
+                    else int(_float_or_none(route.get("quote_ts_us")) or 0) or None
                 )
             else:
                 stamps = [
@@ -1362,9 +1503,13 @@ def live_route_updates_for(
             # The DEX leg does not stream.  Its last exact quote remains the
             # freshness boundary even while the CEX leg moves continuously.
             if _route_has_dex_leg(route):
-                stored_ts = int(_float_or_none(route.get("quote_ts_us")) or 0)
-                if stored_ts:
-                    stamps.append(stored_ts)
+                dex_stamp = (
+                    dex_quote[1]
+                    if dex_quote is not None
+                    else int(_float_or_none(route.get("quote_ts_us")) or 0)
+                )
+                if dex_stamp:
+                    stamps.append(dex_stamp)
             quote_ts_us = min(stamps) if stamps else None
         update = (
             live_depth_spread,
@@ -1377,7 +1522,7 @@ def live_route_updates_for(
     # the resident websocket set. Prefer a two-book live update when present;
     # otherwise use the exact current compact-worker route instead of retaining
     # an older structural/group value on screen.
-    for route_key, fast in _fast_quote_updates_for(routes).items():
+    for route_key, fast in fast_route_updates.items():
         existing = out.get(route_key)
         if existing is None:
             out[route_key] = fast if include_basis else fast[:3]
