@@ -1314,6 +1314,12 @@ def _run_collector_service() -> int:
 
     signal.signal(signal.SIGTERM, stop_collector)
     signal.signal(signal.SIGINT, stop_collector)
+    # A persisted startup index may have been published while only the compact
+    # warm catalogue was available. Seed one publication request before any
+    # slow evidence thread can acquire the shared heavy slot; the publisher
+    # uses the already-persisted books immediately, then bulk quote completion
+    # requests the next bounded generation as usual.
+    route_index_publisher.request()
     refresh_loop.start()
     route_index_publisher.start()
     bulk_quote_loop.start()

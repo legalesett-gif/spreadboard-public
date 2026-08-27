@@ -941,6 +941,9 @@ def test_collector_role_contains_no_subscriber_or_payment_workers() -> None:
     assert "BulkQuoteLoop" in source
     assert "BulkFundingLoop" in source
     assert "MarketEvidenceLoop" in source
+    assert source.index("route_index_publisher.request()") < source.index(
+        "route_index_publisher.start()"
+    )
     for forbidden in (
         "SpreadBoardServer",
         "crypto_watcher",
