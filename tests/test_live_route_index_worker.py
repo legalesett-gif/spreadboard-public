@@ -102,6 +102,59 @@ def test_same_structural_generation_cannot_replace_complete_index_with_thin_slic
     }
 
 
+def test_new_structural_generation_retains_only_still_listed_cex_routes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board_path = tmp_path / "board.jsonl"
+    board_path.write_text("", encoding="utf-8")
+    output_root = tmp_path / "materialized"
+    old_signature = {"board_path": str(board_path.resolve()), "discovery": [1, 10]}
+    new_signature = {"board_path": str(board_path.resolve()), "discovery": [2, 20]}
+    listed = {
+        "route_key": "listed",
+        "route_kind": "FUTURES",
+        "long_venue": "Gate",
+        "long_market_type": "Futures",
+        "long_market_symbol": "GUA/USDT:USDT",
+        "short_venue": "Mexc",
+        "short_market_type": "Futures",
+        "short_market_symbol": "GUA/USDT:USDT",
+    }
+    materialized_views.Store(output_root).write_live_route_index(
+        {
+            "listed": listed,
+            "retired": {**listed, "route_key": "retired", "short_market_symbol": "OLD/USDT:USDT"},
+            "dex": {**listed, "route_key": "dex", "route_kind": "DEX-FUTURES"},
+        },
+        source_signature=old_signature,
+    )
+    monkeypatch.setattr(
+        live_route_index_worker, "source_signature", lambda _path: new_signature
+    )
+    monkeypatch.setattr(
+        live_route_index_worker.chart_catalog,
+        "load",
+        lambda: {
+            "markets": [
+                {"venue": "Gate", "market_type": "Futures", "symbol": "GUA/USDT:USDT"},
+                {"venue": "Mexc", "market_type": "Futures", "symbol": "GUA/USDT:USDT"},
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        live_route_index_worker.api_spreads,
+        "load_public_route_index",
+        lambda: ({"new": {**listed, "route_key": "new"}}, {}),
+    )
+
+    live_route_index_worker.build(board_path, output_root)
+    stored = materialized_views.Store(output_root).live_route_index(
+        board_path=board_path
+    )
+
+    assert set(stored or {}) == {"listed", "new"}
+
+
 def test_server_prefers_newer_fast_index_over_older_full_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

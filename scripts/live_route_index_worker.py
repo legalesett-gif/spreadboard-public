@@ -16,7 +16,7 @@ for import_path in (ROOT / "src", ROOT):
         sys.path.remove(str(import_path))
     sys.path.insert(0, str(import_path))
 
-from spreadboard import api_spreads, materialized_views
+from spreadboard import api_spreads, chart_catalog, materialized_views
 
 
 def _signature(path: Path | str) -> list[int] | None:
@@ -40,17 +40,53 @@ def source_signature(board_path: Path) -> dict[str, Any]:
     }
 
 
+def _retained_structural_cex_rows(
+    rows: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Keep only prior CEX routes whose exact legs remain in the catalogue."""
+
+    markets = {
+        (
+            str(item.get("venue") or ""),
+            str(item.get("market_type") or ""),
+            str(item.get("symbol") or ""),
+        )
+        for item in (chart_catalog.load().get("markets") or [])
+        if isinstance(item, dict)
+        and str(item.get("market_type") or "") in {"Spot", "Futures"}
+    }
+    retained: dict[str, dict[str, Any]] = {}
+    for key, row in rows.items():
+        if str(row.get("route_kind") or "").startswith("DEX-"):
+            continue
+        identities = {
+            (
+                str(row.get(f"{side}_venue") or ""),
+                str(row.get(f"{side}_market_type") or ""),
+                str(row.get(f"{side}_market_symbol") or ""),
+            )
+            for side in ("long", "short")
+        }
+        if len(identities) == 2 and identities.issubset(markets):
+            retained[key] = row
+    return retained
+
+
 def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     started = time.monotonic()
     initial = source_signature(board_path)
     store = materialized_views.Store(output_root)
     previous_meta = store.live_route_index_status()
     previous_rows: dict[str, dict[str, Any]] = {}
-    if (
-        previous_meta.get("ready")
-        and previous_meta.get("source_signature") == initial
-    ):
+    if previous_meta.get("ready"):
         previous_rows = store.live_route_index(board_path=board_path) or {}
+        if previous_meta.get("source_signature") != initial:
+            # A changed discovery/catalogue generation may legitimately remove
+            # markets. Carry forward only exact CEX legs that the new catalogue
+            # still contains; DEX/provider rows must be rediscovered in the new
+            # source itself. This preserves structural coverage without making
+            # the index an append-only graveyard.
+            previous_rows = _retained_structural_cex_rows(previous_rows)
     rows, source_health = api_spreads.load_public_route_index()
     final = source_signature(board_path)
     if final != initial:
