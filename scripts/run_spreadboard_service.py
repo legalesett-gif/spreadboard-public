@@ -1297,7 +1297,10 @@ def _run_collector_service() -> int:
         refresh_loop.stop_event,
         route_index_publisher=route_index_publisher,
     )
-    bulk_funding_loop = BulkFundingLoop(refresh_loop.stop_event)
+    bulk_funding_loop = BulkFundingLoop(
+        refresh_loop.stop_event,
+        route_index_publisher=route_index_publisher,
+    )
     market_evidence_loop = MarketEvidenceLoop(
         refresh_loop.stop_event,
         refresh_loop=refresh_loop,
@@ -1864,7 +1867,7 @@ class LiveRouteIndexPublisher(threading.Thread):
                 min_interval_seconds
                 if min_interval_seconds is not None
                 else os.environ.get(
-                    "SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS", "120"
+                    "SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS", "60"
                 )
             ),
         )
@@ -1915,6 +1918,15 @@ class LiveRouteIndexPublisher(threading.Thread):
             published_at
             and time.monotonic() - published_at <= max(0.0, max_age_seconds)
         )
+
+    def publication_due(self) -> bool:
+        """Whether deferred analytics must yield the shared publication slot."""
+
+        with self._request_lock:
+            return bool(
+                self._ready_generation > self._published_generation
+                and time.monotonic() >= self._next_allowed_at
+            )
 
     def check_once(self) -> dict[str, Any]:
         """Publish one due generation without blocking another heavy owner."""
@@ -1986,6 +1998,27 @@ class LiveRouteIndexPublisher(threading.Thread):
         while not self.stop_event.is_set():
             self.check_once()
             self.stop_event.wait(1.0)
+
+
+def _route_publication_due(
+    publisher: LiveRouteIndexPublisher | None,
+    *,
+    legacy_max_age_seconds: float,
+) -> bool:
+    """Compatibility-safe priority check for current route publication."""
+
+    if publisher is None:
+        return False
+    method = getattr(publisher, "publication_due", None)
+    if callable(method):
+        return bool(method())
+    # Small test/local publisher doubles from before the explicit due method.
+    return bool(
+        publisher.has_pending()
+        and not publisher.has_recent_publication(
+            max_age_seconds=legacy_max_age_seconds
+        )
+    )
 
 
 class BulkQuoteLoop(threading.Thread):
@@ -2079,7 +2112,10 @@ class BulkQuoteLoop(threading.Thread):
             _publish_shared_market_generation("bulk_quotes")
             _invalidate_market_price_caches()
             if self.route_index_publisher is not None:
-                self.route_index_publisher.request()
+                self.route_index_publisher.request(
+                    source_ready=not bool(quotes.get("timed_out"))
+                    and not bool(quotes.get("pending_venues"))
+                )
             # The rankings read the complete shared catalogue, so publish a new
             # atomic generation immediately after its prices move. This worker
             # is isolated and low-priority; HTTP readers keep serving the last
@@ -2106,9 +2142,15 @@ class BulkFundingLoop(threading.Thread):
         1, int(os.environ.get("SPREADBOARD_FUNDING_VENUES_PER_PASS", "4"))
     )
 
-    def __init__(self, stop_event: threading.Event) -> None:
+    def __init__(
+        self,
+        stop_event: threading.Event,
+        *,
+        route_index_publisher: LiveRouteIndexPublisher | None = None,
+    ) -> None:
         super().__init__(name="bulk-funding", daemon=True)
         self.stop_event = stop_event
+        self.route_index_publisher = route_index_publisher
         self.funding_cursor = 0
 
     def run(self) -> None:
@@ -2162,7 +2204,7 @@ class BulkFundingLoop(threading.Thread):
         )
         if (funding.get("legs") or 0) > 0:
             _publish_shared_market_generation("bulk_funding")
-            _schedule_funding_navigation()
+            _schedule_funding_navigation(self.route_index_publisher)
 
 
 class MarketEvidenceLoop(threading.Thread):
@@ -2234,10 +2276,9 @@ class MarketEvidenceLoop(threading.Thread):
             # that already-requested atomic index before another multi-minute
             # history pass can reacquire the same heavy slot.
             if (
-                self.route_index_publisher is not None
-                and self.route_index_publisher.has_pending()
-                and not self.route_index_publisher.has_recent_publication(
-                    max_age_seconds=self.INTERVAL_SECONDS
+                _route_publication_due(
+                    self.route_index_publisher,
+                    legacy_max_age_seconds=self.INTERVAL_SECONDS,
                 )
             ):
                 _log("market evidence deferred; current route index pending")
@@ -2403,6 +2444,9 @@ def _refresh_live_route_index(*, install: bool = True) -> bool:
         _log(
             f"live route index {'ready' if install else 'published'} "
             f"routes={routes} child={summary.get('seconds')}s "
+            f"mode={summary.get('build_mode')} "
+            f"current={summary.get('current_routes')} "
+            f"retained={summary.get('retained_routes')} "
             f"elapsed={time.monotonic() - started:.1f}s"
         )
         return bool(routes)
@@ -2573,8 +2617,16 @@ def _refresh_funding_navigation(*, force: bool = False) -> bool:
         _FUNDING_NAVIGATION_BUILD_LOCK.release()
 
 
-def _schedule_funding_navigation() -> None:
+def _schedule_funding_navigation(
+    route_index_publisher: LiveRouteIndexPublisher | None = None,
+) -> None:
     """Coalesce a funding tick behind any in-progress structural publication."""
+
+    if _route_publication_due(
+        route_index_publisher,
+        legacy_max_age_seconds=FUNDING_NAVIGATION_REFRESH_SECONDS,
+    ):
+        return
 
     if not _FUNDING_NAVIGATION_SCHEDULE_LOCK.acquire(blocking=False):
         return
@@ -2582,6 +2634,11 @@ def _schedule_funding_navigation() -> None:
     def build() -> None:
         try:
             with _COLLECTOR_HEAVY_LOCK:
+                if _route_publication_due(
+                    route_index_publisher,
+                    legacy_max_age_seconds=FUNDING_NAVIGATION_REFRESH_SECONDS,
+                ):
+                    return
                 _refresh_funding_navigation(force=False)
         finally:
             _FUNDING_NAVIGATION_SCHEDULE_LOCK.release()

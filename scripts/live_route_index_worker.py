@@ -16,7 +16,14 @@ for import_path in (ROOT / "src", ROOT):
         sys.path.remove(str(import_path))
     sys.path.insert(0, str(import_path))
 
-from spreadboard import api_spreads, catalog_pairs, chart_catalog, materialized_views
+from spreadboard import (
+    api_spreads,
+    catalog_pairs,
+    chart_catalog,
+    materialized_views,
+)
+
+RECENT_ROUTE_RETENTION_SECONDS = 300.0
 
 
 def _signature(path: Path | str) -> list[int] | None:
@@ -42,8 +49,16 @@ def source_signature(board_path: Path) -> dict[str, Any]:
 
 def _retained_structural_cex_rows(
     rows: dict[str, dict[str, Any]],
+    *,
+    now: float | None = None,
+    max_age_seconds: float = RECENT_ROUTE_RETENTION_SECONDS,
 ) -> dict[str, dict[str, Any]]:
-    """Keep only prior CEX routes whose exact legs remain in the catalogue."""
+    """Keep only recent prior CEX routes whose exact legs are still listed.
+
+    Retaining every route that was positive at any time made this supposedly
+    current index an append-only history. Five minutes bridges publication
+    handoffs; settled funding/history lives in separate complete catalogues.
+    """
 
     markets = {
         (
@@ -56,8 +71,12 @@ def _retained_structural_cex_rows(
         and str(item.get("market_type") or "") in {"Spot", "Futures"}
     }
     retained: dict[str, dict[str, Any]] = {}
+    current_time = time.time() if now is None else float(now)
     for key, row in rows.items():
         if str(row.get("route_kind") or "").startswith("DEX-"):
+            continue
+        age = api_spreads.quote_age_min(row, now=current_time)
+        if age is None or age < 0 or age * 60.0 > max_age_seconds:
             continue
         identities = {
             (
@@ -70,6 +89,114 @@ def _retained_structural_cex_rows(
         if len(identities) == 2 and identities.issubset(markets):
             retained[key] = row
     return retained
+
+
+def _current_dex_rows(
+    previous_rows: dict[str, dict[str, Any]],
+    *,
+    metadata: dict[str, dict[str, Any]],
+    now: float,
+) -> list[dict[str, Any]]:
+    """Rebuild current provider routes without parsing the broad discovery file."""
+
+    rails = api_spreads.public_rails.load_public_rails()
+    books = api_spreads._live_books()
+    previous_seeds = [
+        dict(row)
+        for row in previous_rows.values()
+        if str(row.get("route_kind") or "").startswith("DEX-")
+        and api_spreads.spread_quote_current(row, now=now)
+    ]
+    delta_rows = api_spreads._apply_fast_quote_delta(
+        [],
+        api_spreads._fast_quote_delta_path(
+            api_spreads.DEFAULT_API_DISCOVERY_PATH
+        ),
+        now=now,
+        metadata=metadata,
+        rails=rails,
+    )
+    delta_seeds: list[dict[str, Any]] = []
+    if delta_rows:
+        delta_rows = api_spreads.apply_live_books(delta_rows, books, now=now)
+        delta_seeds = [api_spreads._public_row(row) for row in delta_rows]
+    # The fast delta owns current provider economics. Prior rows contribute
+    # only routes the bounded delta did not select in this cycle.
+    seeds = [*delta_seeds, *previous_seeds]
+    seeds = [
+        row
+        for row in catalog_pairs.with_routes({"routes": []}, seeds, limit=None).get(
+            "routes", []
+        )
+        if isinstance(row, dict)
+        and str(row.get("route_kind") or "").startswith("DEX-")
+        and api_spreads.spread_quote_current(row, now=now)
+    ]
+    expanded = catalog_pairs.dex_futures_routes(
+        seeds,
+        books=books,
+        include_history=False,
+    )
+    merged = catalog_pairs.with_routes(
+        {"routes": expanded},
+        seeds,
+        limit=None,
+    )
+    return [
+        row
+        for row in merged.get("routes") or []
+        if isinstance(row, dict)
+        and not api_spreads.quote_basis_mismatch(row)
+        and api_spreads.spread_evidence_state(row, now=now)
+        in {"verified", "research"}
+    ]
+
+
+def _current_generation_rows(
+    previous_rows: dict[str, dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Build every positive route from one strict-current resident-book cut.
+
+    A basis can reverse between structural discovery builds. The old index kept
+    only the direction that happened to be positive during a slower 180-second
+    build, so the newly-positive direction did not exist for the live overlay.
+    """
+
+    now = time.time()
+    metadata = api_spreads.token_metadata.load_token_metadata()
+    cex_rows, catalogue_meta = api_spreads._complete_current_catalogue_rows(
+        [],
+        metadata=metadata,
+        max_age_seconds=api_spreads.LIVE_BOOK_MAX_AGE_SECONDS,
+    )
+    previous_by_identity = {
+        catalog_pairs.route_identity(row): row
+        for row in previous_rows.values()
+        if not str(row.get("route_kind") or "").startswith("DEX-")
+    }
+    for row in cex_rows:
+        prior = previous_by_identity.get(catalog_pairs.route_identity(row))
+        if prior is not None:
+            catalog_pairs._merge_conservative_route_evidence(row, prior)
+
+    dex_rows = _current_dex_rows(previous_rows, metadata=metadata, now=now)
+    merged = catalog_pairs.with_routes(
+        {"routes": cex_rows},
+        dex_rows,
+        limit=None,
+    )
+    rows = {
+        str(row.get("route_key") or ""): row
+        for row in merged.get("routes") or []
+        if isinstance(row, dict) and str(row.get("route_key") or "")
+    }
+    return rows, {
+        "status": "strict_current_catalogue_generation",
+        "updated_at": None,
+        "complete_catalogue": catalogue_meta,
+        "current_cex_routes": len(cex_rows),
+        "current_dex_routes": len(dex_rows),
+    }
 
 
 def _merge_by_economic_identity(
@@ -108,14 +235,15 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     previous_rows: dict[str, dict[str, Any]] = {}
     if previous_meta.get("ready"):
         previous_rows = store.live_route_index(board_path=board_path) or {}
-        if previous_meta.get("source_signature") != initial:
-            # A changed discovery/catalogue generation may legitimately remove
-            # markets. Carry forward only exact CEX legs that the new catalogue
-            # still contains; DEX/provider rows must be rediscovered in the new
-            # source itself. This preserves structural coverage without making
-            # the index an append-only graveyard.
-            previous_rows = _retained_structural_cex_rows(previous_rows)
-    rows, source_health = api_spreads.load_public_route_index()
+    same_structural_generation = bool(
+        previous_rows and previous_meta.get("source_signature") == initial
+    )
+    if same_structural_generation:
+        rows, source_health = _current_generation_rows(previous_rows)
+        build_mode = "strict_current_catalogue"
+    else:
+        rows, source_health = api_spreads.load_public_route_index()
+        build_mode = "full_discovery_catalogue"
     final = source_signature(board_path)
     if final != initial:
         raise RuntimeError("source_generation_changed_during_live_index_build")
@@ -128,7 +256,8 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         # rechecks the real quote timestamp, so retaining the lookup cannot
         # turn an old price into a current opportunity. A changed structural
         # source signature starts clean and permits genuine removals.
-        rows = _merge_by_economic_identity(previous_rows, rows)
+        retained = _retained_structural_cex_rows(previous_rows)
+        rows = _merge_by_economic_identity(retained, rows)
     meta = store.write_live_route_index(
         rows, source_signature=initial
     )
@@ -137,6 +266,7 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         "routes": len(rows),
         "current_routes": current_route_count,
         "retained_routes": max(0, len(rows) - current_route_count),
+        "build_mode": build_mode,
         "seconds": round(time.monotonic() - started, 3),
         "source_updated_at": source_health.get("updated_at"),
         "artifact": meta.get("file"),

@@ -453,8 +453,8 @@ def test_completed_bulk_books_request_current_pair_publication(monkeypatch) -> N
 
     class Publisher:
         @staticmethod
-        def request() -> int:
-            requests.append(True)
+        def request(*, source_ready: bool = True) -> int:
+            requests.append(source_ready)
             return len(requests)
 
     loop = service.BulkQuoteLoop(
@@ -486,6 +486,48 @@ def test_completed_bulk_books_request_current_pair_publication(monkeypatch) -> N
     loop._sweep_once()
 
     assert requests == [True]
+
+
+def test_partial_bulk_books_do_not_mark_route_generation_ready(monkeypatch) -> None:
+    requests: list[bool] = []
+
+    class Publisher:
+        @staticmethod
+        def request(*, source_ready: bool = True) -> int:
+            requests.append(source_ready)
+            return len(requests)
+
+    loop = service.BulkQuoteLoop(
+        threading.Event(),
+        route_index_publisher=Publisher(),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_worker",
+        lambda *_args, **_kwargs: service.WorkerResult(
+            0,
+            json.dumps(
+                {
+                    "quotes": {
+                        "quotes": 20_000,
+                        "venues": 18,
+                        "seconds": 70.0,
+                        "timed_out": True,
+                        "pending_venues": ["Gate"],
+                    }
+                }
+            ),
+            "",
+            False,
+        ),
+    )
+    monkeypatch.setattr(service, "_publish_shared_market_generation", lambda _kind: None)
+    monkeypatch.setattr(service, "_invalidate_market_price_caches", lambda: None)
+    monkeypatch.setattr(service, "_schedule_token_rankings", lambda: None)
+
+    loop._sweep_once()
+
+    assert requests == [False]
 
 
 def test_live_pair_publisher_coalesces_and_never_installs_in_collector(
@@ -1080,6 +1122,27 @@ def test_recent_route_index_does_not_starve_demanded_funding_history(
     loop._sweep_once()
 
     assert workers == [True]
+
+
+def test_due_route_publication_preempts_new_funding_navigation_work(
+    monkeypatch,
+) -> None:
+    workers: list[bool] = []
+
+    class DuePublisher:
+        @staticmethod
+        def publication_due() -> bool:
+            return True
+
+    monkeypatch.setattr(
+        service,
+        "_refresh_funding_navigation",
+        lambda **_kwargs: workers.append(True),
+    )
+
+    service._schedule_funding_navigation(DuePublisher())  # type: ignore[arg-type]
+
+    assert workers == []
 
 
 def test_refresh_loop_pause_releases_websocket_process() -> None:

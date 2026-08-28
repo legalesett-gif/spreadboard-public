@@ -267,6 +267,50 @@ def test_identity_warned_catalogue_pair_remains_visible_but_cannot_lead(monkeypa
     assert summary["best_spread_route"]["mirage_guarded"] is False
 
 
+def test_five_percent_catalogue_gap_needs_exact_contract_identity(monkeypatch) -> None:
+    catalog = {
+        "markets": [
+            {
+                "token": "T",
+                "venue": "Gate",
+                "market_type": "Futures",
+                "symbol": "T/USDT:USDT",
+                "quote": "USDT",
+            },
+            {
+                "token": "T",
+                "venue": "Mexc",
+                "market_type": "Futures",
+                "symbol": "T/USDT:USDT",
+                "quote": "USDT",
+            },
+        ]
+    }
+    books = {
+        ("Gate", "Futures", "T/USDT:USDT"): _book(1.0, 1.0),
+        ("Mexc", "Futures", "T/USDT:USDT"): _book(1.06, 1.07),
+    }
+    monkeypatch.setattr(catalog_pairs.chart_catalog, "load", lambda: catalog)
+    monkeypatch.setattr(
+        catalog_pairs.live_book_cache,
+        "load_live_book",
+        lambda venue, market_type, symbol, **_kwargs: books.get(
+            (venue, market_type, symbol)
+        ),
+    )
+    monkeypatch.setattr(catalog_pairs.bulk_quotes, "load_funding", dict)
+    monkeypatch.setattr(catalog_pairs.public_rails, "load_public_rails", dict)
+
+    route = catalog_pairs.for_token("T", use_cache=False)["routes"][0]
+
+    assert route["mirage_guarded"] is True
+    assert route["identity_warning"] is True
+    assert route["blockers"] == [
+        "mirage_guard:high_dislocation_exact_identity_required"
+    ]
+    assert api_spreads.spread_evidence_state(route) == "research"
+
+
 def test_missing_catalogue_quote_age_is_not_current() -> None:
     assert api_spreads.spread_quote_current({"age_min": None}) is False
     assert api_spreads.spread_quote_current({}) is False

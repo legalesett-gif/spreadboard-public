@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts import live_route_index_worker
-from spreadboard import intel, materialized_views, server
+from spreadboard import api_spreads, intel, materialized_views, server
 
 
 def test_worker_publishes_complete_index_without_rendering_views(
@@ -68,9 +68,34 @@ def test_same_structural_generation_cannot_replace_complete_index_with_thin_slic
         "discovery": [1, 10],
         "chart_catalog": [2, 20],
     }
+    now_us = int(time.time() * 1_000_000)
     previous = {
-        "old": {"route_key": "old", "token": "OLD", "value": 1},
-        "updated": {"route_key": "updated", "token": "GUA", "value": 1},
+        "old": {
+            "route_key": "old",
+            "token": "OLD",
+            "route_kind": "FUTURES",
+            "long_venue": "Gate",
+            "long_market_type": "Futures",
+            "long_market_symbol": "OLD/USDT:USDT",
+            "short_venue": "Mexc",
+            "short_market_type": "Futures",
+            "short_market_symbol": "OLD/USDT:USDT",
+            "quote_ts_us": now_us,
+            "value": 1,
+        },
+        "updated": {
+            "route_key": "updated",
+            "token": "GUA",
+            "route_kind": "FUTURES",
+            "long_venue": "Gate",
+            "long_market_type": "Futures",
+            "long_market_symbol": "GUA/USDT:USDT",
+            "short_venue": "Mexc",
+            "short_market_type": "Futures",
+            "short_market_symbol": "GUA/USDT:USDT",
+            "quote_ts_us": now_us,
+            "value": 1,
+        },
     }
     materialized_views.Store(output_root).write_live_route_index(
         previous,
@@ -80,12 +105,27 @@ def test_same_structural_generation_cannot_replace_complete_index_with_thin_slic
         live_route_index_worker, "source_signature", lambda _path: signature
     )
     monkeypatch.setattr(
-        live_route_index_worker.api_spreads,
-        "load_public_route_index",
-        lambda: (
-            {"updated": {"route_key": "updated", "token": "GUA", "value": 2}},
+        live_route_index_worker,
+        "_current_generation_rows",
+        lambda _previous: (
+            {"updated": {**previous["updated"], "value": 2}},
             {"updated_at": "2026-08-27T21:00:00Z"},
         ),
+    )
+    monkeypatch.setattr(
+        live_route_index_worker.chart_catalog,
+        "load",
+        lambda: {
+            "markets": [
+                {
+                    "venue": row[f"{side}_venue"],
+                    "market_type": row[f"{side}_market_type"],
+                    "symbol": row[f"{side}_market_symbol"],
+                }
+                for row in previous.values()
+                for side in ("long", "short")
+            ]
+        },
     )
 
     summary = live_route_index_worker.build(board_path, output_root)
@@ -98,7 +138,7 @@ def test_same_structural_generation_cannot_replace_complete_index_with_thin_slic
     assert summary["retained_routes"] == 1
     assert stored == {
         "old": previous["old"],
-        "updated": {"route_key": "updated", "token": "GUA", "value": 2},
+        "updated": {**previous["updated"], "value": 2},
     }
 
 
@@ -144,9 +184,9 @@ def test_current_dex_contract_replaces_retained_route_key_twin(
         live_route_index_worker, "source_signature", lambda _path: signature
     )
     monkeypatch.setattr(
-        live_route_index_worker.api_spreads,
-        "load_public_route_index",
-        lambda: ({fresh["route_key"]: fresh}, {}),
+        live_route_index_worker,
+        "_current_generation_rows",
+        lambda _previous: ({fresh["route_key"]: fresh}, {}),
     )
 
     summary = live_route_index_worker.build(board_path, output_root)
@@ -157,6 +197,172 @@ def test_current_dex_contract_replaces_retained_route_key_twin(
     assert summary["routes"] == 1
     assert summary["retained_routes"] == 0
     assert stored == {fresh["route_key"]: fresh}
+
+
+def test_strict_current_generation_adds_newly_positive_reverse_direction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous = {
+        "old-direction": {
+            "route_key": "old-direction",
+            "token": "GUA",
+            "route_kind": "FUTURES",
+            "long_venue": "Gate",
+            "long_market_type": "Futures",
+            "long_market_symbol": "GUA/USDT:USDT",
+            "short_venue": "Mexc",
+            "short_market_type": "Futures",
+            "short_market_symbol": "GUA/USDT:USDT",
+        }
+    }
+    reversed_row = {
+        **previous["old-direction"],
+        "route_key": "new-direction",
+        "long_venue": "Mexc",
+        "short_venue": "Gate",
+    }
+    captured: dict[str, float] = {}
+
+    def complete(_rows, **kwargs):
+        captured["max_age_seconds"] = kwargs["max_age_seconds"]
+        return [reversed_row], {"status": "ok"}
+
+    monkeypatch.setattr(
+        live_route_index_worker.api_spreads.token_metadata,
+        "load_token_metadata",
+        dict,
+    )
+    monkeypatch.setattr(
+        live_route_index_worker.api_spreads,
+        "_complete_current_catalogue_rows",
+        complete,
+    )
+    monkeypatch.setattr(
+        live_route_index_worker,
+        "_current_dex_rows",
+        lambda *_args, **_kwargs: [],
+    )
+
+    rows, health = live_route_index_worker._current_generation_rows(previous)
+
+    assert captured["max_age_seconds"] == api_spreads.LIVE_BOOK_MAX_AGE_SECONDS
+    assert set(rows) == {"new-direction"}
+    assert health["status"] == "strict_current_catalogue_generation"
+
+
+def test_current_dex_generation_prefers_fast_delta_economics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = time.time()
+    common = {
+        "token": "GUA",
+        "route_key": "gua-dex",
+        "route_kind": "DEX-FUTURES",
+        "long_venue": "OKX DEX 56",
+        "long_market_type": "DEX",
+        "long_market_symbol": "0xgua",
+        "short_venue": "Gate",
+        "short_market_type": "Futures",
+        "short_market_symbol": "GUA/USDT:USDT",
+        "dex_chain": "56",
+        "dex_contract": "0xgua",
+        "quote_ts_us": int(now * 1_000_000),
+    }
+    previous = {"gua-dex": {**common, "executable_spread_pct": 1.0}}
+    fresh = {**common, "executable_spread_pct": 2.0}
+
+    monkeypatch.setattr(live_route_index_worker.api_spreads, "_live_books", dict)
+    monkeypatch.setattr(
+        live_route_index_worker.api_spreads.public_rails,
+        "load_public_rails",
+        dict,
+    )
+    monkeypatch.setattr(
+        live_route_index_worker.api_spreads,
+        "_apply_fast_quote_delta",
+        lambda *_args, **_kwargs: [fresh],
+    )
+    monkeypatch.setattr(
+        live_route_index_worker.api_spreads,
+        "apply_live_books",
+        lambda rows, *_args, **_kwargs: rows,
+    )
+    monkeypatch.setattr(
+        live_route_index_worker.api_spreads,
+        "_public_row",
+        lambda row: row,
+    )
+    monkeypatch.setattr(
+        live_route_index_worker.catalog_pairs,
+        "dex_futures_routes",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        live_route_index_worker.api_spreads,
+        "spread_evidence_state",
+        lambda *_args, **_kwargs: "verified",
+    )
+
+    rows = live_route_index_worker._current_dex_rows(
+        previous,
+        metadata={},
+        now=now,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["executable_spread_pct"] == 2.0
+
+
+def test_retention_drops_old_positive_routes_instead_of_growing_forever(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = time.time()
+    base = {
+        "token": "GUA",
+        "route_kind": "FUTURES",
+        "long_venue": "Gate",
+        "long_market_type": "Futures",
+        "long_market_symbol": "GUA/USDT:USDT",
+        "short_venue": "Mexc",
+        "short_market_type": "Futures",
+        "short_market_symbol": "GUA/USDT:USDT",
+    }
+    monkeypatch.setattr(
+        live_route_index_worker.chart_catalog,
+        "load",
+        lambda: {
+            "markets": [
+                {
+                    "venue": "Gate",
+                    "market_type": "Futures",
+                    "symbol": "GUA/USDT:USDT",
+                },
+                {
+                    "venue": "Mexc",
+                    "market_type": "Futures",
+                    "symbol": "GUA/USDT:USDT",
+                },
+            ]
+        },
+    )
+
+    retained = live_route_index_worker._retained_structural_cex_rows(
+        {
+            "recent": {
+                **base,
+                "route_key": "recent",
+                "quote_ts_us": int((now - 60) * 1_000_000),
+            },
+            "old": {
+                **base,
+                "route_key": "old",
+                "quote_ts_us": int((now - 900) * 1_000_000),
+            },
+        },
+        now=now,
+    )
+
+    assert set(retained) == {"recent"}
 
 
 def test_new_structural_generation_retains_only_still_listed_cex_routes(

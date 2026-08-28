@@ -1186,6 +1186,11 @@ def _route(
     oldest_us = min(long_leg.book.quote_ts_us, short_leg.book.quote_ts_us)
     age_min = max(0.0, (time.time() - oldest_us / 1_000_000.0) / 60.0)
     identity_ratio = max(long_top, short_top) / min(long_top, short_top)
+    observed_dislocation = max(abs(executable), abs(matched or 0.0))
+    high_dislocation_identity_unresolved = (
+        observed_dislocation >= 5.0
+        and not public_rails.exact_contract_match(long_rail, short_rail)
+    )
     requires_existing_spot_inventory = (
         long_leg.market_type == "Futures" and short_leg.market_type == "Spot"
     )
@@ -1256,8 +1261,17 @@ def _route(
         # 1.5x is not a rejection: the operator has captured real 100%+ moves.
         # It is the point where a reused ticker deserves an explicit question
         # mark unless contract metadata proves identity.
-        "mirage_guarded": identity_ratio >= 1.5,
-        "identity_warning": identity_ratio >= 1.5,
+        "mirage_guarded": (
+            identity_ratio >= 1.5 or high_dislocation_identity_unresolved
+        ),
+        "identity_warning": (
+            identity_ratio >= 1.5 or high_dislocation_identity_unresolved
+        ),
+        "blockers": (
+            ["mirage_guard:high_dislocation_exact_identity_required"]
+            if high_dislocation_identity_unresolved
+            else []
+        ),
         "identity_ratio": identity_ratio,
         "requires_existing_spot_inventory": requires_existing_spot_inventory,
         "execution_note": (

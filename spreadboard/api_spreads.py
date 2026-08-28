@@ -216,6 +216,7 @@ def _complete_current_catalogue_rows(
     discovery_rows: list[dict[str, Any]],
     *,
     metadata: dict[str, dict[str, Any]],
+    max_age_seconds: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Merge every fresh exact CEX pair into the structural route universe.
 
@@ -252,7 +253,11 @@ def _complete_current_catalogue_rows(
             # catalogue's bounded 180-second books here; response/render paths
             # still recompute quote age and enforce the unchanged 90-second
             # current-spread gate before presenting an opportunity as live.
-            max_age_seconds=catalog_pairs.MAX_BOOK_AGE_SECONDS,
+            max_age_seconds=(
+                catalog_pairs.MAX_BOOK_AGE_SECONDS
+                if max_age_seconds is None
+                else float(max_age_seconds)
+            ),
             include_history=False,
             include_short_spot=True,
             admissible_spreads_only=True,
@@ -332,6 +337,11 @@ def _complete_current_catalogue_rows(
         "catalogue_token_count": len(payloads),
         "catalogue_kind_counts": dict(sorted(kinds.items())),
         "include_short_spot": True,
+        "book_max_age_seconds": (
+            catalog_pairs.MAX_BOOK_AGE_SECONDS
+            if max_age_seconds is None
+            else float(max_age_seconds)
+        ),
     }
 
 
