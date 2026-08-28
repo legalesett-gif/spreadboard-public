@@ -114,10 +114,10 @@ services:
       SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS: "120"
       # Independent venue adapters refresh concurrently; each venue writes its
       # result in one SQLite transaction. Production passes had grown to
-      # 91-95s at eight workers, outside the unchanged 90s truth boundary.
-      # Twelve turns three network-wait waves into two without extending quote
-      # lifetime or overlapping complete sweeps.
-      SPREADBOARD_BULK_QUOTE_WORKERS: "12"
+      # 91-98s at eight/twelve workers, outside the unchanged 90s truth
+      # boundary. One bounded worker per independent venue measured ~38s and
+      # does not extend quote lifetime or overlap complete sweeps.
+      SPREADBOARD_BULK_QUOTE_WORKERS: "24"
       # Funding has its own isolated worker. A slow funding provider must never
       # postpone a current-price pass or make a valid spread disappear.
       SPREADBOARD_BULK_FUNDING_SECONDS: "30"

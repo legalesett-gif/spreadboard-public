@@ -58,12 +58,13 @@ _CLIENTS: dict[str, Any] = {}
 _DEFAULT_TYPES = {"Futures": "swap", "Spot": "spot"}
 
 # Venues have independent adapters and rate limits. The complete production
-# pass grew to 91–95 seconds at eight workers, beyond the unchanged 90-second
-# current-spread boundary. Twelve remains below the number of independent
-# venues, while reducing three waves of network waits to two. This changes only
-# collection concurrency; no quote receives a longer lifetime.
+# pass grew to 91–98 seconds at eight and twelve workers, beyond the unchanged
+# 90-second current-spread boundary. A measured one-worker-per-venue pass takes
+# about 38 seconds because the independent provider waits no longer queue in
+# waves. It remains one bounded process with the same client set and SQLite
+# writer; no quote receives a longer lifetime.
 BULK_QUOTE_WORKERS = max(
-    1, min(12, int(os.environ.get("SPREADBOARD_BULK_QUOTE_WORKERS", "8")))
+    1, min(24, int(os.environ.get("SPREADBOARD_BULK_QUOTE_WORKERS", "12")))
 )
 
 

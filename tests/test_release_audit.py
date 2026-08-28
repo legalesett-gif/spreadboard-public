@@ -665,10 +665,10 @@ def test_combined_quote_budget_covers_cex_catalog_and_both_dex_lanes() -> None:
     assert dex_routes + 3 <= routes <= 100
     assert dex_routes >= 2 * dex_contracts
     assert 12 <= dex_contracts <= 45
-    assert 3 <= workers <= 12
+    assert 3 <= workers <= 24
     assert timeout <= 300
     assert bulk_seconds <= 15
-    assert 3 <= bulk_workers <= 12
+    assert 3 <= bulk_workers <= 24
 
 
 def test_high_dislocation_dex_route_requires_exact_cex_identity() -> None:
