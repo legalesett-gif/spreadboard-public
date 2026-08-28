@@ -63,44 +63,75 @@ class LiveRouteUniverse:
             self._last_error = None
 
     def refresh(self) -> dict[str, Any]:
-        """Build one complete live update map and swap it in atomically."""
+        """Refresh and publish each route family without a catalogue-wide gap.
+
+        A complete catalogue refresh can outlive the quote freshness window.
+        Holding every new value until the final route finishes then exposes the
+        previous, expired generation to readers and can make one entire market
+        tab look empty.  Each route kind is still replaced atomically, but is
+        published as soon as its own exact-book pass completes.
+        """
 
         with self._refresh_lock:
             with self._lock:
                 rows = self._rows
                 generation = self._installed_generation
-                previous_updates = self._updates
             if not rows:
                 return self.status()
             started = time.monotonic()
-            try:
-                observed_updates = api_spreads.live_route_updates_for(
-                    list(rows.values()), include_basis=True
-                )
-                updates = _merge_live_updates(
-                    previous_updates,
-                    observed_updates,
-                    route_keys=set(rows),
-                    now=time.time(),
-                )
-                headlines = _build_headlines(
-                    tuple(rows.values()), updates, now=time.time()
-                )
-                live_metrics = _live_update_metrics(rows, updates, now=time.time())
-            except Exception as exc:  # noqa: BLE001 - retain the previous good map.
+            errors: list[str] = []
+            for route_kind, selected in _route_kind_slices(rows):
                 with self._lock:
-                    self._last_error = f"{type(exc).__name__}: {str(exc)[:180]}"
-                return self.status()
+                    if generation != self._installed_generation or rows is not self._rows:
+                        return self._status_unlocked()
+                    previous_slice = {
+                        key: value
+                        for key, value in self._updates.items()
+                        if key in selected
+                    }
+                try:
+                    observed = api_spreads.live_route_updates_for(
+                        list(selected.values()), include_basis=True
+                    )
+                    refreshed = _merge_live_updates(
+                        previous_slice,
+                        observed,
+                        route_keys=set(selected),
+                        now=time.time(),
+                    )
+                except Exception as exc:  # noqa: BLE001 - retain the good slice.
+                    errors.append(
+                        f"{route_kind}: {type(exc).__name__}: {str(exc)[:140]}"
+                    )
+                    continue
+                with self._lock:
+                    if generation != self._installed_generation or rows is not self._rows:
+                        return self._status_unlocked()
+                    updates = dict(self._updates)
+                    for key in selected:
+                        updates.pop(key, None)
+                    updates.update(refreshed)
+                    self._updates = updates
+                    now = time.time()
+                    self._live_metrics = _live_update_metrics(rows, updates, now=now)
+                    self._refreshed_at = now
+                    self._refresh_seconds = time.monotonic() - started
+                    self._last_error = "; ".join(errors) if errors else None
+
+            with self._lock:
+                if generation != self._installed_generation or rows is not self._rows:
+                    return self._status_unlocked()
+                updates = self._updates
+            headlines = _build_headlines(
+                tuple(rows.values()), updates, now=time.time()
+            )
             elapsed = time.monotonic() - started
             with self._lock:
-                # A new materialized generation may have arrived during the read.
                 if generation == self._installed_generation and rows is self._rows:
-                    self._updates = updates
                     self._headlines = headlines
-                    self._live_metrics = live_metrics
                     self._refreshed_at = time.time()
                     self._refresh_seconds = elapsed
-                    self._last_error = None
+                    self._last_error = "; ".join(errors) if errors else None
         return self.status()
 
     def refresh_route_kinds(self, route_kinds: Iterable[str]) -> dict[str, Any]:
@@ -295,6 +326,32 @@ def _live_update_metrics(
 LIVE_UNIVERSE = LiveRouteUniverse()
 
 
+def _route_kind_slices(
+    rows: dict[str, dict[str, Any]],
+) -> tuple[tuple[str, dict[str, dict[str, Any]]], ...]:
+    """Partition one generation into independently publishable market lanes."""
+
+    preferred_order = (
+        "FUTURES",
+        "FUTURES-SPOT",
+        "SPOT-FUTURES",
+        "DEX-FUTURES",
+        "DEX-SPOT",
+        "SPOT",
+    )
+    buckets: dict[str, dict[str, dict[str, Any]]] = {}
+    for key, row in rows.items():
+        route_kind = str(row.get("route_kind") or "UNKNOWN").upper()
+        buckets.setdefault(route_kind, {})[key] = row
+    ordered = [
+        (route_kind, buckets.pop(route_kind))
+        for route_kind in preferred_order
+        if route_kind in buckets
+    ]
+    ordered.extend((route_kind, buckets[route_kind]) for route_kind in sorted(buckets))
+    return tuple(ordered)
+
+
 def _merge_live_updates(
     previous: dict[str, tuple[Any, ...]],
     observed: dict[str, tuple[Any, ...]],
@@ -370,17 +427,21 @@ class Worker(threading.Thread):
         )
 
     def run(self) -> None:
-        last_full_started = 0.0
+        last_full_finished = 0.0
         priority_groups = (
-            {"SPOT"},
+            {"FUTURES"},
             {"FUTURES-SPOT", "SPOT-FUTURES"},
+            {"DEX-FUTURES", "DEX-SPOT"},
+            {"SPOT"},
         )
         priority_index = 0
         while not self.stop_event.is_set():
             started = time.monotonic()
-            if started - last_full_started >= self.interval_seconds:
-                last_full_started = started
+            if started - last_full_finished >= self.interval_seconds:
                 LIVE_UNIVERSE.refresh()
+                # A slow full pass must not immediately trigger another full
+                # pass and permanently starve the small priority lanes.
+                last_full_finished = time.monotonic()
             else:
                 LIVE_UNIVERSE.refresh_route_kinds(
                     priority_groups[priority_index % len(priority_groups)]

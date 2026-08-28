@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 import time
+from itertools import count
 from pathlib import Path
 
 import pytest
@@ -407,10 +409,8 @@ def test_targeted_spot_refresh_preserves_unrelated_route_updates(
     universe.install({"GUA-futures": futures, "GUA-spot": spot})
     responses = iter(
         [
-            {
-                "GUA-futures": (0.5, 0.1, now_us, "matched_vwap"),
-                "GUA-spot": (0.2, None, now_us, "top_book"),
-            },
+            {"GUA-futures": (0.5, 0.1, now_us, "matched_vwap")},
+            {"GUA-spot": (0.2, None, now_us, "top_book")},
             {"GUA-spot": (0.35, None, now_us, "top_book")},
         ]
     )
@@ -428,11 +428,102 @@ def test_targeted_spot_refresh_preserves_unrelated_route_updates(
 
     current = universe.snapshot()[1]
     assert observed_route_keys == [
-        {"GUA-futures", "GUA-spot"},
+        {"GUA-futures"},
+        {"GUA-spot"},
         {"GUA-spot"},
     ]
     assert current["GUA-futures"] == (0.5, 0.1, now_us, "matched_vwap")
     assert current["GUA-spot"] == (0.35, None, now_us, "top_book")
+
+
+def test_full_refresh_publishes_a_finished_family_before_slower_families(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow later lane must not leave a fresh earlier lane invisible."""
+
+    now_us = int(time.time() * 1_000_000)
+    futures = _route("GUA", route_key="GUA-futures")
+    spot = {
+        **_route("GUA", route_key="GUA-spot"),
+        "route_kind": "SPOT",
+        "long_market_type": "Spot",
+        "short_market_type": "Spot",
+        "long_market_symbol": "GUA/USDT",
+        "short_market_symbol": "GUA/USDT",
+    }
+    universe = warm_query_projection.LiveRouteUniverse()
+    universe.install({"GUA-futures": futures, "GUA-spot": spot})
+    slow_lane_started = threading.Event()
+    release_slow_lane = threading.Event()
+
+    def updates(routes: list[dict[str, object]], **_kwargs: object):
+        route_key = str(routes[0]["route_key"])
+        if route_key == "GUA-spot":
+            slow_lane_started.set()
+            assert release_slow_lane.wait(timeout=2.0)
+            return {route_key: (0.2, None, now_us, "top_book")}
+        return {route_key: (0.75, 0.1, now_us, "matched_vwap")}
+
+    monkeypatch.setattr(
+        warm_query_projection.api_spreads, "live_route_updates_for", updates
+    )
+    worker = threading.Thread(target=universe.refresh)
+    worker.start()
+    assert slow_lane_started.wait(timeout=2.0)
+
+    during_refresh, status = universe.update_snapshot()
+    assert during_refresh["GUA-futures"] == (
+        0.75,
+        0.1,
+        now_us,
+        "matched_vwap",
+    )
+    assert status["ready"] is True
+
+    release_slow_lane.set()
+    worker.join(timeout=2.0)
+    assert worker.is_alive() is False
+
+
+def test_worker_refreshes_every_priority_lane_between_full_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actions: list[object] = []
+
+    class FakeUniverse:
+        def refresh(self):
+            actions.append("full")
+
+        def refresh_route_kinds(self, route_kinds):
+            actions.append(set(route_kinds))
+
+    class BoundedStop:
+        waits = 0
+
+        def is_set(self):
+            return self.waits >= 5
+
+        def wait(self, _seconds):
+            self.waits += 1
+
+    ticks = count(100.0)
+    monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", FakeUniverse())
+    monkeypatch.setattr(
+        warm_query_projection.time, "monotonic", lambda: next(ticks)
+    )
+    worker = warm_query_projection.Worker(
+        BoundedStop(), interval_seconds=10.0, priority_interval_seconds=2.0
+    )
+
+    worker.run()
+
+    assert actions == [
+        "full",
+        {"FUTURES"},
+        {"FUTURES-SPOT", "SPOT-FUTURES"},
+        {"DEX-FUTURES", "DEX-SPOT"},
+        {"SPOT"},
+    ]
 
 
 def test_update_snapshot_reuses_immutable_maps_without_copying_rows(

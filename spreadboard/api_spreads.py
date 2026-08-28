@@ -1409,22 +1409,45 @@ def live_route_updates_for(
         wanted_keys,
         max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS,
     )
+    # One market book participates in hundreds of pair permutations.  Parsing
+    # and depth-walking the same ladder once per route made the complete live
+    # projection slower than its own 90-second freshness boundary on the
+    # production catalogue.  The loaded book map is immutable for this call,
+    # so each directional side can be evaluated once and safely reused.
+    book_side_cache: dict[
+        tuple[str, str], tuple[float | None, float | None]
+    ] = {}
+
+    def cached_book_side(
+        book_key: str,
+        book: Any,
+        side: str,
+    ) -> tuple[float | None, float | None]:
+        key = (book_key, side)
+        cached = book_side_cache.get(key)
+        if cached is None:
+            cached = _book_side(book, side)
+            book_side_cache[key] = cached
+        return cached
+
     fast_route_updates = _fast_quote_updates_for(routes)
     with _FAST_ROUTE_UPDATE_LOCK:
         fast_dex_quotes = dict(_FAST_ROUTE_UPDATE_CACHE.get("dex") or {})
     out: dict[str, tuple[Any, ...]] = {}
     funding_legs = bulk_quotes.load_funding() if include_funding else {}
     for route in routes:
-        long_book = books.get(
-            live_book_cache.cache_key(
-                str(route.get("long_venue") or ""), str(route.get("long_market_type") or ""),
-                str(route.get("long_market_symbol") or ""))
+        long_book_key = live_book_cache.cache_key(
+            str(route.get("long_venue") or ""),
+            str(route.get("long_market_type") or ""),
+            str(route.get("long_market_symbol") or ""),
         )
-        short_book = books.get(
-            live_book_cache.cache_key(
-                str(route.get("short_venue") or ""), str(route.get("short_market_type") or ""),
-                str(route.get("short_market_symbol") or ""))
+        short_book_key = live_book_cache.cache_key(
+            str(route.get("short_venue") or ""),
+            str(route.get("short_market_type") or ""),
+            str(route.get("short_market_symbol") or ""),
         )
+        long_book = books.get(long_book_key)
+        short_book = books.get(short_book_key)
         dex_identity = _fast_dex_leg_identity(route)
         dex_quote = fast_dex_quotes.get(dex_identity) if dex_identity else None
         if dex_quote is not None and not spread_quote_current(
@@ -1464,7 +1487,7 @@ def live_route_updates_for(
             ask = dex_quote[0]
             ask_vwap = ask if dex_quote[2] else None
         elif long_book is not None:
-            ask, ask_vwap = _book_side(long_book, "ask")
+            ask, ask_vwap = cached_book_side(long_book_key, long_book, "ask")
         else:
             ask = _float_or_none(route.get("long_ask")) or _float_or_none(route.get("long_price"))
             ask_vwap = ask if prior_depth_verified else None
@@ -1472,7 +1495,7 @@ def live_route_updates_for(
             bid = dex_quote[0]
             bid_vwap = bid if dex_quote[2] else None
         elif short_book is not None:
-            bid, bid_vwap = _book_side(short_book, "bid")
+            bid, bid_vwap = cached_book_side(short_book_key, short_book, "bid")
         else:
             bid = _float_or_none(route.get("short_bid")) or _float_or_none(route.get("short_price"))
             bid_vwap = bid if prior_depth_verified else None

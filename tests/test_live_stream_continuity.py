@@ -182,6 +182,33 @@ def test_a_proven_route_still_reports_its_matched_vwap(
     assert spread is not None
 
 
+def test_shared_books_are_depth_walked_once_per_direction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pair expansion must not recalculate one ladder for every route."""
+
+    _books(monkeypatch)
+    monkeypatch.setattr("spreadboard.bulk_quotes.load_funding", dict)
+    original = api_spreads._book_side
+    calls: list[tuple[int, str]] = []
+
+    def counted(book, side):
+        calls.append((id(book), side))
+        return original(book, side)
+
+    monkeypatch.setattr(api_spreads, "_book_side", counted)
+    first = _route(route_key="T|Gate|Spot|Bybit|Futures|one")
+    second = _route(route_key="T|Gate|Spot|Bybit|Futures|two")
+
+    updates = api_spreads.live_route_updates_for(
+        [first, second], include_basis=True
+    )
+
+    assert set(updates) == {first["route_key"], second["route_key"]}
+    assert len(calls) == 2
+    assert {side for _book, side in calls} == {"ask", "bid"}
+
+
 def test_the_client_never_overwrites_a_number_with_a_dash() -> None:
     """A null update must leave the last good value alone.
 
