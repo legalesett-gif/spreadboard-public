@@ -520,7 +520,6 @@ class Worker(threading.Thread):
         )
 
     def run(self) -> None:
-        last_headline_refresh = 0.0
         priority_groups = PRIORITY_ROUTE_KIND_GROUPS
         priority_index = 0
         while not self.stop_event.is_set():
@@ -529,12 +528,6 @@ class Worker(threading.Thread):
                 priority_groups[priority_index % len(priority_groups)]
             )
             priority_index += 1
-            if (
-                priority_index % len(priority_groups) == 0
-                and started - last_headline_refresh >= self.interval_seconds
-            ):
-                LIVE_UNIVERSE.refresh_headlines()
-                last_headline_refresh = time.monotonic()
             remaining = max(
                 0.0,
                 self.priority_interval_seconds - (time.monotonic() - started),

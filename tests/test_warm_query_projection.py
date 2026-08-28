@@ -554,7 +554,7 @@ def test_worker_refreshes_every_lane_without_a_catalogue_wide_pass(
             actions.append(set(route_kinds))
 
         def refresh_headlines(self):
-            actions.append("headlines")
+            raise AssertionError("hot lane worker must not rebuild every headline")
 
     class BoundedStop:
         waits = 0
@@ -592,7 +592,6 @@ def test_worker_refreshes_every_lane_without_a_catalogue_wide_pass(
         {"SPOT-FUTURES"},
         {"DEX-SPOT"},
         {"SPOT"},
-        "headlines",
     ]
 
 
