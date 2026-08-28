@@ -111,6 +111,22 @@ VIEW_LABELS = {
     "depth": "Depth",
     "transfer": "Deposits / Withdrawals",
 }
+
+# Spread farms are separate products in the website and must remain selectable
+# in Telegram too. ``FUTURES-SPOT`` covers both economic directions; the
+# direction is still explicit in each rendered route. OKX DEX is the only DEX
+# product, but the taxonomy supports both directional labels.
+SPREAD_FARM_LABELS = {
+    "": "All spread farms",
+    "ff": "Futures-Futures",
+    "fs": "Futures-Spot",
+    "fd": "Futures-DEX",
+}
+SPREAD_FARM_KINDS = {
+    "ff": {"FUTURES"},
+    "fs": {"FUTURES-SPOT", "SPOT-FUTURES"},
+    "fd": {"DEX-FUTURES", "FUTURES-DEX"},
+}
 # Bare intent words, accepted alongside a cashtag ("$SIREN funding").
 KIND_WORDS = {"spread": "spread", "funding": "funding", "transfer": "transfer",
               "rails": "transfer", "deposit": "transfer", "withdraw": "transfer"}
@@ -123,9 +139,12 @@ class Query:
     #: Free text after the aspect, currently the capital for a sizing request.
     #: Part of the cooldown key: $1,000 and $50,000 are different questions.
     arg: str = ""
+    #: Optional spread-product selector used by Telegram callback buttons.
+    #: Empty means the unified list across every spread farm.
+    farm: str = ""
 
 
-_LAST_ANSWERED: dict[tuple[int, str, str], float] = {}
+_LAST_ANSWERED: dict[tuple[int, str, str, str, str], float] = {}
 _LOCK = threading.Lock()
 
 
@@ -260,7 +279,7 @@ def _normalise(symbol: str) -> str:
 def allow(chat_id: int, query: Query, *, now: float | None = None) -> bool:
     """Rate limit identical questions so a busy group stays readable."""
     moment = time.time() if now is None else now
-    key = (int(chat_id), query.symbol, query.kind, query.arg)
+    key = (int(chat_id), query.symbol, query.kind, query.arg, query.farm)
     with _LOCK:
         last = _LAST_ANSWERED.get(key, 0.0)
         if moment - last < COOLDOWN_SECONDS:
@@ -928,6 +947,7 @@ def _current_funding_monitor(
         (row for row in rows if (_funding_value(row) or 0.0) > 0.0),
         key=lambda row: -float(_funding_value(row) or 0.0),
     )
+    display_rows = _diverse_short_venues(rows, limit=MAX_ROWS)
     body = _table(
         ("ROUTE", "NET/DAY", "BASIS"), (22, 9, 8),
         [
@@ -936,7 +956,7 @@ def _current_funding_monitor(
                 _pct(_funding_value(row), 3),
                 _pct(_current_basis(row), 2),
             )
-            for row in rows[:MAX_ROWS]
+            for row in display_rows
         ],
     )
     radar = f"\n\n{_radar_summary(radar_rows)}" if radar_rows else ""
@@ -956,6 +976,48 @@ def _current_funding_monitor(
         "This token cooled out of the spread Now ranking; these are the current funding-tab pairs, not a relaxed spread signal.\n"
         f"<pre>{escape(body)}</pre>{radar}{warning}{link}"
     )
+
+
+def _diverse_short_venues(
+    rows: list[dict[str, Any]], *, limit: int = MAX_ROWS
+) -> list[dict[str, Any]]:
+    """Rank best carry per short venue before filling with repeats.
+
+    Funding is earned on the short futures leg. Showing eight near-identical
+    routes into one short venue hides venue alternatives without adding useful
+    information. The first pass keeps the original carry rank but takes one
+    route per short venue; a second pass fills remaining slots so no route is
+    removed from the underlying result set.
+    """
+    if limit <= 0:
+        return []
+    first: list[dict[str, Any]] = []
+    repeats: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        venue = " ".join(str(row.get("short_venue") or "").casefold().split())
+        # Missing venue metadata must not collapse unrelated routes together.
+        key = venue or str(row.get("route_key") or id(row))
+        if key in seen:
+            repeats.append(row)
+            continue
+        seen.add(key)
+        first.append(row)
+    return (first + repeats)[:limit]
+
+
+def _spread_farm_rows(
+    rows: list[dict[str, Any]], farm: str
+) -> list[dict[str, Any]]:
+    selected = str(farm or "").casefold().strip()
+    allowed = SPREAD_FARM_KINDS.get(selected)
+    if allowed is None:
+        return rows
+    return [
+        row
+        for row in rows
+        if str(row.get("route_kind") or "").upper() in allowed
+    ]
 
 
 def _table(header: tuple[str, ...], widths: tuple[int, ...], lines: list[tuple[str, ...]]) -> str:
@@ -983,6 +1045,18 @@ def keyboard(query: Query, *, public_url: str = "") -> dict[str, Any]:
         or not query.symbol
         else [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
     )
+    if query.kind == "spread" and query.symbol:
+        farm_buttons = [
+            {
+                "text": ("✓ " if code == query.farm else "") + label,
+                "callback_data": f"l:{code or 'all'}:{query.symbol}"[:64],
+            }
+            for code, label in SPREAD_FARM_LABELS.items()
+        ]
+        rows.extend(
+            farm_buttons[index:index + 2]
+            for index in range(0, len(farm_buttons), 2)
+        )
     if public_url:
         destination = (
             "/funding?rank=1d"
@@ -1040,6 +1114,7 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
     # caller and the symbol can never carry markup into an HTML-parsed message.
     symbol = _normalise(query.symbol)
     rows = _rows_for(symbol, board_path)
+    all_spread_rows = list(rows)
     funding_rows = _funding_rows_for(symbol)
     any_current_funding_rows = list(funding_rows or rows)
     if query.kind == "funding":
@@ -1050,12 +1125,20 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
         ]
     elif query.kind == "spread":
         rows = [row for row in rows if _current_basis(row) is not None]
+        rows = _spread_farm_rows(rows, query.farm)
     if query.kind == "depth":
         return _render_depth(symbol, rows, public_url=public_url)
     if query.kind == "calc":
         return _render_calc(symbol, rows, query.arg, public_url=public_url)
     radar_rows = _radar_rows(symbol) if query.kind in {"spread", "funding"} else []
     if not rows:
+        if query.kind == "spread" and query.farm and all_spread_rows:
+            farm_label = SPREAD_FARM_LABELS.get(query.farm, "Selected spread farm")
+            return (
+                f"<b>{escape(symbol)} · {escape(farm_label)}</b>\n"
+                "No current client-visible routes are available in this spread "
+                "farm. Choose All spread farms to see the other live routes."
+            )
         if query.kind == "funding" and any_current_funding_rows:
             return (
                 f"<b>{escape(symbol)} · funding</b>\n"
@@ -1101,9 +1184,13 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
 
     if query.kind == "funding":
         rows = sorted(rows, key=lambda row: -float(_funding_value(row) or 0.0))
+        display_rows = _diverse_short_venues(rows, limit=MAX_ROWS)
         body = _table(
             ("ROUTE", "NET/DAY", "APR"), (22, 9, 8),
-            [(_route(r), _pct(_funding_value(r), 3), _pct(r.get("funding_apr_pct"), 1)) for r in rows[:MAX_ROWS]],
+            [
+                (_route(r), _pct(_funding_value(r), 3), _pct(r.get("funding_apr_pct"), 1))
+                for r in display_rows
+            ],
         )
         title = f"{symbol} · funding · {len(rows)} routes"
         current_basis = _current_basis(rows[0])
@@ -1135,7 +1222,8 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
             ("ROUTE", "EDGE", "DEPTH"), (22, 8, 7),
             [(_route(r), _pct(_current_basis(r)), _usd(r.get("depth_usd"))) for r in rows[:MAX_ROWS]],
         )
-        title = f"{symbol} · spread · {len(rows)} routes"
+        farm_label = SPREAD_FARM_LABELS.get(query.farm, "All spread farms")
+        title = f"{symbol} · spread · {farm_label} · {len(rows)} routes"
         basis_context = ""
 
     if query.kind == "transfer":
@@ -1143,6 +1231,10 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
 
     total = len(venues) if query.kind == "transfer" else len(rows)
     extra = f"\n<i>Showing top {MAX_ROWS} of {total}.</i>" if total > MAX_ROWS else ""
+    if query.kind == "funding" and len(
+        {str(row.get("short_venue") or "") for row in rows}
+    ) > 1:
+        extra += "\n<i>Best pair per short venue is shown before repeat routes.</i>"
     link = ""
     if public_url:
         destination = (

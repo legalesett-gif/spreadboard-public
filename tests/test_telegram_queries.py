@@ -225,6 +225,43 @@ def test_spread_reply_lists_every_route_best_first(board_file):
     assert "$142K" in body
 
 
+@pytest.mark.parametrize(
+    ("farm", "present", "absent"),
+    [
+        ("ff", "Ghost·F&gt;Phantom·F", "OKX DEX·D&gt;Bybit·F"),
+        ("fs", "Gate·S&gt;Bybit·F", "OKX DEX·D&gt;Bybit·F"),
+        ("fd", "OKX DEX·D&gt;Bybit·F", "Gate·S&gt;Bybit·F"),
+    ],
+)
+def test_spread_reply_can_select_each_product_farm(
+    board_file, farm, present, absent
+):
+    body = telegram_queries.render(
+        telegram_queries.Query("spread", "SIREN", farm=farm),
+        board_path=board_file,
+    )
+
+    assert telegram_queries.SPREAD_FARM_LABELS[farm] in body
+    assert present in body
+    assert absent not in body
+
+
+def test_spread_keyboard_offers_all_three_product_farms():
+    markup = telegram_queries.keyboard(
+        telegram_queries.Query("spread", "SIREN")
+    )
+    buttons = [button for row in markup["inline_keyboard"] for button in row]
+
+    callbacks = {button["callback_data"] for button in buttons}
+    assert {
+        "l:all:SIREN",
+        "l:ff:SIREN",
+        "l:fs:SIREN",
+        "l:fd:SIREN",
+    } <= callbacks
+    assert any(button["text"] == "✓ All spread farms" for button in buttons)
+
+
 def test_okx_dex_keeps_its_dex_lane_label_even_when_the_quote_is_spot() -> None:
     row = route(
         "GUA", "DEX-FUTURES", "OKX DEX 56", "Gate", 1.0, 0.2, 73.0, 500
@@ -302,6 +339,27 @@ def test_funding_reply_shows_net_and_apr(board_file):
     )
     assert "funding" in body
     assert "+0.051%" in body and "+18.6%" in body
+
+
+def test_funding_reply_ranks_distinct_short_venues_before_repeats(
+    board_file,
+):
+    telegram_queries.replace_funding_payloads([{"groups": [{
+        "token": "SIREN",
+        "routes": [
+            route("SIREN", "FUTURES", "LongA", "ShortA", 0, 0.90, 328.5, 10),
+            route("SIREN", "FUTURES", "LongB", "ShortA", 0, 0.80, 292.0, 10),
+            route("SIREN", "FUTURES", "LongC", "ShortB", 0, 0.70, 255.5, 10),
+        ],
+    }]}])
+
+    body = telegram_queries.render(
+        telegram_queries.Query("funding", "SIREN"), board_path=board_file
+    )
+
+    assert body.index("LongA·F&gt;ShortA·F") < body.index("LongC·F&gt;ShortB·F")
+    assert body.index("LongC·F&gt;ShortB·F") < body.index("LongB·F&gt;ShortA·F")
+    assert "Best pair per short venue" in body
 
 
 def test_transfer_reply_shows_deposit_and_withdraw_state(board_file):
@@ -773,6 +831,30 @@ def test_pressing_a_view_button_edits_in_place(db, board_file):
     assert reply["message_id"] == 55
     assert "funding" in reply["text"]
     assert "Spread" in [b["text"] for r in reply["reply_markup"]["inline_keyboard"] for b in r]
+
+
+def test_pressing_a_spread_farm_button_edits_in_place(db, board_file):
+    accounts.configure_telegram_community(
+        GROUP_ID, title="Spread", configured_by_telegram_user_id=1,
+        invite_link="https://t.me/+abc", db_path=db,
+    )
+    update = {"callback_query": {
+        "id": "lane-1", "data": "l:fd:SIREN",
+        "message": {"message_id": 55, "chat": {"id": GROUP_ID, "type": "supergroup"}},
+    }}
+
+    reply = telegram_bot.handle_update(update, db_path=db, board_path=board_file)
+
+    assert reply["method"] == "editMessageText"
+    assert "Futures-DEX" in reply["text"]
+    assert "OKX DEX·D&gt;Bybit·F" in reply["text"]
+    assert "Gate·S&gt;Bybit·F" not in reply["text"]
+    buttons = [
+        button
+        for row in reply["reply_markup"]["inline_keyboard"]
+        for button in row
+    ]
+    assert any(button["text"] == "✓ Futures-DEX" for button in buttons)
 
 
 def test_a_view_button_refresh_failure_is_answered_instead_of_spinning(

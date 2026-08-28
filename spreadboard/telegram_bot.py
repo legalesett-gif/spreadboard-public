@@ -246,6 +246,11 @@ def _handle_callback(cb: dict[str, Any], *, db_path: Any, board_path: Any) -> di
         query = telegram_queries.Query(kind="spread", symbol=parts[1])
     elif len(parts) == 3 and parts[0] == "v":
         query = telegram_queries.Query(kind=parts[1], symbol=parts[2])
+    elif len(parts) == 3 and parts[0] == "l":
+        farm = "" if parts[1] == "all" else parts[1]
+        if farm not in telegram_queries.SPREAD_FARM_KINDS and farm:
+            return None
+        query = telegram_queries.Query(kind="spread", symbol=parts[2], farm=farm)
     else:
         return None
     _record_token_attention(query, source="subscriber_forum")
