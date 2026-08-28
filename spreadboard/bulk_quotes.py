@@ -57,13 +57,13 @@ _CLIENTS: dict[str, Any] = {}
 
 _DEFAULT_TYPES = {"Futures": "swap", "Spot": "spot"}
 
-# Venues have independent adapters and rate limits. Four simultaneous venue
-# calls keeps memory bounded while bringing a complete pass inside the
-# current-spread boundary. The previous sequential pass took about 127 seconds,
-# so a 90-second current-only board could never hold every cross-venue pair at
-# once even when every provider answered successfully.
+# Venues have independent adapters and rate limits. The complete production
+# pass grew to 91–95 seconds at eight workers, beyond the unchanged 90-second
+# current-spread boundary. Twelve remains below the number of independent
+# venues, while reducing three waves of network waits to two. This changes only
+# collection concurrency; no quote receives a longer lifetime.
 BULK_QUOTE_WORKERS = max(
-    1, min(8, int(os.environ.get("SPREADBOARD_BULK_QUOTE_WORKERS", "6")))
+    1, min(12, int(os.environ.get("SPREADBOARD_BULK_QUOTE_WORKERS", "8")))
 )
 
 

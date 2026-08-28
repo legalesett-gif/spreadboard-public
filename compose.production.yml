@@ -113,9 +113,11 @@ services:
       # could enter the structural universe.
       SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS: "120"
       # Independent venue adapters refresh concurrently; each venue writes its
-      # result in one SQLite transaction. This keeps the complete catalogue
-      # inside the 90-second current-spread truth window without raising it.
-      SPREADBOARD_BULK_QUOTE_WORKERS: "8"
+      # result in one SQLite transaction. Production passes had grown to
+      # 91-95s at eight workers, outside the unchanged 90s truth boundary.
+      # Twelve turns three network-wait waves into two without extending quote
+      # lifetime or overlapping complete sweeps.
+      SPREADBOARD_BULK_QUOTE_WORKERS: "12"
       # Funding has its own isolated worker. A slow funding provider must never
       # postpone a current-price pass or make a valid spread disappear.
       SPREADBOARD_BULK_FUNDING_SECONDS: "30"
