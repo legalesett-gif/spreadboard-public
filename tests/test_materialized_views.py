@@ -81,6 +81,27 @@ def test_incomplete_generation_never_replaces_last_complete(tmp_path: Path) -> N
     assert restored and restored["groups"][0]["token"] == "OLD"
 
 
+def test_status_reads_navigation_counts_from_rendered_payload_metadata(
+    tmp_path: Path,
+) -> None:
+    store = materialized_views.Store(tmp_path)
+    query = {"kind": ["FUTURES"], "limit": ["500"]}
+    writer = materialized_views.GenerationWriter(
+        store,
+        required_queries=(query,),
+        source_signature={},
+    )
+    writer.write_view(query, _payload(["A", "B"]))
+    writer.write_route_index({})
+    writer.publish()
+
+    status = store.status()
+
+    assert status["navigation_token_count"] == 2
+    assert status["navigation_route_count"] == 2
+    assert status["empty_view_count"] == 0
+
+
 def test_corrupt_generation_fails_closed_without_destroying_manifest(tmp_path: Path) -> None:
     store = materialized_views.Store(tmp_path)
     writer = materialized_views.GenerationWriter(

@@ -121,6 +121,35 @@ class GenerationWriter:
         raw = _json_bytes(payload)
         filename = f"view-{identity}.json"
         _write_bytes(self.staging / filename, raw)
+        funding_catalog = (
+            payload.get("funding_catalog")
+            if isinstance(payload.get("funding_catalog"), dict)
+            else {}
+        )
+        pagination = (
+            payload.get("pagination")
+            if isinstance(payload.get("pagination"), dict)
+            else {}
+        )
+        summary = (
+            payload.get("summary")
+            if isinstance(payload.get("summary"), dict)
+            else {}
+        )
+        matching_tokens = payload.get("matching_token_count")
+        if matching_tokens is None:
+            matching_tokens = funding_catalog.get("matching_token_count")
+        if matching_tokens is None:
+            matching_tokens = pagination.get("matching_tokens")
+        if matching_tokens is None:
+            matching_tokens = summary.get("matching_tokens")
+        matching_routes = payload.get("matching_route_count")
+        if matching_routes is None:
+            matching_routes = funding_catalog.get("matching_route_count")
+        if matching_routes is None:
+            matching_routes = pagination.get("matching_rows")
+        if matching_routes is None:
+            matching_routes = summary.get("matching_rows")
         self.views[identity] = {
             "identity": identity,
             "query": _query_dict(query),
@@ -129,8 +158,8 @@ class GenerationWriter:
             "sha256": _sha256(raw),
             "group_count": len(payload.get("groups") or []),
             "row_count": len(payload.get("rows") or []),
-            "matching_token_count": int(payload.get("matching_token_count") or 0),
-            "matching_route_count": int(payload.get("matching_route_count") or 0),
+            "matching_token_count": int(matching_tokens or 0),
+            "matching_route_count": int(matching_routes or 0),
         }
 
     def write_route_index(self, rows: dict[str, dict[str, Any]]) -> None:
