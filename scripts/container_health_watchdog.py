@@ -40,6 +40,16 @@ STATE_FILENAME = "container_health_state.json"
 #: kernel kills the process, so the owner sees pressure rather than only the
 #: aftermath.
 MEMORY_PRESSURE_PCT = 90.0
+#: A recurring fault must not produce a notification per occurrence. The
+#: collector OOM-kills its navigation child roughly every 20 minutes; the first
+#: implementation reported "failed" on each kill and "ok" on the very next
+#: 2-minute check, which sent 8 owner pushes in 84 minutes for ONE known
+#: ongoing condition. An incident now stays open across recurrences and only
+#: clears after a genuinely quiet period. The hold-down must exceed the typical
+#: recurrence interval (the collector kill cycle is ~20 minutes) or the incident
+#: simply closes and reopens between occurrences; 15 checks is 30 minutes at the
+#: 2-minute timer cadence.
+RECOVERY_QUIET_CHECKS = 15
 
 
 def _docker_inspect(container: str) -> dict[str, Any] | None:
@@ -267,10 +277,40 @@ def evaluate(
     if int(host.get("mem_available_kb") or 0) and host["mem_available_kb"] < 512 * 1024:
         warnings.append("host has under 512MB available")
 
-    status = "failed" if faults else "warn" if warnings else "ok"
-    detail = "; ".join(faults + warnings) if (faults or warnings) else (
-        "All containers stable; no restart or OOM since the previous check."
-    )
+    # Hold an open incident across recurrences instead of flapping. Without
+    # this, a fault that repeats every 20 minutes alternates failed/ok on a
+    # 2-minute cadence and notifies the owner on every edge.
+    was_open = bool(previous.get("incident_open"))
+    quiet = int(previous.get("quiet_checks") or 0)
+    if faults:
+        incident_open = True
+        quiet = 0
+    elif was_open:
+        quiet += 1
+        # Stay open until the condition has been absent long enough to mean it.
+        incident_open = quiet < RECOVERY_QUIET_CHECKS
+    else:
+        incident_open = False
+
+    if faults:
+        status = "failed"
+        detail = "; ".join(faults + warnings)
+    elif incident_open:
+        # Still inside the hold-down: report it, but do not claim recovery and
+        # do not open a second incident.
+        status = "failed"
+        remaining = RECOVERY_QUIET_CHECKS - quiet
+        detail = (
+            f"{previous.get('open_detail') or 'Container fault'} "
+            f"(no recurrence for {quiet} checks; confirming recovery in {remaining})"
+        )
+    elif warnings:
+        status = "warn"
+        detail = "; ".join(warnings)
+    else:
+        status = "ok"
+        detail = "All containers stable; no restart or OOM since the previous check."
+
     return {
         "schema": "spreadboard.container_health.v1",
         "checked_at_unix": time.time(),
@@ -278,6 +318,11 @@ def evaluate(
         "detail": detail[:480],
         "faults": faults,
         "warnings": warnings,
+        "incident_open": incident_open,
+        "quiet_checks": quiet,
+        "open_detail": ("; ".join(faults) if faults else previous.get("open_detail"))
+        if incident_open
+        else None,
         "containers": {str(item.get("name")): item for item in observations},
         "host": host,
     }
@@ -311,6 +356,9 @@ def main(argv: list[str] | None = None) -> int:
         {
             "checked_at_unix": report["checked_at_unix"],
             "containers": report["containers"],
+            "incident_open": report["incident_open"],
+            "quiet_checks": report["quiet_checks"],
+            "open_detail": report["open_detail"],
         },
     )
     print(f"container health status={report['status']} detail={report['detail']}")
