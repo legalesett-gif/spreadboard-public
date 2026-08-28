@@ -184,6 +184,32 @@ def _route_spread(row: dict[str, Any]) -> float | None:
     return _number(row.get("executable_spread_pct"))
 
 
+#: UACryptoInvest renders some tokenised equities with a display suffix the
+#: venues do not use: SAMSUNGSTOCK/SKHYNIXSTOCK/SHEINSTOCK are listed by the
+#: exchanges as SAMSUNG/SKHYNIX/SHEIN. Recording those as
+#: "missing_long_catalog_market" was misleading -- the market is catalogued,
+#: under its official ticker. Never invent an alias to make parity pass; this
+#: only reports that a comparator label did not resolve.
+_COMPARATOR_DISPLAY_SUFFIXES = ("STOCK",)
+
+
+def _alias_candidates(token: str) -> tuple[str, ...]:
+    clean = str(token or "").strip().upper()
+    return tuple(
+        clean[: -len(suffix)]
+        for suffix in _COMPARATOR_DISPLAY_SUFFIXES
+        if clean.endswith(suffix) and len(clean) > len(suffix)
+    )
+
+
+def _token_route_counts(routes: Any) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    for route in routes or []:
+        if isinstance(route, dict):
+            counts[str(route.get("token") or "").strip().upper()] += 1
+    return dict(counts)
+
+
 def _catalog_index(payload: dict[str, Any]) -> set[tuple[str, str, str]]:
     return {
         (
@@ -289,6 +315,10 @@ def reconcile(
         if isinstance(route, dict):
             route_index[_identity(route)].append(route)
     catalog_pairs = _catalog_index(catalog or {})
+    token_route_counts = _token_route_counts(routes)
+    # The generator's own ceiling, observed rather than assumed, so this stays
+    # correct if the cap is ever changed.
+    token_route_budget = max(token_route_counts.values(), default=0) or 1
     rows: list[dict[str, Any]] = []
     matched = current = mismatch_count = 0
     for sample in reference.get("rows") or []:
@@ -355,12 +385,28 @@ def reconcile(
                 }
             )
             continue
-        if not long_catalogued and not short_catalogued:
+        alias_hits = tuple(
+            alias
+            for alias in _alias_candidates(token)
+            if (alias, long_venue, long_type) in catalog_pairs
+            or (alias, short_venue, short_type) in catalog_pairs
+        )
+        if alias_hits:
+            # The market exists under its official ticker; only the comparator's
+            # display label failed to resolve.
+            reason = "comparator_display_alias_unmatched"
+        elif not long_catalogued and not short_catalogued:
             reason = "missing_both_catalog_markets"
         elif not long_catalogued:
             reason = "missing_long_catalog_market"
         elif not short_catalogued:
             reason = "missing_short_catalog_market"
+        elif token_route_counts.get(token, 0) >= token_route_budget:
+            # Both legs are catalogued and the token already carries the maximum
+            # number of generated routes, so this exact pair was budgeted out
+            # rather than being impossible. Production caps every token at 28
+            # rows even when 16 legs allow 120 directed pairs.
+            reason = "token_route_budget_exhausted"
         else:
             reason = "route_not_generated"
         rows.append(
