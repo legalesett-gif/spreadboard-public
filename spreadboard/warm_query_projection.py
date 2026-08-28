@@ -99,6 +99,63 @@ class LiveRouteUniverse:
                     self._last_error = None
         return self.status()
 
+    def refresh_route_kinds(self, route_kinds: Iterable[str]) -> dict[str, Any]:
+        """Refresh a small product slice without replacing unrelated routes.
+
+        Spot books from independent venues are written at different moments in
+        the complete quote pass. Their simultaneous current window can be much
+        shorter than the thirty-second full-universe projection cadence. A
+        targeted pass catches that real overlap without extending either book's
+        timestamp and without rebuilding all route kinds.
+        """
+
+        wanted = {
+            str(value).strip().upper()
+            for value in route_kinds
+            if str(value).strip()
+        }
+        if not wanted:
+            return self.status()
+        with self._refresh_lock:
+            with self._lock:
+                rows = self._rows
+                generation = self._installed_generation
+                previous_updates = self._updates
+            selected = {
+                key: row
+                for key, row in rows.items()
+                if str(row.get("route_kind") or "").upper() in wanted
+            }
+            if not selected:
+                return self.status()
+            try:
+                observed = api_spreads.live_route_updates_for(
+                    list(selected.values()), include_basis=True
+                )
+                refreshed = _merge_live_updates(
+                    {
+                        key: value
+                        for key, value in previous_updates.items()
+                        if key in selected
+                    },
+                    observed,
+                    route_keys=set(selected),
+                    now=time.time(),
+                )
+            except Exception as exc:  # noqa: BLE001 - retain the last good slice.
+                with self._lock:
+                    self._last_error = f"{type(exc).__name__}: {str(exc)[:180]}"
+                return self.status()
+            with self._lock:
+                if generation == self._installed_generation and rows is self._rows:
+                    updates = dict(self._updates)
+                    for key in selected:
+                        updates.pop(key, None)
+                    updates.update(refreshed)
+                    self._updates = updates
+                    self._last_error = None
+        return self.status()
+
     def snapshot(
         self,
     ) -> tuple[tuple[dict[str, Any], ...], dict[str, tuple[Any, ...]], dict[str, Any]]:
@@ -251,16 +308,26 @@ class Worker(threading.Thread):
         stop_event: threading.Event,
         *,
         interval_seconds: float = DEFAULT_REFRESH_SECONDS,
+        spot_interval_seconds: float = 5.0,
     ) -> None:
         super().__init__(name="materialized-live-route-universe", daemon=True)
         self.stop_event = stop_event
         self.interval_seconds = max(2.0, float(interval_seconds))
+        self.spot_interval_seconds = max(2.0, float(spot_interval_seconds))
 
     def run(self) -> None:
+        last_full_started = 0.0
         while not self.stop_event.is_set():
             started = time.monotonic()
-            LIVE_UNIVERSE.refresh()
-            remaining = max(0.0, self.interval_seconds - (time.monotonic() - started))
+            if started - last_full_started >= self.interval_seconds:
+                last_full_started = started
+                LIVE_UNIVERSE.refresh()
+            else:
+                LIVE_UNIVERSE.refresh_route_kinds({"SPOT"})
+            remaining = max(
+                0.0,
+                self.spot_interval_seconds - (time.monotonic() - started),
+            )
             self.stop_event.wait(remaining)
 
 

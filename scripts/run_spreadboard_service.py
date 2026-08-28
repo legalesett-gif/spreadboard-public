@@ -1471,6 +1471,14 @@ def main() -> int:
             30.0,
             float(os.environ.get("SPREADBOARD_LIVE_QUERY_REFRESH_SECONDS", "30")),
         ),
+        spot_interval_seconds=max(
+            2.0,
+            float(
+                os.environ.get(
+                    "SPREADBOARD_SPOT_LIVE_QUERY_REFRESH_SECONDS", "5"
+                )
+            ),
+        ),
     )
     tracked_route_worker = tracked_route_warmer.Worker(
         service_stop_event,

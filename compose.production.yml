@@ -112,6 +112,10 @@ services:
       # enough for a 20% DEX/Aster dislocation to converge materially before it
       # could enter the structural universe.
       SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS: "120"
+      # Spot venues finish their independent quote writes at different times.
+      # Refresh only the compact Spot projection between full 30-second passes
+      # so real overlaps are observed without extending the 90-second expiry.
+      SPREADBOARD_SPOT_LIVE_QUERY_REFRESH_SECONDS: "5"
       # Independent venue adapters refresh concurrently; each venue writes its
       # result in one SQLite transaction. Production passes had grown to
       # 91-98s at eight/twelve workers, outside the unchanged 90s truth

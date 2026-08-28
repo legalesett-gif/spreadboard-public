@@ -361,6 +361,51 @@ def test_partial_refresh_never_extends_an_expired_price() -> None:
     assert merged["GUA-route"] == (None, 0.22, None, None)
 
 
+def test_targeted_spot_refresh_preserves_unrelated_route_updates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now_us = int(time.time() * 1_000_000)
+    futures = _route("GUA", route_key="GUA-futures")
+    spot = {
+        **_route("GUA", route_key="GUA-spot"),
+        "route_kind": "SPOT",
+        "long_market_type": "Spot",
+        "short_market_type": "Spot",
+        "long_market_symbol": "GUA/USDT",
+        "short_market_symbol": "GUA/USDT",
+    }
+    universe = warm_query_projection.LiveRouteUniverse()
+    universe.install({"GUA-futures": futures, "GUA-spot": spot})
+    responses = iter(
+        [
+            {
+                "GUA-futures": (0.5, 0.1, now_us, "matched_vwap"),
+                "GUA-spot": (0.2, None, now_us, "top_book"),
+            },
+            {"GUA-spot": (0.35, None, now_us, "top_book")},
+        ]
+    )
+    observed_route_keys: list[set[str]] = []
+
+    def updates(routes: list[dict[str, object]], **_kwargs: object):
+        observed_route_keys.append({str(row["route_key"]) for row in routes})
+        return next(responses)
+
+    monkeypatch.setattr(
+        warm_query_projection.api_spreads, "live_route_updates_for", updates
+    )
+    universe.refresh()
+    universe.refresh_route_kinds({"SPOT"})
+
+    current = universe.snapshot()[1]
+    assert observed_route_keys == [
+        {"GUA-futures", "GUA-spot"},
+        {"GUA-spot"},
+    ]
+    assert current["GUA-futures"] == (0.5, 0.1, now_us, "matched_vwap")
+    assert current["GUA-spot"] == (0.35, None, now_us, "top_book")
+
+
 def test_update_snapshot_reuses_immutable_maps_without_copying_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
