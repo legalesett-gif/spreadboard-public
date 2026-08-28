@@ -308,25 +308,35 @@ class Worker(threading.Thread):
         stop_event: threading.Event,
         *,
         interval_seconds: float = DEFAULT_REFRESH_SECONDS,
-        spot_interval_seconds: float = 5.0,
+        priority_interval_seconds: float = 5.0,
     ) -> None:
         super().__init__(name="materialized-live-route-universe", daemon=True)
         self.stop_event = stop_event
         self.interval_seconds = max(2.0, float(interval_seconds))
-        self.spot_interval_seconds = max(2.0, float(spot_interval_seconds))
+        self.priority_interval_seconds = max(
+            2.0, float(priority_interval_seconds)
+        )
 
     def run(self) -> None:
         last_full_started = 0.0
+        priority_groups = (
+            {"SPOT"},
+            {"FUTURES-SPOT", "SPOT-FUTURES"},
+        )
+        priority_index = 0
         while not self.stop_event.is_set():
             started = time.monotonic()
             if started - last_full_started >= self.interval_seconds:
                 last_full_started = started
                 LIVE_UNIVERSE.refresh()
             else:
-                LIVE_UNIVERSE.refresh_route_kinds({"SPOT"})
+                LIVE_UNIVERSE.refresh_route_kinds(
+                    priority_groups[priority_index % len(priority_groups)]
+                )
+                priority_index += 1
             remaining = max(
                 0.0,
-                self.spot_interval_seconds - (time.monotonic() - started),
+                self.priority_interval_seconds - (time.monotonic() - started),
             )
             self.stop_event.wait(remaining)
 
