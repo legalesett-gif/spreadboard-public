@@ -113,6 +113,21 @@ def _public_json(url: str) -> Any:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _public_post_json(url: str, payload: dict[str, Any]) -> Any:
+    request = Request(
+        url,
+        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "SpreadBoard/1.0",
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=25.0) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def _native_aster_books(*, fetcher: Any = None) -> list[dict[str, Any]]:
     """Return Aster's complete USDT spot and perpetual top books.
 
@@ -175,10 +190,16 @@ def _native_aster_books(*, fetcher: Any = None) -> list[dict[str, Any]]:
 
 _NATIVE_COMPLETE_BULK_VENUES = {"Binance", "Kucoin Futures"}
 _NATIVE_PARTIAL_BULK_VENUES = {"Phemex", "WhiteBIT"}
+_NATIVE_FUTURES_ONLY_BULK_VENUES = {"Hyperliquid"}
 _NATIVE_LINEAR_QUOTES = ("USDT", "USDC", "USD")
 
 
-def _native_bulk_books(venue: str, *, fetcher: Any = None) -> list[dict[str, Any]]:
+def _native_bulk_books(
+    venue: str,
+    *,
+    fetcher: Any = None,
+    poster: Any = None,
+) -> list[dict[str, Any]]:
     """Fast first-party BBO snapshots for adapters CCXT leaves one-sided.
 
     Production's generic sweep had no Binance futures or KuCoin Futures books
@@ -190,6 +211,7 @@ def _native_bulk_books(venue: str, *, fetcher: Any = None) -> list[dict[str, Any
     """
 
     get_json = fetcher or _public_json
+    post_json = poster or _public_post_json
     now_us = int(time.time() * 1_000_000)
     output: list[dict[str, Any]] = []
 
@@ -230,6 +252,7 @@ def _native_bulk_books(venue: str, *, fetcher: Any = None) -> list[dict[str, Any
             or normalized_quote not in _NATIVE_LINEAR_QUOTES
             or bid_value <= 0
             or ask_value <= 0
+            or bid_value > ask_value
         ):
             return
         symbol = f"{normalized_base}/{normalized_quote}"
@@ -357,6 +380,48 @@ def _native_bulk_books(venue: str, *, fetcher: Any = None) -> list[dict[str, Any
             )
         return output
 
+    if venue == "Hyperliquid":
+        endpoint = "https://api.hyperliquid.xyz/info"
+        dex_payload = post_json(endpoint, {"type": "perpDexs"})
+        dex_names = [""]
+        for item in dex_payload if isinstance(dex_payload, list) else []:
+            name = item.get("name") if isinstance(item, dict) else item
+            normalized = str(name or "").strip()
+            if normalized and normalized not in dex_names:
+                dex_names.append(normalized)
+        for dex_name in dex_names:
+            request_payload: dict[str, Any] = {"type": "metaAndAssetCtxs"}
+            if dex_name:
+                request_payload["dex"] = dex_name
+            payload = post_json(endpoint, request_payload)
+            if not isinstance(payload, list) or len(payload) < 2:
+                continue
+            metadata = payload[0] if isinstance(payload[0], dict) else {}
+            universe = metadata.get("universe") or []
+            contexts = payload[1] if isinstance(payload[1], list) else []
+            for market, context in zip(universe, contexts, strict=False):
+                if not isinstance(market, dict) or not isinstance(context, dict):
+                    continue
+                if market.get("isDelisted") is True:
+                    continue
+                coin = str(market.get("name") or "").strip()
+                impact_prices = context.get("impactPxs")
+                if not coin or not isinstance(impact_prices, list) or len(impact_prices) < 2:
+                    continue
+                if ":" in coin:
+                    namespace, ticker = coin.split(":", 1)
+                    base = f"{namespace.upper()}-{ticker.upper()}"
+                else:
+                    base = coin.upper()
+                append(
+                    market_type="Futures",
+                    base=base,
+                    quote="USDC",
+                    bid=impact_prices[0],
+                    ask=impact_prices[1],
+                )
+        return output
+
     return output
 
 
@@ -401,7 +466,12 @@ def sweep_venue(
     native_written = 0
     if (
         client_factory is None
-        and venue in (_NATIVE_COMPLETE_BULK_VENUES | _NATIVE_PARTIAL_BULK_VENUES)
+        and venue
+        in (
+            _NATIVE_COMPLETE_BULK_VENUES
+            | _NATIVE_PARTIAL_BULK_VENUES
+            | _NATIVE_FUTURES_ONLY_BULK_VENUES
+        )
     ):
         try:
             native_books = _native_bulk_books(venue)
@@ -410,7 +480,14 @@ def sweep_venue(
             native_books = []
         if native_books:
             native_written = _write_books(store, native_books)
-            if venue in _NATIVE_COMPLETE_BULK_VENUES:
+            if venue in (
+                _NATIVE_COMPLETE_BULK_VENUES | _NATIVE_FUTURES_ONLY_BULK_VENUES
+            ):
+                # Hyperliquid publishes a complete bulk perpetual BBO through
+                # impactPxs. Its spot metadata has only mark/mid prices, not a
+                # book, so do not fabricate spot spreads or let the slow CCXT
+                # fallback hold every venue past the live-truth budget. Exact
+                # spot readers remain available for individually demanded legs.
                 return native_written
     pending_books: list[dict[str, Any]] = []
     market_types = (

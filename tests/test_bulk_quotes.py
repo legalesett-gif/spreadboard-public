@@ -244,6 +244,69 @@ def test_native_futures_ticker_without_size_stays_indicative() -> None:
     assert books[0]["asks"] == [[0.36, 0.0]]
 
 
+def test_hyperliquid_native_bulk_prices_main_and_builder_perpetuals() -> None:
+    payloads = {
+        "perpDexs": [{"name": "xyz"}],
+        "main": [
+            {"universe": [{"name": "BTC"}]},
+            [{"impactPxs": ["80000", "80001"]}],
+        ],
+        "xyz": [
+            {
+                "universe": [
+                    {"name": "xyz:TSLA"},
+                    {"name": "xyz:OLD", "isDelisted": True},
+                ]
+            },
+            [
+                {"impactPxs": ["210.1", "210.2"]},
+                {"impactPxs": ["1", "2"]},
+            ],
+        ],
+    }
+
+    def post(_url: str, payload: dict[str, Any]) -> Any:
+        if payload["type"] == "perpDexs":
+            return payloads["perpDexs"]
+        return payloads[payload.get("dex") or "main"]
+
+    books = bulk_quotes._native_bulk_books("Hyperliquid", poster=post)
+
+    assert [(row["market_type"], row["symbol"]) for row in books] == [
+        ("Futures", "BTC/USDC:USDC"),
+        ("Futures", "XYZ-TSLA/USDC:USDC"),
+    ]
+    assert books[1]["bids"] == [[210.1, 0.0]]
+    assert books[1]["asks"] == [[210.2, 0.0]]
+    assert all(row["source"] == "native_bulk_ticker" for row in books)
+
+
+def test_hyperliquid_native_futures_do_not_wait_for_spot_ccxt(monkeypatch) -> None:
+    store = _Store()
+    native = [
+        {
+            "venue": "Hyperliquid",
+            "market_type": "Futures",
+            "symbol": "BTC/USDC:USDC",
+            "bids": [[80000.0, 0.0]],
+            "asks": [[80001.0, 0.0]],
+            "quote_ts_us": 1_787_453_992_200_000,
+            "source": "native_bulk_ticker",
+        }
+    ]
+    monkeypatch.setattr(bulk_quotes, "_native_bulk_books", lambda *_a, **_k: native)
+    monkeypatch.setattr(
+        bulk_quotes,
+        "_client",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("slow fallback called")),
+    )
+
+    written = bulk_quotes.sweep_venue("Hyperliquid", store=store)
+
+    assert written == 1
+    assert store.written[0][:3] == ("Hyperliquid", "Futures", "BTC/USDC:USDC")
+
+
 def test_native_bulk_venue_is_written_without_slow_ccxt_fallback() -> None:
     store = _Store()
     native = [
