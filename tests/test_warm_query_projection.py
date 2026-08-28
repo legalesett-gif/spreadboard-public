@@ -584,14 +584,11 @@ def test_worker_refreshes_every_lane_without_a_catalogue_wide_pass(
         {"DEX-FUTURES"},
         {"FUTURES"},
         {"SPOT-FUTURES"},
-        {"DEX-SPOT"},
         {"FUTURES"},
         {"FUTURES-SPOT"},
         {"DEX-FUTURES"},
         {"FUTURES"},
         {"SPOT-FUTURES"},
-        {"DEX-SPOT"},
-        {"SPOT"},
     ]
 
 

@@ -41,6 +41,12 @@ ROUTE_KINDS: tuple[RouteKind, ...] = (
 )
 ROUTE_KIND_BY_KIND = {item.kind: item for item in ROUTE_KINDS}
 ALLOWED_KINDS = set(ROUTE_KIND_BY_KIND)
+# Keep the complete taxonomy readable for retained history and old signed chart
+# links, while exposing only the three current research families in navigation
+# and health contracts.
+PUBLIC_ROUTE_KINDS: tuple[RouteKind, ...] = tuple(
+    item for item in ROUTE_KINDS if item.kind not in {"SPOT", "DEX-SPOT"}
+)
 
 
 @dataclass(frozen=True)
@@ -280,7 +286,7 @@ def build_source_health(
     by_kind = _rows_by_kind(snapshot.rows)
     fresh_by_kind = _rows_by_kind(fresh_snapshot.rows)
     tabs = []
-    for meta in ROUTE_KINDS:
+    for meta in PUBLIC_ROUTE_KINDS:
         rows = by_kind.get(meta.kind, [])
         fresh_rows = fresh_by_kind.get(meta.kind, [])
         newest_age = min(
@@ -334,7 +340,7 @@ def build_source_health(
 
 
 def route_kind_options() -> list[dict[str, Any]]:
-    return [asdict(item) for item in ROUTE_KINDS]
+    return [asdict(item) for item in PUBLIC_ROUTE_KINDS]
 
 
 def kind_label(kind: str | None) -> str:

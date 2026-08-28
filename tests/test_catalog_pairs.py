@@ -135,6 +135,26 @@ def test_spot_spot_catalogue_does_not_invent_zero_funding_or_a_funding_leader(
     assert grouped["best_funding_24h_basis"] is None
 
 
+def test_public_catalogue_filter_omits_retired_spot_pair_families() -> None:
+    active = {
+        "token": "GUA",
+        "route_kind": "FUTURES",
+        "displayed_open_spread_pct": 1.0,
+        "depth_weighted_spread_pct": 1.0,
+    }
+    payload = {
+        "routes": [
+            active,
+            {**active, "route_kind": "SPOT"},
+            {**active, "route_kind": "DEX-SPOT"},
+        ]
+    }
+
+    filtered = catalog_pairs.filtered(payload)
+
+    assert filtered["routes"] == [active]
+
+
 def test_incomplete_depth_is_top_book_not_fabricated_vwap(monkeypatch) -> None:
     catalog = _catalog()
     catalog["markets"] = catalog["markets"][:2]

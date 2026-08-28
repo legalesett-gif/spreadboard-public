@@ -96,21 +96,16 @@ NATIVE_SPOT_VENUES = {
 FAST_QUOTE_LANES = (
     "FUTURES",
     "FUTURES-SPOT",
-    "SPOT",
     "DEX-FUTURES",
-    "DEX-SPOT",
 )
 FAST_QUOTE_LANE_WEIGHTS = {
     "FUTURES": 1,
     "FUTURES-SPOT": 1,
-    # Public-book failure rates are measured at the release boundary. The
-    # formerly doubled Spot quota left Futures with only 37 attempts while
-    # Spot was succeeding on 72/73; equal CEX shares give every lane 50
-    # attempts inside the same 220-route ceiling.
-    "SPOT": 1,
     "DEX-FUTURES": 1,
-    "DEX-SPOT": 1,
 }
+DEX_FAST_QUOTE_LANES = tuple(
+    lane for lane in FAST_QUOTE_LANES if lane.startswith("DEX-")
+)
 
 #: What a perpetual settles on when the venue does not say. Eight hours is
 #: the market standard; the venues that differ (Hyperliquid, Kraken) publish
@@ -522,7 +517,7 @@ class FastQuoteRefresher:
                 ):
                     continue
                 lane = _fast_quote_lane(row)
-                if lane is None:
+                if lane not in rows_by_lane:
                     continue
                 spread = _number(row.get("depth_weighted_spread_pct"), -999999.0)
                 # A DEX-futures funding farm can have a negative entry basis
@@ -1304,7 +1299,9 @@ def _publish_fast_quote_delta(
             )
         )
     ]
-    lane_tokens: dict[str, set[str]] = {"DEX-FUTURES": set(), "DEX-SPOT": set()}
+    lane_tokens: dict[str, set[str]] = {
+        lane: set() for lane in DEX_FAST_QUOTE_LANES
+    }
     for row in rows:
         lane = _fast_quote_lane(row)
         if lane not in lane_tokens or not _fresh_fast_quote_row(
@@ -1349,7 +1346,7 @@ def _publish_fast_quote_delta(
         undercovered = any(
             int(summary["lane_token_counts"].get(lane) or 0)
             < int(summary["coverage_target_tokens"])
-            for lane in ("DEX-FUTURES", "DEX-SPOT")
+            for lane in DEX_FAST_QUOTE_LANES
         )
         same_completion = previous_completed.get("updated_at") == summary.get("updated_at")
         streak = (
@@ -1743,17 +1740,16 @@ def _select_fast_quote_rows(
 ) -> list[dict[str, Any]]:
     """Allocate current-book work without making the DEX cycle self-stale.
 
-    OKX Web3 needs two rate-limited requests per token. Treating DEX-FUTURES
-    and DEX-SPOT as independent quotas sampled the same contract twice and
-    selected 70+ rows; the earliest quote had expired before the atomic delta
-    was published. One combined token rotation quotes the shared DEX mark once
-    and leaves a few slots for current leaders after every tracked token.
+    OKX Web3 needs rate-limited requests per token. One contract rotation
+    quotes each selected DEX mark once and leaves route slots for alternate
+    futures pairings after every tracked token.
     """
 
     cex_lanes = [lane for lane in FAST_QUOTE_LANES if not lane.startswith("DEX-")]
     dex_rows = [
-        *rows_by_lane.get("DEX-FUTURES", []),
-        *rows_by_lane.get("DEX-SPOT", []),
+        row
+        for lane in DEX_FAST_QUOTE_LANES
+        for row in rows_by_lane.get(lane, [])
     ]
     active_cex_lanes = sum(bool(rows_by_lane.get(lane)) for lane in cex_lanes)
     dex_route_limit = (
@@ -1785,19 +1781,14 @@ def _select_fast_quote_rows(
         max(8, int(os.environ.get("SPREADBOARD_FAST_DEX_ROUTES", "70"))),
     )
     priority = priority_tokens if priority_tokens is not None else _dex_priority_tokens()
-    # DEX-FUTURES and DEX-SPOT often share one contract, but they are separate
-    # client lanes. Selecting from their combined score alone let a rich
-    # futures universe consume the provider budget and left Spot-DEX below the
-    # public top-25 readiness boundary. Seed each lane independently, then add
-    # combined leaders up to the configured unique-contract ceiling. Shared
-    # contracts are still quoted once by leg_cache below.
+    # Seed every active DEX family independently, then add combined leaders up
+    # to the configured unique-contract ceiling. Shared contracts, if another
+    # family is introduced later, are still quoted once by leg_cache below.
     # One opening-direction OKX call is needed per exact directional leg. A
     # 70-contract rotation still cannot finish reliably inside the public
     # 90-second spread boundary at the provider-safe request cadence. Spend the
-    # 70 route rows on at most 28 exact contracts, preferentially contracts
-    # shared by both DEX lanes. Production currently has enough overlap for 25
-    # independently ranked tokens in each lane. Small diagnostic/test budgets
-    # retain the simple rotation semantics.
+    # 70 route rows on at most 28 exact contracts. Small diagnostic/test
+    # budgets retain the simple rotation semantics.
     if dex_route_limit < 30:
         dex_seeds = _dex_rotating_rows(
             dex_rows,
@@ -1819,7 +1810,11 @@ def _select_fast_quote_rows(
             # Keep thirty leaders in each lane so those failures do not reduce
             # the member-visible set below twenty-five. Every fallback is still
             # an exact quote with its original timestamp.
-            lane_floor=min(contract_limit, 30, dex_route_limit // 2),
+            lane_floor=min(
+                contract_limit,
+                30,
+                dex_route_limit // max(1, len(DEX_FAST_QUOTE_LANES)),
+            ),
         )
     # The DEX provider is charged once per contract, not once per paired route:
     # leg_cache reuses that exact quote. Spend the remaining route budget on
@@ -1837,10 +1832,10 @@ def _shared_dex_lane_seeds(
     contract_limit: int,
     lane_floor: int,
 ) -> list[dict[str, Any]]:
-    """Cover both public DEX lanes with the fewest provider quote calls."""
+    """Cover every active public DEX lane with the fewest provider calls."""
 
     lane_maps: dict[str, dict[tuple[str, str, str, str], dict[str, Any]]] = {}
-    for lane in ("DEX-FUTURES", "DEX-SPOT"):
+    for lane in DEX_FAST_QUOTE_LANES:
         best: dict[tuple[str, str, str, str], dict[str, Any]] = {}
         for row in rows_by_lane.get(lane) or []:
             identity = _dex_contract_identity(row)
@@ -1849,12 +1844,15 @@ def _shared_dex_lane_seeds(
                 best[identity] = row
         lane_maps[lane] = best
 
-    futures = lane_maps["DEX-FUTURES"]
-    spot = lane_maps["DEX-SPOT"]
-    shared = set(futures) & set(spot)
+    active_maps = [lane_map for lane_map in lane_maps.values() if lane_map]
+    shared = (
+        set.intersection(*(set(lane_map) for lane_map in active_maps))
+        if active_maps
+        else set()
+    )
 
     def identity_score(identity: tuple[str, str, str, str]) -> tuple[int, float, float]:
-        rows = [row for row in (futures.get(identity), spot.get(identity)) if row]
+        rows = [lane_map[identity] for lane_map in active_maps if identity in lane_map]
         token = identity[0]
         return (
             int(token in priority_tokens),
@@ -1878,7 +1876,7 @@ def _shared_dex_lane_seeds(
     )
 
     def rotation_score(identity: tuple[str, str, str, str]) -> tuple[int, float, float]:
-        rows = [row for row in (futures.get(identity), spot.get(identity)) if row]
+        rows = [lane_map[identity] for lane_map in active_maps if identity in lane_map]
         oldest_quote = min(
             (_number(row.get("quote_ts_us"), 0.0) for row in rows),
             default=0.0,
@@ -1899,19 +1897,19 @@ def _shared_dex_lane_seeds(
     )[:lane_floor]
     selected = set(selected_identities)
 
-    all_identities = set(futures) | set(spot)
-    # When overlap is sparse, share the remaining contract budget evenly. It
-    # may be mathematically impossible to reach 25+25 inside the contract cap, but
-    # one lane must never consume every slot merely because set ordering changed.
+    all_identities = set().union(*(set(lane_map) for lane_map in active_maps))
+    # When overlap is sparse, share the remaining contract budget evenly. One
+    # active lane must never consume every slot merely because map ordering
+    # changed if another DEX family is introduced later.
     ranked_by_lane = {
-        "DEX-FUTURES": sorted(set(futures) - selected, key=identity_score, reverse=True),
-        "DEX-SPOT": sorted(set(spot) - selected, key=identity_score, reverse=True),
+        lane: sorted(set(lane_map) - selected, key=identity_score, reverse=True)
+        for lane, lane_map in lane_maps.items()
     }
     lane_coverage = {
-        "DEX-FUTURES": sum(identity in futures for identity in selected),
-        "DEX-SPOT": sum(identity in spot for identity in selected),
+        lane: sum(identity in lane_map for identity in selected)
+        for lane, lane_map in lane_maps.items()
     }
-    cursors = {"DEX-FUTURES": 0, "DEX-SPOT": 0}
+    cursors = {lane: 0 for lane in lane_maps}
     while len(selected) < contract_limit and any(
         lane_coverage[lane] < lane_floor for lane in ranked_by_lane
     ):
@@ -1924,8 +1922,8 @@ def _shared_dex_lane_seeds(
             identity = ranked[cursors[lane]]
             cursors[lane] += 1
             selected.add(identity)
-            lane_coverage["DEX-FUTURES"] += int(identity in futures)
-            lane_coverage["DEX-SPOT"] += int(identity in spot)
+            for covered_lane, lane_map in lane_maps.items():
+                lane_coverage[covered_lane] += int(identity in lane_map)
             progressed = True
             if len(selected) >= contract_limit:
                 break
@@ -1948,16 +1946,16 @@ def _shared_dex_lane_seeds(
         selected.add(identity)
 
     seeds: list[dict[str, Any]] = []
-    # Shared contracts first: one provider quote updates a route in each lane.
+    # Shared contracts first: one provider quote updates every active lane.
     for identity in selected_identities:
-        for lane_map in (futures, spot):
+        for lane_map in active_maps:
             row = lane_map.get(identity)
             if row is not None and len(seeds) < route_limit:
                 seeds.append(row)
     for identity in sorted(selected - set(selected_identities), key=identity_score, reverse=True):
         if len(seeds) >= route_limit:
             break
-        candidates = [row for row in (futures.get(identity), spot.get(identity)) if row]
+        candidates = [lane_map[identity] for lane_map in active_maps if identity in lane_map]
         if candidates:
             seeds.append(max(candidates, key=_dex_opportunity_score))
     return seeds
@@ -1973,10 +1971,9 @@ def _expand_selected_dex_tokens(
     identities = {_dex_contract_identity(row) for row in seeds}
     selected = list(seeds[:limit])
     seen = {_snapshot_row_key(row) for row in selected}
-    # A selected contract may have been seeded from only one lane when shared
-    # coverage already met its floor. Add its best missing public-lane seed
-    # before ordinary pair fallbacks; otherwise the same exact DEX quote is paid
-    # for but cannot appear in the other valid lane.
+    # A selected contract may have been seeded from only one active lane when
+    # shared coverage already met its floor. Add its best missing public-lane
+    # seed before ordinary pair fallbacks.
     present_groups = {
         (_dex_contract_identity(row), _fast_quote_lane(row) or "") for row in selected
     }
@@ -2036,16 +2033,15 @@ def _expand_selected_dex_tokens(
         ),
         reverse=True,
     )
-    # Keep the fallback budget symmetric. A score-only ordering could spend all
-    # twenty production spare rows on DEX-SPOT before DEX-FUTURES received one,
-    # even though both lanes make the same top-25 availability promise.
+    # Keep the fallback budget symmetric across whatever DEX families are
+    # active in the product contract.
     ranked_by_lane: dict[str, list[tuple[tuple[str, str, str, str], str]]] = {
         lane: [group for group in group_order if group[1] == lane]
-        for lane in ("DEX-FUTURES", "DEX-SPOT")
+        for lane in DEX_FAST_QUOTE_LANES
     }
     interleaved: list[tuple[tuple[str, str, str, str], str]] = []
     for index in range(max((len(values) for values in ranked_by_lane.values()), default=0)):
-        for lane in ("DEX-FUTURES", "DEX-SPOT"):
+        for lane in DEX_FAST_QUOTE_LANES:
             values = ranked_by_lane[lane]
             if index < len(values):
                 interleaved.append(values[index])

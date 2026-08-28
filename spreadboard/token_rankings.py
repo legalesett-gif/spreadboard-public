@@ -468,12 +468,8 @@ def _catalog_coverage(markets: list[dict[str, Any]]) -> dict[str, Any]:
                 lane_pairs["futures_futures"] += 1
             elif kinds == {"futures", "spot"}:
                 lane_pairs["futures_spot"] += 1
-            elif kinds == {"spot"}:
-                lane_pairs["spot_spot"] += 1
             elif kinds == {"futures", "dex"}:
                 lane_pairs["futures_dex"] += 1
-            elif kinds == {"spot", "dex"}:
-                lane_pairs["spot_dex"] += 1
     return {
         "catalog_market_count": len(unique),
         "catalog_venue_count": len({item[0] for item in unique}),

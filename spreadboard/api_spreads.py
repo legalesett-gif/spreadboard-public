@@ -47,17 +47,12 @@ def _row_value(row: Any, key: str, default: Any = None) -> Any:
     return getattr(row, key, default)
 
 
-# Spot-DEX is outside the current public product. Spot-Spot remains a first-class
-# arbitrage lane and must participate in grouping and top-25 ranking.
-# Spot-DEX was retired, which zeroed a lane uacryptoinvest populates with 20+
-# tokens. Re-enabled; set SPREADBOARD_RETIRE_DEX_SPOT=1 to restore the old
-# behaviour if the lane proves noisy.
-RETIRED_ROUTE_KINDS = frozenset(
-    {"DEX-SPOT"}
-    if str(os.environ.get("SPREADBOARD_RETIRE_DEX_SPOT", "")).strip().lower()
-    in {"1", "true", "yes", "on"}
-    else set()
-)
+# These two transfer-arbitrage families are deliberately outside the paid
+# research product.  Spot books remain collected because Futures-Spot, charts,
+# portfolio marks and token-price alerts all need them; only Spot-Spot and
+# OKX-DEX/Spot pair permutations are retired from public route generation,
+# ranking, warming and Telegram snapshots.
+RETIRED_ROUTE_KINDS = frozenset({"SPOT", "DEX-SPOT"})
 
 
 @dataclass(frozen=True)
@@ -800,21 +795,15 @@ def _release_lane_token_counts(
     tokens = {
         "FUTURES": set(),
         "FUTURES-SPOT": set(),
-        "SPOT": set(),
         "DEX-FUTURES": set(),
-        "DEX-SPOT": set(),
     }
     for row in rows:
         if not lane_current_ready(row):
             continue
-        if row.route_kind == "DEX-SPOT":
-            tokens["DEX-SPOT"].add(row.token)
-        elif row.route_kind == "FUTURES":
+        if row.route_kind == "FUTURES":
             tokens["FUTURES"].add(row.token)
         elif row.route_kind in {"FUTURES-SPOT", "SPOT-FUTURES"}:
             tokens["FUTURES-SPOT"].add(row.token)
-        elif row.route_kind == "SPOT":
-            tokens["SPOT"].add(row.token)
         elif row.route_kind in {"DEX-FUTURES", "FUTURES-DEX"}:
             tokens["DEX-FUTURES"].add(row.token)
     return {kind: len(values) for kind, values in tokens.items()}

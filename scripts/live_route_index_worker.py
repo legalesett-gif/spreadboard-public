@@ -245,6 +245,24 @@ def _merge_by_economic_identity(
     return {key: row for _priority, _stamp, key, row in selected.values()}
 
 
+def _public_product_rows(
+    rows: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Drop retired pair permutations before they consume shared memory.
+
+    Spot instruments themselves remain in the chart catalogue and book store.
+    This boundary only controls which cross-market permutations are serialized
+    into the large resident route index.
+    """
+
+    return {
+        key: row
+        for key, row in rows.items()
+        if str(row.get("route_kind") or "").upper()
+        not in api_spreads.RETIRED_ROUTE_KINDS
+    }
+
+
 def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     started = time.monotonic()
     initial = source_signature(board_path)
@@ -265,6 +283,10 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     final = source_signature(board_path)
     if final != initial:
         raise RuntimeError("source_generation_changed_during_live_index_build")
+    # Retired permutations should not contribute to current/retained metrics or
+    # spend time in the continuity merge. The spot instruments remain in the
+    # catalogue; only their standalone pair products leave the route index.
+    rows = _public_product_rows(rows)
     current_route_count = len(rows)
     if previous_rows:
         # Bulk venues finish at different moments and the isolated build takes
@@ -275,9 +297,13 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         # turn an old price into a current opportunity. Catalogue membership,
         # rather than quote age, permits genuine CEX removals. DEX identities
         # bridge only an unchanged structural generation.
-        retained = _retained_structural_cex_rows(previous_rows)
+        retained = _public_product_rows(
+            _retained_structural_cex_rows(previous_rows)
+        )
         if same_structural_generation:
-            retained.update(_retained_structural_dex_rows(previous_rows))
+            retained.update(
+                _public_product_rows(_retained_structural_dex_rows(previous_rows))
+            )
         rows = _merge_by_economic_identity(retained, rows)
     coverage = source_health.get("complete_catalogue") or source_health
     coverage = {

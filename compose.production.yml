@@ -28,22 +28,22 @@ services:
       SPREADBOARD_REFRESH_TIMEOUT_SECONDS: "3600"
       SPREADBOARD_FAST_QUOTE_SECONDS: "60"
       # The complete CEX catalogue is repriced independently in one bulk pass.
-      # This exact-route worker spends 90 rows on the two rate-limited DEX lanes
-      # and one direct canary per CEX lane. Thirty shared leaders plus five
-      # additional contracts provide an observed failure buffer for thin,
-      # unavailable, or structurally rejected routes. Completed pairs publish
-      # incrementally, so early quotes never wait for the last contract.
+      # This exact-route worker spends 90 rows on the rate-limited Futures-DEX
+      # lane and one direct canary per CEX lane. Thirty leaders plus additional
+      # contracts provide a failure buffer for thin, unavailable, or rejected
+      # routes. Completed pairs publish incrementally, so early quotes never
+      # wait for the last contract.
       SPREADBOARD_FAST_QUOTE_ROUTES: "93"
       # OKX Web3 is rate-limited. The current-board rotation requests only the
       # executable opening direction for each exact DEX leg, shares that quote
       # across paired routes, and keeps both DEX lanes inside the 90-second
-      # current-spread boundary. Full two-sided probes remain available to
-      # explicit chart/detail sampling.
+      # current-spread boundary. Spot-DEX is not a public product. Full
+      # two-sided probes remain available to explicit chart/detail sampling.
       SPREADBOARD_FAST_DEX_ROUTES: "90"
       # The selector counts directional provider quotes: buy and sell on the
       # same contract are different requests. Forty-five is only three calls
       # above the previously miscounted live workload (42), but allocates them
-      # honestly and leaves both lanes with a measured failure buffer.
+      # honestly and leaves Futures-DEX with a measured failure buffer.
       SPREADBOARD_FAST_DEX_CONTRACTS: "45"
       # The complete CEX catalogue is already refreshed independently. Reuse
       # only a depth-complete CEX book from the last 30 seconds while pairing

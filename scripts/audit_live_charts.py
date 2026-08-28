@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
-LANES = ("FUTURES", "FUTURES-SPOT-PAIR", "SPOT", "DEX-FUTURES")
+LANES = ("FUTURES", "FUTURES-SPOT-PAIR", "DEX-FUTURES")
 WINDOWS = {
     "1m": 1 / 60,
     "5m": 5 / 60,

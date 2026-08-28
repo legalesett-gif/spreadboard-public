@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from spreadboard import api_spreads, live, server
+from spreadboard import api_spreads, board, live, server
 from spreadboard.verified_identity import build_verified_identity_registry
 from scripts import dex_spot_broad_scan
 from scripts.api_discovery_worker import build_parser as discovery_worker_parser
@@ -30,15 +30,16 @@ from spreadarb.api_discovery.models import (
 )
 
 
-def test_public_route_contract_shows_all_five_lanes() -> None:
-    """Contract changed 2026-08-01 by operator request.
+def test_public_route_contract_retires_transfer_only_pair_families() -> None:
+    """Spot markets stay available without serializing unused pair lanes."""
 
-    Spot-DEX was retired, which zeroed a lane the reference product
-    (uacryptoinvest) populates with 20+ tokens. It is now shown by default and
-    can be retired again with SPREADBOARD_RETIRE_DEX_SPOT=1.
-    """
-    assert "SPOT" not in api_spreads.RETIRED_ROUTE_KINDS
-    assert "DEX-SPOT" not in api_spreads.RETIRED_ROUTE_KINDS
+    assert api_spreads.RETIRED_ROUTE_KINDS == {"SPOT", "DEX-SPOT"}
+    assert {item.kind for item in board.PUBLIC_ROUTE_KINDS} == {
+        "FUTURES",
+        "SPOT-FUTURES",
+        "FUTURES-SPOT",
+        "DEX-FUTURES",
+    }
     assert api_spreads._normalize_kind_filter("FUTURES-SPOT") == "FUTURES-SPOT-PAIR"
     # The freshness window must exceed the discovery cadence or rows are stale
     # by construction; production overrides this via SPREADBOARD_LIVE_MAX_AGE_MIN.
@@ -1931,14 +1932,10 @@ def test_release_lane_counts_merge_spot_futures_directions() -> None:
         SimpleNamespace(route_kind="DEX-SPOT", token="FIVE", **current),
     ]
 
-    # DEX-SPOT added deliberately: the public contract advertises five lanes and
-    # the reference product shows Spot-Dex, but this counter tracked only four.
     assert api_spreads._release_lane_token_counts(rows) == {
         "FUTURES": 1,
         "FUTURES-SPOT": 2,
-        "SPOT": 1,
         "DEX-FUTURES": 1,
-        "DEX-SPOT": 1,
     }
     assert (
         server.market_kind_count(
@@ -1974,11 +1971,7 @@ def test_current_snapshot_can_seed_a_new_route_chart() -> None:
     assert point["short_bid_price"] == 12
 
 
-def test_all_five_lanes_have_a_markets_tab() -> None:
-    """Every lane that carries data must be reachable in the UI.
-
-    Spot-DEX had rows but no tab, so the lane was invisible to members.
-    """
+def test_only_active_product_families_have_markets_tabs() -> None:
     import inspect
     from spreadboard import server
 
@@ -1986,11 +1979,11 @@ def test_all_five_lanes_have_a_markets_tab() -> None:
     for value, label in [
         ("FUTURES", "Futures-Futures"),
         ("FUTURES-SPOT-PAIR", "Futures-Spot"),
-        ("SPOT", "Spot-Spot"),
         ("DEX-FUTURES", "Futures-DEX"),
-        ("DEX-SPOT", "Spot-DEX"),
     ]:
         assert f'("{value}", "{label}")' in source, f"missing markets tab for {label}"
+    assert '("SPOT", "Spot-Spot")' not in source
+    assert '("DEX-SPOT", "Spot-DEX")' not in source
 
 
 def test_ourbit_is_registered_on_both_market_types() -> None:
@@ -2872,7 +2865,7 @@ def test_lane_counts_exclude_routes_nobody_can_take() -> None:
     good = _vrow(route_kind="SPOT", token="REAL", long_withdraw_enabled=True,
                  short_deposit_enabled=True)
     counts = api_spreads._release_lane_token_counts([shut, collision, thin, good])
-    assert counts["SPOT"] == 1
+    assert "SPOT" not in counts
 
 
 def test_old_route_remains_structurally_rankable_but_not_live_ready() -> None:

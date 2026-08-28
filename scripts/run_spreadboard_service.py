@@ -1585,9 +1585,7 @@ WARM_QUERIES: tuple[dict[str, list[str]], ...] = (
     {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
     {"kind": ["FUTURES"], "limit": ["500"]},
     {"kind": ["FUTURES-SPOT-PAIR"], "limit": ["500"]},
-    {"kind": ["SPOT"], "limit": ["500"]},
     {"kind": ["DEX-FUTURES"], "limit": ["500"]},
-    {"kind": ["DEX-SPOT"], "limit": ["500"]},
     # The funding page carries its `farm` parameter into the query, so warming
     # without it builds a different cache key and the tab stays cold -- which is
     # exactly what left /funding?farm=futures-spot at 27s while /funding was

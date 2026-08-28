@@ -330,16 +330,14 @@ class BookWorker:
         self.store.close()
 
 
-#: Every lane the board renders, including the three funding-farm tabs, which
-#: use their own kinds. A member on any tab expects the prices in front of them
-#: to move, so each lane gets a guaranteed share before depth is added anywhere.
+#: Every active lane the board renders, including the three funding-farm tabs.
+#: Spot books remain because Futures-Spot needs them; only the retired standalone
+#: Spot-Spot and Spot-DEX pair products are absent from this rotation.
 BOARD_LANES: tuple[dict[str, Any], ...] = (
     {},
     {"kind": "FUTURES"},
     {"kind": "FUTURES-SPOT-PAIR"},
-    {"kind": "SPOT"},
     {"kind": "DEX-FUTURES"},
-    {"kind": "DEX-SPOT"},
     {"funding_only": True},
     {"funding_only": True, "kind": "FUTURES"},
     {"funding_only": True, "kind": "FUTURES-SPOT-PAIR"},

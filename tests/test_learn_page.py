@@ -23,8 +23,8 @@ def test_learn_page_separates_opportunities_and_names_live_source_truth() -> Non
 def test_learn_page_teaches_route_friction_and_scopes_read_only_claim() -> None:
     html = server.render_learn_page()
 
-    assert "buy-low venue" in html
-    assert "withdrawal and deposit rails" in html
+    assert "exact OKX DEX token contract" in html
+    assert "liquidity" in html
     assert "Journal, alert, account and billing changes stay inside SpreadBoard" in html
     assert 'href="/methodology"' in html
     assert 'href="/status"' in html

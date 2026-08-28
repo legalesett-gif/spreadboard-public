@@ -5969,6 +5969,16 @@ def restore_materialized_route_index(board_path: Path) -> int:
         rows = _MATERIALIZED_VIEW_STORE.route_index(board_path=board_path)
     if rows is None:
         return 0
+    # A deployment can briefly start from the previous generation before the
+    # collector publishes the first compact product-only index. Do not install
+    # retired Spot-Spot / Spot-DEX permutations into resident web memory during
+    # that bridge window.
+    rows = {
+        key: row
+        for key, row in rows.items()
+        if str(row.get("route_kind") or "").upper()
+        not in api_spreads.RETIRED_ROUTE_KINDS
+    }
     template = _MATERIALIZED_VIEW_STORE.payload_for(
         {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
         board_path=board_path,
@@ -8613,9 +8623,7 @@ def render_market_filter_bar(
     kind_tabs = [
         ("FUTURES", "Futures-Futures"),
         ("FUTURES-SPOT-PAIR", "Futures-Spot"),
-        ("SPOT", "Spot-Spot"),
         ("DEX-FUTURES", "Futures-DEX"),
-        ("DEX-SPOT", "Spot-DEX"),
         ("", "All routes"),
     ]
     exchange_options = data.get("exchange_options") or []
@@ -10726,7 +10734,7 @@ def render_board_page(board_path: Path, config: dict[str, Any], query: dict[str,
     <section class="arbitrage-page">
       <div class="arb-toolbar">
         <div class="tab-selector" aria-label="Route type">
-          {"".join(render_kind_tab(item, selected_kind, query, health) for item in board.ROUTE_KINDS)}
+          {"".join(render_kind_tab(item, selected_kind, query, health) for item in board.PUBLIC_ROUTE_KINDS)}
         </div>
         <div class="quick-tools">
           <details class="filter-menu">
@@ -12166,7 +12174,7 @@ def render_dual_chart_svg(
 
 def render_chart_kind_tabs(query: dict[str, list[str]], selected_kind: str) -> str:
     tabs = ['<a class="tab-button%s" href="/charts">All</a>' % ("" if selected_kind else " active")]
-    for item in board.ROUTE_KINDS:
+    for item in board.PUBLIC_ROUTE_KINDS:
         href = "/charts?" + urlencode(_query_with(query, kind=item.kind))
         active = " active" if selected_kind == item.kind else ""
         tabs.append(
@@ -12886,7 +12894,7 @@ def render_learn_page() -> str:
       </div>
     </section>
     <section class="learn-grid">
-      <article class="panel text"><h2>Route direction</h2><p>Every row is written Long → Short: buy or hold the long leg and sell or short the short leg. Futures-Futures compares two derivatives. Spot-Futures buys spot and shorts a derivative. Futures-Spot needs a genuinely shortable spot leg. Spot-Spot buys at the buy-low venue, transfers the exact token, then sells at the destination; identity, withdrawal and deposit rails, fees, minimums and transfer time all matter.</p></article>
+      <article class="panel text"><h2>Route direction</h2><p>Every row is written Long → Short: buy or hold the long leg and sell or short the short leg. Futures-Futures compares two derivatives. Spot-Futures buys spot and shorts a derivative. Futures-Spot needs a genuinely shortable spot leg. Futures-DEX pairs an exact OKX DEX token contract with a futures hedge after identity and liquidity checks.</p></article>
       <article class="panel text"><h2>Funding opportunity</h2><p>This asks whether normalized funding carry is favorable, persistent and likely to survive fees. Rate sign and payout cadence must be interpreted for each venue. A strong funding setup can exist even when the visible spread is unattractive.</p></article>
       <article class="panel text"><h2>Spread opportunity</h2><p>This asks whether the entry dislocation is executable at the chosen size and has evidence of convergence. Funding is a separate cashflow: it can offset or add to the result instead of deciding whether the spread itself exists.</p></article>
       <article class="panel text"><h2>Volatility and margin</h2><p>Realized volatility and observed basis widening describe how far a hedge has moved in public history. Missing history stays unavailable. Margin reserve is account-specific and must also consider leverage, collateral placement, liquidation rules and adverse widening; it is not a personalized prediction.</p></article>
@@ -13317,7 +13325,7 @@ document.getElementById('registerForm').addEventListener('submit',async(event)=>
 #: member deciding whether to pay reads the ticks.
 MEMBERSHIP_FEATURES = (
     "CEX coverage plus OKX DEX routes when provider and identity evidence pass",
-    "Route lanes for Futures-Futures, Futures-Spot, Spot-Spot, Spot-DEX and Futures-DEX",
+    "Route lanes for Futures-Futures, Futures-Spot and Futures-DEX",
     "Current public-book prices with explicit freshness and depth status",
     "Spread, funding, token price and token funding alerts",
     "Convergence charts, custom pairs and saved charts",
@@ -14112,26 +14120,6 @@ GUIDE_LANES = [
         "shot": "The Futures-Spot tab, plus one exchange screen showing the spot buy and the futures short side by side.",
     },
     {
-        "id": "spot-spot",
-        "title": "Spot / Spot",
-        "one_line": "The same coin is simply cheaper on one exchange than another. You buy it where it is cheap, move it, and sell it where it is expensive.",
-        "how": [
-            "Find a row on the <b>Spot-Spot</b> tab.",
-            "<b>Check the deposit / withdrawal column first.</b> Both must be open. This is the step beginners skip and it is the one that loses money.",
-            "Buy the coin on the cheap exchange.",
-            "Withdraw it to the expensive exchange. Pick the same network on both ends.",
-            "When it arrives, sell it. The difference is yours.",
-        ],
-        "earn": "Only the price gap. There is no funding here.",
-        "watch": [
-            "<b>This transfer workflow leaves inventory unhedged in transit.</b> The price can move before the coin arrives. Pre-positioned inventory can support faster two-sided execution, but it uses more capital and needs rebalancing.",
-            "<b>If withdrawals are shut, this transfer workflow is blocked.</b> A closed rail is marked <b>SHUT</b>; pre-positioned inventory is a different setup and can still become trapped when rebalancing.",
-            "<b>Withdrawal fees and network fees</b> come out of your profit. A 0.3% gap can easily be nothing after fees.",
-            "<b>Wrong network = lost coins.</b> Always match the network on both sides.",
-        ],
-        "shot": "The Spot-Spot tab with the D/W status column clearly visible, plus an exchange withdrawal screen showing the network selector.",
-    },
-    {
         "id": "futures-dex",
         "title": "Futures / DEX",
         "one_line": "A spot token on-chain and a futures contract trade at different prices. The typical beginner route is long DEX spot and short futures, with exact identity and matched exposure proved first.",
@@ -14139,7 +14127,7 @@ GUIDE_LANES = [
             "Find a row on the <b>Futures-DEX</b> tab.",
             "Verify the chain, token contract, pool and futures symbol. A ticker match alone is not identity proof.",
             "For the typical beginner route, buy DEX spot and short futures with matched underlying exposure after applying the futures multiplier.",
-            "Selling spot on a DEX requires inventory. Without pre-owned or borrowed inventory, the DEX cannot be treated as the short leg.",
+            "Selling spot on a DEX requires inventory; pre-positioned inventory must be pre-owned or borrowed before the DEX can be treated as the short leg.",
             f"Check the {PROBE_LABEL} matched VWAP, pool depth, gas and price impact for the exact direction; it is evidence for that probe, not a guaranteed fill.",
             "Keep wallet assets and futures collateral independently funded, then close both legs only under the written exit plan.",
         ],
@@ -15549,7 +15537,9 @@ def render_profile_nav_item(key: str, label: str, selected: str) -> str:
 def render_profile_general(market: dict[str, Any]) -> str:
     summary = market.get("summary") or {}
     kind_counts = market.get("route_kind_counts") or {}
-    available_tabs = sum(1 for item in board.ROUTE_KINDS if kind_counts.get(item.kind))
+    available_tabs = sum(
+        1 for item in board.PUBLIC_ROUTE_KINDS if kind_counts.get(item.kind)
+    )
     return f"""
     <section class="profile-section">
       <div class="profile-section-title">
@@ -15558,7 +15548,7 @@ def render_profile_general(market: dict[str, Any]) -> str:
       </div>
       <section class="profile-summary-grid">
         <article><span>Profile scope</span><strong>Local operator</strong><em>No sign-in required</em></article>
-        <article><span>Route families</span><strong>{h(available_tabs)} / {h(len(board.ROUTE_KINDS))}</strong><em>with local source rows</em></article>
+        <article><span>Route families</span><strong>{h(available_tabs)} / {h(len(board.PUBLIC_ROUTE_KINDS))}</strong><em>with local source rows</em></article>
         <article><span>Parsed routes</span><strong>{h(summary.get("total_rows") or 0)}</strong><em>{h(summary.get("fresh_rows") or 0)} fresh</em></article>
         <article><span>Saved alert rules</span><strong data-profile-rule-count>0</strong><em>browser storage</em></article>
       </section>
@@ -15598,9 +15588,7 @@ def render_profile_telegram() -> str:
         ("FUTURES", "Futures"),
         ("SPOT-FUTURES", "Spot-Futures"),
         ("FUTURES-SPOT-PAIR", "Futures-Spot"),
-        ("SPOT", "Spot"),
         ("DEX-FUTURES", "Futures-DEX"),
-        ("DEX-SPOT", "Spot-DEX"),
     ]
     return f"""
     <section class="profile-section">

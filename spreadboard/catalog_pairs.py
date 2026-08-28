@@ -633,6 +633,8 @@ def filtered(
     routes: list[dict[str, Any]] = []
     for row in payload.get("routes") or []:
         route_kind = str(row.get("route_kind") or "").upper()
+        if route_kind in api_spreads.RETIRED_ROUTE_KINDS:
+            continue
         if normalized_kind == "FUTURES-SPOT-PAIR":
             if route_kind not in {"FUTURES-SPOT", "SPOT-FUTURES"}:
                 continue

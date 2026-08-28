@@ -463,6 +463,22 @@ def test_new_structural_generation_retains_only_still_listed_cex_routes(
     assert set(stored or {}) == {"new"}
 
 
+def test_public_route_artifact_drops_retired_transfer_pair_families() -> None:
+    rows = {
+        "ff": {"route_kind": "FUTURES"},
+        "fs": {"route_kind": "SPOT-FUTURES"},
+        "df": {"route_kind": "DEX-FUTURES"},
+        "ss": {"route_kind": "SPOT"},
+        "ds": {"route_kind": "DEX-SPOT"},
+    }
+
+    assert set(live_route_index_worker._public_product_rows(rows)) == {
+        "ff",
+        "fs",
+        "df",
+    }
+
+
 def test_server_prefers_newer_fast_index_over_older_full_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

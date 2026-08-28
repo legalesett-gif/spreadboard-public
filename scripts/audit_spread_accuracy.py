@@ -31,7 +31,6 @@ from spreadboard.server import api_market_spreads, _query_lists_with  # noqa: E4
 LANES = (
     ("FUTURES", {"kind": "FUTURES"}),
     ("FUTURES-SPOT", {"kind": "FUTURES-SPOT-PAIR"}),
-    ("SPOT", {"kind": "SPOT"}),
 )
 
 

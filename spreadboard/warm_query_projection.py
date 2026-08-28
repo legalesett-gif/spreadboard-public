@@ -27,14 +27,11 @@ PRIORITY_ROUTE_KIND_GROUPS = (
     {"DEX-FUTURES"},
     {"FUTURES"},
     {"SPOT-FUTURES"},
-    {"DEX-SPOT"},
     {"FUTURES"},
     {"FUTURES-SPOT"},
     {"DEX-FUTURES"},
     {"FUTURES"},
     {"SPOT-FUTURES"},
-    {"DEX-SPOT"},
-    {"SPOT"},
 )
 
 
@@ -429,6 +426,9 @@ def _route_kind_slices(
         "FUTURES-SPOT",
         "SPOT-FUTURES",
         "DEX-FUTURES",
+        # Compatibility slices remain testable for retained signed links. The
+        # product artifact and public matcher exclude these before production
+        # refresh work is scheduled.
         "DEX-SPOT",
         "SPOT",
     )
@@ -735,6 +735,8 @@ def _route_volume(row: dict[str, Any]) -> float | None:
 
 
 def _matches_structural(row: dict[str, Any], filters: dict[str, Any]) -> bool:
+    if str(row.get("route_kind") or "").upper() in api_spreads.RETIRED_ROUTE_KINDS:
+        return False
     q = str(filters.get("q") or "").upper().strip()
     if q and q not in f"{row.get('token') or ''} {row.get('token_name') or ''}".upper():
         return False
@@ -1113,9 +1115,7 @@ def _build_headlines(
     lane_tokens: dict[str, set[str]] = {
         "FUTURES": set(),
         "FUTURES-SPOT": set(),
-        "SPOT": set(),
         "DEX-FUTURES": set(),
-        "DEX-SPOT": set(),
     }
     for row in fresh:
         kind = str(row.get("route_kind") or "")

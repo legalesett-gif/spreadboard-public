@@ -125,7 +125,7 @@ def test_combined_dex_rotation_keeps_every_priority_token_before_leaders() -> No
     assert [row["token"] for row in selected] == ["GUA", "ESPORTS", "HEADLINE"]
 
 
-def test_disjoint_dex_lanes_share_the_finite_provider_contract_budget() -> None:
+def test_retired_dex_spot_rows_do_not_consume_provider_contract_budget() -> None:
     lanes = {
         "FUTURES": [], "FUTURES-SPOT": [], "SPOT": [],
         "DEX-FUTURES": [
@@ -150,12 +150,12 @@ def test_disjoint_dex_lanes_share_the_finite_provider_contract_budget() -> None:
         lanes, route_limit=60, priority_tokens=set()
     )
 
-    assert sum(str(row["token"]).startswith("F") for row in selected) >= 14
-    assert sum(str(row["token"]).startswith("S") for row in selected) >= 14
+    assert sum(str(row["token"]).startswith("F") for row in selected) >= 25
+    assert not any(str(row["token"]).startswith("S") for row in selected)
     assert len({fast_quotes._dex_contract_identity(row) for row in selected}) <= 28
 
 
-def test_shared_dex_contracts_keep_25_tokens_current_in_both_public_lanes() -> None:
+def test_dex_futures_keeps_25_tokens_current() -> None:
     lanes = {"FUTURES": [], "FUTURES-SPOT": [], "SPOT": []}
     for lane, short_type in (("DEX-FUTURES", "Futures"), ("DEX-SPOT", "Spot")):
         lanes[lane] = [
@@ -181,7 +181,7 @@ def test_shared_dex_contracts_keep_25_tokens_current_in_both_public_lanes() -> N
     }
 
     assert counts["DEX-FUTURES"] >= 25
-    assert counts["DEX-SPOT"] >= 25
+    assert counts["DEX-SPOT"] == 0
     assert len({fast_quotes._dex_contract_identity(row) for row in selected}) <= 28
 
 
@@ -214,7 +214,7 @@ def test_shared_dex_contracts_rotate_oldest_half_of_top_leader_pool() -> None:
         }
         assert first_tokens == {f"T{index}" for index in range(14)}
 
-        for lane in ("DEX-FUTURES", "DEX-SPOT"):
+        for lane in ("DEX-FUTURES",):
             for row in lanes[lane]:
                 if row["token"] in first_tokens:
                     row["quote_ts_us"] = 100_000_000
@@ -261,7 +261,7 @@ def test_production_shared_dex_contracts_publish_one_complete_top_25() -> None:
         for lane in ("DEX-FUTURES", "DEX-SPOT")
     }
     assert dex_tokens == {f"T{index}" for index in range(25)}
-    assert counts == {"DEX-FUTURES": 25, "DEX-SPOT": 25}
+    assert counts == {"DEX-FUTURES": 25, "DEX-SPOT": 0}
 
 
 def test_production_dex_buffer_keeps_ten_contract_fallbacks_and_pair_fallbacks() -> None:
@@ -292,7 +292,7 @@ def test_production_dex_buffer_keeps_ten_contract_fallbacks_and_pair_fallbacks()
         lane: len({row["token"] for row in selected if _fast_quote_lane(row) == lane})
         for lane in ("DEX-FUTURES", "DEX-SPOT")
     }
-    assert counts == {"DEX-FUTURES": 35, "DEX-SPOT": 35}
+    assert counts == {"DEX-FUTURES": 35, "DEX-SPOT": 0}
     assert len({fast_quotes._dex_contract_identity(row) for row in selected}) == 35
 
 
@@ -411,7 +411,6 @@ def test_fast_delta_tracks_only_sustained_completed_cycle_undercoverage(
     assert saved["consecutive_undercovered_complete_cycles"] == 0
     assert saved["last_completed_cycle"]["top_25_ready"] == {
         "DEX-FUTURES": True,
-        "DEX-SPOT": True,
     }
 
 
@@ -474,7 +473,7 @@ def test_cex_leg_failure_distinguishes_missing_book_from_dex_provider(monkeypatc
 
 def test_production_fast_budget_reserves_dex_truth_and_cex_canaries() -> None:
     lanes: dict[str, list[dict]] = {}
-    for lane in ("FUTURES", "FUTURES-SPOT", "SPOT"):
+    for lane in ("FUTURES", "FUTURES-SPOT"):
         lanes[lane] = [
             {
                 **_route(),
@@ -513,20 +512,20 @@ def test_production_fast_budget_reserves_dex_truth_and_cex_canaries() -> None:
         for lane in lanes
     }
 
-    # Fixtures expose exactly one shared route per lane/contract, so 14 shared
-    # contracts expand to 28 DEX rows plus the three CEX canaries. Production
-    # can use the remaining budget for additional pairings on those contracts.
-    assert len(selected) == 31
-    assert counts["FUTURES"] == counts["FUTURES-SPOT"] == counts["SPOT"] == 1
+    # The retired pair families consume neither a CEX canary nor a DEX route.
+    assert len(selected) == 17
+    assert counts["FUTURES"] + counts["FUTURES-SPOT"] == 3
+    assert counts["FUTURES"] >= 1
+    assert counts["FUTURES-SPOT"] >= 1
     assert counts["DEX-FUTURES"] == 14
-    assert counts["DEX-SPOT"] == 14
+    assert counts["DEX-SPOT"] == 0
 
 
 def test_fast_quote_budget_is_failure_tolerant_across_all_lanes(monkeypatch) -> None:
     monkeypatch.setenv("SPREADBOARD_FAST_DEX_ROUTES", "70")
     lanes = {}
     for lane, prefix in (
-        ("FUTURES", "F"), ("FUTURES-SPOT", "P"), ("SPOT", "S"),
+        ("FUTURES", "F"), ("FUTURES-SPOT", "P"),
         ("DEX-FUTURES", "D"), ("DEX-SPOT", "X"),
     ):
         rows = []
@@ -566,8 +565,8 @@ def test_fast_quote_budget_is_failure_tolerant_across_all_lanes(monkeypatch) -> 
         for lane in lanes
     }
     assert counts == {
-        "FUTURES": 50, "FUTURES-SPOT": 50, "SPOT": 50,
-        "DEX-FUTURES": 14, "DEX-SPOT": 14,
+        "FUTURES": 50, "FUTURES-SPOT": 50,
+        "DEX-FUTURES": 28, "DEX-SPOT": 0,
     }
 
 
@@ -664,10 +663,7 @@ def test_dex_pair_fallbacks_are_shared_fairly_across_contract_lanes() -> None:
     }
 
     assert len(fallback_groups) == 4
-    assert {lane for _identity, lane in fallback_groups} == {
-        "DEX-FUTURES",
-        "DEX-SPOT",
-    }
+    assert {lane for _identity, lane in fallback_groups} == {"DEX-FUTURES"}
 
 
 def test_fast_delta_retains_only_current_verified_rows() -> None:
@@ -767,11 +763,9 @@ def test_fast_delta_publishes_exact_dex_lane_readiness(tmp_path, monkeypatch) ->
     published = json.loads((tmp_path / "api_discovery_fast_quotes.json").read_text())
     assert published["fast_quote_refresh"]["lane_token_counts"] == {
         "DEX-FUTURES": 25,
-        "DEX-SPOT": 25,
     }
     assert published["fast_quote_refresh"]["top_25_ready"] == {
         "DEX-FUTURES": True,
-        "DEX-SPOT": True,
     }
 
 
@@ -2201,28 +2195,24 @@ def test_fast_quote_refresh_covers_top_25_in_each_primary_lane(
     )
     updated = [row for row in saved["rows"] if row.get("fast_quote_verified_at")]
 
-    assert result["selected_routes"] == 154
-    assert result["updated_routes"] == 154
-    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 44
-    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 43
-    assert sum(row["route_kind"] == "SPOT" for row in updated) == 43
+    assert result["selected_routes"] == 132
+    assert result["updated_routes"] == 132
+    assert sum(row["route_kind"] == "FUTURES" for row in updated) == 60
+    assert sum(row["route_kind"] == "FUTURES-SPOT" for row in updated) == 60
+    assert sum(row["route_kind"] == "SPOT" for row in updated) == 0
     assert sum(row["route_kind"] == "DEX-FUTURES" for row in updated) == 12
-    assert sum(row["route_kind"] == "DEX-SPOT" for row in updated) == 12
+    assert sum(row["route_kind"] == "DEX-SPOT" for row in updated) == 0
     assert {row["token"] for row in updated if row["route_kind"] == "FUTURES"} == {
         f"FUT{index:02d}" for index in range(30)
     }
     assert {row["token"] for row in updated if row["route_kind"] == "FUTURES-SPOT"} == {
         f"SPOT{index:02d}" for index in range(30)
     }
-    assert {row["token"] for row in updated if row["route_kind"] == "SPOT"} == {
-        f"CASH{index:02d}" for index in range(43)
-    }
+    assert not {row["token"] for row in updated if row["route_kind"] == "SPOT"}
     assert {row["token"] for row in updated if row["route_kind"] == "DEX-FUTURES"} == {
         f"DEX{index:02d}" for index in range(12)
     }
-    assert {row["token"] for row in updated if row["route_kind"] == "DEX-SPOT"} == {
-        f"DEXCASH{index:02d}" for index in range(12)
-    }
+    assert not {row["token"] for row in updated if row["route_kind"] == "DEX-SPOT"}
     assert sum(row["token"] == "FUT00" and row["route_kind"] == "FUTURES" for row in updated) == 2
     assert (
         sum(row["token"] == "SPOT00" and row["route_kind"] == "FUTURES-SPOT" for row in updated)
@@ -2352,6 +2342,8 @@ def test_fast_quote_refresh_writes_what_it_has_when_the_deadline_passes(
                 "route_key": f"TEST{index}|Binance|Futures|Bybit|Futures",
                 "token": f"TEST{index}",
                 "long_venue": "Binance",
+                "long_market_symbol": f"TEST{index}/USDT:USDT",
+                "short_market_symbol": f"TEST{index}/USDT:USDT",
                 "depth_weighted_spread_pct": 2.0,
                 "executable_spread_pct": 2.0,
                 "blockers": [],
@@ -2376,11 +2368,17 @@ def test_fast_quote_refresh_writes_what_it_has_when_the_deadline_passes(
 
     calls = {"n": 0}
 
-    def slow_leg(_row: dict, side: str, **_kwargs: object) -> dict:
+    def slow_leg(row: dict, side: str, **kwargs: object) -> dict | None:
+        cache = kwargs["cache"]
+        assert isinstance(cache, dict)
+        key = fast_quotes._route_leg_key(row, side)
+        assert key is not None
+        if key in cache:
+            return cache[key]
         calls["n"] += 1
         time.sleep(0.05)
-        return {
-            "symbol": "TEST/USDT:USDT",
+        result = {
+            "symbol": str(row[f"{side}_market_symbol"]),
             "bid": 100.0 if side == "long" else 103.0,
             "ask": 101.0 if side == "long" else 104.0,
             "bid_vwap": 100.0 if side == "long" else 103.0,
@@ -2388,6 +2386,8 @@ def test_fast_quote_refresh_writes_what_it_has_when_the_deadline_passes(
             "contract_size": 1.0,
             "quote_ts_us": 2_000_000,
         }
+        cache[key] = result
+        return result
 
     monkeypatch.setattr(refresher, "_leg_quote", slow_leg)
 
