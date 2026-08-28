@@ -33,7 +33,13 @@ def test_worker_writes_views_route_index_and_intel_atomically(
     monkeypatch.setattr(
         worker.api_spreads,
         "load_public_route_index",
-        lambda: ({"route": {"route_key": "route"}}, {}),
+        lambda: (
+            {
+                "route": {"route_key": "route", "route_kind": "FUTURES"},
+                "retired": {"route_key": "retired", "route_kind": "SPOT"},
+            },
+            {},
+        ),
     )
     monkeypatch.setattr(worker.server, "api_market_spreads", lambda _path, query: _payload((query.get("kind") or ["ALL"])[0]))
     monkeypatch.setattr(worker.server, "api_intel", lambda *_args, **_kwargs: {"ok": True, "intel": "ready"})
@@ -49,7 +55,9 @@ def test_worker_writes_views_route_index_and_intel_atomically(
     assert summary["status"] == "ok"
     assert summary["views"] == 2
     assert store.payload_for({})["groups"][0]["token"] == "ALL"
-    assert store.route_index() == {"route": {"route_key": "route"}}
+    assert store.route_index() == {
+        "route": {"route_key": "route", "route_kind": "FUTURES"}
+    }
     assert store.extra("intel-default") == {"ok": True, "intel": "ready"}
 
 

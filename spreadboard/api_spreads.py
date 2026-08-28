@@ -202,6 +202,7 @@ def load_public_route_index(
             str(row.get("route_key") or ""): row
             for row in complete_public
             if str(row.get("route_key") or "")
+            and str(row.get("route_kind") or "").upper() not in RETIRED_ROUTE_KINDS
         },
         merged_meta,
     )
@@ -274,6 +275,8 @@ def _complete_current_catalogue_rows(
             if not isinstance(original, dict):
                 continue
             row = dict(original)
+            if str(row.get("route_kind") or "").upper() in RETIRED_ROUTE_KINDS:
+                continue
             guard = row.get("tokenized_guard")
             row.setdefault("token_name", token_metadata.token_name(token, metadata))
             row.setdefault(
@@ -319,7 +322,15 @@ def _complete_current_catalogue_rows(
         admissible_discovery_rows,
         limit=None,
     )
-    output = [row for row in merged.get("routes") or [] if isinstance(row, dict)]
+    # Custom/pinned chart routes are merged after catalogue filtering. Apply
+    # the product boundary again so a retained Spot-Spot custom chart cannot
+    # quietly re-enter the large resident route index.
+    output = [
+        row
+        for row in merged.get("routes") or []
+        if isinstance(row, dict)
+        and str(row.get("route_kind") or "").upper() not in RETIRED_ROUTE_KINDS
+    ]
     kinds = Counter(str(row.get("route_kind") or "") for row in catalogue_rows)
     catalog_market_count = sum(
         int(payload.get("catalog_market_count") or 0)

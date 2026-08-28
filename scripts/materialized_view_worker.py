@@ -143,8 +143,19 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
             else None
         )
         source_health: dict[str, Any] = {}
-        if route_index is None:
+        publish_live_index = route_index is None
+        if publish_live_index:
             route_index, source_health = api_spreads.load_public_route_index()
+        # A prior artifact or a pinned custom chart can carry retired product
+        # permutations even after the broad catalogue was filtered. Enforce
+        # the public boundary before resident installation or disk publication.
+        route_index = {
+            key: row
+            for key, row in route_index.items()
+            if str(row.get("route_kind") or "").upper()
+            not in api_spreads.RETIRED_ROUTE_KINDS
+        }
+        if publish_live_index:
             store.write_live_route_index(
                 route_index,
                 source_signature={key: initial_signature.get(key) for key in shared_keys},
