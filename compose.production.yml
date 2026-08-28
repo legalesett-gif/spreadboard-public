@@ -112,11 +112,12 @@ services:
       # any explicitly pending source on the next non-overlapping process.
       SPREADBOARD_BULK_QUOTE_BUDGET_SECONDS: "70"
       # The route artifact is structural. Both directions of every admitted
-      # pair stay indexed while live books reprice them every few seconds, so
-      # rebuilding and reinstalling a 100MB+ index every minute only stole CPU
-      # from current quotes. Five minutes still admits genuinely new OKX DEX
-      # identities promptly; ordinary CEX direction flips need no rebuild.
-      SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS: "300"
+      # pair stay indexed while live books reprice them every few seconds. A
+      # bounded two-minute rebuild now also merges partial venue generations
+      # into that retained structure, so a newly quoteable CEX pair does not
+      # wait for a rare perfect sweep or a five-minute cadence. Foreground
+      # books retain the unchanged 90-second current-opportunity expiry.
+      SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS: "120"
       # Spot and mixed Spot/Futures venues finish their independent quote
       # writes at different times. Alternate those compact projections between
       # full 30-second passes so real overlaps are observed without extending
