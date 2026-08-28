@@ -2551,8 +2551,73 @@ FUNDING_NAVIGATION_FAILURE_RETRY_SECONDS = max(
         )
     ),
 )
+#: The funding-navigation child needs about 1.05GB of anonymous memory. The
+#: collector's steady workers already hold 2.1-3.4GB of a 4GiB cgroup, so the
+#: child was simply spawned into a cgroup that could not hold it and the kernel
+#: killed it (exit=-9) roughly every twenty minutes. Headroom oscillates
+#: 605MB-2,028MB as the periodic quote workers cycle, so waiting for a real
+#: trough turns a hard kill into a short deferral. The margin above the child's
+#: own footprint covers the other workers growing while it runs.
+FUNDING_NAVIGATION_MIN_HEADROOM_BYTES = max(
+    0,
+    int(
+        os.environ.get(
+            "SPREADBOARD_FUNDING_NAVIGATION_MIN_HEADROOM_BYTES", str(1_600 * 1024 * 1024)
+        )
+    ),
+)
+#: Retry a deferral quickly; a trough only lasts seconds.
+FUNDING_NAVIGATION_DEFERRAL_RETRY_SECONDS = max(
+    15.0,
+    float(
+        os.environ.get("SPREADBOARD_FUNDING_NAVIGATION_DEFERRAL_RETRY_SECONDS", "30")
+    ),
+)
+#: Deferring briefly is normal. Deferring for this long means the collector can
+#: never fit the build and the owner must be told rather than left with a
+#: silently ageing navigation generation.
+FUNDING_NAVIGATION_DEFERRAL_ALERT_SECONDS = max(
+    600.0,
+    float(
+        os.environ.get("SPREADBOARD_FUNDING_NAVIGATION_DEFERRAL_ALERT_SECONDS", "1800")
+    ),
+)
 _LAST_FUNDING_NAVIGATION_AT = 0.0
 _FUNDING_NAVIGATION_RETRY_AFTER = 0.0
+_FUNDING_NAVIGATION_DEFERRED_SINCE = 0.0
+
+
+def _cgroup_anon_headroom_bytes() -> int | None:
+    """Unreclaimable memory still available inside our own cgroup.
+
+    Page cache and reclaimable slab are excluded from the used figure because
+    the kernel drops them under pressure rather than OOM-killing for them.
+    Returns ``None`` when the cgroup is unbounded or unreadable, so a
+    non-containerised run is never gated.
+    """
+
+    try:
+        limit_raw = Path("/sys/fs/cgroup/memory.max").read_text().strip()
+    except OSError:
+        return None
+    if limit_raw == "max":
+        return None
+    try:
+        limit = int(limit_raw)
+    except ValueError:
+        return None
+    try:
+        anon = 0
+        for line in Path("/sys/fs/cgroup/memory.stat").read_text().splitlines():
+            key, _, value = line.partition(" ")
+            if key == "anon":
+                anon = int(value)
+                break
+    except (OSError, ValueError):
+        return None
+    if anon <= 0:
+        return None
+    return max(0, limit - anon)
 
 
 def _refresh_live_route_index(*, install: bool = True) -> bool:
@@ -2708,6 +2773,7 @@ def _refresh_funding_navigation(*, force: bool = False) -> bool:
     """Publish all twelve exact Funding tabs outside subscriber requests."""
 
     global _LAST_FUNDING_NAVIGATION_AT, _FUNDING_NAVIGATION_RETRY_AFTER
+    global _FUNDING_NAVIGATION_DEFERRED_SINCE
 
     if _service_role() == "web":
         return False
@@ -2724,6 +2790,37 @@ def _refresh_funding_navigation(*, force: bool = False) -> bool:
     if not _FUNDING_NAVIGATION_BUILD_LOCK.acquire(blocking=False):
         return False
     try:
+        headroom = _cgroup_anon_headroom_bytes()
+        if (
+            headroom is not None
+            and headroom < FUNDING_NAVIGATION_MIN_HEADROOM_BYTES
+        ):
+            # Spawning here is what the kernel kills. Wait for a trough instead:
+            # the previous valid generation keeps serving in the meantime.
+            if not _FUNDING_NAVIGATION_DEFERRED_SINCE:
+                _FUNDING_NAVIGATION_DEFERRED_SINCE = now
+            deferred_for = now - _FUNDING_NAVIGATION_DEFERRED_SINCE
+            _FUNDING_NAVIGATION_RETRY_AFTER = (
+                time.monotonic() + FUNDING_NAVIGATION_DEFERRAL_RETRY_SECONDS
+            )
+            _log(
+                "exact-ranked funding navigation deferred: cgroup headroom "
+                f"{headroom // (1024 * 1024)}MB < "
+                f"{FUNDING_NAVIGATION_MIN_HEADROOM_BYTES // (1024 * 1024)}MB "
+                f"deferred_for={deferred_for:.0f}s"
+            )
+            if deferred_for >= FUNDING_NAVIGATION_DEFERRAL_ALERT_SECONDS:
+                coverage_reconciliation.record_funding_navigation_health(
+                    ok=False,
+                    detail=(
+                        "Generation deferred; previous valid snapshot retained. "
+                        f"Collector memory headroom has stayed below "
+                        f"{FUNDING_NAVIGATION_MIN_HEADROOM_BYTES // (1024 * 1024)}MB "
+                        f"for {deferred_for / 60:.0f} minutes."
+                    ),
+                )
+            return False
+        _FUNDING_NAVIGATION_DEFERRED_SINCE = 0.0
         started = time.monotonic()
         result = _run_worker(
             [
