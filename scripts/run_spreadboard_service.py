@@ -1919,6 +1919,12 @@ class LiveRouteIndexPublisher(threading.Thread):
             and time.monotonic() - published_at <= max(0.0, max_age_seconds)
         )
 
+    def has_published(self) -> bool:
+        """Whether this collector has published one current route generation."""
+
+        with self._request_lock:
+            return bool(self._published_at)
+
     def publication_due(self) -> bool:
         """Whether deferred analytics must yield the shared publication slot."""
 
@@ -2621,6 +2627,16 @@ def _schedule_funding_navigation(
     route_index_publisher: LiveRouteIndexPublisher | None = None,
 ) -> None:
     """Coalesce a funding tick behind any in-progress structural publication."""
+
+    # A cold collector receives a funding tick well before its first complete
+    # all-venue quote sweep.  Starting the multi-minute funding-navigation
+    # child at that point claims the heavy slot just before current spreads are
+    # ready to publish.  The last complete funding generation remains readable
+    # during startup, so current route truth gets the first fresh publication.
+    if route_index_publisher is not None:
+        has_published = getattr(route_index_publisher, "has_published", None)
+        if callable(has_published) and not bool(has_published()):
+            return
 
     if _route_publication_due(
         route_index_publisher,

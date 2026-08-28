@@ -1145,6 +1145,27 @@ def test_due_route_publication_preempts_new_funding_navigation_work(
     assert workers == []
 
 
+def test_cold_start_route_publication_preempts_funding_navigation_work(
+    monkeypatch,
+) -> None:
+    workers: list[bool] = []
+
+    class ColdPublisher:
+        @staticmethod
+        def has_published() -> bool:
+            return False
+
+    monkeypatch.setattr(
+        service,
+        "_refresh_funding_navigation",
+        lambda **_kwargs: workers.append(True),
+    )
+
+    service._schedule_funding_navigation(ColdPublisher())  # type: ignore[arg-type]
+
+    assert workers == []
+
+
 def test_refresh_loop_pause_releases_websocket_process() -> None:
     class Process:
         def __init__(self) -> None:
