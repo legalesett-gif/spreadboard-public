@@ -63,6 +63,11 @@ def payload_for(
 
 def status() -> dict[str, Any]:
     state = store().status()
+    # ``route_count`` describes the chart route index. This store deliberately
+    # writes an empty one (``write_route_index({})``) because navigation needs
+    # no chart index, so passing the key through published a hard zero directly
+    # beside navigation_route_count=123,023 and read as a fault.
+    state.pop("route_count", None)
     return {
         **state,
         "expected_view_count": len(QUERIES),

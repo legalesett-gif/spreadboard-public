@@ -354,3 +354,44 @@ def test_worker_rejects_empty_lane_and_retains_previous_pointer(
 
     assert store.pointer_path.read_bytes() == previous_pointer
     assert store.status()["generation"] == old_manifest["generation"]
+
+
+def test_navigation_status_omits_the_meaningless_route_count(monkeypatch) -> None:
+    """A field that is always zero here is worse than an absent one.
+
+    /api/health published funding_navigation.route_count=0 directly beside
+    navigation_route_count=123,023. ``route_count`` describes the chart route
+    index, and this store deliberately writes an empty one because navigation
+    needs no chart index -- so the value was accurate and useless, and read as
+    a fault.
+    """
+
+    from spreadboard import funding_navigation
+
+    monkeypatch.setattr(
+        funding_navigation,
+        "store",
+        lambda: type(
+            "S",
+            (),
+            {
+                "status": staticmethod(
+                    lambda: {
+                        "ready": True,
+                        "view_count": len(funding_navigation.QUERIES),
+                        "empty_view_count": 0,
+                        "navigation_route_count": 123023,
+                        "route_count": 0,
+                    }
+                )
+            },
+        )(),
+    )
+
+    status = funding_navigation.status()
+
+    assert status["navigation_route_count"] == 123023
+    assert status["complete"] is True
+    assert "route_count" not in status, (
+        "the chart-index count must not be published beside the navigation count"
+    )
