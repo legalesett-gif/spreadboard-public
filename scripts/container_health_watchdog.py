@@ -79,6 +79,28 @@ def _read_int(path: Path) -> int | None:
         return None
 
 
+def _memory_stat(base: Path) -> dict[str, int]:
+    """Anonymous memory is the part that cannot be reclaimed under pressure.
+
+    ``memory.current`` includes page cache, which the kernel deliberately grows
+    to fill the cgroup limit and drops on demand. Using it as the pressure
+    signal reported 100% on a perfectly healthy container.
+    """
+
+    stats: dict[str, int] = {}
+    try:
+        for line in (base / "memory.stat").read_text().splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                try:
+                    stats[parts[0]] = int(parts[1])
+                except ValueError:
+                    continue
+    except OSError:
+        return {}
+    return stats
+
+
 def _memory_events(base: Path) -> dict[str, int]:
     events: dict[str, int] = {}
     try:
@@ -137,7 +159,9 @@ def inspect_container(name: str) -> dict[str, Any]:
     container_id = str(info.get("Id") or "")
     base = _cgroup_base(container_id) if container_id else None
     events = _memory_events(base) if base else {}
+    stats = _memory_stat(base) if base else {}
     current = _read_int(base / "memory.current") if base else None
+    anon = stats.get("anon")
     limit = _read_int(base / "memory.max") if base else None
     host_config = info.get("HostConfig") if isinstance(info.get("HostConfig"), dict) else {}
     if not limit or limit <= 0:
@@ -156,8 +180,14 @@ def inspect_container(name: str) -> dict[str, Any]:
         "cgroup_oom": int(events.get("oom") or 0),
         "cgroup_oom_kill": int(events.get("oom_kill") or 0),
         "memory_current_bytes": current,
+        "memory_anon_bytes": anon,
         "memory_limit_bytes": limit,
+        # Pressure is measured on anon, not memory.current: page cache fills the
+        # limit by design and is reclaimed rather than causing an OOM kill.
         "memory_pct": (
+            round(100.0 * anon / limit, 2) if anon and limit else None
+        ),
+        "memory_current_pct": (
             round(100.0 * current / limit, 2) if current and limit else None
         ),
     }
@@ -226,7 +256,7 @@ def evaluate(
             faults.append(f"{name} cgroup oom_kill={oom_kills}")
         pct = item.get("memory_pct")
         if isinstance(pct, (int, float)) and pct >= MEMORY_PRESSURE_PCT:
-            warnings.append(f"{name} memory {pct:.1f}% of cgroup limit")
+            warnings.append(f"{name} anon memory {pct:.1f}% of cgroup limit")
         if str(item.get("status")) != "running":
             faults.append(f"{name} status={item.get('status')}")
 
