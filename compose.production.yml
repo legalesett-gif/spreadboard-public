@@ -213,8 +213,10 @@ services:
     # The current Droplet has four vCPUs. This is a ceiling, not a reservation;
     # the higher CPU share below makes subscriber work win when both roles run.
     cpus: 3.6
-    # Subscriber HTTP, payments and lifecycle work win scheduling contention
-    # over background exchange collection.
+    # Subscriber HTTP, payments and lifecycle work retain a 4:1 scheduling
+    # advantage over collection. The former 8:1 split let a busy browser audit
+    # stretch otherwise 40-65s quote passes to the 90s truth boundary, causing
+    # current CEX lanes to disappear while the underlying books were healthy.
     cpu_shares: 2048
     logging:
       driver: json-file
@@ -278,7 +280,7 @@ services:
     # 4GiB. Subscriber navigation is now isolated from this work through the
     # persistent materialized-view handoff, so no server resize is required.
     cpus: 2.4
-    cpu_shares: 256
+    cpu_shares: 512
     logging:
       driver: json-file
       options:
