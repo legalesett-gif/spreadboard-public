@@ -115,7 +115,7 @@ services:
       # price pass, no less often than every two minutes. Five minutes was long
       # enough for a 20% DEX/Aster dislocation to converge materially before it
       # could enter the structural universe.
-      SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS: "120"
+      SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS: "60"
       # Spot and mixed Spot/Futures venues finish their independent quote
       # writes at different times. Alternate those compact projections between
       # full 30-second passes so real overlaps are observed without extending
@@ -247,7 +247,10 @@ services:
       # The persisted catalogue and live quote workers are available at
       # restart. Repair exact settlement windows before any due deep structural
       # discovery takes the collector's heavy-work lock.
-      SPREADBOARD_MARKET_EVIDENCE_INITIAL_DELAY_SECONDS: "0"
+      # Current all-venue books and their route index are the user-facing
+      # truth boundary.  Give the first quote+route publication the heavy
+      # worker slot before starting the slower historical evidence catch-up.
+      SPREADBOARD_MARKET_EVIDENCE_INITIAL_DELAY_SECONDS: "120"
       SPREADBOARD_STARTUP_EVIDENCE_WAIT_SECONDS: "600"
       # Structural discovery is deliberately broad and can span long venue and
       # OKX DEX cycles. Live truth has separate book/generation and exact-chain
