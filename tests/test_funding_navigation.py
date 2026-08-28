@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from scripts import funding_navigation_worker
-from spreadboard import funding_catalog, funding_navigation, server
+from spreadboard import funding_catalog, funding_navigation, materialized_views, server
 
 
 def _route(token: str, route_kind: str = "FUTURES") -> dict:
@@ -209,7 +211,12 @@ def test_worker_publishes_loaded_snapshot_when_live_source_advances(
         (
             str((query.get("kind") or [""])[0]),
             str((query.get("funding_window") or ["now"])[0]),
-        ): {"groups": [], "rows": []}
+        ): {
+            "groups": [{"token": "GUA", "routes": [{"route_key": "GUA"}]}],
+            "rows": [{"route_key": "GUA"}],
+            "matching_token_count": 1,
+            "matching_route_count": 1,
+        }
         for query in funding_navigation.QUERIES
     }
     monkeypatch.setattr(
@@ -255,4 +262,67 @@ def test_worker_publishes_loaded_snapshot_when_live_source_advances(
     )
 
     assert result["views"] == 12
+    assert result["empty_views"] == 0
+    assert result["navigation_routes"] == 12
     assert result["source_advanced_during_build"] is True
+
+
+def test_worker_rejects_empty_lane_and_retains_previous_pointer(
+    monkeypatch, tmp_path: Path
+) -> None:
+    output_root = tmp_path / "navigation"
+    store = materialized_views.Store(output_root)
+    old_writer = materialized_views.GenerationWriter(
+        store,
+        required_queries=funding_navigation.QUERIES,
+        source_signature={"old": True},
+    )
+    old_writer.write_route_index({})
+    for query in funding_navigation.QUERIES:
+        old_writer.write_view(
+            query,
+            {
+                "groups": [{"token": "OLD"}],
+                "rows": [{"route_key": "old"}],
+                "matching_token_count": 1,
+                "matching_route_count": 1,
+            },
+        )
+    old_manifest = old_writer.publish()
+    previous_pointer = store.pointer_path.read_bytes()
+
+    monkeypatch.setattr(
+        funding_navigation_worker.funding_catalog,
+        "restore_persisted_cache",
+        lambda: {"ready": True},
+    )
+    pages = {
+        (
+            str((query.get("kind") or [""])[0]),
+            str((query.get("funding_window") or ["now"])[0]),
+        ): {
+            "groups": [{"token": "GUA"}],
+            "rows": [{"route_key": "GUA"}],
+            "matching_token_count": 1,
+            "matching_route_count": 1,
+        }
+        for query in funding_navigation.QUERIES
+    }
+    first = next(iter(pages))
+    pages[first] = {
+        "groups": [],
+        "rows": [],
+        "matching_token_count": 0,
+        "matching_route_count": 0,
+    }
+    monkeypatch.setattr(
+        funding_navigation_worker.funding_catalog,
+        "build_navigation_pages",
+        lambda **_kwargs: pages,
+    )
+
+    with pytest.raises(RuntimeError, match="empty_funding_navigation_lanes"):
+        funding_navigation_worker.build(tmp_path / "board.jsonl", output_root)
+
+    assert store.pointer_path.read_bytes() == previous_pointer
+    assert store.status()["generation"] == old_manifest["generation"]

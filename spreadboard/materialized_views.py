@@ -129,6 +129,8 @@ class GenerationWriter:
             "sha256": _sha256(raw),
             "group_count": len(payload.get("groups") or []),
             "row_count": len(payload.get("rows") or []),
+            "matching_token_count": int(payload.get("matching_token_count") or 0),
+            "matching_route_count": int(payload.get("matching_route_count") or 0),
         }
 
     def write_route_index(self, rows: dict[str, dict[str, Any]]) -> None:
@@ -263,12 +265,31 @@ class Store:
         manifest = self._load_manifest()
         if manifest is None:
             return {"ready": False, "generation": None, "built_at_unix": None}
+        views = [
+            item for item in manifest.get("views") or [] if isinstance(item, dict)
+        ]
+        empty = [
+            str(item.get("identity") or "")
+            for item in views
+            if int(item.get("matching_token_count") or item.get("group_count") or 0) <= 0
+            or int(item.get("matching_route_count") or item.get("row_count") or 0) <= 0
+        ]
         return {
             "ready": True,
             "generation": manifest.get("generation"),
             "built_at_unix": manifest.get("built_at_unix"),
             "source_signature": manifest.get("source_signature") or {},
-            "view_count": len(manifest.get("views") or []),
+            "view_count": len(views),
+            "view_group_count": sum(int(item.get("group_count") or 0) for item in views),
+            "view_row_count": sum(int(item.get("row_count") or 0) for item in views),
+            "navigation_token_count": sum(
+                int(item.get("matching_token_count") or 0) for item in views
+            ),
+            "navigation_route_count": sum(
+                int(item.get("matching_route_count") or 0) for item in views
+            ),
+            "empty_view_count": len(empty),
+            "empty_view_identities": empty,
             "route_count": int((manifest.get("route_index") or {}).get("row_count") or 0),
         }
 

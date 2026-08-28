@@ -42,9 +42,10 @@ from spreadboard import (  # noqa: E402
     catalog_pairs,
     chart_catalog,
     chart_warm_demand,
+    coverage_reconciliation,
+    credential_crypto,
     crypto_billing,
     crypto_watcher,
-    credential_crypto,
     exchange_credentials,
     executor_boundary,
     fair_price,
@@ -58,10 +59,10 @@ from spreadboard import (  # noqa: E402
     live_book_cache,
     mailer,
     margin_planner,
-    materialized_views,
     market_history,
-    venue_funding_history,
-    web_push,
+    materialized_views,
+    operator_alerts,
+    opportunity_journal,
     portfolio,
     research_calibration,
     research_score,
@@ -71,7 +72,9 @@ from spreadboard import (  # noqa: E402
     telegram_queries,
     token_rankings,
     tracked_route_warmer,
+    venue_funding_history,
     warm_query_projection,
+    web_push,
 )
 
 #: Same story as the board cache: intel takes ~24s to build and a 20s life meant
@@ -1162,6 +1165,9 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             return
         accounts.set_current_user(getattr(self, "current_user", None))
         try:
+            if parsed.path == "/api/internal/reconciliation/uacryptoinvest":
+                self._handle_uacryptoinvest_reconciliation()
+                return
             if parsed.path == "/api/billing/webhook":
                 raw = self._read_raw_body()
                 event = billing.verify_webhook(raw, self.headers.get("Stripe-Signature", ""))
@@ -1768,6 +1774,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             "/api/executor-boundary",
             "/api/billing/webhook",
             "/api/telegram/webhook",
+            "/api/internal/reconciliation/uacryptoinvest",
             "/favicon.ico",
             "/service-worker.js",
         } or path.startswith(("/assets/", "/r/"))
@@ -1849,6 +1856,64 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 self._redirect("/pricing?upgrade=research_pro")
             return False
         return True
+
+    def _handle_uacryptoinvest_reconciliation(self) -> None:
+        """Accept a bounded public reference sample and compare it locally.
+
+        The bearer token authorizes only this read-only comparison. It cannot
+        mutate subscriptions, credentials, orders or market data, and the
+        reference prices are never copied into SpreadBoard product rows.
+        """
+
+        expected = os.environ.get("SPREADBOARD_RECONCILIATION_TOKEN", "").strip()
+        supplied = self.headers.get("Authorization", "").strip()
+        candidate = (
+            supplied.removeprefix("Bearer ").strip()
+            if supplied.startswith("Bearer ")
+            else ""
+        )
+        if not expected:
+            self._send_json(
+                {"ok": False, "error": "reconciliation_not_configured"},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        if not candidate or not hmac.compare_digest(candidate, expected):
+            self._send_json(
+                {"ok": False, "error": "invalid_reconciliation_token"},
+                status=HTTPStatus.UNAUTHORIZED,
+            )
+            return
+        payload = self._read_payload()
+        routes = materialized_views.default_store().live_route_index(
+            board_path=self.server.board_path
+        )
+        if not routes:
+            self._send_json(
+                {"ok": False, "error": "live_route_index_unavailable"},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        result = coverage_reconciliation.run(
+            payload,
+            routes=routes,
+            catalog=chart_catalog.load(),
+        )
+        failures = list(result.get("failures") or [])
+        operator_alerts.notify_transition(
+            "external_route_reconciliation",
+            active=bool(failures),
+            title="SpreadBoard route reconciliation",
+            message=(
+                f"Exact-pair recall={result.get('exact_pair_recall_pct')}%; "
+                f"drop={result.get('recall_drop_pp')}pp; "
+                f"absences={result.get('absence_count')}; "
+                f"investigations={result.get('spread_investigation_count')}; "
+                f"failures={','.join(failures) if failures else 'none'}."
+            ),
+            db_path=self.server.accounts_path,
+        )
+        self._send_json({"ok": True, **result})
 
     def _handle_set_password(self) -> None:
         """Spend a one-time link. Rate limited like a login, for the same reason."""
@@ -6513,6 +6578,11 @@ def api_token(
         "url": f"/api/token/{symbol}",
     }
     token_data["board_rows"] = _find_board_symbol(symbol, board_path)
+    token_data["recent_spread_opportunities"] = opportunity_journal.recent_events(
+        token=symbol,
+        since_seconds=1800,
+        limit=25,
+    )
     token_data["community_pulse"] = (
         token_community_pulse(symbol, board_path) if include_community else {}
     )
@@ -6713,6 +6783,13 @@ def api_admin_health(
         **subscription_lifecycle.status(),
     }
     payload["private_accounting"] = accounting_worker_status()
+    payload["coverage_reconciliation"] = coverage_reconciliation.load_json(
+        coverage_reconciliation.STATUS_PATH
+    ) or {"status": "not_run"}
+    payload["book_coverage"] = coverage_reconciliation.load_json(
+        coverage_reconciliation.BOOK_COVERAGE_PATH
+    ) or {"status": "not_run"}
+    payload["funding_navigation"] = funding_navigation.status()
     return payload
 
 

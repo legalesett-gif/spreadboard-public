@@ -11,6 +11,7 @@ projects arbitrary filters from it without network I/O or discovery parsing.
 from __future__ import annotations
 
 import copy
+import logging
 import statistics
 import threading
 import time
@@ -18,7 +19,9 @@ from collections import Counter
 from collections.abc import Iterable
 from typing import Any
 
-from spreadboard import api_spreads
+from spreadboard import api_spreads, opportunity_journal
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_REFRESH_SECONDS = 10.0
 PRIORITY_ROUTE_KIND_GROUPS = (
@@ -313,6 +316,60 @@ class LiveRouteUniverse:
         ]
         return selected, status
 
+    def opportunity_rows(
+        self, route_kinds: Iterable[str]
+    ) -> list[dict[str, Any]]:
+        """Return a compact, current event feed for the opportunity journal.
+
+        This intentionally reads only the already-computed live overlay.  It
+        performs no venue I/O, never extends a quote timestamp and omits cooled
+        rows, so journaling cannot make a stale route look executable.
+        """
+
+        wanted = {
+            str(value).strip().upper()
+            for value in route_kinds
+            if str(value).strip()
+        }
+        now = time.time()
+        with self._lock:
+            rows = self._rows
+            updates = self._updates
+            output: list[dict[str, Any]] = []
+            for key, row in rows.items():
+                route_kind = str(row.get("route_kind") or "").upper()
+                if route_kind not in wanted:
+                    continue
+                update = updates.get(key)
+                if update is None or len(update) < 3 or update[0] is None:
+                    continue
+                try:
+                    spread = float(update[0])
+                    quote_ts_us = int(update[2] or 0)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                age = now - quote_ts_us / 1_000_000.0 if quote_ts_us else float("inf")
+                if not -1.0 <= age <= api_spreads.SPREAD_LEADER_MAX_AGE_MIN * 60.0:
+                    continue
+                output.append(
+                    {
+                        "route_key": key,
+                        "token": str(row.get("token") or "").upper(),
+                        "route_kind": route_kind,
+                        "long_venue": row.get("long_venue"),
+                        "long_market_type": row.get("long_market_type"),
+                        "long_market_symbol": row.get("long_market_symbol"),
+                        "short_venue": row.get("short_venue"),
+                        "short_market_type": row.get("short_market_type"),
+                        "short_market_symbol": row.get("short_market_symbol"),
+                        "spread_pct": spread,
+                        "funding_daily_pct": update[1] if len(update) > 1 else None,
+                        "quote_ts_us": quote_ts_us,
+                        "quote_basis": update[3] if len(update) > 3 else None,
+                    }
+                )
+        return output
+
     def _status_unlocked(self) -> dict[str, Any]:
         age = max(0.0, time.time() - self._refreshed_at) if self._refreshed_at else None
         return {
@@ -524,9 +581,20 @@ class Worker(threading.Thread):
         priority_index = 0
         while not self.stop_event.is_set():
             started = time.monotonic()
-            LIVE_UNIVERSE.refresh_route_kinds(
-                priority_groups[priority_index % len(priority_groups)]
-            )
+            route_kinds = priority_groups[priority_index % len(priority_groups)]
+            status = LIVE_UNIVERSE.refresh_route_kinds(route_kinds)
+            if (
+                isinstance(status, dict)
+                and not status.get("last_error")
+                and hasattr(LIVE_UNIVERSE, "opportunity_rows")
+            ):
+                try:
+                    opportunity_journal.record_snapshot(
+                        LIVE_UNIVERSE.opportunity_rows(route_kinds),
+                        observed_route_kinds=route_kinds,
+                    )
+                except Exception:
+                    LOGGER.exception("opportunity journal update failed")
             priority_index += 1
             remaining = max(
                 0.0,

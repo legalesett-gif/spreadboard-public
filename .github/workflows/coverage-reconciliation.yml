@@ -1,0 +1,33 @@
+name: Independent route coverage reconciliation
+
+on:
+  schedule:
+    # Deliberately off the top of the hour; twice daily is enough to catch
+    # systematic omissions without turning a competitor into a data source.
+    - cron: "17 6,18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spreadboard-coverage-reconciliation
+  cancel-in-progress: true
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install isolated browser dependencies
+        run: |
+          python -m pip install --disable-pip-version-check playwright==1.58.0
+          python -m playwright install --with-deps chromium
+
+      - name: Compare sampled routes with direct-book SpreadBoard output
+        env:
+          SPREADBOARD_RECONCILIATION_TOKEN: ${{ secrets.SPREADBOARD_RECONCILIATION_TOKEN }}
+          SPREADBOARD_RECONCILIATION_URL: https://spreadarbitrage.ink/api/internal/reconciliation/uacryptoinvest
+        run: python scripts/uacryptoinvest_reconciliation_probe.py

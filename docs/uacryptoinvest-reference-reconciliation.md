@@ -42,9 +42,30 @@ For each sampled competitor leader:
 6. Fix a missing adapter, classification or generation defect; accept an
    exclusion when current evidence really fails, and record the reason.
 
-This comparison should be sampled periodically across the top Futures-Futures,
-Futures-Spot and Futures-DEX rows. It is not a reason to copy stale prices,
-invent token aliases, or weaken evidence gates.
+## Automated guard
+
+`.github/workflows/coverage-reconciliation.yml` now runs twice daily and can be
+started manually. It reads the leading 15 and a deterministic randomized tail
+of 10 rows from each public Futures-Futures and Spot-Futures lane, then sends a
+bounded reference envelope to SpreadBoard's token-scoped, read-only monitor.
+The monitor compares direction, venue, market type and SpreadBoard's resolved
+USDT symbols; verifies current direct books; records a reason for every
+absence; and flags direct-book spread differences above 0.5 percentage points.
+It never copies the reference price into the product.
+
+The same run separately gates OKX DEX 56 on structural routes, chain/contract
+identity and at least one current matched-$500 quote. Completed internal book
+generations warn after two consecutive readings below 90% and become critical
+immediately below 85%. Exact-pair recall fails below 95% or after a drop above
+two percentage points.
+
+Funding navigation is also fail-closed. Any empty required lane aborts the
+staging generation, retains the previous valid pointer and emits an owner-only
+operational transition. `scripts/release_integrity_gate.py` exposes the same
+persisted checks to the release procedure.
+
+This comparison is not a reason to copy stale prices, invent token aliases, or
+weaken evidence gates.
 
 ## Retired pair products
 

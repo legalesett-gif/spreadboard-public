@@ -58,6 +58,16 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     )
     if len(pages) != len(funding_navigation.QUERIES):
         raise RuntimeError(f"incomplete_funding_navigation:{len(pages)}")
+    empty_lanes = [
+        f"{kind}:{window}"
+        for (kind, window), page in pages.items()
+        if int(page.get("matching_token_count") or len(page.get("groups") or [])) <= 0
+        or int(page.get("matching_route_count") or len(page.get("rows") or [])) <= 0
+    ]
+    if empty_lanes:
+        # Publication is pointer-atomic.  Raising before creating a writer
+        # guarantees that the previous complete generation remains current.
+        raise RuntimeError("empty_funding_navigation_lanes:" + ",".join(sorted(empty_lanes)))
 
     store = materialized_views.Store(output_root)
     writer = materialized_views.GenerationWriter(
@@ -96,6 +106,13 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         "status": "ok",
         "generation": manifest["generation"],
         "views": len(manifest["views"]),
+        "empty_views": 0,
+        "navigation_tokens": sum(
+            int(page.get("matching_token_count") or 0) for page in pages.values()
+        ),
+        "navigation_routes": sum(
+            int(page.get("matching_route_count") or 0) for page in pages.values()
+        ),
         # Every source file and its decoded object is atomic. A newer funding
         # handoff during this bounded build does not make the loaded snapshot
         # internally inconsistent; aborting here could starve publication

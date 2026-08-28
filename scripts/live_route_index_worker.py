@@ -20,6 +20,7 @@ from spreadboard import (
     api_spreads,
     catalog_pairs,
     chart_catalog,
+    coverage_reconciliation,
     materialized_views,
 )
 
@@ -326,6 +327,7 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         source_signature=initial,
         coverage=coverage,
     )
+    book_health = coverage_reconciliation.record_book_coverage(coverage)
     return {
         "status": "ok",
         "routes": len(rows),
@@ -335,6 +337,7 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         "seconds": round(time.monotonic() - started, 3),
         "source_updated_at": source_health.get("updated_at"),
         "coverage": coverage,
+        "book_coverage_health": book_health,
         "artifact": meta.get("file"),
     }
 

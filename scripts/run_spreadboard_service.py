@@ -31,6 +31,7 @@ from spreadboard import (
     api_spreads,
     board,
     chart_warm_demand,
+    coverage_reconciliation,
     crypto_watcher,
     funding_catalog,
     funding_history_demand,
@@ -38,6 +39,7 @@ from spreadboard import (
     historical_spreads,
     market_history,
     materialized_views,
+    operator_alerts,
     portfolio,
     rail_watch,
     route_taxonomy,
@@ -911,6 +913,12 @@ class SharedArtifactWatcher(threading.Thread):
         self.funding_navigation_signature = _artifact_signature(
             funding_navigation.store().pointer_path
         )
+        self.book_coverage_health_signature = _artifact_signature(
+            coverage_reconciliation.BOOK_COVERAGE_PATH
+        )
+        self.funding_navigation_health_signature = _artifact_signature(
+            coverage_reconciliation.FUNDING_NAVIGATION_HEALTH_PATH
+        )
         self.warm_lock = threading.Lock()
         self.warm_pending = False
         self.funding_warm_pending = False
@@ -975,6 +983,7 @@ class SharedArtifactWatcher(threading.Thread):
                 "exact-ranked funding navigation installed "
                 f"status={funding_navigation.status()}"
             )
+        self._notify_operational_health_if_changed()
         generation = _artifact_signature(MARKET_GENERATION_PATH)
         if generation != self.generation_signature:
             self.generation_signature = generation
@@ -996,6 +1005,44 @@ class SharedArtifactWatcher(threading.Thread):
             self.initial_warm_requested = True
             self.request_warm()
         self._recover_telegram_snapshot_if_due()
+
+    def _notify_operational_health_if_changed(self) -> None:
+        book_signature = _artifact_signature(
+            coverage_reconciliation.BOOK_COVERAGE_PATH
+        )
+        if book_signature != self.book_coverage_health_signature:
+            self.book_coverage_health_signature = book_signature
+            health = coverage_reconciliation.load_json(
+                coverage_reconciliation.BOOK_COVERAGE_PATH
+            )
+            fault = str(health.get("status") or "unknown") in {"warn", "critical"}
+            operator_alerts.notify_transition(
+                "book_coverage_degraded",
+                active=fault,
+                title="SpreadBoard book coverage",
+                message=(
+                    f"Completed route-index generation is {health.get('status')}: "
+                    f"{health.get('book_coverage_pct')}% "
+                    f"({health.get('fresh_market_count')}/"
+                    f"{health.get('catalog_market_count')}); consecutive below "
+                    f"90%={health.get('consecutive_below_90')}."
+                ),
+            )
+        navigation_signature = _artifact_signature(
+            coverage_reconciliation.FUNDING_NAVIGATION_HEALTH_PATH
+        )
+        if navigation_signature != self.funding_navigation_health_signature:
+            self.funding_navigation_health_signature = navigation_signature
+            health = coverage_reconciliation.load_json(
+                coverage_reconciliation.FUNDING_NAVIGATION_HEALTH_PATH
+            )
+            fault = str(health.get("status") or "unknown") == "failed"
+            operator_alerts.notify_transition(
+                "funding_navigation_publication",
+                active=fault,
+                title="SpreadBoard Funding navigation",
+                message=str(health.get("detail") or "Funding navigation status changed."),
+            )
 
     def _recover_telegram_snapshot_if_due(self) -> None:
         """Retry a missing resident bot snapshot without waiting for discovery.
@@ -2599,6 +2646,13 @@ def _refresh_funding_navigation(*, force: bool = False) -> bool:
                 f"timeout={result.timed_out} exit={result.returncode} "
                 f"detail={(result.stdout or result.stderr)[-350:]}"
             )
+            coverage_reconciliation.record_funding_navigation_health(
+                ok=False,
+                detail=(
+                    "Generation failed; previous valid snapshot retained. "
+                    f"timeout={result.timed_out}; exit={result.returncode}."
+                ),
+            )
             return False
         try:
             summary = json.loads(result.stdout.strip().splitlines()[-1])
@@ -2607,15 +2661,40 @@ def _refresh_funding_navigation(*, force: bool = False) -> bool:
                 time.monotonic() + FUNDING_NAVIGATION_FAILURE_RETRY_SECONDS
             )
             _log("exact-ranked funding navigation produced no summary")
+            coverage_reconciliation.record_funding_navigation_health(
+                ok=False,
+                detail="Worker produced no summary; previous valid snapshot retained.",
+            )
             return False
         if int(summary.get("views") or 0) != len(funding_navigation.QUERIES):
             _FUNDING_NAVIGATION_RETRY_AFTER = (
                 time.monotonic() + FUNDING_NAVIGATION_FAILURE_RETRY_SECONDS
             )
             _log(f"exact-ranked funding navigation incomplete {summary}")
+            coverage_reconciliation.record_funding_navigation_health(
+                ok=False,
+                detail=f"Incomplete generation retained; summary={str(summary)[:350]}",
+            )
+            return False
+        if int(summary.get("empty_views") or 0) or int(summary.get("navigation_routes") or 0) <= 0:
+            _FUNDING_NAVIGATION_RETRY_AFTER = (
+                time.monotonic() + FUNDING_NAVIGATION_FAILURE_RETRY_SECONDS
+            )
+            _log(f"exact-ranked funding navigation empty {summary}")
+            coverage_reconciliation.record_funding_navigation_health(
+                ok=False,
+                detail=f"Empty generation rejected; summary={str(summary)[:350]}",
+            )
             return False
         _LAST_FUNDING_NAVIGATION_AT = time.monotonic()
         _FUNDING_NAVIGATION_RETRY_AFTER = 0.0
+        coverage_reconciliation.record_funding_navigation_health(
+            ok=True,
+            detail=(
+                f"All {summary.get('views')} required lanes are non-empty; "
+                f"routes={summary.get('navigation_routes')}."
+            ),
+        )
         _log(
             "exact-ranked funding navigation ready "
             f"generation={summary.get('generation')} views={summary.get('views')} "

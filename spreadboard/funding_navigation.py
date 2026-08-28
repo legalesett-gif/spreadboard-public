@@ -67,5 +67,9 @@ def status() -> dict[str, Any]:
         **state,
         "expected_view_count": len(QUERIES),
         "complete": bool(state.get("ready"))
-        and int(state.get("view_count") or 0) == len(QUERIES),
+        and int(state.get("view_count") or 0) == len(QUERIES)
+        and int(state.get("empty_view_count") or 0) == 0
+        and int(state.get("navigation_route_count") or 0) > 0,
+        "nonempty": int(state.get("empty_view_count") or 0) == 0
+        and int(state.get("navigation_route_count") or 0) > 0,
     }
