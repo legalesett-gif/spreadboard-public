@@ -180,6 +180,11 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
             json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
             handle.flush()
             os.fsync(handle.fileno())
+        # This runs as root on the host while the containers read it as an
+        # unprivileged user. mkstemp creates 0600, which made the artifact
+        # unreadable to the very processes that must relay it. The payload is
+        # deliberately secret-free.
+        os.chmod(temporary, 0o644)
         os.replace(temporary, path)
     finally:
         try:
