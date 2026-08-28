@@ -498,12 +498,16 @@ def test_status_discloses_partial_dex_and_every_running_customer_service(monkeyp
                 "updated_at": "2026-08-21T13:00:00Z",
                 "age_min": 0.5,
                 "row_count": 23_696,
-                "dex_spot_source": {
-                    "status": "partial",
-                    "rows": 0,
-                    "details": {"provider": "OKX DEX"},
-                    "blockers": ["partial_source_errors"],
-                    "errors": ["catalogue:1:API key or regions have no access"],
+                # Standalone DEX-Spot is retired; OKX DEX health is the
+                # DEX-FUTURES lane the fast-quote pass actually publishes.
+                "lane_token_counts": {"DEX-FUTURES": 0},
+                "fast_quote_refresh": {
+                    "status": "degraded",
+                    "lane_token_counts": {"DEX-FUTURES": 0},
+                    "top_25_ready": {"DEX-FUTURES": False},
+                    "failure_reason_counts": {
+                        "API key or regions have no access": 1
+                    },
                 },
             },
         },
@@ -564,11 +568,13 @@ def test_status_does_not_mislabel_a_transient_dex_partial_as_access_blocked(
         lambda *_args, **_kwargs: {
             "ok": True,
             "canonical_api": {
-                "dex_spot_source": {
-                    "status": "partial",
-                    "details": {"provider": "Example DEX"},
-                    "errors": ["quote timeout"],
-                }
+                "lane_token_counts": {"DEX-FUTURES": 0},
+                "fast_quote_refresh": {
+                    "status": "degraded",
+                    "lane_token_counts": {"DEX-FUTURES": 0},
+                    "top_25_ready": {"DEX-FUTURES": False},
+                    "failure_reason_counts": {"quote timeout": 3},
+                },
             },
         },
     )
@@ -594,8 +600,8 @@ def test_status_does_not_mislabel_a_transient_dex_partial_as_access_blocked(
     )
 
     assert payload["components"]["dex_quotes"]["detail"] == (
-        "Example DEX quote source is degraded; CEX market data remains live"
-    )
+        "OKX DEX quote source is degraded; CEX market data remains live"
+    ), "a quote timeout is a degradation, never an access block"
     assert payload["components"]["telegram"]["status"] == "setup_needed"
 
 
