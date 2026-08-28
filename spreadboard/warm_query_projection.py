@@ -48,18 +48,36 @@ class LiveRouteUniverse:
         """Install a complete immutable structural generation by reference."""
 
         with self._lock:
-            retained_updates = {
-                key: value for key, value in self._updates.items() if key in rows
-            }
+            previous_updates = self._updates
+        now = time.time()
+        seeded_updates = {
+            key: _newest_route_update(
+                previous_updates.get(key),
+                _structural_route_update(row),
+            )
+            for key, row in rows.items()
+        }
+        seeded_updates = {
+            key: value for key, value in seeded_updates.items() if value is not None
+        }
+        live_metrics = _live_update_metrics(rows, seeded_updates, now=now)
+        with self._lock:
             self._rows = rows
             self._template = template
-            self._updates = retained_updates
+            # The collector's new structural generation already carries a
+            # real quote timestamp.  Prefer it whenever it is newer than the
+            # process-local overlay; retaining an older tuple here hid tens of
+            # thousands of freshly published rows until another long pass.
+            self._updates = seeded_updates
+            self._live_metrics = live_metrics
             self._installed_generation += 1
-            if not retained_updates:
+            if seeded_updates:
+                self._refreshed_at = now
+                self._refresh_seconds = 0.0
+            else:
                 self._refreshed_at = 0.0
                 self._refresh_seconds = None
                 self._headlines = {}
-                self._live_metrics = {}
             self._last_error = None
 
     def refresh(self) -> dict[str, Any]:
@@ -151,6 +169,7 @@ class LiveRouteUniverse:
         }
         if not wanted:
             return self.status()
+        started = time.monotonic()
         with self._refresh_lock:
             with self._lock:
                 rows = self._rows
@@ -191,7 +210,24 @@ class LiveRouteUniverse:
                     self._live_metrics = _live_update_metrics(
                         rows, updates, now=time.time()
                     )
+                    self._refreshed_at = time.time()
+                    self._refresh_seconds = time.monotonic() - started
                     self._last_error = None
+        return self.status()
+
+    def refresh_headlines(self) -> dict[str, Any]:
+        """Rebuild small navigation summaries without repricing every route."""
+
+        with self._lock:
+            rows = self._rows
+            updates = self._updates
+            generation = self._installed_generation
+        if not rows:
+            return self.status()
+        headlines = _build_headlines(tuple(rows.values()), updates, now=time.time())
+        with self._lock:
+            if generation == self._installed_generation and rows is self._rows:
+                self._headlines = headlines
         return self.status()
 
     def snapshot(
@@ -323,6 +359,48 @@ def _live_update_metrics(
     }
 
 
+def _structural_route_update(row: dict[str, Any]) -> tuple[Any, ...] | None:
+    """Extract the collector's timestamped economics from one index row."""
+
+    if api_spreads.matched_probe_verified(row):
+        spread = api_spreads._float_or_none(row.get("depth_weighted_spread_pct"))
+        basis = "matched_vwap"
+    else:
+        spread = api_spreads._float_or_none(row.get("executable_spread_pct"))
+        basis = "top_book" if spread is not None else None
+    funding = api_spreads._float_or_none(row.get("funding_daily_pct"))
+    try:
+        quote_ts_us = int(row.get("quote_ts_us") or 0) or None
+    except (TypeError, ValueError, OverflowError):
+        quote_ts_us = None
+    if spread is None and funding is None:
+        return None
+    return (spread, funding, quote_ts_us if spread is not None else None, basis)
+
+
+def _newest_route_update(
+    previous: tuple[Any, ...] | None,
+    structural: tuple[Any, ...] | None,
+) -> tuple[Any, ...] | None:
+    """Keep the newest price while preserving explicit live funding expiry."""
+
+    if previous is None:
+        return structural
+    if structural is None:
+        return previous
+
+    def timestamp(update: tuple[Any, ...]) -> int:
+        try:
+            return int(update[2] or 0) if len(update) > 2 else 0
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    price_update = structural if timestamp(structural) >= timestamp(previous) else previous
+    funding = previous[1] if len(previous) > 1 else structural[1]
+    basis = price_update[3] if len(price_update) > 3 else None
+    return (price_update[0], funding, price_update[2], basis)
+
+
 LIVE_UNIVERSE = LiveRouteUniverse()
 
 
@@ -427,26 +505,28 @@ class Worker(threading.Thread):
         )
 
     def run(self) -> None:
-        last_full_finished = 0.0
+        last_headline_refresh = 0.0
         priority_groups = (
             {"FUTURES"},
-            {"FUTURES-SPOT", "SPOT-FUTURES"},
-            {"DEX-FUTURES", "DEX-SPOT"},
+            {"FUTURES-SPOT"},
+            {"SPOT-FUTURES"},
+            {"DEX-FUTURES"},
+            {"DEX-SPOT"},
             {"SPOT"},
         )
         priority_index = 0
         while not self.stop_event.is_set():
             started = time.monotonic()
-            if started - last_full_finished >= self.interval_seconds:
-                LIVE_UNIVERSE.refresh()
-                # A slow full pass must not immediately trigger another full
-                # pass and permanently starve the small priority lanes.
-                last_full_finished = time.monotonic()
-            else:
-                LIVE_UNIVERSE.refresh_route_kinds(
-                    priority_groups[priority_index % len(priority_groups)]
-                )
-                priority_index += 1
+            LIVE_UNIVERSE.refresh_route_kinds(
+                priority_groups[priority_index % len(priority_groups)]
+            )
+            priority_index += 1
+            if (
+                priority_index % len(priority_groups) == 0
+                and started - last_headline_refresh >= self.interval_seconds
+            ):
+                LIVE_UNIVERSE.refresh_headlines()
+                last_headline_refresh = time.monotonic()
             remaining = max(
                 0.0,
                 self.priority_interval_seconds - (time.monotonic() - started),

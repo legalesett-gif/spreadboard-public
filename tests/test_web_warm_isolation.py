@@ -82,3 +82,35 @@ def test_web_watcher_installs_collector_funding_catalogue(tmp_path, monkeypatch)
     watcher.check_once()
 
     assert installed == [True]
+
+
+def test_web_watcher_installs_live_index_without_blocking_on_full_reprice(
+    tmp_path, monkeypatch
+) -> None:
+    from spreadboard import server, warm_query_projection
+
+    pointer = tmp_path / "live-route-index-current.json"
+    monkeypatch.setattr(service, "_live_route_pointer_path", lambda: pointer)
+    installed: list[bool] = []
+    monkeypatch.setattr(
+        server,
+        "restore_materialized_route_index",
+        lambda _path: installed.append(True) or 123,
+    )
+    monkeypatch.setattr(
+        warm_query_projection.LIVE_UNIVERSE,
+        "refresh",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("the artifact watcher must not synchronously reprice")
+        ),
+    )
+    watcher = service.SharedArtifactWatcher(
+        threading.Event(),
+        initial_warm_delay_seconds=3600,
+        telegram_recovery_interval_seconds=3600,
+    )
+
+    pointer.write_text("{}", encoding="utf-8")
+    watcher.check_once()
+
+    assert installed == [True]

@@ -1435,7 +1435,37 @@ def live_route_updates_for(
         fast_dex_quotes = dict(_FAST_ROUTE_UPDATE_CACHE.get("dex") or {})
     out: dict[str, tuple[Any, ...]] = {}
     funding_legs = bulk_quotes.load_funding() if include_funding else {}
+    funding_leg_daily: dict[tuple[str, str], float | None] = {}
+    funding_daily_by_route: dict[str, float | None] = {}
+
+    def cached_funding_daily(route: dict[str, Any]) -> float | None:
+        daily: dict[str, float] = {}
+        saw_live_leg = False
+        for side in ("long", "short"):
+            if str(route.get(f"{side}_market_type") or "") != "Futures":
+                daily[side] = 0.0
+                continue
+            venue = str(route.get(f"{side}_venue") or "")
+            symbol = str(route.get(f"{side}_market_symbol") or "")
+            key = (venue, symbol)
+            if key not in funding_leg_daily:
+                entry = funding_legs.get(f"{venue}|{symbol}") if symbol else None
+                if entry:
+                    funding_leg_daily[key] = _per_day(
+                        _float_or_none(entry.get("rate_pct")),
+                        _float_or_none(entry.get("interval_hours")),
+                    )
+                else:
+                    funding_leg_daily[key] = None
+            value = funding_leg_daily[key]
+            if value is None:
+                return None
+            saw_live_leg = True
+            daily[side] = value
+        return daily["short"] - daily["long"] if saw_live_leg else None
+
     for route in routes:
+        route_key = str(route.get("route_key") or "")
         long_book_key = live_book_cache.cache_key(
             str(route.get("long_venue") or ""),
             str(route.get("long_market_type") or ""),
@@ -1448,23 +1478,27 @@ def live_route_updates_for(
         )
         long_book = books.get(long_book_key)
         short_book = books.get(short_book_key)
-        dex_identity = _fast_dex_leg_identity(route)
+        route_kind = str(route.get("route_kind") or "").upper()
+        possible_dex = route_kind.startswith("DEX-") or any(
+            str(route.get(f"{side}_market_type") or "").casefold() == "dex"
+            for side in ("long", "short")
+        )
+        dex_side = _route_dex_side(route) if possible_dex else ""
+        has_dex_leg = bool(dex_side)
+        dex_identity = _fast_dex_leg_identity(route) if has_dex_leg else None
         dex_quote = fast_dex_quotes.get(dex_identity) if dex_identity else None
         if dex_quote is not None and not spread_quote_current(
             {"quote_ts_us": dex_quote[1]}
         ):
             dex_quote = None
-        dex_side = (
-            dex_identity[2]
-            if dex_identity is not None
-            else _route_dex_side(route)
-        )
+        if dex_identity is not None:
+            dex_side = dex_identity[2]
         # Mixing one current CEX book with one older quote can manufacture a
         # spread that never existed. CEX routes therefore move only when both
         # books are live. A DEX leg has no websocket by definition, so those
         # routes may still reprice their one streamable CEX leg.
         price_is_live = not (long_book is None and short_book is None)
-        if not _route_has_dex_leg(route):
+        if not has_dex_leg:
             price_is_live = long_book is not None and short_book is not None
         else:
             other_book = short_book if dex_side == "long" else long_book
@@ -1476,11 +1510,13 @@ def live_route_updates_for(
             price_is_live = other_book is not None and (
                 dex_quote is not None or spread_quote_current(route)
             )
-        funding_daily = _stream_funding_daily(route, funding_legs) if include_funding else None
+        funding_daily = cached_funding_daily(route) if include_funding else None
+        if route_key:
+            funding_daily_by_route[route_key] = funding_daily
         if not price_is_live:
             if funding_daily is not None:
                 update = (None, funding_daily, None, None)
-                out[str(route["route_key"])] = update if include_basis else update[:3]
+                out[route_key] = update if include_basis else update[:3]
             continue
         prior_depth_verified = matched_probe_verified(route) and dex_quote is None
         if dex_side == "long" and dex_quote is not None:
@@ -1539,7 +1575,7 @@ def live_route_updates_for(
             # renew that *indicative* timestamp. Keeping the structural build
             # time made every research/DD row disappear exactly 90 seconds
             # after the route-index worker, even while both books kept moving.
-            if prior_depth_verified or _route_has_dex_leg(route):
+            if prior_depth_verified or has_dex_leg:
                 quote_ts_us = (
                     dex_quote[1]
                     if dex_quote is not None
@@ -1560,7 +1596,7 @@ def live_route_updates_for(
             ]
             # The DEX leg does not stream.  Its last exact quote remains the
             # freshness boundary even while the CEX leg moves continuously.
-            if _route_has_dex_leg(route):
+            if has_dex_leg:
                 dex_stamp = (
                     dex_quote[1]
                     if dex_quote is not None
@@ -1575,7 +1611,7 @@ def live_route_updates_for(
             quote_ts_us,
             spread_basis,
         )
-        out[str(route["route_key"])] = update if include_basis else update[:3]
+        out[route_key] = update if include_basis else update[:3]
     # A complete fast-quote cycle covers routes that are intentionally outside
     # the resident websocket set. Prefer a two-book live update when present;
     # otherwise use the exact current compact-worker route instead of retaining
@@ -1627,7 +1663,7 @@ def live_route_updates_for(
             route_key = str(route.get("route_key") or "")
             if not route_key:
                 continue
-            funding = _stream_funding_daily(route, funding_legs)
+            funding = funding_daily_by_route.get(route_key)
             existing = out.get(route_key)
             if existing is None:
                 merged = (None, funding, None, None)

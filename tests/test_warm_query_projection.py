@@ -152,10 +152,22 @@ def test_arbitrary_filters_project_from_one_live_atomic_snapshot(
 def test_live_health_does_not_count_funding_only_tuples_as_priced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    funding_only = _route("BTW", route_key="funding-only")
+    empty = _route("SPCX", route_key="empty")
+    for row in (funding_only, empty):
+        row.update(
+            {
+                "executable_spread_pct": None,
+                "displayed_open_spread_pct": None,
+                "depth_weighted_spread_pct": None,
+                "depth_unverified": True,
+                "quote_ts_us": None,
+            }
+        )
     rows = {
         "priced": _route("GUA", route_key="priced"),
-        "funding-only": _route("BTW", route_key="funding-only"),
-        "empty": _route("SPCX", route_key="empty"),
+        "funding-only": funding_only,
+        "empty": empty,
     }
     universe = _ready_universe(
         monkeypatch,
@@ -485,7 +497,7 @@ def test_full_refresh_publishes_a_finished_family_before_slower_families(
     assert worker.is_alive() is False
 
 
-def test_worker_refreshes_every_priority_lane_between_full_passes(
+def test_worker_refreshes_every_lane_without_a_catalogue_wide_pass(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     actions: list[object] = []
@@ -497,11 +509,14 @@ def test_worker_refreshes_every_priority_lane_between_full_passes(
         def refresh_route_kinds(self, route_kinds):
             actions.append(set(route_kinds))
 
+        def refresh_headlines(self):
+            actions.append("headlines")
+
     class BoundedStop:
         waits = 0
 
         def is_set(self):
-            return self.waits >= 5
+            return self.waits >= 6
 
         def wait(self, _seconds):
             self.waits += 1
@@ -518,12 +533,31 @@ def test_worker_refreshes_every_priority_lane_between_full_passes(
     worker.run()
 
     assert actions == [
-        "full",
         {"FUTURES"},
-        {"FUTURES-SPOT", "SPOT-FUTURES"},
-        {"DEX-FUTURES", "DEX-SPOT"},
+        {"FUTURES-SPOT"},
+        {"SPOT-FUTURES"},
+        {"DEX-FUTURES"},
+        {"DEX-SPOT"},
         {"SPOT"},
+        "headlines",
     ]
+
+
+def test_new_structural_generation_immediately_wins_with_a_newer_quote() -> None:
+    now_us = int(time.time() * 1_000_000)
+    old = _route("GUA", route_key="GUA-route", spread=0.2)
+    old["quote_ts_us"] = now_us - 10_000_000
+    current = _route("GUA", route_key="GUA-route", spread=0.9)
+    current["quote_ts_us"] = now_us
+    universe = warm_query_projection.LiveRouteUniverse()
+
+    universe.install({"GUA-route": old})
+    universe.install({"GUA-route": current})
+
+    updates, status = universe.update_snapshot()
+    assert updates["GUA-route"] == (0.9, 0.1, now_us, "matched_vwap")
+    assert status["ready"] is True
+    assert status["current_priced_route_count"] == 1
 
 
 def test_update_snapshot_reuses_immutable_maps_without_copying_rows(

@@ -209,6 +209,37 @@ def test_shared_books_are_depth_walked_once_per_direction(
     assert {side for _book, side in calls} == {"ask", "bid"}
 
 
+def test_shared_funding_leg_is_normalised_once_for_many_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _books(monkeypatch)
+    monkeypatch.setattr(
+        "spreadboard.bulk_quotes.load_funding",
+        lambda: {
+            "Bybit|T/USDT:USDT": {
+                "rate_pct": 0.03,
+                "interval_hours": 8.0,
+            }
+        },
+    )
+    original = api_spreads._per_day
+    calls: list[tuple[float | None, float | None]] = []
+
+    def counted(rate, interval):
+        calls.append((rate, interval))
+        return original(rate, interval)
+
+    monkeypatch.setattr(api_spreads, "_per_day", counted)
+    first = _route(route_key="T|Gate|Spot|Bybit|Futures|one")
+    second = _route(route_key="T|Gate|Spot|Bybit|Futures|two")
+
+    updates = api_spreads.live_route_updates_for([first, second])
+
+    assert len(calls) == 1
+    assert updates[first["route_key"]][1] == pytest.approx(0.09)
+    assert updates[second["route_key"]][1] == pytest.approx(0.09)
+
+
 def test_the_client_never_overwrites_a_number_with_a_dash() -> None:
     """A null update must leave the last good value alone.
 

@@ -933,8 +933,6 @@ class SharedArtifactWatcher(threading.Thread):
             from spreadboard import server as server_module
 
             route_count = server_module.restore_materialized_route_index(_board_path())
-            if route_count:
-                warm_query_projection.LIVE_UNIVERSE.refresh()
             _log(f"live route index installed routes={route_count}")
         materialized_signature = _artifact_signature(
             materialized_views.default_store().pointer_path
@@ -948,7 +946,6 @@ class SharedArtifactWatcher(threading.Thread):
             server_module.restore_materialized_intel(_board_path())
             if route_count:
                 server_module.mark_historical_dex_archive_ready()
-                warm_query_projection.LIVE_UNIVERSE.refresh()
             _log(
                 "materialized navigation generation installed "
                 f"routes={route_count} live_query={warm_query_projection.LIVE_UNIVERSE.status()}"
@@ -1459,9 +1456,7 @@ def main() -> int:
     restored_intel = server_module.restore_materialized_intel(board_path)
     if restored_routes:
         server_module.mark_historical_dex_archive_ready()
-        live_status = warm_query_projection.LIVE_UNIVERSE.refresh()
-    else:
-        live_status = warm_query_projection.LIVE_UNIVERSE.status()
+    live_status = warm_query_projection.LIVE_UNIVERSE.status()
     _log(
         "materialized startup restore "
         f"routes={restored_routes} intel={restored_intel} "
