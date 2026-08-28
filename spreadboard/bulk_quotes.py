@@ -566,10 +566,12 @@ def sweep(
     concurrency = max(1, min(int(workers or BULK_QUOTE_WORKERS), len(rotation) or 1))
     next_index = 0
     in_flight: dict[Future[int], tuple[str, int]] = {}
-    with ThreadPoolExecutor(
+    timed_out = False
+    executor = ThreadPoolExecutor(
         max_workers=concurrency,
         thread_name_prefix="bulk-quote-venue",
-    ) as executor:
+    )
+    try:
         while next_index < len(rotation) or in_flight:
             while (
                 next_index < len(rotation)
@@ -591,7 +593,18 @@ def sweep(
                 position = (ordered_index + 1) % max(1, len(ordered))
             if not in_flight:
                 break
-            done, _pending = wait(tuple(in_flight), return_when=FIRST_COMPLETED)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            done, _pending = wait(
+                tuple(in_flight),
+                timeout=remaining,
+                return_when=FIRST_COMPLETED,
+            )
+            if not done:
+                timed_out = True
+                break
             for future in done:
                 in_flight.pop(future, None)
                 try:
@@ -601,8 +614,18 @@ def sweep(
                 if count:
                     covered += 1
                     written += count
+    finally:
+        # The disposable production worker calls os._exit after publishing the
+        # summary, so a provider which exceeded the truth budget must not make
+        # ThreadPoolExecutor.__exit__ wait for it anyway. Unit/in-process callers
+        # can release their test/provider thread normally; pending work is never
+        # counted as published evidence.
+        executor.shutdown(wait=not timed_out, cancel_futures=timed_out)
     _store_cursor(position)
-    if venues is None:
+    if venues is None and timed_out and aster_opening_count:
+        covered += 1
+        written += aster_opening_count
+    if venues is None and not timed_out:
         try:
             aster_closing_count = sweep_venue("Aster", store=target)
         except Exception:
@@ -612,12 +635,16 @@ def sweep(
         if aster_count:
             covered += 1
             written += aster_count
-    deviations = fair_price.write(fair_price_rows)
+    deviations = fair_price.write(fair_price_rows) if not timed_out else 0
     return {
         "status": "ok",
         "venues": covered,
         "quotes": written,
         "fair_price_deviations": deviations,
+        "timed_out": timed_out,
+        "pending_venues": sorted(
+            venue for venue, _ordered_index in in_flight.values()
+        ),
         "seconds": round(time.monotonic() - started, 1),
         "updated_at": datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat(),
     }

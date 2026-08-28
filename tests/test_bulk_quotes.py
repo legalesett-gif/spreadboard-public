@@ -389,6 +389,32 @@ def test_independent_venues_refresh_concurrently(tmp_path, monkeypatch) -> None:
     assert result["venues"] == 4
 
 
+def test_a_stuck_venue_cannot_hold_the_sweep_past_its_truth_budget(
+    tmp_path, monkeypatch
+) -> None:
+    release = threading.Event()
+
+    def stuck(_venue, **_kwargs):
+        release.wait(2.0)
+        return 1
+
+    monkeypatch.setattr(bulk_quotes, "CURSOR_PATH", tmp_path / "cursor.json")
+    monkeypatch.setattr(bulk_quotes.fair_price, "write", lambda rows, **_k: 0)
+    monkeypatch.setattr(bulk_quotes, "sweep_venue", stuck)
+
+    started = time.monotonic()
+    result = bulk_quotes.sweep(
+        ["Slow"], store=_Store(), budget_seconds=0.05, workers=1
+    )
+    elapsed = time.monotonic() - started
+    release.set()
+
+    assert elapsed < 0.5
+    assert result["timed_out"] is True
+    assert result["pending_venues"] == ["Slow"]
+    assert result["venues"] == 0
+
+
 def test_normal_sweep_refreshes_aster_again_at_publication(tmp_path, monkeypatch) -> None:
     visited: list[str] = []
 

@@ -107,6 +107,10 @@ services:
       # breath keeps their start-to-start cadence below the 90-second route
       # boundary while avoiding a permanently tight worker loop.
       SPREADBOARD_BULK_QUOTE_SECONDS: "5"
+      # One provider cannot hold every healthy venue beyond the 90-second live
+      # truth boundary. Publish completed venue batches at 70 seconds and retry
+      # any explicitly pending source on the next non-overlapping process.
+      SPREADBOARD_BULK_QUOTE_BUDGET_SECONDS: "70"
       # Re-evaluate the complete positive pair universe after each bounded
       # price pass, no less often than every two minutes. Five minutes was long
       # enough for a 20% DEX/Aster dislocation to converge materially before it

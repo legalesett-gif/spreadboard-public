@@ -2033,6 +2033,17 @@ class BulkQuoteLoop(threading.Thread):
         crossed its cgroup and was OOM-killed -- hourly, killing the discovery
         scan with it. It also held the GIL against every page load.
         """
+        quote_budget_seconds = min(
+            self.TIMEOUT_SECONDS / 2,
+            max(
+                30.0,
+                float(
+                    os.environ.get(
+                        "SPREADBOARD_BULK_QUOTE_BUDGET_SECONDS", "70"
+                    )
+                ),
+            ),
+        )
         completed = _run_worker(
             [
                 # Current prices are the board's truth boundary. Funding,
@@ -2044,7 +2055,7 @@ class BulkQuoteLoop(threading.Thread):
                 sys.executable,
                 str(Path(__file__).with_name("bulk_quote_worker.py")),
                 "--budget-seconds",
-                str(self.TIMEOUT_SECONDS / 2),
+                str(quote_budget_seconds),
                 "--funding-budget-seconds",
                 "0",
             ],
@@ -2061,7 +2072,8 @@ class BulkQuoteLoop(threading.Thread):
         quotes = summary.get("quotes") or {}
         _log(
             f"bulk quotes: {quotes.get('quotes')} from {quotes.get('venues')} venues "
-            f"in {quotes.get('seconds')}s"
+            f"in {quotes.get('seconds')}s timed_out={bool(quotes.get('timed_out'))} "
+            f"pending={','.join(quotes.get('pending_venues') or []) or '-'}"
         )
         if (quotes.get("quotes") or 0) > 0:
             _publish_shared_market_generation("bulk_quotes")
