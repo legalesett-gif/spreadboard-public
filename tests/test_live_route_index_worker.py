@@ -20,7 +20,18 @@ def test_worker_publishes_complete_index_without_rendering_views(
     monkeypatch.setattr(
         live_route_index_worker.api_spreads,
         "load_public_route_index",
-        lambda: (rows, {"updated_at": "2026-08-24T20:00:00Z"}),
+        lambda: (
+            rows,
+            {
+                "updated_at": "2026-08-24T20:00:00Z",
+                "complete_catalogue": {
+                    "catalog_market_count": 10,
+                    "fresh_market_count": 8,
+                    "missing_book_count": 2,
+                    "book_coverage_pct": 80.0,
+                },
+            },
+        ),
     )
 
     summary = live_route_index_worker.build(board_path, tmp_path / "materialized")
@@ -29,6 +40,12 @@ def test_worker_publishes_complete_index_without_rendering_views(
     assert summary["routes"] == 1
     assert store.live_route_index(board_path=board_path) == rows
     assert store.live_route_index_status()["ready"] is True
+    assert store.live_route_index_status()["coverage"] == {
+        "catalog_market_count": 10,
+        "fresh_market_count": 8,
+        "missing_book_count": 2,
+        "book_coverage_pct": 80.0,
+    }
 
 
 def test_source_change_during_fast_build_keeps_previous_pointer(

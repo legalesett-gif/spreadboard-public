@@ -188,7 +188,12 @@ def _native_aster_books(*, fetcher: Any = None) -> list[dict[str, Any]]:
     return output
 
 
-_NATIVE_COMPLETE_BULK_VENUES = {"Binance", "Kucoin Futures"}
+_NATIVE_COMPLETE_BULK_VENUES = {
+    "Binance",
+    "Kraken Futures",
+    "Kucoin Futures",
+    "XT",
+}
 _NATIVE_PARTIAL_BULK_VENUES = {"Phemex", "WhiteBIT"}
 _NATIVE_FUTURES_ONLY_BULK_VENUES = {"Hyperliquid"}
 _NATIVE_LINEAR_QUOTES = ("USDT", "USDC", "USD")
@@ -339,6 +344,89 @@ def _native_bulk_books(
                 bid_size=(_float(item.get("bestBidSize")) or 0.0) * multiplier,
                 ask_size=(_float(item.get("bestAskSize")) or 0.0) * multiplier,
                 timestamp_us=(int(timestamp_ns / 1000) if timestamp_ns else now_us),
+            )
+        return output
+
+    if venue == "XT":
+        # XT's generic ``fetch_tickers`` adapter returns last prices for the
+        # futures family and, depending on ``defaultType``, can return the spot
+        # book-ticker family twice. The venue publishes both complete BBO sets
+        # directly. Using them here closes the exact failure mode where a price
+        # was visible on XT but no bid/ask existed for spread construction.
+        spot = get_json("https://sapi.xt.com/v4/public/ticker/book")
+        for item in (spot.get("result") or []) if isinstance(spot, dict) else []:
+            if not isinstance(item, dict):
+                continue
+            identity = pair(item.get("s"), perpetual=False)
+            if identity is None:
+                continue
+            timestamp_ms = _float(item.get("t"))
+            append(
+                market_type="Spot",
+                base=identity[0],
+                quote=identity[1],
+                bid=item.get("bp"),
+                ask=item.get("ap"),
+                bid_size=item.get("bq"),
+                ask_size=item.get("aq"),
+                timestamp_us=(int(timestamp_ms * 1000) if timestamp_ms else now_us),
+            )
+        futures = get_json(
+            "https://fapi.xt.com/future/market/v1/public/q/agg-tickers"
+        )
+        for item in (
+            (futures.get("result") or []) if isinstance(futures, dict) else []
+        ):
+            if not isinstance(item, dict):
+                continue
+            identity = pair(item.get("s"), perpetual=True)
+            if identity is None:
+                continue
+            timestamp_ms = _float(item.get("t"))
+            append(
+                market_type="Futures",
+                base=identity[0],
+                quote=identity[1],
+                bid=item.get("bp"),
+                ask=item.get("ap"),
+                # XT's all-contract endpoint proves a current BBO but does not
+                # publish size. Keep it indicative; depth verification remains
+                # closed until an exact order book is available.
+                timestamp_us=(int(timestamp_ms * 1000) if timestamp_ms else now_us),
+            )
+        return output
+
+    if venue == "Kraken Futures":
+        payload = get_json(
+            "https://futures.kraken.com/derivatives/api/v3/tickers"
+        )
+        for item in (
+            (payload.get("tickers") or []) if isinstance(payload, dict) else []
+        ):
+            if not isinstance(item, dict):
+                continue
+            # Inverse contracts settle in the base asset and are not the
+            # linear USD/USDT/USDC product SpreadBoard compares. Kraken labels
+            # linear perpetuals PF_* and exposes their exact base:quote pair.
+            market_id = str(item.get("symbol") or "").upper()
+            if (
+                not market_id.startswith("PF_")
+                or str(item.get("tag") or "").casefold() != "perpetual"
+                or item.get("suspended") is True
+            ):
+                continue
+            raw_pair = str(item.get("pair") or "")
+            if ":" not in raw_pair:
+                continue
+            base, quote = raw_pair.split(":", 1)
+            append(
+                market_type="Futures",
+                base=base,
+                quote=quote,
+                bid=item.get("bid"),
+                ask=item.get("ask"),
+                bid_size=item.get("bidSize"),
+                ask_size=item.get("askSize"),
             )
         return output
 

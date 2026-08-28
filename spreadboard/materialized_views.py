@@ -321,6 +321,7 @@ class Store:
         rows: dict[str, dict[str, Any]],
         *,
         source_signature: dict[str, Any],
+        coverage: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Atomically publish the fast structural index independently of views."""
 
@@ -336,6 +337,7 @@ class Store:
             "row_count": len(rows),
             "built_at_unix": time.time(),
             "source_signature": source_signature,
+            "coverage": dict(coverage or {}),
         }
         pointer = _json_bytes(meta)
         pointer_temp = self.root / f".{self.live_route_pointer_path.name}.{uuid.uuid4().hex}.tmp"

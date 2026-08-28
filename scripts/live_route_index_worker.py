@@ -279,8 +279,26 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         if same_structural_generation:
             retained.update(_retained_structural_dex_rows(previous_rows))
         rows = _merge_by_economic_identity(retained, rows)
+    coverage = source_health.get("complete_catalogue") or source_health
+    coverage = {
+        key: coverage.get(key)
+        for key in (
+            "catalog_market_count",
+            "fresh_market_count",
+            "missing_book_count",
+            "book_coverage_pct",
+            "catalogue_route_count",
+            "merged_route_count",
+            "catalogue_token_count",
+            "catalogue_kind_counts",
+            "book_max_age_seconds",
+        )
+        if isinstance(coverage, dict) and coverage.get(key) is not None
+    }
     meta = store.write_live_route_index(
-        rows, source_signature=initial
+        rows,
+        source_signature=initial,
+        coverage=coverage,
     )
     return {
         "status": "ok",
@@ -290,6 +308,7 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         "build_mode": build_mode,
         "seconds": round(time.monotonic() - started, 3),
         "source_updated_at": source_health.get("updated_at"),
+        "coverage": coverage,
         "artifact": meta.get("file"),
     }
 

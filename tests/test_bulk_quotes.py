@@ -224,6 +224,92 @@ def test_kucoin_native_bulk_applies_contract_multiplier() -> None:
     assert books[0]["asks"] == [[80001.0, 0.006]]
 
 
+def test_xt_native_bulk_keeps_spot_and_futures_bbo_families_separate() -> None:
+    payloads = {
+        "sapi.xt.com": {
+            "rc": 0,
+            "result": [
+                {
+                    "s": "gua_usdt",
+                    "t": 1_787_453_992_200,
+                    "bp": "0.0400",
+                    "bq": "4000",
+                    "ap": "0.0401",
+                    "aq": "5000",
+                }
+            ],
+        },
+        "fapi.xt.com": {
+            "returnCode": 0,
+            "result": [
+                {
+                    "s": "gua_usdt",
+                    "t": 1_787_453_992_300,
+                    "bp": "0.0410",
+                    "ap": "0.0411",
+                }
+            ],
+        },
+    }
+
+    books = bulk_quotes._native_bulk_books(
+        "XT",
+        fetcher=lambda url: payloads[
+            "fapi.xt.com" if "fapi.xt.com" in url else "sapi.xt.com"
+        ],
+    )
+
+    assert [(row["market_type"], row["symbol"]) for row in books] == [
+        ("Spot", "GUA/USDT"),
+        ("Futures", "GUA/USDT:USDT"),
+    ]
+    assert books[0]["bids"] == [[0.04, 4000.0]]
+    assert books[1]["bids"] == [[0.041, 0.0]]
+
+
+def test_kraken_futures_native_bulk_keeps_only_linear_live_perpetuals() -> None:
+    books = bulk_quotes._native_bulk_books(
+        "Kraken Futures",
+        fetcher=lambda _url: {
+            "result": "success",
+            "tickers": [
+                {
+                    "symbol": "PF_XBTUSD",
+                    "tag": "perpetual",
+                    "pair": "XBT:USD",
+                    "bid": 80_000,
+                    "bidSize": 2,
+                    "ask": 80_001,
+                    "askSize": 3,
+                    "suspended": False,
+                },
+                {
+                    "symbol": "PI_XBTUSD",
+                    "tag": "perpetual",
+                    "pair": "XBT:USD",
+                    "bid": 80_000,
+                    "ask": 80_001,
+                    "suspended": False,
+                },
+                {
+                    "symbol": "PF_OLDUSD",
+                    "tag": "perpetual",
+                    "pair": "OLD:USD",
+                    "bid": 1,
+                    "ask": 2,
+                    "suspended": True,
+                },
+            ],
+        },
+    )
+
+    assert [(row["market_type"], row["symbol"]) for row in books] == [
+        ("Futures", "BTC/USD:USD")
+    ]
+    assert books[0]["bids"] == [[80_000.0, 2.0]]
+    assert books[0]["asks"] == [[80_001.0, 3.0]]
+
+
 def test_native_futures_ticker_without_size_stays_indicative() -> None:
     books = bulk_quotes._native_bulk_books(
         "Phemex",

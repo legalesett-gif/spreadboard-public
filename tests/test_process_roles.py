@@ -488,7 +488,7 @@ def test_completed_bulk_books_request_current_pair_publication(monkeypatch) -> N
     assert requests == [True]
 
 
-def test_partial_bulk_books_do_not_mark_route_generation_ready(monkeypatch) -> None:
+def test_partial_bulk_books_publish_without_erasing_retained_routes(monkeypatch) -> None:
     requests: list[bool] = []
 
     class Publisher:
@@ -527,7 +527,15 @@ def test_partial_bulk_books_do_not_mark_route_generation_ready(monkeypatch) -> N
 
     loop._sweep_once()
 
-    assert requests == [False]
+    assert requests == [True]
+
+
+def test_live_pair_publisher_default_cadence_bounds_new_pair_delay(monkeypatch) -> None:
+    monkeypatch.delenv("SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS", raising=False)
+
+    publisher = service.LiveRouteIndexPublisher(threading.Event())
+
+    assert publisher.min_interval_seconds == 120.0
 
 
 def test_live_pair_publisher_coalesces_and_never_installs_in_collector(

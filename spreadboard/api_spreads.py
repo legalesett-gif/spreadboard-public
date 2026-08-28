@@ -326,6 +326,18 @@ def _complete_current_catalogue_rows(
     )
     output = [row for row in merged.get("routes") or [] if isinstance(row, dict)]
     kinds = Counter(str(row.get("route_kind") or "") for row in catalogue_rows)
+    catalog_market_count = sum(
+        int(payload.get("catalog_market_count") or 0)
+        for payload in payloads.values()
+    )
+    fresh_market_count = sum(
+        int(payload.get("fresh_market_count") or 0)
+        for payload in payloads.values()
+    )
+    missing_book_count = sum(
+        int(payload.get("missing_book_count") or 0)
+        for payload in payloads.values()
+    )
     return output, {
         "status": "complete_current_cex_plus_discovery",
         "discovery_input_route_count": discovery_input_count,
@@ -337,6 +349,18 @@ def _complete_current_catalogue_rows(
         "merged_route_count": len(output),
         "catalogue_token_count": len(payloads),
         "catalogue_kind_counts": dict(sorted(kinds.items())),
+        # These are exact chart-market identities joined to a bounded-current
+        # bid/ask book, not route or token counts. Publishing the denominator
+        # makes a healthy-looking route total auditable: an exchange can expose
+        # a last price while still lacking the BBO required for a real spread.
+        "catalog_market_count": catalog_market_count,
+        "fresh_market_count": fresh_market_count,
+        "missing_book_count": missing_book_count,
+        "book_coverage_pct": (
+            round(fresh_market_count / catalog_market_count * 100.0, 2)
+            if catalog_market_count
+            else None
+        ),
         "include_short_spot": True,
         "book_max_age_seconds": (
             catalog_pairs.MAX_BOOK_AGE_SECONDS

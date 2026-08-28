@@ -877,7 +877,7 @@ class SharedArtifactWatcher(threading.Thread):
                 live_route_refresh_interval_seconds
                 if live_route_refresh_interval_seconds is not None
                 else os.environ.get(
-                    "SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS", "300"
+                    "SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS", "120"
                 )
             ),
         )
@@ -1064,7 +1064,7 @@ class SharedArtifactWatcher(threading.Thread):
         # Current positive CEX pairings are derived from the full live-book
         # catalogue, not the two-hour structural discovery quota. Rebuild only
         # the compact route index after a completed price generation and at a
-        # bounded five-minute cadence. The collector owns the isolated worker;
+        # bounded two-minute cadence. The collector owns the isolated worker;
         # the web process merely installs its atomic pointer.
         if (
             _service_role() != "web"
@@ -1867,7 +1867,7 @@ class LiveRouteIndexPublisher(threading.Thread):
                 min_interval_seconds
                 if min_interval_seconds is not None
                 else os.environ.get(
-                    "SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS", "300"
+                    "SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS", "120"
                 )
             ),
         )
@@ -2123,10 +2123,15 @@ class BulkQuoteLoop(threading.Thread):
             _publish_shared_market_generation("bulk_quotes")
             _invalidate_market_price_caches()
             if self.route_index_publisher is not None:
-                self.route_index_publisher.request(
-                    source_ready=not bool(quotes.get("timed_out"))
-                    and not bool(quotes.get("pending_venues"))
-                )
+                # Each venue writes its books atomically and the route worker
+                # merges a partial current cut into the last still-listed
+                # structural universe. Therefore a provider timeout cannot
+                # collapse coverage, while withholding the generation here
+                # prevents newly quoteable pairs from appearing at all until a
+                # rare perfectly complete sweep. Every non-empty price pass is
+                # safe to publish; foreground readers still enforce the exact
+                # 90-second age gate and never extend a quote timestamp.
+                self.route_index_publisher.request(source_ready=True)
             # The rankings read the complete shared catalogue, so publish a new
             # atomic generation immediately after its prices move. This worker
             # is isolated and low-priority; HTTP readers keep serving the last

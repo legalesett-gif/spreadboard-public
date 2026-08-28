@@ -178,7 +178,14 @@ def test_complete_route_index_merges_all_catalogue_pairs_and_reverse_spot_leg(
     def fake_for_tokens(tokens, **kwargs):
         captured["tokens"] = tokens
         captured.update(kwargs)
-        return {"GUA": {"routes": [spot_future, future_spot]}}
+        return {
+            "GUA": {
+                "routes": [spot_future, future_spot],
+                "catalog_market_count": 3,
+                "fresh_market_count": 2,
+                "missing_book_count": 1,
+            }
+        }
 
     monkeypatch.setattr(catalog_pairs, "for_tokens", fake_for_tokens)
 
@@ -202,6 +209,10 @@ def test_complete_route_index_merges_all_catalogue_pairs_and_reverse_spot_leg(
     assert health["discovery_input_route_count"] == 2
     assert health["discovery_route_count"] == 1
     assert health["discovery_pruned_route_count"] == 1
+    assert health["catalog_market_count"] == 3
+    assert health["fresh_market_count"] == 2
+    assert health["missing_book_count"] == 1
+    assert health["book_coverage_pct"] == 66.67
 
 
 def test_public_route_index_expands_dex_against_every_current_futures_leg(
