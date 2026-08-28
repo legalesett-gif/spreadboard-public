@@ -23,8 +23,6 @@ from spreadboard import (
     materialized_views,
 )
 
-RECENT_ROUTE_RETENTION_SECONDS = 300.0
-
 
 def _signature(path: Path | str) -> list[int] | None:
     try:
@@ -49,15 +47,16 @@ def source_signature(board_path: Path) -> dict[str, Any]:
 
 def _retained_structural_cex_rows(
     rows: dict[str, dict[str, Any]],
-    *,
-    now: float | None = None,
-    max_age_seconds: float = RECENT_ROUTE_RETENTION_SECONDS,
 ) -> dict[str, dict[str, Any]]:
-    """Keep only recent prior CEX routes whose exact legs are still listed.
+    """Keep prior CEX pair identities while both exact legs remain listed.
 
-    Retaining every route that was positive at any time made this supposedly
-    current index an append-only history. Five minutes bridges publication
-    handoffs; settled funding/history lives in separate complete catalogues.
+    This artifact is a structural lookup index, not a current-price claim.
+    Expiring identities by their old quote timestamp made a complete index
+    collapse whenever a venue sweep and the isolated build crossed the
+    90-second presentation boundary. Foreground projections always replace
+    the stored economics from current books and independently enforce the
+    strict quote-age gate, so keeping a still-listed pair cannot make it live.
+    Genuine removals are driven by the exact chart-market catalogue instead.
     """
 
     markets = {
@@ -71,12 +70,8 @@ def _retained_structural_cex_rows(
         and str(item.get("market_type") or "") in {"Spot", "Futures"}
     }
     retained: dict[str, dict[str, Any]] = {}
-    current_time = time.time() if now is None else float(now)
     for key, row in rows.items():
         if str(row.get("route_kind") or "").startswith("DEX-"):
-            continue
-        age = api_spreads.quote_age_min(row, now=current_time)
-        if age is None or age < 0 or age * 60.0 > max_age_seconds:
             continue
         identities = {
             (
@@ -89,6 +84,25 @@ def _retained_structural_cex_rows(
         if len(identities) == 2 and identities.issubset(markets):
             retained[key] = row
     return retained
+
+
+def _retained_structural_dex_rows(
+    rows: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Bridge transient OKX provider gaps inside one structural generation.
+
+    DEX quote freshness is still enforced from the exact provider timestamp.
+    Retaining the chain/contract route identity merely lets the next fast
+    quote revive it without waiting for the broad discovery generation.
+    A changed discovery/catalogue signature starts from the newly discovered
+    DEX set and therefore removes contracts which really left the universe.
+    """
+
+    return {
+        key: row
+        for key, row in rows.items()
+        if str(row.get("route_kind") or "").startswith("DEX-")
+    }
 
 
 def _current_dex_rows(
@@ -258,9 +272,12 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         # erase thousands of structurally valid lookups from the same
         # discovery/catalogue generation. Foreground rendering independently
         # rechecks the real quote timestamp, so retaining the lookup cannot
-        # turn an old price into a current opportunity. A changed structural
-        # source signature starts clean and permits genuine removals.
+        # turn an old price into a current opportunity. Catalogue membership,
+        # rather than quote age, permits genuine CEX removals. DEX identities
+        # bridge only an unchanged structural generation.
         retained = _retained_structural_cex_rows(previous_rows)
+        if same_structural_generation:
+            retained.update(_retained_structural_dex_rows(previous_rows))
         rows = _merge_by_economic_identity(retained, rows)
     meta = store.write_live_route_index(
         rows, source_signature=initial

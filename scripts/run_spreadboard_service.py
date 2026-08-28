@@ -1867,7 +1867,7 @@ class LiveRouteIndexPublisher(threading.Thread):
                 min_interval_seconds
                 if min_interval_seconds is not None
                 else os.environ.get(
-                    "SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS", "60"
+                    "SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS", "300"
                 )
             ),
         )
@@ -1986,10 +1986,12 @@ class LiveRouteIndexPublisher(threading.Thread):
             }
             return dict(self.last_result)
         with self._request_lock:
-            # Requests which arrived during the build remain pending for the
-            # next bounded pass; this published generation covers everything
-            # that was complete when the child began.
-            self._published_generation = max(self._published_generation, requested)
+            # Publish only the last generation explicitly marked complete.
+            # A partial bulk request can arrive while this child is running;
+            # advancing to ``requested`` incorrectly acknowledged that partial
+            # mutable cut and allowed it to replace the coherent generation.
+            # It remains pending until a later all-venue pass marks it ready.
+            self._published_generation = max(self._published_generation, ready)
             self._published_at = time.monotonic()
             published = self._published_generation
         self._next_allowed_at = time.monotonic() + self.min_interval_seconds

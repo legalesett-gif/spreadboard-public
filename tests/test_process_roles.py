@@ -585,6 +585,29 @@ def test_startup_route_index_request_waits_for_complete_bulk_books(monkeypatch) 
     assert publications == [False]
 
 
+def test_partial_request_during_route_build_is_not_acknowledged(
+    monkeypatch,
+) -> None:
+    publisher = service.LiveRouteIndexPublisher(
+        threading.Event(), min_interval_seconds=30
+    )
+    publisher.request(source_ready=True)
+
+    def publish(*, install: bool) -> bool:
+        assert install is False
+        publisher.request(source_ready=False)
+        return True
+
+    monkeypatch.setattr(service, "_refresh_live_route_index", publish)
+
+    published = publisher.check_once()
+    waiting = publisher.check_once()
+
+    assert published["published_generation"] == 1
+    assert publisher.has_pending() is True
+    assert waiting["status"] == "awaiting_current_bulk_books"
+
+
 def test_live_pair_publisher_backs_off_after_a_failed_child(monkeypatch) -> None:
     attempts: list[bool] = []
     clock = [100.0]

@@ -302,6 +302,16 @@ def test_current_dex_generation_prefers_fast_delta_economics(
         "spread_evidence_state",
         lambda *_args, **_kwargs: "verified",
     )
+    monkeypatch.setattr(
+        live_route_index_worker.api_spreads,
+        "spread_quote_current",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        live_route_index_worker.api_spreads,
+        "quote_basis_mismatch",
+        lambda *_args, **_kwargs: False,
+    )
 
     rows = live_route_index_worker._current_dex_rows(
         previous,
@@ -313,7 +323,7 @@ def test_current_dex_generation_prefers_fast_delta_economics(
     assert rows[0]["executable_spread_pct"] == 2.0
 
 
-def test_retention_drops_old_positive_routes_instead_of_growing_forever(
+def test_retention_keeps_old_structural_pair_while_exact_legs_stay_listed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = time.time()
@@ -358,11 +368,26 @@ def test_retention_drops_old_positive_routes_instead_of_growing_forever(
                 "route_key": "old",
                 "quote_ts_us": int((now - 900) * 1_000_000),
             },
-        },
-        now=now,
+        }
     )
 
-    assert set(retained) == {"recent"}
+    assert set(retained) == {"recent", "old"}
+
+
+def test_same_generation_retains_dex_identity_across_provider_gap() -> None:
+    rows = {
+        "cex": {"route_key": "cex", "route_kind": "FUTURES"},
+        "dex": {
+            "route_key": "dex",
+            "route_kind": "DEX-FUTURES",
+            "dex_chain": "56",
+            "dex_contract": "0xgua",
+        },
+    }
+
+    assert live_route_index_worker._retained_structural_dex_rows(rows) == {
+        "dex": rows["dex"]
+    }
 
 
 def test_new_structural_generation_retains_only_still_listed_cex_routes(

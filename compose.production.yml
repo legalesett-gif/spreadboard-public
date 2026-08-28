@@ -111,11 +111,12 @@ services:
       # truth boundary. Publish completed venue batches at 70 seconds and retry
       # any explicitly pending source on the next non-overlapping process.
       SPREADBOARD_BULK_QUOTE_BUDGET_SECONDS: "70"
-      # Re-evaluate the complete positive pair universe after each bounded
-      # price pass, no less often than every two minutes. Five minutes was long
-      # enough for a 20% DEX/Aster dislocation to converge materially before it
-      # could enter the structural universe.
-      SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS: "60"
+      # The route artifact is structural. Both directions of every admitted
+      # pair stay indexed while live books reprice them every few seconds, so
+      # rebuilding and reinstalling a 100MB+ index every minute only stole CPU
+      # from current quotes. Five minutes still admits genuinely new OKX DEX
+      # identities promptly; ordinary CEX direction flips need no rebuild.
+      SPREADBOARD_LIVE_ROUTE_INDEX_REFRESH_SECONDS: "300"
       # Spot and mixed Spot/Futures venues finish their independent quote
       # writes at different times. Alternate those compact projections between
       # full 30-second passes so real overlaps are observed without extending
