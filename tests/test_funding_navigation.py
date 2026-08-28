@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -68,6 +69,33 @@ def test_navigation_build_ranks_now_and_exact_windows_in_one_generation(monkeypa
     assert pages[("FUTURES", "now")]["groups"][0]["routes"][0][
         "settled_funding_windows"
     ] == history["FAST"]
+
+
+def test_navigation_revives_retained_dex_only_from_current_shared_quote(
+    monkeypatch,
+) -> None:
+    now_us = int(time.time() * 1_000_000)
+    route = {
+        **_route("GUA", "DEX-FUTURES"),
+        "route_key": "dex-gua",
+        "radar_historical": True,
+        "quote_ts_us": now_us - 20 * 60 * 1_000_000,
+        "depth_weighted_spread_pct": 0.1,
+        "matched_size_notional_usd": 500.0,
+    }
+    monkeypatch.setattr(
+        funding_catalog.api_spreads,
+        "live_route_updates_for",
+        lambda rows, include_funding, include_basis: {
+            "dex-gua": (0.8, None, now_us, "matched_vwap")
+        },
+    )
+
+    result = funding_catalog._shared_current_dex_overlay([route])
+
+    assert result[0]["radar_historical"] is False
+    assert result[0]["depth_weighted_spread_pct"] == 0.8
+    assert result[0]["quote_ts_us"] == now_us
 
 
 def test_principal_funding_request_uses_persisted_ranking_before_dynamic_catalog(

@@ -503,6 +503,48 @@ def _resident_live_overlay(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _shared_current_dex_overlay(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Revive retained DEX rows only from the current shared quote handoff.
+
+    The navigation builder runs in an isolated collector child, so it cannot
+    use the web process's in-memory projection.  The fast quote delta and book
+    database are shared, however.  Reading just the DEX subset from those
+    artifacts keeps the Now lane honest and avoids walking the full CEX
+    permutation catalogue a second time.
+    """
+
+    indexes = [
+        index
+        for index, route in enumerate(rows)
+        if str(route.get("route_kind") or "").upper() == "DEX-FUTURES"
+    ]
+    if not indexes:
+        return rows
+    candidates = [rows[index] for index in indexes]
+    updates = api_spreads.live_route_updates_for(
+        candidates,
+        include_funding=False,
+        include_basis=True,
+    )
+    if not updates:
+        return rows
+    from spreadboard import warm_query_projection
+
+    now = time.time()
+    for index in indexes:
+        route = rows[index]
+        update = updates.get(str(route.get("route_key") or ""))
+        if update is None:
+            continue
+        overlaid = warm_query_projection._overlay(route, update, now=now)
+        # A retained historical identity becomes a Now candidate only while its
+        # exact provider/book timestamp passes the unchanged live boundary.
+        if api_spreads.spread_quote_current(overlaid, now=now):
+            overlaid["radar_historical"] = False
+        rows[index] = overlaid
+    return rows
+
+
 def _copy_route(route: dict[str, Any], *, historical: bool) -> dict[str, Any]:
     row = dict(route)
     if not historical:
@@ -856,6 +898,7 @@ def build_navigation_pages(
             payloads=payloads,
         )
     ]
+    rows = _shared_current_dex_overlay(rows)
     current_funding = bulk_quotes.load_funding()
     if not current_funding:
         return {}
