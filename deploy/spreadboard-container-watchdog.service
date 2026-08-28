@@ -1,0 +1,21 @@
+[Unit]
+Description=SpreadBoard container/cgroup OOM and restart watchdog
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Runs on the host, outside both application cgroups. A process killed by the
+# OOM killer cannot alert through itself, so this check must not live inside
+# the cgroup it is watching.
+ExecStart=/usr/bin/python3 /opt/spreadboard/app/scripts/container_health_watchdog.py --runtime-dir /opt/spreadboard/runtime
+Nice=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/spreadboard/runtime
+ReadOnlyPaths=/opt/spreadboard/app
+
+[Install]
+WantedBy=multi-user.target
