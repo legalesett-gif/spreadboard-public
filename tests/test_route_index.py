@@ -29,6 +29,10 @@ def test_a_legacy_request_builds_one_token_then_reuses_it(monkeypatch: pytest.Mo
     with server._ROUTE_INDEX_LOCK:
         server._ROUTE_INDEX["signature"] = None
         server._ROUTE_INDEX["rows"] = {}
+        # A new generation clears the bookmark compatibility cache too;
+        # production does this inside restore_materialized_route_index.
+        server._ROUTE_COMPAT_PATHS.clear()
+        server._ROUTE_COMPAT_ROWS.clear()
 
     board = Path("board.jsonl")
     first = server._find_canonical_route("A|X|Spot|Y|Spot", board)
@@ -54,6 +58,10 @@ def test_a_new_snapshot_retains_index_until_background_swap(
     with server._ROUTE_INDEX_LOCK:
         server._ROUTE_INDEX["signature"] = None
         server._ROUTE_INDEX["rows"] = {}
+        # A new generation clears the bookmark compatibility cache too;
+        # production does this inside restore_materialized_route_index.
+        server._ROUTE_COMPAT_PATHS.clear()
+        server._ROUTE_COMPAT_ROWS.clear()
 
     board = Path("board.jsonl")
     server._find_canonical_route("A|X|Spot|Y|Spot", board)
@@ -159,6 +167,10 @@ def test_catalogue_route_rejoins_the_exact_warm_pair(
     )
     with server._ROUTE_INDEX_LOCK:
         server._ROUTE_INDEX["rows"] = {}
+        # A new generation clears the bookmark compatibility cache too;
+        # production does this inside restore_materialized_route_index.
+        server._ROUTE_COMPAT_PATHS.clear()
+        server._ROUTE_COMPAT_ROWS.clear()
 
     selected = server._find_canonical_route("CUSTOM:ong", Path("board.jsonl"))
 
@@ -239,6 +251,10 @@ def test_historical_route_uses_indexed_radar_without_board_build(
     with server._ROUTE_INDEX_LOCK:
         server._ROUTE_INDEX["signature"] = None
         server._ROUTE_INDEX["rows"] = {}
+        # A new generation clears the bookmark compatibility cache too;
+        # production does this inside restore_materialized_route_index.
+        server._ROUTE_COMPAT_PATHS.clear()
+        server._ROUTE_COMPAT_ROWS.clear()
 
     assert server._find_canonical_route(retained["route_key"], Path("board")) is retained
 

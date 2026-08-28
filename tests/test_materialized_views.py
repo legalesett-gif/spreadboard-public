@@ -222,6 +222,10 @@ def test_route_index_restores_from_generation_without_parsing_snapshot(
     with server._ROUTE_INDEX_LOCK:
         server._ROUTE_INDEX["signature"] = None
         server._ROUTE_INDEX["rows"] = {}
+        # A new generation clears the bookmark compatibility cache too;
+        # production does this inside restore_materialized_route_index.
+        server._ROUTE_COMPAT_PATHS.clear()
+        server._ROUTE_COMPAT_ROWS.clear()
 
     restored = server.restore_materialized_route_index(tmp_path / "board.jsonl")
 

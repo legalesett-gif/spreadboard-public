@@ -446,6 +446,12 @@ class Store:
             payload = orjson.loads(raw)
         except orjson.JSONDecodeError:
             return None
+        finally:
+            # The structural artifact is ~300MB.  Holding the raw bytes while
+            # the decoded generation, the previous generation and the seeded
+            # overlay are all resident is what pushed the web role over its
+            # cgroup.  The checksum has already been verified above.
+            del raw
         if not isinstance(payload, dict) or not all(
             isinstance(key, str) and isinstance(value, dict)
             for key, value in payload.items()

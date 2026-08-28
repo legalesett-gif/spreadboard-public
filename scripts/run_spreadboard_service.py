@@ -60,6 +60,10 @@ FAST_QUOTE_PATH = RUNTIME_DIR / "api_discovery_fast_quotes.json"
 REFRESH_SNAPSHOT_PATH = RUNTIME_DIR / "api_discovery_refresh.json"
 GENERATED_IDENTITY_PATH = RUNTIME_DIR / "api_discovery_identity_registry.generated.json"
 MARKET_GENERATION_PATH = RUNTIME_DIR / "market_generation.json"
+#: Written by the host systemd watchdog from outside both application cgroups.
+CONTAINER_HEALTH_PATH = RUNTIME_DIR / "container_health.json"
+#: The watchdog timer runs every two minutes; treat a long silence as a fault.
+CONTAINER_HEALTH_STALE_SECONDS = 900.0
 
 # Discovery, exact funding evidence, and materialized navigation each expand
 # tens of thousands of markets into large Python object graphs.  The collector
@@ -919,6 +923,10 @@ class SharedArtifactWatcher(threading.Thread):
         self.funding_navigation_health_signature = _artifact_signature(
             coverage_reconciliation.FUNDING_NAVIGATION_HEALTH_PATH
         )
+        self.book_coverage_health: dict[str, Any] | None = None
+        self.funding_navigation_health: dict[str, Any] | None = None
+        self.container_health_signature = _artifact_signature(CONTAINER_HEALTH_PATH)
+        self.container_health: dict[str, Any] | None = None
         self.warm_lock = threading.Lock()
         self.warm_pending = False
         self.funding_warm_pending = False
@@ -933,31 +941,38 @@ class SharedArtifactWatcher(threading.Thread):
             self.stop_event.wait(self.poll_seconds)
 
     def check_once(self) -> None:
+        # The collector republishes the live-route pointer and the materialized
+        # pointer within the same publication.  Restoring once per pointer read
+        # the ~300MB structural artifact twice in one cycle, and each parse
+        # holds the previous generation, the raw bytes and the new generation
+        # at the same time.  That doubled transient is what exhausted the web
+        # cgroup.  Collapse both triggers into a single restore.
         live_route_signature = _artifact_signature(
             _live_route_pointer_path()
         )
-        if live_route_signature != self.live_route_signature:
-            self.live_route_signature = live_route_signature
-            from spreadboard import server as server_module
-
-            route_count = server_module.restore_materialized_route_index(_board_path())
-            _log(f"live route index installed routes={route_count}")
         materialized_signature = _artifact_signature(
             materialized_views.default_store().pointer_path
         )
-        if materialized_signature != self.materialized_signature:
+        live_route_changed = live_route_signature != self.live_route_signature
+        materialized_changed = materialized_signature != self.materialized_signature
+        if live_route_changed or materialized_changed:
+            self.live_route_signature = live_route_signature
             self.materialized_signature = materialized_signature
             from spreadboard import server as server_module
 
-            server_module._MATERIALIZED_VIEW_STORE.invalidate()
+            if materialized_changed:
+                server_module._MATERIALIZED_VIEW_STORE.invalidate()
             route_count = server_module.restore_materialized_route_index(_board_path())
-            server_module.restore_materialized_intel(_board_path())
-            if route_count:
-                server_module.mark_historical_dex_archive_ready()
-            _log(
-                "materialized navigation generation installed "
-                f"routes={route_count} live_query={warm_query_projection.LIVE_UNIVERSE.status()}"
-            )
+            if materialized_changed:
+                server_module.restore_materialized_intel(_board_path())
+                if route_count:
+                    server_module.mark_historical_dex_archive_ready()
+                _log(
+                    "materialized navigation generation installed "
+                    f"routes={route_count} live_query={warm_query_projection.LIVE_UNIVERSE.status()}"
+                )
+            else:
+                _log(f"live route index installed routes={route_count}")
         funding_catalog_signature = _artifact_signature(
             funding_catalog.DEFAULT_CACHE_PATH
         )
@@ -1006,19 +1021,50 @@ class SharedArtifactWatcher(threading.Thread):
             self.request_warm()
         self._recover_telegram_snapshot_if_due()
 
+    def _emit_operator_alert(self, key: str, *, active: bool, title: str, message: str) -> None:
+        """Alert and record the delivery outcome.
+
+        Callers used to discard ``delivered``/``errors`` entirely, so a push the
+        provider rejected left no trace anywhere in production.
+        """
+
+        try:
+            result = operator_alerts.notify_transition(
+                key, active=active, title=title, message=message
+            )
+        except Exception as exc:  # noqa: BLE001 - alerting must not kill the watcher.
+            _log(f"operator alert {key}: {type(exc).__name__}: {exc}")
+            return
+        if result.get("changed") or result.get("retry"):
+            _log(
+                f"operator alert {key} active={result.get('active')} "
+                f"incident={result.get('incident_id')} "
+                f"delivered={result.get('delivered')} "
+                f"attempts={result.get('attempts')} "
+                f"errors={len(result.get('errors') or [])}"
+            )
+
     def _notify_operational_health_if_changed(self) -> None:
+        # Evaluate on every poll, not only when the artifact signature moves.
+        # A transition whose push the provider rejected stays pending inside
+        # notify_transition; gating the call on a signature change meant the
+        # retry could only fire if the health file happened to change again.
         book_signature = _artifact_signature(
             coverage_reconciliation.BOOK_COVERAGE_PATH
         )
-        if book_signature != self.book_coverage_health_signature:
+        if (
+            book_signature != self.book_coverage_health_signature
+            or self.book_coverage_health is None
+        ):
             self.book_coverage_health_signature = book_signature
-            health = coverage_reconciliation.load_json(
+            self.book_coverage_health = coverage_reconciliation.load_json(
                 coverage_reconciliation.BOOK_COVERAGE_PATH
             )
-            fault = str(health.get("status") or "unknown") in {"warn", "critical"}
-            operator_alerts.notify_transition(
+        health = self.book_coverage_health or {}
+        if health:
+            self._emit_operator_alert(
                 "book_coverage_degraded",
-                active=fault,
+                active=str(health.get("status") or "unknown") in {"warn", "critical"},
                 title="SpreadBoard book coverage",
                 message=(
                     f"Completed route-index generation is {health.get('status')}: "
@@ -1031,18 +1077,71 @@ class SharedArtifactWatcher(threading.Thread):
         navigation_signature = _artifact_signature(
             coverage_reconciliation.FUNDING_NAVIGATION_HEALTH_PATH
         )
-        if navigation_signature != self.funding_navigation_health_signature:
+        if (
+            navigation_signature != self.funding_navigation_health_signature
+            or self.funding_navigation_health is None
+        ):
             self.funding_navigation_health_signature = navigation_signature
-            health = coverage_reconciliation.load_json(
+            self.funding_navigation_health = coverage_reconciliation.load_json(
                 coverage_reconciliation.FUNDING_NAVIGATION_HEALTH_PATH
             )
-            fault = str(health.get("status") or "unknown") == "failed"
-            operator_alerts.notify_transition(
+        health = self.funding_navigation_health or {}
+        if health:
+            self._emit_operator_alert(
                 "funding_navigation_publication",
-                active=fault,
+                active=str(health.get("status") or "unknown") == "failed",
                 title="SpreadBoard Funding navigation",
                 message=str(health.get("detail") or "Funding navigation status changed."),
             )
+        self._notify_container_health()
+
+    def _notify_container_health(self) -> None:
+        """Relay the host watchdog's finding through the owner-only path.
+
+        The host timer writes this artifact from outside both cgroups, because
+        a container the kernel has just killed cannot report its own death.
+        Either container may relay it; ``operator_alerts`` deduplicates on the
+        shared state file, so the owner is notified exactly once.
+        """
+
+        container_health = _artifact_signature(CONTAINER_HEALTH_PATH)
+        if (
+            container_health != self.container_health_signature
+            or self.container_health is None
+        ):
+            self.container_health_signature = container_health
+            self.container_health = coverage_reconciliation.load_json(
+                CONTAINER_HEALTH_PATH
+            )
+        health = self.container_health or {}
+        if not health:
+            return
+        checked_at = float(health.get("checked_at_unix") or 0.0)
+        if checked_at and time.time() - checked_at > CONTAINER_HEALTH_STALE_SECONDS:
+            # A silent watchdog is itself a fault worth seeing, but it must not
+            # masquerade as a fresh restart or OOM finding.
+            self._emit_operator_alert(
+                "container_watchdog_stale",
+                active=True,
+                title="SpreadBoard container watchdog",
+                message=(
+                    "Host container watchdog has not reported for "
+                    f"{int(time.time() - checked_at)}s."
+                ),
+            )
+            return
+        self._emit_operator_alert(
+            "container_watchdog_stale",
+            active=False,
+            title="SpreadBoard container watchdog",
+            message="Host container watchdog is reporting again.",
+        )
+        self._emit_operator_alert(
+            "container_runtime_health",
+            active=str(health.get("status") or "ok") == "failed",
+            title="SpreadBoard container health",
+            message=str(health.get("detail") or "Container health changed."),
+        )
 
     def _recover_telegram_snapshot_if_due(self) -> None:
         """Retry a missing resident bot snapshot without waiting for discovery.

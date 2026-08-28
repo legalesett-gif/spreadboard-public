@@ -513,6 +513,10 @@ def test_server_prefers_newer_fast_index_over_older_full_generation(
     with server._ROUTE_INDEX_LOCK:
         server._ROUTE_INDEX["signature"] = None
         server._ROUTE_INDEX["rows"] = {}
+        # A new generation clears the bookmark compatibility cache too;
+        # production does this inside restore_materialized_route_index.
+        server._ROUTE_COMPAT_PATHS.clear()
+        server._ROUTE_COMPAT_ROWS.clear()
 
     restored = server.restore_materialized_route_index(board_path)
 

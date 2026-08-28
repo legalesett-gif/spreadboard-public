@@ -6014,6 +6014,16 @@ def _chart_stream_payload(route_key: str, board_path: Path, hours: float) -> dic
 #: every chart opened by route -- most of the thirty seconds a member waited.
 _ROUTE_INDEX: dict[str, Any] = {"signature": None, "rows": {}}
 _ROUTE_COMPAT_PATHS: dict[str, str] = {}
+#: Old bookmarks resolve routes that the current generation no longer carries.
+#: Those rows are kept here rather than merged into ``_ROUTE_INDEX["rows"]``.
+#: That dictionary is installed into ``LIVE_UNIVERSE`` by reference, so an
+#: in-place ``update`` mutated the live universe from an unrelated lock and
+#: raised "dictionary changed size during iteration" inside the route-kind
+#: refresh and the opportunity journal, silently skipping that pass.
+_ROUTE_COMPAT_ROWS: dict[str, dict[str, Any]] = {}
+#: A member scanning many historical links must not grow web memory without
+#: bound.  The cache only has to outlive the chart that is currently open.
+_ROUTE_COMPAT_ROW_LIMIT = max(200, int(os.environ.get("SPREADBOARD_ROUTE_COMPAT_ROWS", "2000")))
 _ROUTE_INDEX_LOCK = threading.Lock()
 
 
@@ -6057,6 +6067,7 @@ def restore_materialized_route_index(board_path: Path) -> int:
         _ROUTE_INDEX["signature"] = signature
         _ROUTE_INDEX["rows"] = rows
         _ROUTE_COMPAT_PATHS.clear()
+        _ROUTE_COMPAT_ROWS.clear()
     warm_query_projection.LIVE_UNIVERSE.install(rows, template=template)
     return len(rows)
 
@@ -6103,6 +6114,7 @@ def _route_index(board_path: Path) -> dict[str, dict[str, Any]]:
         _ROUTE_INDEX["signature"] = signature
         _ROUTE_INDEX["rows"] = index
         _ROUTE_COMPAT_PATHS.clear()
+        _ROUTE_COMPAT_ROWS.clear()
     warm_query_projection.LIVE_UNIVERSE.install(
         index,
         template=_MATERIALIZED_VIEW_STORE.payload_for(
@@ -6164,6 +6176,7 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
         retained_signature = _ROUTE_INDEX["signature"]
         retained = (
             _ROUTE_INDEX["rows"].get(route_key)
+            or _ROUTE_COMPAT_ROWS.get(route_key)
             if (
                 retained_signature
                 and retained_signature[0] == str(board_path)
@@ -6201,10 +6214,18 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
     }
     if indexed:
         with _ROUTE_INDEX_LOCK:
-            _ROUTE_INDEX["rows"].update(indexed)
+            # Never mutate ``_ROUTE_INDEX["rows"]`` in place. The same object is
+            # installed into LIVE_UNIVERSE, whose refresh and journal passes
+            # iterate it under a different lock.
+            _ROUTE_COMPAT_ROWS.update(indexed)
             _ROUTE_COMPAT_PATHS.update(
                 {key: str(board_path) for key in indexed}
             )
+            while len(_ROUTE_COMPAT_ROWS) > _ROUTE_COMPAT_ROW_LIMIT:
+                # Oldest first: ``popitem`` would discard the row just resolved.
+                evicted = next(iter(_ROUTE_COMPAT_ROWS))
+                _ROUTE_COMPAT_ROWS.pop(evicted, None)
+                _ROUTE_COMPAT_PATHS.pop(evicted, None)
     return indexed.get(route_key)
 
 
@@ -6931,6 +6952,129 @@ def password_recovery_status(accounts_path: Path | str | None = None) -> dict[st
     }
 
 
+#: Gates a member or an external probe must be able to read apart. Collapsing
+#: them into one outage bit made a bounded funding-history backlog look like a
+#: site outage while the site was serving current data correctly.
+_AVAILABILITY_COMPONENTS = ("website", "market_data")
+_CURRENT_DATA_COMPONENTS = ("market_data", "dex_quotes")
+_HISTORICAL_COMPONENTS = ("funding_history",)
+
+
+def _okx_dex_lane_health(canonical: dict[str, Any]) -> dict[str, Any]:
+    """Current OKX DEX health from the supported DEX-FUTURES lane.
+
+    ``canonical["dex_spot_source"]`` described the retired standalone DEX-Spot
+    product and is no longer published, so ``.get`` returned an empty mapping
+    and every read reported the lane degraded with zero rows.
+    """
+
+    refresh = canonical.get("fast_quote_refresh")
+    refresh = refresh if isinstance(refresh, dict) else {}
+    lane_counts = canonical.get("lane_token_counts")
+    if not isinstance(lane_counts, dict) or not lane_counts:
+        lane_counts = refresh.get("lane_token_counts")
+    lane_counts = lane_counts if isinstance(lane_counts, dict) else {}
+    ready = refresh.get("top_25_ready")
+    if not isinstance(ready, dict):
+        ready = canonical.get("top_25_ready")
+    ready = ready if isinstance(ready, dict) else {}
+
+    token_count = int(lane_counts.get("DEX-FUTURES") or 0)
+    reasons = refresh.get("failure_reason_counts")
+    reasons = reasons if isinstance(reasons, dict) else {}
+    issue_text = " ".join(str(key) for key in reasons).lower()
+    access_blocked = any(
+        marker in issue_text
+        for marker in (
+            "no access",
+            "access denied",
+            "forbidden",
+            "not authorized",
+            "unauthorized",
+            "region",
+        )
+    )
+    refresh_status = str(refresh.get("status") or "").lower()
+    healthy = (
+        token_count > 0
+        and bool(ready.get("DEX-FUTURES"))
+        and refresh_status in {"", "ok", "fresh", "operational"}
+    )
+    return {
+        "ok": healthy,
+        "provider": "OKX DEX",
+        "token_count": token_count,
+        "access_blocked": access_blocked,
+        "refresh_status": refresh_status or "unknown",
+    }
+
+
+def _funding_history_component(funding: dict[str, Any]) -> dict[str, Any]:
+    """Exact-settlement windows advance for days; say so without lying.
+
+    The previous rendering printed "100.0% source coverage" beside a degraded
+    status, because the percentage described source classification while the
+    status described rolling-window completeness. Report both.
+    """
+
+    windows = funding.get("window_coverage_pct")
+    windows = windows if isinstance(windows, dict) else {}
+    source_pct = funding.get("coverage_pct")
+    status = str(funding.get("status") or "")
+    catching_up = status == "archive_catching_up" or not bool(
+        funding.get("history_catch_up_complete", True)
+    )
+    complete = funding.get("window_leg_counts")
+    complete = complete if isinstance(complete, dict) else {}
+    overdue = funding.get("overdue_window_leg_counts")
+    overdue = overdue if isinstance(overdue, dict) else {}
+    complete_24h = int(complete.get("1d") or 0)
+    overdue_24h = int(overdue.get("1d") or 0)
+    # ``archive_catching_up`` is the collector's label for "not complete"; it
+    # is not evidence of progress. On 2026-08-28 complete 24h windows fell
+    # 3,071 -> 2,293 in an hour while overdue rose 6,130 -> 6,914, because the
+    # OOM-killed collector could not finish its settlement passes. Saying "still
+    # filling" there would have been false.
+    losing_ground = bool(complete_24h and overdue_24h > complete_24h)
+    window_text = ", ".join(
+        f"{label} {float(windows.get(key) or 0.0):.0f}%"
+        for key, label in (("1d", "24h"), ("7d", "7d"), ("30d", "30d"))
+        if windows.get(key) is not None
+    )
+    coverage_text = f" ({window_text} complete)" if window_text else ""
+    if status == "operational":
+        detail = "Exact settlement windows complete"
+    elif losing_ground:
+        detail = (
+            f"Exact settlement windows are overdue on {overdue_24h} legs versus "
+            f"{complete_24h} current{coverage_text}; incomplete windows stay blank"
+        )
+    elif catching_up:
+        detail = (
+            "Exact settlement archive is incomplete"
+            + coverage_text
+            + "; incomplete windows stay blank"
+        )
+    else:
+        detail = "Funding-window collector health"
+    return {
+        # A bounded backlog reports as catching_up under the historical gate.
+        # A backlog larger than what is current is a real service fault and
+        # must not hide behind the friendlier label.
+        "status": "operational"
+        if status == "operational"
+        else "degraded"
+        if losing_ground or not catching_up
+        else "catching_up",
+        "coverage_pct": source_pct,
+        "source_coverage_pct": source_pct,
+        "window_coverage_pct": windows or None,
+        "complete_window_leg_count": complete_24h or None,
+        "overdue_window_leg_count": overdue_24h or None,
+        "detail": detail,
+    }
+
+
 def api_public_status(
     board_path: Path,
     config: dict[str, Any],
@@ -6947,26 +7091,14 @@ def api_public_status(
     accounting = accounting_worker_status()
     recovery = password_recovery_status(accounts_path)
     market_ok = bool(sources.get("ok"))
-    dex = canonical.get("dex_spot_source") or {}
-    dex_provider = str((dex.get("details") or {}).get("provider") or "DEX provider")
-    dex_status = str(dex.get("status") or "unknown")
-    dex_ok = dex_status in {"fresh", "ok", "operational"} and not dex.get("blockers")
-    dex_issue_text = " ".join(
-        str(item)
-        for item in [*(dex.get("errors") or []), *(dex.get("blockers") or [])]
-    ).lower()
-    dex_access_blocked = any(
-        marker in dex_issue_text
-        for marker in (
-            "no access",
-            "access denied",
-            "forbidden",
-            "not authorized",
-            "unauthorized",
-            "region",
-        )
-    )
-    funding_ok = str(funding.get("status") or "") == "operational"
+    # Standalone DEX-Spot is a retired product. Reading the legacy
+    # ``dex_spot_source`` key made /api/status report DEX quotes degraded with
+    # row_count 0 while the fast-quote pass was actually publishing 32 current
+    # DEX-FUTURES tokens. Derive OKX DEX health from the supported lane.
+    dex = _okx_dex_lane_health(canonical)
+    dex_provider = str(dex.get("provider") or "OKX DEX")
+    dex_ok = bool(dex.get("ok"))
+    dex_access_blocked = bool(dex.get("access_blocked"))
     accounting_ok = bool(
         accounting.get("configured")
         and accounting.get("running")
@@ -6986,7 +7118,9 @@ def api_public_status(
         "dex_quotes": {
             "status": "operational" if dex_ok else "degraded",
             "provider": dex_provider,
-            "row_count": int(dex.get("rows") or 0),
+            "row_count": int(dex.get("token_count") or 0),
+            "token_count": int(dex.get("token_count") or 0),
+            "lane": "DEX-FUTURES",
             "detail": (
                 f"{dex_provider} quotes are current"
                 if dex_ok
@@ -6997,15 +7131,7 @@ def api_public_status(
                 )
             ),
         },
-        "funding_history": {
-            "status": "operational" if funding_ok else "degraded",
-            "coverage_pct": funding.get("coverage_pct"),
-            "detail": (
-                f"{float(funding.get('coverage_pct') or 0):.1f}% source coverage"
-                if funding.get("coverage_pct") is not None
-                else "Funding-window collector health"
-            ),
-        },
+        "funding_history": _funding_history_component(funding),
         "crypto_checkout": {
             "status": "operational" if crypto.get("checkout_ready") else "setup_needed",
             "chain": crypto.get("chain"),
@@ -7043,9 +7169,42 @@ def api_public_status(
         if "degraded" in component_statuses
         else "setup_needed"
     )
+
+    def _gate(names: tuple[str, ...]) -> dict[str, Any]:
+        selected = {name: components[name] for name in names if name in components}
+        failing = sorted(
+            name
+            for name, item in selected.items()
+            if str(item.get("status") or "") not in {"operational", "catching_up"}
+        )
+        pending = sorted(
+            name
+            for name, item in selected.items()
+            if str(item.get("status") or "") == "catching_up"
+        )
+        return {
+            "status": "degraded" if failing else "catching_up" if pending else "operational",
+            "failing": failing,
+            "pending": pending,
+        }
+
+    gates = {
+        "availability": _gate(_AVAILABILITY_COMPONENTS),
+        "current_market_data": _gate(_CURRENT_DATA_COMPONENTS),
+        "historical_completeness": _gate(_HISTORICAL_COMPONENTS),
+    }
+    # Only availability and current-market-data may claim the product itself is
+    # not serving. An advancing exact-settlement backlog stays visible in its
+    # own gate instead of turning every probe red.
+    serving_ok = (
+        gates["availability"]["status"] == "operational"
+        and gates["current_market_data"]["status"] == "operational"
+    )
     return {
-        "ok": overall_status == "operational",
+        "ok": serving_ok,
+        "serving_ok": serving_ok,
         "overall_status": overall_status,
+        "gates": gates,
         "service": "SpreadBoard",
         "checked_at": datetime.now(tz=timezone.utc).isoformat(),
         "components": components,

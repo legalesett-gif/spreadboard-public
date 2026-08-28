@@ -9,6 +9,13 @@ services:
     environment: &spreadboard_runtime_environment
       HOST: 0.0.0.0
       PORT: "8200"
+      # Each structural generation allocates and frees ~0.66GB of row dicts on
+      # worker threads.  glibc keeps a per-thread arena for that churn and does
+      # not return it, so resident memory ratcheted 1.79 -> 2.71 -> 2.91GB
+      # between publications until the cgroup killed the process.  Capping the
+      # arenas and trimming aggressively returns freed generations to the OS.
+      MALLOC_ARENA_MAX: "2"
+      MALLOC_TRIM_THRESHOLD_: "131072"
       SPREADBOARD_SERVICE_ROLE: "web"
       SPREADBOARD_DATA_DIR: /app/runtime
       SPREADBOARD_PUBLIC_MODE: "1"
