@@ -947,7 +947,7 @@ def _current_funding_monitor(
         (row for row in rows if (_funding_value(row) or 0.0) > 0.0),
         key=lambda row: -float(_funding_value(row) or 0.0),
     )
-    display_rows = _diverse_short_venues(rows, limit=MAX_ROWS)
+    display_rows = _diverse_funding_venues(rows, limit=MAX_ROWS)
     body = _table(
         ("ROUTE", "NET/DAY", "BASIS"), (22, 9, 8),
         [
@@ -978,16 +978,32 @@ def _current_funding_monitor(
     )
 
 
-def _diverse_short_venues(
+def _funding_venue(row: dict[str, Any]) -> str:
+    """The futures venue whose rate makes a one-futures-leg farm possible."""
+
+    long_futures = str(row.get("long_market_type") or "").casefold() == "futures"
+    short_futures = str(row.get("short_market_type") or "").casefold() == "futures"
+    if long_futures != short_futures:
+        return str(
+            (row.get("long_venue") if long_futures else row.get("short_venue")) or ""
+        )
+    # For futures-futures the short venue remains the clearest diversity key:
+    # both accounts are required, while the short leg is normally the positive
+    # contribution displayed to the member.
+    return str(row.get("short_venue") or "")
+
+
+def _diverse_funding_venues(
     rows: list[dict[str, Any]], *, limit: int = MAX_ROWS
 ) -> list[dict[str, Any]]:
-    """Rank best carry per short venue before filling with repeats.
+    """Rank best carry per earning futures venue before filling repeats.
 
-    Funding is earned on the short futures leg. Showing eight near-identical
-    routes into one short venue hides venue alternatives without adding useful
-    information. The first pass keeps the original carry rank but takes one
-    route per short venue; a second pass fills remaining slots so no route is
-    removed from the underlying result set.
+    In the usual Spot-long/Futures-short farm, funding is earned on the short
+    venue. In the reverse Futures-long/Spot-short farm, a negative rate is
+    earned on the *long* futures venue. Keying only on ``short_venue`` therefore
+    made reverse farms look diverse by spot venue while hiding the account a
+    member actually needs. The first pass keeps one row per relevant futures
+    venue; the second fills remaining slots without deleting underlying rows.
     """
     if limit <= 0:
         return []
@@ -995,7 +1011,7 @@ def _diverse_short_venues(
     repeats: list[dict[str, Any]] = []
     seen: set[str] = set()
     for row in rows:
-        venue = " ".join(str(row.get("short_venue") or "").casefold().split())
+        venue = " ".join(_funding_venue(row).casefold().split())
         # Missing venue metadata must not collapse unrelated routes together.
         key = venue or str(row.get("route_key") or id(row))
         if key in seen:
@@ -1172,19 +1188,19 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
         if public_url:
             link = (
                 f'\n\n<a href="{escape(public_url.rstrip("/"))}/markets?'
-                f'q={escape(symbol)}&amp;include_unverified=1&amp;view=table">'
-                "Check audit-only routes on SpreadBoard</a>"
+                f'q={escape(symbol)}&amp;view=table">'
+                "Check all current routes on SpreadBoard</a>"
             )
         return (
             f"<b>{escape(symbol)}</b> — query recognised; no parsed routes right now.\n"
             "There are no current client-visible routes. The token may be "
-            "unlisted, stale, or available only behind the board's explicit "
-            f"unverified/audit filter.{link}"
+            "unlisted, stale, or currently missing a complete public quote."
+            f"{link}"
         )
 
     if query.kind == "funding":
         rows = sorted(rows, key=lambda row: -float(_funding_value(row) or 0.0))
-        display_rows = _diverse_short_venues(rows, limit=MAX_ROWS)
+        display_rows = _diverse_funding_venues(rows, limit=MAX_ROWS)
         body = _table(
             ("ROUTE", "NET/DAY", "APR"), (22, 9, 8),
             [
@@ -1234,7 +1250,7 @@ def render(query: Query, *, board_path: Path | str, public_url: str = "") -> str
     if query.kind == "funding" and len(
         {str(row.get("short_venue") or "") for row in rows}
     ) > 1:
-        extra += "\n<i>Best pair per short venue is shown before repeat routes.</i>"
+        extra += "\n<i>Best pair per funding venue is shown before repeat routes.</i>"
     link = ""
     if public_url:
         destination = (

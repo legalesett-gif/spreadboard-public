@@ -33,6 +33,7 @@ class LiveRouteUniverse:
         self._template: dict[str, Any] | None = None
         self._headlines: dict[str, Any] = {}
         self._updates: dict[str, tuple[Any, ...]] = {}
+        self._live_metrics: dict[str, Any] = {}
         self._installed_generation = 0
         self._refreshed_at = 0.0
         self._refresh_seconds: float | None = None
@@ -58,6 +59,7 @@ class LiveRouteUniverse:
                 self._refreshed_at = 0.0
                 self._refresh_seconds = None
                 self._headlines = {}
+                self._live_metrics = {}
             self._last_error = None
 
     def refresh(self) -> dict[str, Any]:
@@ -84,6 +86,7 @@ class LiveRouteUniverse:
                 headlines = _build_headlines(
                     tuple(rows.values()), updates, now=time.time()
                 )
+                live_metrics = _live_update_metrics(rows, updates, now=time.time())
             except Exception as exc:  # noqa: BLE001 - retain the previous good map.
                 with self._lock:
                     self._last_error = f"{type(exc).__name__}: {str(exc)[:180]}"
@@ -94,6 +97,7 @@ class LiveRouteUniverse:
                 if generation == self._installed_generation and rows is self._rows:
                     self._updates = updates
                     self._headlines = headlines
+                    self._live_metrics = live_metrics
                     self._refreshed_at = time.time()
                     self._refresh_seconds = elapsed
                     self._last_error = None
@@ -153,6 +157,9 @@ class LiveRouteUniverse:
                         updates.pop(key, None)
                     updates.update(refreshed)
                     self._updates = updates
+                    self._live_metrics = _live_update_metrics(
+                        rows, updates, now=time.time()
+                    )
                     self._last_error = None
         return self.status()
 
@@ -232,12 +239,57 @@ class LiveRouteUniverse:
         return {
             "ready": bool(self._rows and self._refreshed_at),
             "route_count": len(self._rows),
+            # ``live_route_updates_for`` emits a tuple even when only funding
+            # (or neither live field) is available. The old count therefore
+            # looked like 100% spread coverage while both books were absent.
+            # Keep it for compatibility, but expose the actual two-book truth.
             "updated_route_count": len(self._updates),
+            **self._live_metrics,
             "age_seconds": age,
             "refresh_seconds": self._refresh_seconds,
             "generation": self._installed_generation,
             "last_error": self._last_error,
         }
+
+
+def _live_update_metrics(
+    rows: dict[str, dict[str, Any]],
+    updates: dict[str, tuple[Any, ...]],
+    *,
+    now: float,
+) -> dict[str, Any]:
+    priced = 0
+    funding_only = 0
+    tokens: set[str] = set()
+    families: Counter[str] = Counter()
+    for key, update in updates.items():
+        if not update:
+            continue
+        spread = update[0] if len(update) > 0 else None
+        funding = update[1] if len(update) > 1 else None
+        quote_ts_us = update[2] if len(update) > 2 else None
+        current = False
+        if spread is not None and quote_ts_us is not None:
+            try:
+                age_seconds = now - float(quote_ts_us) / 1_000_000.0
+            except (TypeError, ValueError, OverflowError):
+                age_seconds = float("inf")
+            current = -1.0 <= age_seconds <= api_spreads.LIVE_BOOK_MAX_AGE_SECONDS
+        if current:
+            priced += 1
+            row = rows.get(key) or {}
+            token = str(row.get("token") or "").upper()
+            if token:
+                tokens.add(token)
+            families[str(row.get("route_kind") or "UNKNOWN").upper()] += 1
+        elif funding is not None:
+            funding_only += 1
+    return {
+        "current_priced_route_count": priced,
+        "current_priced_token_count": len(tokens),
+        "current_priced_route_kind_counts": dict(families),
+        "funding_only_route_count": funding_only,
+    }
 
 
 LIVE_UNIVERSE = LiveRouteUniverse()

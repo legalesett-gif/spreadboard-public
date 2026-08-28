@@ -138,7 +138,7 @@ class LiveBookStore:
                 -- push had almost nothing left to send.
                 WHERE excluded.quote_ts_us >= live_books.quote_ts_us
                   AND NOT (
-                    excluded.source = 'bulk_ticker'
+                    excluded.source IN ('bulk_ticker', 'native_bulk_ticker')
                     AND live_books.source = 'public_websocket'
                     AND live_books.quote_ts_us >= excluded.quote_ts_us - 30000000
                   )

@@ -143,6 +143,35 @@ def test_arbitrary_filters_project_from_one_live_atomic_snapshot(
     assert [group["token"] for group in payload["groups"]] == ["GUA"]
     assert payload["groups"][0]["best_edge_pct"] == pytest.approx(2.5)
     assert payload["materialized_live_universe"]["updated_route_count"] == 2
+    assert payload["materialized_live_universe"]["current_priced_route_count"] == 2
+    assert payload["materialized_live_universe"]["current_priced_token_count"] == 2
+
+
+def test_live_health_does_not_count_funding_only_tuples_as_priced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = {
+        "priced": _route("GUA", route_key="priced"),
+        "funding-only": _route("BTW", route_key="funding-only"),
+        "empty": _route("SPCX", route_key="empty"),
+    }
+    universe = _ready_universe(
+        monkeypatch,
+        rows,
+        updates={
+            "priced": (0.5, 0.2, int(time.time() * 1_000_000), "matched_vwap"),
+            "funding-only": (None, 0.3, None, None),
+            "empty": (None, None, None, None),
+        },
+    )
+
+    status = universe.status()
+
+    assert status["updated_route_count"] == 3
+    assert status["current_priced_route_count"] == 1
+    assert status["current_priced_token_count"] == 1
+    assert status["funding_only_route_count"] == 1
+    assert status["current_priced_route_kind_counts"] == {"FUTURES": 1}
 
 
 def test_empty_search_is_a_complete_projection_not_a_rebuild(

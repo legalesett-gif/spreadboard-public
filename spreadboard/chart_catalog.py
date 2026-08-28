@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 from typing import Any
+from urllib.request import Request, urlopen
 
 from spreadboard.fast_quotes import NATIVE_FUTURES_VENUES, NATIVE_SPOT_VENUES, VENUE_IDS
 from spreadboard import route_taxonomy
@@ -237,6 +238,13 @@ def route_from_key(route_key: str) -> dict[str, Any] | None:
 def _load_venue(venue: str, market_type: str) -> list[dict[str, Any]]:
     import ccxt
 
+    if venue == "WhiteBIT":
+        # WhiteBIT publishes the authoritative product type itself. Its CCXT
+        # adapter currently maps ``tradfiFutures`` markets such as AAOI_PERP to
+        # Spot and also omits them from the Futures family, creating phantom
+        # spot-futures spreads and hiding real perpetual routes at once.
+        return _load_whitebit_venue(market_type)
+
     if venue == "Ourbit" and market_type == "Futures":
         # Ourbit is an MEXC-compatible public API without a CCXT class. Use the
         # same host-retargeted adapter as discovery so its 800+ futures markets
@@ -289,13 +297,95 @@ def _catalog_market_supported(market: dict[str, Any], market_type: str) -> bool:
     if market.get("active") is False or str(market.get("quote") or "").upper() not in STABLE_QUOTES:
         return False
     if market_type == "Spot":
-        return bool(market.get("spot"))
+        # A `_PERP` instrument can never be a spot leg even if an adapter
+        # misclassifies a provider-specific product type.
+        return bool(market.get("spot")) and not str(market.get("id") or "").upper().endswith(
+            "_PERP"
+        )
     if market_type != "Futures" or not market.get("swap"):
         return False
     # The native futures adapters quote stablecoin-settled perpetuals. Inverse
     # contracts such as BTC/USD:BTC need different symbols, sizing, and funding
     # units and must not leak into the same chart path.
     return str(market.get("settle") or "").upper() in STABLE_QUOTES
+
+
+def _load_whitebit_venue(
+    market_type: str,
+    *,
+    fetcher: Any = None,
+) -> list[dict[str, Any]]:
+    """Load exact WhiteBIT spot or perpetual definitions from first party."""
+
+    def public_json(url: str) -> Any:
+        request = Request(
+            url,
+            headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"},
+        )
+        with urlopen(request, timeout=20.0) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    get_json = fetcher or public_json
+    rows: list[dict[str, Any]] = []
+    if market_type == "Spot":
+        payload = get_json("https://whitebit.com/api/v4/public/markets")
+        for item in payload if isinstance(payload, list) else []:
+            if not isinstance(item, dict):
+                continue
+            quote = str(item.get("money") or "").upper()
+            token = str(item.get("stock") or "").upper()
+            market_id = str(item.get("name") or "").upper()
+            if (
+                str(item.get("type") or "").casefold() != "spot"
+                or item.get("tradesEnabled") is not True
+                or item.get("delistedAt") is not None
+                or quote not in STABLE_QUOTES
+                or not token
+                or not market_id
+            ):
+                continue
+            rows.append(
+                {
+                    "token": token,
+                    "venue": "WhiteBIT",
+                    "market_type": "Spot",
+                    "symbol": f"{token}/{quote}",
+                    "market_id": market_id,
+                    "quote": quote,
+                    "contract_size": 1.0,
+                }
+            )
+        return rows
+
+    if market_type != "Futures":
+        return []
+    payload = get_json("https://whitebit.com/api/v4/public/futures")
+    futures = payload.get("result") if isinstance(payload, dict) else payload
+    for item in futures if isinstance(futures, list) else []:
+        if not isinstance(item, dict):
+            continue
+        quote = str(item.get("money_currency") or "").upper()
+        token = str(item.get("stock_currency") or "").upper()
+        market_id = str(item.get("ticker_id") or "").upper()
+        if (
+            str(item.get("product_type") or "").casefold() != "perpetual"
+            or quote not in STABLE_QUOTES
+            or not token
+            or not market_id.endswith("_PERP")
+        ):
+            continue
+        rows.append(
+            {
+                "token": token,
+                "venue": "WhiteBIT",
+                "market_type": "Futures",
+                "symbol": f"{token}/{quote}:{quote}",
+                "market_id": market_id,
+                "quote": quote,
+                "contract_size": 1.0,
+            }
+        )
+    return rows
 
 
 def dex_market_entries(path: Path | str = DEX_WATCHLIST_PATH) -> list[dict[str, Any]]:

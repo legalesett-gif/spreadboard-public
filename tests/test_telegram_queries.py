@@ -341,7 +341,7 @@ def test_funding_reply_shows_net_and_apr(board_file):
     assert "+0.051%" in body and "+18.6%" in body
 
 
-def test_funding_reply_ranks_distinct_short_venues_before_repeats(
+def test_funding_reply_ranks_distinct_funding_venues_before_repeats(
     board_file,
 ):
     telegram_queries.replace_funding_payloads([{"groups": [{
@@ -359,7 +359,37 @@ def test_funding_reply_ranks_distinct_short_venues_before_repeats(
 
     assert body.index("LongA·F&gt;ShortA·F") < body.index("LongC·F&gt;ShortB·F")
     assert body.index("LongC·F&gt;ShortB·F") < body.index("LongB·F&gt;ShortA·F")
-    assert "Best pair per short venue" in body
+    assert "Best pair per funding venue" in body
+
+
+def test_reverse_spot_futures_farms_diversify_by_long_futures_venue() -> None:
+    rows = [
+        {
+            "route_key": "a",
+            "long_venue": "Aster",
+            "long_market_type": "Futures",
+            "short_venue": "Gate",
+            "short_market_type": "Spot",
+        },
+        {
+            "route_key": "b",
+            "long_venue": "Aster",
+            "long_market_type": "Futures",
+            "short_venue": "Mexc",
+            "short_market_type": "Spot",
+        },
+        {
+            "route_key": "c",
+            "long_venue": "Bybit",
+            "long_market_type": "Futures",
+            "short_venue": "Gate",
+            "short_market_type": "Spot",
+        },
+    ]
+
+    ranked = telegram_queries._diverse_funding_venues(rows, limit=3)
+
+    assert [row["route_key"] for row in ranked] == ["a", "c", "b"]
 
 
 def test_transfer_reply_shows_deposit_and_withdraw_state(board_file):
@@ -378,13 +408,14 @@ def test_unknown_token_answers_plainly(board_file):
     assert "query recognised" in body and "no parsed routes" in body
 
 
-def test_unknown_token_links_to_explicit_audit_filter(board_file):
+def test_unknown_token_links_to_the_unified_market_list(board_file):
     body = telegram_queries.render(
         telegram_queries.Query("spread", "NOTATOKEN"),
         board_path=board_file,
         public_url="https://spreadarbitrage.ink",
     )
-    assert "include_unverified=1" in body
+    assert "/markets?q=NOTATOKEN&amp;view=table" in body
+    assert "audit-only" not in body
 
 
 def test_cooled_token_falls_back_to_the_historical_funding_radar(board_file, monkeypatch):

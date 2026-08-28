@@ -23,9 +23,11 @@ from spreadboard import bulk_quotes
 class _Store:
     def __init__(self) -> None:
         self.written: list[tuple] = []
+        self.quote_timestamps: list[int] = []
 
     def put(self, venue, market_type, symbol, *, bids, asks, quote_ts_us, source="public_websocket"):
         self.written.append((venue, market_type, symbol, bids[0][0], asks[0][0]))
+        self.quote_timestamps.append(quote_ts_us)
 
 
 class _Client:
@@ -222,6 +224,115 @@ def test_kucoin_native_bulk_applies_contract_multiplier() -> None:
     assert books[0]["symbol"] == "BTC/USDT:USDT"
     assert books[0]["bids"] == [[80000.0, 0.005]]
     assert books[0]["asks"] == [[80001.0, 0.006]]
+
+
+def test_native_snapshot_freshness_is_observation_time_not_last_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A quiet but freshly returned BBO must not disappear as stale."""
+
+    observed_at = 1_800_000_000.0
+    monkeypatch.setattr(bulk_quotes.time, "time", lambda: observed_at)
+    payloads = {
+        "allTickers": {
+            "data": [
+                {
+                    "symbol": "XBTUSDTM",
+                    "bestBidPrice": "80000",
+                    "bestBidSize": "5",
+                    "bestAskPrice": "80001",
+                    "bestAskSize": "6",
+                    "ts": 1_700_000_000_000_000_000,
+                }
+            ]
+        },
+        "contracts": {
+            "data": [
+                {
+                    "symbol": "XBTUSDTM",
+                    "baseCurrency": "XBT",
+                    "quoteCurrency": "USDT",
+                    "multiplier": "0.001",
+                    "isInverse": False,
+                    "status": "Open",
+                }
+            ]
+        },
+    }
+
+    books = bulk_quotes._native_bulk_books(
+        "Kucoin Futures",
+        fetcher=lambda url: payloads[
+            "allTickers" if "allTickers" in url else "contracts"
+        ],
+    )
+
+    assert books[0]["quote_ts_us"] == int(observed_at * 1_000_000)
+
+
+def test_whitebit_native_snapshot_separates_real_spot_and_tradfi_futures() -> None:
+    definitions = [
+        {
+            "name": "BTC_USDT",
+            "stock": "BTC",
+            "money": "USDT",
+            "type": "spot",
+            "tradesEnabled": True,
+            "delistedAt": None,
+        },
+        {
+            "name": "AAOI_PERP",
+            "stock": "AAOI",
+            "money": "USDT",
+            "type": "tradfiFutures",
+            "tradesEnabled": True,
+            "delistedAt": None,
+        },
+    ]
+    snapshot = [
+        [1.0, 2.0, "BTC_USDT", 1, "80000", "2", "80001", "3"],
+        [1.0, 2.0, "AAOI_PERP", 2, "109.8", "4", "110.0", "5"],
+    ]
+
+    books = bulk_quotes._native_bulk_books(
+        "WhiteBIT",
+        fetcher=lambda _url: definitions,
+        whitebit_snapshotter=lambda expected: snapshot
+        if expected == {"BTC_USDT", "AAOI_PERP"}
+        else [],
+    )
+
+    assert [(row["market_type"], row["symbol"]) for row in books] == [
+        ("Spot", "BTC/USDT"),
+        ("Futures", "AAOI/USDT:USDT"),
+    ]
+    assert books[1]["bids"] == [[109.8, 4.0]]
+
+
+def test_generic_bulk_ticker_uses_fresh_response_observation_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_at = 1_800_000_000.0
+    monkeypatch.setattr(bulk_quotes.time, "time", lambda: observed_at)
+    store = _Store()
+    client = _Client(
+        {
+            "QUIET/USDT": {
+                "bid": 1.0,
+                "ask": 1.1,
+                "timestamp": 1_700_000_000_000,
+            }
+        },
+        {"QUIET/USDT": {"spot": True}},
+    )
+
+    assert (
+        bulk_quotes.sweep_venue(
+            "Gate", store=store, client_factory=lambda *_args: client
+        )
+        == 1
+    )
+    assert store.quote_timestamps == [int(observed_at * 1_000_000)]
 
 
 def test_xt_native_bulk_keeps_spot_and_futures_bbo_families_separate() -> None:
@@ -946,7 +1057,10 @@ def test_futures_ticker_volume_is_normalised_by_contract_size(tmp_path) -> None:
     assert book.source == "bulk_ticker"
 
 
-def test_bulk_ticker_cannot_flatten_a_current_websocket_ladder(tmp_path) -> None:
+@pytest.mark.parametrize("source", ["bulk_ticker", "native_bulk_ticker"])
+def test_bulk_ticker_cannot_flatten_a_current_websocket_ladder(
+    tmp_path, source
+) -> None:
     from spreadboard import live_book_cache
 
     store = live_book_cache.LiveBookStore(tmp_path / "books.sqlite3")
@@ -962,7 +1076,7 @@ def test_bulk_ticker_cannot_flatten_a_current_websocket_ladder(tmp_path) -> None
         "Gate", "Spot", "T/USDT",
         bids=[[9.0, 0.0]], asks=[[9.1, 0.0]],
         quote_ts_us=timestamp + 1_000_000,
-        source="bulk_ticker",
+        source=source,
     )
 
     book = store.get("Gate", "Spot", "T/USDT", max_age_seconds=300.0)

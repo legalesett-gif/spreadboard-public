@@ -294,6 +294,69 @@ def test_catalog_excludes_inverse_perpetuals_from_stablecoin_chart_path() -> Non
     assert chart_catalog._catalog_market_supported(linear, "Futures")
 
 
+def test_whitebit_catalog_uses_first_party_product_types() -> None:
+    definitions = [
+        {
+            "name": "BTC_USDT",
+            "stock": "BTC",
+            "money": "USDT",
+            "type": "spot",
+            "tradesEnabled": True,
+            "delistedAt": None,
+        },
+        {
+            "name": "AAOI_PERP",
+            "stock": "AAOI",
+            "money": "USDT",
+            "type": "tradfiFutures",
+            "tradesEnabled": True,
+            "delistedAt": None,
+        },
+    ]
+    futures = {
+        "result": [
+            {
+                "ticker_id": "AAOI_PERP",
+                "stock_currency": "AAOI",
+                "money_currency": "USDT",
+                "product_type": "Perpetual",
+            }
+        ]
+    }
+
+    spot_rows = chart_catalog._load_whitebit_venue(
+        "Spot", fetcher=lambda _url: definitions
+    )
+    future_rows = chart_catalog._load_whitebit_venue(
+        "Futures", fetcher=lambda _url: futures
+    )
+
+    assert [row["market_id"] for row in spot_rows] == ["BTC_USDT"]
+    assert future_rows == [
+        {
+            "token": "AAOI",
+            "venue": "WhiteBIT",
+            "market_type": "Futures",
+            "symbol": "AAOI/USDT:USDT",
+            "market_id": "AAOI_PERP",
+            "quote": "USDT",
+            "contract_size": 1.0,
+        }
+    ]
+
+
+def test_perp_suffix_never_enters_generic_spot_catalog() -> None:
+    assert not chart_catalog._catalog_market_supported(
+        {
+            "active": True,
+            "spot": True,
+            "quote": "USDT",
+            "id": "AAOI_PERP",
+        },
+        "Spot",
+    )
+
+
 def test_one_day_chart_budget_can_hold_every_minute() -> None:
     config = server.chart_window_config("1d")
     assert config["hours"] == 24
@@ -343,6 +406,7 @@ def test_history_merge_preserves_full_window_and_prefers_exact_bucket() -> None:
 
 
 def test_position_suggestions_use_canonical_live_route(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(server.telegram_queries, "client_visible_payload", dict)
     monkeypatch.setattr(
         server.api_spreads,
         "load_spreads",

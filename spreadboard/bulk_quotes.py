@@ -169,7 +169,6 @@ def _native_aster_books(*, fetcher: Any = None) -> list[dict[str, Any]]:
                 ask = float(item.get("askPrice") or 0.0)
                 bid_amount = float(item.get("bidQty") or 0.0)
                 ask_amount = float(item.get("askQty") or 0.0)
-                timestamp_ms = float(item.get("time") or 0.0)
             except (TypeError, ValueError):
                 continue
             if bid <= 0 or ask <= 0 or bid_amount <= 0 or ask_amount <= 0:
@@ -181,7 +180,13 @@ def _native_aster_books(*, fetcher: Any = None) -> list[dict[str, Any]]:
                     "symbol": symbol,
                     "bids": [[bid, bid_amount]],
                     "asks": [[ask, ask_amount]],
-                    "quote_ts_us": int(timestamp_ms * 1000) if timestamp_ms > 0 else now_us,
+                    # This is a freshly fetched all-market BBO snapshot.  The
+                    # provider's per-symbol ``time`` may be the last matching-
+                    # engine change (hours old on a quiet market), not the age
+                    # of the bid/ask we just observed.  Using it as freshness
+                    # silently removed valid books even though the endpoint
+                    # had returned their current BBO in this request.
+                    "quote_ts_us": now_us,
                     "source": "native_bulk_ticker",
                 }
             )
@@ -192,9 +197,10 @@ _NATIVE_COMPLETE_BULK_VENUES = {
     "Binance",
     "Kraken Futures",
     "Kucoin Futures",
+    "WhiteBIT",
     "XT",
 }
-_NATIVE_PARTIAL_BULK_VENUES = {"Phemex", "WhiteBIT"}
+_NATIVE_PARTIAL_BULK_VENUES = {"Phemex"}
 _NATIVE_FUTURES_ONLY_BULK_VENUES = {"Hyperliquid"}
 _NATIVE_LINEAR_QUOTES = ("USDT", "USDC", "USD")
 
@@ -204,6 +210,7 @@ def _native_bulk_books(
     *,
     fetcher: Any = None,
     poster: Any = None,
+    whitebit_snapshotter: Any = None,
 ) -> list[dict[str, Any]]:
     """Fast first-party BBO snapshots for adapters CCXT leaves one-sided.
 
@@ -238,7 +245,6 @@ def _native_bulk_books(
         ask: Any,
         bid_size: Any = 0.0,
         ask_size: Any = 0.0,
-        timestamp_us: Any = None,
     ) -> None:
         normalized_base = {"XBT": "BTC", "XDG": "DOGE"}.get(
             str(base or "").upper(), str(base or "").upper()
@@ -249,7 +255,6 @@ def _native_bulk_books(
             ask_value = float(ask or 0.0)
             bid_amount = max(0.0, float(bid_size or 0.0))
             ask_amount = max(0.0, float(ask_size or 0.0))
-            quote_ts_us = int(timestamp_us or now_us)
         except (TypeError, ValueError):
             return
         if (
@@ -270,7 +275,11 @@ def _native_bulk_books(
                 "symbol": symbol,
                 "bids": [[bid_value, bid_amount]],
                 "asks": [[ask_value, ask_amount]],
-                "quote_ts_us": quote_ts_us,
+                # A successful synchronous all-market response is a current
+                # observation of this BBO. Provider event/trade timestamps are
+                # provenance, not quote freshness: an unchanged book remains
+                # current when the venue returns it again.
+                "quote_ts_us": now_us,
                 "source": "native_bulk_ticker",
             }
         )
@@ -288,7 +297,6 @@ def _native_bulk_books(
                 identity = pair(item.get("symbol"), perpetual=market_type == "Futures")
                 if identity is None:
                     continue
-                timestamp_ms = _float(item.get("time"))
                 append(
                     market_type=market_type,
                     base=identity[0],
@@ -297,7 +305,6 @@ def _native_bulk_books(
                     ask=item.get("askPrice"),
                     bid_size=item.get("bidQty"),
                     ask_size=item.get("askQty"),
-                    timestamp_us=(int(timestamp_ms * 1000) if timestamp_ms else now_us),
                 )
         return output
 
@@ -334,7 +341,6 @@ def _native_bulk_books(
                     continue
                 base, quote = identity
             multiplier = abs(_float(contract.get("multiplier")) or 1.0)
-            timestamp_ns = _float(item.get("ts"))
             append(
                 market_type="Futures",
                 base=base,
@@ -343,7 +349,6 @@ def _native_bulk_books(
                 ask=item.get("bestAskPrice"),
                 bid_size=(_float(item.get("bestBidSize")) or 0.0) * multiplier,
                 ask_size=(_float(item.get("bestAskSize")) or 0.0) * multiplier,
-                timestamp_us=(int(timestamp_ns / 1000) if timestamp_ns else now_us),
             )
         return output
 
@@ -360,7 +365,6 @@ def _native_bulk_books(
             identity = pair(item.get("s"), perpetual=False)
             if identity is None:
                 continue
-            timestamp_ms = _float(item.get("t"))
             append(
                 market_type="Spot",
                 base=identity[0],
@@ -369,7 +373,6 @@ def _native_bulk_books(
                 ask=item.get("ap"),
                 bid_size=item.get("bq"),
                 ask_size=item.get("aq"),
-                timestamp_us=(int(timestamp_ms * 1000) if timestamp_ms else now_us),
             )
         futures = get_json(
             "https://fapi.xt.com/future/market/v1/public/q/agg-tickers"
@@ -382,7 +385,6 @@ def _native_bulk_books(
             identity = pair(item.get("s"), perpetual=True)
             if identity is None:
                 continue
-            timestamp_ms = _float(item.get("t"))
             append(
                 market_type="Futures",
                 base=identity[0],
@@ -392,7 +394,6 @@ def _native_bulk_books(
                 # XT's all-contract endpoint proves a current BBO but does not
                 # publish size. Keep it indicative; depth verification remains
                 # closed until an exact order book is available.
-                timestamp_us=(int(timestamp_ms * 1000) if timestamp_ms else now_us),
             )
         return output
 
@@ -439,32 +440,64 @@ def _native_bulk_books(
             identity = pair(item.get("symbol"), perpetual=True)
             if identity is None:
                 continue
-            timestamp_ns = _float(item.get("timestamp"))
             append(
                 market_type="Futures",
                 base=identity[0],
                 quote=identity[1],
                 bid=item.get("bidRp"),
                 ask=item.get("askRp"),
-                timestamp_us=(int(timestamp_ns / 1000) if timestamp_ns else now_us),
             )
         return output
 
     if venue == "WhiteBIT":
-        payload = get_json("https://whitebit.com/api/v4/public/futures")
-        rows = payload.get("result") if isinstance(payload, dict) else payload
-        for item in rows or []:
+        definitions = get_json("https://whitebit.com/api/v4/public/markets")
+        markets: dict[str, dict[str, Any]] = {}
+        for item in definitions if isinstance(definitions, list) else []:
             if not isinstance(item, dict):
                 continue
-            if str(item.get("product_type") or "Perpetual").casefold() != "perpetual":
+            name = str(item.get("name") or "").upper()
+            quote = str(item.get("money") or "").upper()
+            kind = str(item.get("type") or "").casefold()
+            if (
+                not name
+                or quote not in _NATIVE_LINEAR_QUOTES
+                or item.get("tradesEnabled") is not True
+                or item.get("delistedAt") is not None
+            ):
+                continue
+            market_type = (
+                "Spot"
+                if kind == "spot"
+                else "Futures"
+                if kind in {"futures", "tradfifutures"}
+                else None
+            )
+            if market_type is None:
+                continue
+            markets[name] = {
+                "market_type": market_type,
+                "base": item.get("stock"),
+                "quote": quote,
+            }
+        snapshot = (
+            whitebit_snapshotter(set(markets))
+            if whitebit_snapshotter is not None
+            else _whitebit_book_ticker_snapshot(set(markets))
+        )
+        for item in snapshot:
+            if not isinstance(item, (list, tuple)) or len(item) < 8:
+                continue
+            market = markets.get(str(item[2] or "").upper())
+            if market is None:
                 continue
             append(
-                market_type="Futures",
-                base=item.get("stock_currency")
-                or str(item.get("ticker_id") or "").removesuffix("_PERP"),
-                quote=item.get("money_currency") or "USDT",
-                bid=item.get("bid"),
-                ask=item.get("ask"),
+                market_type=market["market_type"],
+                base=market["base"],
+                quote=market["quote"],
+                bid=item[4],
+                bid_size=item[5],
+                ask=item[6],
+                ask_size=item[7],
             )
         return output
 
@@ -511,6 +544,73 @@ def _native_bulk_books(
         return output
 
     return output
+
+
+def _whitebit_book_ticker_snapshot(
+    expected_markets: set[str],
+    *,
+    timeout_seconds: float = 8.0,
+) -> list[list[Any]]:
+    """Read WhiteBIT's public all-market BBO snapshot atomically.
+
+    WhiteBIT's REST ticker has no bid/ask and its CCXT catalogue historically
+    classified ``tradfiFutures`` as spot. The first-party Book Ticker stream
+    explicitly accepts an empty market list and then sends one current BBO for
+    every market. Require the complete enabled market set before publishing;
+    on a partial response the caller falls back instead of calling the subset
+    a complete venue sweep.
+    """
+
+    import asyncio
+
+    import aiohttp
+
+    async def collect() -> list[list[Any]]:
+        latest: dict[str, list[Any]] = {}
+        deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+        timeout = aiohttp.ClientTimeout(total=max(3.0, float(timeout_seconds) + 2.0))
+        async with (
+            aiohttp.ClientSession(timeout=timeout) as session,
+            session.ws_connect(
+                "wss://api.whitebit.com/ws",
+                heartbeat=15.0,
+            ) as websocket,
+        ):
+            await websocket.send_json(
+                {"method": "bookTicker_subscribe", "params": [], "id": 1}
+            )
+            while time.monotonic() < deadline and not expected_markets.issubset(
+                latest
+            ):
+                remaining = max(0.1, deadline - time.monotonic())
+                try:
+                    message = await asyncio.wait_for(
+                        websocket.receive(), timeout=min(1.0, remaining)
+                    )
+                except TimeoutError:
+                    continue
+                if message.type != aiohttp.WSMsgType.TEXT:
+                    continue
+                try:
+                    payload = json.loads(message.data)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if payload.get("method") != "bookTicker_update":
+                    continue
+                for item in payload.get("params") or []:
+                    if not isinstance(item, list) or len(item) < 8:
+                        continue
+                    market = str(item[2] or "").upper()
+                    if market in expected_markets:
+                        latest[market] = item
+        missing = expected_markets - set(latest)
+        if missing:
+            raise TimeoutError(
+                f"whitebit_book_ticker_incomplete:{len(latest)}/{len(expected_markets)}"
+            )
+        return [latest[market] for market in sorted(expected_markets)]
+
+    return asyncio.run(collect())
 
 
 def _write_books(store: live_book_cache.LiveBookStore, books: list[dict[str, Any]]) -> int:
@@ -615,7 +715,6 @@ def sweep_venue(
                 row = fair_price.deviation(venue, str(symbol), ticker)
                 if row is not None:
                     fair_price_rows.append(row)
-            timestamp_ms = ticker.get("timestamp")
             try:
                 pending_books.append({
                     "venue": venue,
@@ -629,11 +728,11 @@ def sweep_venue(
                         float(ask),
                         float(ticker.get("askVolume") or 0.0) * contract_size,
                     ]],
-                    "quote_ts_us": (
-                        int(float(timestamp_ms) * 1000)
-                        if timestamp_ms
-                        else now_us
-                    ),
+                    # `fetch_tickers()` returned this BBO in the current
+                    # response. Many adapters expose last-trade time in
+                    # `timestamp`; treating it as BBO age wrongly deletes quiet
+                    # but currently quoted markets from the route universe.
+                    "quote_ts_us": now_us,
                     "source": "bulk_ticker",
                 })
             except (TypeError, ValueError):
