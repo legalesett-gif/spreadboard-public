@@ -67,12 +67,19 @@ class LiveRouteUniverse:
             with self._lock:
                 rows = self._rows
                 generation = self._installed_generation
+                previous_updates = self._updates
             if not rows:
                 return self.status()
             started = time.monotonic()
             try:
-                updates = api_spreads.live_route_updates_for(
+                observed_updates = api_spreads.live_route_updates_for(
                     list(rows.values()), include_basis=True
+                )
+                updates = _merge_live_updates(
+                    previous_updates,
+                    observed_updates,
+                    route_keys=set(rows),
+                    now=time.time(),
                 )
                 headlines = _build_headlines(
                     tuple(rows.values()), updates, now=time.time()
@@ -177,6 +184,63 @@ class LiveRouteUniverse:
 
 
 LIVE_UNIVERSE = LiveRouteUniverse()
+
+
+def _merge_live_updates(
+    previous: dict[str, tuple[Any, ...]],
+    observed: dict[str, tuple[Any, ...]],
+    *,
+    route_keys: set[str],
+    now: float,
+) -> dict[str, tuple[Any, ...]]:
+    """Retain a still-current quote across a partial live-book pass.
+
+    ``live_route_updates_for`` deliberately emits a funding-only tuple when a
+    route is missing either exact book in the current read. Replacing the
+    complete map with that tuple immediately erased a quote that could still
+    have 60-80 seconds left inside the strict freshness boundary. The reader
+    would alternate between thousands of routes and an empty farm as venue
+    sweeps crossed each other.
+
+    Keep only the previous *price* and its original timestamp/basis while it is
+    still current; take funding from the new observation, including ``None``.
+    Nothing is re-timestamped or extended, so the ordinary 90-second gate still
+    removes the route exactly on schedule.
+    """
+
+    merged: dict[str, tuple[Any, ...]] = {}
+    for key in route_keys:
+        current = observed.get(key)
+        prior = previous.get(key)
+        if current is not None and len(current) >= 3:
+            current_spread = current[0]
+            current_timestamp = current[2]
+            if current_spread is not None and current_timestamp is not None:
+                merged[key] = current
+                continue
+        if prior is not None and len(prior) >= 3:
+            prior_spread = prior[0]
+            prior_timestamp = prior[2]
+            try:
+                prior_age = now - float(prior_timestamp) / 1_000_000.0
+            except (TypeError, ValueError, OverflowError):
+                prior_age = float("inf")
+            if (
+                prior_spread is not None
+                and -1.0 <= prior_age <= api_spreads.LIVE_BOOK_MAX_AGE_SECONDS
+            ):
+                current_funding = current[1] if current is not None and len(current) > 1 else None
+                prior_basis = prior[3] if len(prior) > 3 else None
+                merged[key] = (
+                    prior_spread,
+                    current_funding,
+                    prior_timestamp,
+                    prior_basis,
+                )
+                continue
+        if current is not None:
+            merged[key] = current
+    return merged
 
 
 class Worker(threading.Thread):

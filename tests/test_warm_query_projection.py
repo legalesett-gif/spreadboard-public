@@ -318,6 +318,49 @@ def test_failed_refresh_retains_the_previous_complete_live_map(
     assert "temporary sqlite handoff" in str(status["last_error"])
 
 
+def test_partial_refresh_keeps_only_a_still_current_price_and_new_funding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = time.time()
+    quote_ts_us = int((now - 20.0) * 1_000_000)
+    rows = {"GUA-route": _route("GUA", route_key="GUA-route")}
+    universe = warm_query_projection.LiveRouteUniverse()
+    universe.install(rows)  # type: ignore[arg-type]
+    observations = iter(
+        [
+            {"GUA-route": (1.25, 0.10, quote_ts_us, "matched_vwap")},
+            {"GUA-route": (None, 0.22, None, None)},
+        ]
+    )
+    monkeypatch.setattr(
+        warm_query_projection.api_spreads,
+        "live_route_updates_for",
+        lambda *_args, **_kwargs: next(observations),
+    )
+    universe.refresh()
+    universe.refresh()
+
+    update = universe.snapshot()[1]["GUA-route"]
+    assert update == (1.25, 0.22, quote_ts_us, "matched_vwap")
+
+
+def test_partial_refresh_never_extends_an_expired_price() -> None:
+    now = time.time()
+    expired_ts_us = int(
+        (now - warm_query_projection.api_spreads.LIVE_BOOK_MAX_AGE_SECONDS - 1.0)
+        * 1_000_000
+    )
+
+    merged = warm_query_projection._merge_live_updates(
+        {"GUA-route": (1.25, 0.10, expired_ts_us, "matched_vwap")},
+        {"GUA-route": (None, 0.22, None, None)},
+        route_keys={"GUA-route"},
+        now=now,
+    )
+
+    assert merged["GUA-route"] == (None, 0.22, None, None)
+
+
 def test_update_snapshot_reuses_immutable_maps_without_copying_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
