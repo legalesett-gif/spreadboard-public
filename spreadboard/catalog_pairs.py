@@ -220,6 +220,7 @@ def for_tokens(
     include_history: bool = False,
     include_short_spot: bool = False,
     admissible_spreads_only: bool = False,
+    retain_reverse_pairs: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Build current CEX pair catalogues for several tokens from one book read.
 
@@ -297,18 +298,38 @@ def for_tokens(
             max_age_seconds=max_age_seconds,
             include_history=include_history,
             include_short_spot=include_short_spot,
+            include_reverse_spot=retain_reverse_pairs,
         )
         if admissible_spreads_only:
             # The global route index needs every current positive pair, not
             # every negative mirror direction. Filtering inside this per-token
             # loop avoids retaining 100k+ temporary route dictionaries while
             # preserving the uncapped exact-token builder used by detail pages.
-            routes = [
-                row
-                for row in payload.get("routes") or []
-                if api_spreads.spread_evidence_state(row)
-                in {"verified", "research"}
-            ]
+            all_routes = list(payload.get("routes") or [])
+            if retain_reverse_pairs:
+                admitted_pairs = {
+                    _undirected_route_identity(row)
+                    for row in all_routes
+                    if api_spreads.spread_evidence_state(row)
+                    in {"verified", "research"}
+                }
+                # Keep the opposite structural direction beside every current
+                # opportunity.  Its negative quote remains filtered out by the
+                # live evidence gate, but if the basis reverses the continuous
+                # book overlay can surface it immediately without waiting for
+                # another all-token structural build.
+                routes = [
+                    row
+                    for row in all_routes
+                    if _undirected_route_identity(row) in admitted_pairs
+                ]
+            else:
+                routes = [
+                    row
+                    for row in all_routes
+                    if api_spreads.spread_evidence_state(row)
+                    in {"verified", "research"}
+                ]
             payload = {
                 **payload,
                 "ok": bool(routes),
@@ -688,6 +709,7 @@ def _payload_from_legs(
     max_age_seconds: float,
     include_history: bool,
     include_short_spot: bool = False,
+    include_reverse_spot: bool = False,
 ) -> dict[str, Any]:
     routes: list[dict[str, Any]] = []
     rejected = {
@@ -700,7 +722,10 @@ def _payload_from_legs(
     for left_index, left in enumerate(legs):
         for right in legs[left_index + 1 :]:
             for long_leg, short_leg in _directions(
-                left, right, include_short_spot=include_short_spot
+                left,
+                right,
+                include_short_spot=include_short_spot,
+                include_reverse_spot=include_reverse_spot,
             ):
                 reason = _reject_reason(token, long_leg, short_leg, rails)
                 if reason:
@@ -1096,6 +1121,7 @@ def _directions(
     right: Leg,
     *,
     include_short_spot: bool = False,
+    include_reverse_spot: bool = False,
 ) -> list[tuple[Leg, Leg]]:
     if left.market_type == right.market_type == "Futures":
         if left.venue == right.venue:
@@ -1104,6 +1130,8 @@ def _directions(
     if left.market_type == right.market_type == "Spot":
         if left.venue == right.venue:
             return []
+        if include_reverse_spot:
+            return [(left, right), (right, left)]
         left_to_right = right.bid / left.ask - 1.0
         right_to_left = left.bid / right.ask - 1.0
         return [(left, right)] if left_to_right >= right_to_left else [(right, left)]
@@ -1112,6 +1140,22 @@ def _directions(
     if include_short_spot:
         return [(spot, future), (future, spot)]
     return [(spot, future)]
+
+
+def _undirected_route_identity(row: dict[str, Any]) -> tuple[Any, ...]:
+    """Exact CEX pair identity independent of its current trade direction."""
+
+    def leg(side: str) -> tuple[str, str, str]:
+        return (
+            str(row.get(f"{side}_venue") or "").casefold(),
+            str(row.get(f"{side}_market_type") or "").casefold(),
+            str(row.get(f"{side}_market_symbol") or "").upper(),
+        )
+
+    return (
+        str(row.get("token") or "").upper(),
+        tuple(sorted((leg("long"), leg("short")))),
+    )
 
 
 def _reject_reason(

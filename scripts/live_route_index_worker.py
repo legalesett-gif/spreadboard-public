@@ -155,11 +155,15 @@ def _current_dex_rows(
 def _current_generation_rows(
     previous_rows: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    """Build every positive route from one strict-current resident-book cut.
+    """Build live structural pairs from one complete resident-book cut.
 
-    A basis can reverse between structural discovery builds. The old index kept
-    only the direction that happened to be positive during a slower 180-second
-    build, so the newly-positive direction did not exist for the live overlay.
+    The complete quote pass and this isolated build can together exceed the
+    90-second presentation boundary.  The index is therefore allowed to use
+    the catalogue's bounded 180-second structural window; every web/Telegram
+    projection still overlays the latest books and enforces the unchanged
+    90-second current-quote gate. Reverse pair directions are stored beside an
+    admitted direction so a genuine basis flip appears on the next live
+    overlay rather than waiting for another whole-catalogue build.
     """
 
     now = time.time()
@@ -167,7 +171,7 @@ def _current_generation_rows(
     cex_rows, catalogue_meta = api_spreads._complete_current_catalogue_rows(
         [],
         metadata=metadata,
-        max_age_seconds=api_spreads.LIVE_BOOK_MAX_AGE_SECONDS,
+        max_age_seconds=catalog_pairs.MAX_BOOK_AGE_SECONDS,
     )
     previous_by_identity = {
         catalog_pairs.route_identity(row): row
@@ -191,7 +195,7 @@ def _current_generation_rows(
         if isinstance(row, dict) and str(row.get("route_key") or "")
     }
     return rows, {
-        "status": "strict_current_catalogue_generation",
+        "status": "complete_live_structural_catalogue_generation",
         "updated_at": None,
         "complete_catalogue": catalogue_meta,
         "current_cex_routes": len(cex_rows),
@@ -240,7 +244,7 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     )
     if same_structural_generation:
         rows, source_health = _current_generation_rows(previous_rows)
-        build_mode = "strict_current_catalogue"
+        build_mode = "complete_live_structural_catalogue"
     else:
         rows, source_health = api_spreads.load_public_route_index()
         build_mode = "full_discovery_catalogue"

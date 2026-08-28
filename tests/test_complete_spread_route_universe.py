@@ -190,6 +190,7 @@ def test_complete_route_index_merges_all_catalogue_pairs_and_reverse_spot_leg(
     assert captured["include_short_spot"] is True
     assert captured["include_history"] is False
     assert captured["admissible_spreads_only"] is True
+    assert captured["retain_reverse_pairs"] is True
     assert captured["max_age_seconds"] == catalog_pairs.MAX_BOOK_AGE_SECONDS
     assert {row["route_kind"] for row in rows} == {
         "SPOT-FUTURES",
@@ -377,3 +378,73 @@ def test_bulk_catalogue_discards_negative_mirrors_before_global_retention(
         "indicative",
     }
     assert payload["route_count"] == 2
+
+
+def test_route_index_retains_reverse_of_each_admitted_pair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    book_path = tmp_path / "books.sqlite3"
+    book_path.touch()
+    monkeypatch.setattr(catalog_pairs.live_book_cache, "DEFAULT_PATH", book_path)
+    monkeypatch.setattr(
+        catalog_pairs.chart_catalog,
+        "load",
+        lambda: {
+            "markets": [
+                {
+                    "token": "GUA",
+                    "venue": "Gate",
+                    "market_type": "Futures",
+                    "symbol": "GUA/USDT:USDT",
+                }
+            ]
+        },
+    )
+
+    class Store:
+        def load_all(self, **_kwargs):
+            return {}
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(catalog_pairs.live_book_cache, "LiveBookStore", Store)
+    forward = _evidence_route(route_key="forward")
+    reverse = _evidence_route(
+        route_key="reverse",
+        long_venue="Mexc",
+        short_venue="Gate",
+        executable_spread_pct=-2.2,
+        displayed_open_spread_pct=-2.2,
+        depth_weighted_spread_pct=-2.1,
+    )
+    unrelated = _evidence_route(
+        token="OTHER",
+        route_key="unrelated",
+        long_market_symbol="OTHER/USDT:USDT",
+        short_market_symbol="OTHER/USDT:USDT",
+        executable_spread_pct=-1.0,
+        displayed_open_spread_pct=-1.0,
+        depth_weighted_spread_pct=-1.0,
+    )
+    monkeypatch.setattr(
+        catalog_pairs,
+        "_payload_from_legs",
+        lambda *_args, **_kwargs: {
+            "routes": [forward, reverse, unrelated],
+            "route_count": 3,
+            "displayed_route_count": 3,
+        },
+    )
+
+    payload = catalog_pairs.for_tokens(
+        {"GUA"},
+        admissible_spreads_only=True,
+        include_short_spot=True,
+        retain_reverse_pairs=True,
+    )["GUA"]
+
+    assert {row["route_key"] for row in payload["routes"]} == {
+        "forward",
+        "reverse",
+    }

@@ -261,6 +261,7 @@ def _complete_current_catalogue_rows(
             include_history=False,
             include_short_spot=True,
             admissible_spreads_only=True,
+            retain_reverse_pairs=True,
         )
     except Exception as exc:  # noqa: BLE001 - retain canonical discovery fallback.
         LOGGER.warning("complete catalogue route-index expansion unavailable: %s", exc)

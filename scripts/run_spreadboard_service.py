@@ -1998,6 +1998,9 @@ class LiveRouteIndexPublisher(threading.Thread):
             "requested_generation": self._requested_generation,
             "published_generation": published,
         }
+        # Rankings are useful derived analytics, but must never race the
+        # user-facing route publication which supplies their structural input.
+        _schedule_token_rankings()
         return dict(self.last_result)
 
     def run(self) -> None:
@@ -2126,7 +2129,9 @@ class BulkQuoteLoop(threading.Thread):
             # atomic generation immediately after its prices move. This worker
             # is isolated and low-priority; HTTP readers keep serving the last
             # complete generation while it runs.
-            _schedule_token_rankings()
+            # The route publisher schedules token rankings after its atomic
+            # structural generation is complete. Starting both children here
+            # made the derived ranking child steal CPU from current spreads.
 
 
 class BulkFundingLoop(threading.Thread):
@@ -2416,7 +2421,6 @@ def _refresh_live_route_index(*, install: bool = True) -> bool:
         started = time.monotonic()
         result = _run_worker(
             [
-                *_low_priority_prefix(),
                 sys.executable,
                 str(ROOT / "scripts/live_route_index_worker.py"),
                 "--board-path",

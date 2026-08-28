@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts import live_route_index_worker
-from spreadboard import api_spreads, intel, materialized_views, server
+from spreadboard import catalog_pairs, intel, materialized_views, server
 
 
 def test_worker_publishes_complete_index_without_rendering_views(
@@ -245,9 +245,9 @@ def test_strict_current_generation_adds_newly_positive_reverse_direction(
 
     rows, health = live_route_index_worker._current_generation_rows(previous)
 
-    assert captured["max_age_seconds"] == api_spreads.LIVE_BOOK_MAX_AGE_SECONDS
+    assert captured["max_age_seconds"] == catalog_pairs.MAX_BOOK_AGE_SECONDS
     assert set(rows) == {"new-direction"}
-    assert health["status"] == "strict_current_catalogue_generation"
+    assert health["status"] == "complete_live_structural_catalogue_generation"
 
 
 def test_current_dex_generation_prefers_fast_delta_economics(
