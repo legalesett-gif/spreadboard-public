@@ -552,16 +552,22 @@ def project(
 ) -> dict[str, Any] | None:
     """Return the exact query projection from the continuously live universe."""
 
+    filters = _filters(query, limit=limit, offset=offset)
     structural, updates, live_status = LIVE_UNIVERSE.snapshot()
     headlines = LIVE_UNIVERSE.headlines()
     if not structural or not live_status.get("ready"):
         return None
-    filters = _filters(query, limit=limit, offset=offset)
     now = time.time()
     candidates = [
         _overlay(row, updates.get(str(row.get("route_key") or "")), now=now)
         for row in structural
         if _matches_structural(row, filters)
+        and _passes_fast_spread_threshold(
+            row,
+            updates.get(str(row.get("route_key") or "")),
+            filters,
+            now=now,
+        )
     ]
     dynamically_matching = [
         row
@@ -842,6 +848,32 @@ def _matches_dynamic(row: dict[str, Any], filters: dict[str, Any]) -> bool:
         return False
     threshold = filters.get("min_abs_funding_24h_pct")
     return threshold is None or abs(funding or 0.0) >= float(threshold)
+
+
+def _passes_fast_spread_threshold(
+    source: dict[str, Any],
+    update: tuple[Any, ...] | None,
+    filters: dict[str, Any],
+    *,
+    now: float,
+) -> bool:
+    """Reject obvious sub-threshold routes before copying their full rows."""
+
+    threshold = filters.get("min_spread_pct")
+    if filters.get("funding_only") or threshold is None:
+        return True
+    if update is not None and len(update) >= 3:
+        spread = api_spreads._float_or_none(update[0])
+        quote_ts_us = update[2]
+        if spread is not None and quote_ts_us is not None and api_spreads.spread_quote_current(
+            {"quote_ts_us": quote_ts_us}, now=now
+        ):
+            return spread >= float(threshold)
+    if filters.get("include_stale") or api_spreads.spread_quote_current(
+        source, now=now
+    ):
+        return api_spreads._entrance_spread_dict(source) >= float(threshold)
+    return False
 
 
 def _presentable(

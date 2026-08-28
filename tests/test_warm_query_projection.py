@@ -149,6 +149,50 @@ def test_arbitrary_filters_project_from_one_live_atomic_snapshot(
     assert payload["materialized_live_universe"]["current_priced_token_count"] == 2
 
 
+def test_minimum_spread_is_applied_before_copying_large_route_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now_us = int(time.time() * 1_000_000)
+    rows = {
+        f"route-{index}": _route(
+            f"T{index}",
+            route_key=f"route-{index}",
+            spread=0.75 if index == 99 else 0.1,
+        )
+        for index in range(100)
+    }
+    updates = {
+        key: (
+            row["depth_weighted_spread_pct"],
+            row["funding_daily_pct"],
+            now_us,
+            "matched_vwap",
+        )
+        for key, row in rows.items()
+    }
+    universe = _ready_universe(monkeypatch, rows, updates=updates)
+    monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", universe)
+    original_overlay = warm_query_projection._overlay
+    copied: list[str] = []
+
+    def counted_overlay(source, update, *, now):
+        copied.append(str(source["route_key"]))
+        return original_overlay(source, update, now=now)
+
+    monkeypatch.setattr(warm_query_projection, "_overlay", counted_overlay)
+
+    payload = warm_query_projection.project(
+        {"min_spread_pct": ["0.5"]},
+        template=_template(),
+        limit=500,
+        offset=0,
+    )
+
+    assert payload is not None
+    assert copied == ["route-99"]
+    assert [group["token"] for group in payload["groups"]] == ["T99"]
+
+
 def test_live_health_does_not_count_funding_only_tuples_as_priced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
