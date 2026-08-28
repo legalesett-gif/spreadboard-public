@@ -21,6 +21,21 @@ from typing import Any
 from spreadboard import api_spreads
 
 DEFAULT_REFRESH_SECONDS = 10.0
+PRIORITY_ROUTE_KIND_GROUPS = (
+    {"FUTURES"},
+    {"FUTURES-SPOT"},
+    {"DEX-FUTURES"},
+    {"FUTURES"},
+    {"SPOT-FUTURES"},
+    {"DEX-SPOT"},
+    {"FUTURES"},
+    {"FUTURES-SPOT"},
+    {"DEX-FUTURES"},
+    {"FUTURES"},
+    {"SPOT-FUTURES"},
+    {"DEX-SPOT"},
+    {"SPOT"},
+)
 
 
 class LiveRouteUniverse:
@@ -506,14 +521,7 @@ class Worker(threading.Thread):
 
     def run(self) -> None:
         last_headline_refresh = 0.0
-        priority_groups = (
-            {"FUTURES"},
-            {"FUTURES-SPOT"},
-            {"SPOT-FUTURES"},
-            {"DEX-FUTURES"},
-            {"DEX-SPOT"},
-            {"SPOT"},
-        )
+        priority_groups = PRIORITY_ROUTE_KIND_GROUPS
         priority_index = 0
         while not self.stop_event.is_set():
             started = time.monotonic()

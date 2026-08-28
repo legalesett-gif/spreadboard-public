@@ -516,7 +516,9 @@ def test_worker_refreshes_every_lane_without_a_catalogue_wide_pass(
         waits = 0
 
         def is_set(self):
-            return self.waits >= 6
+            return self.waits >= len(
+                warm_query_projection.PRIORITY_ROUTE_KIND_GROUPS
+            )
 
         def wait(self, _seconds):
             self.waits += 1
@@ -535,8 +537,15 @@ def test_worker_refreshes_every_lane_without_a_catalogue_wide_pass(
     assert actions == [
         {"FUTURES"},
         {"FUTURES-SPOT"},
-        {"SPOT-FUTURES"},
         {"DEX-FUTURES"},
+        {"FUTURES"},
+        {"SPOT-FUTURES"},
+        {"DEX-SPOT"},
+        {"FUTURES"},
+        {"FUTURES-SPOT"},
+        {"DEX-FUTURES"},
+        {"FUTURES"},
+        {"SPOT-FUTURES"},
         {"DEX-SPOT"},
         {"SPOT"},
         "headlines",
