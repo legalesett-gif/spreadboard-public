@@ -135,3 +135,35 @@ def test_okx_dex_monitor_requires_identity_and_current_matched_quote() -> None:
     assert health["route_count"] == 1
     assert health["current_matched_route_count"] == 1
     assert health["target_notional_usd"] == 500.0
+
+
+def test_okx_dex_monitor_uses_current_overlay_without_extending_timestamp(
+    monkeypatch,
+) -> None:
+    now_us = int(time.time() * 1_000_000)
+    stale_us = now_us - 20 * 60 * 1_000_000
+    route = {
+        "route_key": "dex-gua-overlay",
+        "token": "GUA",
+        "route_kind": "DEX-FUTURES",
+        "long_venue": "OKX DEX 56",
+        "short_venue": "Gate",
+        "dex_chain": "56",
+        "dex_contract": "0xgua",
+        "depth_weighted_spread_pct": 0.1,
+        "matched_size_notional_usd": 500.0,
+        "quote_ts_us": stale_us,
+    }
+    monkeypatch.setattr(
+        coverage_reconciliation.api_spreads,
+        "live_route_updates_for",
+        lambda rows, include_basis: {
+            "dex-gua-overlay": (1.25, None, now_us, "matched_500_usd")
+        },
+    )
+
+    health = coverage_reconciliation.dex_monitor([route])
+
+    assert health["status"] == "ok"
+    assert health["current_matched_route_count"] == 1
+    assert route["quote_ts_us"] == stale_us

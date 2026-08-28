@@ -215,7 +215,7 @@ def dex_monitor(routes: Iterable[dict[str, Any]]) -> dict[str, Any]:
     """Separate OKX-DEX identity and matched-quote health from CEX recall."""
 
     dex_rows = [
-        row
+        dict(row)
         for row in routes
         if str(row.get("route_kind") or "").upper()
         in {"DEX-FUTURES", "FUTURES-DEX"}
@@ -225,6 +225,22 @@ def dex_monitor(routes: Iterable[dict[str, Any]]) -> dict[str, Any]:
             normalize_venue(row.get("short_venue")),
         }
     ]
+    # The route index is the complete structural catalogue.  Current prices are
+    # intentionally published as a compact, process-shared overlay every few
+    # seconds so a 150 MB catalogue is not rewritten for every quote.  Reading
+    # only the structural row here therefore made a healthy OKX DEX warmer look
+    # stale until the next broad catalogue generation.  Apply the same live
+    # overlay used by browser/API readers; timestamps remain the provider/book
+    # timestamps and are rechecked below, so this cannot manufacture freshness.
+    updates = api_spreads.live_route_updates_for(dex_rows, include_basis=True)
+    for row in dex_rows:
+        update = updates.get(str(row.get("route_key") or ""))
+        if update is None or len(update) < 3 or update[0] is None:
+            continue
+        row["depth_weighted_spread_pct"] = update[0]
+        row["quote_ts_us"] = update[2]
+        if len(update) > 3:
+            row["quote_basis"] = update[3]
     identity_rows = [
         row
         for row in dex_rows
