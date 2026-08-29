@@ -155,12 +155,19 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
             if str(row.get("route_kind") or "").upper()
             not in api_spreads.RETIRED_ROUTE_KINDS
         }
+        # Encode the structural index ONCE. Both writers below persist exactly
+        # these bytes, and each encoding of ~130k rows is about 300MB; holding
+        # two of them beside the decoded index is what pushed this worker to
+        # 2,162MB inside a 4GiB cgroup that already carries a ~2.2GB base.
+        encoded_route_index = materialized_views._json_bytes(route_index)
         if publish_live_index:
             store.write_live_route_index(
                 route_index,
                 source_signature={key: initial_signature.get(key) for key in shared_keys},
+                encoded=encoded_route_index,
             )
-        writer.write_route_index(route_index)
+        writer.write_route_index(route_index, encoded=encoded_route_index)
+        del encoded_route_index
         template = store.payload_for(
             {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
             board_path=board_path,

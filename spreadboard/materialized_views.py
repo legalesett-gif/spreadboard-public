@@ -162,8 +162,19 @@ class GenerationWriter:
             "matching_route_count": int(matching_routes or 0),
         }
 
-    def write_route_index(self, rows: dict[str, dict[str, Any]]) -> None:
-        raw = _json_bytes(rows)
+    def write_route_index(
+        self, rows: dict[str, dict[str, Any]], *, encoded: bytes | None = None
+    ) -> None:
+        """Persist the structural index, reusing an existing encoding.
+
+        The collector serialises this same ~130k-row dictionary here and again
+        in ``write_live_route_index``. Each encoding is a ~300MB bytes object,
+        and holding two of them beside the decoded index is part of why the
+        view worker peaked at 2,162MB inside a 4GiB cgroup. ``orjson`` with
+        sorted keys is deterministic, so one encoding serves both writers.
+        """
+
+        raw = encoded if encoded is not None else _json_bytes(rows)
         filename = "route-index.json"
         _write_bytes(self.staging / filename, raw)
         self.route_index_meta = {
@@ -372,10 +383,15 @@ class Store:
         *,
         source_signature: dict[str, Any],
         coverage: dict[str, Any] | None = None,
+        encoded: bytes | None = None,
     ) -> dict[str, Any]:
-        """Atomically publish the fast structural index independently of views."""
+        """Atomically publish the fast structural index independently of views.
 
-        payload = _json_bytes(rows)
+        ``encoded`` lets the caller supply an encoding it already holds rather
+        than paying for a second ~300MB serialisation of the same rows.
+        """
+
+        payload = encoded if encoded is not None else _json_bytes(rows)
         identity = f"{time.time_ns()}-{uuid.uuid4().hex[:10]}"
         filename = f"live-route-index-{identity}.json"
         path = self.root / filename
