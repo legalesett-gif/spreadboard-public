@@ -7719,34 +7719,28 @@ def render_json_export_script() -> str:
 #: visitor costs no board build at all. It is pinned here rather than read from
 #: the request: a public page that honoured `limit` would hand the whole board
 #: to anyone who typed `?limit=100000`.
-#: The public landing board. This is pinned server-side, never taken from the
-#: request, so a visitor cannot widen it into the whole product.
+#: The public landing board. Pinned server-side, never taken from the request,
+#: so a visitor cannot widen it into the whole product.
 #:
-#: The limit is load-bearing. On a cache miss ``api_market_spreads`` asks
-#: ``_MATERIALIZED_VIEW_STORE.payload_for(query)`` before building anything, so
-#: a query whose canonical key is one the collector materializes is served from
-#: the pre-built generation. An empty query canonicalises to its own key, which
-#: is NOT warmed, so /free fell through to a full unbounded board build to
-#: render two complete rows and six teasers -- 20.8s time-to-first-byte against
-#: 1.5s for /login. ``{"limit": ["500"]}`` is exactly the warmed key.
+#: An empty query canonicalises to its own cache key, which the collector does
+#: NOT materialize, so every cache miss rebuilds the board -- measured at 20.8s
+#: time-to-first-byte against 1.5s for /login.
 #:
-#: This is the defect the WARM_QUERIES comments already record for
-#: /funding?farm=futures-spot, which sat at 27s while /funding answered in
-#: 0.20s, because warming a different key leaves the page cold.
+#: Setting this to {"limit": ["500"]} does reach a materialized view: a direct
+#: probe in production returned payload_for HIT in 0.815s and
+#: api_market_spreads in 2.1s. But over HTTP it measured 1.9s warm and 43s
+#: contended, because ``api_market_spreads`` SKIPS the materialized shortcut
+#: whenever another thread already owns a build for that cache key
+#: (``owns_refresh is not False``) and makes the request wait for that build
+#: instead. A private key never contends; a shared key does. That trade made a
+#: public page bimodal, so it is deliberately not taken.
 #:
-#: Expect the page to be slow until the collector publishes its first
-#: generation after a restart; the view has to exist before it can be served.
-#:
-#: Counts are unaffected: ``matching_tokens``/``matching_rows`` are computed
-#: before the limit is applied, so the hidden-token teaser stays exact. A limit
-#: also narrows what the pinned free stream can carry, which is the safe
-#: direction for a public surface.
-#:
-#: The free stream script is deliberately rendered with an EMPTY query rather
-#: than this one. ``/api/stream/free`` pins the query server-side precisely so a
-#: visitor cannot influence it, so forwarding parameters the server ignores
-#: would only put a misleading query string on a public URL.
-FREE_BOARD_QUERY: dict[str, list[str]] = {"limit": ["500"]}
+#: The real fix is to let a waiter answer from the materialized view instead of
+#: blocking behind another thread's build -- move the payload_for lookup above
+#: the in-flight ownership logic. That is a shared concurrency path used by
+#: every board page and wants its own change with its own soak, not a
+#: same-session follow-on.
+FREE_BOARD_QUERY: dict[str, list[str]] = {}
 
 #: How many rows a visitor sees complete, token and both venues included.
 FREE_TOKEN_LIMIT = 2

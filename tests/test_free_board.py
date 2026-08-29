@@ -373,13 +373,7 @@ def test_the_free_query_is_pinned_and_ignores_whatever_the_visitor_sends(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`/free?limit=100000` must not hand over the whole board."""
-    # Pinned means "the visitor cannot influence it", not "it is empty". The
-    # query is bounded so /free is served from a warmed materialized view
-    # instead of rebuilding the whole board; see FREE_BOARD_QUERY.
-    assert server.FREE_BOARD_QUERY == {"limit": ["500"]}
-    assert not (set(server.FREE_BOARD_QUERY) - {"limit"}), (
-        "no request-controlled filter may enter the pinned public query"
-    )
+    assert server.FREE_BOARD_QUERY == {}
     # Assert on the page that actually ships, not a hand-built script call.
     # /api/stream/free pins its query server-side, so the subscription URL must
     # carry no query string at all -- nothing from the request reaches it.
