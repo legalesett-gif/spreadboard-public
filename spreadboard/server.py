@@ -7719,7 +7719,28 @@ def render_json_export_script() -> str:
 #: visitor costs no board build at all. It is pinned here rather than read from
 #: the request: a public page that honoured `limit` would hand the whole board
 #: to anyone who typed `?limit=100000`.
-FREE_BOARD_QUERY: dict[str, list[str]] = {}
+#: The public landing board. This is pinned server-side, never taken from the
+#: request, so a visitor cannot widen it into the whole product.
+#:
+#: The limit is load-bearing, not cosmetic. An empty query canonicalises to its
+#: own cache key, which is NOT one of the warmed materialized views, so /free
+#: rebuilt the entire unbounded board on every cache miss to render two complete
+#: rows and six teasers -- measured at 20.8s time-to-first-byte against 1.5s for
+#: /login. ``{"limit": ["500"]}`` is exactly the warmed key, so the page is
+#: served from the pre-built generation instead. This is the same defect the
+#: WARM_QUERIES comments record for /funding?farm=futures-spot, which sat at
+#: 27s for the same reason.
+#:
+#: Counts are unaffected: ``matching_tokens``/``matching_rows`` are computed
+#: before the limit is applied, so the hidden-token teaser stays exact. A limit
+#: also narrows what the pinned free stream can carry, which is the safe
+#: direction for a public surface.
+#:
+#: The free stream script is deliberately rendered with an EMPTY query rather
+#: than this one. ``/api/stream/free`` pins the query server-side precisely so a
+#: visitor cannot influence it, so forwarding parameters the server ignores
+#: would only put a misleading query string on a public URL.
+FREE_BOARD_QUERY: dict[str, list[str]] = {"limit": ["500"]}
 
 #: How many rows a visitor sees complete, token and both venues included.
 FREE_TOKEN_LIMIT = 2
@@ -8083,7 +8104,7 @@ def render_free_page(board_path: Path) -> str:
       }});
     }})();
     </script>
-    {render_board_stream_script(dict(FREE_BOARD_QUERY), endpoint="/api/stream/free")}
+    {render_board_stream_script({}, endpoint="/api/stream/free")}
     """
     return shell("Live spreads - SpreadBoard", "free", body)
 

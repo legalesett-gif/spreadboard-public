@@ -369,14 +369,24 @@ def test_the_free_stream_endpoint_is_the_one_the_page_subscribes_to(
     assert "/api/stream/board" not in html
 
 
-def test_the_free_query_is_pinned_and_ignores_whatever_the_visitor_sends() -> None:
+def test_the_free_query_is_pinned_and_ignores_whatever_the_visitor_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """`/free?limit=100000` must not hand over the whole board."""
-    assert server.FREE_BOARD_QUERY == {}
-    script = server.render_board_stream_script(
-        dict(server.FREE_BOARD_QUERY), endpoint="/api/stream/free"
+    # Pinned means "the visitor cannot influence it", not "it is empty". The
+    # query is bounded so /free is served from a warmed materialized view
+    # instead of rebuilding the whole board; see FREE_BOARD_QUERY.
+    assert server.FREE_BOARD_QUERY == {"limit": ["500"]}
+    assert not (set(server.FREE_BOARD_QUERY) - {"limit"}), (
+        "no request-controlled filter may enter the pinned public query"
     )
-    # No query string at all: nothing from the request reaches the subscription.
-    assert 'EventSource("/api/stream/free")' in script
+    # Assert on the page that actually ships, not a hand-built script call.
+    # /api/stream/free pins its query server-side, so the subscription URL must
+    # carry no query string at all -- nothing from the request reaches it.
+    _stub_board(monkeypatch, PAYLOAD)
+    html = server.render_free_page(Path("board.json"))
+    assert 'EventSource("/api/stream/free")' in html
+    assert "/api/stream/free?" not in html
 
 
 def test_the_free_page_and_its_stream_are_reachable_without_an_account() -> None:
