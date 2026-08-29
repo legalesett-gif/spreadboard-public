@@ -7722,14 +7722,20 @@ def render_json_export_script() -> str:
 #: The public landing board. This is pinned server-side, never taken from the
 #: request, so a visitor cannot widen it into the whole product.
 #:
-#: The limit is load-bearing, not cosmetic. An empty query canonicalises to its
-#: own cache key, which is NOT one of the warmed materialized views, so /free
-#: rebuilt the entire unbounded board on every cache miss to render two complete
-#: rows and six teasers -- measured at 20.8s time-to-first-byte against 1.5s for
-#: /login. ``{"limit": ["500"]}`` is exactly the warmed key, so the page is
-#: served from the pre-built generation instead. This is the same defect the
-#: WARM_QUERIES comments record for /funding?farm=futures-spot, which sat at
-#: 27s for the same reason.
+#: The limit is load-bearing. On a cache miss ``api_market_spreads`` asks
+#: ``_MATERIALIZED_VIEW_STORE.payload_for(query)`` before building anything, so
+#: a query whose canonical key is one the collector materializes is served from
+#: the pre-built generation. An empty query canonicalises to its own key, which
+#: is NOT warmed, so /free fell through to a full unbounded board build to
+#: render two complete rows and six teasers -- 20.8s time-to-first-byte against
+#: 1.5s for /login. ``{"limit": ["500"]}`` is exactly the warmed key.
+#:
+#: This is the defect the WARM_QUERIES comments already record for
+#: /funding?farm=futures-spot, which sat at 27s while /funding answered in
+#: 0.20s, because warming a different key leaves the page cold.
+#:
+#: Expect the page to be slow until the collector publishes its first
+#: generation after a restart; the view has to exist before it can be served.
 #:
 #: Counts are unaffected: ``matching_tokens``/``matching_rows`` are computed
 #: before the limit is applied, so the hidden-token teaser stays exact. A limit
