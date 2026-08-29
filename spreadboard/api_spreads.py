@@ -1626,6 +1626,11 @@ def live_route_updates_for(
             executable_ask, executable_bid = ask, bid
         else:
             executable_ask = executable_bid = None
+        # A matched observation also saw the top of book. Carry that indicative
+        # figure so `executable_spread_pct` is refreshed too: it is the sort key
+        # for ranking, and leaving it at its structural value let a matched row
+        # be ordered by a stale number while displaying a current one.
+        top_book_spread = (bid / ask - 1.0) * 100.0 if ask and bid and ask > 0 else None
         update = (
             live_depth_spread,
             funding_daily if include_funding else None,
@@ -1633,6 +1638,7 @@ def live_route_updates_for(
             spread_basis,
             executable_ask,
             executable_bid,
+            top_book_spread,
         )
         out[route_key] = update if include_basis else update[:3]
     # A complete fast-quote cycle covers routes that are intentionally outside
@@ -1683,6 +1689,7 @@ def live_route_updates_for(
             basis,
             source[4] if len(source) > 4 else None,
             source[5] if len(source) > 5 else None,
+            source[6] if len(source) > 6 else None,
         )
         out[route_key] = merged if include_basis else merged[:3]
     if include_funding:
@@ -1708,6 +1715,7 @@ def live_route_updates_for(
                     basis,
                     existing[4] if len(existing) > 4 else None,
                     existing[5] if len(existing) > 5 else None,
+                    existing[6] if len(existing) > 6 else None,
                 )
             out[route_key] = merged if include_basis else merged[:3]
     return out

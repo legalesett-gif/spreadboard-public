@@ -128,3 +128,36 @@ def test_live_prices_for_still_reads_a_three_tuple() -> None:
 
     source = inspect.getsource(api_spreads.live_prices_for)
     assert "(spread, funding, _quote_ts_us)" in source
+
+
+def test_a_matched_update_also_refreshes_the_ranking_key() -> None:
+    """executable_spread_pct is the sort key; a matched row must not rank stale.
+
+    Before this, a matched observation wrote depth_weighted_spread_pct and left
+    executable_spread_pct at its structural value. 96 served rows ranked by a
+    stale number while displaying a current one.
+    """
+
+    now = time.time()
+    ts = int(now * 1_000_000)
+    # matched spread 2.0% from VWAP legs; top of book was 1.5% in the same read.
+    update = (2.0, None, ts, "matched_vwap", 50.0, 51.0, 1.5)
+
+    out = warm_query_projection._overlay(_row(), update, now=now)
+
+    assert out["depth_weighted_spread_pct"] == 2.0, "matched figure is displayed"
+    assert out["executable_spread_pct"] == 1.5, (
+        "the ranking key must come from the same observation, not the old row"
+    )
+    assert out["displayed_open_spread_pct"] == 1.5
+
+
+def test_a_matched_update_without_a_top_book_reading_leaves_the_key_alone() -> None:
+    now = time.time()
+    ts = int(now * 1_000_000)
+    update = (2.0, None, ts, "matched_vwap", 50.0, 51.0, None)
+
+    out = warm_query_projection._overlay(_row(), update, now=now)
+
+    assert out["depth_weighted_spread_pct"] == 2.0
+    assert out["executable_spread_pct"] == 1.0, "unchanged when nothing was read"

@@ -461,6 +461,7 @@ def _structural_route_update(row: dict[str, Any]) -> tuple[Any, ...] | None:
         basis,
         api_spreads._float_or_none(row.get("long_ask")),
         api_spreads._float_or_none(row.get("short_bid")),
+        api_spreads._float_or_none(row.get("executable_spread_pct")),
     )
 
 
@@ -572,6 +573,7 @@ def _merge_live_updates(
                     prior_basis,
                     prior[4] if len(prior) > 4 else None,
                     prior[5] if len(prior) > 5 else None,
+                    prior[6] if len(prior) > 6 else None,
                 )
                 continue
         if current is not None:
@@ -891,6 +893,13 @@ def _overlay(
                 row["depth_unverified"] = False
                 row["matched_size_notional_usd"] = api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD
                 row["depth_usd"] = api_spreads.LIVE_BOOK_TARGET_NOTIONAL_USD
+                # Keep the indicative figure current too: it is the ranking sort
+                # key, so a stale value here misorders a row that displays a
+                # fresh matched spread.
+                top_book_spread = update[6] if len(update) > 6 else None
+                if top_book_spread is not None:
+                    row["executable_spread_pct"] = top_book_spread
+                    row["displayed_open_spread_pct"] = top_book_spread
             elif basis == "top_book":
                 row["executable_spread_pct"] = spread
                 row["displayed_open_spread_pct"] = spread
