@@ -1302,11 +1302,20 @@ def _fast_quote_updates_for(
                 matched = _float_or_none(raw.get("depth_weighted_spread_pct"))
                 top = _float_or_none(raw.get("executable_spread_pct"))
                 spread = matched if matched is not None else top
+                raw_basis = (
+                    "matched_vwap" if matched is not None
+                    else "top_book" if top is not None
+                    else None
+                )
                 update = (
                     spread,
                     _float_or_none(raw.get("funding_daily_pct")),
                     quote_ts_us,
-                    "matched_vwap" if matched is not None else "top_book" if top is not None else None,
+                    raw_basis,
+                    # The executable legs this spread was computed from. Carrying
+                    # them is what keeps a rendered row internally consistent.
+                    _float_or_none(raw.get("long_ask")),
+                    _float_or_none(raw.get("short_bid")),
                 )
                 current = exact.get(identity)
                 if current is None or int(current[2] or 0) <= quote_ts_us:
@@ -1515,7 +1524,7 @@ def live_route_updates_for(
             funding_daily_by_route[route_key] = funding_daily
         if not price_is_live:
             if funding_daily is not None:
-                update = (None, funding_daily, None, None)
+                update = (None, funding_daily, None, None, None, None)
                 out[route_key] = update if include_basis else update[:3]
             continue
         prior_depth_verified = matched_probe_verified(route) and dex_quote is None
@@ -1605,11 +1614,25 @@ def live_route_updates_for(
                 if dex_stamp:
                     stamps.append(dex_stamp)
             quote_ts_us = min(stamps) if stamps else None
+        # Emit the exact legs the spread was derived from, paired to its basis.
+        # A matched_vwap spread comes from the depth-weighted prices and a
+        # top_book spread from the top of book; a retained_matched_vwap spread
+        # is a PRIOR measurement, so this observation must not claim legs for
+        # it. Previously these were computed here and thrown away, which is why
+        # a fresh headline could sit beside stale legs it did not come from.
+        if spread_basis == "matched_vwap":
+            executable_ask, executable_bid = ask_vwap, bid_vwap
+        elif spread_basis == "top_book":
+            executable_ask, executable_bid = ask, bid
+        else:
+            executable_ask = executable_bid = None
         update = (
             live_depth_spread,
             funding_daily if include_funding else None,
             quote_ts_us,
             spread_basis,
+            executable_ask,
+            executable_bid,
         )
         out[route_key] = update if include_basis else update[:3]
     # A complete fast-quote cycle covers routes that are intentionally outside
@@ -1651,7 +1674,16 @@ def live_route_updates_for(
             if existing[0] is not None
             else fast_basis
         )
-        merged = (spread, funding, timestamp, basis)
+        # Legs must travel with the spread that was chosen, never be mixed.
+        source = fast if (prefer_fast_spread or existing[0] is None) else existing
+        merged = (
+            spread,
+            funding,
+            timestamp,
+            basis,
+            source[4] if len(source) > 4 else None,
+            source[5] if len(source) > 5 else None,
+        )
         out[route_key] = merged if include_basis else merged[:3]
     if include_funding:
         # Funding has a dedicated exact-leg freshness cache. Never let a rate
@@ -1666,10 +1698,17 @@ def live_route_updates_for(
             funding = funding_daily_by_route.get(route_key)
             existing = out.get(route_key)
             if existing is None:
-                merged = (None, funding, None, None)
+                merged = (None, funding, None, None, None, None)
             else:
                 basis = existing[3] if len(existing) > 3 else None
-                merged = (existing[0], funding, existing[2], basis)
+                merged = (
+                    existing[0],
+                    funding,
+                    existing[2],
+                    basis,
+                    existing[4] if len(existing) > 4 else None,
+                    existing[5] if len(existing) > 5 else None,
+                )
             out[route_key] = merged if include_basis else merged[:3]
     return out
 

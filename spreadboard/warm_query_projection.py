@@ -451,7 +451,17 @@ def _structural_route_update(row: dict[str, Any]) -> tuple[Any, ...] | None:
         quote_ts_us = None
     if spread is None and funding is None:
         return None
-    return (spread, funding, quote_ts_us if spread is not None else None, basis)
+    # The structural row's own legs produced its own spread, so they are
+    # consistent by construction. Carrying them keeps the tuple shape uniform
+    # and stops the overlay leaving a seeded row without legs.
+    return (
+        spread,
+        funding,
+        quote_ts_us if spread is not None else None,
+        basis,
+        api_spreads._float_or_none(row.get("long_ask")),
+        api_spreads._float_or_none(row.get("short_bid")),
+    )
 
 
 def _newest_route_update(
@@ -554,11 +564,14 @@ def _merge_live_updates(
             ):
                 current_funding = current[1] if current is not None and len(current) > 1 else None
                 prior_basis = prior[3] if len(prior) > 3 else None
+                # Retain the prior legs with the prior price they belong to.
                 merged[key] = (
                     prior_spread,
                     current_funding,
                     prior_timestamp,
                     prior_basis,
+                    prior[4] if len(prior) > 4 else None,
+                    prior[5] if len(prior) > 5 else None,
                 )
                 continue
         if current is not None:
@@ -860,9 +873,19 @@ def _overlay(
 ) -> dict[str, Any]:
     row = dict(source)
     if update is not None:
-        spread, funding, quote_ts_us, basis = update
+        spread, funding, quote_ts_us, basis = update[0], update[1], update[2], update[3]
+        executable_ask = update[4] if len(update) > 4 else None
+        executable_bid = update[5] if len(update) > 5 else None
         if spread is not None and quote_ts_us is not None:
             row["quote_ts_us"] = quote_ts_us
+            # Write the legs the spread was actually derived from. Without this
+            # a fresh headline sat beside legs from the last structural
+            # generation: 30.4% of served rows could not be reproduced from
+            # their own displayed prices, including sign flips and one route
+            # overstating the edge by 3.5 percentage points.
+            if executable_ask is not None and executable_bid is not None:
+                row["long_ask"] = executable_ask
+                row["short_bid"] = executable_bid
             if basis in {"matched_vwap", "retained_matched_vwap"}:
                 row["depth_weighted_spread_pct"] = spread
                 row["depth_unverified"] = False

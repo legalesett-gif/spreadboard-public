@@ -3598,9 +3598,18 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
         update = live_updates.get(str(route.get("route_key") or ""))
         if update is None:
             continue
-        spread, funding, quote_ts_us, spread_basis = update
+        spread, funding, quote_ts_us = update[0], update[1], update[2]
+        spread_basis = update[3] if len(update) > 3 else None
+        executable_ask = update[4] if len(update) > 4 else None
+        executable_bid = update[5] if len(update) > 5 else None
         if spread is not None and quote_ts_us is not None:
             route["quote_ts_us"] = quote_ts_us
+            # Same rule as warm_query_projection._overlay: a rendered spread has
+            # to be reproducible from the legs rendered beside it, so write the
+            # legs this price was actually derived from.
+            if executable_ask is not None and executable_bid is not None:
+                route["long_ask"] = executable_ask
+                route["short_bid"] = executable_bid
             if spread_basis in {"matched_vwap", "retained_matched_vwap"}:
                 route["depth_weighted_spread_pct"] = spread
                 route["depth_unverified"] = False
@@ -7462,9 +7471,12 @@ def _board_stream_rows(
     rows: dict[str, tuple[Any, ...]] = {}
     for route in routes:
         key = str(route["route_key"])
-        spread, funding, _quote_ts_us, spread_basis = live.get(
-            key, (None, None, None, None)
-        )
+        # Index rather than unpack: the update tuple also carries the exact legs
+        # the spread was priced from, and a fixed-arity unpack breaks whenever
+        # that payload is extended.
+        update = live.get(key) or (None, None, None, None)
+        spread, funding, _quote_ts_us = update[0], update[1], update[2]
+        spread_basis = update[3] if len(update) > 3 else None
         # The websocket cache is an acceleration lane, not the source of truth
         # for whether an exact bulk/DEX quote still exists. On restart (and on
         # venues without a resident websocket) live_prices_for deliberately

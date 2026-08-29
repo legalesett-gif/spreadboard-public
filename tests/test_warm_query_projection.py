@@ -428,7 +428,10 @@ def test_partial_refresh_keeps_only_a_still_current_price_and_new_funding(
     universe.refresh()
 
     update = universe.snapshot()[1]["GUA-route"]
-    assert update == (1.25, 0.22, quote_ts_us, "matched_vwap")
+    # The tuple also carries the executable legs the price was derived from, so
+    # a rendered spread can be reproduced from the legs rendered beside it.
+    # Assert the economics rather than the arity.
+    assert update[:4] == (1.25, 0.22, quote_ts_us, "matched_vwap")
 
 
 def test_partial_refresh_never_extends_an_expired_price() -> None:
