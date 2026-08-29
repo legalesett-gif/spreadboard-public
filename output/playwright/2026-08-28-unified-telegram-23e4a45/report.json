@@ -1,0 +1,251 @@
+{
+  "auditedAt": "2026-08-28T02:41:07.205Z",
+  "results": [
+    {
+      "name": "desktop",
+      "families": {
+        "futuresFutures": {
+          "elapsedMs": 4155,
+          "routes": 78,
+          "tokens": 20
+        },
+        "futuresSpot": {
+          "elapsedMs": 681,
+          "routes": 98,
+          "tokens": 20
+        },
+        "spotSpot": {
+          "elapsedMs": 577,
+          "routes": 32,
+          "tokens": 20
+        },
+        "futuresDex": {
+          "elapsedMs": 2616,
+          "routes": 102,
+          "tokens": 20
+        }
+      },
+      "stability": [
+        {
+          "futuresFutures": {
+            "elapsedMs": 1976,
+            "routes": 102,
+            "tokens": 20
+          },
+          "futuresSpot": {
+            "elapsedMs": 2436,
+            "routes": 123,
+            "tokens": 20
+          },
+          "spotSpot": {
+            "elapsedMs": 1417,
+            "routes": 32,
+            "tokens": 20
+          },
+          "futuresDex": {
+            "elapsedMs": 2575,
+            "routes": 82,
+            "tokens": 17
+          }
+        },
+        {
+          "futuresFutures": {
+            "elapsedMs": 2567,
+            "routes": 81,
+            "tokens": 20
+          },
+          "futuresSpot": {
+            "elapsedMs": 1324,
+            "routes": 115,
+            "tokens": 20
+          },
+          "spotSpot": {
+            "elapsedMs": 1176,
+            "routes": 33,
+            "tokens": 20
+          },
+          "futuresDex": {
+            "elapsedMs": 6936,
+            "routes": 103,
+            "tokens": 20
+          }
+        },
+        {
+          "futuresFutures": {
+            "elapsedMs": 1213,
+            "routes": 89,
+            "tokens": 20
+          },
+          "futuresSpot": {
+            "elapsedMs": 391,
+            "routes": 114,
+            "tokens": 20
+          },
+          "spotSpot": {
+            "elapsedMs": 270,
+            "routes": 33,
+            "tokens": 20
+          },
+          "futuresDex": {
+            "elapsedMs": 421,
+            "routes": 108,
+            "tokens": 20
+          }
+        },
+        {
+          "futuresFutures": {
+            "elapsedMs": 4155,
+            "routes": 78,
+            "tokens": 20
+          },
+          "futuresSpot": {
+            "elapsedMs": 681,
+            "routes": 98,
+            "tokens": 20
+          },
+          "spotSpot": {
+            "elapsedMs": 577,
+            "routes": 32,
+            "tokens": 20
+          },
+          "futuresDex": {
+            "elapsedMs": 2616,
+            "routes": 102,
+            "tokens": 20
+          }
+        }
+      ],
+      "funding": {
+        "now": {
+          "elapsedMs": 9789,
+          "tokens": 20,
+          "valueKind": "current_rate_projected_24h"
+        },
+        "1d": {
+          "elapsedMs": 24569,
+          "tokens": 20,
+          "valueKind": "aggregate_exact_settlements"
+        },
+        "7d": {
+          "elapsedMs": 16265,
+          "tokens": 20,
+          "valueKind": "aggregate_exact_settlements"
+        },
+        "30d": {
+          "elapsedMs": 15478,
+          "tokens": 20,
+          "valueKind": "aggregate_exact_settlements"
+        }
+      },
+      "markets": {
+        "status": 200,
+        "elapsedMs": 5190,
+        "researchOnly": false,
+        "matchedEvidence": true,
+        "indicativeEvidence": true,
+        "overflow": 0
+      },
+      "fundingPage": {
+        "status": 200,
+        "elapsedMs": 4072,
+        "labels": [
+          "Now projected",
+          "24h settled",
+          "7d settled",
+          "30d settled"
+        ],
+        "pairLabels": [
+          "Now",
+          "24h",
+          "7d",
+          "30d",
+          "Now",
+          "24h",
+          "7d",
+          "30d",
+          "Now",
+          "24h",
+          "7d",
+          "30d"
+        ],
+        "pairValues": [
+          "+12.727%",
+          "—",
+          "—",
+          "—",
+          "+11.651%",
+          "—",
+          "—",
+          "—",
+          "+12.442%",
+          "—",
+          "—",
+          "—"
+        ],
+        "hasFourGroupWindows": true,
+        "hasFourPairWindows": true,
+        "researchOnly": false,
+        "overflow": 0
+      },
+      "errors": []
+    },
+    {
+      "name": "mobile",
+      "families": {},
+      "stability": [],
+      "funding": {},
+      "markets": {
+        "status": 200,
+        "elapsedMs": 5746,
+        "researchOnly": false,
+        "matchedEvidence": true,
+        "indicativeEvidence": true,
+        "overflow": 0
+      },
+      "fundingPage": {
+        "status": 200,
+        "elapsedMs": 6890,
+        "labels": [
+          "Now projected",
+          "24h settled",
+          "7d settled",
+          "30d settled"
+        ],
+        "pairLabels": [
+          "Now",
+          "24h",
+          "7d",
+          "30d",
+          "Now",
+          "24h",
+          "7d",
+          "30d",
+          "Now",
+          "24h",
+          "7d",
+          "30d"
+        ],
+        "pairValues": [
+          "+12.727%",
+          "—",
+          "—",
+          "—",
+          "+11.651%",
+          "—",
+          "—",
+          "—",
+          "+12.442%",
+          "—",
+          "—",
+          "—"
+        ],
+        "hasFourGroupWindows": true,
+        "hasFourPairWindows": true,
+        "researchOnly": false,
+        "overflow": 0
+      },
+      "errors": []
+    }
+  ],
+  "failures": []
+}

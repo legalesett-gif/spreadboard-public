@@ -1,0 +1,221 @@
+{
+  "auditedAt": "2026-08-27T19:03:39.616Z",
+  "desktop": {
+    "name": "desktop",
+    "funding": {
+      "now": {
+        "elapsedMs": 8877,
+        "routeCount": 497,
+        "tokenCount": 20,
+        "valueKind": "current_rate_projected_24h",
+        "windowSample": [
+          {
+            "token": "ONG",
+            "windows": {
+              "1d": null,
+              "30d": null,
+              "7d": null
+            }
+          },
+          {
+            "token": "ONG",
+            "windows": {
+              "1d": null,
+              "30d": null,
+              "7d": null
+            }
+          }
+        ]
+      },
+      "1d": {
+        "elapsedMs": 2422,
+        "routeCount": 118,
+        "tokenCount": 20,
+        "valueKind": "aggregate_exact_settlements",
+        "windowSample": [
+          {
+            "token": "OKTA",
+            "windows": {
+              "1d": 2.40188151261006,
+              "30d": null,
+              "7d": 2.59727822162866
+            }
+          },
+          {
+            "token": "BICO",
+            "windows": {
+              "1d": 1.91831546113903,
+              "30d": 6.076283065409152,
+              "7d": 1.7035856653699808
+            }
+          }
+        ]
+      },
+      "7d": {
+        "elapsedMs": 744,
+        "routeCount": 179,
+        "tokenCount": 20,
+        "valueKind": "aggregate_exact_settlements",
+        "windowSample": [
+          {
+            "token": "ONT",
+            "windows": {
+              "1d": 0.7048396558680601,
+              "30d": 7.41599062806887,
+              "7d": 6.29326794731813
+            }
+          },
+          {
+            "token": "ONT",
+            "windows": {
+              "1d": 0.43708065586806,
+              "30d": 4.19420762806887,
+              "7d": 3.9417309473181303
+            }
+          }
+        ]
+      },
+      "30d": {
+        "elapsedMs": 2750,
+        "routeCount": 189,
+        "tokenCount": 20,
+        "valueKind": "aggregate_exact_settlements",
+        "windowSample": [
+          {
+            "token": "DEXE",
+            "windows": {
+              "1d": 0,
+              "30d": 16.60348,
+              "7d": 0.5165
+            }
+          },
+          {
+            "token": "DEXE",
+            "windows": {
+              "1d": 0,
+              "30d": 16.56428,
+              "7d": 0.5128
+            }
+          }
+        ]
+      }
+    },
+    "page": {
+      "status": 200,
+      "elapsedMs": 5332,
+      "overflowPx": 0,
+      "summaryText": "ONT\nMetadata pending\nLive now · funding 1 min old\nIndicative spread · DD: $500 depth not verified\nOKX → WhiteBIT\n+0.909%\n24h at current rate\nevery 4h · every 8h\n-2.6%\nNOW PROJECTED\n+0.909%\n24H SETTLED\n+0.70%\n7D SETTLED\n+6.29%\n30D SETTLED\n+7.42%\n3\n⌄",
+      "firstPairText": "Long\nOKX · Futures\n↗\n-0.1495% · every 4h\nShort\nWhiteBIT · Futures\n↗\n+0.0050% · every 8h\nNet now / 24h\n+0.909%\n24h at current rate · every 4h · every 8h\nBasis / VWAP\n-2.6%\n—\nPrice quote age\n1 min\n+\nAlert\nDetails\nChart\nNOW EST. / SETTLED HISTORY\nNow\n+0.909%\n24h\n+0.70%\n7d\n+6.29%\n30d\n+7.42%"
+    },
+    "errors": []
+  },
+  "mobile": {
+    "name": "mobile",
+    "funding": {
+      "now": {
+        "elapsedMs": 1987,
+        "routeCount": 497,
+        "tokenCount": 20,
+        "valueKind": "current_rate_projected_24h",
+        "windowSample": [
+          {
+            "token": "ONG",
+            "windows": {
+              "1d": null,
+              "30d": null,
+              "7d": null
+            }
+          },
+          {
+            "token": "ONG",
+            "windows": {
+              "1d": null,
+              "30d": null,
+              "7d": null
+            }
+          }
+        ]
+      },
+      "1d": {
+        "elapsedMs": 1053,
+        "routeCount": 118,
+        "tokenCount": 20,
+        "valueKind": "aggregate_exact_settlements",
+        "windowSample": [
+          {
+            "token": "OKTA",
+            "windows": {
+              "1d": 2.40188151261006,
+              "30d": null,
+              "7d": 2.59727822162866
+            }
+          },
+          {
+            "token": "BICO",
+            "windows": {
+              "1d": 1.91831546113903,
+              "30d": 6.076283065409152,
+              "7d": 1.7035856653699808
+            }
+          }
+        ]
+      },
+      "7d": {
+        "elapsedMs": 7630,
+        "routeCount": 179,
+        "tokenCount": 20,
+        "valueKind": "aggregate_exact_settlements",
+        "windowSample": [
+          {
+            "token": "ONT",
+            "windows": {
+              "1d": 0.7048396558680601,
+              "30d": 7.41599062806887,
+              "7d": 6.29326794731813
+            }
+          },
+          {
+            "token": "ONT",
+            "windows": {
+              "1d": 0.43708065586806,
+              "30d": 4.19420762806887,
+              "7d": 3.9417309473181303
+            }
+          }
+        ]
+      },
+      "30d": {
+        "elapsedMs": 2488,
+        "routeCount": 189,
+        "tokenCount": 20,
+        "valueKind": "aggregate_exact_settlements",
+        "windowSample": [
+          {
+            "token": "DEXE",
+            "windows": {
+              "1d": 0,
+              "30d": 16.60348,
+              "7d": 0.5165
+            }
+          },
+          {
+            "token": "DEXE",
+            "windows": {
+              "1d": 0,
+              "30d": 16.56428,
+              "7d": 0.5128
+            }
+          }
+        ]
+      }
+    },
+    "page": {
+      "status": 200,
+      "elapsedMs": 2447,
+      "overflowPx": 0,
+      "summaryText": "ONT\nMetadata pending\nLive now · funding 1 min old\nIndicative spread · DD: $500 depth not verified\nBEST FARM\nOKX → WhiteBIT\nNET NOW / 24H\n+0.909%\n24h at current rate\nPAYOUTS\nevery 4h · every 8h\nBASIS REFRESHING\n-2.9%\nFUNDING RETURNS\nNOW PROJECTED\n+0.909%\n24H SETTLED\n+0.70%\n7D SETTLED\n+6.29%\n30D SETTLED\n+7.42%\nPAIRS\n3\n⌄",
+      "firstPairText": "Long\nOKX · Futures\n↗\n-0.1495% · every 4h\nShort\nWhiteBIT · Futures\n↗\n+0.0050% · every 8h\nNet now / 24h\n+0.909%\n24h at current rate · every 4h · every 8h\nBasis refreshing\n-2.9%\n—\nPrice quote age\n37 min\n+\nAlert\nDetails\nChart\nNOW EST. / SETTLED HISTORY\nNow\n+0.909%\n24h\n+0.70%\n7d\n+6.29%\n30d\n+7.42%"
+    },
+    "errors": []
+  }
+}

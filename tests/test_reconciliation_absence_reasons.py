@@ -145,3 +145,32 @@ def test_alias_detection_never_invents_a_market() -> None:
     assert reason == "missing_both_catalog_markets", (
         "no SHEIN market exists here, so no alias may be claimed"
     )
+
+
+def _catalog_with_quotes(*markets):
+    return {
+        "markets": [
+            {"token": t, "venue": v, "market_type": m, "quote": q}
+            for t, v, m, q in markets
+        ]
+    }
+
+
+def test_a_leg_quoted_in_both_assets_still_counts_as_a_real_gap() -> None:
+    """Binance lists NOM in USDT and USDC; the USDT pairing is buildable."""
+
+    reason = _reason(
+        _sample("NOM", "Binance", "Spot", "Bybit", "Futures"),
+        routes=[],
+        catalog=_catalog_with_quotes(
+            ("NOM", "Binance", "Spot", "USDC"),
+            ("NOM", "Binance", "Spot", "USDT"),
+            ("NOM", "Bybit", "Futures", "USDT"),
+        ),
+    )
+
+    assert reason == "route_not_generated", (
+        "a shared quote asset exists, so this absence is genuinely addressable"
+    )
+
+

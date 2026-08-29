@@ -1,0 +1,187 @@
+{
+  "auditedAt": "2026-08-28T12:55:24.989Z",
+  "revision": "decfe00",
+  "results": [
+    {
+      "name": "desktop",
+      "pages": {
+        "markets": {
+          "status": 200,
+          "elapsedMs": 4960,
+          "spotSpotLabel": false,
+          "spotDexLabel": false,
+          "futuresFuturesLabel": true,
+          "futuresSpotLabel": true,
+          "futuresDexLabel": true,
+          "overflowPx": 0
+        },
+        "charts": {
+          "status": 200,
+          "elapsedMs": 686,
+          "spotSpotLabel": false,
+          "spotDexLabel": false,
+          "futuresFuturesLabel": false,
+          "futuresSpotLabel": false,
+          "futuresDexLabel": false,
+          "overflowPx": 0
+        },
+        "guide": {
+          "status": 200,
+          "elapsedMs": 424,
+          "spotSpotLabel": false,
+          "spotDexLabel": false,
+          "futuresFuturesLabel": true,
+          "futuresSpotLabel": true,
+          "futuresDexLabel": true,
+          "overflowPx": 0
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "mobile",
+      "pages": {
+        "markets": {
+          "status": 200,
+          "elapsedMs": 2115,
+          "spotSpotLabel": false,
+          "spotDexLabel": false,
+          "futuresFuturesLabel": true,
+          "futuresSpotLabel": true,
+          "futuresDexLabel": true,
+          "overflowPx": 0
+        },
+        "charts": {
+          "status": 200,
+          "elapsedMs": 644,
+          "spotSpotLabel": false,
+          "spotDexLabel": false,
+          "futuresFuturesLabel": false,
+          "futuresSpotLabel": false,
+          "futuresDexLabel": false,
+          "overflowPx": 0
+        },
+        "guide": {
+          "status": 200,
+          "elapsedMs": 476,
+          "spotSpotLabel": false,
+          "spotDexLabel": false,
+          "futuresFuturesLabel": true,
+          "futuresSpotLabel": true,
+          "futuresDexLabel": true,
+          "overflowPx": 0
+        }
+      },
+      "errors": []
+    }
+  ],
+  "lanes": {
+    "FUTURES": {
+      "status": 200,
+      "elapsedMs": 765,
+      "groups": 25,
+      "routes": 65,
+      "coverageMode": null
+    },
+    "FUTURES-SPOT-PAIR": {
+      "status": 200,
+      "elapsedMs": 3263,
+      "groups": 25,
+      "routes": 85,
+      "coverageMode": null
+    },
+    "DEX-FUTURES": {
+      "status": 200,
+      "elapsedMs": 2147,
+      "groups": 11,
+      "routes": 45,
+      "coverageMode": null
+    },
+    "SPOT": {
+      "status": 200,
+      "elapsedMs": 479,
+      "groups": 0,
+      "routes": 0,
+      "coverageMode": null
+    },
+    "DEX-SPOT": {
+      "status": 200,
+      "elapsedMs": 501,
+      "groups": 0,
+      "routes": 0,
+      "coverageMode": null
+    }
+  },
+  "references": {
+    "ANTHROPIC": {
+      "status": 200,
+      "elapsedMs": 2645,
+      "groups": 1,
+      "routes": 28,
+      "routeKinds": [
+        "FUTURES"
+      ]
+    },
+    "ONE": {
+      "status": 200,
+      "elapsedMs": 2569,
+      "groups": 1,
+      "routes": 50,
+      "routeKinds": [
+        "FUTURES",
+        "FUTURES-SPOT",
+        "SPOT-FUTURES"
+      ]
+    },
+    "SPCX": {
+      "status": 200,
+      "elapsedMs": 6804,
+      "groups": 1,
+      "routes": 47,
+      "routeKinds": [
+        "FUTURES",
+        "SPOT-FUTURES"
+      ]
+    },
+    "SHEIN": {
+      "status": 200,
+      "elapsedMs": 648,
+      "groups": 1,
+      "routes": 2,
+      "routeKinds": [
+        "FUTURES"
+      ]
+    },
+    "ONG": {
+      "status": 200,
+      "elapsedMs": 3743,
+      "groups": 1,
+      "routes": 50,
+      "routeKinds": [
+        "FUTURES",
+        "FUTURES-SPOT"
+      ]
+    },
+    "EDEN": {
+      "status": 200,
+      "elapsedMs": 3607,
+      "groups": 1,
+      "routes": 50,
+      "routeKinds": [
+        "FUTURES",
+        "FUTURES-SPOT",
+        "SPOT-FUTURES"
+      ]
+    },
+    "XCU": {
+      "status": 200,
+      "elapsedMs": 2781,
+      "groups": 1,
+      "routes": 2,
+      "routeKinds": [
+        "FUTURES"
+      ]
+    }
+  },
+  "failures": []
+}

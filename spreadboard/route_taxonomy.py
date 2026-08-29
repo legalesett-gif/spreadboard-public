@@ -120,3 +120,60 @@ def route_kind(
     if long_type == short_type == "spot":
         return "SPOT"
     return "UNKNOWN"
+
+
+#: Quote assets that are all "a dollar" for the purpose of pairing two legs.
+#:
+#: A token's USDC perpetual and its USDT perpetual are the same trade. The
+#: stablecoin basis between them is a rounding error against the spreads this
+#: board ranks, and refusing to pair across it removed whole venues from the
+#: product rather than removing a risk -- Hyperliquid quotes its perpetuals in
+#: USDC, so every Hyperliquid route was silently unbuildable.
+#:
+#: This is the single definition. Anything that decides whether two legs may be
+#: paired, or whether an external reference row is one we could have built,
+#: must ask here rather than comparing quote strings.
+USD_PEGGED_QUOTES = frozenset(
+    {
+        "USD",
+        "USDT",
+        "USDC",
+        "USDE",
+        "FDUSD",
+        "BUSD",
+        "DAI",
+        "TUSD",
+        "USD1",
+        "USDP",
+        "PYUSD",
+        "USDD",
+        "USDS",
+        "RLUSD",
+    }
+)
+
+
+def quote_is_usd_pegged(quote: Any) -> bool:
+    """True when this quote asset is a dollar for pairing purposes."""
+
+    return str(quote or "").strip().upper() in USD_PEGGED_QUOTES
+
+
+def quotes_are_interchangeable(left: Any, right: Any) -> bool:
+    """True when two legs' quote assets describe the same trade.
+
+    Two dollar quotes are interchangeable however they are spelled. A dollar
+    quote against BTC, ETH or EUR is not: that pairing is currency risk wearing
+    a token spread's clothes, and it stays rejected.
+
+    An unknown quote on either side is treated as compatible, because dropping
+    a route for missing metadata loses real coverage to a blank field.
+    """
+
+    a = str(left or "").strip().upper()
+    b = str(right or "").strip().upper()
+    if not a or not b:
+        return True
+    if a == b:
+        return True
+    return a in USD_PEGGED_QUOTES and b in USD_PEGGED_QUOTES

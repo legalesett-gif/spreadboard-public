@@ -1,0 +1,639 @@
+{
+  "auditedAt": "2026-08-27T19:05:34.039Z",
+  "desktop": {
+    "name": "desktop",
+    "families": {
+      "futures_futures": {
+        "elapsedMs": 2375,
+        "routeCount": 89,
+        "tokenCount": 20,
+        "summary": {
+          "api_rows": 11716,
+          "dex_rows": 1411,
+          "fresh_rows": 1224,
+          "funding_rows": 1202,
+          "identity_mismatch_rows": 0,
+          "limit": 20,
+          "matching_rows": 1224,
+          "matching_tokens": 434,
+          "max_abs_funding_24h_pct": 2.6216354659470573,
+          "max_abs_funding_apr_pct": 956.8969450706759,
+          "max_depth_weighted_spread_pct": 0.14235654840124567,
+          "max_executable_spread_pct": 0.14235654840124567,
+          "max_funding_24h_pct": 0.2543280000000001,
+          "offset": 0,
+          "returned_rows": 89,
+          "returned_tokens": 20,
+          "stale_rows": 0,
+          "thin_book_rows": 0,
+          "total_rows": 11716,
+          "total_tokens": 908,
+          "undeliverable_rows": 0,
+          "visible_rows": 1224
+        },
+        "sample": [
+          {
+            "token": "QNT",
+            "route_kind": "FUTURES",
+            "long": "OKX Futures",
+            "short": "Bybit Futures",
+            "spread": 17.018518518518523
+          },
+          {
+            "token": "QNT",
+            "route_kind": "FUTURES",
+            "long": "OKX Futures",
+            "short": "Bingx Futures",
+            "spread": 16.999999999999993
+          }
+        ]
+      },
+      "futures_spot": {
+        "elapsedMs": 3231,
+        "routeCount": 198,
+        "tokenCount": 20,
+        "summary": {
+          "api_rows": 11716,
+          "dex_rows": 1411,
+          "fresh_rows": 3970,
+          "funding_rows": 3961,
+          "identity_mismatch_rows": 0,
+          "limit": 20,
+          "matching_rows": 3970,
+          "matching_tokens": 475,
+          "max_abs_funding_24h_pct": 2.8752,
+          "max_abs_funding_apr_pct": 1049.448,
+          "max_depth_weighted_spread_pct": 0.5459479139935164,
+          "max_executable_spread_pct": 0.5459479139935164,
+          "max_funding_24h_pct": 0.8389739999999999,
+          "offset": 0,
+          "returned_rows": 198,
+          "returned_tokens": 20,
+          "stale_rows": 0,
+          "thin_book_rows": 0,
+          "total_rows": 11716,
+          "total_tokens": 908,
+          "undeliverable_rows": 0,
+          "visible_rows": 3970
+        },
+        "sample": [
+          {
+            "token": "ESPORTS",
+            "route_kind": "FUTURES-SPOT",
+            "long": "Gate Futures",
+            "short": "Gate Spot",
+            "spread": 10.127478753541075
+          },
+          {
+            "token": "ESPORTS",
+            "route_kind": "FUTURES-SPOT",
+            "long": "Bybit Futures",
+            "short": "Gate Spot",
+            "spread": 10.127478753541075
+          }
+        ]
+      },
+      "spot_spot": {
+        "elapsedMs": 1498,
+        "routeCount": 42,
+        "tokenCount": 20,
+        "summary": {
+          "api_rows": 11716,
+          "dex_rows": 1411,
+          "fresh_rows": 521,
+          "funding_rows": 0,
+          "identity_mismatch_rows": 0,
+          "limit": 20,
+          "matching_rows": 521,
+          "matching_tokens": 228,
+          "max_abs_funding_24h_pct": null,
+          "max_abs_funding_apr_pct": null,
+          "max_depth_weighted_spread_pct": 0.5366835679220028,
+          "max_executable_spread_pct": 0.5366835679220028,
+          "max_funding_24h_pct": null,
+          "offset": 0,
+          "returned_rows": 42,
+          "returned_tokens": 20,
+          "stale_rows": 0,
+          "thin_book_rows": 0,
+          "total_rows": 11716,
+          "total_tokens": 908,
+          "undeliverable_rows": 0,
+          "visible_rows": 521
+        },
+        "sample": [
+          {
+            "token": "ELSA",
+            "route_kind": "SPOT",
+            "long": "HTX Spot",
+            "short": "Bybit Spot",
+            "spread": 10.320987654320968
+          },
+          {
+            "token": "ELSA",
+            "route_kind": "SPOT",
+            "long": "HTX Spot",
+            "short": "Gate Spot",
+            "spread": 10.296296296296292
+          }
+        ]
+      },
+      "futures_dex": {
+        "elapsedMs": 748,
+        "routeCount": 13,
+        "tokenCount": 12,
+        "summary": {
+          "api_rows": 11716,
+          "dex_rows": 1411,
+          "fresh_rows": 13,
+          "funding_rows": 13,
+          "identity_mismatch_rows": 0,
+          "limit": 20,
+          "matching_rows": 13,
+          "matching_tokens": 12,
+          "max_abs_funding_24h_pct": 0.55908,
+          "max_abs_funding_apr_pct": 204.0642,
+          "max_depth_weighted_spread_pct": 5.082957840189595,
+          "max_executable_spread_pct": 5.082957840189595,
+          "max_funding_24h_pct": 0.55908,
+          "offset": 0,
+          "returned_rows": 13,
+          "returned_tokens": 12,
+          "stale_rows": 0,
+          "thin_book_rows": 0,
+          "total_rows": 11716,
+          "total_tokens": 908,
+          "undeliverable_rows": 0,
+          "visible_rows": 13
+        },
+        "sample": [
+          {
+            "token": "VET",
+            "route_kind": "DEX-FUTURES",
+            "long": "OKX DEX 56 Spot",
+            "short": "Kraken Futures Futures",
+            "spread": 5.082957840189595
+          },
+          {
+            "token": "SIREN",
+            "route_kind": "DEX-FUTURES",
+            "long": "OKX DEX 56 Spot",
+            "short": "Aster Futures",
+            "spread": 0.50718841
+          }
+        ]
+      },
+      "spot_dex": {
+        "elapsedMs": 639,
+        "routeCount": 5,
+        "tokenCount": 5,
+        "summary": {
+          "api_rows": 11716,
+          "dex_rows": 1411,
+          "fresh_rows": 5,
+          "funding_rows": 0,
+          "identity_mismatch_rows": 0,
+          "limit": 20,
+          "matching_rows": 5,
+          "matching_tokens": 5,
+          "max_abs_funding_24h_pct": null,
+          "max_abs_funding_apr_pct": null,
+          "max_depth_weighted_spread_pct": 0.11487099,
+          "max_executable_spread_pct": 0.11487099,
+          "max_funding_24h_pct": null,
+          "offset": 0,
+          "returned_rows": 5,
+          "returned_tokens": 5,
+          "stale_rows": 0,
+          "thin_book_rows": 0,
+          "total_rows": 11716,
+          "total_tokens": 908,
+          "undeliverable_rows": 0,
+          "visible_rows": 5
+        },
+        "sample": [
+          {
+            "token": "USD1",
+            "route_kind": "DEX-SPOT",
+            "long": "Kucoin Spot",
+            "short": "OKX DEX 56 Spot",
+            "spread": 0.11487099
+          },
+          {
+            "token": "BNB",
+            "route_kind": "DEX-SPOT",
+            "long": "OKX DEX 56 Spot",
+            "short": "HTX Spot",
+            "spread": 0.08995146
+          }
+        ]
+      }
+    },
+    "catalogue": {
+      "OPENAI": {
+        "elapsedMs": 8159,
+        "routeCount": 36,
+        "catalogMarketCount": 13,
+        "freshMarketCount": 9,
+        "routeKinds": [
+          "FUTURES",
+          "SPOT-FUTURES"
+        ]
+      },
+      "ANTHROPIC": {
+        "elapsedMs": 2067,
+        "routeCount": 42,
+        "catalogMarketCount": 13,
+        "freshMarketCount": 9,
+        "routeKinds": [
+          "FUTURES"
+        ]
+      },
+      "SPCX": {
+        "elapsedMs": 2351,
+        "routeCount": 49,
+        "catalogMarketCount": 14,
+        "freshMarketCount": 9,
+        "routeKinds": [
+          "FUTURES",
+          "SPOT-FUTURES"
+        ]
+      },
+      "GUA": {
+        "elapsedMs": 1845,
+        "routeCount": 43,
+        "catalogMarketCount": 12,
+        "freshMarketCount": 9,
+        "routeKinds": [
+          "FUTURES",
+          "SPOT",
+          "SPOT-FUTURES"
+        ]
+      }
+    },
+    "funding": {
+      "now": {
+        "elapsedMs": 5622,
+        "routeCount": 525,
+        "tokenCount": 20,
+        "valueKind": "current_rate_projected_24h",
+        "nowIndependent": true
+      },
+      "1d": {
+        "elapsedMs": 10155,
+        "routeCount": 194,
+        "tokenCount": 20,
+        "valueKind": "aggregate_exact_settlements",
+        "nowIndependent": true
+      },
+      "7d": {
+        "elapsedMs": 9982,
+        "routeCount": 230,
+        "tokenCount": 20,
+        "valueKind": "aggregate_exact_settlements",
+        "nowIndependent": true
+      },
+      "30d": {
+        "elapsedMs": 18425,
+        "routeCount": 215,
+        "tokenCount": 20,
+        "valueKind": "aggregate_exact_settlements",
+        "nowIndependent": true
+      }
+    },
+    "pages": {
+      "markets": {
+        "status": 200,
+        "elapsedMs": 1709,
+        "overflowPx": 0
+      },
+      "funding7d": {
+        "status": 200,
+        "elapsedMs": 2759,
+        "overflowPx": 0
+      }
+    },
+    "errors": [
+      "request:https://spreadarbitrage.ink/api/stream/board:net::ERR_ABORTED",
+      "request:https://spreadarbitrage.ink/api/stream/board:net::ERR_ABORTED"
+    ]
+  },
+  "mobile": {
+    "name": "mobile",
+    "families": {
+      "futures_futures": {
+        "elapsedMs": 7106,
+        "routeCount": 77,
+        "tokenCount": 20,
+        "summary": {
+          "api_rows": 11716,
+          "dex_rows": 1411,
+          "fresh_rows": 645,
+          "funding_rows": 626,
+          "identity_mismatch_rows": 0,
+          "limit": 20,
+          "matching_rows": 645,
+          "matching_tokens": 268,
+          "max_abs_funding_24h_pct": 0.8041739999999999,
+          "max_abs_funding_apr_pct": 293.52351,
+          "max_depth_weighted_spread_pct": 0.139275766016711,
+          "max_executable_spread_pct": 0.139275766016711,
+          "max_funding_24h_pct": 0.15689999999999998,
+          "offset": 0,
+          "returned_rows": 77,
+          "returned_tokens": 20,
+          "stale_rows": 0,
+          "thin_book_rows": 0,
+          "total_rows": 11716,
+          "total_tokens": 908,
+          "undeliverable_rows": 0,
+          "visible_rows": 645
+        },
+        "sample": [
+          {
+            "token": "QNT",
+            "route_kind": "FUTURES",
+            "long": "OKX Futures",
+            "short": "Bybit Futures",
+            "spread": 17.018518518518523
+          },
+          {
+            "token": "QNT",
+            "route_kind": "FUTURES",
+            "long": "OKX Futures",
+            "short": "Bitget Futures",
+            "spread": 16.981481481481488
+          }
+        ]
+      },
+      "futures_spot": {
+        "elapsedMs": 1384,
+        "routeCount": 202,
+        "tokenCount": 20,
+        "summary": {
+          "api_rows": 11716,
+          "dex_rows": 1411,
+          "fresh_rows": 3830,
+          "funding_rows": 3821,
+          "identity_mismatch_rows": 0,
+          "limit": 20,
+          "matching_rows": 3830,
+          "matching_tokens": 477,
+          "max_abs_funding_24h_pct": 2.8752,
+          "max_abs_funding_apr_pct": 1049.448,
+          "max_depth_weighted_spread_pct": 0.6438495425279633,
+          "max_executable_spread_pct": 0.6438495425279633,
+          "max_funding_24h_pct": 0.8389739999999999,
+          "offset": 0,
+          "returned_rows": 202,
+          "returned_tokens": 20,
+          "stale_rows": 0,
+          "thin_book_rows": 0,
+          "total_rows": 11716,
+          "total_tokens": 908,
+          "undeliverable_rows": 0,
+          "visible_rows": 3830
+        },
+        "sample": [
+          {
+            "token": "ESPORTS",
+            "route_kind": "FUTURES-SPOT",
+            "long": "Gate Futures",
+            "short": "Gate Spot",
+            "spread": 10.127478753541075
+          },
+          {
+            "token": "ESPORTS",
+            "route_kind": "FUTURES-SPOT",
+            "long": "Bybit Futures",
+            "short": "Gate Spot",
+            "spread": 10.049539985845723
+          }
+        ]
+      },
+      "spot_spot": {
+        "elapsedMs": 1741,
+        "routeCount": 41,
+        "tokenCount": 20,
+        "summary": {
+          "api_rows": 11716,
+          "dex_rows": 1411,
+          "fresh_rows": 556,
+          "funding_rows": 0,
+          "identity_mismatch_rows": 0,
+          "limit": 20,
+          "matching_rows": 556,
+          "matching_tokens": 242,
+          "max_abs_funding_24h_pct": null,
+          "max_abs_funding_apr_pct": null,
+          "max_depth_weighted_spread_pct": 0.6585788561525252,
+          "max_executable_spread_pct": 0.6585788561525252,
+          "max_funding_24h_pct": null,
+          "offset": 0,
+          "returned_rows": 41,
+          "returned_tokens": 20,
+          "stale_rows": 0,
+          "thin_book_rows": 0,
+          "total_rows": 11716,
+          "total_tokens": 908,
+          "undeliverable_rows": 0,
+          "visible_rows": 556
+        },
+        "sample": [
+          {
+            "token": "HPP",
+            "route_kind": "SPOT",
+            "long": "Gate Spot",
+            "short": "HTX Spot",
+            "spread": 11.261040235525034
+          },
+          {
+            "token": "HPP",
+            "route_kind": "SPOT",
+            "long": "Bingx Spot",
+            "short": "HTX Spot",
+            "spread": 10.219953821849547
+          }
+        ]
+      },
+      "futures_dex": {
+        "elapsedMs": 525,
+        "routeCount": 17,
+        "tokenCount": 17,
+        "summary": {
+          "api_rows": 11716,
+          "dex_rows": 1411,
+          "fresh_rows": 17,
+          "funding_rows": 17,
+          "identity_mismatch_rows": 0,
+          "limit": 20,
+          "matching_rows": 17,
+          "matching_tokens": 17,
+          "max_abs_funding_24h_pct": 0.55908,
+          "max_abs_funding_apr_pct": 204.0642,
+          "max_depth_weighted_spread_pct": 0.5938891919403888,
+          "max_executable_spread_pct": 0.5938891919403888,
+          "max_funding_24h_pct": 0.55908,
+          "offset": 0,
+          "returned_rows": 17,
+          "returned_tokens": 17,
+          "stale_rows": 0,
+          "thin_book_rows": 0,
+          "total_rows": 11716,
+          "total_tokens": 908,
+          "undeliverable_rows": 0,
+          "visible_rows": 17
+        },
+        "sample": [
+          {
+            "token": "SNX",
+            "route_kind": "DEX-FUTURES",
+            "long": "OKX DEX 1 Spot",
+            "short": "Bybit Futures",
+            "spread": 0.5938891919403888
+          },
+          {
+            "token": "SIREN",
+            "route_kind": "DEX-FUTURES",
+            "long": "OKX DEX 56 Spot",
+            "short": "Aster Futures",
+            "spread": 0.39848851
+          }
+        ]
+      },
+      "spot_dex": {
+        "elapsedMs": 1717,
+        "routeCount": 5,
+        "tokenCount": 5,
+        "summary": {
+          "api_rows": 11716,
+          "dex_rows": 1411,
+          "fresh_rows": 5,
+          "funding_rows": 0,
+          "identity_mismatch_rows": 0,
+          "limit": 20,
+          "matching_rows": 5,
+          "matching_tokens": 5,
+          "max_abs_funding_24h_pct": null,
+          "max_abs_funding_apr_pct": null,
+          "max_depth_weighted_spread_pct": 0.03022406,
+          "max_executable_spread_pct": 0.03022406,
+          "max_funding_24h_pct": null,
+          "offset": 0,
+          "returned_rows": 5,
+          "returned_tokens": 5,
+          "stale_rows": 0,
+          "thin_book_rows": 0,
+          "total_rows": 11716,
+          "total_tokens": 908,
+          "undeliverable_rows": 0,
+          "visible_rows": 5
+        },
+        "sample": [
+          {
+            "token": "ETH",
+            "route_kind": "DEX-SPOT",
+            "long": "OKX DEX 1 Spot",
+            "short": "WhiteBIT Spot",
+            "spread": 0.03022406
+          },
+          {
+            "token": "PENDLE",
+            "route_kind": "DEX-SPOT",
+            "long": "OKX DEX 1 Spot",
+            "short": "Kucoin Spot",
+            "spread": 0.0089314
+          }
+        ]
+      }
+    },
+    "catalogue": {
+      "OPENAI": {
+        "elapsedMs": 1463,
+        "routeCount": 36,
+        "catalogMarketCount": 13,
+        "freshMarketCount": 9,
+        "routeKinds": [
+          "FUTURES",
+          "SPOT-FUTURES"
+        ]
+      },
+      "ANTHROPIC": {
+        "elapsedMs": 1510,
+        "routeCount": 42,
+        "catalogMarketCount": 13,
+        "freshMarketCount": 9,
+        "routeKinds": [
+          "FUTURES"
+        ]
+      },
+      "SPCX": {
+        "elapsedMs": 1179,
+        "routeCount": 49,
+        "catalogMarketCount": 14,
+        "freshMarketCount": 9,
+        "routeKinds": [
+          "FUTURES",
+          "SPOT-FUTURES"
+        ]
+      },
+      "GUA": {
+        "elapsedMs": 4372,
+        "routeCount": 43,
+        "catalogMarketCount": 12,
+        "freshMarketCount": 9,
+        "routeKinds": [
+          "FUTURES",
+          "SPOT",
+          "SPOT-FUTURES"
+        ]
+      }
+    },
+    "funding": {
+      "now": {
+        "elapsedMs": 3645,
+        "routeCount": 536,
+        "tokenCount": 20,
+        "valueKind": "current_rate_projected_24h",
+        "nowIndependent": true
+      },
+      "1d": {
+        "elapsedMs": 7590,
+        "routeCount": 194,
+        "tokenCount": 20,
+        "valueKind": "aggregate_exact_settlements",
+        "nowIndependent": true
+      },
+      "7d": {
+        "elapsedMs": 12643,
+        "routeCount": 230,
+        "tokenCount": 20,
+        "valueKind": "aggregate_exact_settlements",
+        "nowIndependent": true
+      },
+      "30d": {
+        "elapsedMs": 18786,
+        "routeCount": 215,
+        "tokenCount": 20,
+        "valueKind": "aggregate_exact_settlements",
+        "nowIndependent": true
+      }
+    },
+    "pages": {
+      "markets": {
+        "status": 200,
+        "elapsedMs": 906,
+        "overflowPx": 0
+      },
+      "funding7d": {
+        "status": 200,
+        "elapsedMs": 4119,
+        "overflowPx": 0
+      }
+    },
+    "errors": [
+      "request:https://spreadarbitrage.ink/api/stream/board:net::ERR_ABORTED",
+      "request:https://spreadarbitrage.ink/api/stream/board:net::ERR_ABORTED"
+    ]
+  }
+}

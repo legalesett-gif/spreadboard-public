@@ -13,7 +13,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from spreadboard import api_spreads, chart_catalog, funding_navigation, live_book_cache
+from spreadboard import (
+    api_spreads,
+    chart_catalog,
+    funding_navigation,
+    live_book_cache,
+    route_taxonomy,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
@@ -76,9 +82,26 @@ def _slug(value: Any) -> str:
     return "".join(character for character in str(value).casefold() if character.isalnum())
 
 
+#: A venue name may carry the market namespace it serves -- "Kucoin Futures",
+#: "Kraken Futures". The identity already carries market type separately, so
+#: that suffix is redundant there and only ever causes a false mismatch against
+#: a reference that names the exchange plainly. Stripping it as a RULE replaces
+#: a hand-maintained alias per venue, which silently mismatched every venue
+#: nobody had added yet.
+#:
+#: "Dex" is deliberately not stripped: OKX DEX is a distinct venue from OKX in
+#: the product taxonomy, not the same exchange's other namespace.
+_VENUE_NAMESPACE_SUFFIXES = ("futures", "perpetual", "perpetuals", "perp", "swap")
+
+
 def normalize_venue(value: Any) -> str:
     slug = _slug(value)
-    return _VENUE_ALIASES.get(slug, slug)
+    slug = _VENUE_ALIASES.get(slug, slug)
+    for suffix in _VENUE_NAMESPACE_SUFFIXES:
+        if slug.endswith(suffix) and len(slug) > len(suffix):
+            trimmed = slug[: -len(suffix)]
+            return _VENUE_ALIASES.get(trimmed, trimmed)
+    return slug
 
 
 def normalize_market_type(value: Any) -> str:
@@ -171,8 +194,18 @@ def _identity(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
 
 
 def _usdt_symbol(value: Any) -> bool:
+    """True when a leg is quoted in a dollar, whichever dollar it is.
+
+    This gate used to demand the literal string USDT, so a Hyperliquid USDC
+    perpetual could never be counted as matched even once the route existed --
+    the comparator reported the pair absent while the board was serving it.
+    """
+
     symbol = str(value or "").upper()
-    return "/USDT" in symbol or symbol.endswith("USDT") or "USDT:" in symbol
+    if "/" not in symbol:
+        return False
+    quote = symbol.split("/", 1)[1].split(":", 1)[0].strip()
+    return route_taxonomy.quote_is_usd_pegged(quote)
 
 
 def _route_spread(row: dict[str, Any]) -> float | None:

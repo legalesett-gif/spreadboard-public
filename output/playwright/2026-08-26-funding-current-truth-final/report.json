@@ -1,0 +1,43 @@
+{
+  "mode": "production",
+  "generatedAt": "2026-08-25T23:04:24.954Z",
+  "results": [
+    {
+      "viewport": "desktop",
+      "name": "funding",
+      "url": "https://spreadarbitrage.ink/funding",
+      "finalUrl": "https://spreadarbitrage.ink/funding",
+      "status": 200,
+      "elapsedMs": 7787,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": null,
+      "screenshot": "output/playwright/2026-08-26-funding-current-truth-final/desktop-funding.png",
+      "unexpectedRedirect": false,
+      "title": "Funding - SpreadBoard",
+      "h1": "Paired carry farms",
+      "bodyChars": 6290,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    },
+    {
+      "viewport": "mobile",
+      "name": "funding",
+      "url": "https://spreadarbitrage.ink/funding",
+      "finalUrl": "https://spreadarbitrage.ink/funding",
+      "status": 200,
+      "elapsedMs": 24084,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": null,
+      "screenshot": "output/playwright/2026-08-26-funding-current-truth-final/mobile-funding.png",
+      "unexpectedRedirect": false,
+      "title": "Funding - SpreadBoard",
+      "h1": "Paired carry farms",
+      "bodyChars": 7795,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    }
+  ],
+  "failures": []
+}

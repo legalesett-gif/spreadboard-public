@@ -160,6 +160,8 @@ def for_token(
             )
         )
 
+    legs = _one_leg_per_venue(legs)
+
     funding = bulk_quotes.load_funding()
     rails = public_rails.load_public_rails()
     routes: list[dict[str, Any]] = []
@@ -1160,6 +1162,45 @@ def _undirected_route_identity(row: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _leg_top_depth_usd(leg: Leg) -> float:
+    """Rough top-of-book dollar depth, used only to rank two quotes of one market."""
+
+    try:
+        bid_price, bid_size = float(leg.book.bids[0][0]), float(leg.book.bids[0][1])
+        ask_price, ask_size = float(leg.book.asks[0][0]), float(leg.book.asks[0][1])
+    except (IndexError, TypeError, ValueError):
+        return 0.0
+    return min(bid_price * bid_size, ask_price * ask_size) * max(leg.contract_size, 0.0)
+
+
+def _one_leg_per_venue(legs: list[Leg]) -> list[Leg]:
+    """Collapse a venue's several dollar quotes of one market into one leg.
+
+    Now that a USDC leg and a USDT leg are the same trade, a venue listing both
+    would otherwise enter the pairing twice and every route through it would
+    appear twice -- differing only in which dollar the quote is denominated in.
+    Measured on the live catalogue, keeping both turned quote unification into
+    +62.6% routes, of which only +14.1% was new venue reach; the rest was that
+    duplication.
+
+    The deepest book wins, so the row a member sees is the one they could
+    actually fill. A venue quoting in a currency of its own -- BTC, EUR -- is a
+    genuinely different market and keeps its own leg.
+    """
+
+    best: dict[tuple[str, str], Leg] = {}
+    others: list[Leg] = []
+    for leg in legs:
+        if not route_taxonomy.quote_is_usd_pegged(leg.quote):
+            others.append(leg)
+            continue
+        key = (leg.venue, leg.market_type)
+        incumbent = best.get(key)
+        if incumbent is None or _leg_top_depth_usd(leg) > _leg_top_depth_usd(incumbent):
+            best[key] = leg
+    return [*best.values(), *others]
+
+
 def _reject_reason(
     token: str,
     long_leg: Leg,
@@ -1171,11 +1212,12 @@ def _reject_reason(
         and long_leg.market_type == short_leg.market_type
     ):
         return "same_venue"
-    # USD/USDC/USDT basis is a different risk from token spread. Ranking a
-    # Kraken USD book against a Gate USDT book as if the quotes were identical
-    # manufactured small but persistent leaders. Exact-pair rankings compare
-    # like-for-like quote assets; cross-quote research remains a custom chart.
-    if long_leg.quote and short_leg.quote and long_leg.quote != short_leg.quote:
+    # Two dollar quotes are the same trade however they are spelled. Requiring
+    # the strings to match removed whole venues from the product instead of
+    # removing a risk: Hyperliquid quotes its perpetuals in USDC, so every
+    # Hyperliquid route was unbuildable and the token simply never appeared.
+    # A dollar against BTC/ETH/EUR is still currency risk and still rejected.
+    if not route_taxonomy.quotes_are_interchangeable(long_leg.quote, short_leg.quote):
         return "quote_mismatch"
     low = min(long_leg.ask, short_leg.bid)
     high = max(long_leg.ask, short_leg.bid)

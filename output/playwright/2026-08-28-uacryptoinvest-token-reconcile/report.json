@@ -1,0 +1,43 @@
+{
+  "mode": "reference",
+  "generatedAt": "2026-08-28T11:57:21.155Z",
+  "results": [
+    {
+      "viewport": "desktop",
+      "name": "uacryptoinvest-scanner",
+      "url": "https://uacryptoinvest.com/arbitrage",
+      "finalUrl": "https://uacryptoinvest.com/arbitrage",
+      "status": 200,
+      "elapsedMs": 6517,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": null,
+      "screenshot": "output/playwright/2026-08-28-uacryptoinvest-token-reconcile/desktop-uacryptoinvest-scanner.png",
+      "unexpectedRedirect": false,
+      "title": "Arbitrage",
+      "h1": "",
+      "bodyChars": 268,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    },
+    {
+      "viewport": "mobile",
+      "name": "uacryptoinvest-scanner",
+      "url": "https://uacryptoinvest.com/arbitrage",
+      "finalUrl": "https://uacryptoinvest.com/arbitrage",
+      "status": 200,
+      "elapsedMs": 7925,
+      "navigationError": null,
+      "browserErrors": [],
+      "interactiveState": null,
+      "screenshot": "output/playwright/2026-08-28-uacryptoinvest-token-reconcile/mobile-uacryptoinvest-scanner.png",
+      "unexpectedRedirect": false,
+      "title": "Arbitrage",
+      "h1": "",
+      "bodyChars": 222,
+      "invalidText": [],
+      "bodyOverflowPx": 0
+    }
+  ],
+  "failures": []
+}

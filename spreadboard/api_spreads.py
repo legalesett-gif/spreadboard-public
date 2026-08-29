@@ -866,6 +866,12 @@ LIVE_BOOK_MAX_AGE_SECONDS = max(
 )
 LIVE_BOOK_TARGET_NOTIONAL_USD = probe_notional.TARGET_NOTIONAL_USD
 
+# How far a stored headline may sit from the spread its own published legs
+# imply before the legs win. Kept well under the 0.05pp the accuracy audit
+# flags, so anything that audit would report is corrected, while ordinary
+# rounding between a producer's arithmetic and ours never rewrites a row.
+LEG_SPREAD_COHERENCE_TOLERANCE_PCT = 0.01
+
 
 def quote_age_min(row: Any, *, now: float | None = None) -> float | None:
     """Current age for either a row object or a serialized route mapping.
@@ -2753,6 +2759,34 @@ def _row_from_api(
         and "depth_unverified" not in blockers
     ):
         blockers.append("depth_unverified")
+
+    # A short leg is opened by SELLING into the bid, never at the last trade.
+    # Some producers derive the headline as (short_price / long_ask - 1) using
+    # the venue's last price, which sits inside the spread. That overstates the
+    # edge, and when the last trade printed above the bid it prints a POSITIVE
+    # spread on a route that is negative at the touch. Both were live on the
+    # OKX DEX -> Futures lane: PEPE showed +0.395% against +0.340% at the bid,
+    # and token "4" showed +0.071% when selling into the bid was -0.037%.
+    #
+    # The headline a member reads must be reproducible from the legs shown
+    # beside it. Derive it from them whenever both are published. This invents
+    # no price -- it uses the two the row already displays -- and it leaves a
+    # row whose legs are unknown exactly as the producer measured it.
+    executable_pct = _float_or_none(raw.get("executable_spread_pct"))
+    published_long_ask = _nested_float(route_inputs, "long", "ask")
+    published_short_bid = _nested_float(route_inputs, "short", "bid")
+    if (
+        published_long_ask is not None
+        and published_long_ask > 0
+        and published_short_bid is not None
+    ):
+        leg_implied_pct = (published_short_bid / published_long_ask - 1.0) * 100.0
+        if (
+            executable_pct is None
+            or abs(leg_implied_pct - executable_pct)
+            > LEG_SPREAD_COHERENCE_TOLERANCE_PCT
+        ):
+            executable_pct = leg_implied_pct
     return SpreadTerminalRow(
         token=token,
         token_name=token_metadata.token_name(token, metadata or {}),
@@ -2765,11 +2799,11 @@ def _row_from_api(
         long_market_type=long_market_type,
         short_venue=short_venue,
         short_market_type=short_market_type,
-        executable_spread_pct=_float_or_none(raw.get("executable_spread_pct")),
+        executable_spread_pct=executable_pct,
         depth_weighted_spread_pct=_float_or_none(raw.get("depth_weighted_spread_pct")),
         displayed_open_spread_pct=(
-            _float_or_none(raw.get("executable_spread_pct"))
-            if _float_or_none(raw.get("executable_spread_pct")) is not None
+            executable_pct
+            if executable_pct is not None
             else _float_or_none(raw.get("depth_weighted_spread_pct"))
         ),
         funding_apr_pct=funding_apr,
