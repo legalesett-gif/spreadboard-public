@@ -709,12 +709,31 @@ def build(
         in RETRYABLE_STATUSES
     ]
     leading = list(dict.fromkeys([*priorities, *retryable_or_pending]))
-    rotated = (
-        due_priorities
-        if priority_only
-        else leading
-        + [item for item in ordered[start:] + ordered[:start] if item not in leading]
-    )
+
+    def _staleness(item: tuple[str, str]) -> tuple[int, int]:
+        """Most-overdue exact aggregate first, then the plain rotation.
+
+        The background pass walked a fixed cursor, so with ~10,470 legs, a
+        two-minute budget and 4-8 hour settlement schedules, a leg's window
+        expired long before the rotation came back to it. Production showed
+        9,081 legs holding a stored 24h aggregate while only 1,965 were still
+        current -- the data existed and could not be shown. Refreshing whatever
+        has just crossed its settlement converts that stored history into
+        displayable windows without fetching anything extra.
+        """
+
+        key = f"{item[0]}|{item[1]}"
+        _current, next_expiry = _current_leg_windows(
+            windows.get(key), leg_status.get(key), now_ms=now_ms
+        )
+        if next_expiry is None:
+            # Nothing current to lose: it is already blank, so refresh it early.
+            return (0, 0)
+        return (1, int(next_expiry))
+
+    background = [item for item in ordered[start:] + ordered[:start] if item not in leading]
+    background.sort(key=_staleness)
+    rotated = due_priorities if priority_only else leading + background
     attempted = 0
     priority_attempted = 0
     background_attempted = 0
