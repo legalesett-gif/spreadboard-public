@@ -927,6 +927,18 @@ class SharedArtifactWatcher(threading.Thread):
         self.funding_navigation_health: dict[str, Any] | None = None
         self.container_health_signature = _artifact_signature(CONTAINER_HEALTH_PATH)
         self.container_health: dict[str, Any] | None = None
+        #: None until the first structural install; 0.0 is a valid monotonic
+        #: reading, so truthiness must not be used to mean "never installed".
+        self.last_route_index_install_at: float | None = None
+        #: Minimum spacing between structural reinstalls in the web role.
+        self.min_route_index_install_interval_seconds = max(
+            0.0,
+            float(
+                os.environ.get(
+                    "SPREADBOARD_ROUTE_INDEX_INSTALL_MIN_INTERVAL_SECONDS", "600"
+                )
+            ),
+        )
         self.warm_lock = threading.Lock()
         self.warm_pending = False
         self.funding_warm_pending = False
@@ -955,7 +967,23 @@ class SharedArtifactWatcher(threading.Thread):
         )
         live_route_changed = live_route_signature != self.live_route_signature
         materialized_changed = materialized_signature != self.materialized_signature
-        if live_route_changed or materialized_changed:
+        # Each restore decodes the ~300MB structural artifact into ~0.66GB of
+        # row dicts, and glibc does not return all of it. While the collector
+        # is rebuilding it can republish every few minutes -- four installs in
+        # 25 minutes was observed -- which ratcheted the web role 2.06GB ->
+        # 3.33GB in 73 minutes. Live prices come from the process-shared
+        # overlay, not from this artifact, so spacing structural reinstalls
+        # costs freshness of structure only, never of price.
+        now_monotonic = time.monotonic()
+        install_due = (live_route_changed or materialized_changed) and (
+            self.last_route_index_install_at is None
+            or now_monotonic - self.last_route_index_install_at
+            >= self.min_route_index_install_interval_seconds
+        )
+        # While throttled the stored signatures are deliberately left unchanged
+        # so the next poll retries, and the rest of check_once still runs.
+        if install_due:
+            self.last_route_index_install_at = now_monotonic
             self.live_route_signature = live_route_signature
             self.materialized_signature = materialized_signature
             from spreadboard import server as server_module
