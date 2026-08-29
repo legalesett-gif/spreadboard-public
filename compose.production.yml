@@ -199,8 +199,19 @@ services:
       # and never drops a token below one route. That is what makes a naive
       # increase (the cap once went to 90) different from this one -- back then
       # the trim was a plain slice and the board fell from 1,637 tokens to 777.
-      SPREADARB_MAX_ROWS_PER_TOKEN: "40"
-      SPREADARB_MAX_SNAPSHOT_ROWS_PER_TOKEN: "40"
+      # TRIED AND REVERTED 2026-08-29: raising this to 40 worked exactly as
+      # intended for coverage -- the snapshot went 21,305 -> 28,224 rows, the
+      # per-token max reached 40, and SKHYNIX kucoin->bybit (one of the three
+      # comparator absences at 94% recall) appeared. It also took the site down.
+      # The extra 32% of rows pushed the collector past its 4GiB cgroup: two
+      # OOM kills, the web app restarted, and /api/health served 502.
+      #
+      # Coverage here is memory-bound, not logic-bound. Do not raise it again
+      # until the collector has real headroom -- see the capacity note in
+      # REMINDERS.md (steady base ~2.2GB plus a ~2GB child in 4GiB, on a host
+      # already committing 8.44GB of 7.94GB).
+      SPREADARB_MAX_ROWS_PER_TOKEN: "28"
+      SPREADARB_MAX_SNAPSHOT_ROWS_PER_TOKEN: "28"
       SPREADARB_MIN_FUNDING_APR_PCT: "0.01"
       SPREADBOARD_DISCOVERY_ROWS: "30000"
       SPREADBOARD_DEX_CANDIDATES: "450"
