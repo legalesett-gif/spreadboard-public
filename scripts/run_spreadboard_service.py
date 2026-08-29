@@ -2551,18 +2551,24 @@ FUNDING_NAVIGATION_FAILURE_RETRY_SECONDS = max(
         )
     ),
 )
-#: The funding-navigation child needs about 1.05GB of anonymous memory. The
-#: collector's steady workers already hold 2.1-3.4GB of a 4GiB cgroup, so the
-#: child was simply spawned into a cgroup that could not hold it and the kernel
-#: killed it (exit=-9) roughly every twenty minutes. Headroom oscillates
-#: 605MB-2,028MB as the periodic quote workers cycle, so waiting for a real
-#: trough turns a hard kill into a short deferral. The margin above the child's
-#: own footprint covers the other workers growing while it runs.
+#: The funding-navigation child's measured peak is 1,611MB of anonymous memory
+#: -- not the ~1.05GB implied by the anon-rss recorded at kill time, because the
+#: kernel kills at cgroup exhaustion rather than at the process's own peak. A
+#: first attempt used 1,600MB, which is BELOW the child's own peak and left
+#: negative margin; production duly killed it again at 23:21 and 23:29.
+#:
+#: The threshold must cover the child's peak plus the growth of everything else
+#: while it runs. The collector routinely holds 3-4 concurrent heavy workers and
+#: its anon swings about 2GB (1,936MB-3,930MB of a 4GiB cgroup), so the margin
+#: is deliberately large. If this cannot be met the build defers and, after
+#: thirty minutes, reports honestly -- which is the correct signal that the
+#: collector is over-subscribed and needs a product decision, not a silent
+#: OOM loop.
 FUNDING_NAVIGATION_MIN_HEADROOM_BYTES = max(
     0,
     int(
         os.environ.get(
-            "SPREADBOARD_FUNDING_NAVIGATION_MIN_HEADROOM_BYTES", str(1_600 * 1024 * 1024)
+            "SPREADBOARD_FUNDING_NAVIGATION_MIN_HEADROOM_BYTES", str(2_200 * 1024 * 1024)
         )
     ),
 )

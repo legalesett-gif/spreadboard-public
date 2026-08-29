@@ -1,14 +1,18 @@
 """A heavy child must not be spawned into a cgroup that cannot hold it.
 
-The funding-navigation worker needs about 1.05GB of anonymous memory. The
-collector's steady workers already hold 2.1-3.4GB of its 4GiB cgroup, so the
-child was spawned regardless of headroom and the kernel killed it (exit=-9)
-roughly every twenty minutes on 2026-08-28, each kill raising an owner alert
-and wasting the whole build.
+The funding-navigation worker's MEASURED peak is 1,611MB of anonymous memory,
+observed while it ran. The anon-rss recorded at kill time (~1.0-1.2GB) badly
+understates it, because the kernel kills at cgroup exhaustion rather than at
+the process's own peak -- reading those snapshots as the requirement is what
+produced a first threshold of 1,600MB, BELOW the child's own peak, and
+production killed the build again at 23:21:12 and 23:29:29.
 
-Headroom oscillates between about 605MB and 2,028MB as the periodic quote
-workers cycle, so waiting for a real trough converts a hard kill into a short
-deferral while the previous valid generation keeps serving.
+The collector routinely runs 3-4 concurrent heavy workers at 90-96% of its
+4GiB cgroup, with anon swinging about 2GB (1,936MB-3,930MB). The gate must
+therefore reserve the child's peak plus real margin for that growth. When it
+cannot be met the build defers and, after thirty minutes, reports honestly --
+the correct signal that the collector is over-subscribed and needs a product
+decision, not a silent OOM loop.
 """
 
 from __future__ import annotations
@@ -41,11 +45,11 @@ def _no_spawn(monkeypatch: pytest.MonkeyPatch) -> list:
 def test_a_build_is_deferred_when_the_cgroup_cannot_hold_the_child(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The exact production condition: 605MB free, child needs ~1.05GB."""
+    """The exact production condition: far less free than the child's peak."""
 
     spawned = _no_spawn(monkeypatch)
     monkeypatch.setattr(
-        service, "_cgroup_anon_headroom_bytes", lambda: 605 * 1024 * 1024
+        service, "_cgroup_anon_headroom_bytes", lambda: 1_650 * 1024 * 1024
     )
     health: list = []
     monkeypatch.setattr(
@@ -62,7 +66,7 @@ def test_a_build_is_deferred_when_the_cgroup_cannot_hold_the_child(
 def test_a_build_proceeds_during_a_memory_trough(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Troughs are real: headroom reached 2,028MB while workers cycled."""
+    """Troughs are real, but must clear the child's 1,611MB peak plus margin."""
 
     spawned: list = []
 
@@ -78,7 +82,7 @@ def test_a_build_proceeds_during_a_memory_trough(
 
     monkeypatch.setattr(service, "_run_worker", _run_worker)
     monkeypatch.setattr(
-        service, "_cgroup_anon_headroom_bytes", lambda: 2_028 * 1024 * 1024
+        service, "_cgroup_anon_headroom_bytes", lambda: 2_600 * 1024 * 1024
     )
     monkeypatch.setattr(
         service.coverage_reconciliation,
@@ -169,3 +173,43 @@ def test_headroom_excludes_reclaimable_page_cache(
     assert headroom == 2147483648, (
         "page cache is reclaimable and must not be treated as used"
     )
+
+
+def test_the_threshold_exceeds_the_measured_child_peak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A threshold below the child's own peak guarantees an OOM kill.
+
+    The first attempt required 1,600MB for a child whose measured peak is
+    1,611MB, so the margin was negative and production killed the build twice
+    more (23:21:12 anon-rss 1,592MB, 23:29:29 anon-rss 1,176MB).
+    """
+
+    measured_child_peak = 1_611 * 1024 * 1024
+    assert service.FUNDING_NAVIGATION_MIN_HEADROOM_BYTES > measured_child_peak, (
+        "the gate must reserve more than the child's own peak"
+    )
+    # And enough beyond it for the other workers to grow while it runs.
+    assert (
+        service.FUNDING_NAVIGATION_MIN_HEADROOM_BYTES - measured_child_peak
+        >= 500 * 1024 * 1024
+    ), "leave real margin for concurrent worker growth"
+
+
+def test_headroom_just_under_the_child_peak_still_defers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """1,650MB looks generous but cannot hold a 1,611MB child plus growth."""
+
+    spawned = _no_spawn(monkeypatch)
+    monkeypatch.setattr(
+        service, "_cgroup_anon_headroom_bytes", lambda: 1_650 * 1024 * 1024
+    )
+    monkeypatch.setattr(
+        service.coverage_reconciliation,
+        "record_funding_navigation_health",
+        lambda **_kw: None,
+    )
+
+    assert service._refresh_funding_navigation(force=True) is False
+    assert not spawned
