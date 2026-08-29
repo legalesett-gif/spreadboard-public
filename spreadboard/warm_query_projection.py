@@ -332,42 +332,49 @@ class LiveRouteUniverse:
             if str(value).strip()
         }
         now = time.time()
+        # Take references under the lock, then iterate OUTSIDE it. Scanning
+        # ~130k rows while holding the lock serialised every reader behind this
+        # pass: LIVE_UNIVERSE.status() is called by /api/health, which measured
+        # 11.5s time-to-first-byte because it was simply waiting here. Both
+        # dictionaries are replaced wholesale by install() and are never mutated
+        # in place, so a reference taken under the lock stays internally
+        # consistent for the duration of the scan.
         with self._lock:
             rows = self._rows
             updates = self._updates
-            output: list[dict[str, Any]] = []
-            for key, row in rows.items():
-                route_kind = str(row.get("route_kind") or "").upper()
-                if route_kind not in wanted:
-                    continue
-                update = updates.get(key)
-                if update is None or len(update) < 3 or update[0] is None:
-                    continue
-                try:
-                    spread = float(update[0])
-                    quote_ts_us = int(update[2] or 0)
-                except (TypeError, ValueError, OverflowError):
-                    continue
-                age = now - quote_ts_us / 1_000_000.0 if quote_ts_us else float("inf")
-                if not -1.0 <= age <= api_spreads.SPREAD_LEADER_MAX_AGE_MIN * 60.0:
-                    continue
-                output.append(
-                    {
-                        "route_key": key,
-                        "token": str(row.get("token") or "").upper(),
-                        "route_kind": route_kind,
-                        "long_venue": row.get("long_venue"),
-                        "long_market_type": row.get("long_market_type"),
-                        "long_market_symbol": row.get("long_market_symbol"),
-                        "short_venue": row.get("short_venue"),
-                        "short_market_type": row.get("short_market_type"),
-                        "short_market_symbol": row.get("short_market_symbol"),
-                        "spread_pct": spread,
-                        "funding_daily_pct": update[1] if len(update) > 1 else None,
-                        "quote_ts_us": quote_ts_us,
-                        "quote_basis": update[3] if len(update) > 3 else None,
-                    }
-                )
+        output: list[dict[str, Any]] = []
+        for key, row in rows.items():
+            route_kind = str(row.get("route_kind") or "").upper()
+            if route_kind not in wanted:
+                continue
+            update = updates.get(key)
+            if update is None or len(update) < 3 or update[0] is None:
+                continue
+            try:
+                spread = float(update[0])
+                quote_ts_us = int(update[2] or 0)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            age = now - quote_ts_us / 1_000_000.0 if quote_ts_us else float("inf")
+            if not -1.0 <= age <= api_spreads.SPREAD_LEADER_MAX_AGE_MIN * 60.0:
+                continue
+            output.append(
+                {
+                    "route_key": key,
+                    "token": str(row.get("token") or "").upper(),
+                    "route_kind": route_kind,
+                    "long_venue": row.get("long_venue"),
+                    "long_market_type": row.get("long_market_type"),
+                    "long_market_symbol": row.get("long_market_symbol"),
+                    "short_venue": row.get("short_venue"),
+                    "short_market_type": row.get("short_market_type"),
+                    "short_market_symbol": row.get("short_market_symbol"),
+                    "spread_pct": spread,
+                    "funding_daily_pct": update[1] if len(update) > 1 else None,
+                    "quote_ts_us": quote_ts_us,
+                    "quote_basis": update[3] if len(update) > 3 else None,
+                }
+            )
         return output
 
     def _status_unlocked(self) -> dict[str, Any]:

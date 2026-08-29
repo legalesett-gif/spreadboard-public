@@ -202,3 +202,39 @@ def test_a_compat_row_cache_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
         f"compat cache grew to {len(server._ROUTE_COMPAT_ROWS)} rows"
     )
     assert len(server._ROUTE_COMPAT_PATHS) <= 25, "the path map must be evicted too"
+
+
+def test_the_full_universe_scan_does_not_run_under_the_lock() -> None:
+    """Holding ``_lock`` across a ~130k-row scan serialises every reader.
+
+    ``status()`` -- which /api/health calls -- takes the same lock, so a scan
+    that holds it for the whole pass makes health latency a function of the
+    universe size. This is asserted structurally rather than by timing: a
+    timing assertion at test scale passes with or without the bug, which would
+    make it a false guard.
+
+    Iterating outside the lock is only safe because ``install()`` replaces both
+    dictionaries wholesale and nothing mutates them in place -- the property
+    the other tests in this module pin.
+    """
+
+    import inspect
+    import textwrap
+
+    source = textwrap.dedent(
+        inspect.getsource(warm_query_projection.LiveRouteUniverse.opportunity_rows)
+    )
+    lock_line = None
+    for index, line in enumerate(source.splitlines()):
+        if "with self._lock:" in line:
+            lock_line = index
+            lock_indent = len(line) - len(line.lstrip())
+        if "for key, row in rows.items():" in line:
+            scan_indent = len(line) - len(line.lstrip())
+            assert lock_line is not None, "expected the reference grab under the lock"
+            assert scan_indent <= lock_indent, (
+                "the full-universe scan is nested inside `with self._lock:`; "
+                "take references under the lock and iterate outside it"
+            )
+            return
+    raise AssertionError("could not locate the scan loop")
