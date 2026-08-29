@@ -3300,10 +3300,23 @@ def _refresh_funding_windows() -> None:
 
     try:
         _refresh_complete_funding_catalog(force=False)
-        route_keys: list[str] = []
-        leaders: list[dict[str, Any]] = []
-        warm_routes: list[dict[str, Any]] = []
-        priority_routes: list[dict[str, Any]] = []
+        # Five funding-only queries each build their own payload, and the same
+        # route appears in several of them. Appending every occurrence held
+        # roughly five copies of the route universe at once and drove this
+        # worker to 2.3GB, where the collector's cgroup killed it -- which is
+        # why funding windows never converged: the process that computes them
+        # died before finishing. Deduplicate as we collect.
+        #
+        # This cannot change the result. ``warm_routes`` is keyed below by
+        # ``catalog_pairs.route_identity`` in a last-wins dict, so keeping only
+        # the last route per identity here yields the identical mapping.
+        # ``priority_routes`` is reduced to (venue, symbol) legs and
+        # deduplicated by its consumer, and ``route_keys`` addresses rows by
+        # key. Order is preserved throughout.
+        route_key_set: dict[str, None] = {}
+        leader_by_key: dict[str, dict[str, Any]] = {}
+        warm_by_identity: dict[Any, dict[str, Any]] = {}
+        priority_by_key: dict[str, dict[str, Any]] = {}
         for query in (*WARM_QUERIES, *FUNDING_ARCHIVE_QUERIES):
             if not query.get("funding_only"):
                 continue
@@ -3311,19 +3324,24 @@ def _refresh_funding_windows() -> None:
             for group in payload.get("groups") or []:
                 leader = group.get("best_funding_route")
                 if isinstance(leader, dict):
-                    leaders.append(leader)
-                    priority_routes.append(leader)
-                priority_routes.extend(
-                    route
-                    for route in (group.get("routes") or [])
-                    if isinstance(route, dict)
-                )
+                    leader_key = str(leader.get("route_key") or id(leader))
+                    leader_by_key.setdefault(leader_key, leader)
+                    priority_by_key.setdefault(leader_key, leader)
                 for route in group.get("routes") or []:
-                    if isinstance(route, dict):
-                        warm_routes.append(route)
+                    if not isinstance(route, dict):
+                        continue
                     key = route.get("route_key")
                     if key:
-                        route_keys.append(str(key))
+                        route_key_set.setdefault(str(key), None)
+                        priority_by_key.setdefault(str(key), route)
+                    # Last-wins, matching the radar mapping built below.
+                    warm_by_identity[catalog_pairs.route_identity(route)] = route
+            # The payload itself is no longer needed once its routes are held.
+            del payload
+        route_keys: list[str] = list(route_key_set)
+        leaders: list[dict[str, Any]] = list(leader_by_key.values())
+        warm_routes: list[dict[str, Any]] = list(warm_by_identity.values())
+        priority_routes: list[dict[str, Any]] = list(priority_by_key.values())
         if not route_keys:
             return
         # Refresh exact settlement evidence before the heavier radar/calibration
