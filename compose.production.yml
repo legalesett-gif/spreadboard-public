@@ -187,8 +187,20 @@ services:
       SPREADBOARD_TELEGRAM_MEMBERSHIP_SECONDS: "60"
       SPREADBOARD_CEX_CANDIDATES: "550"
       SPREADARB_MIN_SPREAD_PCT: "0.05"
-      SPREADARB_MAX_ROWS_PER_TOKEN: "28"
-      SPREADARB_MAX_SNAPSHOT_ROWS_PER_TOKEN: "28"
+      # A token quoted on many venues yields far more directed pairs than this.
+      # At 28 the snapshot held 22,111 rows against a 30,000 budget, so the cap
+      # -- not the budget -- was dropping real routes: SKHYNIX carries both a
+      # Kucoin-futures and a Bybit-futures leg, yet kucoin->bybit was cut, which
+      # is one of the three exact pairs the UACryptoInvest comparator reports as
+      # missing at 94% recall.
+      #
+      # Raising this is safe for breadth because the snapshot trim is
+      # budget-aware: it lowers the per-token allowance until the whole set fits
+      # and never drops a token below one route. That is what makes a naive
+      # increase (the cap once went to 90) different from this one -- back then
+      # the trim was a plain slice and the board fell from 1,637 tokens to 777.
+      SPREADARB_MAX_ROWS_PER_TOKEN: "40"
+      SPREADARB_MAX_SNAPSHOT_ROWS_PER_TOKEN: "40"
       SPREADARB_MIN_FUNDING_APR_PCT: "0.01"
       SPREADBOARD_DISCOVERY_ROWS: "30000"
       SPREADBOARD_DEX_CANDIDATES: "450"
