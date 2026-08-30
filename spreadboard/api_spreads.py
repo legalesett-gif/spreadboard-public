@@ -2780,13 +2780,9 @@ def _row_from_api(
         and published_long_ask > 0
         and published_short_bid is not None
     ):
-        leg_implied_pct = (published_short_bid / published_long_ask - 1.0) * 100.0
-        if (
-            executable_pct is None
-            or abs(leg_implied_pct - executable_pct)
-            > LEG_SPREAD_COHERENCE_TOLERANCE_PCT
-        ):
-            executable_pct = leg_implied_pct
+        executable_pct = coherent_leg_spread_pct(
+            published_long_ask, published_short_bid, executable_pct
+        )
     return SpreadTerminalRow(
         token=token,
         token_name=token_metadata.token_name(token, metadata or {}),
@@ -4064,6 +4060,35 @@ def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | 
     return net_daily, net_daily * 365.0
 
 
+def coherent_leg_spread_pct(
+    long_ask: Any, short_bid: Any, headline: Any
+) -> float | None:
+    """The headline a member reads, made reproducible from the legs shown.
+
+    You buy the long leg at its ask and sell the short leg into its bid, so
+    those two published numbers ARE the spread. A headline that disagrees with
+    them is unverifiable at best and wrong at worst: production served
+    HFT Kraken->Kraken Futures at +2.213% when its own legs implied -4.194%,
+    and token "4" at +0.071% when selling into the bid was -0.037%.
+
+    Returns the headline unchanged when it already agrees, or when there are no
+    legs to check it against -- a row whose legs are unknown keeps whatever its
+    producer measured rather than being silently zeroed.
+    """
+
+    ask = _float_or_none(long_ask)
+    bid = _float_or_none(short_bid)
+    current = _float_or_none(headline)
+    if ask is None or bid is None or ask <= 0:
+        return current
+    implied = (bid / ask - 1.0) * 100.0
+    if current is None:
+        return implied
+    if abs(implied - current) > LEG_SPREAD_COHERENCE_TOLERANCE_PCT:
+        return implied
+    return current
+
+
 def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
     payload = row.to_dict()
     payload["market_events"] = market_events.events_for_route(payload)
@@ -4118,6 +4143,19 @@ def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
         "validation_state",
     ):
         payload.pop(key, None)
+    # Last gate before serving. Rows reach here from several producers and from
+    # a merge that can pair one generation's spread with another's legs, so the
+    # invariant is enforced on the published fields themselves rather than
+    # trusted from upstream.
+    coherent = coherent_leg_spread_pct(
+        payload.get("long_ask"),
+        payload.get("short_bid"),
+        payload.get("displayed_open_spread_pct"),
+    )
+    if coherent is not None:
+        payload["displayed_open_spread_pct"] = coherent
+        if payload.get("executable_spread_pct") is not None:
+            payload["executable_spread_pct"] = coherent
     return payload
 
 

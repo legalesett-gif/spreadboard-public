@@ -13,6 +13,8 @@ CEX-short farms.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from spreadboard import api_spreads
 
 
@@ -102,3 +104,60 @@ def test_a_row_without_published_legs_keeps_the_producer_headline() -> None:
     )
 
     assert row.executable_spread_pct == 0.3947373340721594
+
+
+def test_the_published_row_is_coherent_whatever_produced_it() -> None:
+    """The last gate before serving, on the fields the reader actually sees.
+
+    Rows reach the member from several producers and from a merge that can pair
+    one generation's spread with another generation's legs. Production served
+    HFT Kraken->Kraken Futures at +2.213% while its own published legs implied
+    -4.194%: a member sorting by spread saw a route paying 221bp on a route
+    that was 419bp underwater at the touch.
+    """
+
+    long_ask, short_bid = 1.0, 0.95806
+    row = api_spreads._row_from_api(
+        {
+            "token": "HFT",
+            "long_venue": "Kraken",
+            "long_market_type": "Spot",
+            "short_venue": "Kraken Futures",
+            "short_market_type": "Futures",
+            "executable_spread_pct": 2.213,
+            "notes": {"route_inputs": {"long": {}, "short": {}}},
+        },
+        bucket="api_discovered",
+        now=1.0,
+    )
+    # The legs arrive from a producer that does not populate route_inputs.
+    row = replace(row, long_ask=long_ask, short_bid=short_bid)
+
+    payload = api_spreads._public_row(row)
+
+    implied = (short_bid / long_ask - 1.0) * 100.0
+    assert implied < 0
+    assert payload["displayed_open_spread_pct"] < 0.0, (
+        "a route underwater at the touch must not print a positive headline"
+    )
+    assert abs(payload["displayed_open_spread_pct"] - implied) < 1e-9
+
+
+def test_a_published_row_without_legs_keeps_its_measured_headline() -> None:
+    row = api_spreads._row_from_api(
+        {
+            "token": "HFT",
+            "long_venue": "Kraken",
+            "long_market_type": "Spot",
+            "short_venue": "Bybit",
+            "short_market_type": "Futures",
+            "executable_spread_pct": 2.213,
+            "notes": {"route_inputs": {"long": {}, "short": {}}},
+        },
+        bucket="api_discovered",
+        now=1.0,
+    )
+
+    payload = api_spreads._public_row(row)
+
+    assert payload["displayed_open_spread_pct"] == 2.213
