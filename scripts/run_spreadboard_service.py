@@ -3338,6 +3338,31 @@ def _refresh_funding_windows() -> None:
                     warm_by_identity[catalog_pairs.route_identity(route)] = route
             # The payload itself is no longer needed once its routes are held.
             del payload
+        # The rows a member reads on the SPREAD board carry the same 1d/7d/30d
+        # columns, but only the funding lane fed this fast lane. So the sweep
+        # refreshed legs by global staleness across ~9,400 catalogue legs while
+        # the board displayed ~84 of them: measured, 6% of on-screen legs held
+        # a live window, and a route needs BOTH, so the columns were empty
+        # everywhere. Collect the visible board legs too -- as (venue, symbol)
+        # tuples, never route dicts, so this costs a list of strings rather
+        # than another copy of the route universe.
+        board_priority_legs: dict[tuple[str, str], None] = {}
+        for query in WARM_QUERIES:
+            if query.get("funding_only"):
+                continue
+            payload = server.api_market_spreads(_board_path(), dict(query))
+            for row in payload.get("rows") or []:
+                if not isinstance(row, dict):
+                    continue
+                for side in ("long", "short"):
+                    if str(row.get(f"{side}_market_type") or "") != "Futures":
+                        continue
+                    venue = row.get(f"{side}_venue")
+                    symbol = row.get(f"{side}_market_symbol")
+                    if venue and symbol:
+                        board_priority_legs.setdefault((str(venue), str(symbol)), None)
+            del payload
+
         route_keys: list[str] = list(route_key_set)
         leaders: list[dict[str, Any]] = list(leader_by_key.values())
         warm_routes: list[dict[str, Any]] = list(warm_by_identity.values())
@@ -3347,7 +3372,10 @@ def _refresh_funding_windows() -> None:
         # Refresh exact settlement evidence before the heavier radar/calibration
         # work. Member-visible totals therefore publish as soon as their next
         # settlement is due instead of waiting behind a multi-minute archive.
-        _refresh_venue_funding_history(priority_routes=priority_routes)
+        _refresh_venue_funding_history(
+            priority_routes=priority_routes,
+            extra_priority_legs=list(board_priority_legs),
+        )
         started = time.monotonic()
         count = market_history.write_funding_windows(route_keys)
         _log(f"funding windows computed for {count} routes in {time.monotonic() - started:.1f}s")
@@ -3402,6 +3430,7 @@ _LAST_VENUE_HISTORY_CATALOG_AT = 0.0
 def _refresh_venue_funding_history(
     *,
     priority_routes: list[dict[str, Any]] | None = None,
+    extra_priority_legs: list[tuple[str, str]] | None = None,
 ) -> None:
     """Pull each venue's settled funding for the legs the board is showing."""
     global _LAST_VENUE_HISTORY_PRIORITY_AT, _LAST_VENUE_HISTORY_CATALOG_AT
@@ -3446,6 +3475,11 @@ def _refresh_venue_funding_history(
             and route.get(f"{side}_venue")
             and route.get(f"{side}_market_symbol")
         ]
+        # The legs currently on the member-visible spread board. These carry the
+        # same 1d/7d/30d columns as the funding lane and were never in this
+        # fast lane, so their windows sat expired while the sweep refreshed
+        # catalogue legs nobody was looking at.
+        priority_legs.extend(extra_priority_legs or [])
         priority_legs.extend(
             accounts.all_open_position_futures_legs(db_path=accounts.DEFAULT_DB_PATH)
         )
