@@ -22,6 +22,7 @@ from pathlib import Path
 from itertools import pairwise
 import threading
 import time
+from collections.abc import Iterator
 from typing import Any
 
 from spreadboard.fast_quotes import VENUE_IDS
@@ -668,6 +669,42 @@ def _fetch_leg_outcome(venue: str, symbol: str, page_budget: int) -> dict[str, A
         return leg_history_outcome(venue, symbol)
 
 
+def _venue_diverse_chunks(
+    items: list[tuple[str, str]], size: int, per_venue: int
+) -> Iterator[list[tuple[str, str]]]:
+    """Batches that spread across venues, keeping the caller's priority order.
+
+    Legs are ordered by staleness, and a venue settles all of its contracts on
+    one schedule -- so the most-overdue legs arrive as long runs from the same
+    venue. Slicing that list consecutively put six legs of one venue into a
+    six-slot pool, where the per-venue cap throttled it back to two: measured
+    as 1.7x instead of the ~6x the pool should give.
+
+    Taking the next item from a DIFFERENT venue each time fills the pool with
+    work that can actually run in parallel. Order is still priority order --
+    an item is only ever deferred to the next batch, never dropped or
+    reordered relative to its own venue.
+    """
+
+    size = max(1, size)
+    pending = list(items)
+    while pending:
+        chunk: list[tuple[str, str]] = []
+        used: dict[str, int] = {}
+        leftover: list[tuple[str, str]] = []
+        for item in pending:
+            venue = item[0]
+            if len(chunk) < size and used.get(venue, 0) < per_venue:
+                chunk.append(item)
+                used[venue] = used.get(venue, 0) + 1
+            else:
+                leftover.append(item)
+        if not chunk:
+            return
+        yield chunk
+        pending = leftover
+
+
 def _fetch_outcomes_in_batches(
     items: list[tuple[str, str]],
     *,
@@ -696,11 +733,10 @@ def _fetch_outcomes_in_batches(
         with guard:
             return item, budget, _fetch_leg_outcome(venue, symbol, budget)
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        for index in range(0, len(items), max(1, workers)):
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for chunk in _venue_diverse_chunks(items, workers, per_venue):
             if time.monotonic() >= deadline:
                 return
-            chunk = items[index : index + max(1, workers)]
             futures = [pool.submit(_run, item) for item in chunk]
             for future in futures:
                 try:

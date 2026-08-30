@@ -1072,3 +1072,64 @@ def test_one_venue_never_receives_the_whole_pool(tmp_path, monkeypatch) -> None:
     assert per_venue_peak.get("SOLO", 0) <= 2, (
         f"one venue saw {per_venue_peak.get('SOLO')} concurrent requests"
     )
+
+
+def test_a_batch_spreads_across_venues_so_the_pool_can_actually_run(
+    tmp_path, monkeypatch
+) -> None:
+    """Staleness ordering groups a venue's legs together; the cap then throttles.
+
+    A venue settles all of its contracts on one schedule, so ordering by
+    "most overdue first" produces long same-venue runs. Slicing that
+    consecutively put six legs of one venue into a six-slot pool, where the
+    two-per-venue cap throttled it back to two -- measured as 1.7x rather than
+    the ~6x the pool should give.
+    """
+
+    import threading
+
+    path = tmp_path / "funding.json"
+    path.write_text(f'{{"schema":"{vfh.SCHEMA}"}}', encoding="utf-8")
+
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def outcome(venue: str, symbol: str, **_kwargs):
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        try:
+            time.sleep(0.03)
+            return {"status": "no_history_rows", "entries": []}
+        finally:
+            with lock:
+                in_flight -= 1
+
+    monkeypatch.setattr(vfh, "leg_history_outcome", outcome)
+    monkeypatch.setattr(vfh, "FUNDING_HISTORY_FETCH_WORKERS", 6)
+    monkeypatch.setattr(vfh, "FUNDING_HISTORY_PER_VENUE", 2)
+
+    # The production shape: one venue's legs arrive as a consecutive run.
+    legs = [("A", f"a{i}") for i in range(6)] + [("B", f"b{i}") for i in range(6)]
+    legs += [("C", f"c{i}") for i in range(6)]
+    vfh.build(legs, cache_path=path, budget_seconds=30)
+
+    assert peak > 2, (
+        f"peak concurrency {peak} means the pool was throttled to one venue; "
+        "batches must mix venues"
+    )
+
+
+def test_venue_diverse_chunks_keep_every_item_exactly_once() -> None:
+    items = [("A", "1"), ("A", "2"), ("A", "3"), ("B", "1"), ("C", "1")]
+    chunks = list(vfh._venue_diverse_chunks(items, 3, 2))
+
+    flat = [item for chunk in chunks for item in chunk]
+    assert sorted(flat) == sorted(items), "no leg may be dropped or duplicated"
+    for chunk in chunks:
+        counts: dict[str, int] = {}
+        for venue, _ in chunk:
+            counts[venue] = counts.get(venue, 0) + 1
+        assert max(counts.values()) <= 2
