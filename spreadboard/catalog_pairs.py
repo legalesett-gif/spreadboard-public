@@ -703,6 +703,7 @@ def filtered(
     min_abs_funding_24h_pct: float | None = None,
     min_abs_funding_apr_pct: float | None = None,
     limit: int | None = None,
+    include_unprofitable: bool = False,
 ) -> dict[str, Any]:
     """Apply board economics without coupling spread eligibility to funding.
 
@@ -745,7 +746,14 @@ def filtered(
         if funding_only:
             if carry is None or carry <= 0:
                 continue
-        elif spread <= 0:
+        elif spread <= 0 and not include_unprofitable:
+            # The ranked board lists opportunities, so a pair that is not
+            # paying is dropped here. A member looking at ONE token is
+            # investigating rather than scanning, and for them the same pair is
+            # information: on a futures-futures pair you cross the bid-ask on
+            # both legs, so a tight pair reads negative in either direction and
+            # its absence looks like missing coverage. Only that view opts in;
+            # the caller still gates on trust before displaying anything.
             continue
         if min_spread_pct is not None and not funding_only and spread < float(min_spread_pct):
             continue

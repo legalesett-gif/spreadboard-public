@@ -2948,6 +2948,9 @@ def _exact_catalog_market_projection(
         min_abs_funding_24h_pct=_query_float(query, "min_abs_funding_24h_pct"),
         min_abs_funding_apr_pct=_query_float(query, "min_abs_funding_apr_pct"),
         limit=None,
+        # This is the one-token view. Keep the pairs that are not paying so the
+        # trust check below can decide; the ranked board never asks for them.
+        include_unprofitable=not _query_bool(query, "funding_only"),
     )
     all_routes = list(selected.get("routes") or [])
     evidence = str(_query_first(query, "evidence") or "all").casefold()

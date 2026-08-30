@@ -81,3 +81,32 @@ def test_it_stays_out_of_the_ranked_evidence_states() -> None:
     """The ranked board reads spread_evidence_state; that must not change."""
 
     assert api_spreads.spread_evidence_state(_route()) == "excluded"
+
+
+def test_the_ranked_board_still_drops_unprofitable_routes() -> None:
+    """`filtered` must keep its default: the board lists opportunities."""
+
+    from spreadboard import catalog_pairs
+
+    payload = {"routes": [_route(), _route(displayed_open_spread_pct=0.5,
+                                           executable_spread_pct=0.5)]}
+
+    kept = catalog_pairs.filtered(payload, limit=None).get("routes") or []
+
+    assert len(kept) == 1
+    assert kept[0]["displayed_open_spread_pct"] == 0.5
+
+
+def test_the_token_view_can_ask_to_keep_them() -> None:
+    """Opting in is what makes the one-token answer complete."""
+
+    from spreadboard import catalog_pairs
+
+    payload = {"routes": [_route(), _route(displayed_open_spread_pct=0.5,
+                                           executable_spread_pct=0.5)]}
+
+    kept = catalog_pairs.filtered(
+        payload, limit=None, include_unprofitable=True
+    ).get("routes") or []
+
+    assert len(kept) == 2, "the pair that is not paying must survive for that view"
