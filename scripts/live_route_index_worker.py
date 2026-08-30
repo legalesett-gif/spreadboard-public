@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import sys
 import time
@@ -306,6 +307,16 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
                 _public_product_rows(_retained_structural_dex_rows(previous_rows))
             )
         rows = _merge_by_economic_identity(retained, rows)
+        # Both the previous generation and the merged one are live at this
+        # point -- roughly 107k route dicts each -- and the encoding built
+        # below allocates a further ~300MB on top. That peak is what the web
+        # cgroup actually has to hold: it OOM-killed this worker at 3.5GiB on
+        # 2026-08-30 00:01:05, taking the container with it. Nothing reads the
+        # previous generation after the merge, so release it before the
+        # encoding rather than carrying it through the high-water mark.
+        del retained
+        previous_rows = {}
+        gc.collect()
     coverage = source_health.get("complete_catalogue") or source_health
     coverage = {
         key: coverage.get(key)
