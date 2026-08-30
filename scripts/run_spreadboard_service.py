@@ -3581,6 +3581,37 @@ class WorkerResult:
         self.timed_out = timed_out
 
 
+#: The three heaviest children, run one at a time.
+#:
+#: Each already serialised against ITSELF, but nothing stopped them overlapping
+#: EACH OTHER. Measured peak RSS in the collector: market_evidence 1,487MB,
+#: live_route_index 1,122MB, funding_navigation 993MB. Together that is 3,602MB
+#: inside a 4,096MB cgroup, leaving under 500MB for a service that peaks at
+#: 690MB alone -- which is why the kernel spent the day killing children.
+#: Summed over every collector process the peaks reach 6,549MB against the same
+#: 4,096MB: the container survives only because they usually miss each other.
+#:
+#: Waiting beats colliding. A build that waits finishes a few minutes late; one
+#: the kernel kills loses all of its work and destabilises everything sharing
+#: the cgroup on the way out. `market evidence` already waited up to 300s for
+#: the publication lock, so this is the established shape here.
+HEAVY_CHILD_SCRIPTS = (
+    "market_evidence_worker.py",
+    "live_route_index_worker.py",
+    "funding_navigation_worker.py",
+)
+_HEAVY_CHILD_SLOT = threading.Semaphore(1)
+HEAVY_CHILD_SLOT_WAIT_SECONDS = float(
+    os.environ.get("SPREADBOARD_HEAVY_CHILD_SLOT_WAIT_SECONDS", "300")
+)
+
+
+def _is_heavy_child(command: list[str]) -> bool:
+    return any(
+        str(part).endswith(HEAVY_CHILD_SCRIPTS) for part in command
+    )
+
+
 def _run_worker(
     command: list[str],
     *,
@@ -3606,6 +3637,29 @@ def _run_worker(
         except OSError:
             return ""
 
+    if _is_heavy_child(command):
+        if not _HEAVY_CHILD_SLOT.acquire(timeout=HEAVY_CHILD_SLOT_WAIT_SECONDS):
+            _log(f"heavy child deferred; slot busy: {Path(command[-1]).name}")
+            return WorkerResult(
+                timed_out=True, returncode=-1, stdout="", stderr="heavy_child_slot_busy"
+            )
+        try:
+            return _run_worker_unslotted(
+                command, timeout=timeout, cwd=cwd, env=env, tail=tail
+            )
+        finally:
+            _HEAVY_CHILD_SLOT.release()
+    return _run_worker_unslotted(command, timeout=timeout, cwd=cwd, env=env, tail=tail)
+
+
+def _run_worker_unslotted(
+    command: list[str],
+    *,
+    timeout: float,
+    cwd: Path,
+    env: dict[str, str] | None,
+    tail: Any,
+) -> WorkerResult:
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         timed_out = False
         returncode = -1
