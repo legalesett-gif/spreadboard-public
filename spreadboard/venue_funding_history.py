@@ -648,8 +648,13 @@ def _priority_refresh_due(
 #: fail-closed to blank -- the exact aggregates existed and could not be shown.
 #: Fetching a batch at a time closes a 4.1x gap for almost no memory: each
 #: worker holds one venue's history response.
+#: Its own knob. ``SPREADBOARD_FUNDING_HISTORY_WORKERS`` was already taken --
+#: it sets --funding-workers on the snapshot finalize worker, an unrelated
+#: concern -- and reusing the name silently coupled the two, so tuning either
+#: would move the other. Production's value of 14 was driving this pool by
+#: accident; it is now requested deliberately in compose.
 FUNDING_HISTORY_FETCH_WORKERS = max(
-    1, int(os.environ.get("SPREADBOARD_FUNDING_HISTORY_WORKERS", "6"))
+    1, int(os.environ.get("SPREADBOARD_FUNDING_HISTORY_FETCH_WORKERS", "6"))
 )
 #: Never point the whole pool at one venue; that trades a throughput problem
 #: for a rate-limit ban.

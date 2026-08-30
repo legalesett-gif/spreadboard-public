@@ -1133,3 +1133,30 @@ def test_venue_diverse_chunks_keep_every_item_exactly_once() -> None:
         for venue, _ in chunk:
             counts[venue] = counts.get(venue, 0) + 1
         assert max(counts.values()) <= 2
+
+
+def test_the_fetch_pool_has_its_own_knob(monkeypatch) -> None:
+    """``SPREADBOARD_FUNDING_HISTORY_WORKERS`` already means something else.
+
+    It sets --funding-workers on the snapshot finalize worker. Reusing the name
+    for this pool coupled two unrelated concerns to one variable, so tuning
+    either would silently move the other -- and production's 14 was driving
+    this pool by accident.
+    """
+
+    import importlib
+
+    monkeypatch.setenv("SPREADBOARD_FUNDING_HISTORY_WORKERS", "99")
+    monkeypatch.delenv("SPREADBOARD_FUNDING_HISTORY_FETCH_WORKERS", raising=False)
+    reloaded = importlib.reload(vfh)
+    try:
+        assert reloaded.FUNDING_HISTORY_FETCH_WORKERS != 99, (
+            "the fetch pool must not read the finalize worker's setting"
+        )
+        monkeypatch.setenv("SPREADBOARD_FUNDING_HISTORY_FETCH_WORKERS", "11")
+        again = importlib.reload(vfh)
+        assert again.FUNDING_HISTORY_FETCH_WORKERS == 11
+    finally:
+        monkeypatch.delenv("SPREADBOARD_FUNDING_HISTORY_FETCH_WORKERS", raising=False)
+        monkeypatch.delenv("SPREADBOARD_FUNDING_HISTORY_WORKERS", raising=False)
+        importlib.reload(vfh)

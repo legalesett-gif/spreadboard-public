@@ -223,6 +223,15 @@ services:
       # back off and retry; free mode still stops on HTTP 402 and cannot pay.
       SPREADBOARD_OKX_DEX_MIN_INTERVAL_S: "0.55"
       SPREADBOARD_FUNDING_HISTORY_WORKERS: "14"
+      # Concurrency for the settled-funding history sweep. A window fails
+      # closed at its next settlement, so holding the 1d/7d/30d columns means
+      # refreshing every futures leg on the board every 4-8 hours. Serially
+      # that measured 285 legs/hour against the ~1,175 needed; batched and
+      # spread across venues it reaches ~1,200. Real parallelism is bounded by
+      # FUNDING_HISTORY_PER_VENUE (2), which is what protects a venue from a
+      # rate-limit ban -- this number only widens how many DIFFERENT venues are
+      # in flight. Measured at this setting: 4.2% non-ok responses.
+      SPREADBOARD_FUNDING_HISTORY_FETCH_WORKERS: "20"
       # Settled funding needs one history call per futures leg -- no venue
       # offers it in bulk -- so it cannot cover the whole board. At 25 tokens a
       # lane only 181 of 15,754 rows were settled and the rest were projections
