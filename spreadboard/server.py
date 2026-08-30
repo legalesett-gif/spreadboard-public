@@ -2972,6 +2972,17 @@ def _exact_catalog_market_projection(
             route
             for route in all_routes
             if api_spreads.spread_evidence_state(route) in accepted_states
+            # Someone who searched for ONE token is investigating it, not
+            # scanning for an entry. A pair we trust and that simply is not
+            # paying belongs in that answer: on a futures-futures pair you
+            # cross the bid-ask on both legs, so a tight pair reads negative in
+            # either direction, and omitting it looks like missing coverage.
+            # These stay off the ranked board, where they would treble the row
+            # count with untradeable rows.
+            or (
+                evidence == "all"
+                and api_spreads.spread_is_sound_but_unprofitable(route)
+            )
         ]
     )
     page_routes = routes[offset : offset + limit]

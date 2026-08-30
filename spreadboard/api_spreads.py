@@ -940,6 +940,51 @@ def matched_probe_verified(row: Any) -> bool:
     )
 
 
+def spread_is_sound_but_unprofitable(row: Any, *, now: float | None = None) -> bool:
+    """A route we trust completely that simply is not paying right now.
+
+    ``excluded`` conflates two very different verdicts: "we do not trust this
+    number" (identity mismatch, mirage, thin book, stale quote) and "this
+    number is fine and it is negative". A member searching one token deserves
+    the second kind -- on a futures-futures pair you cross the bid-ask on BOTH
+    legs, so a tight pair reads negative in either direction until the gap
+    exceeds the combined spread, and hiding it looks like missing coverage.
+    The external comparator lists exactly these pairs.
+
+    They stay off the ranked board on purpose. Measured across ten tokens:
+    2,246 of them against 936 shown, mostly between -0.01% and -0.04%, so
+    ranking them would treble the board with rows nobody can trade and grow
+    the very structures this box cannot hold.
+    """
+
+    if not spread_quote_current(row, now=now):
+        return False
+    getter = lambda key, default=None: _row_value(row, key, default)
+    spread = (
+        _entrance_spread_dict(row)
+        if isinstance(row, dict)
+        else _entrance_spread(row)
+    )
+    if spread is None or spread > 0:
+        return False
+    deliverable = getter("deliverable")
+    if deliverable is None:
+        deliverable = route_deliverable(row)
+    route_kind = str(getter("route_kind") or "").upper()
+    return not (
+        bool(getter("identity_mismatch"))
+        or price_ratio_implausible(row)
+        or bool(getter("thin_book"))
+        or leg_volume_too_thin(row)
+        or bool(getter("quote_mismatch"))
+        or quote_basis_mismatch(row)
+        or is_venue_specific_leveraged_token(row)
+        or is_non_perpetual_or_inverse(row)
+        or spread_is_untrustworthy(row)
+        or (route_kind in TRANSFER_ROUTE_KINDS and deliverable is False)
+    )
+
+
 def spread_evidence_state(row: Any, *, now: float | None = None) -> str:
     """Classify a current spread without confusing a ticker lead with a quote.
 
