@@ -293,10 +293,41 @@ def _load_venue(venue: str, market_type: str) -> list[dict[str, Any]]:
         if klass is None:
             raise RuntimeError("adapter_unavailable")
         client = klass({"enableRateLimit": True, "timeout": 12_000, "options": {"defaultType": "spot" if market_type == "Spot" else "swap"}})
+    # ccxt's MEXC parser cannot read Ourbit's spot status field, so every one of
+    # its 856 spot markets comes back active=False and the supported-check drops
+    # the lot. The venue's own ticker feed is the evidence that settles it: 850
+    # of those 856 quote live right now. Trust that rather than a flag the
+    # adapter had no way to fill. If the feed cannot be read we admit nothing,
+    # which is the same fail-closed behaviour as before.
+    live_spot_symbols: set[str] = set()
+    if venue == "Ourbit" and market_type == "Spot":
+        from spreadboard import ourbit_quotes
+
+        try:
+            payload = ourbit_quotes.fetch_spot()
+            entries = payload if isinstance(payload, list) else (payload or {}).get("data") or []
+            live_spot_symbols = {
+                symbol
+                for symbol in (
+                    ourbit_quotes.spot_symbol(entry.get("symbol"))
+                    for entry in entries
+                    if isinstance(entry, dict)
+                )
+                if symbol
+            }
+        except Exception:  # noqa: BLE001 - a venue outage must not fail the refresh.
+            live_spot_symbols = set()
+
     try:
         loaded = client.load_markets()
         rows = []
         for market in loaded.values():
+            if (
+                live_spot_symbols
+                and market.get("active") is False
+                and str(market.get("symbol") or "") in live_spot_symbols
+            ):
+                market = {**market, "active": True}
             if not _catalog_market_supported(market, market_type):
                 continue
             is_derivative = bool(market.get("swap"))

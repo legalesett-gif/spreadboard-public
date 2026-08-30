@@ -74,3 +74,71 @@ def test_a_spot_request_uses_the_ourbit_adapter_not_ccxt(monkeypatch) -> None:
 
 def test_ourbit_futures_is_still_catalogued() -> None:
     assert "Ourbit" in fast_quotes.NATIVE_FUTURES_VENUES
+
+
+def test_a_live_quote_overrides_an_unreadable_active_flag(monkeypatch) -> None:
+    """Ourbit's spot markets all report active=False; 850 of 856 quote live.
+
+    ccxt's MEXC parser cannot read Ourbit's spot status field, so the flag is
+    an artifact of the white-label mismatch rather than a delisting. The
+    venue's own ticker feed is the evidence that settles it.
+    """
+
+    from spreadarb.api_discovery import sources
+    from spreadboard import ourbit_quotes
+
+    class _Client:
+        def load_markets(self):
+            return {
+                "QNT/USDT": {
+                    "base": "QNT", "quote": "USDT", "symbol": "QNT/USDT",
+                    "id": "QNTUSDT", "spot": True, "swap": False, "active": False,
+                },
+                "GONE/USDT": {
+                    "base": "GONE", "quote": "USDT", "symbol": "GONE/USDT",
+                    "id": "GONEUSDT", "spot": True, "swap": False, "active": False,
+                },
+            }
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(sources, "_build_ourbit_exchange", lambda _p: _Client())
+    monkeypatch.setattr(
+        ourbit_quotes, "fetch_spot", lambda: [{"symbol": "QNTUSDT"}]
+    )
+
+    rows = chart_catalog._load_venue("Ourbit", "Spot")
+
+    tokens = {row["token"] for row in rows}
+    assert "QNT" in tokens, "a market quoting live must be catalogued"
+    assert "GONE" not in tokens, (
+        "a market with no live quote keeps the adapter's answer"
+    )
+
+
+def test_a_ticker_outage_admits_nothing_rather_than_guessing(monkeypatch) -> None:
+    """No evidence means no override -- the same fail-closed result as before."""
+
+    from spreadarb.api_discovery import sources
+    from spreadboard import ourbit_quotes
+
+    class _Client:
+        def load_markets(self):
+            return {
+                "QNT/USDT": {
+                    "base": "QNT", "quote": "USDT", "symbol": "QNT/USDT",
+                    "id": "QNTUSDT", "spot": True, "swap": False, "active": False,
+                }
+            }
+
+        def close(self):
+            return None
+
+    def _boom():
+        raise RuntimeError("venue down")
+
+    monkeypatch.setattr(sources, "_build_ourbit_exchange", lambda _p: _Client())
+    monkeypatch.setattr(ourbit_quotes, "fetch_spot", _boom)
+
+    assert chart_catalog._load_venue("Ourbit", "Spot") == []
