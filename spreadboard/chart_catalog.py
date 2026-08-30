@@ -24,6 +24,17 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_PATH = RUNTIME_DIR / "chart_market_catalog.json"
 STABLE_QUOTES = {"USD", "USDC", "USDT"}
+
+#: Spot venues that belong in the catalogue but are quoted by the bulk sweep
+#: rather than the native order-book fetcher.
+#:
+#: ``NATIVE_SPOT_VENUES`` answers "does this venue have a native book fetcher",
+#: and the catalogue was reusing it to answer "should we list this venue's spot
+#: markets". Those are different questions, and Ourbit is the case that shows
+#: it: its spot books are already swept by ``ourbit_quotes.fetch_spot``, but it
+#: has no native fetcher, so the whole venue's spot side was never catalogued
+#: and every route needing it was reported as a missing market.
+CATALOGUE_ONLY_SPOT_VENUES = frozenset({"Ourbit"})
 DEX_WATCHLIST_PATH = ROOT / "data" / "api_discovery_watchlist.json"
 _LOAD_CACHE: dict[str, Any] = {"key": None, "payload": None}
 _LOAD_LOCK = threading.Lock()
@@ -39,12 +50,20 @@ def refresh(path: Path | str = DEFAULT_PATH, *, workers: int = 4) -> dict[str, A
             continue
         key = f"{item.get('venue')}|{item.get('market_type')}"
         previous_by_job.setdefault(key, []).append(item)
-    venues = sorted(set(VENUE_IDS) | set(NATIVE_FUTURES_VENUES) | set(NATIVE_SPOT_VENUES))
+    venues = sorted(
+        set(VENUE_IDS)
+        | set(NATIVE_FUTURES_VENUES)
+        | set(NATIVE_SPOT_VENUES)
+        | CATALOGUE_ONLY_SPOT_VENUES
+    )
     jobs = [
         (venue, market_type)
         for venue in venues
         for market_type, supported in (
-            ("Spot", venue in NATIVE_SPOT_VENUES),
+            (
+                "Spot",
+                venue in NATIVE_SPOT_VENUES or venue in CATALOGUE_ONLY_SPOT_VENUES,
+            ),
             ("Futures", venue in NATIVE_FUTURES_VENUES),
         )
         if supported
@@ -245,18 +264,26 @@ def _load_venue(venue: str, market_type: str) -> list[dict[str, Any]]:
         # spot-futures spreads and hiding real perpetual routes at once.
         return _load_whitebit_venue(market_type)
 
-    if venue == "Ourbit" and market_type == "Futures":
+    if venue == "Ourbit":
         # Ourbit is an MEXC-compatible public API without a CCXT class. Use the
-        # same host-retargeted adapter as discovery so its 800+ futures markets
-        # enter the complete chart/funding catalogue instead of existing only
-        # in the bounded scanner.
+        # same host-retargeted adapter as discovery so its markets enter the
+        # complete chart/funding catalogue instead of existing only in the
+        # bounded scanner.
+        #
+        # This used to run for Futures only, so Ourbit SPOT fell through to the
+        # ccxt path, where Ourbit has no adapter class -- the whole venue's
+        # spot side was silently uncatalogued and every route needing it was
+        # reported as a missing market. The same client serves both: verified
+        # 831 spot alongside 703 swap.
         from spreadarb.api_discovery.sources import _build_ourbit_exchange
 
         client = _build_ourbit_exchange(
             {
                 "enableRateLimit": True,
                 "timeout": 12_000,
-                "options": {"defaultType": "swap"},
+                "options": {
+                    "defaultType": "spot" if market_type == "Spot" else "swap"
+                },
             }
         )
     else:
