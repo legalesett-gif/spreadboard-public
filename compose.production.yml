@@ -210,8 +210,19 @@ services:
       # until the collector has real headroom -- see the capacity note in
       # REMINDERS.md (steady base ~2.2GB plus a ~2GB child in 4GiB, on a host
       # already committing 8.44GB of 7.94GB).
-      SPREADARB_MAX_ROWS_PER_TOKEN: "28"
-      SPREADARB_MAX_SNAPSHOT_ROWS_PER_TOKEN: "28"
+      # 2026-08-31: 28 -> 32. The 28 -> 40 attempt on 2026-08-29 OOM-killed the
+      # collector and 502'd the site, but the conditions that made it fail have
+      # since changed: complete_funding_catalog.json is down from 523MB to
+      # 178MB, the live-route-index build no longer holds two generations at
+      # once, and one-leg-per-venue removed the duplicate expansions. The
+      # collector now peaks at 3,392MB of 4,096MB.
+      #
+      # Sized deliberately small: 630 tokens sit at the cap, so this adds at
+      # most ~2,520 rows (22,388 -> ~24,908, +11%) and stays under the 30,000
+      # SPREADBOARD_DISCOVERY_ROWS ceiling. The failed attempt was +32%.
+      # Revert to 28 if the collector shows any oom_kill.
+      SPREADARB_MAX_ROWS_PER_TOKEN: "32"
+      SPREADARB_MAX_SNAPSHOT_ROWS_PER_TOKEN: "32"
       SPREADARB_MIN_FUNDING_APR_PCT: "0.01"
       SPREADBOARD_DISCOVERY_ROWS: "30000"
       SPREADBOARD_DEX_CANDIDATES: "450"
