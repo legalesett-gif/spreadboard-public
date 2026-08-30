@@ -150,6 +150,113 @@ def refresh_cache() -> dict[str, dict[str, Any]]:
     return _complete_payloads(force_refresh=True)
 
 
+#: How many tokens the all-token catalogue actually expands, ranked by the
+#: bound below. The Funding lane paginates at
+#: ``SPREADBOARD_FUNDING_TOKENS_PER_LANE`` (90 in production), so this leaves
+#: several times the headroom a visible page can consume.
+CATALOG_TOKEN_BUDGET = max(
+    0, int(os.environ.get("SPREADBOARD_FUNDING_CATALOG_TOKENS", "500"))
+)
+
+
+def _funding_reach_bound() -> dict[str, float]:
+    """Upper bound on each token's achievable net DAILY carry.
+
+    A route's net carry is one leg's rate minus the other's, so the best any
+    pair of a token's legs can produce is ``max(rate) - min(rate)`` across all
+    of them. A spot leg pays nothing, so zero joins the set whenever the token
+    has one. Rates are normalised to a day first: 0.01% every 4 hours is not
+    the same carry as 0.01% every 8.
+
+    This reads ``live_funding.json`` -- every leg, 1.6MB -- and NOT the
+    per-token-bounded discovery snapshot. That distinction is the whole point.
+    This module expands the complete universe precisely because ranking a
+    bounded index would bias the lane, and a bound taken from the unbounded
+    per-leg file keeps that guarantee: the true value is always at or below it,
+    so a token cut here could not have outranked one that was kept.
+    """
+
+    try:
+        payload = bulk_quotes.load_funding()
+    except Exception:  # noqa: BLE001 - no bound means expand everything.
+        return {}
+    reach: dict[str, list[float]] = {}
+    for key, leg in (payload or {}).items():
+        if not isinstance(leg, dict):
+            continue
+        rate, interval = leg.get("rate_pct"), leg.get("interval_hours")
+        if rate is None or not interval:
+            continue
+        try:
+            daily = float(rate) * (24.0 / float(interval))
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        raw = str(key)
+        symbol = raw.split("|", 1)[1] if "|" in raw else raw
+        token = symbol.split("/", 1)[0].split("_", 1)[0].strip().upper()
+        if token:
+            reach.setdefault(token, []).append(daily)
+    return {
+        token: max(rates) - min(rates) for token, rates in reach.items() if rates
+    }
+
+
+def _tokens_worth_expanding(
+    tokens: list[str], *, futures_tokens: set[str] | None = None
+) -> list[str]:
+    """Expand the tokens that can reach a visible page, not the whole universe.
+
+    Measured on production: this catalogue held 5,331 token payloads in a
+    523MB file, resident, and 3,643 of those payloads contained no routes at
+    all. Worse, payload size runs OPPOSITE to funding interest -- BTC spans 35
+    legs and 4.4MB and ranks 483rd by reachable carry, while ZKC ranks first on
+    a fraction of the bytes. Majors trade everywhere, so their funding is
+    arbitraged flat; the tokens that actually pay are thin.
+
+    Absence from the funding file is not one situation but two, and treating
+    them alike inverts this function. A token with NO futures market cannot pay
+    funding at all -- its bound is zero, provably -- and 3,126 of production's
+    5,331 tokens are exactly that. Keeping them unconditionally would spend the
+    entire budget on tokens that cannot produce a single funding route and drop
+    ZKC, the best payer on the board. A token that HAS a futures leg but no
+    published rate is the genuinely unknown case, and that one is kept.
+    """
+
+    if CATALOG_TOKEN_BUDGET <= 0 or len(tokens) <= CATALOG_TOKEN_BUDGET:
+        return tokens
+    bound = _funding_reach_bound()
+    if not bound:
+        return tokens
+    tradeable = futures_tokens if futures_tokens is not None else set(bound)
+    unknown = [
+        token
+        for token in tokens
+        if token not in bound and token in tradeable
+    ]
+    ranked = sorted(
+        (token for token in tokens if token in bound),
+        key=lambda token: -bound[token],
+    )
+    keep = unknown + ranked[: max(0, CATALOG_TOKEN_BUDGET - len(unknown))]
+    return sorted(set(keep))
+
+
+def _expand_one_token(token: str) -> dict[str, Any] | None:
+    """Build a single token's funding payload for a direct request."""
+
+    if not token:
+        return None
+    try:
+        built = catalog_pairs.for_tokens(
+            [token],
+            max_age_seconds=api_spreads.DEFAULT_MAX_AGE_MIN * 60.0,
+        )
+    except Exception:  # noqa: BLE001 - a detail page must not 500 on a venue.
+        return None
+    payload = (built or {}).get(token)
+    return payload if isinstance(payload, dict) else None
+
+
 def _complete_payloads(*, force_refresh: bool = False) -> dict[str, dict[str, Any]]:
     """One coherent all-token generation from already-warm local artifacts."""
 
@@ -199,6 +306,16 @@ def _complete_payloads(*, force_refresh: bool = False) -> dict[str, dict[str, An
                 for item in catalog.get("markets") or []
                 if isinstance(item, dict) and item.get("token")
             }
+        )
+        tokens = _tokens_worth_expanding(
+            tokens,
+            futures_tokens={
+                str(item.get("token") or "").strip().upper()
+                for item in catalog.get("markets") or []
+                if isinstance(item, dict)
+                and str(item.get("market_type") or "") == "Futures"
+                and item.get("token")
+            },
         )
         built = catalog_pairs.for_tokens(
             tokens,
@@ -570,6 +687,15 @@ def _all_routes(
 ) -> list[dict[str, Any]]:
     selected_payloads = payloads if payloads is not None else _complete_payloads()
     wanted_symbol = str(symbol or "").strip().upper()
+    if wanted_symbol and wanted_symbol not in selected_payloads:
+        # The catalogue expands the tokens that can reach a visible page, so a
+        # token nobody could have ranked into one is absent by design. Opening
+        # it directly is a different request, and it must still answer: build
+        # that one token now. This is the same O(routes-for-one-token) work the
+        # comment below describes, so the page costs what it always did.
+        on_demand = _expand_one_token(wanted_symbol)
+        if on_demand is not None:
+            selected_payloads = {wanted_symbol: on_demand}
     if wanted_symbol and wanted_symbol in selected_payloads:
         # Exact token detail is an O(routes-for-one-token) lookup.  Walking the
         # whole 100k-pair catalogue made a GUA page take 7-12 seconds even
