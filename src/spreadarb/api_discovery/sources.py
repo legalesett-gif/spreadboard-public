@@ -1724,6 +1724,33 @@ def _keep_diverse_token_routes(
         if len(kept) >= limit:
             return kept
 
+    # Reserve a foothold for every VENUE before filling by venue pair. A token
+    # trading on fifteen venues has over a hundred possible pairs, so ranking
+    # by pair alone can spend all 28 slots without ever reaching a venue: on
+    # production CASHCAT had 18 buildable Hyperliquid routes and the index
+    # carried none of them, GRIFFAIN 28 and none. The venue was reachable and
+    # simply never surfaced, which reads to a member as "this venue has no
+    # spread" rather than "we ranked it 29th".
+    #
+    # This costs no extra rows -- it changes which of the same `limit` rows
+    # survive -- so it is safe on a box that cannot afford a larger snapshot.
+    seen_venues: set[str] = set()
+    for row in kept:
+        seen_venues.add(str(row.get("long_venue") or ""))
+        seen_venues.add(str(row.get("short_venue") or ""))
+    for row in rows:
+        if id(row) in seen_rows:
+            continue
+        venues = {str(row.get("long_venue") or ""), str(row.get("short_venue") or "")}
+        if venues <= seen_venues:
+            continue
+        kept.append(row)
+        seen_rows.add(id(row))
+        seen_venues |= venues
+        seen_pairs.add(_row_pair_identity(row))
+        if len(kept) >= limit:
+            return kept
+
     for row in rows:
         pair = _row_pair_identity(row)
         if pair in seen_pairs or id(row) in seen_rows:
