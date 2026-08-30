@@ -80,6 +80,94 @@ class Leg:
         return float(self.book.asks[0][0])
 
 
+#: How far a market's price may sit from this token's own band and still be the
+#: same instrument. Deliberately far tighter than MAX_PRICE_RATIO: that guard
+#: rejects an implausible PAIR, while this decides whether a market IS this
+#: asset, where a wrong answer manufactures the spread rather than failing to
+#: reject it.
+SAME_ASSET_PRICE_RATIO = 1.05
+#: Books this old still prove identity; they are never used to price anything.
+SAME_ASSET_PRICE_MAX_AGE_SECONDS = 1800.0
+
+
+def _market_mid(item: dict[str, Any], max_age_seconds: float) -> float | None:
+    try:
+        book = live_book_cache.load_live_book(
+            str(item.get("venue") or ""),
+            str(item.get("market_type") or ""),
+            str(item.get("symbol") or ""),
+            max_age_seconds=max_age_seconds,
+        )
+    except Exception:  # noqa: BLE001 - never admit a market on a bad cache.
+        return None
+    if book is None or not book.bids or not book.asks:
+        return None
+    try:
+        mid = (float(book.bids[0][0]) + float(book.asks[0][0])) / 2.0
+    except (IndexError, TypeError, ValueError):
+        return None
+    return mid if mid > 0 else None
+
+
+def _other_spelling_markets(
+    symbol: str,
+    catalog: dict[str, Any],
+    own: list[dict[str, Any]],
+    max_age_seconds: float,
+) -> list[dict[str, Any]]:
+    """Markets a venue files under the other spelling of this same asset.
+
+    Venues disagree about tokenised-equity tickers: Mexc lists Apple as
+    AAPLSTOCK while twelve other venues list AAPL. The catalogue keeps those as
+    two tokens with NO venue in common, so no cross-venue route for them can be
+    built -- 221 assets and 1,935 markets stranded, and the external comparator
+    reports one (MSTRSTOCK whitebit -> mexc) as an unmatched alias.
+
+    Admission is per MARKET and requires a live price, which is what makes it
+    safe. Deciding per TOKEN does not work: a ticker like C carries Citigroup
+    under one spelling and an unrelated crypto under the other, and judging the
+    token by one arbitrary market merges the two. Nor is "the token's own
+    prices agree" enough -- that says nothing about its UNPRICED markets, which
+    would join silently and be priced later. So each candidate market must
+    itself agree with this token's own price band, and an unpriced one never
+    joins. Measured on the live catalogue: 1,404 markets admitted, 247 rejected
+    on price (all 18 of CSTOCK's crypto markets among them), 108 skipped for
+    having no price.
+    """
+
+    suffix = "STOCK"
+    other = (
+        symbol[: -len(suffix)]
+        if symbol.endswith(suffix) and len(symbol) > len(suffix)
+        else f"{symbol}{suffix}"
+    )
+    if not other or other == symbol:
+        return []
+    own_prices = [
+        price
+        for price in (_market_mid(item, max_age_seconds) for item in own)
+        if price
+    ]
+    if not own_prices:
+        return []
+    low, high = min(own_prices), max(own_prices)
+    admitted: list[dict[str, Any]] = []
+    for item in catalog.get("markets") or []:
+        if not isinstance(item, dict) or _token(item.get("token")) != other:
+            continue
+        if _is_onchain_spot(item) or str(item.get("market_type") or "") not in {
+            "Spot",
+            "Futures",
+        }:
+            continue
+        price = _market_mid(item, max_age_seconds)
+        if price is None:
+            continue
+        if max(price, high) / min(price, low) <= SAME_ASSET_PRICE_RATIO:
+            admitted.append(item)
+    return admitted
+
+
 def for_token(
     token: str,
     *,
@@ -117,6 +205,7 @@ def for_token(
         and not _is_onchain_spot(item)
         and str(item.get("market_type") or "") in {"Spot", "Futures"}
     ]
+    markets.extend(_other_spelling_markets(symbol, catalog, markets, max_age_seconds))
     # A catalogue can retain two aliases for one exact market after an adapter
     # rename.  The venue/type/symbol identity is what the live-book store uses.
     unique_markets: dict[tuple[str, str, str], dict[str, Any]] = {}
