@@ -43,8 +43,6 @@ from spreadboard import (
 
 
 MAX_PRICE_RATIO = 3.0
-#: Books this old still prove identity; they are not used to price anything.
-SAME_ASSET_PRICE_MAX_AGE_SECONDS = 1800.0
 TARGET_NOTIONAL_USD = probe_notional.TARGET_NOTIONAL_USD
 MAX_BOOK_AGE_SECONDS = max(
     30.0, float(os.environ.get("SPREADBOARD_CATALOG_BOOK_AGE_SECONDS", "180"))
@@ -82,99 +80,6 @@ class Leg:
         return float(self.book.asks[0][0])
 
 
-_TOKEN_INDEX_CACHE: dict[int, dict[str, list[dict[str, Any]]]] = {}
-
-
-def _catalog_token_index(catalog: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """token -> its markets, built once per catalogue object."""
-
-    markets = catalog.get("markets") or []
-    key = id(markets)
-    cached = _TOKEN_INDEX_CACHE.get(key)
-    if cached is not None:
-        return cached
-    index: dict[str, list[dict[str, Any]]] = {}
-    for item in markets:
-        if isinstance(item, dict):
-            index.setdefault(_token(item.get("token")), []).append(item)
-    # The catalogue is replaced wholesale, so one live generation is enough.
-    _TOKEN_INDEX_CACHE.clear()
-    _TOKEN_INDEX_CACHE[key] = index
-    return index
-
-
-#: How far two spellings' prices may sit apart and still be treated as one
-#: asset. Deliberately far tighter than MAX_PRICE_RATIO: that guard exists to
-#: reject an implausible PAIR, whereas this decides whether two tickers ARE the
-#: same instrument, and a wrong answer here manufactures the spread rather than
-#: merely failing to reject it.
-SAME_ASSET_PRICE_RATIO = 1.05
-
-
-def _first_book_mid(markets: list[dict[str, Any]]) -> float | None:
-    for item in markets:
-        try:
-            book = live_book_cache.load_live_book(
-                str(item.get("venue") or ""),
-                str(item.get("market_type") or ""),
-                str(item.get("symbol") or ""),
-                max_age_seconds=SAME_ASSET_PRICE_MAX_AGE_SECONDS,
-            )
-        except Exception:  # noqa: BLE001, S112 - never merge on a bad cache.
-            continue
-        if book is None or not book.bids or not book.asks:
-            continue
-        try:
-            return (float(book.bids[0][0]) + float(book.asks[0][0])) / 2.0
-        except (IndexError, TypeError, ValueError):
-            continue
-    return None
-
-
-def _same_asset_spellings(symbol: str, catalog: dict[str, Any]) -> set[str]:
-    """Spellings of one asset that venues disagree about, proven by price.
-
-    Tokenised equities carry different tickers depending on venue: Mexc lists
-    Apple as AAPLSTOCK while twelve other venues list AAPL. The catalogue kept
-    those as two tokens with NO venue in common, so no cross-venue route for
-    them could ever be built -- 221 assets and 1,935 markets stranded, and the
-    external comparator reported one of them (MSTRSTOCK whitebit -> mexc) as an
-    unmatched alias.
-
-    Stripping the suffix blindly would be much worse than the gap. 18 of those
-    221 are ticker COLLISIONS with unrelated crypto -- Citigroup against a
-    token called C, Brinker against EAT, 61,000x apart -- and three of them
-    (HD 1.66x, JPM 2.97x, QNT 1.22x) sit inside the 3x mirage guard, so they
-    would have printed plausible 20-66% spreads that nothing downstream would
-    have caught. Only merge when the two books agree on the price.
-    """
-
-    spellings = {symbol}
-    suffix = "STOCK"
-    others = {
-        symbol[: -len(suffix)]
-        if symbol.endswith(suffix) and len(symbol) > len(suffix)
-        else f"{symbol}{suffix}"
-    }
-    # Indexed once per catalogue generation. Scanning the full market list per
-    # token turned the all-token build into O(tokens x markets) -- 5,331 by
-    # 23,000 -- and doubled the test suite's runtime before this.
-    index = _catalog_token_index(catalog)
-    for other in others:
-        if not other or other == symbol:
-            continue
-        mine = index.get(symbol) or []
-        theirs = index.get(other) or []
-        if not mine or not theirs:
-            continue
-        left, right = _first_book_mid(mine), _first_book_mid(theirs)
-        if not left or not right or left <= 0 or right <= 0:
-            continue
-        if max(left, right) / min(left, right) <= SAME_ASSET_PRICE_RATIO:
-            spellings.add(other)
-    return spellings
-
-
 def for_token(
     token: str,
     *,
@@ -204,12 +109,11 @@ def for_token(
                 return _limited(cached[1], limit)
 
     catalog = chart_catalog.load()
-    spellings = _same_asset_spellings(symbol, catalog)
     markets = [
         item
         for item in catalog.get("markets") or []
         if isinstance(item, dict)
-        and _token(item.get("token")) in spellings
+        and _token(item.get("token")) == symbol
         and not _is_onchain_spot(item)
         and str(item.get("market_type") or "") in {"Spot", "Futures"}
     ]
