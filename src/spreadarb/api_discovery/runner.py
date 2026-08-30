@@ -227,6 +227,43 @@ def _prefer_newer_previous_rows(
     )
 
 
+def _token_fair_trim(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Trim to ``limit`` without dropping whole tokens off the end of the list.
+
+    This was ``rows[:limit]``. The list arrives grouped by source and token, so
+    once the limit binds -- and it does now, the production snapshot sits
+    exactly on it -- the trim discarded every remaining token wholesale rather
+    than the weakest routes. A token late in the ordering lost ALL of its
+    spreads no matter how good they were, and nothing reported it.
+
+    Each token keeps its best route before any token keeps a second, so the
+    cut falls on a token's marginal extra routes instead of on its existence.
+    Rows keep their incoming order within a token, which is already the
+    per-token cap's strength ordering.
+    """
+
+    if limit <= 0 or len(rows) <= limit:
+        return rows[:limit] if limit >= 0 else rows
+    by_token: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_token.setdefault(str(row.get("token") or "").upper(), []).append(row)
+    kept: list[dict[str, Any]] = []
+    depth = 0
+    while len(kept) < limit:
+        progressed = False
+        for token_rows in by_token.values():
+            if depth >= len(token_rows):
+                continue
+            kept.append(token_rows[depth])
+            progressed = True
+            if len(kept) >= limit:
+                break
+        if not progressed:
+            break
+        depth += 1
+    return kept
+
+
 def _merge_previous_rows(
     snapshot: dict[str, Any],
     previous: dict[str, Any],
@@ -258,7 +295,7 @@ def _merge_previous_rows(
                 merged.append(row)
             seen.add(identity)
         if not retain_unmatched or len(merged) >= row_limit:
-            snapshot[bucket] = merged[:row_limit]
+            snapshot[bucket] = _token_fair_trim(merged, row_limit)
             continue
         for row in previous_rows:
             identity = _row_identity(row)
@@ -269,7 +306,7 @@ def _merge_previous_rows(
             retained += 1
             if len(merged) >= row_limit:
                 break
-        snapshot[bucket] = merged[:row_limit]
+        snapshot[bucket] = _token_fair_trim(merged, row_limit)
     snapshot["source_refresh"]["previous_snapshot_rows_retained"] = retained
     return snapshot
 
