@@ -803,6 +803,9 @@ def test_recent_demand_ignores_a_cursor_from_the_previous_ordering(
         return {"status": "no_history_rows", "entries": []}
 
     monkeypatch.setattr(vfh, "leg_history_outcome", outcome)
+    # This asserts the order legs are visited, which only one worker makes
+    # deterministic; concurrency within a batch has no defined fetch order.
+    monkeypatch.setattr(vfh, "FUNDING_HISTORY_FETCH_WORKERS", 1)
 
     vfh.build(
         [("A", "ONE"), ("B", "TWO"), ("C", "THREE")],
@@ -970,6 +973,10 @@ def test_retryable_and_unattempted_legs_run_before_healthy_maintenance(
         return {"status": "no_history_rows", "entries": []}
 
     monkeypatch.setattr(vfh, "leg_history_outcome", outcome)
+    # Ordering is what this test guards. Fetches now run a batch at a time, so
+    # pin one worker to keep the sequence deterministic; the concurrent path
+    # has its own test below.
+    monkeypatch.setattr(vfh, "FUNDING_HISTORY_FETCH_WORKERS", 1)
     ticks = iter((0.0, 0.0, 2.0))
     monkeypatch.setattr(vfh.time, "monotonic", lambda: next(ticks))
 
@@ -980,3 +987,88 @@ def test_retryable_and_unattempted_legs_run_before_healthy_maintenance(
     )
 
     assert attempted == [("B", "RETRY")]
+
+
+def test_legs_are_fetched_concurrently_but_processed_in_priority_order(
+    tmp_path, monkeypatch
+) -> None:
+    """The sweep was network-bound and strictly serial.
+
+    Measured on production: ~3.4s per leg, 285 legs/hour, against the
+    1,175/hour needed to hold an 8-hour settlement cadence. 68% of legs sat
+    past their next settlement and fail-closed to blank, so exact aggregates
+    that existed could not be displayed. Fetching a batch at a time closes
+    that 4.1x gap.
+
+    Concurrency must not disturb WHICH legs win the budget: results are applied
+    in the caller's priority order regardless of which fetch returns first.
+    """
+
+    import threading
+
+    path = tmp_path / "funding.json"
+    path.write_text(f'{{"schema":"{vfh.SCHEMA}"}}', encoding="utf-8")
+
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def outcome(venue: str, symbol: str, **_kwargs):
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        try:
+            time.sleep(0.02)
+            return {"status": "no_history_rows", "entries": []}
+        finally:
+            with lock:
+                in_flight -= 1
+
+    monkeypatch.setattr(vfh, "leg_history_outcome", outcome)
+    monkeypatch.setattr(vfh, "FUNDING_HISTORY_FETCH_WORKERS", 4)
+    monkeypatch.setattr(vfh, "FUNDING_HISTORY_PER_VENUE", 4)
+
+    legs = [("V", f"S{i}") for i in range(8)]
+    vfh.build(legs, cache_path=path, budget_seconds=30)
+
+    assert peak > 1, "fetches must overlap; a serial sweep cannot hold the cadence"
+
+    status = json.loads(path.read_text(encoding="utf-8")).get("leg_status") or {}
+    assert len(status) == 8, "every leg in the batch must still be recorded"
+
+
+def test_one_venue_never_receives_the_whole_pool(tmp_path, monkeypatch) -> None:
+    """Trading a throughput problem for a rate-limit ban would be a bad deal."""
+
+    import threading
+
+    path = tmp_path / "funding.json"
+    path.write_text(f'{{"schema":"{vfh.SCHEMA}"}}', encoding="utf-8")
+
+    per_venue_in_flight: dict[str, int] = {}
+    per_venue_peak: dict[str, int] = {}
+    lock = threading.Lock()
+
+    def outcome(venue: str, symbol: str, **_kwargs):
+        with lock:
+            per_venue_in_flight[venue] = per_venue_in_flight.get(venue, 0) + 1
+            per_venue_peak[venue] = max(
+                per_venue_peak.get(venue, 0), per_venue_in_flight[venue]
+            )
+        try:
+            time.sleep(0.02)
+            return {"status": "no_history_rows", "entries": []}
+        finally:
+            with lock:
+                per_venue_in_flight[venue] -= 1
+
+    monkeypatch.setattr(vfh, "leg_history_outcome", outcome)
+    monkeypatch.setattr(vfh, "FUNDING_HISTORY_FETCH_WORKERS", 8)
+    monkeypatch.setattr(vfh, "FUNDING_HISTORY_PER_VENUE", 2)
+
+    vfh.build([("SOLO", f"S{i}") for i in range(8)], cache_path=path, budget_seconds=30)
+
+    assert per_venue_peak.get("SOLO", 0) <= 2, (
+        f"one venue saw {per_venue_peak.get('SOLO')} concurrent requests"
+    )

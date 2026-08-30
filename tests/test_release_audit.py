@@ -3541,7 +3541,16 @@ def test_a_real_dislocation_is_still_paired() -> None:
 
 
 def test_different_quote_assets_do_not_become_token_spread() -> None:
-    """Kraken USD versus Gate USDT contains a second, unmodelled basis."""
+    """A dollar is a dollar; a dollar against another currency is not.
+
+    This test used to assert that Kraken USD and Gate USDT were two bases and
+    must never pair. The owner overruled that on 2026-08-30: the stablecoin
+    basis is a rounding error against the spreads this board ranks, and
+    refusing to pair across it removed whole venues -- Hyperliquid quotes every
+    perpetual in USDC, so no Hyperliquid route could be built at all.
+
+    What must still be refused is a genuinely different currency.
+    """
     ts = int(time.time() * 1_000_000)
 
     def q(venue: str, quote: str, price: float) -> MarketQuote:
@@ -3553,13 +3562,20 @@ def test_different_quote_assets_do_not_become_token_spread() -> None:
             symbol=f"BTC/{quote}:{quote}", quote_asset=quote,
         )
 
-    assert not sources.quote_candidate_pairs(
+    assert sources.quote_candidate_pairs(
         [q("Kraken", "USD", 100.0), q("Gate", "USDT", 100.2)],
         min_spread_pct=-100.0,
-    )
-    row = _vrow(long_quote="USD", short_quote="USDT")
-    assert api_spreads.quote_basis_mismatch(row) is True
-    assert api_spreads.row_is_presentable(row) is False
+    ), "two dollar quotes are the same trade and must pair"
+    dollar_row = _vrow(long_quote="USD", short_quote="USDT")
+    assert api_spreads.quote_basis_mismatch(dollar_row) is False
+
+    assert not sources.quote_candidate_pairs(
+        [q("Kraken", "BTC", 100.0), q("Gate", "USDT", 100.2)],
+        min_spread_pct=-100.0,
+    ), "a dollar against BTC is currency risk, not a token spread"
+    currency_row = _vrow(long_quote="BTC", short_quote="USDT")
+    assert api_spreads.quote_basis_mismatch(currency_row) is True
+    assert api_spreads.row_is_presentable(currency_row) is False
 
 
 def test_duplicate_routes_do_not_eat_a_tokens_slots() -> None:

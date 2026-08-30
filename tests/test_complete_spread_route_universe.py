@@ -51,7 +51,12 @@ def _evidence_route(**overrides: object) -> dict[str, object]:
         ({}, "verified"),
         ({"depth_weighted_spread_pct": None, "depth_unverified": True}, "research"),
         ({"short_price": 4.0}, "excluded"),
-        ({"short_quote": "USD"}, "excluded"),
+        # A dollar is a dollar (owner ruling 2026-08-30): a USD leg against a
+        # USDT leg is the same trade, and refusing it removed whole venues --
+        # Hyperliquid quotes every perpetual in USDC.
+        ({"short_quote": "USD"}, "verified"),
+        # A genuinely different currency is still a second, unmodelled basis.
+        ({"short_quote": "BTC"}, "excluded"),
         ({"token": "ETH3L"}, "excluded"),
         ({"short_market_symbol": "GUA/USD:GUA"}, "excluded"),
         ({"depth_weighted_spread_pct": -0.1}, "excluded"),

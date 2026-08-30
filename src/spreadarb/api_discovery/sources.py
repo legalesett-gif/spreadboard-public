@@ -16,6 +16,8 @@ from urllib.request import Request, urlopen
 
 import ccxt
 
+from spreadboard import route_taxonomy
+
 from spreadarb.api_discovery.attestations import ExecutorAttestationRegistry, route_key
 from spreadarb.api_discovery.identity import (
     IdentityResolution,
@@ -1826,16 +1828,14 @@ def quote_candidate_pairs(
                     and long_quote.market_type == short_quote.market_type
                 ):
                     continue
-                # A USD leg and a USDT (or USDC) leg contain a stablecoin/fiat
-                # basis in addition to the token basis.  Treating those quote
-                # currencies as interchangeable manufactured persistent small
-                # "edges" and made the pair impossible to reconcile against a
-                # USDT-only reference.  Cross-quote research belongs in an
-                # explicit custom chart where both bases can be shown.
-                if (
-                    long_quote.quote_asset
-                    and short_quote.quote_asset
-                    and long_quote.quote_asset != short_quote.quote_asset
+                # The third and last copy of one rule: two dollar quotes are
+                # one basis. Requiring the strings to match removed whole
+                # venues from the product rather than removing a risk --
+                # Hyperliquid quotes every perpetual in USDC. A dollar against
+                # BTC, ETH or EUR is still currency risk and still rejected.
+                # See spreadboard.route_taxonomy for the single definition.
+                if not route_taxonomy.quotes_are_interchangeable(
+                    long_quote.quote_asset, short_quote.quote_asset
                 ):
                     continue
                 if _price_ratio_implausible(long_quote, short_quote):

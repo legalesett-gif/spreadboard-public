@@ -3286,18 +3286,22 @@ def price_ratio_implausible(row: "SpreadTerminalRow") -> bool:
 
 
 def quote_basis_mismatch(row: "SpreadTerminalRow") -> bool:
-    """True when two CEX legs are denominated in different quote assets.
+    """True when two legs are denominated in genuinely different currencies.
 
-    USD, USDC and USDT can trade close to one another, but they are not the
-    same basis.  A route comparing them cannot honestly attribute the entire
-    difference to the token and therefore does not belong in the standard
-    spread or funding rankings.  Unknown quote assets (notably DEX legs) are
-    left untouched until their conversion path is explicitly modelled.
+    This is the discovery-side twin of ``catalog_pairs._reject_reason`` and it
+    used to hold the same rule: that USD, USDC and USDT were three different
+    bases. Correcting only the pairing gate left this one filtering the very
+    routes that gate had just started building, inside
+    ``load_public_route_index`` -- the index the board serves and the external
+    comparator reads. Two dollar quotes are one basis; a dollar against BTC,
+    ETH or EUR is not, and is still excluded.
+
+    Unknown quote assets (notably DEX legs) are left untouched.
     """
 
     long_quote = str(_row_value(row, "long_quote", "") or "").upper().strip()
     short_quote = str(_row_value(row, "short_quote", "") or "").upper().strip()
-    return bool(long_quote and short_quote and long_quote != short_quote)
+    return not route_taxonomy.quotes_are_interchangeable(long_quote, short_quote)
 
 
 # Only these lanes require the coin to physically move between venues. Futures

@@ -199,3 +199,45 @@ def test_a_non_dollar_market_keeps_its_own_leg() -> None:
     )
 
     assert len(legs) == 2
+
+
+def test_the_discovery_side_gate_matches_the_pairing_gate() -> None:
+    """``quote_basis_mismatch`` is the twin of ``_reject_reason``.
+
+    Correcting only the pairing gate left this one filtering out the very
+    routes that gate had just started building, inside
+    ``load_public_route_index`` -- the index the board serves and the external
+    comparator reads. Both must answer the same question the same way.
+    """
+
+    from dataclasses import replace as _replace
+
+    from spreadboard import api_spreads
+
+    base = api_spreads._row_from_api(
+        {
+            "token": "STBL",
+            "long_venue": "Hyperliquid",
+            "long_market_type": "Futures",
+            "long_quote": "USDC",
+            "short_venue": "Gate",
+            "short_market_type": "Futures",
+            "short_quote": "USDT",
+            "notes": {"route_inputs": {"long": {}, "short": {}}},
+        },
+        bucket="api_discovered",
+        now=1.0,
+    )
+
+    assert not api_spreads.quote_basis_mismatch(base), (
+        "a USDC perp against a USDT perp must survive the discovery filter"
+    )
+    assert not api_spreads.quote_basis_mismatch(
+        _replace(base, long_quote="USD", short_quote="USDT")
+    )
+    assert api_spreads.quote_basis_mismatch(
+        _replace(base, long_quote="BTC", short_quote="USDT")
+    ), "a dollar against BTC is still a different basis"
+    assert not api_spreads.quote_basis_mismatch(
+        _replace(base, long_quote="", short_quote="USDT")
+    ), "an unknown quote (DEX leg) must not be filtered out"
