@@ -264,6 +264,25 @@ def _token_fair_trim(rows: list[dict[str, Any]], limit: int) -> list[dict[str, A
     return kept
 
 
+def _trim_merged_rows(
+    rows: list[dict[str, Any]], row_limit: int
+) -> list[dict[str, Any]]:
+    """Apply BOTH bounds to a merged snapshot, not just the global ceiling.
+
+    Retained rows are added after `_cap_rows_per_token` has already run, so
+    re-applying only `_token_fair_trim` here bounded the total while letting a
+    single token hold its fresh allowance plus a second retained one. Production
+    ran a configured cap of 32 with a measured maximum of 64 -- exactly twice --
+    across 485 tokens, for 5,419 rows (18%) of surplus depth.
+
+    Order matters: cap depth per token first, then settle the global ceiling on
+    what remains, so the ceiling is spent on breadth rather than on one token's
+    thirty-third route.
+    """
+
+    return _token_fair_trim(_cap_rows_per_token(rows, budget=row_limit), row_limit)
+
+
 def _merge_previous_rows(
     snapshot: dict[str, Any],
     previous: dict[str, Any],
@@ -295,7 +314,7 @@ def _merge_previous_rows(
                 merged.append(row)
             seen.add(identity)
         if not retain_unmatched or len(merged) >= row_limit:
-            snapshot[bucket] = _token_fair_trim(merged, row_limit)
+            snapshot[bucket] = _trim_merged_rows(merged, row_limit)
             continue
         for row in previous_rows:
             identity = _row_identity(row)
@@ -306,7 +325,7 @@ def _merge_previous_rows(
             retained += 1
             if len(merged) >= row_limit:
                 break
-        snapshot[bucket] = _token_fair_trim(merged, row_limit)
+        snapshot[bucket] = _trim_merged_rows(merged, row_limit)
     snapshot["source_refresh"]["previous_snapshot_rows_retained"] = retained
     return snapshot
 
