@@ -224,7 +224,23 @@ services:
       SPREADARB_MAX_ROWS_PER_TOKEN: "32"
       SPREADARB_MAX_SNAPSHOT_ROWS_PER_TOKEN: "32"
       SPREADARB_MIN_FUNDING_APR_PCT: "0.01"
-      SPREADBOARD_DISCOVERY_ROWS: "30000"
+      # 2026-09-01: 30,000 -> 22,000. The per-token cap was being bypassed by
+      # retained rows (configured 32, measured 64), so fixing that made the cap
+      # bind for the first time -- and the freed slots were immediately spent on
+      # BREADTH by _token_fair_trim ("breadth is decided first, depth with what
+      # is left"): tokens 1,457 -> 1,535, token-venue reach 10,514 -> 11,381.
+      #
+      # Good for coverage, bad for memory. The index grew 118k -> 132k routes
+      # and the always-resident main service went 1,038MB -> 1,483MB peak, and
+      # the collector OOM-killed twice at 23:31 UTC. Measured at that kill:
+      #   main 1,378 + live_route_index 1,281 + api_discovery 555
+      #   + bulk_quote 488 + fast_quote 232 = 3,934MB of a 4,096MB ceiling.
+      #
+      # api_discovery_worker cannot be serialised out of the way -- it runs for
+      # 45-60 minutes, far past the 300s heavy-child slot wait -- so the only
+      # reliable lever is total footprint. This bounds it. Raise again only
+      # with a measured collector peak below ~3,400MB.
+      SPREADBOARD_DISCOVERY_ROWS: "22000"
       SPREADBOARD_DEX_CANDIDATES: "450"
       SPREADBOARD_DEX_SPOT_TIMEOUT_SECONDS: "420"
       # 2026-08-31: 150 -> 250, the ceiling the code itself enforces
