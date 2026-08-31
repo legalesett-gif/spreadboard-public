@@ -1352,15 +1352,33 @@ def route_windows_last_complete(
     return out
 
 
-def _load_raw(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, Any]:
-    """The persisted file without the expiry filter `load()` applies."""
+_RAW_CACHE: dict[str, Any] = {"stamp": None, "path": None, "payload": {}}
 
+
+def _load_raw(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, Any]:
+    """The persisted file without the expiry filter `load()` applies.
+
+    Re-read only when the file changes, for the same reason `load()` is cached:
+    this is an 11.5MB document and a board render asks for it once per row.
+    """
+
+    path = Path(cache_path)
     try:
-        payload = json.loads(Path(cache_path).read_text(encoding="utf-8"))
+        stamp = path.stat().st_mtime_ns
+    except OSError:
+        return {}
+    key = str(path)
+    if _RAW_CACHE["stamp"] == stamp and _RAW_CACHE["path"] == key:
+        return _RAW_CACHE["payload"]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
     if not isinstance(payload, dict) or payload.get("schema") != SCHEMA:
         return {}
+    _RAW_CACHE["stamp"] = stamp
+    _RAW_CACHE["path"] = key
+    _RAW_CACHE["payload"] = payload
     return payload
 
 

@@ -14,7 +14,12 @@ older news, which is what someone investigating a farm actually wants.
 
 from __future__ import annotations
 
-from spreadboard import server
+import json
+import os
+import time
+from pathlib import Path
+
+from spreadboard import server, venue_funding_history
 
 
 def _row(**overrides):
@@ -81,3 +86,48 @@ def test_a_current_figure_is_never_replaced_by_a_stale_one() -> None:
 
     assert "2.000" in html
     assert "9.900" not in html
+
+
+def test_the_raw_file_is_not_reparsed_on_every_call(tmp_path, monkeypatch):
+    """An 11.5MB parse per board row is what this cache exists to prevent.
+
+    Without it a single render re-reads the whole funding document once per
+    stale row, which is how this timed out in production before the cache.
+    """
+
+    cache = tmp_path / "venue_funding_history.json"
+    cache.write_text(
+        json.dumps({"schema": venue_funding_history.SCHEMA, "legs": {}, "leg_status": {}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(venue_funding_history, "_RAW_CACHE", {"stamp": None, "path": None, "payload": {}})
+
+    reads = []
+    real_read_text = Path.read_text
+
+    def counting_read_text(self, *args, **kwargs):
+        reads.append(str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+
+    for _ in range(5):
+        venue_funding_history._load_raw(cache_path=cache)
+    assert len(reads) == 1, f"re-parsed the file {len(reads)} times for 5 calls"
+
+    # A genuinely newer file must still be picked up: staleness here would
+    # freeze the board on whichever generation happened to be read first.
+    cache.write_text(
+        json.dumps(
+            {
+                "schema": venue_funding_history.SCHEMA,
+                "legs": {"Gate|X/USDT:USDT": {"1d": 0.5}},
+                "leg_status": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(cache, (time.time() + 5, time.time() + 5))
+    refreshed = venue_funding_history._load_raw(cache_path=cache)
+    assert refreshed.get("legs", {}).get("Gate|X/USDT:USDT") == {"1d": 0.5}
+    assert len(reads) == 2
