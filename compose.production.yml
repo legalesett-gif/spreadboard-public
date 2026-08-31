@@ -240,7 +240,16 @@ services:
       # minutes, so 250 lands near five, inside the 420s
       # SPREADBOARD_DEX_SPOT_TIMEOUT_SECONDS. Watch for
       # "dex spot" timeouts and drop back to 150 if the pass stops completing.
-      SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS: "250"
+      # REVERTED 2026-08-31: 250 delivered NO coverage -- dex_tokens stayed at
+      # 161 for 45 minutes and none of IN/TRIA/AIXBT/MARSCOIN/FOLKS gained an
+      # on-chain leg -- while the collector took 7 OOM kills, the web app
+      # restarted 5 times and the site served one 502. Zero benefit, real cost.
+      #
+      # The budget is NOT what keeps those tokens out. Selection ranks
+      # candidates by projected funding, so raising the ceiling only admits
+      # more of the same ranking; whatever excludes these tokens happens
+      # earlier. Find that before touching this number again.
+      SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS: "150"
       # The connected project is visibly on OKX's Startup plan (minimum 2
       # RPS). Stay below that ceiling while cutting a two-sided 150-contract
       # quote pass from about six minutes to about three. Provider 429s still

@@ -172,7 +172,13 @@ def test_exact_payment_activates_for_the_period(db):
     assert result["resolution"] == "settled"
     user = accounts.get_user_object(user_id, db_path=db)
     assert user.subscription_status == "active"
-    assert user.subscription_active is True
+    # Asserted against NOW rather than `subscription_active`, which reads the
+    # real clock: with NOW fixed at 2026-08-01, the 30-day period bought here
+    # lapsed in real time on 2026-08-31 and turned this green test red without
+    # a line of code changing. The behaviour under test is that paying grants
+    # the period, and that is what this now checks.
+    assert user.subscription_expires_at is not None
+    assert str(user.subscription_expires_at) > NOW.isoformat()
     assert user.subscription_expires_at.startswith("2026-08-31")
 
 

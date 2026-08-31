@@ -9071,6 +9071,16 @@ FILTER_PRESET_SCRIPT = r"""
 
 
 
+def _as_of_label(asof_ms: Any) -> str:
+    """`as of 04:00 UTC`, or a plain marker when the settlement time is unknown."""
+
+    try:
+        moment = time.gmtime(int(asof_ms) / 1000.0)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "last complete"
+    return f"as of {time.strftime('%H:%M', moment)} UTC"
+
+
 def render_carry_windows(row: dict[str, Any]) -> str:
     """Realised 1d/7d/30d carry cells for one route.
 
@@ -9078,11 +9088,30 @@ def render_carry_windows(row: dict[str, Any]) -> str:
     yet" and "carry was flat" are opposite conclusions for anyone sizing a farm.
     """
     windows = row.get("settled_funding_windows") or {}
+    last_complete = row.get("settled_funding_windows_last_complete") or {}
     cells = []
     for key in ("1d", "7d", "30d"):
         value = _float_or_none(windows.get(key))
-        shown = fmt_signed_pct(value, digits=3) if value is not None else "&mdash;"
-        cells.append(f'<td data-label="{key}"><strong>{shown}</strong></td>')
+        if value is not None:
+            shown = fmt_signed_pct(value, digits=3)
+            cells.append(f'<td data-label="{key}"><strong>{shown}</strong></td>')
+            continue
+        # Not current -- but if the exact total is held, show it stamped with
+        # the settlement it covers rather than hiding what we know. The stamp
+        # is what keeps this honest: an unlabelled stale figure is the thing
+        # the dash existed to prevent, a labelled one is simply older news.
+        stale = last_complete.get(key) if isinstance(last_complete, dict) else None
+        stale_value = _float_or_none((stale or {}).get("net"))
+        asof_ms = (stale or {}).get("asof_ms")
+        if stale_value is None:
+            cells.append(f'<td data-label="{key}"><strong>&mdash;</strong></td>')
+            continue
+        stamp = _as_of_label(asof_ms)
+        cells.append(
+            f'<td data-label="{key}" class="carry-stale">'
+            f'<strong>{fmt_signed_pct(stale_value, digits=3)}</strong>'
+            f'<em class="carry-asof">{stamp}</em></td>'
+        )
     return "".join(cells)
 
 
@@ -11087,6 +11116,14 @@ def render_pair_page(route_key: str, board_path: Path, config: dict[str, Any]) -
     # its expanded Funding row. These values come from the current exact venue
     # settlement archive; incomplete or overdue windows remain blank.
     row["settled_funding_windows"] = venue_funding_history.route_windows(row)
+    # A window that has crossed its next settlement is no longer current, but
+    # it is still an exact official total and we already hold it. Carry it
+    # alongside so the cell can show the figure with the moment it was last
+    # complete instead of a dash -- 97.1% of legs hold one while only about a
+    # third are still inside expiry, which is why the board read as 30%.
+    row["settled_funding_windows_last_complete"] = (
+        venue_funding_history.route_windows_last_complete(row)
+    )
     funding_history_demand.enqueue(
         (
             str(row.get(f"{side}_venue") or ""),

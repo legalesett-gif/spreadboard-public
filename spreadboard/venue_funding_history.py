@@ -1289,6 +1289,81 @@ def route_history_status(route: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def route_windows_last_complete(
+    route: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """The last COMPLETE window for a route, with the moment it was complete.
+
+    A window fails closed the instant it crosses its next settlement, which is
+    right for "is this current" and wrong for "what did this pay". 97.1% of legs
+    hold a stored exact aggregate while only about a third are still inside
+    their expiry, so the board was blanking data it already had and reading as
+    30% accurate.
+
+    This returns those stored aggregates unchanged -- still exact official
+    settlement totals, never a current rate, a partial sum or a synthetic zero
+    -- together with `asof_ms`, the latest settlement each one actually covers.
+    The caller must label them with that timestamp; presenting one as current
+    is the thing the blanking existed to prevent.
+    """
+
+    out: dict[str, dict[str, Any]] = {}
+    has_futures_leg = any(
+        str(route.get(f"{side}_market_type") or "").casefold() == "futures"
+        and "dex" not in str(route.get(f"{side}_venue") or "").casefold()
+        for side in ("long", "short")
+    )
+    if not has_futures_leg:
+        return out
+    payload = _load_raw()
+    legs = payload.get("legs") or {}
+    status = payload.get("leg_status") or {}
+    sides: dict[str, dict[str, Any] | None] = {}
+    asof: dict[str, int] = {}
+    for side in ("long", "short"):
+        venue = str(route.get(f"{side}_venue") or "")
+        is_futures = (
+            str(route.get(f"{side}_market_type") or "").casefold() == "futures"
+            and "dex" not in venue.casefold()
+        )
+        if not is_futures:
+            sides[side] = {label: 0.0 for label in (f"{d}d" for d in WINDOW_DAYS)}
+            continue
+        key = f"{venue}|{route.get(f'{side}_market_symbol')}"
+        sides[side] = legs.get(key)
+        detail = ((status.get(key) or {}).get("window_details") or {})
+        for label in (f"{d}d" for d in WINDOW_DAYS):
+            latest = (detail.get(label) or {}).get("latest_event_at")
+            try:
+                asof[label] = max(asof.get(label, 0), int(latest))
+            except (TypeError, ValueError):
+                continue
+    if sides["long"] is None or sides["short"] is None:
+        return out
+    for label in (f"{d}d" for d in WINDOW_DAYS):
+        long_value = sides["long"].get(label)
+        short_value = sides["short"].get(label)
+        if long_value is None or short_value is None:
+            continue
+        out[label] = {
+            "net": short_value - long_value,
+            "asof_ms": asof.get(label) or None,
+        }
+    return out
+
+
+def _load_raw(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, Any]:
+    """The persisted file without the expiry filter `load()` applies."""
+
+    try:
+        payload = json.loads(Path(cache_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict) or payload.get("schema") != SCHEMA:
+        return {}
+    return payload
+
+
 def route_windows(
     route: dict[str, Any],
     *,
