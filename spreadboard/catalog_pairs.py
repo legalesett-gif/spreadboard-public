@@ -131,6 +131,22 @@ def _admit_other_spellings_bulk(
 
     def mid(key: tuple[str, str, str]) -> float | None:
         book = books.get(live_book_cache.cache_key(*key))
+        if book is None:
+            # Identity is not a price claim. `books` here is the tight
+            # pricing window, and judging identity by it meant a market whose
+            # quote had merely gone quiet could not prove it was the same
+            # asset -- SNDK on WhiteBIT is real and quotes at 1462.40, yet
+            # SNDKSTOCK mexc->whitebit was absent in every comparator sample
+            # because that book missed the pricing cut at build time. A older
+            # book still proves two tickers are one instrument; it is never
+            # used to price anything.
+            try:
+                book = live_book_cache.load_live_book(
+                    key[0], key[1], key[2],
+                    max_age_seconds=SAME_ASSET_PRICE_MAX_AGE_SECONDS,
+                )
+            except Exception:  # noqa: BLE001 - a bad cache must not merge assets.
+                return None
         if book is None or not book.bids or not book.asks:
             return None
         try:

@@ -224,3 +224,46 @@ def test_the_bulk_expansion_actually_calls_the_merge() -> None:
     assert "_admit_other_spellings_bulk(" in source, (
         "for_tokens builds the live route index; it must merge spellings too"
     )
+
+
+def test_a_quiet_book_can_still_prove_identity(monkeypatch) -> None:
+    """Identity is not a price claim, so it must not use the pricing window.
+
+    SNDK on WhiteBIT is real and quotes at 1462.40, but that book missed the
+    tight pricing cut at index-build time -- so SNDKSTOCK mexc->whitebit was
+    absent in every comparator sample. A slightly older book still proves two
+    tickers are one instrument; it is never used to price anything.
+    """
+
+    mkts = {
+        "SNDKSTOCK": {("Mexc", "Futures", "SNDKSTOCK/USDT:USDT"): {"token": "SNDKSTOCK"}},
+        "SNDK": {("WhiteBIT", "Futures", "SNDK/USDT:USDT"): {"token": "SNDK"}},
+    }
+    # Only the STOCK side is in the tight pricing window.
+    books = {
+        live_book_cache.cache_key("Mexc", "Futures", "SNDKSTOCK/USDT:USDT"): _book(1462.49),
+    }
+    monkeypatch.setattr(
+        live_book_cache, "load_live_book",
+        lambda venue, mtype, symbol, **_kw: _book(1462.40) if venue == "WhiteBIT" else None,
+    )
+
+    catalog_pairs._admit_other_spellings_bulk(mkts, books)
+
+    assert len(mkts["SNDKSTOCK"]) == 2, "a quiet but real market must still merge"
+
+
+def test_a_quiet_book_that_disagrees_is_still_refused(monkeypatch) -> None:
+    mkts = {
+        "CSTOCK": {("Mexc", "Futures", "CSTOCK/USDT:USDT"): {"token": "CSTOCK"}},
+        "C": {("Aster", "Futures", "C/USDT:USDT"): {"token": "C"}},
+    }
+    books = {live_book_cache.cache_key("Mexc", "Futures", "CSTOCK/USDT:USDT"): _book(134.49)}
+    monkeypatch.setattr(
+        live_book_cache, "load_live_book",
+        lambda venue, mtype, symbol, **_kw: _book(0.0624) if venue == "Aster" else None,
+    )
+
+    catalog_pairs._admit_other_spellings_bulk(mkts, books)
+
+    assert len(mkts["CSTOCK"]) == 1
