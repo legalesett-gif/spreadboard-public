@@ -137,3 +137,90 @@ def test_a_token_with_no_other_spelling_admits_nothing(monkeypatch) -> None:
 def test_the_identity_gate_is_tighter_than_the_pair_guard() -> None:
     assert catalog_pairs.SAME_ASSET_PRICE_RATIO < catalog_pairs.MAX_PRICE_RATIO
     assert catalog_pairs.SAME_ASSET_PRICE_RATIO <= 1.05
+
+
+def _book(price: float):
+    return live_book_cache.CachedBook(
+        bids=[[price * 0.999, 10.0]], asks=[[price * 1.001, 10.0]],
+        quote_ts_us=1, source="test",
+    )
+
+
+def test_the_bulk_path_merges_spellings_too() -> None:
+    """`for_token` alone fixed the token page and nothing the board reads.
+
+    The live route index is built by `for_tokens`, so MSTRSTOCK showed 132
+    routes when searched and 0 in the index -- and the comparator kept
+    reporting it as comparator_display_alias_unmatched.
+    """
+
+    mkts = {
+        "AAPLSTOCK": {("Mexc", "Futures", "AAPLSTOCK/USDT:USDT"): {"token": "AAPLSTOCK"}},
+        "AAPL": {("WhiteBIT", "Futures", "AAPL/USDT:USDT"): {"token": "AAPL"}},
+    }
+    books = {
+        live_book_cache.cache_key("Mexc", "Futures", "AAPLSTOCK/USDT:USDT"): _book(232.10),
+        live_book_cache.cache_key("WhiteBIT", "Futures", "AAPL/USDT:USDT"): _book(232.55),
+    }
+
+    catalog_pairs._admit_other_spellings_bulk(mkts, books)
+
+    assert len(mkts["AAPLSTOCK"]) == 2, "the plain ticker's market must join"
+    assert len(mkts["AAPL"]) == 2, "and the merge is symmetric"
+
+
+def test_the_bulk_path_refuses_a_collision() -> None:
+    """Citigroup against a crypto called C, 2,155x apart."""
+
+    mkts = {
+        "CSTOCK": {("Mexc", "Futures", "CSTOCK/USDT:USDT"): {"token": "CSTOCK"}},
+        "C": {("Aster", "Futures", "C/USDT:USDT"): {"token": "C"}},
+    }
+    books = {
+        live_book_cache.cache_key("Mexc", "Futures", "CSTOCK/USDT:USDT"): _book(134.49),
+        live_book_cache.cache_key("Aster", "Futures", "C/USDT:USDT"): _book(0.0624),
+    }
+
+    catalog_pairs._admit_other_spellings_bulk(mkts, books)
+
+    assert len(mkts["CSTOCK"]) == 1
+    assert len(mkts["C"]) == 1
+
+
+def test_the_bulk_merge_does_not_compound_across_spellings() -> None:
+    """Reading a snapshot keeps one spelling's new markets out of the other's band."""
+
+    mkts = {
+        "XSTOCK": {("Mexc", "Futures", "XSTOCK/USDT:USDT"): {"token": "XSTOCK"}},
+        "X": {
+            ("WhiteBIT", "Futures", "X/USDT:USDT"): {"token": "X"},
+            ("Aster", "Futures", "X/USDT:USDT"): {"token": "X"},
+        },
+    }
+    books = {
+        live_book_cache.cache_key("Mexc", "Futures", "XSTOCK/USDT:USDT"): _book(100.0),
+        live_book_cache.cache_key("WhiteBIT", "Futures", "X/USDT:USDT"): _book(100.5),
+        live_book_cache.cache_key("Aster", "Futures", "X/USDT:USDT"): _book(10.0),
+    }
+
+    catalog_pairs._admit_other_spellings_bulk(mkts, books)
+
+    assert len(mkts["XSTOCK"]) == 2, "only the agreeing market joins"
+    keys = {k[0] for k in mkts["XSTOCK"]}
+    assert "Aster" not in keys
+
+
+def test_the_bulk_expansion_actually_calls_the_merge() -> None:
+    """Guard the wiring: the helper passes on its own whether or not it runs.
+
+    That is exactly how the first version of this fix shipped half-done -- the
+    single-token path was wired, the bulk path that builds the index was not,
+    and every test still passed.
+    """
+
+    import inspect
+
+    source = inspect.getsource(catalog_pairs.for_tokens)
+    assert "_admit_other_spellings_bulk(" in source, (
+        "for_tokens builds the live route index; it must merge spellings too"
+    )

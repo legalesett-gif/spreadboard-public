@@ -109,6 +109,58 @@ def _market_mid(item: dict[str, Any], max_age_seconds: float) -> float | None:
     return mid if mid > 0 else None
 
 
+def _admit_other_spellings_bulk(
+    markets_by_token: dict[str, dict[tuple[str, str, str], dict[str, Any]]],
+    books: dict[str, Any],
+) -> None:
+    """The same one-asset-two-tickers merge, for the bulk path.
+
+    `for_token` gained this first, which fixed the token page and nothing else:
+    the live route index is built by `for_tokens`, so MSTRSTOCK showed 132
+    routes when searched and **0 in the index** that the board and the external
+    comparator both read. The comparator kept reporting these as
+    `comparator_display_alias_unmatched`.
+
+    Admission is per MARKET on a live price, exactly as in the single-token
+    path -- a ticker can carry the equity on one venue and an unrelated token on
+    another, so judging the token merges the two. Prices come from the books
+    this function already loaded, so the gate costs no extra reads.
+    """
+
+    original = {token: dict(markets) for token, markets in markets_by_token.items()}
+
+    def mid(key: tuple[str, str, str]) -> float | None:
+        book = books.get(live_book_cache.cache_key(*key))
+        if book is None or not book.bids or not book.asks:
+            return None
+        try:
+            value = (float(book.bids[0][0]) + float(book.asks[0][0])) / 2.0
+        except (IndexError, TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+
+    suffix = "STOCK"
+    for token, markets in original.items():
+        other = (
+            token[: -len(suffix)]
+            if token.endswith(suffix) and len(token) > len(suffix)
+            else f"{token}{suffix}"
+        )
+        theirs = original.get(other)
+        if not theirs or other == token:
+            continue
+        own = [price for price in (mid(key) for key in markets) if price]
+        if not own:
+            continue
+        low, high = min(own), max(own)
+        for key, item in theirs.items():
+            price = mid(key)
+            if price is None:
+                continue
+            if max(price, high) / min(price, low) <= SAME_ASSET_PRICE_RATIO:
+                markets_by_token.setdefault(token, {}).setdefault(key, item)
+
+
 def _other_spelling_markets(
     symbol: str,
     catalog: dict[str, Any],
@@ -352,6 +404,8 @@ def for_tokens(
         )
         if all(key) and key[1] in {"Spot", "Futures"}:
             markets_by_token.setdefault(token, {})[key] = item
+
+    _admit_other_spellings_bulk(markets_by_token, books)
 
     funding = bulk_quotes.load_funding()
     rails = public_rails.load_public_rails()
