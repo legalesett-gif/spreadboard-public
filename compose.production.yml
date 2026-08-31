@@ -227,7 +227,20 @@ services:
       SPREADBOARD_DISCOVERY_ROWS: "30000"
       SPREADBOARD_DEX_CANDIDATES: "450"
       SPREADBOARD_DEX_SPOT_TIMEOUT_SECONDS: "420"
-      SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS: "150"
+      # 2026-08-31: 150 -> 250, the ceiling the code itself enforces
+      # (min(250, env) in sources.py). This is the largest remaining source of
+      # comparator absences: UACryptoInvest pairs a BinanceAlpha spot leg
+      # against a CEX future, and of the tokens it samples there, five of seven
+      # -- IN, TRIA, AIXBT, MARSCOIN, FOLKS -- have plenty of CEX routes here
+      # and NO on-chain leg at all, because they are not in this scan set.
+      #
+      # It costs no quota. OKX's rate limit is respected by
+      # SPREADBOARD_OKX_DEX_MIN_INTERVAL_S below; more tokens make the pass
+      # LONGER, not faster. A two-sided 150-token pass runs about three
+      # minutes, so 250 lands near five, inside the 420s
+      # SPREADBOARD_DEX_SPOT_TIMEOUT_SECONDS. Watch for
+      # "dex spot" timeouts and drop back to 150 if the pass stops completing.
+      SPREADBOARD_OKX_DEX_DYNAMIC_TOKENS: "250"
       # The connected project is visibly on OKX's Startup plan (minimum 2
       # RPS). Stay below that ceiling while cutting a two-sided 150-contract
       # quote pass from about six minutes to about three. Provider 429s still
