@@ -247,49 +247,40 @@ def realised_windows(
     return realised_window_details(entries, now_ms=now_ms)["windows"]
 
 
-#: Venues CCXT cannot give settled history for. BitMart is the only one, and it
-#: appears in the top funding rows, so its native endpoint is worth the code.
-NATIVE_HISTORY = {
-    "BitMart": "https://api-cloud-v2.bitmart.com/contract/public/funding-rate-history?symbol={symbol}&limit=500",
-}
+def _fetch_json(url: str) -> Any:
+    """One public GET returning decoded JSON, or raising for the caller."""
+
+    from urllib.request import Request, urlopen
+
+    request = Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"},
+    )
+    with urlopen(request, timeout=15) as response:
+        return json.loads(response.read())
 
 
-def _native_leg_history_outcome(venue: str, symbol: str) -> dict[str, Any]:
-    """Settled funding from a native endpoint with an explicit outcome."""
-    template = NATIVE_HISTORY.get(venue)
-    if not template:
-        return {"status": "unsupported_venue", "entries": []}
-    native_symbol = symbol.split(":")[0].replace("/", "")
+def _bitmart_history(symbol: str, *, days: int, max_pages: int) -> dict[str, Any]:
+    """BitMart returns its whole recent archive in one call."""
+
+    del days, max_pages
     # urllib requires an ASCII URL. BitMart lists Unicode market ids (for
     # example 龙虾USDT); interpolating them raw raises UnicodeEncodeError before
     # the provider is contacted and leaves the history sweep retrying forever.
     from urllib.parse import quote
 
-    encoded_symbol = quote(native_symbol, safe="")
+    native_symbol = quote(symbol.split(":")[0].replace("/", ""), safe="")
     try:
-        from urllib.request import Request, urlopen
-
-        request = Request(
-            template.format(symbol=encoded_symbol),
-            headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"},
+        payload = _fetch_json(
+            "https://api-cloud-v2.bitmart.com/contract/public/funding-rate-history"
+            f"?symbol={native_symbol}&limit=500"
         )
-        with urlopen(request, timeout=15) as response:
-            payload = json.loads(response.read())
     except Exception as exc:  # noqa: BLE001 - one venue must not stop the sweep.
-        return {
-            "status": "api_error",
-            "entries": [],
-            "error_type": type(exc).__name__,
-        }
+        return {"status": "api_error", "entries": [], "error_type": type(exc).__name__}
     if str(payload.get("code") or "1000") != "1000":
-        return {
-            "status": "api_error",
-            "entries": [],
-            "error_type": "BitMartResponseError",
-        }
-    rows = (payload.get("data") or {}).get("list") or []
+        return {"status": "api_error", "entries": [], "error_type": "BitMartResponseError"}
     entries: list[dict[str, Any]] = []
-    for row in rows:
+    for row in (payload.get("data") or {}).get("list") or []:
         try:
             entries.append(
                 {
@@ -299,10 +290,96 @@ def _native_leg_history_outcome(venue: str, symbol: str) -> dict[str, Any]:
             )
         except (KeyError, TypeError, ValueError):
             continue
-    return {
-        "status": "ok" if entries else "no_history_rows",
-        "entries": entries,
-    }
+    return {"status": "ok" if entries else "no_history_rows", "entries": entries}
+
+
+#: Ourbit pages its archive newest-first, 100 rows at a time. An 8-hour market
+#: needs one page for 30 days; an hourly one needs eight, so this pages until
+#: the window is covered rather than assuming a cycle.
+OURBIT_PAGE_SIZE = 100
+
+
+def _ourbit_history(symbol: str, *, days: int, max_pages: int) -> dict[str, Any]:
+    """Settled funding from Ourbit's own contract endpoint.
+
+    Ourbit has no CCXT adapter, so without this every Ourbit leg is
+    ``unsupported_venue`` and any route touching one shows no funding at all.
+    """
+
+    from urllib.parse import quote
+
+    native_symbol = quote(symbol.split(":")[0].replace("/", "_"), safe="")
+    cutoff_ms = int(time.time() * 1000) - int(max(days, 1)) * 86_400_000
+    entries: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for page in range(1, max(int(max_pages), 1) + 1):
+        try:
+            payload = _fetch_json(
+                "https://futures.ourbit.com/api/v1/contract/funding_rate/history"
+                f"?symbol={native_symbol}&page_num={page}&page_size={OURBIT_PAGE_SIZE}"
+            )
+        except Exception as exc:  # noqa: BLE001 - one venue must not stop the sweep.
+            if entries:
+                break
+            return {"status": "api_error", "entries": [], "error_type": type(exc).__name__}
+        # ``code`` is 0 on success, so ``or`` would read a good response as a
+        # failure; compare the value itself.
+        try:
+            ok = bool(payload.get("success")) and int(payload.get("code", -1)) == 0
+        except (TypeError, ValueError):
+            ok = False
+        if not ok:
+            if entries:
+                break
+            return {"status": "api_error", "entries": [], "error_type": "OurbitResponseError"}
+        data = payload.get("data") or {}
+        rows = data.get("resultList") or []
+        if not rows:
+            break
+        oldest_on_page: int | None = None
+        for row in rows:
+            try:
+                settled_at = int(row["settleTime"])
+                rate = float(row["fundingRate"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            oldest_on_page = settled_at if oldest_on_page is None else min(oldest_on_page, settled_at)
+            if settled_at in seen:
+                continue
+            seen.add(settled_at)
+            entries.append({"timestamp": settled_at, "fundingRate": rate})
+        try:
+            last_page = page >= int(data.get("totalPage") or page)
+        except (TypeError, ValueError):
+            last_page = True
+        # Stop as soon as the page ran past the window; paging further would
+        # fetch settlements no window on the board can use.
+        if last_page or (oldest_on_page is not None and oldest_on_page <= cutoff_ms):
+            break
+    return {"status": "ok" if entries else "no_history_rows", "entries": entries}
+
+
+#: Venues CCXT cannot give settled history for, each with the reader for its own
+#: endpoint. A venue earns a place here when it carries board rows that would
+#: otherwise show no funding at all.
+NATIVE_HISTORY = {
+    "BitMart": _bitmart_history,
+    "Ourbit": _ourbit_history,
+}
+
+
+def _native_leg_history_outcome(
+    venue: str,
+    symbol: str,
+    *,
+    days: int = 30,
+    max_pages: int = PRIORITY_HISTORY_PAGES,
+) -> dict[str, Any]:
+    """Settled funding from a native endpoint with an explicit outcome."""
+    handler = NATIVE_HISTORY.get(venue)
+    if handler is None:
+        return {"status": "unsupported_venue", "entries": []}
+    return handler(symbol, days=days, max_pages=max_pages)
 
 
 def _native_leg_history(venue: str, symbol: str) -> list[dict[str, Any]]:
@@ -484,7 +561,9 @@ def leg_history_outcome(
 ) -> dict[str, Any]:
     """Return rows plus a truthful, retry-aware source classification."""
     if venue in NATIVE_HISTORY:
-        return _native_leg_history_outcome(venue, symbol)
+        return _native_leg_history_outcome(
+            venue, symbol, days=days, max_pages=max_pages
+        )
     exchange_id = VENUE_IDS.get(venue)
     if not exchange_id:
         return {"status": "unsupported_venue", "entries": []}
