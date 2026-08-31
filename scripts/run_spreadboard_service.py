@@ -814,10 +814,37 @@ def _materialized_generation_ready() -> bool:
     )
 
 
+def _is_abandoned_temp_name(name: str) -> bool:
+    """Whether a runtime filename is an atomic writer's leftover.
+
+    Matched by SHAPE, not by a list of names. The previous rule knew only
+    `.api_discovery_refresh.json.*.tmp`, so every other writer's debris
+    accumulated forever -- production held 140MB across 7 files dating to Aug 24,
+    the residue of workers dying mid-write, which is what an OOM kill does.
+
+    Three conventions exist in this codebase and all three are covered:
+      f".{name}.{pid}.{tid}.tmp"                    -- funding catalogue
+      tempfile.mkstemp(prefix=f".{name}.")          -- telegram snapshots, no suffix
+      path.with_suffix(".tmp")                      -- no leading dot at all
+
+    A real artifact never ends in `.tmp`, and a genuine dotfile such as
+    `.deployed_revision` or `.env` carries no `.json.` segment, so neither is
+    matched.
+    """
+
+    if name.endswith(".tmp"):
+        return True
+    return name.startswith(".") and ".json." in name
+
+
 def _cleanup_abandoned_discovery_temps(
     *, max_age_seconds: float = 21_600.0, now: float | None = None
 ) -> dict[str, int]:
-    """Delete only timed-out atomic discovery files older than six hours."""
+    """Delete timed-out atomic temp files older than six hours.
+
+    The age gate is the entire safety property: deleting a temp a writer still
+    holds corrupts that write, and no atomic write here takes six hours.
+    """
 
     moment = time.time() if now is None else float(now)
     removed = 0
@@ -830,8 +857,7 @@ def _cleanup_abandoned_discovery_temps(
         if (
             not entry.is_file()
             or entry.is_symlink()
-            or not entry.name.startswith(".api_discovery_refresh.json.")
-            or not entry.name.endswith(".tmp")
+            or not _is_abandoned_temp_name(entry.name)
         ):
             continue
         try:
