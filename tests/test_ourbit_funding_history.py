@@ -143,3 +143,70 @@ def test_ourbit_is_registered_so_legs_are_no_longer_unsupported() -> None:
     assert vfh._native_leg_history_outcome("Binance", "BTC/USDT:USDT")["status"] == (
         "unsupported_venue"
     )
+
+
+def test_a_shipped_reader_invalidates_the_unsupported_stamp() -> None:
+    """`unsupported_venue` describes the build, not the venue.
+
+    736 Ourbit legs carried that stamp from before a reader existed. It is
+    deliberately not retryable, so without this rule they wait for the slow
+    rotation and a shipped reader takes most of a day to reach the board.
+    """
+
+    stamped = {"status": "unsupported_venue", "last_attempt_status": "unsupported_venue"}
+
+    assert vfh._status_is_obsolete_unsupported("Ourbit", stamped) is True
+    # A venue this build genuinely cannot read must NOT be re-queued, or the
+    # sweep spends its budget re-asking a question with no answer.
+    assert vfh._status_is_obsolete_unsupported("NotAVenue", stamped) is False
+    # And a leg that simply worked is not obsolete.
+    assert vfh._status_is_obsolete_unsupported("Ourbit", {"status": "ok"}) is False
+
+
+def test_the_sweep_asks_an_obsolete_leg_early(tmp_path, monkeypatch) -> None:
+    """The rule must change `build`'s ORDER, not just leg membership.
+
+    Every leg is in the rotation eventually; the point of the rule is that a
+    leg whose reader just shipped is asked now rather than most of a day later.
+    An earlier version of this test only asserted membership and passed against
+    the mutant that deletes the rule entirely.
+    """
+
+    fresh = {
+        "status": "ok",
+        "last_attempt_at": "2026-08-30T00:00:00+00:00",
+        "last_attempt_status": "ok",
+        "updated_at": "2026-08-30T00:00:00+00:00",
+    }
+    legs = [("Gate", f"T{n}/USDT:USDT") for n in range(40)]
+    legs.append(("Ourbit", "A/USDT:USDT"))
+    leg_status = {f"Gate|T{n}/USDT:USDT": dict(fresh) for n in range(40)}
+    leg_status["Ourbit|A/USDT:USDT"] = {
+        "status": "unsupported_venue",
+        "last_attempt_at": "2026-08-30T00:00:00+00:00",
+        "last_attempt_status": "unsupported_venue",
+    }
+
+    cache = tmp_path / "venue_funding_history.json"
+    cache.write_text(
+        json.dumps({"schema": vfh.SCHEMA, "legs": {}, "leg_status": leg_status}),
+        encoding="utf-8",
+    )
+
+    asked: list[tuple[str, str]] = []
+
+    def fake_batches(items, *, page_budget_for, **_kwargs):
+        for venue, symbol in items:
+            asked.append((venue, symbol))
+            yield venue, symbol, 1, {"status": "no_history_rows", "entries": []}
+
+    monkeypatch.setattr(vfh, "_fetch_outcomes_in_batches", fake_batches)
+
+    vfh.build(legs, cache_path=cache, budget_seconds=5.0)
+
+    assert ("Ourbit", "A/USDT:USDT") in asked
+    position = asked.index(("Ourbit", "A/USDT:USDT"))
+    assert position < 5, (
+        f"asked at position {position} of {len(asked)}: a leg whose reader just "
+        "shipped is still waiting behind the ordinary rotation"
+    )

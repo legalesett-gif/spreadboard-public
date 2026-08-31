@@ -656,6 +656,30 @@ def _status_is_classified(status: dict[str, Any] | None) -> bool:
     return str((status or {}).get("status") or "") in CLASSIFIED_STATUSES
 
 
+def _venue_is_readable(venue: str) -> bool:
+    """Whether this build can read settled funding for the venue at all."""
+
+    return venue in NATIVE_HISTORY or venue in VENUE_IDS
+
+
+def _status_is_obsolete_unsupported(venue: str, status: dict[str, Any] | None) -> bool:
+    """A leg recorded as unreadable that this build can now read.
+
+    ``unsupported_venue`` is deliberately not retryable -- re-asking a venue we
+    have no reader for would burn the sweep budget forever. But the status
+    describes the BUILD, not the venue, so adding a reader silently invalidates
+    every leg already stamped with it. Without this the legs sit on the slow
+    rotation and a shipped reader takes most of a day to show up on the board.
+    """
+
+    if not _venue_is_readable(venue):
+        return False
+    recorded = str(
+        (status or {}).get("last_attempt_status") or (status or {}).get("status") or ""
+    )
+    return recorded == "unsupported_venue"
+
+
 def _status_was_attempted(status: dict[str, Any] | None) -> bool:
     """Whether v4 has made at least one real provider attempt for this leg.
 
@@ -899,6 +923,9 @@ def build(
             or ""
         )
         in RETRYABLE_STATUSES
+        or _status_is_obsolete_unsupported(
+            item[0], leg_status.get(f"{item[0]}|{item[1]}")
+        )
     ]
     leading = list(dict.fromkeys([*priorities, *retryable_or_pending]))
 

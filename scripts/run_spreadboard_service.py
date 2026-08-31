@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,7 @@ from spreadboard import (
     telegram_checkout,
     token_metadata,
     tracked_route_warmer,
+    venue_funding_history,
     warm_query_projection,
     web_push,
 )  # noqa: E402
@@ -64,6 +66,10 @@ MARKET_GENERATION_PATH = RUNTIME_DIR / "market_generation.json"
 CONTAINER_HEALTH_PATH = RUNTIME_DIR / "container_health.json"
 #: The watchdog timer runs every two minutes; treat a long silence as a fault.
 CONTAINER_HEALTH_STALE_SECONDS = 900.0
+
+#: The funding sweep republishes its artifact every cycle. A long silence means
+#: the sweep has stopped and every window on the board is quietly ageing out.
+FUNDING_ARTIFACT_STALE_SECONDS = 3 * 3600.0
 
 # Discovery, exact funding evidence, and materialized navigation each expand
 # tens of thousands of markets into large Python object graphs.  The collector
@@ -705,6 +711,25 @@ def _service_role() -> str:
     return role
 
 
+def _artifact_age_seconds(updated_at: Any) -> float | None:
+    """Seconds since an ISO timestamp, or None when it cannot be read.
+
+    An unreadable stamp must not be reported as stale: "we cannot tell" and
+    "the sweep died" are different findings and only one is actionable.
+    """
+
+    text = str(updated_at or "").strip()
+    if not text:
+        return None
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return max(0.0, datetime.now(UTC).timestamp() - moment.timestamp())
+
+
 def _artifact_signature(path: Path) -> tuple[int, int] | None:
     try:
         stat = path.stat()
@@ -927,6 +952,10 @@ class SharedArtifactWatcher(threading.Thread):
         self.funding_navigation_health: dict[str, Any] | None = None
         self.container_health_signature = _artifact_signature(CONTAINER_HEALTH_PATH)
         self.container_health: dict[str, Any] | None = None
+        self.funding_truth_signature = _artifact_signature(
+            venue_funding_history.DEFAULT_CACHE_PATH
+        )
+        self.funding_truth_payload: dict[str, Any] | None = None
         #: None until the first structural install; 0.0 is a valid monotonic
         #: reading, so truthiness must not be used to mean "never installed".
         self.last_route_index_install_at: float | None = None
@@ -1121,7 +1150,69 @@ class SharedArtifactWatcher(threading.Thread):
                 title="SpreadBoard Funding navigation",
                 message=str(health.get("detail") or "Funding navigation status changed."),
             )
+        self._notify_funding_truth()
         self._notify_container_health()
+
+    def _notify_funding_truth(self) -> None:
+        """Alert on the two ways funding silently stops being true.
+
+        `catalog_coverage_pct` reported 100% while 736 Ourbit legs held no
+        figure at all, because it counts legs we have *classified*, not legs we
+        can actually show. Seven board cells in ten were blank and nothing
+        alerted. Both checks below are rules rather than tuned thresholds:
+
+        - a venue every one of whose legs is `unsupported_venue` has no reader
+          at all, which is a code gap that names itself; and
+        - an artifact that has stopped being republished means the sweep died,
+          after which every window ages out no matter how healthy the file
+          looks.
+        """
+
+        signature = _artifact_signature(venue_funding_history.DEFAULT_CACHE_PATH)
+        if (
+            signature != self.funding_truth_signature
+            or self.funding_truth_payload is None
+        ):
+            self.funding_truth_signature = signature
+            self.funding_truth_payload = venue_funding_history._load_raw()
+        payload = self.funding_truth_payload or {}
+        if not payload:
+            return
+
+        statuses = payload.get("leg_status") or {}
+        per_venue: dict[str, list[str]] = {}
+        for key, entry in statuses.items():
+            venue = str(key).split("|", 1)[0]
+            per_venue.setdefault(venue, []).append(str((entry or {}).get("status") or ""))
+        unreadable = sorted(
+            (venue, len(rows))
+            for venue, rows in per_venue.items()
+            if rows and all(status == "unsupported_venue" for status in rows)
+        )
+        self._emit_operator_alert(
+            "funding_venue_without_reader",
+            active=bool(unreadable),
+            title="SpreadBoard funding: venue has no reader",
+            message=(
+                "Every leg is unsupported_venue for: "
+                + ", ".join(f"{venue} ({count})" for venue, count in unreadable)
+                + ". Routes touching these venues show no funding at all."
+                if unreadable
+                else "Every venue on the board has a funding reader."
+            ),
+        )
+
+        age = _artifact_age_seconds(payload.get("updated_at"))
+        self._emit_operator_alert(
+            "funding_sweep_stalled",
+            active=age is not None and age > FUNDING_ARTIFACT_STALE_SECONDS,
+            title="SpreadBoard funding sweep stalled",
+            message=(
+                f"Funding history last published {int((age or 0) / 60)} minutes ago "
+                f"(limit {int(FUNDING_ARTIFACT_STALE_SECONDS / 60)}). "
+                "Windows on the board age out while this is stalled."
+            ),
+        )
 
     def _notify_container_health(self) -> None:
         """Relay the host watchdog's finding through the owner-only path.
