@@ -163,7 +163,20 @@ services:
       # of concurrent CCXT subscriptions consumed a full CPU and more than 1GB
       # while repeatedly reconnecting. The lane reserver still gives each view
       # first access to this bounded live set.
-      SPREADBOARD_WS_BOOKS: "96"
+      # 2026-09-01: 96 -> 64. The book worker plateaus around 1,400MB, which
+      # is the single largest process in the collector and put anon at 3,760MB
+      # of 4,096MB after a generation rotation. Purging per-symbol caches on
+      # unsubscribe (shipped earlier today) stopped the unbounded +22MB/min
+      # climb but did not lower the ceiling, because the bulk is NOT per-symbol:
+      # _ensure_markets loads each venue's FULL market catalogue per client, so
+      # the footprint scales with venues touched, and fewer subscriptions span
+      # fewer venues.
+      #
+      # This does not blank anything. Only these routes are websocket-fed; all
+      # ~2,686 board rows are already quoted by the bulk/fast path, measured at
+      # 100% spread_quote_current with a 68s median age. The routes dropped
+      # from websocket coverage lose freshness, not their quote.
+      SPREADBOARD_WS_BOOKS: "64"
       # Search/history rows remain available for five minutes, but a spread
       # older than this cannot headline a current ranking. Funding is ranked
       # independently and is not suppressed by this basis-age boundary.
