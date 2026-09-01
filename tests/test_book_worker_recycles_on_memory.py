@@ -128,3 +128,32 @@ def test_the_reset_frees_clients_and_market_state() -> None:
     assert instance.clients == {}
     assert instance._markets_ready == set()
     assert instance._market_locks == {}
+
+
+def test_the_reset_returns_arenas_to_the_os(monkeypatch) -> None:
+    """Freeing the objects is not freeing the memory.
+
+    Each venue catalogue is many medium-sized dicts, which fragments the
+    allocator: `gc.collect()` drops them while glibc keeps the arenas and RSS
+    never falls. Production measured five resets returning 48MB, 9MB, 1MB, 0MB
+    and 0MB -- a guard that fired correctly and bounded nothing.
+    """
+
+    calls: list[str] = []
+    monkeypatch.setattr(worker.gc, "collect", lambda: calls.append("gc"))
+
+    class _Libc:
+        def malloc_trim(self, _arg):
+            calls.append("malloc_trim")
+            return 1
+
+    monkeypatch.setattr(worker.ctypes, "CDLL", lambda _name: _Libc())
+
+    instance = _instance()
+    instance._markets_ready = set()
+    instance._market_locks = {}
+    asyncio.run(instance._reset_clients())
+
+    assert calls == ["gc", "malloc_trim"], (
+        f"reset performed {calls}; dropping references alone does not lower RSS"
+    )

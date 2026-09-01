@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+import ctypes
 import gc
 import json
 import os
@@ -175,6 +176,17 @@ class BookWorker:
         self.clients.clear()
         self._markets_ready.clear()
         self._market_locks.clear()
+        # Dropping the objects is not enough. Each venue catalogue is many
+        # medium-sized dicts, which fragments the allocator, so `gc.collect()`
+        # frees them while glibc keeps the arenas and RSS never falls. Measured
+        # on production: five resets returned 48MB, 9MB, 1MB, 0MB and 0MB.
+        # `malloc_trim` is glibc-only and advisory; elsewhere it is a no-op.
+        gc.collect()
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except (OSError, AttributeError):
+            # musl or macOS: there is no glibc arena to return.
+            pass
 
     async def run(self) -> None:
         while not self.stop.is_set():
