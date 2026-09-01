@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import gc
 import json
 import os
@@ -33,6 +34,11 @@ SNAPSHOT_PATH = RUNTIME_DIR / "api_discovery_latest.json"
 FAST_QUOTE_PATH = RUNTIME_DIR / "api_discovery_fast_quotes.json"
 ACCOUNTS_PATH = RUNTIME_DIR / "spreadboard_accounts.sqlite3"
 MAX_SUBSCRIPTIONS = max(20, int(os.environ.get("SPREADBOARD_WS_BOOKS", "160")))
+#: Recycle above this resident size. The footprint is dominated by CCXT's
+#: per-VENUE market catalogues, which cannot be released -- the client needs
+#: `markets`, `markets_by_id`, `symbols` and `ids` to resolve a symbol at all --
+#: so the process itself is the only thing that can be bounded. 0 disables.
+RSS_LIMIT_MB = max(0, int(os.environ.get("SPREADBOARD_WS_RSS_LIMIT_MB", "900")))
 RECONCILE_SECONDS = max(3.0, float(os.environ.get("SPREADBOARD_WS_RECONCILE_SECONDS", "10")))
 #: Floor on how often the subscription set is recomputed. Selection walks ten
 #: board lanes over a 62.7MB snapshot and measured 158 SECONDS in production,
@@ -101,6 +107,21 @@ def _asyncio_exception_handler(
     loop.default_exception_handler(context)
 
 
+def _self_rss_mb() -> int | None:
+    """This process's resident size, or None when it cannot be read.
+
+    None means "cannot tell" and must never be reported as 0, which would read
+    as unlimited headroom and silently disable the guard.
+    """
+
+    try:
+        with open("/proc/self/statm", encoding="ascii") as handle:
+            resident_pages = int(handle.read().split()[1])
+    except (OSError, IndexError, ValueError):
+        return None
+    return (resident_pages * os.sysconf("SC_PAGE_SIZE")) // (1024 * 1024)
+
+
 class BookWorker:
     def __init__(self) -> None:
         self.stop = asyncio.Event()
@@ -117,8 +138,54 @@ class BookWorker:
         #: Monotonic stamp of the last selection, for the refresh floor.
         self._desired_computed_at: float = -DESIRED_REFRESH_SECONDS
 
+    def _should_recycle(self) -> bool:
+        """Whether this process has grown past its bound and should exit.
+
+        `_ensure_websocket_worker` respawns it, so exiting restores a client set
+        with empty market catalogues. Every board row is quoted by the bulk/fast
+        path regardless, so the seconds spent resubscribing blank nothing.
+        """
+
+        if RSS_LIMIT_MB <= 0:
+            return False
+        resident = _self_rss_mb()
+        if resident is None:
+            return False
+        return resident > RSS_LIMIT_MB
+
+    async def _reset_clients(self) -> None:
+        """Drop every CCXT client so its market catalogues are freed.
+
+        Resetting in place rather than exiting the process is deliberate:
+        `_ensure_websocket_worker` is only called at the top of the refresh
+        loop, whose body contains the 45-60 minute discovery scan, so a worker
+        that exited could stay dead for up to two hours. The next `_watch`
+        iteration rebuilds whatever it needs through `_client`.
+        """
+
+        for task in self.tasks.values():
+            task.cancel()
+        if self.tasks:
+            await asyncio.gather(*self.tasks.values(), return_exceptions=True)
+        self.tasks.clear()
+        for client in self.clients.values():
+            # A stuck client must not block the reset that is freeing memory.
+            with suppress(Exception):
+                await client.close()
+        self.clients.clear()
+        self._markets_ready.clear()
+        self._market_locks.clear()
+
     async def run(self) -> None:
         while not self.stop.is_set():
+            if self._should_recycle():
+                before = _self_rss_mb()
+                await self._reset_clients()
+                print(
+                    f"websocket book worker reset clients at {before}MB "
+                    f"(limit {RSS_LIMIT_MB}MB); now {_self_rss_mb()}MB",
+                    flush=True,
+                )
             desired = (await self._desired_legs_cached()) - self._unavailable
             for key in set(self.tasks) - desired:
                 self.tasks.pop(key).cancel()
