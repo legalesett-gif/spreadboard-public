@@ -177,6 +177,18 @@ services:
       # 100% spread_quote_current with a 68s median age. The routes dropped
       # from websocket coverage lose freshness, not their quote.
       SPREADBOARD_WS_BOOKS: "64"
+      # 2026-09-01: the book worker's ceiling, lowered from the code default of
+      # 900MB. The collector OOM-killed at 12:43 UTC with the victim holding
+      # 814MB -- BELOW the 900MB guard, so it never fired. The threshold has to
+      # sit under what the collector can actually spare beside a running scan
+      # (market_evidence peaks 1,544MB, live_route_index 1,333MB, the scan
+      # itself ~800MB), not merely under the worker's own growth curve.
+      #
+      # Verified reclaim at this mechanism: a reset at 984MB returned the
+      # process to 655MB, so 650 is comfortably above the post-reset floor and
+      # will not thrash. Each reset costs seconds of websocket freshness on 64
+      # routes, never a quote -- the bulk/fast path covers every board row.
+      SPREADBOARD_WS_RSS_LIMIT_MB: "650"
       # Search/history rows remain available for five minutes, but a spread
       # older than this cannot headline a current ranking. Funding is ranked
       # independently and is not suppressed by this basis-age boundary.
