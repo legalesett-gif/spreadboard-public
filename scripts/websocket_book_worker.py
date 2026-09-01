@@ -122,6 +122,7 @@ class BookWorker:
             desired = (await self._desired_legs_cached()) - self._unavailable
             for key in set(self.tasks) - desired:
                 self.tasks.pop(key).cancel()
+                self._release_client_caches(key)
             for key in desired - set(self.tasks):
                 self.tasks[key] = asyncio.create_task(self._watch(key))
             self._prune_stale_books()
@@ -130,6 +131,37 @@ class BookWorker:
             except TimeoutError:
                 pass
         await self.close()
+
+    #: CCXT Pro keeps one entry per symbol in these caches for the life of the
+    #: client. Cancelling the task stops the updates but frees nothing.
+    _PER_SYMBOL_CACHES = ("orderbooks", "trades", "ohlcvs", "tickers")
+
+    def _release_client_caches(self, key: LegKey) -> None:
+        """Drop a no-longer-watched symbol from its client's per-symbol caches.
+
+        The desired set is recomputed whenever a new generation lands, so a
+        symbol that rotates out would otherwise stay resident forever. In
+        production this worker held 96 subscriptions and reached 1,456MB --
+        ~15MB per subscription, which is accumulation, not a working set --
+        before the kernel killed it at 1,553MB and took the collector's
+        in-flight work with it.
+
+        Best effort by design: freeing memory must never be able to break the
+        reconcile loop that is doing the freeing.
+        """
+
+        venue, market_type, symbol = key
+        client = self.clients.get((venue, market_type))
+        if client is None:
+            return
+        for attribute in self._PER_SYMBOL_CACHES:
+            cache = getattr(client, attribute, None)
+            if cache is None:
+                continue
+            try:
+                cache.pop(symbol, None)
+            except (AttributeError, TypeError):
+                continue
 
     def _prune_stale_books(self) -> bool:
         """Keep a maintenance lock from killing every live subscription.
