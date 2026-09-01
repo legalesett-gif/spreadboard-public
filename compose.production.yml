@@ -253,7 +253,18 @@ services:
       # 45-60 minutes, far past the 300s heavy-child slot wait -- so the only
       # reliable lever is total footprint. This bounds it. Raise again only
       # with a measured collector peak below ~3,400MB.
-      SPREADBOARD_DISCOVERY_ROWS: "22000"
+      # 2026-09-01 (second pass): 22,000 -> 28,000. The cut to 22,000 was a
+      # proxy for a bug I had not yet found. The real cause of the OOM kills was
+      # websocket_book_worker holding every book it had ever subscribed to;
+      # fixing that (per-symbol release + 96 -> 64 subscriptions) took the book
+      # worker from a 1,492MB peak to 679MB and the main service from 1,483MB to
+      # 911MB, with collector anon at 1,801MB of 4,096MB.
+      #
+      # The comparator measured the cost of the cut: exact-pair recall 82% -> 76%
+      # on a 50-row sample. Breadth was never the problem, so paying for it in
+      # accuracy is not a trade worth keeping. Restored to 28,000 rather than the
+      # original 30,000 so the genuine saving is not spent in full.
+      SPREADBOARD_DISCOVERY_ROWS: "28000"
       SPREADBOARD_DEX_CANDIDATES: "450"
       SPREADBOARD_DEX_SPOT_TIMEOUT_SECONDS: "420"
       # 2026-08-31: 150 -> 250, the ceiling the code itself enforces
