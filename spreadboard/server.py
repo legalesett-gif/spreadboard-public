@@ -6091,6 +6091,8 @@ def restore_materialized_route_index(board_path: Path) -> int:
         _ROUTE_INDEX["rows"] = rows
         _ROUTE_COMPAT_PATHS.clear()
         _ROUTE_COMPAT_ROWS.clear()
+        # A route absent from the previous generation may exist in this one.
+        _ROUTE_MISS_CACHE.clear()
     warm_query_projection.LIVE_UNIVERSE.install(rows, template=template)
     return len(rows)
 
@@ -6138,6 +6140,8 @@ def _route_index(board_path: Path) -> dict[str, dict[str, Any]]:
         _ROUTE_INDEX["rows"] = index
         _ROUTE_COMPAT_PATHS.clear()
         _ROUTE_COMPAT_ROWS.clear()
+        # A route absent from the previous generation may exist in this one.
+        _ROUTE_MISS_CACHE.clear()
     warm_query_projection.LIVE_UNIVERSE.install(
         index,
         template=_MATERIALIZED_VIEW_STORE.payload_for(
@@ -6146,6 +6150,28 @@ def _route_index(board_path: Path) -> dict[str, dict[str, Any]]:
         ),
     )
     return index
+
+
+#: Route keys the snapshot walk has already failed to resolve, per board path.
+#: `_find_canonical_route`'s last resort walks the whole discovery snapshot to
+#: build rows before filtering to one token, and it had no memory of failure --
+#: so `tracked_route_warmer`, which asks for every tracked route on every pass,
+#: paid that cost again and again for a position whose route is not on the
+#: board. Profiled in production at 54% of a core, holding the GIL, with pages
+#: taking 14 seconds behind it.
+_ROUTE_MISS_CACHE: set[tuple[str, str]] = set()
+_ROUTE_MISS_LIMIT = 4096
+
+
+def _reset_route_miss_cache() -> None:
+    """Forget every remembered miss.
+
+    Called when a new discovery generation is installed: a route absent from one
+    generation may exist in the next, and remembering otherwise would hide it.
+    """
+
+    with _ROUTE_INDEX_LOCK:
+        _ROUTE_MISS_CACHE.clear()
 
 
 def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | None:
@@ -6223,6 +6249,13 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
     token = str(route_key or "").split("|", 1)[0].strip().upper()
     if not token:
         return None
+    miss_key = (str(route_key), str(board_path))
+    with _ROUTE_INDEX_LOCK:
+        already_missed = miss_key in _ROUTE_MISS_CACHE
+    if already_missed:
+        # Already walked the snapshot for this key against this generation and
+        # found nothing. Walking it again cannot produce a different answer.
+        return None
     market = api_spreads.load_spreads(
         board_path=board_path,
         q=token,
@@ -6249,7 +6282,13 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
                 evicted = next(iter(_ROUTE_COMPAT_ROWS))
                 _ROUTE_COMPAT_ROWS.pop(evicted, None)
                 _ROUTE_COMPAT_PATHS.pop(evicted, None)
-    return indexed.get(route_key)
+    resolved = indexed.get(route_key)
+    if resolved is None:
+        with _ROUTE_INDEX_LOCK:
+            if len(_ROUTE_MISS_CACHE) >= _ROUTE_MISS_LIMIT:
+                _ROUTE_MISS_CACHE.clear()
+            _ROUTE_MISS_CACHE.add(miss_key)
+    return resolved
 
 
 def _chart_leg_symbol(row: dict[str, Any], side: str) -> str:
