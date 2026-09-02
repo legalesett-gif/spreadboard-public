@@ -210,37 +210,20 @@ def collapse_payloads_to_short_legs(
     return payloads
 
 
-#: Long-leg market types that pay no funding, so the pair's net carry is the
-#: short leg's rate alone. Anything else -- a futures long -- funds too.
-NON_FUNDING_LONG_TYPES = frozenset({"spot", "dex"})
-
-
-def _long_leg_funds(route: dict[str, Any]) -> bool:
-    """Whether the long leg contributes to the pair's net carry."""
-
-    market_type = str(route.get("long_market_type") or "").strip().casefold()
-    if market_type in NON_FUNDING_LONG_TYPES:
-        return False
-    # DEX venues are named rather than typed on some rows.
-    return "dex" not in str(route.get("long_venue") or "").casefold()
+#: How many longs a single short leg keeps. A token listed on fifteen futures
+#: venues has 15x14 ordered pairs, every one with a distinct net rate, so
+#: distinctness alone cannot bound the catalogue. The ranked page shows a
+#: handful per token; the rest is weight.
+LONGS_PER_SHORT_LEG = max(1, int(os.environ.get("SPREADBOARD_FUNDING_LONGS_PER_SHORT", "3")))
 
 
 def _short_leg_key(route: dict[str, Any]) -> tuple[str, str, str] | None:
-    """A route's funding-bearing identity: the leg that pays or charges.
+    """The funding-bearing identity of a route: its short leg.
 
-    Only defined where the SHORT alone determines the pair's carry -- a
-    spot-futures or dex-futures route. Net carry is short minus long, so when
-    the long funds too, two routes sharing a short genuinely differ: production
-    龙虾 showed a Gate short at 91.76%, 86.29% and 80.81% against three futures
-    longs. Merging those would report one long's rate for the others, which is
-    inventing a number rather than removing a repeat.
-
-    Venue alone is not enough either. A venue can list several independently
-    funded contracts for one token (a USDT perp and a USDC perp).
+    Venue alone is not enough. A venue can list several independently funded
+    contracts for one token (a USDT perp and a USDC perp).
     """
 
-    if _long_leg_funds(route):
-        return None
     venue = str(route.get("short_venue") or "").strip()
     symbol = str(route.get("short_market_symbol") or "").strip()
     if not venue or not symbol:
@@ -248,47 +231,82 @@ def _short_leg_key(route: dict[str, Any]) -> tuple[str, str, str] | None:
     return (venue, str(route.get("short_market_type") or "").strip(), symbol)
 
 
+def _net_rate(route: dict[str, Any]) -> float | None:
+    """The pair's net carry, or None when it is not known.
+
+    Unknown must not compare equal to a known value: "we cannot tell" and "the
+    same as that one" are different claims, and merging on the first would
+    report one route's rate for another.
+    """
+
+    for key in ("funding_apr_pct", "funding_24h_pct", "funding_daily_pct"):
+        value = route.get(key)
+        try:
+            return round(float(value), 6)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def collapse_to_short_legs(
     routes: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """One route per short leg, keeping the best long to pair it with.
+    """Drop rows that repeat a short leg's rate; bound the rest.
 
-    Funding is paid by the short leg, so every route sharing one carries the
-    identical rate. Production held 144,409 routes for 4,169 distinct (token,
-    short leg) facts -- 34.6x duplication, with TRX alone repeating each of its
-    43 short legs across 42 different longs.
+    Funding is paid by the short leg, so routes sharing one usually carry the
+    identical rate against different longs. Production held 144,409 routes for
+    4,169 such facts -- 34.6x -- and that weight is what forced the catalogue
+    down to 500 tokens, hiding SKHYNIX and 龙虾.
 
-    That repetition is what forced the catalogue down to a 500-token budget,
-    which is why LOBSTER (Aster at 116.8% APR, a 93.9th-percentile rate) and
-    SKHYNIX were missing from Funding altogether.
+    But net carry is short MINUS long, so a funding long makes two routes on the
+    same short genuinely different: 龙虾 showed a Gate short at 91.76%, 86.29%
+    and 80.81%. What makes a row redundant is therefore the RATE, not the leg's
+    market type -- an earlier version keyed on the type and left 373 identical
+    rows on the board while growing the catalogue past its original size.
 
-    Collapsing is lossless for funding -- the dropped rows repeat the rate that
-    survives. What is reduced is the choice of long, so the survivor is the one
-    with the widest spread: the same row a member would pick to enter on, since
-    a pair at or below zero spread is one to wait on rather than take now.
-
-    Every distinct short leg is preserved. Reducing THAT would be removing a
-    venue that pays, which is the opposite of the point.
+    Where rows are kept, the survivor is the widest spread: the same row worth
+    entering, since a pair at or below zero costs you to open.
     """
 
-    best: dict[tuple[str, str, str], dict[str, Any]] = {}
-    passthrough: list[dict[str, Any]] = []
+    best: dict[tuple[Any, ...], dict[str, Any]] = {}
+    unkeyed: list[dict[str, Any]] = []
     for route in routes:
         if not isinstance(route, dict):
             continue
-        key = _short_leg_key(route)
-        if key is None:
-            # Either the long funds too -- so this route's carry is its own and
-            # must survive -- or there is no identifiable short leg, in which
-            # case bucketing them together would report one arbitrary rate for
-            # all of them. A row with no short leg at all is dropped.
-            if _long_leg_funds(route) and str(route.get("short_venue") or "").strip():
-                passthrough.append(route)
+        leg = _short_leg_key(route)
+        if leg is None:
+            # No identifiable short leg: bucketing these together would report
+            # one arbitrary rate for all of them.
             continue
+        rate = _net_rate(route)
+        if rate is None:
+            # Unknown rates cannot be compared, so they are bounded by the
+            # per-leg cap below rather than merged.
+            unkeyed.append(route)
+            continue
+        key = (*leg, rate)
         current = best.get(key)
         if current is None or _entry_spread(route) > _entry_spread(current):
             best[key] = route
-    return [*best.values(), *passthrough]
+
+    per_leg: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for route in (*best.values(), *unkeyed):
+        leg = _short_leg_key(route)
+        if leg is not None:
+            per_leg.setdefault(leg, []).append(route)
+
+    kept: list[dict[str, Any]] = []
+    for routes_for_leg in per_leg.values():
+        if len(routes_for_leg) > LONGS_PER_SHORT_LEG:
+            routes_for_leg = sorted(
+                routes_for_leg,
+                key=lambda item: (
+                    _net_rate(item) if _net_rate(item) is not None else float("-inf")
+                ),
+                reverse=True,
+            )[:LONGS_PER_SHORT_LEG]
+        kept.extend(routes_for_leg)
+    return kept
 
 
 def _entry_spread(route: dict[str, Any]) -> float:
