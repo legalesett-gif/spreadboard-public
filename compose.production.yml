@@ -194,6 +194,17 @@ services:
       # Each reset costs seconds of websocket freshness on 64 routes, never a
       # quote -- the bulk/fast path covers every board row.
       SPREADBOARD_WS_RSS_LIMIT_MB: "1000"
+      # 2026-09-02: 500 -> 2500. The short-leg collapse took the catalogue from
+      # 259.9MB to 12.7MB (-95.1%) and routes per token from 288.8 to 13.4,
+      # because funding is a property of the short leg and every route sharing
+      # one repeated its rate. 500 tokens was what that duplication could
+      # afford, and it is why LOBSTER -- whose Aster leg pays 116.8% APR, a
+      # 93.9th-percentile rate -- never appeared in Funding at all.
+      #
+      # At 25KB a token this holds 2,500 for roughly 63MB, still a quarter of
+      # what 500 duplicated tokens cost. Raise further only against a measured
+      # catalogue size; the collector has been OOM-sensitive all week.
+      SPREADBOARD_FUNDING_CATALOG_TOKENS: "2500"
       # Search/history rows remain available for five minutes, but a spread
       # older than this cannot headline a current ranking. Funding is ranked
       # independently and is not suppressed by this basis-age boundary.
