@@ -129,7 +129,17 @@ services:
       # writes at different times. Alternate those compact projections between
       # full 30-second passes so real overlaps are observed without extending
       # the 90-second expiry.
-      SPREADBOARD_PRIORITY_LIVE_QUERY_REFRESH_SECONDS: "5"
+      # 2026-09-02: 5 -> 15. Re-rendering a ~3,000-row board every five seconds
+      # is what the web process spends 119% of a core on, and the box was at
+      # 364% of its 400% capacity with pages taking 10-14s. The other two
+      # consumers -- bulk quotes 88.7%, websocket books 71.8% -- ARE the live
+      # price feed and cannot be traded away without losing what the product is.
+      #
+      # This does not blank anything and does not change any expiry: the 90s
+      # truth boundary, the 30s bulk pass and the websocket books are all
+      # unchanged. It only re-projects the compact priority views less often,
+      # which is still far inside the 15-minute window an opportunity survives.
+      SPREADBOARD_PRIORITY_LIVE_QUERY_REFRESH_SECONDS: "15"
       # Independent venue adapters refresh concurrently; each venue writes its
       # result in one SQLite transaction. Production passes had grown to
       # 91-98s at eight/twelve workers, outside the unchanged 90s truth
