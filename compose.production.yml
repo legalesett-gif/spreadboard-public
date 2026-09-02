@@ -243,7 +243,16 @@ services:
       SPREADBOARD_CHART_CATALOG_WORKERS: "2"
       SPREADBOARD_CHART_CATALOG_SECONDS: "21600"
       SPREADBOARD_CHART_CATALOG_VENUE_TIMEOUT: "60"
-      SPREADBOARD_POSITION_ALERT_SECONDS: "2"
+      # 2026-09-02: 2 -> 15. Each pass calls live_book_cache.load_all(), which
+      # JSON-parses EVERY fresh book -- hundreds of legs -- so that ~22 keys can
+      # be looked up for the account's positions. Profiled holding a thread
+      # active in load_all while pages waited.
+      #
+      # These alerts watch multi-day funding farms against user thresholds.
+      # Two-second latency on that is not worth a large fraction of a core, and
+      # 15s is still far tighter than the positions move. The proper fix is a
+      # keyed load rather than load_all; this is the cheap part of it.
+      SPREADBOARD_POSITION_ALERT_SECONDS: "15"
       SPREADBOARD_ACCOUNTING_PUBLIC_KEY_FILE: /run/secrets/accounting-public.pem
       SPREADBOARD_MARKET_ALERT_SECONDS: "2"
       # Rail reopen transitions are retained for diagnostics but never posted
