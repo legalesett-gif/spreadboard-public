@@ -219,14 +219,22 @@ def _hydrate_position(
     long_multiplier, short_multiplier = _relative_value_multipliers(
         market.get("canonical_route") or current
     )
-    open_spread = _spread(
-        long_ask * long_multiplier if long_ask is not None else None,
-        short_bid * short_multiplier if short_bid is not None else None,
-    )
-    marked_spread = _spread(
-        long_mark * long_multiplier if long_mark is not None else None,
-        short_mark * short_multiplier if short_mark is not None else None,
-    )
+    # The route's relative-value note wins when it exists; otherwise the
+    # position's own leg quantities carry the ratio. Applying both would count
+    # the same 10:1 twice.
+    ratio_from_route = long_multiplier != 1.0 or short_multiplier != 1.0
+    if ratio_from_route:
+        open_spread = _spread(
+            long_ask * long_multiplier if long_ask is not None else None,
+            short_bid * short_multiplier if short_bid is not None else None,
+        )
+        marked_spread = _spread(
+            long_mark * long_multiplier if long_mark is not None else None,
+            short_mark * short_multiplier if short_mark is not None else None,
+        )
+    else:
+        open_spread = paired_spread_pct(position, long_price=long_ask, short_price=short_bid)
+        marked_spread = paired_spread_pct(position, long_price=long_mark, short_price=short_mark)
     listing_status = str(market.get("listing_status") or "unlisted")
     if (
         current
@@ -931,6 +939,32 @@ def _route_kind(position: dict[str, Any]) -> str:
         short_market_type=position.get("short_market_type"),
         source_kind=position.get("source_kind"),
     )
+
+
+def paired_spread_pct(
+    position: dict[str, Any],
+    *,
+    long_price: float | None,
+    short_price: float | None,
+) -> float | None:
+    """The basis between two legs, measured on what each leg is WORTH.
+
+    A paired position is not always 1:1. The owner's SKHX is 10:1 by
+    construction -- one leg is an ADR of the other -- so comparing raw prices
+    reported -86.78% for a position whose real basis is +32.17%.
+
+    Quantities are the position's own statement of its ratio and are always
+    present, so they are the basis. When either is missing the prices are
+    compared directly, which is the same answer whenever the legs are equal.
+    """
+
+    if long_price is None or short_price is None:
+        return None
+    long_qty = _number(position.get("long_quantity"))
+    short_qty = _number(position.get("short_quantity"))
+    if long_qty and short_qty and long_qty > 0 and short_qty > 0:
+        return _spread(float(long_qty) * float(long_price), float(short_qty) * float(short_price))
+    return _spread(float(long_price), float(short_price))
 
 
 def _spread(denominator: float | None, numerator: float | None) -> float | None:

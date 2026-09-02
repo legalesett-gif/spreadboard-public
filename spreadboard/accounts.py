@@ -2895,7 +2895,15 @@ def _position_values(payload: dict[str, Any]) -> dict[str, Any]:
         for key in ("long_quantity", "long_entry_price", "short_quantity", "short_entry_price")
     }
     opened_at = _normalize_iso(str(payload.get("opened_at") or _utc_iso()))
-    entry_spread = (numeric["short_entry_price"] / numeric["long_entry_price"] - 1) * 100
+    # Measured on what each leg is WORTH, not on its unit price. A paired
+    # position is not always 1:1 -- SKHX is 10:1 because one leg is an ADR of
+    # the other -- and comparing prices reported -86.78% for a +32.17% basis.
+    # Identical to the price ratio whenever the quantities are equal.
+    entry_spread = (
+        (numeric["short_quantity"] * numeric["short_entry_price"])
+        / (numeric["long_quantity"] * numeric["long_entry_price"])
+        - 1
+    ) * 100
     token = text["token"].upper()
     route_key = "|".join(
         (
