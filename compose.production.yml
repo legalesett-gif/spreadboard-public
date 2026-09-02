@@ -204,7 +204,16 @@ services:
       # At 25KB a token this holds 2,500 for roughly 63MB, still a quarter of
       # what 500 duplicated tokens cost. Raise further only against a measured
       # catalogue size; the collector has been OOM-sensitive all week.
-      SPREADBOARD_FUNDING_CATALOG_TOKENS: "2500"
+      # 2026-09-02 (second pass): 2500 -> 1200, sized from the reach-bound
+      # ranking rather than guessed. 2,500 expanded all 2,308 ranked tokens and
+      # put the box into CPU saturation -- load 6.55 on 4 vCPU, the app's web
+      # process pegged at 118%, /free taking 11s. Memory was never the issue
+      # there; the build work was.
+      #
+      # 1200 keeps every token that matters, with margin:
+      #   龙虾 rank 185 · TRX 308 · SKHYNIX 501 · BP 866 · SKHX 911
+      # SKHYNIX missing at the old 500 was a miss by ONE place.
+      SPREADBOARD_FUNDING_CATALOG_TOKENS: "1200"
       # Search/history rows remain available for five minutes, but a spread
       # older than this cannot headline a current ranking. Funding is ranked
       # independently and is not suppressed by this basis-age boundary.
