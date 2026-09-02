@@ -1046,34 +1046,47 @@ def capital_metrics(position: dict[str, Any]) -> dict[str, Any]:
 
 
 def deployed_capital_summary(positions: list[dict[str, Any]]) -> dict[str, Any]:
-    """What the money currently at work is earning, across everything open.
+    """What the money at work has earned, over the money currently at work.
 
-    Closed positions returned their capital, so they are excluded: including
-    them answers "how did the month go", which the monthly figure already
-    covers, rather than "what is deployed right now actually returning".
+    The two halves are deliberately asymmetric, and the asymmetry is the point.
+
+    CAPITAL counts only open positions: a closed one returned its capital, so
+    including it would answer "how did the month go", which the monthly figure
+    already answers.
+
+    PNL counts everything, realised included. The live account showed $634.71
+    earned on $25,880 deployed -- 2.45% -- while this reported 0.86%, because
+    the numerator held only the open legs' mark-to-market and funding and
+    discarded every dollar already banked. Read the way an owner reads it,
+    that made a book look worse the more often it took profit.
     """
     open_positions = [
         item for item in positions if str(item.get("status") or "open") == "open"
     ]
     deployed = 0.0
     notional = 0.0
-    pnl_total = 0.0
     priced_capital = 0.0
     for item in open_positions:
         metrics = capital_metrics(item)
         committed = float(metrics["capital_committed_usd"] or 0.0)
         deployed += committed
         notional += float(metrics["matched_notional_usd"] or 0.0)
-        value = _number(item.get("total_pnl_usd"))
-        if value is not None:
-            pnl_total += float(value)
+        if _number(item.get("total_pnl_usd")) is not None:
             priced_capital += committed
+    # Every position's contribution, open or closed. A position with no priced
+    # PnL contributes nothing rather than zero, so an unquotable leg cannot
+    # read as a flat result.
+    pnl_total = sum(
+        float(value)
+        for value in (_number(item.get("total_pnl_usd")) for item in positions)
+        if value is not None
+    )
     return {
         "deployed_capital_usd": round(deployed, 4),
         "deployed_notional_usd": round(notional, 4),
-        # Quoted on the capital of the positions that could be priced. Requiring
-        # every position to be priceable blanked the figure whenever a single
-        # leg was unquotable.
+        # Quoted on the capital of the OPEN positions that could be priced.
+        # Requiring every position to be priceable blanked the figure whenever
+        # a single leg was unquotable.
         "open_return_on_capital_pct": (
             round(pnl_total / priced_capital * 100.0, 4)
             if priced_capital > 0

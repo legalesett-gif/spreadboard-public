@@ -123,3 +123,39 @@ def test_leverage_round_trips_through_the_journal(tmp_path) -> None:
 
     metrics = portfolio.capital_metrics(stored)
     assert metrics["capital_committed_usd"] == 1200.0
+
+
+def test_leverage_can_be_corrected_on_an_existing_position(tmp_path) -> None:
+    """Adding the column was not enough: the owner's SKHX position was written
+    before it existed, so it must be settable by editing the entry. Without an
+    update path the capital figure stays wrong forever."""
+
+    from spreadboard import accounts
+
+    db = tmp_path / "accounts.sqlite3"
+    accounts.initialize(db_path=db)
+    user = accounts.create_user(
+        email="edit@example.com", display_name="Edit", password="pw-1234567890ab", db_path=db
+    )
+    uid = int(user["id"])
+    base = {
+        "token": "SKHX",
+        "long_venue": "Hyperliquid",
+        "long_market_type": "Futures",
+        "short_venue": "Hyperliquid",
+        "short_market_type": "Futures",
+        "long_quantity": 100.0,
+        "long_entry_price": 10.0,
+        "short_quantity": 100.0,
+        "short_entry_price": 10.0,
+    }
+    created = accounts.create_position(uid, dict(base), db_path=db)
+    assert created["short_leverage"] is None
+    assert portfolio.capital_metrics(created)["capital_committed_usd"] == 2000.0
+
+    updated = accounts.update_position(
+        uid, int(created["id"]), dict(base, short_leverage=5.0), db_path=db
+    )
+
+    assert updated["short_leverage"] == 5.0, "editing the entry did not persist leverage"
+    assert portfolio.capital_metrics(updated)["capital_committed_usd"] == 1200.0
