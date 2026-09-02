@@ -210,14 +210,37 @@ def collapse_payloads_to_short_legs(
     return payloads
 
 
+#: Long-leg market types that pay no funding, so the pair's net carry is the
+#: short leg's rate alone. Anything else -- a futures long -- funds too.
+NON_FUNDING_LONG_TYPES = frozenset({"spot", "dex"})
+
+
+def _long_leg_funds(route: dict[str, Any]) -> bool:
+    """Whether the long leg contributes to the pair's net carry."""
+
+    market_type = str(route.get("long_market_type") or "").strip().casefold()
+    if market_type in NON_FUNDING_LONG_TYPES:
+        return False
+    # DEX venues are named rather than typed on some rows.
+    return "dex" not in str(route.get("long_venue") or "").casefold()
+
+
 def _short_leg_key(route: dict[str, Any]) -> tuple[str, str, str] | None:
     """A route's funding-bearing identity: the leg that pays or charges.
 
-    Venue alone is not enough. A venue can list several independently funded
-    contracts for one token (a USDT perp and a USDC perp), and merging those
-    would report one contract's rate for the other.
+    Only defined where the SHORT alone determines the pair's carry -- a
+    spot-futures or dex-futures route. Net carry is short minus long, so when
+    the long funds too, two routes sharing a short genuinely differ: production
+    龙虾 showed a Gate short at 91.76%, 86.29% and 80.81% against three futures
+    longs. Merging those would report one long's rate for the others, which is
+    inventing a number rather than removing a repeat.
+
+    Venue alone is not enough either. A venue can list several independently
+    funded contracts for one token (a USDT perp and a USDC perp).
     """
 
+    if _long_leg_funds(route):
+        return None
     venue = str(route.get("short_venue") or "").strip()
     symbol = str(route.get("short_market_symbol") or "").strip()
     if not venue or not symbol:
@@ -249,18 +272,23 @@ def collapse_to_short_legs(
     """
 
     best: dict[tuple[str, str, str], dict[str, Any]] = {}
+    passthrough: list[dict[str, Any]] = []
     for route in routes:
         if not isinstance(route, dict):
             continue
         key = _short_leg_key(route)
         if key is None:
-            # No identifiable short leg: bucketing these together would report
-            # one arbitrary rate for all of them.
+            # Either the long funds too -- so this route's carry is its own and
+            # must survive -- or there is no identifiable short leg, in which
+            # case bucketing them together would report one arbitrary rate for
+            # all of them. A row with no short leg at all is dropped.
+            if _long_leg_funds(route) and str(route.get("short_venue") or "").strip():
+                passthrough.append(route)
             continue
         current = best.get(key)
         if current is None or _entry_spread(route) > _entry_spread(current):
             best[key] = route
-    return list(best.values())
+    return [*best.values(), *passthrough]
 
 
 def _entry_spread(route: dict[str, Any]) -> float:

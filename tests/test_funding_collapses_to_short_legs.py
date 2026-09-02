@@ -311,3 +311,68 @@ def test_an_exact_symbol_search_keeps_every_leg(monkeypatch) -> None:
         f"exact-symbol view returned {len(routes)} legs; capping it can hide the "
         "venue the member actually holds"
     )
+
+
+def _ff_route(short_venue, *, long_venue, long_funding, spread=0.5):
+    """A futures-futures route: BOTH legs fund, so net carry depends on the long."""
+
+    return {
+        "token": "TKN",
+        "long_venue": long_venue,
+        "long_market_type": "Futures",
+        "long_market_symbol": f"TKN/USDT:USDT@{long_venue}",
+        "long_funding_pct": long_funding,
+        "short_venue": short_venue,
+        "short_market_type": "Futures",
+        "short_market_symbol": f"TKN/USDT:USDT@{short_venue}",
+        "displayed_open_spread_pct": spread,
+    }
+
+
+def test_futures_futures_routes_are_not_merged_on_the_short_alone() -> None:
+    """Net carry is short minus long, so a funding long makes routes distinct.
+
+    Production 龙虾 showed a Gate short at 91.76%, 86.29% and 80.81% against
+    three different futures longs. Merging those reports one long's rate for
+    the others -- the collapse would be inventing a number, not removing a
+    repeat.
+    """
+
+    routes = [
+        _ff_route("Gate", long_venue="Mexc", long_funding=0.0),
+        _ff_route("Gate", long_venue="HTX", long_funding=0.05),
+        _ff_route("Gate", long_venue="Bitget", long_funding=0.11),
+    ]
+
+    kept = funding_catalog.collapse_to_short_legs(routes)
+
+    assert len(kept) == 3, (
+        "merged futures-futures routes whose net carry genuinely differs"
+    )
+
+
+def test_a_spot_long_pays_no_funding_so_those_do_collapse() -> None:
+    """This is the case the duplication actually came from."""
+
+    routes = [
+        _route("Gate", long_venue="Mexc", spread=0.1),
+        _route("Gate", long_venue="HTX", spread=0.9),
+        _route("Gate", long_venue="Bitget", spread=0.3),
+    ]
+
+    kept = funding_catalog.collapse_to_short_legs(routes)
+
+    assert len(kept) == 1
+    assert kept[0]["long_venue"] == "HTX"
+
+
+def test_a_dex_long_also_collapses() -> None:
+    routes = [
+        dict(_route("Aster", long_venue="OKX DEX 56", spread=0.2), long_market_type="DEX"),
+        dict(_route("Aster", long_venue="OKX DEX 1", spread=0.8), long_market_type="DEX"),
+    ]
+
+    kept = funding_catalog.collapse_to_short_legs(routes)
+
+    assert len(kept) == 1
+    assert kept[0]["long_venue"] == "OKX DEX 1"
