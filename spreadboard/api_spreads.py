@@ -3964,11 +3964,19 @@ def _group_sort_value(group: dict[str, Any], sort_by: str) -> Any:
     if sort_by == "depth":
         return max((_float_or_none(row.get("depth_usd")) or 0.0 for row in routes), default=0.0)
     if sort_by == "edge":
-        # Keep guarded research rows searchable without letting an unresolved
-        # identity or transfer path buy a leader slot.  Healthy groups always
-        # sort ahead; an all-guarded token remains at the tail with its badge.
-        if (group.get("best_route") or {}).get("mirage_guarded"):
-            return -999999.0
+        # Guarded groups rank on their real edge, badged, rather than being
+        # forced to the tail.
+        #
+        # `load_spreads` stopped HIDING guarded rows on 2026-08-01 because the
+        # operator captured a 150% spread for real money and hiding them "loses
+        # the very opportunities the product exists to surface". This sort was
+        # never updated to match, so they were shown and then buried behind
+        # every ordinary row -- on a paginated board that is the same outcome.
+        # BP's 18.78% Mexc->Gate lead sat below 0.2% rows for exactly this
+        # reason.
+        #
+        # Guarded is a claim about IDENTITY EVIDENCE, not about size, and the
+        # row already carries `mirage_guarded` for the badge that says so.
         return _float_or_none(group.get("best_edge_pct")) or 0.0
     return _row_sort_key_dict(group.get("best_route") or {})
 
