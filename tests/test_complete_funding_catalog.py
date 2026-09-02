@@ -560,7 +560,22 @@ def test_production_now_enriches_only_visible_routes_with_exact_windows(
     assert all(legs == {"generation": {}} for _token, _label, legs in observed)
 
 
-def test_every_eligible_route_for_a_returned_token_is_preserved(monkeypatch) -> None:
+def test_a_returned_token_keeps_its_best_paying_short_legs(monkeypatch) -> None:
+    """Superseded 2026-09-02: this asserted all 75 legs survived.
+
+    The ranked list now keeps the best-paying `SHORT_LEG_BUDGET` short legs per
+    token. That is a deliberate policy change, not a regression: coverage was
+    lopsided, with some tokens showing 14 short venues while others showed 3
+    despite having more, and no one choosing where to short needs 75 options.
+    Capping the crowded tokens is what leaves room for tokens that were absent
+    from Funding entirely.
+
+    The original concern -- that a returned token must not be truncated
+    ARBITRARILY -- still holds and is what the assertions below check: the
+    survivors are exactly the best paying, in order, and an exact-symbol search
+    still keeps every leg (see test_an_exact_symbol_search_keeps_every_leg).
+    """
+
     routes = [
         {
             **_route("FULL", f"full-{index}", current=2.0 - index / 100, one_day=1.0),
@@ -576,9 +591,13 @@ def test_every_eligible_route_for_a_returned_token_is_preserved(monkeypatch) -> 
 
     page = funding_catalog.page(route_kind="FUTURES", window="now", limit=25)
 
-    assert page["matching_route_count"] == 75
-    assert page["groups"][0]["route_count"] == 75
-    assert len(page["groups"][0]["routes"]) == 75
+    budget = funding_catalog.SHORT_LEG_BUDGET
+    assert page["matching_route_count"] == 75, "the count of what matched must stay honest"
+    assert len(page["groups"][0]["routes"]) == budget
+    # `current` descends with index, so the best payers are the lowest indexes.
+    assert [route["short_venue"] for route in page["groups"][0]["routes"]] == [
+        f"Short {index}" for index in range(budget)
+    ]
 
 
 def test_live_and_retained_legacy_keys_dedupe_by_exact_economic_legs(monkeypatch) -> None:

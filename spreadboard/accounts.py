@@ -682,6 +682,10 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 "transfer_contract": "TEXT",
                 "transfer_started_at": "TEXT",
                 "transfer_credited_at": "TEXT",
+                # Per leg, because a spot long is 1x while the perp short
+                # beside it may not be. NULL means "not stated" = unlevered.
+                "long_leverage": "REAL",
+                "short_leverage": "REAL",
                 "research_costs_complete": "INTEGER NOT NULL DEFAULT 0",
                 "research_cost_consent": "INTEGER NOT NULL DEFAULT 0",
                 "research_transfer_consent": "INTEGER NOT NULL DEFAULT 0",
@@ -2865,6 +2869,22 @@ def anonymized_research_evidence(
     return output
 
 
+def _optional_leverage(value: Any) -> float | None:
+    """A leg's leverage, or None when not stated.
+
+    Zero and negatives are rejected rather than stored: dividing capital by them
+    would report an infinite return on a position.
+    """
+
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _position_values(payload: dict[str, Any]) -> dict[str, Any]:
     required_text = ("token", "long_venue", "long_market_type", "short_venue", "short_market_type")
     text = {key: str(payload.get(key) or "").strip() for key in required_text}
@@ -2895,6 +2915,8 @@ def _position_values(payload: dict[str, Any]) -> dict[str, Any]:
         "short_symbol": str(payload.get("short_symbol") or "").strip() or None,
         "entry_spread_pct": entry_spread,
         "capital_usd": _optional_nonnegative_float(payload.get("capital_usd")),
+        "long_leverage": _optional_leverage(payload.get("long_leverage")),
+        "short_leverage": _optional_leverage(payload.get("short_leverage")),
         "entry_fees_usd": _optional_nonnegative_float(payload.get("entry_fees_usd")) or 0.0,
         "borrow_costs_usd": _optional_nonnegative_float(payload.get("borrow_costs_usd")) or 0.0,
         "gas_costs_usd": _optional_nonnegative_float(payload.get("gas_costs_usd")) or 0.0,
@@ -2918,10 +2940,11 @@ def create_position(
                 user_id, token, route_key, long_venue, long_market_type, long_symbol,
                 long_quantity, long_entry_price, short_venue, short_market_type,
                 short_symbol, short_quantity, short_entry_price, entry_spread_pct,
-                capital_usd, entry_fees_usd, borrow_costs_usd, gas_costs_usd,
+                capital_usd, long_leverage, short_leverage,
+                entry_fees_usd, borrow_costs_usd, gas_costs_usd,
                 transfer_costs_usd, slippage_costs_usd, opened_at, notes,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -2939,6 +2962,8 @@ def create_position(
                 values["short_entry_price"],
                 values["entry_spread_pct"],
                 values["capital_usd"],
+                values["long_leverage"],
+                values["short_leverage"],
                 values["entry_fees_usd"],
                 values["borrow_costs_usd"],
                 values["gas_costs_usd"],

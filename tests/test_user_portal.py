@@ -338,14 +338,23 @@ def test_portfolio_separates_price_funding_and_fees(
 
 
 def test_portfolio_return_falls_back_to_tracked_position_capital() -> None:
+    """Corrected 2026-09-02: this asserted the bug the owner reported.
+
+    `capital_usd` is the form's "Allocated capital per leg" column. Both legs
+    are funded, so $500 per leg is $1,000 at work and $25 is 2.5%, not 5%. The
+    per-position rows already used the committed figure via `capital_metrics`;
+    only this summary still summed the raw column, so the headline read about
+    twice every row beneath it.
+    """
+
     summary = portfolio._portfolio_totals(
         [{"status": "open", "total_pnl_usd": 25, "funding_income_usd": 5, "capital_usd": 500}],
         None,
     )
-    assert summary["monthly_capital_usd"] == 500
+    assert summary["monthly_capital_usd"] == 1000
     assert summary["capital_basis"] == "tracked_positions"
-    assert summary["monthly_return_pct"] == pytest.approx(5)
-    assert summary["open_position_return_pct"] == pytest.approx(5)
+    assert summary["monthly_return_pct"] == pytest.approx(2.5)
+    assert summary["open_position_return_pct"] == pytest.approx(2.5)
 
 
 def test_position_correction_converts_all_local_timestamps_to_utc() -> None:

@@ -159,6 +159,120 @@ CATALOG_TOKEN_BUDGET = max(
 )
 
 
+#: How many short legs a token shows on the ranked Funding list. Coverage was
+#: lopsided -- some tokens carried 14 short venues while others showed 3
+#: despite having more -- and a member choosing where to short does not need
+#: fourteen options. Capping the crowded tokens is what leaves room for the
+#: ones that were absent.
+SHORT_LEG_BUDGET = max(1, int(os.environ.get("SPREADBOARD_FUNDING_SHORT_LEGS", "7")))
+
+
+def top_short_legs(
+    candidates: list[tuple[float | None, dict[str, Any]]],
+    *,
+    budget: int | None = None,
+) -> list[tuple[float | None, dict[str, Any]]]:
+    """The best-paying short legs for one token, bounded.
+
+    Ranked on the value the page computed, which for Now is the live rate --
+    not the rate frozen into the catalogue at build time, so a leg that has
+    started paying is not held out by a stale number.
+    """
+
+    limit = SHORT_LEG_BUDGET if budget is None else max(1, int(budget))
+    if len(candidates) <= limit:
+        return candidates
+    ranked = sorted(
+        candidates,
+        key=lambda item: (
+            item[0] if isinstance(item[0], (int, float)) else float("-inf")
+        ),
+        reverse=True,
+    )
+    return ranked[:limit]
+
+
+def collapse_payloads_to_short_legs(
+    payloads: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Apply the short-leg collapse across a whole built generation."""
+
+    for payload in payloads.values():
+        if not isinstance(payload, dict):
+            continue
+        routes = payload.get("routes")
+        if not isinstance(routes, list):
+            continue
+        kept = collapse_to_short_legs(routes)
+        payload["routes"] = kept
+        payload["route_count"] = len(kept)
+        payload["displayed_route_count"] = len(kept)
+    return payloads
+
+
+def _short_leg_key(route: dict[str, Any]) -> tuple[str, str, str] | None:
+    """A route's funding-bearing identity: the leg that pays or charges.
+
+    Venue alone is not enough. A venue can list several independently funded
+    contracts for one token (a USDT perp and a USDC perp), and merging those
+    would report one contract's rate for the other.
+    """
+
+    venue = str(route.get("short_venue") or "").strip()
+    symbol = str(route.get("short_market_symbol") or "").strip()
+    if not venue or not symbol:
+        return None
+    return (venue, str(route.get("short_market_type") or "").strip(), symbol)
+
+
+def collapse_to_short_legs(
+    routes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """One route per short leg, keeping the best long to pair it with.
+
+    Funding is paid by the short leg, so every route sharing one carries the
+    identical rate. Production held 144,409 routes for 4,169 distinct (token,
+    short leg) facts -- 34.6x duplication, with TRX alone repeating each of its
+    43 short legs across 42 different longs.
+
+    That repetition is what forced the catalogue down to a 500-token budget,
+    which is why LOBSTER (Aster at 116.8% APR, a 93.9th-percentile rate) and
+    SKHYNIX were missing from Funding altogether.
+
+    Collapsing is lossless for funding -- the dropped rows repeat the rate that
+    survives. What is reduced is the choice of long, so the survivor is the one
+    with the widest spread: the same row a member would pick to enter on, since
+    a pair at or below zero spread is one to wait on rather than take now.
+
+    Every distinct short leg is preserved. Reducing THAT would be removing a
+    venue that pays, which is the opposite of the point.
+    """
+
+    best: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for route in routes:
+        if not isinstance(route, dict):
+            continue
+        key = _short_leg_key(route)
+        if key is None:
+            # No identifiable short leg: bucketing these together would report
+            # one arbitrary rate for all of them.
+            continue
+        current = best.get(key)
+        if current is None or _entry_spread(route) > _entry_spread(current):
+            best[key] = route
+    return list(best.values())
+
+
+def _entry_spread(route: dict[str, Any]) -> float:
+    """The spread a member would enter on, with unknown ranked last."""
+
+    value = route.get("displayed_open_spread_pct")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("-inf")
+
+
 def _funding_reach_bound() -> dict[str, float]:
     """Upper bound on each token's achievable net DAILY carry.
 
@@ -334,6 +448,11 @@ def _complete_payloads(*, force_refresh: bool = False) -> dict[str, dict[str, An
             include_history=False,
             include_short_spot=True,
         )
+        # Funding is a property of the short leg, so the routes that share one
+        # repeat its rate. Collapsing here rather than at render time is what
+        # makes the token budget affordable: 34.6x fewer routes to hold, which
+        # is the room that missing tokens like LOBSTER need.
+        built = collapse_payloads_to_short_legs(built)
     except Exception:
         if not previous:
             raise
@@ -936,6 +1055,19 @@ def page(
                 continue
         grouped.setdefault(token, []).append((value, route))
 
+    # Count what MATCHED before the display cap is applied. Capping first made
+    # `matching_route_count` report the number shown rather than the number
+    # found, which is a different question and the wrong answer to it.
+    matched_route_total = sum(len(candidates) for candidates in grouped.values())
+    if not exact_symbol_detail:
+        # A member scanning the list is choosing where to short, not auditing
+        # one token. Someone who searched for an exact symbol IS auditing it,
+        # and may hold a venue that is not among the best paying, so their view
+        # keeps every leg.
+        grouped = {
+            token: top_short_legs(candidates)
+            for token, candidates in grouped.items()
+        }
     groups = [
         _group(token, candidates, window=selected_window)
         for token, candidates in grouped.items()
@@ -982,7 +1114,7 @@ def page(
         "groups": visible,
         "rows": [route for group in visible for route in group.get("routes") or []],
         "matching_token_count": len(groups),
-        "matching_route_count": sum(int(group.get("route_count") or 0) for group in groups),
+        "matching_route_count": matched_route_total,
         "returned_token_count": len(visible),
         "returned_route_count": sum(len(group.get("routes") or []) for group in visible),
         "offset": start,

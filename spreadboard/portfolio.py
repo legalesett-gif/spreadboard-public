@@ -737,10 +737,14 @@ def _portfolio_totals(
     total = sum(known) if known else 0.0 if not positions else None
     unpriced = len(positions) - len(known)
     configured_capital = _number(monthly_capital)
+    # Both legs are funded, so both legs are capital. Summing the raw
+    # `capital_usd` column -- which the position form labels "per leg" -- made
+    # this headline read about twice every row beneath it, because the rows use
+    # `capital_metrics` and this did not. `capital_committed_usd` prefers actual
+    # fills and falls back to the per-leg allocation doubled.
     tracked_capital = sum(
-        float(item.get("capital_usd") or 0.0)
+        float(capital_metrics(item)["capital_committed_usd"] or 0.0)
         for item in positions
-        if _number(item.get("capital_usd")) is not None
     )
     capital = (
         configured_capital if configured_capital and configured_capital > 0 else tracked_capital
@@ -957,6 +961,20 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def _leverage(position: dict[str, Any], side: str) -> float:
+    """A leg's leverage, defaulting to unlevered.
+
+    Anything missing, zero or negative means "not stated", which is 1x. Letting
+    a bad value through would divide the capital toward zero and report an
+    infinite return on it.
+    """
+
+    value = _number(position.get(f"{side}_leverage"))
+    if value is None or value <= 0:
+        return 1.0
+    return float(value)
+
+
 def capital_metrics(position: dict[str, Any]) -> dict[str, Any]:
     """Notional controlled, capital committed, and the return on that capital.
 
@@ -981,6 +999,14 @@ def capital_metrics(position: dict[str, Any]) -> dict[str, Any]:
         else None
     )
     sides = [value for value in (long_usd, short_usd) if value is not None]
+    # Leverage changes the capital locked, never the exposure controlled. It is
+    # per leg because a spot long is always 1x while the perp short beside it
+    # may not be -- the operator runs SKHY at 5x on the short only.
+    locked = [
+        value / _leverage(position, side)
+        for value, side in ((long_usd, "long"), (short_usd, "short"))
+        if value is not None
+    ]
     # Only the smaller leg is hedged. Whatever the larger one carries beyond it
     # is naked exposure, and calling that "farm size" hides a directional bet.
     matched = min(sides) if sides else None
@@ -995,8 +1021,8 @@ def capital_metrics(position: dict[str, Any]) -> dict[str, Any]:
 
     # Both legs are funded, so both legs are capital. Fills are the truth when
     # present; the per-leg allocation doubled is the fallback when they are not.
-    if sides:
-        committed = sum(sides)
+    if locked:
+        committed = sum(locked)
     elif allocated_per_leg is not None:
         committed = allocated_per_leg * 2.0
     else:
