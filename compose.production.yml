@@ -204,16 +204,14 @@ services:
       # At 25KB a token this holds 2,500 for roughly 63MB, still a quarter of
       # what 500 duplicated tokens cost. Raise further only against a measured
       # catalogue size; the collector has been OOM-sensitive all week.
-      # 2026-09-02 (second pass): 2500 -> 1200, sized from the reach-bound
-      # ranking rather than guessed. 2,500 expanded all 2,308 ranked tokens and
-      # put the box into CPU saturation -- load 6.55 on 4 vCPU, the app's web
-      # process pegged at 118%, /free taking 11s. Memory was never the issue
-      # there; the build work was.
+      # 2026-09-02: back to 500 on the owner's call. Raising it to 2,500 to
+      # admit SKHYNIX was solving the wrong problem -- SKHY is a basis play, not
+      # a funding one -- and it cost CPU rather than memory: load 6.55 on 4 vCPU,
+      # the web process pegged at 118%, /free at 11s.
       #
-      # 1200 keeps every token that matters, with margin:
-      #   龙虾 rank 185 · TRX 308 · SKHYNIX 501 · BP 866 · SKHX 911
-      # SKHYNIX missing at the old 500 was a miss by ONE place.
-      SPREADBOARD_FUNDING_CATALOG_TOKENS: "1200"
+      # 500 is sufficient for the funding lane. Raise it only for a token that
+      # is actually a funding play and ranks outside it.
+      SPREADBOARD_FUNDING_CATALOG_TOKENS: "500"
       # Search/history rows remain available for five minutes, but a spread
       # older than this cannot headline a current ranking. Funding is ranked
       # independently and is not suppressed by this basis-age boundary.
