@@ -222,7 +222,15 @@ services:
       SPREADBOARD_CHART_STREAM_SECONDS: "2"
       SPREADBOARD_CHART_SAMPLE_TIMEOUT_SECONDS: "22"
       SPREADBOARD_CHART_SAMPLE_CONCURRENCY: "4"
-      SPREADBOARD_CHART_CATALOG_WORKERS: "4"
+      # 2026-09-02: 4 -> 2. Four parallel catalogue workers on a 4-vCPU box
+      # oversubscribes it on their own, and they do not run alone: measured in
+      # steady state with NO discovery scan, the collector held the index build
+      # (61.7%), bulk quotes (57.3%) and four chart workers (~70% together)
+      # while the web process needed 118% to serve. Load averaged 8.2 on 4
+      # cores and /free took 10-20 seconds.
+      #
+      # The catalogue is a periodic job; the page is what a member waits on.
+      SPREADBOARD_CHART_CATALOG_WORKERS: "2"
       SPREADBOARD_CHART_CATALOG_SECONDS: "21600"
       SPREADBOARD_CHART_CATALOG_VENUE_TIMEOUT: "60"
       SPREADBOARD_POSITION_ALERT_SECONDS: "2"
