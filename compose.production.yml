@@ -184,11 +184,16 @@ services:
       # (market_evidence peaks 1,544MB, live_route_index 1,333MB, the scan
       # itself ~800MB), not merely under the worker's own growth curve.
       #
-      # Verified reclaim at this mechanism: a reset at 984MB returned the
-      # process to 655MB, so 650 is comfortably above the post-reset floor and
-      # will not thrash. Each reset costs seconds of websocket freshness on 64
-      # routes, never a quote -- the bulk/fast path covers every board row.
-      SPREADBOARD_WS_RSS_LIMIT_MB: "650"
+      # 650 was sized from ONE reset (984 -> 655MB) and was wrong: across 310
+      # resets the post-reset floor is 690-783MB and rising, so the guard landed
+      # above its own threshold and re-fired immediately. That thrash made
+      # things worse -- kills went from one in 11.5h to one every ~2h.
+      #
+      # 1000 sits above the observed floor with room for the ~200-300MB the
+      # trim actually reclaims, so it fires occasionally instead of constantly.
+      # Each reset costs seconds of websocket freshness on 64 routes, never a
+      # quote -- the bulk/fast path covers every board row.
+      SPREADBOARD_WS_RSS_LIMIT_MB: "1000"
       # Search/history rows remain available for five minutes, but a spread
       # older than this cannot headline a current ranking. Funding is ranked
       # independently and is not suppressed by this basis-age boundary.
