@@ -3692,7 +3692,19 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
     def current_rankable(route: Any) -> bool:
         if not isinstance(route, dict) or not api_spreads.spread_quote_current(route):
             return False
-        if route.get("mirage_guarded") or route.get("identity_mismatch") or route.get("thin_book"):
+        # `mirage_guarded` is deliberately not here. It is a claim about
+        # IDENTITY EVIDENCE, not about size, and `_group_sort_value` was
+        # already repaired to rank guarded groups on their real edge -- but
+        # this function set that edge to None first, so the repair had nothing
+        # left to read and the group ranked at 0.0, mid-board among the
+        # near-zero spreads. OPENAI carries a matched, quote-current 64.29%
+        # Ourbit-spot to Binance-futures route whose only disqualifier is this
+        # guard. The row keeps its badge; the reader decides.
+        #
+        # The other two stay. An identity mismatch means the legs may not be
+        # the same asset, so the number is not a spread at all, and a thin book
+        # means it is not available at the probe size.
+        if route.get("identity_mismatch") or route.get("thin_book"):
             return False
         if route.get("deliverable") is False:
             return False
