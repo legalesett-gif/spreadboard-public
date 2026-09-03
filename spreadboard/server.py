@@ -4015,7 +4015,16 @@ def _market_cache_get(
                 and key[4:6] == cache_key[4:6]
                 and key[9:] == cache_key[9:]
                 and now - value[0] <= _MARKET_CACHE_TTL_SECONDS
-                and value[1].get("mode") != "materialized_live_query_projection"
+                # A live-query projection used to be excluded here, on the
+                # reasoning that a payload meant to be live should not be
+                # served from an older generation. But the projection is the
+                # only mode production builds, so the exclusion did not make
+                # anything fresher -- it made every request rebuild. `/free`
+                # measured 8.9s to 40.6s on production and never once landed
+                # fast. It is safe to reuse for the same reason the other
+                # modes are: the structural signature above must match, and
+                # `_apply_spread_freshness_coalesced` overlays current books
+                # and funding onto whatever this returns.
             ]
             if candidates:
                 return max(candidates, key=lambda item: item[1][0])[1][1]
