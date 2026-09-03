@@ -151,3 +151,74 @@ def test_eviction_keeps_the_generation_pages_are_reading() -> None:
 
     assert "0" in surviving
     assert "1" not in surviving
+
+
+def test_serving_an_earlier_generation_starts_building_the_current_one(
+    monkeypatch, tmp_path
+) -> None:
+    """Otherwise nothing builds it: reuse satisfies the request, and the web
+    role does not run the background warm. The board would sit on one structure
+    until the entry aged out -- fifteen minutes in which a route that appeared
+    could not show up on the page the operator is watching."""
+
+    started: list[tuple] = []
+    monkeypatch.setattr(
+        server,
+        "_schedule_market_generation_warm",
+        lambda board_path, query, cache_key: started.append(cache_key) or True,
+    )
+    monkeypatch.setattr(server, "_market_cache_key", lambda board_path, query: _key(
+        fast_quotes=2
+    ))
+    monkeypatch.setattr(server, "_exact_catalog_market_projection", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_sync_telegram_client_universe", lambda payload: payload)
+    _store(
+        _key(fast_quotes=1),
+        {"mode": PROJECTION, "groups": [{"token": "BP"}], "generation": "earlier"},
+    )
+
+    served = server.api_market_spreads(tmp_path / "board.json", {})
+
+    assert served["generation"] == "earlier"
+    assert started == [_key(fast_quotes=2)]
+
+
+def test_an_exact_generation_starts_nothing(monkeypatch, tmp_path) -> None:
+    started: list[tuple] = []
+    monkeypatch.setattr(
+        server,
+        "_schedule_market_generation_warm",
+        lambda board_path, query, cache_key: started.append(cache_key) or True,
+    )
+    monkeypatch.setattr(server, "_market_cache_key", lambda board_path, query: _key())
+    monkeypatch.setattr(server, "_exact_catalog_market_projection", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_sync_telegram_client_universe", lambda payload: payload)
+    _store(_key(), {"mode": PROJECTION, "groups": [{"token": "BP"}], "generation": "now"})
+
+    served = server.api_market_spreads(tmp_path / "board.json", {})
+
+    assert served["generation"] == "now"
+    assert started == []
+
+
+def test_the_background_build_is_throttled_per_query(monkeypatch, tmp_path) -> None:
+    """Every request would otherwise start its own rebuild of the same board."""
+
+    threads: list[str] = []
+
+    class _Recorded:
+        def __init__(self, **kwargs) -> None:
+            threads.append(kwargs.get("name", ""))
+
+        def start(self) -> None:
+            return None
+
+    monkeypatch.setattr(server.threading, "Thread", _Recorded)
+    server._MARKET_GENERATION_WARM_AT.clear()
+
+    first = server._schedule_market_generation_warm(tmp_path, {}, _key(fast_quotes=1))
+    second = server._schedule_market_generation_warm(tmp_path, {}, _key(fast_quotes=2))
+
+    assert first is True
+    assert second is False
+    assert threads == ["market-generation-warm"]

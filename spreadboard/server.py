@@ -2701,10 +2701,12 @@ def api_market_spreads(
     cache_key = None if _query_bool(query, "no_cache") else _market_cache_key(board_path, query)
     allow_previous_generation = not _market_build_is_background()
     if cache_key is not None:
-        cached = _market_cache_get(
+        cached, exact_generation = _market_cache_lookup(
             cache_key, allow_previous_generation=allow_previous_generation
         )
         if cached is not None:
+            if not exact_generation:
+                _schedule_market_generation_warm(board_path, query, cache_key)
             return _sync_telegram_client_universe(cached)
         owns_refresh: bool | None = None
         inflight: threading.Event | None = None
@@ -4017,6 +4019,23 @@ def _file_signature(path: Path | str) -> tuple[int, int] | None:
 def _market_cache_get(
     cache_key: tuple[Any, ...], *, allow_previous_generation: bool = False
 ) -> dict[str, Any] | None:
+    return _market_cache_lookup(
+        cache_key, allow_previous_generation=allow_previous_generation
+    )[0]
+
+
+def _market_cache_lookup(
+    cache_key: tuple[Any, ...], *, allow_previous_generation: bool = False
+) -> tuple[dict[str, Any] | None, bool]:
+    """Return the payload and whether it is this generation or an earlier one.
+
+    A caller that is handed an earlier generation has to arrange for the
+    current one to be built, or nothing ever does: reuse satisfies the request,
+    so no request becomes the builder, and the background warm is not started
+    in the web role. The board then stays on one structure until the entry ages
+    out -- fifteen minutes during which a route that appeared cannot show up.
+    """
+
     now = time.monotonic()
     with _MARKET_CACHE_LOCK:
         cached = _MARKET_CACHE.get(cache_key)
@@ -4029,7 +4048,7 @@ def _market_cache_get(
             cached = None
         if cached and now - cached[0] <= _MARKET_CACHE_TTL_SECONDS:
             _MARKET_CACHE_LAST_USED[cache_key] = now
-            return cached[1]
+            return cached[1], True
         if cached:
             _MARKET_CACHE.pop(cache_key, None)
         if allow_previous_generation:
@@ -4074,8 +4093,54 @@ def _market_cache_get(
             if candidates:
                 key, value = max(candidates, key=lambda item: item[1][0])
                 _MARKET_CACHE_LAST_USED[key] = now
-                return value[1]
-    return None
+                return value[1], False
+    return None, False
+
+
+#: How often a served-from-an-earlier-generation query may start a background
+#: build of the current one. Throttled per query rather than globally so the
+#: free board and a member view cannot starve each other.
+_MARKET_GENERATION_WARM_INTERVAL_SECONDS = max(
+    5.0, float(os.environ.get("SPREADBOARD_MARKET_GENERATION_WARM_SECONDS", "30"))
+)
+_MARKET_GENERATION_WARM_AT: dict[Any, float] = {}
+_MARKET_GENERATION_WARM_ERROR: str | None = None
+
+
+def _market_generation_warm_run(board_path: Path, query: dict[str, list[str]]) -> None:
+    """Build the current generation off the request path.
+
+    The thread name matters: `_market_build_is_background` reads it, so this
+    call declines the reuse it was started because of and becomes the builder.
+    """
+
+    global _MARKET_GENERATION_WARM_ERROR
+    try:
+        api_market_spreads(board_path, query)
+        _MARKET_GENERATION_WARM_ERROR = None
+    except Exception as exc:  # noqa: BLE001 - a warm must never take a page down.
+        _MARKET_GENERATION_WARM_ERROR = f"{type(exc).__name__}: {str(exc)[:120]}"
+
+
+def _schedule_market_generation_warm(
+    board_path: Path, query: dict[str, list[str]], cache_key: tuple[Any, ...]
+) -> bool:
+    now = time.monotonic()
+    throttle_key = cache_key[9:]
+    with _MARKET_CACHE_LOCK:
+        if cache_key in _MARKET_CACHE_INFLIGHT:
+            return False
+        last = _MARKET_GENERATION_WARM_AT.get(throttle_key)
+        if last is not None and now - last < _MARKET_GENERATION_WARM_INTERVAL_SECONDS:
+            return False
+        _MARKET_GENERATION_WARM_AT[throttle_key] = now
+    threading.Thread(
+        target=_market_generation_warm_run,
+        args=(board_path, dict(query)),
+        name="market-generation-warm",
+        daemon=True,
+    ).start()
+    return True
 
 
 def _market_cache_finish(cache_key: tuple[Any, ...], data: dict[str, Any] | None) -> None:
