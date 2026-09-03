@@ -105,6 +105,9 @@ _MARKET_CACHE_TTL_SECONDS = max(
 _MARKET_CACHE_MAX_ENTRIES = max(4, int(os.environ.get("SPREADBOARD_MARKET_CACHE_ENTRIES", "32")))
 _MARKET_CACHE_LOCK = threading.Lock()
 _MARKET_CACHE: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+#: When each entry was last served. Kept apart from the write time above,
+#: which is the TTL basis and must not move when a page reads an entry.
+_MARKET_CACHE_LAST_USED: dict[tuple[Any, ...], float] = {}
 _MARKET_CACHE_INFLIGHT: dict[tuple[Any, ...], threading.Event] = {}
 _MATERIALIZED_VIEW_STORE = materialized_views.default_store()
 _FUNDING_NAVIGATION_STORE = funding_navigation.store()
@@ -4025,6 +4028,7 @@ def _market_cache_get(
             _MARKET_CACHE.pop(cache_key, None)
             cached = None
         if cached and now - cached[0] <= _MARKET_CACHE_TTL_SECONDS:
+            _MARKET_CACHE_LAST_USED[cache_key] = now
             return cached[1]
         if cached:
             _MARKET_CACHE.pop(cache_key, None)
@@ -4068,7 +4072,9 @@ def _market_cache_get(
                 # and funding onto whatever this returns.
             ]
             if candidates:
-                return max(candidates, key=lambda item: item[1][0])[1][1]
+                key, value = max(candidates, key=lambda item: item[1][0])
+                _MARKET_CACHE_LAST_USED[key] = now
+                return value[1]
     return None
 
 
@@ -4076,9 +4082,22 @@ def _market_cache_finish(cache_key: tuple[Any, ...], data: dict[str, Any] | None
     with _MARKET_CACHE_LOCK:
         if data is not None and _market_payload_cacheable(data):
             _MARKET_CACHE[cache_key] = (time.monotonic(), data)
-            if len(_MARKET_CACHE) > _MARKET_CACHE_MAX_ENTRIES:
-                oldest = min(_MARKET_CACHE, key=lambda key: _MARKET_CACHE[key][0])
-                _MARKET_CACHE.pop(oldest, None)
+            _MARKET_CACHE_LAST_USED[cache_key] = _MARKET_CACHE[cache_key][0]
+            while len(_MARKET_CACHE) > _MARKET_CACHE_MAX_ENTRIES:
+                # By least recent USE. A previous generation is older than every
+                # key arriving now and serving it does not rewrite it, so
+                # evicting by write time threw away precisely the payload that
+                # was keeping pages off the rebuild path. Production allows six
+                # entries and a 500-row view is 21MB, so the answer is not a
+                # bigger cache.
+                stale = min(
+                    _MARKET_CACHE,
+                    key=lambda key: _MARKET_CACHE_LAST_USED.get(
+                        key, _MARKET_CACHE[key][0]
+                    ),
+                )
+                _MARKET_CACHE.pop(stale, None)
+                _MARKET_CACHE_LAST_USED.pop(stale, None)
         inflight = _MARKET_CACHE_INFLIGHT.pop(cache_key, None)
         if inflight is not None:
             inflight.set()

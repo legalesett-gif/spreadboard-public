@@ -113,3 +113,41 @@ def test_an_empty_board_is_never_reused_as_a_generation() -> None:
         server._market_cache_get(_key(fast_quotes=2), allow_previous_generation=True)
         is None
     )
+
+
+def test_eviction_keeps_the_generation_pages_are_reading() -> None:
+    """The entry reuse depends on was the first one thrown away.
+
+    Eviction picked the oldest *written* entry. A previous generation is by
+    definition older than the keys arriving now, and serving it does not
+    rewrite it, so unrelated traffic evicted exactly the payload that was
+    keeping `/free` off the rebuild path. Production allows six entries and a
+    500-row view is 21MB, so the cache cannot simply be made larger.
+    """
+
+    server._MARKET_CACHE_MAX_ENTRIES = 3
+    try:
+        for index in range(3):
+            _store(
+                _key(fast_quotes=index),
+                {"mode": PROJECTION, "groups": [{"n": index}], "generation": str(index)},
+            )
+        # A page reads the oldest-written entry as its previous generation.
+        assert (
+            server._market_cache_get(_key(fast_quotes=0), allow_previous_generation=True)
+            is not None
+        )
+        _store(
+            _key(fast_quotes=9),
+            {"mode": PROJECTION, "groups": [{"n": 9}], "generation": "9"},
+        )
+
+        with server._MARKET_CACHE_LOCK:
+            surviving = {
+                value[1]["generation"] for value in server._MARKET_CACHE.values()
+            }
+    finally:
+        server._MARKET_CACHE_MAX_ENTRIES = 32
+
+    assert "0" in surviving
+    assert "1" not in surviving
