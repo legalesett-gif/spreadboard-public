@@ -66,7 +66,10 @@ def test_a_rewritten_price_file_reuses_the_last_projection() -> None:
 def test_a_new_structural_generation_is_never_reused() -> None:
     """A different discovery snapshot is a different set of routes."""
 
-    _store(_key(discovery=1), {"mode": PROJECTION, "groups": [], "generation": "old"})
+    _store(
+        _key(discovery=1),
+        {"mode": PROJECTION, "groups": [{"token": "BP"}], "generation": "old"},
+    )
 
     assert (
         server._market_cache_get(_key(discovery=2), allow_previous_generation=True)
@@ -77,7 +80,10 @@ def test_a_new_structural_generation_is_never_reused() -> None:
 def test_reuse_stays_opt_in() -> None:
     """The background builder asks for the exact generation and must not get another."""
 
-    _store(_key(fast_quotes=1), {"mode": PROJECTION, "groups": [], "generation": "old"})
+    _store(
+        _key(fast_quotes=1),
+        {"mode": PROJECTION, "groups": [{"token": "BP"}], "generation": "old"},
+    )
 
     assert (
         server._market_cache_get(_key(fast_quotes=2), allow_previous_generation=False)
@@ -88,8 +94,22 @@ def test_reuse_stays_opt_in() -> None:
 def test_an_exact_hit_is_still_served_directly() -> None:
     """The fast path must keep working; reuse is the fallback, not the route."""
 
-    _store(_key(fast_quotes=1), {"mode": PROJECTION, "groups": [], "generation": "same"})
+    _store(
+        _key(fast_quotes=1),
+        {"mode": PROJECTION, "groups": [{"token": "BP"}], "generation": "same"},
+    )
 
     hit = server._market_cache_get(_key(fast_quotes=1), allow_previous_generation=True)
 
     assert hit is not None and hit["generation"] == "same"
+
+
+def test_an_empty_board_is_never_reused_as_a_generation() -> None:
+    """A projection with no groups is correct for its own key and only that one."""
+
+    _store(_key(fast_quotes=1), {"mode": PROJECTION, "groups": [], "generation": "empty"})
+
+    assert (
+        server._market_cache_get(_key(fast_quotes=2), allow_previous_generation=True)
+        is None
+    )

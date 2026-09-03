@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -110,6 +111,39 @@ _FUNDING_NAVIGATION_STORE = funding_navigation.store()
 _LIVE_QUERY_RESULT_TTL_SECONDS = max(
     2.0, float(os.environ.get("SPREADBOARD_LIVE_QUERY_RESULT_SECONDS", "10"))
 )
+
+#: `/api/health` is polled by the container HEALTHCHECK every thirty seconds and
+#: by anything else watching the site, and two of its fields are collector-wide
+#: aggregates: funding coverage across every futures leg in the chart catalogue,
+#: and the research calibration store. Rebuilding those per request cost between
+#: 3.2 and 14.7 seconds on production. They summarise artefacts written on a
+#: minutes-long cadence, so a memo this short gives away no freshness.
+_HEALTH_AGGREGATE_TTL_SECONDS = max(
+    5.0, float(os.environ.get("SPREADBOARD_HEALTH_AGGREGATE_SECONDS", "60"))
+)
+_HEALTH_AGGREGATE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_HEALTH_AGGREGATE_LOCK = threading.Lock()
+
+
+def _cached_health_aggregate(
+    name: str, build: Callable[[], dict[str, Any]]
+) -> dict[str, Any]:
+    now = time.monotonic()
+    with _HEALTH_AGGREGATE_LOCK:
+        cached = _HEALTH_AGGREGATE_CACHE.get(name)
+        if cached is not None and now - cached[0] <= _HEALTH_AGGREGATE_TTL_SECONDS:
+            return cached[1]
+    # Built outside the lock: two concurrent health checks doing the work twice
+    # is better than one of them waiting several seconds behind the other.
+    value = build()
+    with _HEALTH_AGGREGATE_LOCK:
+        _HEALTH_AGGREGATE_CACHE[name] = (time.monotonic(), value)
+    return value
+
+
+def _reset_health_aggregates() -> None:
+    with _HEALTH_AGGREGATE_LOCK:
+        _HEALTH_AGGREGATE_CACHE.clear()
 
 
 class _MarketFreshnessGate:
@@ -4015,6 +4049,13 @@ def _market_cache_get(
                 and key[4:6] == cache_key[4:6]
                 and key[9:] == cache_key[9:]
                 and now - value[0] <= _MARKET_CACHE_TTL_SECONDS
+                # An empty board is never a usable stand-in. A projection is
+                # cached even with no groups, because a query that genuinely
+                # matches nothing is still a successful query -- correct for
+                # its own key, wrong to hand to a different one. Reusing one
+                # served `/free` as "0 tokens and 0 priced routes" for as long
+                # as the entry lived.
+                and value[1].get("groups")
                 # A live-query projection used to be excluded here, on the
                 # reasoning that a payload meant to be live should not be
                 # served from an older generation. But the projection is the
@@ -6760,8 +6801,12 @@ def api_health(
         "market_updated_at": canonical.get("updated_at"),
         "market_row_count": canonical.get("row_count"),
         "source_health": source_health,
-        "funding_history": funding_history_health(),
-        "research_evidence": research_evidence_health(),
+        "funding_history": _cached_health_aggregate(
+            "funding_history", funding_history_health
+        ),
+        "research_evidence": _cached_health_aggregate(
+            "research_evidence", research_evidence_health
+        ),
         "position_alerts": {
             "running": bool(position_alert_worker and position_alert_worker.running),
             "poll_seconds": getattr(position_alert_worker, "poll_seconds", None),
