@@ -7,6 +7,12 @@
 # This check existed only as something the operator remembered to run; it was
 # broken three times in one hour on 2026-08-31.
 #
+# It also ships the working tree it is run from. The server build directory was
+# kept in step by hand, so on 2026-09-03 this script reported "deploy OK" three
+# times while the container went on running a market_history.py from five days
+# earlier -- health was 200 and the restart counts were flat, and neither says
+# anything about which code came back up. The source digest at the end does.
+#
 #   ./scripts/deploy_production.sh app collector      # refuses during a scan
 #   ./scripts/deploy_production.sh --force app        # deliberate, scan is lost
 #
@@ -16,6 +22,8 @@ HOST="${SPREADBOARD_DEPLOY_HOST:-root@178.128.126.204}"
 KEY="${SPREADBOARD_DEPLOY_KEY:-$HOME/.ssh/spreadboard_digitalocean}"
 APP_DIR="${SPREADBOARD_DEPLOY_DIR:-/opt/spreadboard/app}"
 COMPOSE="compose.production.yml"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCE_TREES=(spreadboard src scripts)
 
 FORCE=0
 if [[ "${1:-}" == "--force" ]]; then
@@ -52,6 +60,17 @@ MSG
   echo "WARNING: --force given; discarding an in-flight discovery scan." >&2
 fi
 
+echo "==> syncing source"
+for tree in "${SOURCE_TREES[@]}"; do
+  rsync -a --delete \
+    --exclude '__pycache__/' --exclude '*.pyc' \
+    -e "ssh -i $KEY -o ConnectTimeout=60" \
+    "$REPO_ROOT/$tree/" "$HOST:$APP_DIR/$tree/"
+done
+rsync -a -e "ssh -i $KEY -o ConnectTimeout=60" \
+  "$REPO_ROOT/pyproject.toml" "$REPO_ROOT/uv.lock" "$REPO_ROOT/Dockerfile" \
+  "$REPO_ROOT/$COMPOSE" "$HOST:$APP_DIR/"
+
 echo "==> building: ${SERVICES[*]}"
 ssh_do "cd $APP_DIR && docker compose -f $COMPOSE build ${SERVICES[*]}"
 
@@ -67,4 +86,15 @@ echo "restart counts: before=$restarts_before after=$restarts_after"
 ssh_do 'docker inspect app-app-1 app-collector-1 --format "{{.Name}} oom={{.State.OOMKilled}} status={{.State.Status}}"'
 
 [[ "$code" == "200" ]] || { echo "health check failed" >&2; exit 1; }
+
+# A 200 only says something is serving. This says it is serving THIS source.
+want=$(cd "$REPO_ROOT" && python3 scripts/source_digest.py .)
+for service in "${SERVICES[@]}"; do
+  got=$(ssh_do "docker exec app-${service}-1 python /app/scripts/source_digest.py /app" 2>/dev/null | tr -d '[:space:]')
+  echo "source $service: want=$want got=$got"
+  [[ "$got" == "$want" ]] || {
+    echo "REFUSING to report success: app-${service}-1 is running different source." >&2
+    exit 1
+  }
+done
 echo "==> deploy OK"
