@@ -20,6 +20,34 @@ DEFAULT_DB_PATH = RUNTIME_DIR / "spreadboard_market_history.sqlite3"
 _SCHEMA_LOCK = threading.Lock()
 _SCHEMA_READY: set[str] = set()
 
+# ``INSERT OR IGNORE`` decides a duplicate by walking the primary-key B-tree,
+# and route_points holds fourteen million rows in a five-gigabyte file behind a
+# two-megabyte page cache.  The fast-quote delta re-offers its whole row set on
+# every cycle, so all but the freshly repriced routes pay for that walk to be
+# told what this process already knows.  Remembering the points it wrote turns
+# the repeat offer into a dictionary lookup.  The bound matters more than the
+# hit rate: an evicted point simply costs one B-tree probe again.
+_WRITTEN_POINT_LIMIT = 50_000
+_WRITTEN_POINTS: dict[tuple[str, str, int], None] = {}
+_WRITTEN_LOCK = threading.Lock()
+
+
+def _point_already_written(db_key: str, point: tuple[str, int]) -> bool:
+    with _WRITTEN_LOCK:
+        return (db_key, *point) in _WRITTEN_POINTS
+
+
+def _remember_written_points(db_key: str, points: Sequence[tuple[str, int]]) -> None:
+    """Record committed points, oldest evicted first once the bound is reached."""
+
+    if not points:
+        return
+    with _WRITTEN_LOCK:
+        for point in points:
+            _WRITTEN_POINTS[(db_key, *point)] = None
+        while len(_WRITTEN_POINTS) > _WRITTEN_POINT_LIMIT:
+            del _WRITTEN_POINTS[next(iter(_WRITTEN_POINTS))]
+
 
 def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
     """Apply additive history schema changes before read-only consumers start."""
@@ -44,8 +72,11 @@ def record_snapshot(
     ]
     if not rows:
         return 0
+    db_key = str(Path(db_path).resolve())
     connection = _connect(db_path)
     inserted = 0
+    written: list[tuple[str, int]] = []
+    offered: set[tuple[str, int]] = set()
     try:
         for row in rows:
             route_key = route_key_for(row)
@@ -59,6 +90,10 @@ def record_snapshot(
                 route_kind, executable_spread, depth_spread
             ):
                 continue
+            point = (route_key, quote_ts_us)
+            if point in offered or _point_already_written(db_key, point):
+                continue
+            offered.add(point)
             notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
             route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
             funding = notes.get("funding") if isinstance(notes.get("funding"), dict) else {}
@@ -133,6 +168,7 @@ def record_snapshot(
                 ),
             )
             inserted += int(connection.execute("SELECT changes()").fetchone()[0] > 0)
+            written.append(point)
         if prune:
             cutoff = int(
                 (datetime.now(tz=timezone.utc) - timedelta(days=max(1, retention_days))).timestamp()
@@ -142,6 +178,9 @@ def record_snapshot(
         connection.commit()
     finally:
         connection.close()
+    # Only after the commit: a point remembered from a transaction that never
+    # landed would be skipped forever.
+    _remember_written_points(db_key, written)
     return inserted
 
 
@@ -151,10 +190,16 @@ def record_route(
     db_path: Path | str = DEFAULT_DB_PATH,
     sample_source: str = "live_chart_exact_route",
 ) -> int:
+    # Retention has no index to use -- ``quote_ts_us`` is the second column of
+    # the primary key -- so the DELETE scans every row in the table.  Running
+    # that behind each single-route chart sample cost 23.5% of the web
+    # process's CPU.  Snapshot publication still prunes, which is the right
+    # cadence for a thirty-day window.
     return record_snapshot(
         {"api_discovered_rows": [row]},
         db_path=db_path,
         sample_source=sample_source,
+        prune=False,
     )
 
 
