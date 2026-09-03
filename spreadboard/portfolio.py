@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -631,6 +633,48 @@ def _quote_age_seconds(current: dict[str, Any] | None) -> float | None:
     return max(0.0, time.time() - timestamp / 1_000_000.0)
 
 
+def position_book_keys(positions: Iterable[dict[str, Any]]) -> set[str]:
+    """Every book cache key the given positions could be priced from.
+
+    Both the recorded market type and its canonical spelling are included,
+    because the reader tries both -- fetching only one would miss the book it
+    then looks for.
+    """
+
+    keys: set[str] = set()
+    for position in positions or ():
+        if not isinstance(position, dict):
+            continue
+        for side in ("long", "short"):
+            venue = str(position.get(f"{side}_venue") or "").strip()
+            symbol = str(position.get(f"{side}_symbol") or "").strip()
+            if not venue or not symbol:
+                continue
+            market_type = str(position.get(f"{side}_market_type") or "").strip()
+            canonical = position_markets.normalize_market_type(venue, market_type)
+            for candidate in dict.fromkeys((market_type, canonical)):
+                keys.add(live_book_cache.cache_key(venue, candidate, symbol))
+    return keys
+
+
+def _live_books_for(positions: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Books for exactly these positions, rather than the whole cache."""
+
+    keys = position_book_keys(positions)
+    if not keys:
+        return {}
+    try:
+        store = live_book_cache.LiveBookStore()
+        try:
+            return store.load_keys(
+                keys, max_age_seconds=api_spreads.LIVE_BOOK_MAX_AGE_SECONDS
+            )
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - a missing cache makes marks unavailable, not the account.
+        return {}
+
+
 def _live_books() -> dict[str, Any]:
     try:
         store = live_book_cache.LiveBookStore()
@@ -885,7 +929,23 @@ class PositionAlertWorker:
         # ranked-board regroup adds no position evidence and can block the
         # worker long enough to miss a threshold crossing.
         rows: list[dict[str, Any]] = []
-        books = _live_books()
+        # Collect the positions this pass will actually price BEFORE loading
+        # books, so only their legs are read. `_live_books()` decodes every
+        # fresh book in the cache -- hundreds of legs -- to serve about twenty
+        # two lookups, and this worker repeated that on every pass.
+        alert_users = [
+            user_id
+            for user_id in accounts.list_alert_user_ids(db_path=self.accounts_path)
+        ]
+        pending: list[tuple[int, dict[str, Any]]] = []
+        for user_id in alert_users:
+            for raw in accounts.list_positions(user_id, db_path=self.accounts_path):
+                if raw.get("status") != "open" or not any(
+                    rule.get("enabled") for rule in raw.get("alert_rules") or []
+                ):
+                    continue
+                pending.append((user_id, raw))
+        books = _live_books_for(item for _uid, item in pending)
         funding_legs = bulk_quotes.load_funding()
         catalogue = chart_catalog.load()
         market_index = position_markets.catalogue_market_index(catalogue)
@@ -895,35 +955,33 @@ class PositionAlertWorker:
         # DEX legs can lose their current reference mark in the background.
         funding_snapshot = portfolio_funding.load()
         user_count = position_count = notification_count = 0
-        for user_id in accounts.list_alert_user_ids(db_path=self.accounts_path):
+        seen_users: set[int] = set()
+        for user_id, raw in pending:
             user = accounts.get_user_object(user_id, db_path=self.accounts_path)
             if user is None or not user.subscription_active:
                 continue
-            user_count += 1
-            for raw in accounts.list_positions(user_id, db_path=self.accounts_path):
-                if raw.get("status") != "open" or not any(
-                    rule.get("enabled") for rule in raw.get("alert_rules") or []
-                ):
-                    continue
-                position_count += 1
-                hydrated = _hydrate_position(
-                    raw,
-                    rows,
-                    books=books,
-                    funding_legs=funding_legs,
-                    catalogue=catalogue,
-                    market_index=market_index,
-                    funding_snapshot=funding_snapshot,
-                )
-                if (
-                    hydrated.get("quote_refresh_needed")
-                    and callable(self.quote_scheduler)
-                    and isinstance(hydrated.get("canonical_route"), dict)
-                ):
-                    self.quote_scheduler(hydrated["canonical_route"])
-                notification_count += _evaluate_position_alerts(
-                    user_id, hydrated, accounts_path=self.accounts_path
-                )
+            if user_id not in seen_users:
+                seen_users.add(user_id)
+                user_count += 1
+            position_count += 1
+            hydrated = _hydrate_position(
+                raw,
+                rows,
+                books=books,
+                funding_legs=funding_legs,
+                catalogue=catalogue,
+                market_index=market_index,
+                funding_snapshot=funding_snapshot,
+            )
+            if (
+                hydrated.get("quote_refresh_needed")
+                and callable(self.quote_scheduler)
+                and isinstance(hydrated.get("canonical_route"), dict)
+            ):
+                self.quote_scheduler(hydrated["canonical_route"])
+            notification_count += _evaluate_position_alerts(
+                user_id, hydrated, accounts_path=self.accounts_path
+            )
         return {
             "users": user_count,
             "positions": position_count,

@@ -187,6 +187,50 @@ class LiveBookStore:
             source=str(row[3] or "public_websocket"),
         )
 
+    def load_keys(
+        self, keys: Iterable[str], *, max_age_seconds: float = 30.0
+    ) -> dict[str, CachedBook]:
+        """Only the books asked for, decoded.
+
+        `load_all` reads and JSON-decodes every fresh book so a caller can pick
+        a handful out of the result. Pricing an account's positions needs about
+        twenty two of several hundred, and the alert worker repeated that on
+        every pass -- profiled inside `load_all` while requests waited.
+        """
+
+        wanted = [str(key) for key in keys if str(key).strip()]
+        if not wanted:
+            return {}
+        cutoff_us = int((time.time() - max(0.1, max_age_seconds)) * 1_000_000)
+        books: dict[str, CachedBook] = {}
+        # SQLite caps host parameters, so ask in chunks rather than assuming the
+        # caller's set is small.
+        chunk = 400
+        with self._lock:
+            for start in range(0, len(wanted), chunk):
+                batch = wanted[start : start + chunk]
+                placeholders = ",".join("?" * len(batch))
+                rows = self._conn.execute(
+                    f"""
+                    SELECT cache_key, quote_ts_us, bids_json, asks_json, source
+                    FROM live_books
+                    WHERE quote_ts_us >= ? AND cache_key IN ({placeholders})
+                    """,
+                    (cutoff_us, *batch),
+                ).fetchall()
+                for key, quote_ts_us, bids_json, asks_json, source in rows:
+                    try:
+                        bids = _levels(json.loads(bids_json), side="bid")
+                        asks = _levels(json.loads(asks_json), side="ask")
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    if not bids or not asks:
+                        continue
+                    books[key] = CachedBook(
+                        bids=bids, asks=asks, quote_ts_us=quote_ts_us, source=source
+                    )
+        return books
+
     def load_all(self, *, max_age_seconds: float = 30.0) -> dict[str, "CachedBook"]:
         """Every book fresh enough to price with, in one query.
 
