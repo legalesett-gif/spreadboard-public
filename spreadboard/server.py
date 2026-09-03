@@ -4168,6 +4168,35 @@ def _market_cache_finish(cache_key: tuple[Any, ...], data: dict[str, Any] | None
             inflight.set()
 
 
+#: Filter keys that select or paginate rather than narrow. Anything else with a
+#: value means the reader asked for a subset, and a subset may be empty.
+_NON_NARROWING_FILTER_KEYS = frozenset(
+    {
+        "source",
+        "sort",
+        "direction",
+        "offset",
+        "limit",
+        "include_unverified",
+        "include_stale",
+    }
+)
+
+
+def _projection_query_narrows(data: dict[str, Any]) -> bool:
+    filters = data.get("filters") if isinstance(data.get("filters"), dict) else {}
+    for key, value in filters.items():
+        if key in _NON_NARROWING_FILTER_KEYS:
+            continue
+        if key == "evidence":
+            if str(value or "all").casefold() != "all":
+                return True
+            continue
+        if value not in (None, "", False, [], {}):
+            return True
+    return False
+
+
 def _market_payload_cacheable(data: dict[str, Any]) -> bool:
     if data.get("status") == "warming":
         return False
@@ -4175,7 +4204,28 @@ def _market_payload_cacheable(data: dict[str, Any]) -> bool:
     # example a typo in search). It is still a successful query and must never
     # fall through to the broad discovery parser merely because it has no rows.
     if data.get("mode") == "materialized_live_query_projection":
-        return True
+        if data.get("groups"):
+            return True
+        # A query that narrows can legitimately match nothing -- a search for a
+        # token nobody lists is a complete answer. An unfiltered board over a
+        # populated, ready universe cannot: that is the live overlay having
+        # collapsed mid-build. Production served "0 tokens and 0 priced routes"
+        # while health reported the universe ready with 123,362 routes at an
+        # unchanged generation 115, three minutes after the same universe
+        # produced 468 tokens. This is the rule the canonical mode below
+        # already applies, and refusing the payload is enough: the caller then
+        # falls through to the persisted view.
+        if _projection_query_narrows(data):
+            return True
+        universe = (
+            data.get("materialized_live_universe")
+            if isinstance(data.get("materialized_live_universe"), dict)
+            else {}
+        )
+        return not (
+            bool(universe.get("ready"))
+            and int(_float_or_none(universe.get("route_count")) or 0) > 0
+        )
     if data.get("groups"):
         return True
     canonical = ((data.get("source_health") or {}).get("canonical_api") or {})
