@@ -850,6 +850,28 @@ def _quote_mid(quote: "MarketQuote") -> float | None:
     return bid or ask
 
 
+def _price_identified_token(
+    mid: float, reference_prices: Mapping[str, list[float]]
+) -> str | None:
+    """Which CEX token this builder market's price corroborates, if exactly one.
+
+    Ambiguity is not evidence. Many tokens trade within five percent of each
+    other, and admitting the first of them would be guessing at an identity --
+    the failure that once merged JPMorgan with an unrelated crypto. Returning
+    None leaves the market out, which is the safe answer.
+    """
+
+    matched = [
+        token
+        for token, anchors in reference_prices.items()
+        if any(
+            anchor and abs(mid / anchor - 1.0) <= BUILDER_DEX_PRICE_TOLERANCE
+            for anchor in anchors
+        )
+    ]
+    return matched[0] if len(matched) == 1 else None
+
+
 class HyperliquidBuilderDexSource:
     """Hyperliquid's builder DEXes, which plain CCXT cannot see.
 
@@ -924,13 +946,27 @@ class HyperliquidBuilderDexSource:
                 ticker = symbol.split(":")[-1].upper()
                 if not ticker:
                     continue
-                token = f"{ticker}STOCK" if f"{ticker}STOCK" in known else ticker
-                if token not in known:
-                    continue
                 asset = contexts[index] or {}
                 mid = as_float(asset.get("midPx")) or as_float(asset.get("markPx"))
                 if not mid or mid <= 0:
                     continue
+                token = f"{ticker}STOCK" if f"{ticker}STOCK" in known else ticker
+                if token not in known:
+                    # The ticker is not what any CEX calls this asset.
+                    # Hyperliquid's live OpenAI perp is `io:OAI` -- 2,302 open
+                    # interest, $5.58M of 24h volume -- while every CEX says
+                    # OPENAI, so it was dropped here, before the price gate
+                    # that exists to answer exactly this question. Price is
+                    # already the identity evidence this source trusts; let it
+                    # work in the other direction too.
+                    token = _price_identified_token(mid, reference_prices)
+                    if token is None:
+                        # Recorded, not dropped in silence: the silent
+                        # `continue` is why this gap left nothing to find.
+                        errors.append(
+                            f"{self.venue}:{symbol}:no_cex_ticker_or_price_match"
+                        )
+                        continue
                 anchors = reference_prices.get(token) or []
                 # Reference iteration order must not decide whether an exact
                 # market exists. A genuine venue dislocation can be within the
