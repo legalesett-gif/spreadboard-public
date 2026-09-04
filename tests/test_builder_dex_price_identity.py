@@ -183,3 +183,100 @@ def test_a_live_market_with_open_interest_is_still_quoted(monkeypatch) -> None:
     result = _collect(source, _anchor("OPENAI", 1390.21))
 
     assert {q.symbol for q in result.quotes} == {"io:OAI"}
+
+
+def _registry(*markets: dict):
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from spreadarb.api_discovery.identity import load_identity_registry
+
+    payload = {
+        "schema": "spreadarb.api_discovery.identity_registry.v1",
+        "assets": [
+            {
+                "asset_id": "asset:openai",
+                "symbol": "OPENAI",
+                "name": "OpenAI (pre-IPO)",
+                "cex_futures": list(markets),
+            }
+        ],
+    }
+    path = Path(tempfile.mkdtemp()) / "registry.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return load_identity_registry(path)
+
+
+def _collect_with_registry(source, registry, *anchors):
+    ctx = sources.DiscoveryContext(
+        tokens=(),
+        watchlist={},
+        deadline_monotonic=None,
+        reference_quotes=anchors,
+        min_spread_pct=0.05,
+        min_funding_apr_pct=0.01,
+        identity_registry=registry,
+    )
+    return source.collect(ctx)
+
+
+def test_a_declared_market_is_admitted_under_its_declared_token(monkeypatch) -> None:
+    """Price cannot separate io:OAI from palladium -- they trade 0.6% apart.
+
+    EntropyIO's own dex metadata lists io:OAI beside io:ANTH, io:SNDK, io:NBIS
+    and io:GPRO -- company names, no metals; palladium is on the xyz dex. The
+    registry is where that fact belongs, and a declared identity outranks a
+    ticker that happens to match nothing.
+    """
+
+    source = _dead_market(
+        monkeypatch,
+        "io:OAI",
+        "1468.2",
+        ctx={"dayNtlVlm": "5296809", "openInterest": "2316.726"},
+    )
+    registry = _registry({"venue": "Hyperliquid", "symbol": "io:OAI", "token": "OPENAI"})
+
+    # XPD (palladium) really does sit here: 1417.21 against OPENAI's 1425.60,
+    # a 1.24x separation. Price alone must stay ambiguous, so this asserts the
+    # registry decided it.
+    result = _collect_with_registry(
+        source, registry, _anchor("OPENAI", 1425.60), _anchor("XPD", 1417.21)
+    )
+
+    assert {q.symbol for q in result.quotes} == {"io:OAI"}
+    assert {q.token for q in result.quotes} == {"OPENAI"}
+
+
+def test_a_declared_market_keeps_its_dislocation(monkeypatch) -> None:
+    """The price gate infers identity. Once identity is declared, applying it
+    would reject exactly the gap the board exists to surface."""
+
+    source = _dead_market(
+        monkeypatch,
+        "io:OAI",
+        "1600.0",  # ~12% above the anchor: far outside the 5% inference gate
+        ctx={"dayNtlVlm": "5296809", "openInterest": "2316.726"},
+    )
+    registry = _registry({"venue": "Hyperliquid", "symbol": "io:OAI", "token": "OPENAI"})
+
+    result = _collect_with_registry(source, registry, _anchor("OPENAI", 1425.60))
+
+    assert {q.token for q in result.quotes} == {"OPENAI"}
+
+
+def test_an_undeclared_market_still_goes_through_the_price_gate(monkeypatch) -> None:
+    """Declaration is the exception, not a way around the inference rules."""
+
+    source = _dead_market(
+        monkeypatch,
+        "io:WHAT",
+        "1600.0",
+        ctx={"dayNtlVlm": "5296809", "openInterest": "2316.726"},
+    )
+    registry = _registry({"venue": "Hyperliquid", "symbol": "io:OAI", "token": "OPENAI"})
+
+    result = _collect_with_registry(source, registry, _anchor("OPENAI", 1425.60))
+
+    assert not result.quotes

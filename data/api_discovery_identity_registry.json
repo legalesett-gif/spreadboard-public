@@ -1,6 +1,6 @@
 {
   "schema": "spreadarb.api_discovery.identity_registry.v1",
-  "updated_at": "2026-05-23T00:00:00Z",
+  "updated_at": "2026-09-04T02:00:00Z",
   "assets": [
     {
       "asset_id": "asset:eth",
@@ -11,28 +11,108 @@
         "1": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
       },
       "cex_spot": [
-        {"venue": "Binance", "symbol": "ETH/USDT"},
-        {"venue": "Bybit", "symbol": "ETH/USDT"},
-        {"venue": "Bitget", "symbol": "ETH/USDT"},
-        {"venue": "OKX", "symbol": "ETH/USDT"},
-        {"venue": "Gate", "symbol": "ETH/USDT"},
-        {"venue": "Mexc", "symbol": "ETH/USDT"},
-        {"venue": "Kucoin", "symbol": "ETH/USDT"},
-        {"venue": "Bingx", "symbol": "ETH/USDT"},
-        {"venue": "Coinbase", "symbol": "ETH/USD"},
-        {"venue": "Kraken", "symbol": "ETH/USD"}
+        {
+          "venue": "Binance",
+          "symbol": "ETH/USDT"
+        },
+        {
+          "venue": "Bybit",
+          "symbol": "ETH/USDT"
+        },
+        {
+          "venue": "Bitget",
+          "symbol": "ETH/USDT"
+        },
+        {
+          "venue": "OKX",
+          "symbol": "ETH/USDT"
+        },
+        {
+          "venue": "Gate",
+          "symbol": "ETH/USDT"
+        },
+        {
+          "venue": "Mexc",
+          "symbol": "ETH/USDT"
+        },
+        {
+          "venue": "Kucoin",
+          "symbol": "ETH/USDT"
+        },
+        {
+          "venue": "Bingx",
+          "symbol": "ETH/USDT"
+        },
+        {
+          "venue": "Coinbase",
+          "symbol": "ETH/USD"
+        },
+        {
+          "venue": "Kraken",
+          "symbol": "ETH/USD"
+        }
       ],
       "cex_futures": [
-        {"venue": "Binance", "symbol": "ETH/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Bybit", "symbol": "ETH/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Bitget", "symbol": "ETH/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "OKX", "symbol": "ETH/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Gate", "symbol": "ETH/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Mexc", "symbol": "ETH/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Kucoin", "symbol": "ETH/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Bingx", "symbol": "ETH/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Hyperliquid", "symbol": "ETH/USDC:USDC", "settle_asset": "USDC", "contract_size": null},
-        {"venue": "Aster", "symbol": "ETH/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+        {
+          "venue": "Binance",
+          "symbol": "ETH/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Bybit",
+          "symbol": "ETH/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Bitget",
+          "symbol": "ETH/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "OKX",
+          "symbol": "ETH/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Gate",
+          "symbol": "ETH/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Mexc",
+          "symbol": "ETH/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Kucoin",
+          "symbol": "ETH/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Bingx",
+          "symbol": "ETH/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Hyperliquid",
+          "symbol": "ETH/USDC:USDC",
+          "settle_asset": "USDC",
+          "contract_size": null
+        },
+        {
+          "venue": "Aster",
+          "symbol": "ETH/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        }
       ]
     },
     {
@@ -44,28 +124,108 @@
         "1": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"
       },
       "cex_spot": [
-        {"venue": "Binance", "symbol": "BTC/USDT"},
-        {"venue": "Bybit", "symbol": "BTC/USDT"},
-        {"venue": "Bitget", "symbol": "BTC/USDT"},
-        {"venue": "OKX", "symbol": "BTC/USDT"},
-        {"venue": "Gate", "symbol": "BTC/USDT"},
-        {"venue": "Mexc", "symbol": "BTC/USDT"},
-        {"venue": "Kucoin", "symbol": "BTC/USDT"},
-        {"venue": "Bingx", "symbol": "BTC/USDT"},
-        {"venue": "Coinbase", "symbol": "BTC/USD"},
-        {"venue": "Kraken", "symbol": "BTC/USD"}
+        {
+          "venue": "Binance",
+          "symbol": "BTC/USDT"
+        },
+        {
+          "venue": "Bybit",
+          "symbol": "BTC/USDT"
+        },
+        {
+          "venue": "Bitget",
+          "symbol": "BTC/USDT"
+        },
+        {
+          "venue": "OKX",
+          "symbol": "BTC/USDT"
+        },
+        {
+          "venue": "Gate",
+          "symbol": "BTC/USDT"
+        },
+        {
+          "venue": "Mexc",
+          "symbol": "BTC/USDT"
+        },
+        {
+          "venue": "Kucoin",
+          "symbol": "BTC/USDT"
+        },
+        {
+          "venue": "Bingx",
+          "symbol": "BTC/USDT"
+        },
+        {
+          "venue": "Coinbase",
+          "symbol": "BTC/USD"
+        },
+        {
+          "venue": "Kraken",
+          "symbol": "BTC/USD"
+        }
       ],
       "cex_futures": [
-        {"venue": "Binance", "symbol": "BTC/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Bybit", "symbol": "BTC/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Bitget", "symbol": "BTC/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "OKX", "symbol": "BTC/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Gate", "symbol": "BTC/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Mexc", "symbol": "BTC/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Kucoin", "symbol": "BTC/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Bingx", "symbol": "BTC/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Hyperliquid", "symbol": "BTC/USDC:USDC", "settle_asset": "USDC", "contract_size": null},
-        {"venue": "Aster", "symbol": "BTC/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+        {
+          "venue": "Binance",
+          "symbol": "BTC/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Bybit",
+          "symbol": "BTC/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Bitget",
+          "symbol": "BTC/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "OKX",
+          "symbol": "BTC/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Gate",
+          "symbol": "BTC/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Mexc",
+          "symbol": "BTC/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Kucoin",
+          "symbol": "BTC/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Bingx",
+          "symbol": "BTC/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Hyperliquid",
+          "symbol": "BTC/USDC:USDC",
+          "settle_asset": "USDC",
+          "contract_size": null
+        },
+        {
+          "venue": "Aster",
+          "symbol": "BTC/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        }
       ]
     },
     {
@@ -76,28 +236,108 @@
       "solana_mint": "So11111111111111111111111111111111111111112",
       "solana_decimals": 9,
       "cex_spot": [
-        {"venue": "Binance", "symbol": "SOL/USDT"},
-        {"venue": "Bybit", "symbol": "SOL/USDT"},
-        {"venue": "Bitget", "symbol": "SOL/USDT"},
-        {"venue": "OKX", "symbol": "SOL/USDT"},
-        {"venue": "Gate", "symbol": "SOL/USDT"},
-        {"venue": "Mexc", "symbol": "SOL/USDT"},
-        {"venue": "Kucoin", "symbol": "SOL/USDT"},
-        {"venue": "Bingx", "symbol": "SOL/USDT"},
-        {"venue": "Coinbase", "symbol": "SOL/USD"},
-        {"venue": "Kraken", "symbol": "SOL/USD"}
+        {
+          "venue": "Binance",
+          "symbol": "SOL/USDT"
+        },
+        {
+          "venue": "Bybit",
+          "symbol": "SOL/USDT"
+        },
+        {
+          "venue": "Bitget",
+          "symbol": "SOL/USDT"
+        },
+        {
+          "venue": "OKX",
+          "symbol": "SOL/USDT"
+        },
+        {
+          "venue": "Gate",
+          "symbol": "SOL/USDT"
+        },
+        {
+          "venue": "Mexc",
+          "symbol": "SOL/USDT"
+        },
+        {
+          "venue": "Kucoin",
+          "symbol": "SOL/USDT"
+        },
+        {
+          "venue": "Bingx",
+          "symbol": "SOL/USDT"
+        },
+        {
+          "venue": "Coinbase",
+          "symbol": "SOL/USD"
+        },
+        {
+          "venue": "Kraken",
+          "symbol": "SOL/USD"
+        }
       ],
       "cex_futures": [
-        {"venue": "Binance", "symbol": "SOL/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Bybit", "symbol": "SOL/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Bitget", "symbol": "SOL/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "OKX", "symbol": "SOL/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Gate", "symbol": "SOL/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Mexc", "symbol": "SOL/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Kucoin", "symbol": "SOL/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Bingx", "symbol": "SOL/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Hyperliquid", "symbol": "SOL/USDC:USDC", "settle_asset": "USDC", "contract_size": null},
-        {"venue": "Aster", "symbol": "SOL/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+        {
+          "venue": "Binance",
+          "symbol": "SOL/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Bybit",
+          "symbol": "SOL/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Bitget",
+          "symbol": "SOL/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "OKX",
+          "symbol": "SOL/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Gate",
+          "symbol": "SOL/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Mexc",
+          "symbol": "SOL/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Kucoin",
+          "symbol": "SOL/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Bingx",
+          "symbol": "SOL/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Hyperliquid",
+          "symbol": "SOL/USDC:USDC",
+          "settle_asset": "USDC",
+          "contract_size": null
+        },
+        {
+          "venue": "Aster",
+          "symbol": "SOL/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        }
       ]
     },
     {
@@ -108,24 +348,88 @@
       "solana_mint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
       "solana_decimals": 6,
       "cex_spot": [
-        {"venue": "Binance", "symbol": "JUP/USDT"},
-        {"venue": "Bybit", "symbol": "JUP/USDT"},
-        {"venue": "Bitget", "symbol": "JUP/USDT"},
-        {"venue": "OKX", "symbol": "JUP/USDT"},
-        {"venue": "Gate", "symbol": "JUP/USDT"},
-        {"venue": "Mexc", "symbol": "JUP/USDT"},
-        {"venue": "Kucoin", "symbol": "JUP/USDT"},
-        {"venue": "Bingx", "symbol": "JUP/USDT"}
+        {
+          "venue": "Binance",
+          "symbol": "JUP/USDT"
+        },
+        {
+          "venue": "Bybit",
+          "symbol": "JUP/USDT"
+        },
+        {
+          "venue": "Bitget",
+          "symbol": "JUP/USDT"
+        },
+        {
+          "venue": "OKX",
+          "symbol": "JUP/USDT"
+        },
+        {
+          "venue": "Gate",
+          "symbol": "JUP/USDT"
+        },
+        {
+          "venue": "Mexc",
+          "symbol": "JUP/USDT"
+        },
+        {
+          "venue": "Kucoin",
+          "symbol": "JUP/USDT"
+        },
+        {
+          "venue": "Bingx",
+          "symbol": "JUP/USDT"
+        }
       ],
       "cex_futures": [
-        {"venue": "Binance", "symbol": "JUP/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Bybit", "symbol": "JUP/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Bitget", "symbol": "JUP/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "OKX", "symbol": "JUP/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Gate", "symbol": "JUP/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Mexc", "symbol": "JUP/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Kucoin", "symbol": "JUP/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Bingx", "symbol": "JUP/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+        {
+          "venue": "Binance",
+          "symbol": "JUP/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Bybit",
+          "symbol": "JUP/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Bitget",
+          "symbol": "JUP/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "OKX",
+          "symbol": "JUP/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Gate",
+          "symbol": "JUP/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Mexc",
+          "symbol": "JUP/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Kucoin",
+          "symbol": "JUP/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Bingx",
+          "symbol": "JUP/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        }
       ]
     },
     {
@@ -137,7 +441,10 @@
         "1": "0x13E4b8CfFe704d3De6F19E52b281d92f21EC18bD"
       },
       "cex_spot": [
-        {"venue": "Mexc", "symbol": "PAI/USDT"}
+        {
+          "venue": "Mexc",
+          "symbol": "PAI/USDT"
+        }
       ]
     },
     {
@@ -149,7 +456,10 @@
         "56": "0x13a5f811093dd001C328b59a0CC9deC88951F042"
       },
       "cex_spot": [
-        {"venue": "Bingx", "symbol": "PAI/USDT"}
+        {
+          "venue": "Bingx",
+          "symbol": "PAI/USDT"
+        }
       ]
     },
     {
@@ -159,8 +469,18 @@
       "solana_mint": "BPxxfRCXkUVhig4HS1Lh7kZqV6SPJhzfEk4x6fVBjPCy",
       "solana_decimals": 9,
       "cex_futures": [
-        {"venue": "Mexc", "symbol": "BP/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Gate", "symbol": "BP/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+        {
+          "venue": "Mexc",
+          "symbol": "BP/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Gate",
+          "symbol": "BP/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        }
       ]
     },
     {
@@ -172,8 +492,18 @@
         "1": "0xcdf7028ceab81fa0c6971208e83fa7872994bee5"
       },
       "cex_futures": [
-        {"venue": "Binance", "symbol": "T/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Mexc", "symbol": "T/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+        {
+          "venue": "Binance",
+          "symbol": "T/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Mexc",
+          "symbol": "T/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        }
       ]
     },
     {
@@ -184,7 +514,12 @@
         "56": "0xf39e4b21c84e737df08e2c3b32541d856f508e48"
       },
       "cex_futures": [
-        {"venue": "Kucoin Futures", "symbol": "ESPORTS/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+        {
+          "venue": "Kucoin Futures",
+          "symbol": "ESPORTS/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        }
       ]
     },
     {
@@ -195,7 +530,12 @@
         "8453": "0x532f27101965dd16442e59d40670faf5ebb142e4"
       },
       "cex_futures": [
-        {"venue": "Bybit", "symbol": "BRETT/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+        {
+          "venue": "Bybit",
+          "symbol": "BRETT/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        }
       ]
     },
     {
@@ -206,7 +546,12 @@
         "56": "0x3aee7602b612de36088f3ffed8c8f10e86ebf2bf"
       },
       "cex_futures": [
-        {"venue": "Kucoin Futures", "symbol": "BANK/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+        {
+          "venue": "Kucoin Futures",
+          "symbol": "BANK/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        }
       ]
     },
     {
@@ -217,7 +562,12 @@
         "56": "0x95c9b514566fbd224dc2037f5914eb8ab91c9201"
       },
       "cex_futures": [
-        {"venue": "Bybit", "symbol": "PTB/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+        {
+          "venue": "Bybit",
+          "symbol": "PTB/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        }
       ]
     },
     {
@@ -228,7 +578,12 @@
         "1": "0xf280b16ef293d8e534e370794ef26bf312694126"
       },
       "cex_futures": [
-        {"venue": "Mexc", "symbol": "ASTEROID/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+        {
+          "venue": "Mexc",
+          "symbol": "ASTEROID/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        }
       ]
     },
     {
@@ -240,8 +595,18 @@
         "56": "0x7083609fce4d1d8dc0c979aab8c869ea2c873402"
       },
       "cex_futures": [
-        {"venue": "Bingx", "symbol": "DOT/USDT:USDT", "settle_asset": "USDT", "contract_size": null},
-        {"venue": "Binance", "symbol": "DOT/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+        {
+          "venue": "Bingx",
+          "symbol": "DOT/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        },
+        {
+          "venue": "Binance",
+          "symbol": "DOT/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        }
       ]
     },
     {
@@ -252,14 +617,36 @@
         "1": "0xa27ec0006e59f245217ff08cd52a7e8b169e62d2"
       },
       "cex_futures": [
-        {"venue": "Bybit", "symbol": "AZTEC/USDT:USDT", "settle_asset": "USDT", "contract_size": null}
+        {
+          "venue": "Bybit",
+          "symbol": "AZTEC/USDT:USDT",
+          "settle_asset": "USDT",
+          "contract_size": null
+        }
+      ]
+    },
+    {
+      "asset_id": "asset:openai",
+      "symbol": "OPENAI",
+      "name": "OpenAI (pre-IPO exposure)",
+      "cex_futures": [
+        {
+          "venue": "Hyperliquid",
+          "symbol": "io:OAI",
+          "token": "OPENAI",
+          "market_type": "Futures",
+          "source": "entropyio_hip3_dex_metadata"
+        }
       ]
     }
   ],
   "known_ticker_collisions": [
     {
       "symbol": "PAI",
-      "asset_ids": ["asset:pai:parallelai", "asset:pai:pantherai"],
+      "asset_ids": [
+        "asset:pai:parallelai",
+        "asset:pai:pantherai"
+      ],
       "notes": "MEXC PAI/USDT and BingX PAI/USDT have previously resolved to different contracts/underlyings."
     }
   ]

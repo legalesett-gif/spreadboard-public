@@ -675,6 +675,31 @@ class CexCcxtSource:
         self.include_reference_quotes = include_reference_quotes
         self.collect_funding = collect_funding
 
+    def _quote(
+        self, *, symbol: str, token: str, mid: float, asset: Mapping[str, Any]
+    ) -> MarketQuote:
+        funding_rate = as_float(asset.get("funding"))
+        return MarketQuote(
+            token=token,
+            venue=self.venue,
+            market_type=self.market_type,
+            bid=mid,
+            ask=mid,
+            bid_vwap=mid,
+            ask_vwap=mid,
+            quote_ts_us=now_us(),
+            source_name=self.name,
+            symbol=symbol,
+            # Hyperliquid funding settles hourly.
+            funding_rate_pct=funding_rate * 100.0 if funding_rate is not None else None,
+            funding_interval_hours=1.0,
+            funding_apr_pct=(
+                funding_rate * 100.0 * 24.0 * 365.0 if funding_rate is not None else None
+            ),
+            volume_24h_usd=as_float(asset.get("dayNtlVlm")),
+            blockers=(DEPTH_UNVERIFIED_BLOCKER,),
+        )
+
     def collect(self, context: DiscoveryContext) -> SourceResult:
         started_at = utc_now_iso()
         started = monotonic()
@@ -850,6 +875,32 @@ def _quote_mid(quote: "MarketQuote") -> float | None:
     return bid or ask
 
 
+def _registry_declared_token(
+    registry: Any, *, venue: str, market_type: str, ticker: str, symbol: str
+) -> str | None:
+    """The token an identity registry says this exact market is.
+
+    Price cannot separate every asset. Hyperliquid's `io:OAI` sits 2.6% from
+    OpenAI's CEX anchor and 3.2% from palladium's -- a 1.24x separation, so any
+    threshold admitting one admits the other. EntropyIO's own dex metadata
+    lists io:OAI beside io:ANTH, io:SNDK, io:NBIS and io:GPRO, all company
+    names, with no metals on that dex at all. That is a fact to record, not to
+    infer, and the registry is where it belongs.
+    """
+
+    if registry is None:
+        return None
+    try:
+        resolution = registry.resolve_market(
+            venue=venue, market_type=market_type, token=ticker, symbol=symbol
+        )
+    except Exception:  # noqa: BLE001 - a malformed registry must not stop discovery.
+        return None
+    identity = getattr(resolution, "market_identity", None)
+    token = str(getattr(identity, "token", "") or "").upper()
+    return token or None
+
+
 def _price_identified_token(
     mid: float, reference_prices: Mapping[str, list[float]]
 ) -> str | None:
@@ -898,6 +949,31 @@ class HyperliquidBuilderDexSource:
         )
         with urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed public origin
             return json.loads(response.read().decode("utf-8"))
+
+    def _quote(
+        self, *, symbol: str, token: str, mid: float, asset: Mapping[str, Any]
+    ) -> MarketQuote:
+        funding_rate = as_float(asset.get("funding"))
+        return MarketQuote(
+            token=token,
+            venue=self.venue,
+            market_type=self.market_type,
+            bid=mid,
+            ask=mid,
+            bid_vwap=mid,
+            ask_vwap=mid,
+            quote_ts_us=now_us(),
+            source_name=self.name,
+            symbol=symbol,
+            # Hyperliquid funding settles hourly.
+            funding_rate_pct=funding_rate * 100.0 if funding_rate is not None else None,
+            funding_interval_hours=1.0,
+            funding_apr_pct=(
+                funding_rate * 100.0 * 24.0 * 365.0 if funding_rate is not None else None
+            ),
+            volume_24h_usd=as_float(asset.get("dayNtlVlm")),
+            blockers=(DEPTH_UNVERIFIED_BLOCKER,),
+        )
 
     def collect(self, context: DiscoveryContext) -> SourceResult:
         started_at = utc_now_iso()
@@ -968,6 +1044,26 @@ class HyperliquidBuilderDexSource:
                     errors.append(f"{self.venue}:{symbol}:no_open_interest_or_volume")
                     continue
                 token = f"{ticker}STOCK" if f"{ticker}STOCK" in known else ticker
+                declared = (
+                    None
+                    if token in known
+                    else _registry_declared_token(
+                        getattr(context, "identity_registry", None),
+                        venue=self.venue,
+                        market_type=self.market_type,
+                        ticker=ticker,
+                        symbol=symbol,
+                    )
+                )
+                if declared and declared in known:
+                    # A declared identity skips the price gate below. That gate
+                    # exists to INFER identity; applying it to a market whose
+                    # identity is already established would reject exactly the
+                    # dislocation the board is for.
+                    quotes.append(
+                        self._quote(symbol=symbol, token=declared, mid=mid, asset=asset)
+                    )
+                    continue
                 if token not in known:
                     # The ticker is not what any CEX calls this asset.
                     # Hyperliquid's live OpenAI perp is `io:OAI` -- 2,302 open
@@ -997,32 +1093,7 @@ class HyperliquidBuilderDexSource:
                 ):
                     errors.append(f"{self.venue}:{symbol}:price_disagrees_with_{token}")
                     continue
-                funding_rate = as_float(asset.get("funding"))
-                quotes.append(
-                    MarketQuote(
-                        token=token,
-                        venue=self.venue,
-                        market_type=self.market_type,
-                        bid=mid,
-                        ask=mid,
-                        bid_vwap=mid,
-                        ask_vwap=mid,
-                        quote_ts_us=now_us(),
-                        source_name=self.name,
-                        symbol=symbol,
-                        # Hyperliquid funding settles hourly.
-                        funding_rate_pct=funding_rate * 100.0 if funding_rate is not None else None,
-                        funding_interval_hours=1.0,
-                        funding_apr_pct=(
-                            funding_rate * 100.0 * 24.0 * 365.0
-                            if funding_rate is not None
-                            else None
-                        ),
-                        volume_24h_usd=as_float(asset.get("dayNtlVlm")),
-                        blockers=(DEPTH_UNVERIFIED_BLOCKER,),
-                    )
-                )
-
+                quotes.append(self._quote(symbol=symbol, token=token, mid=mid, asset=asset))
         rows = pairwise_candidates(
             [*context.reference_quotes, *quotes],
             source_kind=self.source_kind,
@@ -1088,6 +1159,31 @@ class ZeroxQuoteSource:
         self.http_get_json = http_get_json or fetch_json
         self.base_url = base_url
         self.slippage_bps = slippage_bps
+
+    def _quote(
+        self, *, symbol: str, token: str, mid: float, asset: Mapping[str, Any]
+    ) -> MarketQuote:
+        funding_rate = as_float(asset.get("funding"))
+        return MarketQuote(
+            token=token,
+            venue=self.venue,
+            market_type=self.market_type,
+            bid=mid,
+            ask=mid,
+            bid_vwap=mid,
+            ask_vwap=mid,
+            quote_ts_us=now_us(),
+            source_name=self.name,
+            symbol=symbol,
+            # Hyperliquid funding settles hourly.
+            funding_rate_pct=funding_rate * 100.0 if funding_rate is not None else None,
+            funding_interval_hours=1.0,
+            funding_apr_pct=(
+                funding_rate * 100.0 * 24.0 * 365.0 if funding_rate is not None else None
+            ),
+            volume_24h_usd=as_float(asset.get("dayNtlVlm")),
+            blockers=(DEPTH_UNVERIFIED_BLOCKER,),
+        )
 
     def collect(self, context: DiscoveryContext) -> SourceResult:
         started_at = utc_now_iso()
@@ -1223,6 +1319,31 @@ class JupiterQuoteSource:
         self.http_get_json = http_get_json or fetch_json
         self.base_url = base_url
         self.slippage_bps = slippage_bps
+
+    def _quote(
+        self, *, symbol: str, token: str, mid: float, asset: Mapping[str, Any]
+    ) -> MarketQuote:
+        funding_rate = as_float(asset.get("funding"))
+        return MarketQuote(
+            token=token,
+            venue=self.venue,
+            market_type=self.market_type,
+            bid=mid,
+            ask=mid,
+            bid_vwap=mid,
+            ask_vwap=mid,
+            quote_ts_us=now_us(),
+            source_name=self.name,
+            symbol=symbol,
+            # Hyperliquid funding settles hourly.
+            funding_rate_pct=funding_rate * 100.0 if funding_rate is not None else None,
+            funding_interval_hours=1.0,
+            funding_apr_pct=(
+                funding_rate * 100.0 * 24.0 * 365.0 if funding_rate is not None else None
+            ),
+            volume_24h_usd=as_float(asset.get("dayNtlVlm")),
+            blockers=(DEPTH_UNVERIFIED_BLOCKER,),
+        )
 
     def collect(self, context: DiscoveryContext) -> SourceResult:
         started_at = utc_now_iso()
