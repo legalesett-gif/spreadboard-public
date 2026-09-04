@@ -3858,6 +3858,66 @@ def _heap_summary(rss_gb: float) -> str:
         return ""
 
 
+#: Fraction of the container's memory limit above which the watchdog records
+#: which processes are holding it.
+CONTAINER_PRESSURE_RATIO = float(
+    os.environ.get("SPREADBOARD_CONTAINER_PRESSURE_RATIO", "0.85")
+)
+CONTAINER_PRESSURE_PROCESSES = 6
+CGROUP_ROOT = Path("/sys/fs/cgroup")
+PROCFS_ROOT = Path("/proc")
+
+
+def _container_pressure(
+    *, cgroup: Path = CGROUP_ROOT, procfs: Path = PROCFS_ROOT
+) -> str:
+    """Which processes are holding the container's memory, when it is nearly full.
+
+    The cap is hit as a SUM. The collector's 4011MB peak was five processes,
+    none of them pathological, and a heap summary of any one of them could not
+    have shown that -- they are separate processes. Both numbers are readable
+    from inside the container, so the composition at the moment of pressure
+    becomes a log line rather than something to catch by sampling from outside.
+    """
+
+    try:
+        current = int((cgroup / "memory.current").read_text().strip())
+        raw_limit = (cgroup / "memory.max").read_text().strip()
+        if raw_limit == "max":
+            return ""
+        limit = int(raw_limit)
+        if limit <= 0 or current / limit < CONTAINER_PRESSURE_RATIO:
+            return ""
+        processes: list[tuple[int, str]] = []
+        for entry in procfs.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                status = (entry / "status").read_text()
+                command = (entry / "cmdline").read_bytes().decode("utf-8", "replace")
+            except OSError:
+                continue
+            for line in status.splitlines():
+                if not line.startswith("VmRSS"):
+                    continue
+                name = Path(
+                    next(
+                        (part for part in command.split("\0") if part.endswith(".py")),
+                        command.replace("\0", " ").strip() or "?",
+                    )
+                ).name
+                processes.append((int(line.split()[1]), name))
+                break
+        processes.sort(reverse=True)
+        top = " ".join(
+            f"{name}={kilobytes // 1024}MB"
+            for kilobytes, name in processes[:CONTAINER_PRESSURE_PROCESSES]
+        )
+        return f" pressure[{current // 1048576}/{limit // 1048576}MB {top}]"
+    except (OSError, ValueError, ZeroDivisionError):
+        return ""
+
+
 class MemoryWatchdog(threading.Thread):
     """Say what the process is holding, every so often.
 
@@ -3883,6 +3943,7 @@ class MemoryWatchdog(threading.Thread):
                     f"tick={len(server_module._LIVE_TICK)} "
                     f"threads={threading.active_count()}"
                     f"{_heap_summary(_rss_gb())}"
+                    f"{_container_pressure()}"
                 )
             except Exception as exc:  # noqa: BLE001 - observation must not break serving.
                 _log(f"memory watchdog: {type(exc).__name__}: {exc}")
