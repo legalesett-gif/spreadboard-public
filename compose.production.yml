@@ -140,6 +140,8 @@ services:
       # unchanged. It only re-projects the compact priority views less often,
       # which is still far inside the 15-minute window an opportunity survives.
       SPREADBOARD_PRIORITY_LIVE_QUERY_REFRESH_SECONDS: "20"
+      # Owner asked for the site-status pushes to stop (2026-09-04).
+      SPREADBOARD_OPERATOR_ALERTS: "off"
       # Independent venue adapters refresh concurrently; each venue writes its
       # result in one SQLite transaction. Production passes had grown to
       # 91-98s at eight/twelve workers, outside the unchanged 90s truth

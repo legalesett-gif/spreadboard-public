@@ -151,6 +151,15 @@ def _send(
     return delivered, errors
 
 
+#: Owner-facing SpreadBoard health pushes (route reconciliation, funding truth).
+#: Set `SPREADBOARD_OPERATOR_ALERTS` to off/0/false/no to silence them. This is
+#: the only Pushover path in this repository; the trading system's alerts use a
+#: different token and are unaffected.
+def _alerts_enabled() -> bool:
+    raw = os.environ.get("SPREADBOARD_OPERATOR_ALERTS", "").strip().casefold()
+    return raw not in {"off", "0", "false", "no", "disabled"}
+
+
 def notify_transition(
     key: str,
     *,
@@ -254,6 +263,48 @@ def notify_transition(
         LOGGER.error("%s: %s", send_title, rendered)
     else:
         LOGGER.info("%s: %s", send_title, rendered)
+
+    if not _alerts_enabled():
+        # Off at the door, after the state write above. The transition is still
+        # recorded, so re-enabling does not replay a backlog of faults that
+        # opened while this was quiet -- which means clearing the pending flag
+        # that write set, or the first call after re-enabling sends all of them.
+        with _LOCK:
+            state = _load(path)
+            events = state.setdefault("events", {})
+            current = events.get(clean_key)
+            if isinstance(current, dict) and str(
+                current.get("incident_id") or ""
+            ) == incident_id:
+                current["delivery"] = {
+                    "pending": False,
+                    "attempts": 0,
+                    "delivered": 0,
+                    "last_error": "operator_alerts_disabled",
+                    "next_attempt_unix": now,
+                }
+                state["updated_at_unix"] = now
+                _atomic_write(path, state)
+        _append_ledger(
+            ledger,
+            {
+                "at_unix": now,
+                "incident_id": incident_id,
+                "key": clean_key,
+                "severity": "fault" if send_active else "recovery",
+                "event": "skipped",
+                "reason": "operator_alerts_disabled",
+                "attempt": attempts + 1,
+                "delivered": 0,
+            },
+        )
+        return {
+            "changed": not retry,
+            "delivered": 0,
+            "active": bool(active),
+            "incident_id": incident_id,
+            "delivery": "operator_alerts_disabled",
+        }
 
     app_token = os.environ.get("SPREADBOARD_PUSHOVER_APP_TOKEN", "").strip()
     if not app_token:
