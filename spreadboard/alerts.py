@@ -653,7 +653,7 @@ class UserMarketAlertWorker:
         checked = str(rule.get("delivery_receipt_checked_at") or "")
         if checked:
             try:
-                moment = datetime.fromisoformat(checked.replace("Z", "+00:00"))
+                moment = datetime.fromisoformat(checked)
                 if time.time() - moment.timestamp() < 60:
                     return rule
             except ValueError:

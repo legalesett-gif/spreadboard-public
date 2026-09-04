@@ -3076,11 +3076,18 @@ def _position_values(payload: dict[str, Any]) -> dict[str, Any]:
                 text["short_market_type"],
             )
         )
-    entry_spread = (
-        numeric["short_entry_price"] * short_multiplier
-        / (numeric["long_entry_price"] * long_multiplier)
-        - 1
-    ) * 100
+    if requested_route_key.startswith("CUSTOM:"):
+        entry_spread = (
+            numeric["short_entry_price"] * short_multiplier
+            / (numeric["long_entry_price"] * long_multiplier)
+            - 1
+        ) * 100
+    else:
+        entry_spread = (
+            numeric["short_quantity"] * numeric["short_entry_price"]
+            / (numeric["long_quantity"] * numeric["long_entry_price"])
+            - 1
+        ) * 100
     return {
         **text,
         **numeric,

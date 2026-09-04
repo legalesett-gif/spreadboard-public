@@ -15,9 +15,9 @@ anything URL-shaped is refused outright.
 from __future__ import annotations
 
 import pytest
-from spreadboard.telegram_queries import parse_query
 
 from spreadboard import telegram_queries
+from spreadboard.telegram_queries import parse_query
 
 # --------------------------------------------------------------------------
 # It must not answer ordinary conversation
