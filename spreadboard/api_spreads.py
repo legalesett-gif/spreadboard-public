@@ -208,6 +208,22 @@ def load_public_route_index(
     )
 
 
+#: Sources whose markets exist nowhere else, so discovery is their only path in.
+#:
+#: The freshness rule above is right for a CEX venue: the chart catalogue holds
+#: a current book for every market it covers, so a stale discovery mirror of one
+#: is redundant. A Hyperliquid HIP-3 builder market has no book feed at all, and
+#: `SPREAD_LEADER_MAX_AGE_MIN` is 1.5 minutes against a 45-60 minute scan, so the
+#: rule closed the only door. All seven Hyperliquid OPENAI routes were dropped
+#: this way -- including Kucoin:Futures to Hyperliquid:Futures at 5.69% off the
+#: live io:OAI market -- and the index carried zero OPENAI entries.
+#:
+#: Deliberately not every `dex_discovered` row. That was measured at 4,916 extra
+#: rows across 587 tokens, a fifth of the index, and almost all of it Aster
+#: mirroring pairs the catalogue already carries.
+PROVIDER_ONLY_SOURCE_NAMES = frozenset({"hyperliquid_builder_dex"})
+
+
 def _complete_current_catalogue_rows(
     discovery_rows: list[dict[str, Any]],
     *,
@@ -311,6 +327,7 @@ def _complete_current_catalogue_rows(
         row
         for row in discovery_rows
         if str(row.get("route_kind") or "").startswith("DEX-")
+        or str(row.get("source_name") or "") in PROVIDER_ONLY_SOURCE_NAMES
         or spread_evidence_state(row) in {"verified", "research"}
     ]
 
