@@ -3716,6 +3716,17 @@ HEAVY_CHILD_SCRIPTS = (
     "market_evidence_worker.py",
     "live_route_index_worker.py",
     "funding_navigation_worker.py",
+    # Measured, 120 samples at 10s through a full collector cycle: the route
+    # index build was running in 31 of them and shared the box with the ranking
+    # build in 23 of those. anon peaked at 4050, 3914 and 3650MB when they
+    # overlapped against 2900, 2861 and 2708MB when they did not -- roughly
+    # 1.15GB -- and the 4096MB ceiling was touched in 80 of the 120 samples.
+    # The worst read 46MB of headroom.
+    #
+    # `bulk_quote_worker` overlaps just as often and is deliberately NOT here:
+    # it is the price path, and parking it behind a multi-minute build would
+    # cost the live freshness the board is judged on.
+    "token_ranking_worker.py",
 )
 _HEAVY_CHILD_SLOT = threading.Semaphore(1)
 HEAVY_CHILD_SLOT_WAIT_SECONDS = float(
