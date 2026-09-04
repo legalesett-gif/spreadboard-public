@@ -3350,6 +3350,26 @@ MAX_SPOT_INDEX_DEVIATION = max(
 )
 
 
+def _leg_index_price(row: SpreadTerminalRow, side: str) -> float | None:
+    """The perp's published index, from wherever this leg carries it.
+
+    The bulk funding refresh merges its fields into `notes.route_inputs[side]`,
+    which is the canonical per-leg store; the exact-route path also mirrors the
+    value onto the row. Reading only the row missed every board leg.
+    """
+
+    notes = _row_value(row, "notes")
+    if isinstance(notes, dict):
+        inputs = notes.get("route_inputs")
+        if isinstance(inputs, dict):
+            leg = inputs.get(side)
+            if isinstance(leg, dict):
+                value = _float_or_none(leg.get("index_price"))
+                if value:
+                    return value
+    return _float_or_none(_row_value(row, f"{side}_index_price"))
+
+
 def spot_disagrees_with_perp_index(row: SpreadTerminalRow) -> bool:
     """True when a spot leg is nowhere near what its paired perp settles on.
 
@@ -3364,7 +3384,7 @@ def spot_disagrees_with_perp_index(row: SpreadTerminalRow) -> bool:
             continue
         if str(_row_value(row, f"{perp_side}_market_type") or "").casefold() != "futures":
             continue
-        index = _float_or_none(_row_value(row, f"{perp_side}_index_price"))
+        index = _leg_index_price(row, perp_side)
         spot = _float_or_none(_row_value(row, f"{spot_side}_price"))
         if not index or not spot or index <= 0 or spot <= 0:
             continue

@@ -148,3 +148,15 @@ def test_the_index_price_reaches_the_row() -> None:
     )
 
     assert row["short_index_price"] == 1461.35
+
+
+def test_the_index_is_read_from_the_leg_the_bulk_refresh_writes() -> None:
+    """`_refresh_funding` merges into notes.route_inputs[side], not the row.
+
+    Reading only the row's own field found the index on 0 of 320 board routes.
+    """
+
+    row = _route(notes={"route_inputs": {"short": {"index_price": 1461.35}}})
+
+    assert api_spreads.spot_disagrees_with_perp_index(row) is True
+    assert api_spreads.spread_evidence_state(row) == "excluded"
