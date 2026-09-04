@@ -992,6 +992,7 @@ def spread_is_sound_but_unprofitable(row: Any, *, now: float | None = None) -> b
         bool(getter("identity_mismatch"))
         or price_ratio_implausible(row)
         or bool(getter("thin_book"))
+        or spot_disagrees_with_perp_index(row)
         or leg_volume_too_thin(row)
         or bool(getter("quote_mismatch"))
         or quote_basis_mismatch(row)
@@ -1034,6 +1035,7 @@ def spread_evidence_state(row: Any, *, now: float | None = None) -> str:
         bool(getter("identity_mismatch"))
         or price_ratio_implausible(row)
         or bool(getter("thin_book"))
+        or spot_disagrees_with_perp_index(row)
         or leg_volume_too_thin(row)
         or bool(getter("quote_mismatch"))
         or quote_basis_mismatch(row)
@@ -3335,6 +3337,40 @@ def _hide_guarded_rows() -> bool:
 # (881% edge) while the reference product showed 3.13%. 3x still preserves a
 # 150% capture (2.5x), which the operator has taken for real money.
 MAX_CROSS_VENUE_PRICE_RATIO = 3.0
+
+
+#: How far a spot leg may sit from the paired perp's published index before the
+#: two stop being claims on one asset. Real cross-venue spot dispersion is a few
+#: percent; the observed failures were 63%, 72% and 82% -- OPENAI spot at ~846
+#: against perps whose own index reads ~1,390-1,461 while paying 0.005% funding
+#: per 8h against a 3% cap. A perp genuinely rich to its deliverable would be
+#: pinned at that cap, so these settle against something else entirely.
+MAX_SPOT_INDEX_DEVIATION = max(
+    0.05, float(os.environ.get("SPREADBOARD_MAX_SPOT_INDEX_DEVIATION", "0.25"))
+)
+
+
+def spot_disagrees_with_perp_index(row: SpreadTerminalRow) -> bool:
+    """True when a spot leg is nowhere near what its paired perp settles on.
+
+    The index is the venue's own number, so this asks the venue rather than
+    inferring from cross-venue prices. Only spot-versus-futures pairs are
+    judged: two futures legs are each other's peers, and a gap between them is
+    the dislocation this board exists to find.
+    """
+
+    for spot_side, perp_side in (("long", "short"), ("short", "long")):
+        if str(_row_value(row, f"{spot_side}_market_type") or "").casefold() != "spot":
+            continue
+        if str(_row_value(row, f"{perp_side}_market_type") or "").casefold() != "futures":
+            continue
+        index = _float_or_none(_row_value(row, f"{perp_side}_index_price"))
+        spot = _float_or_none(_row_value(row, f"{spot_side}_price"))
+        if not index or not spot or index <= 0 or spot <= 0:
+            continue
+        if abs(spot / index - 1.0) > MAX_SPOT_INDEX_DEVIATION:
+            return True
+    return False
 
 
 def price_ratio_implausible(row: "SpreadTerminalRow") -> bool:

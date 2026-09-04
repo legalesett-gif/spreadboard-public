@@ -435,6 +435,7 @@ class FastQuoteRefresher:
                     interval = interval_overrides.get(str(market.get("id") or "").upper())
             fields = _funding_fields(
                 item.get("fundingRate"),
+                index_price=item.get("indexPrice") or item.get("markPrice"),
                 # Never leave a fresh rate sitting on a stale interval. WhiteBIT
                 # publishes no interval, so DEXE kept a 1h interval from an old
                 # scan against an 8h rate and read 4.27%/day instead of 0.02%.
@@ -1235,6 +1236,9 @@ def _sync_quoted_funding(
         rate = _optional_number(quote.get("current_funding_pct"))
         interval = _optional_number(quote.get("funding_interval_hours"))
         upcoming = _optional_int(quote.get("next_funding_ts_us"))
+        index = _optional_number(quote.get("index_price"))
+        if index is not None and index > 0:
+            row[f"{side}_index_price"] = index
         if rate is not None:
             row[f"{side}_current_funding_pct"] = rate
             row[f"{side}_funding_pct"] = rate
@@ -2712,6 +2716,7 @@ def _funding_fields(
     interval_assumed: bool | None = None,
     next_funding_ms: Any = None,
     next_funding_seconds: Any = None,
+    index_price: Any = None,
 ) -> dict[str, Any]:
     """Shape one venue's funding print for the board.
 
@@ -2729,6 +2734,11 @@ def _funding_fields(
         next_seconds = _optional_number(next_funding_seconds)
         next_ms = next_seconds * 1000 if next_seconds is not None else None
     output = {"current_funding_pct": parsed * 100.0}
+    # The venue's own statement of what the contract settles against. Already on
+    # the wire from `fetch_funding_rates`, and previously dropped here.
+    index = _optional_number(index_price)
+    if index is not None and index > 0:
+        output["index_price"] = index
     if interval is not None:
         output["funding_interval_hours"] = interval
         if interval_assumed is not None:
