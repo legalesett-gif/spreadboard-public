@@ -49,12 +49,12 @@ def digest(
         else:
             # A file present on one side and absent on the other must not hash
             # the same as both sides having it.
-            hasher.update(f"{name}\0<absent>\0".encode("utf-8"))
+            hasher.update(f"{name}\0<absent>\0".encode())
     return hasher.hexdigest()[:16]
 
 
-def _absorb(hasher: "hashlib._Hash", root: Path, path: Path) -> None:
-    hasher.update(str(path.relative_to(root)).encode("utf-8"))
+def _absorb(hasher: hashlib._Hash, root: Path, path: Path) -> None:
+    hasher.update(str(path.relative_to(root)).encode())
     hasher.update(b"\0")
     hasher.update(path.read_bytes())
     hasher.update(b"\0")
