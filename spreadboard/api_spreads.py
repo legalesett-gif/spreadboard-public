@@ -1450,6 +1450,65 @@ def _fast_quote_updates_for(
     return updates
 
 
+#: Last-good books for the keyed read, mirroring `_LAST_GOOD_LIVE_BOOKS` for the
+#: broad one. `get_many` is a single SQLite read, and a venue-sized writer
+#: transaction can briefly leave it returning an incomplete generation -- the
+#: exact hazard `_live_books` guards against. Without the same fail-safe here,
+#: one short read reclassified thousands of priced routes as funding-only:
+#: production showed `current_priced_route_count` swinging 332 to 92,299 against
+#: a universe pinned at 128,848 routes and a book store steady at ~26,000, with
+#: the funding-only count moving in exact opposition and the total constant.
+_LAST_GOOD_ROUTE_BOOKS: dict[str, Any] = {}
+_ROUTE_BOOK_FALLBACK_LOCK = Lock()
+
+
+def reset_keyed_book_fallback() -> None:
+    """Drop the retained keyed books. For tests and process handoffs."""
+
+    with _ROUTE_BOOK_FALLBACK_LOCK:
+        _LAST_GOOD_ROUTE_BOOKS.clear()
+
+
+def _with_retained_books(
+    current: dict[str, Any], wanted_keys: set[str]
+) -> dict[str, Any]:
+    """Fill gaps in one read from the last read that had them.
+
+    Every retained book is still judged on its OWN `quote_ts_us` against the
+    unchanged `LIVE_BOOK_MAX_AGE_SECONDS`, so this cannot widen the freshness
+    contract -- a route only stays priced while its book would have been
+    acceptable had the read returned it.
+
+    Retention is scoped to the keys being asked for, which bounds the map to the
+    working set rather than every book ever seen.
+    """
+
+    cutoff_us = int((time.time() - LIVE_BOOK_MAX_AGE_SECONDS) * 1_000_000)
+
+    def still_current(book: Any) -> bool:
+        try:
+            return int(book.quote_ts_us) >= cutoff_us
+        except (AttributeError, TypeError, ValueError):
+            return False
+
+    with _ROUTE_BOOK_FALLBACK_LOCK:
+        retained = {
+            key: book
+            for key in wanted_keys
+            if (book := _LAST_GOOD_ROUTE_BOOKS.get(key)) is not None
+            and still_current(book)
+        }
+        # A fresh read always wins; retention is a floor, never a ceiling.
+        merged = {**retained, **current}
+        for key in wanted_keys:
+            book = merged.get(key)
+            if book is None:
+                _LAST_GOOD_ROUTE_BOOKS.pop(key, None)
+            else:
+                _LAST_GOOD_ROUTE_BOOKS[key] = book
+    return merged
+
+
 def live_route_updates_for(
     routes: list[dict[str, Any]],
     *,
@@ -1484,9 +1543,12 @@ def live_route_updates_for(
         for side in ("long", "short")
         if route.get(f"{side}_venue") and route.get(f"{side}_market_symbol")
     }
-    books = live_book_cache.load_live_books_by_keys(
+    books = _with_retained_books(
+        live_book_cache.load_live_books_by_keys(
+            wanted_keys,
+            max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS,
+        ),
         wanted_keys,
-        max_age_seconds=LIVE_BOOK_MAX_AGE_SECONDS,
     )
     # One market book participates in hundreds of pair permutations.  Parsing
     # and depth-walking the same ladder once per route made the complete live
