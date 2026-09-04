@@ -3951,6 +3951,11 @@ class MemoryWatchdog(threading.Thread):
                     f"market={len(server_module._MARKET_CACHE)} "
                     f"result={len(api_spreads._RESULT_CACHE)} "
                     f"tick={len(server_module._LIVE_TICK)} "
+                    # The three counters above all read 0 beside 1.45GB. The
+                    # heap walk found 31,831 SpreadTerminalRow and 26,058
+                    # CachedBook, which live in these two.
+                    f"rows={len(api_spreads._ROW_CACHE)} "
+                    f"books={len(api_spreads._LAST_GOOD_LIVE_BOOKS)} "
                     f"threads={threading.active_count()}"
                     f"{_heap_summary(_rss_gb())}"
                     f"{_container_pressure()}"

@@ -90,3 +90,35 @@ def test_a_small_process_logs_no_heap_section(monkeypatch) -> None:
     service.MemoryWatchdog(_OnceEvent()).run()
 
     assert lines and "heap[" not in lines[0]
+
+
+def test_the_watchdog_counts_the_caches_that_actually_hold_rows(monkeypatch) -> None:
+    """`market=0 result=0 tick=0` was reported beside 1.45GB of retained rows.
+
+    The heap walk named them: 31,831 SpreadTerminalRow and 26,058 CachedBook,
+    stable across every sample. `_ROW_CACHE` (900s TTL) and
+    `_LAST_GOOD_LIVE_BOOKS` hold exactly those, and neither was in the line, so
+    the counters said the memory was somewhere else while sitting on top of it.
+    """
+
+    lines: list[str] = []
+    monkeypatch.setattr(service, "_log", lines.append)
+    monkeypatch.setattr(service, "_rss_gb", lambda: 0.2)
+    monkeypatch.setattr(service, "_container_pressure", lambda **_kwargs: "")
+    monkeypatch.setattr(service.api_spreads, "_ROW_CACHE", {"a": 1, "b": 2})
+    monkeypatch.setattr(
+        service.api_spreads, "_LAST_GOOD_LIVE_BOOKS", dict.fromkeys(range(7))
+    )
+
+    class _OnceEvent:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def wait(self, _timeout: float) -> bool:
+            self.calls += 1
+            return self.calls > 1
+
+    service.MemoryWatchdog(_OnceEvent()).run()
+
+    assert "rows=2" in lines[0], lines[0]
+    assert "books=7" in lines[0], lines[0]
