@@ -435,6 +435,16 @@ services:
       <<: *spreadboard_runtime_environment
       SPREADBOARD_SERVICE_ROLE: "collector"
       SPREADBOARD_DISABLE_LOCAL_CACHE_WARM: "1"
+      # The collector renders no pages, so it has no reader to serve a parsed
+      # board to for fifteen minutes. A heap walk of its supervisor at 1.45GB
+      # found SpreadTerminalRow=31831 -- the whole board -- retained here behind
+      # the 900s default, alongside CachedBook=26058. The app keeps 900s because
+      # it genuinely serves from it.
+      #
+      # Not lower than this: the cache's own comment records that a 5s TTL
+      # "added CPU load without improving freshness", and this box is CPU-bound
+      # as well as memory-bound.
+      SPREADBOARD_ROW_CACHE_SECONDS: "180"
       # Slow settled-history/radar publication runs in an isolated low-priority
       # worker after startup, never in the HTTP process or collector parent.
       # The persisted catalogue and live quote workers are available at
