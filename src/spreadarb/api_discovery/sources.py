@@ -946,9 +946,26 @@ class HyperliquidBuilderDexSource:
                 ticker = symbol.split(":")[-1].upper()
                 if not ticker:
                     continue
+                if (market or {}).get("isDelisted"):
+                    # A delisted contract cannot be traded by anyone, so its
+                    # last mark is not a price. `vntl:OPENAI` was published as
+                    # bid == ask == 1336.2 and invented a 4.14% spread against
+                    # Aster's live perp and 57.85% against Gate spot -- while
+                    # occupying the token's route budget that Hyperliquid's
+                    # live OpenAI market needed.
+                    errors.append(f"{self.venue}:{symbol}:delisted")
+                    continue
                 asset = contexts[index] or {}
                 mid = as_float(asset.get("midPx")) or as_float(asset.get("markPx"))
                 if not mid or mid <= 0:
+                    continue
+                open_interest = as_float(asset.get("openInterest")) or 0.0
+                day_volume = as_float(asset.get("dayNtlVlm")) or 0.0
+                if open_interest <= 0.0 and day_volume <= 0.0:
+                    # Nobody holds it and nobody traded it today. This source
+                    # publishes the mark as both sides of the book, so a dead
+                    # market reads as a firm two-sided quote it cannot honour.
+                    errors.append(f"{self.venue}:{symbol}:no_open_interest_or_volume")
                     continue
                 token = f"{ticker}STOCK" if f"{ticker}STOCK" in known else ticker
                 if token not in known:

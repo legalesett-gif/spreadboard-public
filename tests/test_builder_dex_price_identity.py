@@ -118,3 +118,68 @@ def test_a_named_match_that_disagrees_on_price_is_still_rejected(monkeypatch) ->
     result = _collect(source, _anchor("OPENAI", 1390.21))
 
     assert not result.quotes
+
+
+def _dead_market(monkeypatch, symbol: str, mid: str, **market_flags):
+    source = sources.HyperliquidBuilderDexSource()
+    ctxs = {"midPx": mid, "funding": "0.0", "dayNtlVlm": "0.0", "openInterest": "0.0"}
+    ctxs.update(market_flags.pop("ctx", {}))
+    market = {"name": symbol}
+    market.update(market_flags)
+    monkeypatch.setattr(
+        source,
+        "_info",
+        lambda payload, _timeout: (
+            [{"name": symbol.split(":")[0]}]
+            if payload["type"] == "perpDexs"
+            else [{"universe": [market]}, [ctxs]]
+        ),
+    )
+    return source
+
+
+def test_a_delisted_builder_market_is_not_quoted(monkeypatch) -> None:
+    """`vntl:OPENAI` is delisted with zero open interest and zero volume, and
+    the source published its mark as bid == ask == 1336.2. That invented a
+    4.14% spread against Aster's live perp and a 57.85% one against Gate spot,
+    and it took the slot Hyperliquid's live OpenAI market should have had."""
+
+    source = _dead_market(
+        monkeypatch,
+        "vntl:OPENAI",
+        "1336.2",
+        isDelisted=True,
+        # Healthy figures, so this asserts the delisting alone is enough.
+        ctx={"dayNtlVlm": "5580000", "openInterest": "2302.316"},
+    )
+
+    result = _collect(source, _anchor("OPENAI", 1390.21))
+
+    assert not result.quotes
+
+
+def test_a_market_with_no_open_interest_and_no_volume_is_not_quoted(
+    monkeypatch,
+) -> None:
+    """Nobody holds it and nobody traded it today; there is no price to take."""
+
+    source = _dead_market(monkeypatch, "vntl:OPENAI", "1336.2")
+
+    result = _collect(source, _anchor("OPENAI", 1390.21))
+
+    assert not result.quotes
+
+
+def test_a_live_market_with_open_interest_is_still_quoted(monkeypatch) -> None:
+    """io:OAI carries 2,302 open interest and $5.58M of 24h volume."""
+
+    source = _dead_market(
+        monkeypatch,
+        "io:OAI",
+        "1400.0",
+        ctx={"dayNtlVlm": "5580000", "openInterest": "2302.316"},
+    )
+
+    result = _collect(source, _anchor("OPENAI", 1390.21))
+
+    assert {q.symbol for q in result.quotes} == {"io:OAI"}
