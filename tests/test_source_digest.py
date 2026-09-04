@@ -45,3 +45,26 @@ def test_compiled_artifacts_do_not_move_the_digest(tmp_path) -> None:
     (cache / "market_history.py").write_text("junk\n", encoding="utf-8")
 
     assert source_digest.digest(root) == before
+
+
+def test_a_baked_data_file_changes_the_digest(tmp_path) -> None:
+    """An identity-registry change shipped nothing and still deployed green."""
+
+    here = _tree(tmp_path / "a", "value = 1\n")
+    there = _tree(tmp_path / "b", "value = 1\n")
+    for root, body in ((here, '{"assets": []}'), (there, '{"assets": [1]}')):
+        (root / "data").mkdir(exist_ok=True)
+        (root / "data" / "api_discovery_identity_registry.json").write_text(
+            body, encoding="utf-8"
+        )
+
+    assert source_digest.digest(here) != source_digest.digest(there)
+
+
+def test_a_data_file_present_on_one_side_only_changes_the_digest(tmp_path) -> None:
+    here = _tree(tmp_path / "c", "value = 1\n")
+    there = _tree(tmp_path / "d", "value = 1\n")
+    (here / "data").mkdir(exist_ok=True)
+    (here / "data" / "token_metadata_seed.json").write_text("{}", encoding="utf-8")
+
+    assert source_digest.digest(here) != source_digest.digest(there)

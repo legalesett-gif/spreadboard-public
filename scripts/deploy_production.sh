@@ -70,6 +70,14 @@ done
 rsync -a -e "ssh -i $KEY -o ConnectTimeout=60" \
   "$REPO_ROOT/pyproject.toml" "$REPO_ROOT/uv.lock" "$REPO_ROOT/Dockerfile" \
   "$REPO_ROOT/$COMPOSE" "$HOST:$APP_DIR/"
+# The Dockerfile bakes these in. Leaving them out let an identity-registry
+# change pass a green deploy without ever reaching the container.
+rsync -a -e "ssh -i $KEY -o ConnectTimeout=60" \
+  "$REPO_ROOT/data/api_discovery_watchlist.json" \
+  "$REPO_ROOT/data/api_discovery_identity_registry.json" \
+  "$REPO_ROOT/data/api_discovery_executor_attestations.json" \
+  "$REPO_ROOT/data/token_metadata_seed.json" \
+  "$HOST:$APP_DIR/data/"
 
 echo "==> building: ${SERVICES[*]}"
 ssh_do "cd $APP_DIR && docker compose -f $COMPOSE build ${SERVICES[*]}"
