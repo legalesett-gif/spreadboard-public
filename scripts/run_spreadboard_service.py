@@ -3824,6 +3824,40 @@ def _log(message: str) -> None:
     print(f"spreadboard-service: [{_rss_gb():.2f}GB] {message}", flush=True)
 
 
+#: Above this, the watchdog pays for a heap walk. The collector supervisor read
+#: `market=0 result=0 tick=0` at 1.54GB, so the counts it did report proved only
+#: that the memory was somewhere else, and its heavy work all runs in child
+#: processes -- nothing outside the process could say what the growth was.
+HEAP_SUMMARY_MIN_GB = float(os.environ.get("SPREADBOARD_HEAP_SUMMARY_MIN_GB", "1.0"))
+HEAP_SUMMARY_TYPES = 6
+
+
+def _heap_summary(rss_gb: float) -> str:
+    """Top object types by count, but only once the size is worth the walk.
+
+    Millions of small dicts is a retained structure; a handful of very large
+    bytes is a serialisation buffer. The counts separate those two, which is
+    the fork this investigation kept arriving at without an answer.
+    """
+
+    if rss_gb < HEAP_SUMMARY_MIN_GB:
+        return ""
+    try:
+        counts: dict[str, int] = {}
+        for item in gc.get_objects():
+            name = type(item).__name__
+            counts[name] = counts.get(name, 0) + 1
+        top = " ".join(
+            f"{name}={count}"
+            for name, count in sorted(counts.items(), key=lambda item: -item[1])[
+                :HEAP_SUMMARY_TYPES
+            ]
+        )
+        return f" heap[{top}]" if top else ""
+    except Exception:  # noqa: BLE001 - observation must never take the service down.
+        return ""
+
+
 class MemoryWatchdog(threading.Thread):
     """Say what the process is holding, every so often.
 
@@ -3848,6 +3882,7 @@ class MemoryWatchdog(threading.Thread):
                     f"result={len(api_spreads._RESULT_CACHE)} "
                     f"tick={len(server_module._LIVE_TICK)} "
                     f"threads={threading.active_count()}"
+                    f"{_heap_summary(_rss_gb())}"
                 )
             except Exception as exc:  # noqa: BLE001 - observation must not break serving.
                 _log(f"memory watchdog: {type(exc).__name__}: {exc}")
