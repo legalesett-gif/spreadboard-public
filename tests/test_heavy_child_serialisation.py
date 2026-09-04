@@ -56,3 +56,27 @@ def test_only_one_heavy_child_runs_at_a_time() -> None:
     """The slot is what makes membership mean anything."""
 
     assert service._HEAVY_CHILD_SLOT._value == 1
+
+
+def test_the_materialized_view_build_takes_a_heavy_slot() -> None:
+    """Named by the container-pressure log, not by guesswork.
+
+    18:19 on the collector: 3934/4096MB with materialized_view_worker at 1292MB
+    -- the largest process in the container -- concurrent with
+    token_ranking_worker at 750MB. Observed elapsed times put them 53s apart and
+    overlapping for minutes.
+    """
+
+    assert service._is_heavy_child(_command("materialized_view_worker.py")) is True
+
+
+def test_the_heavy_set_is_exactly_the_measured_ones() -> None:
+    """Membership costs other workers their turn; it should stay deliberate."""
+
+    assert set(service.HEAVY_CHILD_SCRIPTS) == {
+        "market_evidence_worker.py",
+        "live_route_index_worker.py",
+        "funding_navigation_worker.py",
+        "token_ranking_worker.py",
+        "materialized_view_worker.py",
+    }

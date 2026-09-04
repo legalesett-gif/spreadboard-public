@@ -3727,6 +3727,16 @@ HEAVY_CHILD_SCRIPTS = (
     # it is the price path, and parking it behind a multi-minute build would
     # cost the live freshness the board is judged on.
     "token_ranking_worker.py",
+    # Named by the container-pressure log on its first firing, which is what
+    # that instrument exists for. At 18:19 the collector read 3934/4096MB with
+    # materialized_view_worker at 1292MB -- the single largest process in the
+    # container -- running alongside token_ranking_worker at 750MB, the worker
+    # serialised one change earlier. Two heavy builds, 2,042MB between them,
+    # and only one of them was holding a slot.
+    #
+    # It runs ~190s, well inside HEAVY_CHILD_SLOT_WAIT_SECONDS, and a deferral
+    # is graceful: the caller keeps the previous generation and retries.
+    "materialized_view_worker.py",
 )
 _HEAVY_CHILD_SLOT = threading.Semaphore(1)
 HEAVY_CHILD_SLOT_WAIT_SECONDS = float(
