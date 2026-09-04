@@ -11174,6 +11174,7 @@ def render_alert_draft_button(
     default_labels = {
         "funding": "Funding alert",
         "token_spread": "Spread alert",
+        "close_spread": "Close-spread alert",
         "price": "Token price alert",
         "token_funding": "Best token funding alert",
     }
@@ -15626,6 +15627,7 @@ def render_position_card(item: dict[str, Any]) -> str:
 def editable_position_data(item: dict[str, Any]) -> dict[str, Any]:
     fields = (
         "token",
+        "route_key",
         "status",
         "capital_usd",
         # Without these the correction form opens blank and clears the recorded
@@ -15904,6 +15906,11 @@ def render_position_edit_dialog() -> str:
 
     return (
         _render_position_edit_dialog_base()
+        .replace(
+            '<div class="position-form-grid"><label><span>Token</span>',
+            '<div class="position-form-grid"><input name="route_key" type="hidden"><label><span>Token</span>',
+            1,
+        )
         .replace(
             '<fieldset class="wide research-contribution"',
             f'<input type="hidden" name="research_consent_version" value="{accounts.RESEARCH_CONSENT_VERSION}"><fieldset class="wide research-contribution"',
@@ -16424,6 +16431,9 @@ def render_member_alert_card(
     labels = {
         "funding_24h_pct": "route funding / 24h",
         "open_spread_pct": "route spread",
+        "close_spread_pct": "best-price close spread",
+        "long_leg_price": "long-leg price",
+        "short_leg_price": "short-leg price",
         "token_price": "token price",
         "token_funding_24h_pct": "best token funding / 24h",
         "route_deliverable": "deposit / withdrawal",
@@ -16438,13 +16448,15 @@ def render_member_alert_card(
     above = str(rule.get("operator") or "gte") == "gte"
     enabled = bool(rule.get("enabled"))
     live = _float_or_none(value)
+    if live is None:
+        live = _float_or_none(rule.get("last_value"))
     met = live is not None and ((live >= threshold) if above else (live <= threshold))
     triggered = not enabled and bool(rule.get("last_triggered_at"))
     state = "armed" if enabled else "triggered" if triggered else "paused"
     token_wide = accounts.token_from_alert_key(str(rule.get("route_key") or "")) is not None
     if live is None:
         current_display = "no live quote"
-    elif metric == "token_price":
+    elif metric in {"token_price", "long_leg_price", "short_leg_price"}:
         current_display = f"{live:,.8g}"
     elif metric == "route_deliverable":
         current_display = "transferable" if live >= 0.5 else "blocked"
@@ -16463,6 +16475,7 @@ def render_member_alert_card(
       <div class="member-alert-head">
         <span class="member-alert-state">{"Armed" if enabled else "Triggered" if triggered else "Paused"}</span>
         <span class="member-alert-kind">{h(label)}</span>
+        {('<span class="member-alert-state">Emergency siren</span>' if int(rule.get("delivery_priority") or 0) == 2 else '')}
       </div>
       <strong class="member-alert-token">{h(rule.get("symbol"))}</strong>
       <div class="member-alert-route">{h(route_display)}</div>
@@ -16487,6 +16500,12 @@ def render_member_alert_card(
 
 
 def route_label_from_key(route_key: str) -> str:
+    custom = chart_catalog.route_from_key(route_key)
+    if custom is not None:
+        return (
+            f"{custom.get('long_venue')} {custom.get('long_market_type')} -> "
+            f"{custom.get('short_venue')} {custom.get('short_market_type')}"
+        )
     parts = [part for part in route_key.split("|") if part]
     if len(parts) >= 5:
         return f"{parts[1]} {parts[2]} -> {parts[3]} {parts[4]}"
@@ -19599,6 +19618,9 @@ def render_alert_draft_script() -> str:
   function labelForType(value) {
     return ({
       token_spread: "Token spread",
+      close_spread: "Close spread",
+      long_price: "Long-leg price",
+      short_price: "Short-leg price",
       funding: "Funding",
       price: "Price",
       token_funding: "Token funding",
@@ -19653,6 +19675,9 @@ def render_alert_draft_script() -> str:
         <form>
           <label><span>Alert type</span><select name="type">
             <option value="token_spread">Exact route spread</option>
+            <option value="close_spread">Exact route close spread</option>
+            <option value="long_price">Long-leg price</option>
+            <option value="short_price">Short-leg price</option>
             <option value="funding">Exact route funding / 24h</option>
             <option value="price">Token price</option>
             <option value="token_funding">Best token funding / 24h</option>

@@ -67,11 +67,11 @@ def test_a_balanced_pair_carries_no_unhedged_residual() -> None:
     assert row["unhedged_notional_usd"] == 0.0
 
 
-def test_capital_committed_still_counts_both_legs_when_they_differ() -> None:
-    """Capital follows what was actually funded, not the hedged portion."""
+def test_explicit_per_leg_capital_remains_the_denominator_when_notional_differs() -> None:
+    """Leveraged positions must not relabel controlled notional as cash capital."""
     row = portfolio.capital_metrics(_position(short_quantity=50.0))
 
-    assert row["capital_committed_usd"] == 300.0
+    assert row["capital_committed_usd"] == 400.0
 
 
 def test_the_per_leg_allocation_is_kept_but_never_used_as_the_total() -> None:
@@ -149,9 +149,9 @@ def test_return_on_deployed_capital_spans_every_open_position() -> None:
         _position(long_quantity=200.0, short_quantity=200.0, total_pnl_usd=20.0),
     ])
 
-    # 400 + 800 committed, 30 earned.
-    assert totals["deployed_capital_usd"] == 1200.0
-    assert totals["open_return_on_capital_pct"] == 2.5
+    # Both rows explicitly allocate $200 per leg: 400 + 400 committed.
+    assert totals["deployed_capital_usd"] == 800.0
+    assert totals["open_return_on_capital_pct"] == 3.75
 
 
 def test_deployed_notional_sums_the_hedged_size_of_each_farm() -> None:

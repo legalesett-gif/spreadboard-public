@@ -226,6 +226,15 @@ def test_hyperliquid_public_ledger_uses_xyz_namespace_signed_usdc_and_pagination
     assert all(row["timestamp"] % 2 == 0 for row in rows)
 
 
+def test_hyperliquid_public_ledger_preserves_entropy_io_namespace() -> None:
+    assert (
+        sync_portfolio_funding.HyperliquidPublicAccountClient._coin(
+            "IO-OAI/USDC:USDC"
+        )
+        == "io:OAI"
+    )
+
+
 def test_hyperliquid_build_never_requests_a_secret(monkeypatch) -> None:
     requested = []
 

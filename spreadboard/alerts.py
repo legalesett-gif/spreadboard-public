@@ -25,6 +25,7 @@ RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(Path(__file__).res
 STATUS_PATH = RUNTIME_DIR / "alert_worker_status.json"
 PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
 PUSHOVER_VALIDATE_URL = "https://api.pushover.net/1/users/validate.json"
+PUSHOVER_RECEIPT_URL = "https://api.pushover.net/1/receipts/{receipt}.json"
 DEFAULT_CONFIG: dict[str, Any] = {
     "telegram_channel_url": "",
     "pushover_app_token": "",
@@ -90,6 +91,8 @@ def send_pushover_message(
     priority: int | None = None,
     retry: int | None = None,
     expire: int | None = None,
+    retry_seconds: int | None = None,
+    expire_seconds: int | None = None,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
     payload = {
@@ -111,8 +114,10 @@ def send_pushover_message(
             # Pushover's emergency contract requires both values. Native apps
             # repeat the selected sound until the member taps Acknowledge (or
             # the bounded expiry is reached).
-            payload["retry"] = max(30, int(retry or 60))
-            payload["expire"] = max(1, min(10800, int(expire or 10800)))
+            retry_value = retry_seconds if retry_seconds is not None else retry
+            expire_value = expire_seconds if expire_seconds is not None else expire
+            payload["retry"] = max(30, min(10_800, int(retry_value or 60)))
+            payload["expire"] = max(30, min(10_800, int(expire_value or 10_800)))
     body = urllib.parse.urlencode(payload).encode("utf-8")
     request = urllib.request.Request(
         PUSHOVER_URL,
@@ -131,6 +136,34 @@ def send_pushover_message(
         return {"ok": False, "status": exc.code, "response": _json_or_text(text)}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "status": None, "error": str(exc)}
+
+
+def pushover_receipt_status(
+    *, app_token: str, receipt: str, timeout: float = 10.0
+) -> dict[str, Any]:
+    """Read acknowledgement state for one emergency notification receipt."""
+
+    normalized = str(receipt or "").strip()
+    if not normalized or not normalized.replace("-", "").isalnum():
+        return {"ok": False, "error": "invalid_pushover_receipt"}
+    url = PUSHOVER_RECEIPT_URL.format(
+        receipt=urllib.parse.quote(normalized, safe="")
+    ) + "?" + urllib.parse.urlencode({"token": app_token})
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = _json_or_text(response.read().decode("utf-8", errors="replace"))
+            ok = response.status == 200 and isinstance(raw, dict) and raw.get("status") == 1
+            return {
+                "ok": ok,
+                "status": response.status,
+                "acknowledged": bool(raw.get("acknowledged")) if isinstance(raw, dict) else False,
+                "expired": bool(raw.get("expired")) if isinstance(raw, dict) else False,
+            }
+    except urllib.error.HTTPError as exc:
+        return {"ok": False, "status": exc.code}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "status": None, "error": type(exc).__name__}
 
 
 def validate_pushover_user(
@@ -421,7 +454,11 @@ class UserMarketAlertWorker:
             return {"evaluated": 0, "triggered": 0, "delivered": 0}
         rules_by_user = {}
         for user_id in user_ids:
-            rules = accounts.list_market_alert_rules(user_id, db_path=self.accounts_path)
+            rules = accounts.list_market_alert_rules(
+                user_id,
+                include_delivery_state=True,
+                db_path=self.accounts_path,
+            )
             if rule_ids is not None:
                 rules = [rule for rule in rules if int(rule.get("id") or 0) in rule_ids]
             if rules:
@@ -510,6 +547,7 @@ class UserMarketAlertWorker:
                 if not rule.get("enabled"):
                     run["skipped"]["disabled_rule"] += 1
                     continue
+                rule = self._refresh_emergency_receipt(user_id, rule, app_token)
                 metric = str(rule.get("metric") or "")
                 token = accounts.token_from_alert_key(str(rule.get("route_key") or ""))
                 if token is not None:
@@ -562,13 +600,30 @@ class UserMarketAlertWorker:
                         message=notification["body"],
                         url=_notification_url(public_url, rule, token),
                         device=delivery.get("device"),
-                        sound="siren",
-                        priority=2,
-                        retry=60,
-                        expire=10800,
+                        sound=str(rule.get("delivery_sound") or delivery.get("sound") or ""),
+                        priority=int(rule.get("delivery_priority") or 0),
+                        retry_seconds=int(rule.get("delivery_retry_seconds") or 60),
+                        expire_seconds=int(rule.get("delivery_expire_seconds") or 10_800),
                     )
                     delivered += int(bool(result.get("ok")))
+                    response = result.get("response")
+                    receipt = response.get("receipt") if isinstance(response, dict) else None
+                    if result.get("ok") and int(rule.get("delivery_priority") or 0) == 2 and receipt:
+                        accounts.record_market_alert_delivery_receipt(
+                            user_id,
+                            int(rule["id"]),
+                            str(receipt),
+                            db_path=self.accounts_path,
+                        )
                     if not result.get("ok"):
+                        if int(rule.get("delivery_priority") or 0) == 2:
+                            accounts.record_market_alert_receipt_status(
+                                user_id,
+                                int(rule["id"]),
+                                acknowledged=False,
+                                expired=True,
+                                db_path=self.accounts_path,
+                            )
                         status_code = result.get("status")
                         reason = (
                             f"pushover_http_{status_code}"
@@ -582,6 +637,41 @@ class UserMarketAlertWorker:
         run["latency_seconds"] = _latency_summary(latencies)
         self.last_run = run
         return {"evaluated": evaluated, "triggered": triggered, "delivered": delivered}
+
+    def _refresh_emergency_receipt(
+        self, user_id: int, rule: dict[str, Any], app_token: str
+    ) -> dict[str, Any]:
+        """Keep a priority-2 alert alive beyond one provider receipt window."""
+
+        if (
+            not app_token
+            or int(rule.get("delivery_priority") or 0) != 2
+            or not rule.get("delivery_receipt")
+            or rule.get("delivery_receipt_acknowledged_at")
+        ):
+            return rule
+        checked = str(rule.get("delivery_receipt_checked_at") or "")
+        if checked:
+            try:
+                moment = datetime.fromisoformat(checked.replace("Z", "+00:00"))
+                if time.time() - moment.timestamp() < 60:
+                    return rule
+            except ValueError:
+                pass
+        state = pushover_receipt_status(
+            app_token=app_token,
+            receipt=str(rule["delivery_receipt"]),
+        )
+        if not state.get("ok"):
+            return rule
+        updated = accounts.record_market_alert_receipt_status(
+            user_id,
+            int(rule["id"]),
+            acknowledged=bool(state.get("acknowledged")),
+            expired=bool(state.get("expired")),
+            db_path=self.accounts_path,
+        )
+        return updated or rule
 
     def _custom_alert_rows(
         self,
@@ -813,6 +903,9 @@ def _float(value: Any) -> float | None:
 _METRIC_LABELS = {
     "funding_24h_pct": ("current-rate 24h paired funding", True),
     "open_spread_pct": ("open spread", True),
+    "close_spread_pct": ("best-price close spread", True),
+    "long_leg_price": ("long-leg price", False),
+    "short_leg_price": ("short-leg price", False),
     "token_price": ("price", False),
     "token_funding_24h_pct": ("best current-rate 24h funding", True),
     "route_deliverable": ("deposit / withdrawal route", False),
@@ -858,12 +951,28 @@ def _rule_value(row: dict[str, Any] | None, metric: str) -> float | None:
     if metric == "quote_age_seconds":
         age_min = api_spreads.quote_age_min(row)
         return max(0.0, age_min * 60.0) if age_min is not None else None
-    if (
-        metric == "open_spread_pct"
-        and row.get("spread_quote_current") is not True
+    if metric in {"open_spread_pct", "close_spread_pct"} and (
+        row.get("spread_quote_current") is not True
         and not api_spreads.spread_quote_current(row)
     ):
         return None
+    if metric in {"long_leg_price", "short_leg_price", "close_spread_pct"}:
+        notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
+        inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}
+        long_leg = inputs.get("long") if isinstance(inputs.get("long"), dict) else {}
+        short_leg = inputs.get("short") if isinstance(inputs.get("short"), dict) else {}
+        if metric == "long_leg_price":
+            return _leg_reference_price(row, long_leg, "long")
+        if metric == "short_leg_price":
+            return _leg_reference_price(row, short_leg, "short")
+        long_bid = _first_number(long_leg.get("bid"), row.get("long_bid"))
+        short_ask = _first_number(short_leg.get("ask"), row.get("short_ask"))
+        if long_bid is None or short_ask is None or long_bid <= 0:
+            return None
+        relative = notes.get("relative_value") if isinstance(notes.get("relative_value"), dict) else {}
+        long_multiplier = _first_number(relative.get("long_multiplier")) or 1.0
+        short_multiplier = _first_number(relative.get("short_multiplier")) or 1.0
+        return (short_ask * short_multiplier / (long_bid * long_multiplier) - 1.0) * 100.0
     # These must name fields the board actually produces. They did not: every
     # spread rule read None and silently never fired, so a member could set a
     # threshold, watch the board cross it, and never be told. The displayed
@@ -897,6 +1006,30 @@ def _rule_value(row: dict[str, Any] | None, metric: str) -> float | None:
     return None
 
 
+def _first_number(*values: Any) -> float | None:
+    for value in values:
+        number = _float(value)
+        if number is not None:
+            return number
+    return None
+
+
+def _leg_reference_price(
+    row: dict[str, Any], leg: dict[str, Any], side: str
+) -> float | None:
+    bid = _first_number(leg.get("bid"), row.get(f"{side}_bid"))
+    ask = _first_number(leg.get("ask"), row.get(f"{side}_ask"))
+    if bid is not None and ask is not None:
+        return (bid + ask) / 2.0
+    return _first_number(
+        bid,
+        ask,
+        leg.get("mark"),
+        leg.get("mark_price"),
+        row.get(f"{side}_price"),
+    )
+
+
 def _duration_label(seconds: float) -> str:
     seconds = max(0.0, float(seconds))
     if seconds < 60:
@@ -910,6 +1043,9 @@ def _notification_title(rule: dict[str, Any], metric: str, token_wide: bool) -> 
         "token_funding_24h_pct": "funding",
         "funding_24h_pct": "funding",
         "open_spread_pct": "spread",
+        "close_spread_pct": "close spread",
+        "long_leg_price": "long price",
+        "short_leg_price": "short price",
         "route_deliverable": "D/W status",
         "quote_age_seconds": "quote freshness",
     }.get(metric, "market")

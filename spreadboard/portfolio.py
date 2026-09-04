@@ -1111,12 +1111,14 @@ def capital_metrics(position: dict[str, Any]) -> dict[str, Any]:
         allocated_per_leg if allocated_per_leg and allocated_per_leg > 0 else None
     )
 
-    # Both legs are funded, so both legs are capital. Fills are the truth when
-    # present; the per-leg allocation doubled is the fallback when they are not.
-    if locked:
-        committed = sum(locked)
-    elif allocated_per_leg is not None:
+    # Fills determine controlled notional, not the cash tied up. For leveraged
+    # futures the two can differ by several times, so an explicit per-leg
+    # allocation is the authoritative capital denominator. Fall back to gross
+    # funded notionals only for old journal rows with no allocation recorded.
+    if allocated_per_leg is not None:
         committed = allocated_per_leg * 2.0
+    elif sides:
+        committed = sum(sides)
     else:
         committed = None
     committed = committed if committed and committed > 0 else None

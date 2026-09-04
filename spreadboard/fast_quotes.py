@@ -2769,6 +2769,8 @@ def _hyperliquid_coin(base: str) -> str:
     normalized = str(base).upper()
     if normalized.startswith("XYZ-"):
         return f"xyz:{normalized.removeprefix('XYZ-')}"
+    if normalized.startswith("IO-"):
+        return f"io:{normalized.removeprefix('IO-')}"
     return normalized
 
 

@@ -107,6 +107,10 @@ class HyperliquidPublicAccountClient:
             return f"xyz:{normalized.removeprefix('XYZ-')}"
         if normalized.startswith("XYZ:"):
             return f"xyz:{normalized.removeprefix('XYZ:')}"
+        if normalized.startswith("IO-"):
+            return f"io:{normalized.removeprefix('IO-')}"
+        if normalized.startswith("IO:"):
+            return f"io:{normalized.removeprefix('IO:')}"
         if not normalized:
             raise RuntimeError("invalid_hyperliquid_symbol")
         return normalized

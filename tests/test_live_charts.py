@@ -995,6 +995,10 @@ def test_hyperliquid_xyz_catalog_symbol_maps_to_xyz_coin() -> None:
     assert fast_quotes._hyperliquid_coin("XYZ-SKHX") == "xyz:SKHX"
 
 
+def test_hyperliquid_entropy_io_catalog_symbol_maps_to_io_coin() -> None:
+    assert fast_quotes._hyperliquid_coin("IO-OAI") == "io:OAI"
+
+
 def test_native_gate_spot_order_book_is_sorted_and_normalized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -46,3 +46,48 @@ def test_rule_value_still_reads_rules_stored_under_the_old_names() -> None:
     assert _rule_value({"open_spread_pct": 5.0, "age_min": 10.0}, "open_spread_pct") is None
     assert _rule_value({"funding_net_24h_pct": 0.1}, "funding_24h_pct") == 0.1
     assert _rule_value({}, "open_spread_pct") is None
+
+
+def test_emergency_pushover_payload_repeats_with_siren_until_acknowledged(
+    monkeypatch,
+) -> None:
+    import urllib.parse
+
+    from spreadboard import alerts
+
+    captured = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return b'{"status":1,"receipt":"receipt-id"}'
+
+    def fake_urlopen(request, timeout):
+        del timeout
+        captured.update(urllib.parse.parse_qs(request.data.decode("utf-8")))
+        return Response()
+
+    monkeypatch.setattr(alerts.urllib.request, "urlopen", fake_urlopen)
+    result = alerts.send_pushover_message(
+        app_token="app",
+        user_key="user",
+        title="OPENAI exit",
+        message="Close spread reached",
+        sound="siren",
+        priority=2,
+        retry_seconds=216,
+        expire_seconds=10_800,
+    )
+
+    assert result["ok"] is True
+    assert captured["priority"] == ["2"]
+    assert captured["sound"] == ["siren"]
+    assert captured["retry"] == ["216"]
+    assert captured["expire"] == ["10800"]

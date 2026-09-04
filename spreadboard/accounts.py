@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -333,7 +334,8 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 route_key TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 metric TEXT NOT NULL CHECK (metric IN (
-                    'open_spread_pct', 'funding_24h_pct',
+                    'open_spread_pct', 'close_spread_pct', 'funding_24h_pct',
+                    'long_leg_price', 'short_leg_price',
                     -- Per token rather than per route: "tell me when DOGE
                     -- trades above X", or when anything on this token pays.
                     'token_price', 'token_funding_24h_pct',
@@ -349,6 +351,13 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 last_condition_met INTEGER NOT NULL DEFAULT 0,
                 last_triggered_at TEXT,
                 last_value REAL,
+                delivery_priority INTEGER NOT NULL DEFAULT 0,
+                delivery_sound TEXT NOT NULL DEFAULT '',
+                delivery_retry_seconds INTEGER NOT NULL DEFAULT 60,
+                delivery_expire_seconds INTEGER NOT NULL DEFAULT 10800,
+                delivery_receipt TEXT,
+                delivery_receipt_checked_at TEXT,
+                delivery_receipt_acknowledged_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -702,6 +711,19 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
             },
         )
         _widen_market_alert_metrics(connection)
+        _ensure_columns(
+            connection,
+            "market_alert_rules",
+            {
+                "delivery_priority": "INTEGER NOT NULL DEFAULT 0",
+                "delivery_sound": "TEXT NOT NULL DEFAULT ''",
+                "delivery_retry_seconds": "INTEGER NOT NULL DEFAULT 60",
+                "delivery_expire_seconds": "INTEGER NOT NULL DEFAULT 10800",
+                "delivery_receipt": "TEXT",
+                "delivery_receipt_checked_at": "TEXT",
+                "delivery_receipt_acknowledged_at": "TEXT",
+            },
+        )
         connection.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS users_billing_customer ON users(billing_customer_id) WHERE billing_customer_id IS NOT NULL"
         )
@@ -1667,15 +1689,33 @@ def add_market_alert_rule(
     symbol = str(payload.get("symbol") or "").strip().upper()[:80]
     alert_type = str(payload.get("type") or "token_spread")
     metric = {
+        "token_spread": "open_spread_pct",
+        "exchange_spread": "open_spread_pct",
+        "custom_pair_spread": "open_spread_pct",
+        "close_spread": "close_spread_pct",
         "funding": "funding_24h_pct",
         "price": "token_price",
+        "long_price": "long_leg_price",
+        "short_price": "short_leg_price",
         "token_funding": "token_funding_24h_pct",
         "dw_tracking": "route_deliverable",
         "freshness": "quote_age_seconds",
-    }.get(alert_type, "open_spread_pct")
+    }.get(alert_type)
+    if metric is None:
+        raise ValueError("invalid_market_alert_type")
     operator = "lte" if str(payload.get("direction") or "above") == "below" else "gte"
     threshold = float(payload.get("threshold"))
+    if not math.isfinite(threshold):
+        raise ValueError("alert_threshold_must_be_finite")
     stability = max(0, min(3600, int(payload.get("stability_seconds") or 0)))
+    priority = int(payload.get("delivery_priority") or 0)
+    if priority not in {-2, -1, 0, 1, 2}:
+        raise ValueError("invalid_pushover_priority")
+    sound = str(payload.get("delivery_sound") or "").strip()[:30]
+    if sound and (not sound.replace("-", "").replace("_", "").isalnum()):
+        raise ValueError("invalid_pushover_sound")
+    retry_seconds = max(30, min(10_800, int(payload.get("delivery_retry_seconds") or 60)))
+    expire_seconds = max(30, min(10_800, int(payload.get("delivery_expire_seconds") or 10_800)))
     if not symbol:
         raise ValueError("alert_requires_a_token")
     if metric in TOKEN_METRICS:
@@ -1688,24 +1728,33 @@ def add_market_alert_rule(
     now = _utc_iso()
     connection = _connect(db_path)
     try:
-        cursor = connection.execute(
-            """INSERT INTO market_alert_rules (
-                   user_id, route_key, symbol, metric, operator, threshold,
-                   stability_seconds, enabled, created_at, updated_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                int(user_id),
-                route_key,
-                symbol,
-                metric,
-                operator,
-                threshold,
-                stability,
-                int(payload.get("enabled") is not False),
-                now,
-                now,
-            ),
+        columns = {
+            str(item["name"])
+            for item in connection.execute("PRAGMA table_info(market_alert_rules)")
+        }
+        base_values = (
+            int(user_id), route_key, symbol, metric, operator, threshold,
+            stability, int(payload.get("enabled") is not False),
         )
+        if "delivery_priority" in columns:
+            cursor = connection.execute(
+                """INSERT INTO market_alert_rules (
+                       user_id, route_key, symbol, metric, operator, threshold,
+                       stability_seconds, enabled, delivery_priority, delivery_sound,
+                       delivery_retry_seconds, delivery_expire_seconds, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (*base_values, priority, sound, retry_seconds, expire_seconds, now, now),
+            )
+        else:
+            # Compatibility for a process opening a pre-migration database.
+            # The next initialize() widens its CHECK and adds delivery fields.
+            cursor = connection.execute(
+                """INSERT INTO market_alert_rules (
+                       user_id, route_key, symbol, metric, operator, threshold,
+                       stability_seconds, enabled, created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (*base_values, now, now),
+            )
         connection.commit()
         row = connection.execute(
             "SELECT * FROM market_alert_rules WHERE id = ?", (cursor.lastrowid,)
@@ -1797,17 +1846,26 @@ def delete_market_alert_rule(
 
 
 def list_market_alert_rules(
-    user_id: int, *, db_path: Path | str = DEFAULT_DB_PATH
+    user_id: int,
+    *,
+    include_delivery_state: bool = False,
+    db_path: Path | str = DEFAULT_DB_PATH,
 ) -> list[dict[str, Any]]:
     connection = _connect(db_path)
     try:
-        return [
+        rules = [
             dict(row)
             for row in connection.execute(
                 "SELECT * FROM market_alert_rules WHERE user_id = ? ORDER BY updated_at DESC",
                 (int(user_id),),
             ).fetchall()
         ]
+        if not include_delivery_state:
+            for rule in rules:
+                rule.pop("delivery_receipt", None)
+                rule.pop("delivery_receipt_checked_at", None)
+                rule.pop("delivery_acknowledged_at", None)
+        return rules
     finally:
         connection.close()
 
@@ -1902,7 +1960,8 @@ def record_market_alert_evaluation(
         connection.execute(
             """UPDATE market_alert_rules SET condition_since = ?, last_condition_met = ?,
                    last_triggered_at = CASE WHEN ? THEN ? ELSE last_triggered_at END,
-                   enabled = CASE WHEN ? THEN 0 ELSE enabled END,
+                   enabled = CASE WHEN ? AND COALESCE(delivery_priority, 0) != 2
+                                  THEN 0 ELSE enabled END,
                    last_value = ?, updated_at = ? WHERE id = ?""",
             (
                 condition_since,
@@ -1920,6 +1979,85 @@ def record_market_alert_evaluation(
     except Exception:
         connection.rollback()
         raise
+    finally:
+        connection.close()
+
+
+def record_market_alert_delivery_receipt(
+    user_id: int,
+    rule_id: int,
+    receipt: str,
+    *,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    """Persist only the opaque Pushover receipt needed to observe acknowledgement."""
+
+    normalized = str(receipt or "").strip()[:200]
+    if not normalized or not normalized.replace("-", "").isalnum():
+        raise ValueError("invalid_pushover_receipt")
+    now = _utc_iso()
+    connection = _connect(db_path)
+    try:
+        connection.execute(
+            """UPDATE market_alert_rules SET delivery_receipt = ?,
+                   delivery_receipt_checked_at = ?,
+                   delivery_receipt_acknowledged_at = NULL, updated_at = ?
+               WHERE id = ? AND user_id = ?""",
+            (normalized, now, now, int(rule_id), int(user_id)),
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM market_alert_rules WHERE id = ? AND user_id = ?",
+            (int(rule_id), int(user_id)),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        connection.close()
+
+
+def record_market_alert_receipt_status(
+    user_id: int,
+    rule_id: int,
+    *,
+    acknowledged: bool,
+    expired: bool,
+    db_path: Path | str = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    """Record acknowledgement or re-arm an expired unacknowledged emergency."""
+
+    now = _utc_iso()
+    connection = _connect(db_path)
+    try:
+        if acknowledged:
+            connection.execute(
+                """UPDATE market_alert_rules SET delivery_receipt_checked_at = ?,
+                       delivery_receipt_acknowledged_at = ?, updated_at = ?
+                   WHERE id = ? AND user_id = ?""",
+                (now, now, now, int(rule_id), int(user_id)),
+            )
+        elif expired:
+            # Pushover caps a single emergency receipt. Re-arm the still-met
+            # rule so the worker issues a new receipt rather than going silent.
+            connection.execute(
+                """UPDATE market_alert_rules SET delivery_receipt = NULL,
+                       delivery_receipt_checked_at = NULL,
+                       delivery_receipt_acknowledged_at = NULL,
+                       last_condition_met = 0, updated_at = ?
+                   WHERE id = ? AND user_id = ?""",
+                (now, int(rule_id), int(user_id)),
+            )
+        else:
+            connection.execute(
+                """UPDATE market_alert_rules SET delivery_receipt_checked_at = ?, updated_at = ?
+                   WHERE id = ? AND user_id = ?""",
+                (now, now, int(rule_id), int(user_id)),
+            )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM market_alert_rules WHERE id = ? AND user_id = ?",
+            (int(rule_id), int(user_id)),
+        ).fetchone()
+        return dict(row) if row else None
     finally:
         connection.close()
 
@@ -2895,32 +3033,61 @@ def _position_values(payload: dict[str, Any]) -> dict[str, Any]:
         for key in ("long_quantity", "long_entry_price", "short_quantity", "short_entry_price")
     }
     opened_at = _normalize_iso(str(payload.get("opened_at") or _utc_iso()))
-    # Measured on what each leg is WORTH, not on its unit price. A paired
-    # position is not always 1:1 -- SKHX is 10:1 because one leg is an ADR of
-    # the other -- and comparing prices reported -86.78% for a +32.17% basis.
-    # Identical to the price ratio whenever the quantities are equal.
+    token = text["token"].upper()
+    long_symbol = str(payload.get("long_symbol") or "").strip() or None
+    short_symbol = str(payload.get("short_symbol") or "").strip() or None
+    requested_route_key = str(payload.get("route_key") or "").strip()
+    long_multiplier = short_multiplier = 1.0
+    if requested_route_key.startswith("CUSTOM:"):
+        # Relative-value pairs and namespaced Hyperliquid markets cannot be
+        # reconstructed from the five generic route columns. Preserve the
+        # exact validated custom route instead of silently turning it into a
+        # different pair whenever a member edits a journal row.
+        from . import chart_catalog
+
+        route = chart_catalog.route_from_key(requested_route_key)
+        expected = {
+            "token": token,
+            "long_venue": text["long_venue"],
+            "long_market_type": text["long_market_type"],
+            "short_venue": text["short_venue"],
+            "short_market_type": text["short_market_type"],
+        }
+        if route is None or any(
+            str(route.get(key) or "").casefold() != str(value).casefold()
+            for key, value in expected.items()
+        ):
+            raise ValueError("position_route_key_mismatch")
+        if long_symbol and str(route.get("long_market_symbol") or "").casefold() != long_symbol.casefold():
+            raise ValueError("position_route_key_mismatch")
+        if short_symbol and str(route.get("short_market_symbol") or "").casefold() != short_symbol.casefold():
+            raise ValueError("position_route_key_mismatch")
+        relative = (route.get("notes") or {}).get("relative_value") or {}
+        long_multiplier = float(relative.get("long_multiplier") or 1.0)
+        short_multiplier = float(relative.get("short_multiplier") or 1.0)
+        route_key = requested_route_key
+    else:
+        route_key = "|".join(
+            (
+                token,
+                text["long_venue"],
+                text["long_market_type"],
+                text["short_venue"],
+                text["short_market_type"],
+            )
+        )
     entry_spread = (
-        (numeric["short_quantity"] * numeric["short_entry_price"])
-        / (numeric["long_quantity"] * numeric["long_entry_price"])
+        numeric["short_entry_price"] * short_multiplier
+        / (numeric["long_entry_price"] * long_multiplier)
         - 1
     ) * 100
-    token = text["token"].upper()
-    route_key = "|".join(
-        (
-            token,
-            text["long_venue"],
-            text["long_market_type"],
-            text["short_venue"],
-            text["short_market_type"],
-        )
-    )
     return {
         **text,
         **numeric,
         "token": token,
         "route_key": route_key,
-        "long_symbol": str(payload.get("long_symbol") or "").strip() or None,
-        "short_symbol": str(payload.get("short_symbol") or "").strip() or None,
+        "long_symbol": long_symbol,
+        "short_symbol": short_symbol,
         "entry_spread_pct": entry_spread,
         "capital_usd": _optional_nonnegative_float(payload.get("capital_usd")),
         "long_leverage": _optional_leverage(payload.get("long_leverage")),
@@ -3778,7 +3945,14 @@ def _widen_market_alert_metrics(connection: sqlite3.Connection) -> None:
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='market_alert_rules'"
     ).fetchone()
     existing = str((row[0] if row else "") or "")
-    required_metrics = {"token_price", "route_deliverable", "quote_age_seconds"}
+    required_metrics = {
+        "token_price",
+        "route_deliverable",
+        "quote_age_seconds",
+        "close_spread_pct",
+        "long_leg_price",
+        "short_leg_price",
+    }
     if not existing or all(metric in existing for metric in required_metrics):
         return
     columns = [item[1] for item in connection.execute("PRAGMA table_info(market_alert_rules)")]
@@ -3791,7 +3965,8 @@ def _widen_market_alert_metrics(connection: sqlite3.Connection) -> None:
             route_key TEXT NOT NULL,
             symbol TEXT NOT NULL,
             metric TEXT NOT NULL CHECK (metric IN (
-                'open_spread_pct', 'funding_24h_pct',
+                'open_spread_pct', 'close_spread_pct', 'funding_24h_pct',
+                'long_leg_price', 'short_leg_price',
                 'token_price', 'token_funding_24h_pct',
                 'route_deliverable', 'quote_age_seconds'
             )),
@@ -3803,6 +3978,13 @@ def _widen_market_alert_metrics(connection: sqlite3.Connection) -> None:
             last_condition_met INTEGER NOT NULL DEFAULT 0,
             last_triggered_at TEXT,
             last_value REAL,
+            delivery_priority INTEGER NOT NULL DEFAULT 0,
+            delivery_sound TEXT NOT NULL DEFAULT '',
+            delivery_retry_seconds INTEGER NOT NULL DEFAULT 60,
+            delivery_expire_seconds INTEGER NOT NULL DEFAULT 10800,
+            delivery_receipt TEXT,
+            delivery_receipt_checked_at TEXT,
+            delivery_receipt_acknowledged_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )

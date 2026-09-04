@@ -4,6 +4,7 @@ import threading
 import time
 import urllib.parse
 
+import pytest
 from cryptography.fernet import Fernet
 
 from spreadboard import accounts, alerts, chart_catalog, warm_query_projection
@@ -40,7 +41,51 @@ def test_pushover_key_is_encrypted_and_never_returned(tmp_path, monkeypatch) -> 
     assert accounts.notification_delivery(user["id"], db_path=db_path)["user_key"] == key
 
 
-def test_route_alert_fires_once_and_disables_itself(tmp_path, monkeypatch) -> None:
+def test_market_alert_delivery_receipt_is_not_returned_to_member_views(tmp_path) -> None:
+    db_path = tmp_path / "accounts.sqlite3"
+    accounts.initialize(db_path)
+    user = accounts.create_user(
+        email="receipt-privacy@example.test",
+        display_name="Receipt Privacy",
+        password="strong-receipt-password",
+        subscription_status="active",
+        db_path=db_path,
+    )
+    rule = accounts.add_market_alert_rule(
+        user["id"],
+        {
+            "route_key": "OPENAI|CUSTOM|Mexc|Futures|IO-OAI_USDT|Hyperliquid|Futures|io:OAI",
+            "symbol": "OPENAI",
+            "type": "close_spread",
+            "direction": "below",
+            "threshold": 0.5,
+            "delivery_priority": 2,
+            "delivery_sound": "siren",
+        },
+        db_path=db_path,
+    )
+    connection = accounts._connect(db_path)
+    try:
+        connection.execute(
+            "UPDATE market_alert_rules SET delivery_receipt = ? WHERE id = ?",
+            ("opaque-provider-receipt", rule["id"]),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    public = accounts.list_market_alert_rules(user["id"], db_path=db_path)[0]
+    internal = accounts.list_market_alert_rules(
+        user["id"], include_delivery_state=True, db_path=db_path
+    )[0]
+
+    assert "delivery_receipt" not in public
+    assert "delivery_receipt_checked_at" not in public
+    assert "delivery_acknowledged_at" not in public
+    assert internal["delivery_receipt"] == "opaque-provider-receipt"
+
+
+def test_normal_route_alert_fires_once_and_disables_itself(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "accounts.sqlite3"
     monkeypatch.setenv("SPREADBOARD_FIELD_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setenv("SPREADBOARD_PUSHOVER_APP_TOKEN", "app-token")
@@ -97,10 +142,7 @@ def test_route_alert_fires_once_and_disables_itself(tmp_path, monkeypatch) -> No
     row["open_spread_pct"] = 6.0
     assert worker.check_once()["triggered"] == 0
     assert len(sent) == 1
-    assert sent[0]["priority"] == 2
-    assert sent[0]["retry"] == 60
-    assert sent[0]["expire"] == 10800
-    assert sent[0]["sound"] == "siren"
+    assert sent[0]["priority"] == 0
 
 
 def test_route_alert_uses_resident_live_universe_without_board_rebuild(
@@ -179,8 +221,8 @@ def test_route_alert_uses_resident_live_universe_without_board_rebuild(
 
     assert result == {"evaluated": 1, "triggered": 1, "delivered": 1}
     assert len(sent) == 1
-    assert sent[0]["priority"] == 2
-    assert sent[0]["sound"] == "siren"
+    assert sent[0]["priority"] == 0
+    assert sent[0]["sound"] == "pushover"
 
 
 def test_emergency_pushover_payload_repeats_until_acknowledged(monkeypatch) -> None:
@@ -314,6 +356,119 @@ def test_custom_chart_alert_resolves_to_matching_live_board_route(tmp_path, monk
 
 def test_funding_alert_accepts_current_projection_when_settled_is_missing() -> None:
     assert alerts._rule_value({"funding_projected_24h_pct": 0.42}, "funding_24h_pct") == 0.42
+
+
+def test_exact_route_exit_and_leg_price_alert_values_use_live_crossing_books() -> None:
+    row = {
+        "spread_quote_current": True,
+        "notes": {
+            "route_inputs": {
+                "long": {"bid": 100.0, "ask": 101.0},
+                "short": {"bid": 105.0, "ask": 106.0},
+            },
+            "relative_value": {"long_multiplier": 1, "short_multiplier": 1},
+        },
+    }
+
+    assert alerts._rule_value(row, "close_spread_pct") == pytest.approx(6.0)
+    assert alerts._rule_value(row, "long_leg_price") == 100.5
+    assert alerts._rule_value(row, "short_leg_price") == 105.5
+
+
+def test_openai_emergency_rule_keeps_its_per_rule_delivery_override(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = tmp_path / "accounts.sqlite3"
+    monkeypatch.setenv("SPREADBOARD_FIELD_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    accounts.initialize(db_path)
+    user = accounts.create_user(
+        email="openai-alert@example.test",
+        display_name="OpenAI Alert",
+        password="strong-openai-password",
+        subscription_status="active",
+        db_path=db_path,
+    )
+    route_key = chart_catalog.custom_route_key(
+        "OPENAI",
+        {"venue": "Mexc", "market_type": "Futures", "symbol": "OPENAI/USDT:USDT"},
+        {
+            "venue": "Hyperliquid",
+            "market_type": "Futures",
+            "symbol": "IO-OAI/USDC:USDC",
+        },
+    )
+    rule = accounts.add_market_alert_rule(
+        user["id"],
+        {
+            "route_key": route_key,
+            "symbol": "OPENAI",
+            "type": "close_spread",
+            "direction": "below",
+            "threshold": 0.5,
+            "delivery_priority": 2,
+            "delivery_sound": "siren",
+            "delivery_retry_seconds": 216,
+            "delivery_expire_seconds": 10_800,
+        },
+        db_path=db_path,
+    )
+
+    assert rule["metric"] == "close_spread_pct"
+    assert rule["delivery_priority"] == 2
+    assert rule["delivery_sound"] == "siren"
+    assert rule["delivery_retry_seconds"] == 216
+    assert rule["delivery_expire_seconds"] == 10_800
+
+
+def test_expired_unacknowledged_emergency_receipt_rearms_the_rule(
+    tmp_path, monkeypatch
+) -> None:
+    db_path = tmp_path / "accounts.sqlite3"
+    monkeypatch.setenv("SPREADBOARD_FIELD_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    accounts.initialize(db_path)
+    user = accounts.create_user(
+        email="repeat-alert@example.test",
+        display_name="Repeat Alert",
+        password="strong-repeat-password",
+        subscription_status="active",
+        db_path=db_path,
+    )
+    rule = accounts.add_market_alert_rule(
+        user["id"],
+        {
+            "route_key": "OPENAI|Mexc|Futures|Hyperliquid|Futures",
+            "symbol": "OPENAI",
+            "type": "close_spread",
+            "direction": "below",
+            "threshold": 0.5,
+            "stability_seconds": 0,
+            "delivery_priority": 2,
+        },
+        db_path=db_path,
+    )
+    assert accounts.record_market_alert_evaluation(
+        user["id"], rule["id"], value=0.4, title="t", body="b", db_path=db_path
+    )
+    active = accounts.list_market_alert_rules(
+        user["id"], include_delivery_state=True, db_path=db_path
+    )[0]
+    assert active["enabled"] == 1
+    accounts.record_market_alert_delivery_receipt(
+        user["id"], rule["id"], "receipt-id", db_path=db_path
+    )
+    rearmed = accounts.record_market_alert_receipt_status(
+        user["id"],
+        rule["id"],
+        acknowledged=False,
+        expired=True,
+        db_path=db_path,
+    )
+
+    assert rearmed["delivery_receipt"] is None
+    assert rearmed["last_condition_met"] == 0
+    assert accounts.record_market_alert_evaluation(
+        user["id"], rule["id"], value=0.4, title="t", body="b", db_path=db_path
+    )
 
 
 def test_custom_chart_alert_quotes_noncanonical_dex_route(tmp_path, monkeypatch) -> None:

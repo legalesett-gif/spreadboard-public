@@ -714,3 +714,28 @@ def test_filter_presets_reject_unknown_query_fields(tmp_path, monkeypatch) -> No
         accounts.save_filter_preset(
             user["id"], {"name": "Unsafe", "query": {"redirect": "https://example.com"}}, db_path=db
         )
+
+
+def test_position_edit_preserves_validated_relative_value_route() -> None:
+    from spreadboard import chart_catalog
+
+    route_key = chart_catalog.skhx_skhynix_route_key()
+    values = accounts._position_values(
+        {
+            "token": "SKHX / SK HYNIX",
+            "route_key": route_key,
+            "long_venue": "Hyperliquid",
+            "long_market_type": "Futures",
+            "long_symbol": "XYZ-SKHX/USDC:USDC",
+            "long_quantity": 2.186,
+            "long_entry_price": 1182.625,
+            "short_venue": "Hyperliquid",
+            "short_market_type": "Futures",
+            "short_symbol": "XYZ-SKHY/USDC:USDC",
+            "short_quantity": 21.86,
+            "short_entry_price": 156.3022,
+        }
+    )
+
+    assert values["route_key"] == route_key
+    assert values["entry_spread_pct"] == pytest.approx(32.1654793362)
