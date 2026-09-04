@@ -3708,15 +3708,75 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
             return False
         if route.get("deliverable") is False:
             return False
-        if not api_spreads.matched_probe_verified(route):
+        # A matched probe was required here. The pipeline almost never has one
+        # at the same time as a current quote: the websocket books reprice
+        # every minute but publish `depth_unverified: true` with no matched
+        # VWAP, while the $500 probes run on the slow path and are two hours
+        # old by the time a page is served. 446 of 500 groups therefore had no
+        # edge and all sorted at 0.0, which is a handful of ranked rows above a
+        # mass in arbitrary order.
+        #
+        # `spread_evidence_state` is the product's own trust test and already
+        # says what is admissible: `research` is a top-book dislocation that is
+        # "current and structurally plausible", and `excluded` rejects
+        # ticker-derived wide rows, implausible price ratios, thin books and
+        # quote mismatches.
+        if api_spreads.spread_evidence_state(route) == "excluded":
             return False
         guard = route.get("tokenized_guard") or {}
         return not isinstance(guard, dict) or guard.get("rankable") is not False
 
+    def spread_basis(route: dict[str, Any]) -> str:
+        return (
+            "matched_vwap"
+            if api_spreads.matched_probe_verified(route)
+            else "top_book"
+        )
+
     def spread_value(route: dict[str, Any]) -> float | None:
-        if not api_spreads.matched_probe_verified(route):
-            return None
-        return _float_or_none(route.get("depth_weighted_spread_pct"))
+        """Rank on the number the row displays.
+
+        The card already renders "$500 VWAP · X% top book" when a probe filled
+        and "X% top book · target depth unavailable" when it did not, so a row
+        showed a spread while ranking as though it had none.
+        """
+
+        if api_spreads.matched_probe_verified(route):
+            return _float_or_none(route.get("depth_weighted_spread_pct"))
+        return _float_or_none(route.get("executable_spread_pct"))
+
+    def best_ranking_route(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """Proven depth first; top book only when the group has no proof at all.
+
+        Taking the largest number across mixed evidence gets two things wrong
+        that the release audit already pins down. A legacy route probed at $50
+        showing 4.1% would beat a current $500-verified 1.25% one, because
+        failing the matched probe dropped it into the top-book path. And a
+        guarded VANRY row at 125% with no probe would retake the first slot,
+        which is the blank mirage the guard exists to demote.
+
+        So a group ranks on matched depth whenever any of its routes has it,
+        and falls back to top of book only for the groups that have none --
+        which is most of the board, since the websocket books are current but
+        depth-unverified. A guarded route is excluded from that fallback: the
+        guard says identity is unproven, and an unproven identity with no depth
+        proof either is not something to put at the top of the board.
+        """
+
+        def pick(routes: list[dict[str, Any]]) -> dict[str, Any] | None:
+            scored = [
+                (value, route)
+                for route in routes
+                if (value := spread_value(route)) is not None
+            ]
+            return max(scored, key=lambda item: item[0])[1] if scored else None
+
+        verified = [
+            route for route in candidates if api_spreads.matched_probe_verified(route)
+        ]
+        if verified:
+            return pick(verified)
+        return pick([route for route in candidates if not route.get("mirage_guarded")])
 
     filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
     funding_catalog_state = (
@@ -3744,17 +3804,14 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                 for route in [*(group.get("routes") or []), group.get("best_route")]
                 if current_rankable(route)
             ]
-            if candidates:
-                best = max(
-                    candidates,
-                    key=lambda route: spread_value(route)
-                    if spread_value(route) is not None
-                    else float("-inf"),
-                )
+            best = best_ranking_route(candidates)
+            if best is not None:
                 group["best_route"] = best
                 group["best_edge_pct"] = spread_value(best)
+                group["best_edge_basis"] = spread_basis(best)
             else:
                 group["best_edge_pct"] = None
+                group["best_edge_basis"] = None
             if not (historical_funding_page and name == "groups"):
                 funding_candidates = [
                     route
@@ -13132,7 +13189,7 @@ def render_token_intelligence(
       <div class="panel-head"><div><h2>Token intelligence</h2><p>Token-wide price and routes, plus deterministic historical evidence for the best current spread and funding routes.</p></div><span class="status-pill fresh">Local evidence</span></div>
       <div class="terminal-kpis compact-kpis">
         {render_market_metric("Median token price", fmt_price(metrics.get("token_price")), "fresh cross-venue marks")}
-        {render_market_metric("Best spread", fmt_pct(group.get("best_edge_pct")), "matched current route")}
+        {render_market_metric("Best spread", fmt_pct(group.get("best_edge_pct")), "matched current route" if group.get("best_edge_basis") != "top_book" else "top book · $500 depth unproven")}
         {render_market_metric("Best funding / 24h", fmt_signed_pct(metrics.get("token_funding_24h_pct"), digits=3), "current-rate projection")}
         {render_market_metric("Basis volatility / 24h", fmt_pct(basis.get("volatility_24h_pct_points")), "observed route history")}
         {render_market_metric("Adverse basis p95", fmt_pct(basis.get("adverse_24h_p95_pct_points")), "observed 24h widening")}

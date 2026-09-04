@@ -3886,7 +3886,7 @@ def test_freshness_guard_resorts_blank_mirages_below_real_edges(
         "top_funding": [],
         "summary": {},
     }
-    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row, **_kw: True)
     monkeypatch.setattr(server.api_spreads, "quote_age_min", lambda _row: 0.1)
 
     server._apply_spread_freshness(payload)
@@ -3915,7 +3915,7 @@ def test_freshness_keeps_timestamped_matched_depth_despite_fast_top_only_flag(
         "top_funding": [],
         "summary": {},
     }
-    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row, **_kw: True)
     monkeypatch.setattr(server.api_spreads, "quote_age_min", lambda _row: 0.1)
 
     server._apply_spread_freshness(payload)
@@ -3960,7 +3960,7 @@ def test_freshness_never_promotes_an_old_smaller_probe_over_current_500_depth(
         "live_route_updates_for",
         lambda _routes, **_kwargs: {},
     )
-    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row, **_kw: True)
     monkeypatch.setattr(server.api_spreads, "quote_age_min", lambda _row: 0.0)
 
     server._apply_spread_freshness(payload)
@@ -3999,7 +3999,7 @@ def test_filtered_empty_lane_never_borrows_a_global_headline_edge(
         "top_funding": [],
         "summary": {"matching_rows": 0, "max_depth_weighted_spread_pct": None},
     }
-    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row, **_kw: True)
     monkeypatch.setattr(server.api_spreads, "quote_age_min", lambda _row: 0.0)
 
     server._apply_spread_freshness(payload)
@@ -4047,7 +4047,7 @@ def test_freshness_reprices_cached_routes_and_repairs_headline_panel(
     monkeypatch.setattr(
         server.api_spreads,
         "spread_quote_current",
-        lambda row: int(row.get("quote_ts_us") or 0) == 9_000_000,
+        lambda row, **_kw: int(row.get("quote_ts_us") or 0) == 9_000_000,
     )
     monkeypatch.setattr(
         server.api_spreads,
@@ -4099,7 +4099,7 @@ def test_freshness_keeps_now_live_and_leaves_settled_to_history(
             "GUA|funding": (0.25, 0.4, 10_000_000, "matched_vwap")
         },
     )
-    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row, **_kw: True)
     monkeypatch.setattr(server.api_spreads, "quote_age_min", lambda _row: 0.0)
 
     server._apply_spread_freshness(payload)
@@ -4153,7 +4153,7 @@ def test_freshness_promotes_the_route_with_the_best_live_carry(
             "GUA|projected": (0.3, 0.9, 10_000_000, "matched_vwap"),
         },
     )
-    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row: True)
+    monkeypatch.setattr(server.api_spreads, "spread_quote_current", lambda _row, **_kw: True)
     monkeypatch.setattr(server.api_spreads, "quote_age_min", lambda _row: 0.0)
 
     server._apply_spread_freshness(payload)
