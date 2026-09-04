@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,22 @@ MEMORY_PRESSURE_PCT = 90.0
 #: simply closes and reopens between occurrences; 15 checks is 30 minutes at the
 #: 2-minute timer cadence.
 RECOVERY_QUIET_CHECKS = 15
+
+#: Consecutive unhealthy checks before this watchdog restarts a container. The
+#: timer runs every two minutes, so the app is given ~6 minutes of genuine
+#: failure. Nothing else in the system acts on unhealthy: `restart:
+#: unless-stopped` fires on EXIT only, so before this the site could stay
+#: degraded indefinitely -- and did, for hours, until the owner reported it.
+APP_UNHEALTHY_CHECKS = 3
+#: The collector is dearer to restart: it destroys a 45-60 minute discovery
+#: scan. Give it ~16 minutes, and only when no scan is running.
+COLLECTOR_UNHEALTHY_CHECKS = 8
+#: Past ~30 minutes unhealthy the scan is not going to finish anyway, so restart
+#: regardless.
+COLLECTOR_WEDGED_CHECKS = 15
+#: A crash loop must be contained and visible rather than hammered.
+MAX_RESTARTS_PER_HOUR = 3
+RESTART_WINDOW_SECONDS = 3600.0
 
 
 def _docker_inspect(container: str) -> dict[str, Any] | None:
@@ -269,6 +286,14 @@ def evaluate(
             warnings.append(f"{name} anon memory {pct:.1f}% of cgroup limit")
         if str(item.get("status")) != "running":
             faults.append(f"{name} status={item.get('status')}")
+        # A container can be `running` and `unhealthy` for hours. That produced
+        # no fault at all before, which is how the site stayed down.
+        streak = int(before.get("unhealthy_checks") or 0)
+        streak = streak + 1 if str(item.get("health")) == "unhealthy" else 0
+        item["unhealthy_checks"] = streak
+        item["restarts"] = list(before.get("restarts") or [])
+        if streak >= _restart_threshold(name):
+            faults.append(f"{name} unhealthy for {streak} checks")
 
     swap_total = int(host.get("swap_total_kb") or 0)
     swap_free = int(host.get("swap_free_kb") or 0)
@@ -328,6 +353,81 @@ def evaluate(
     }
 
 
+def _restart_threshold(name: str) -> int:
+    return COLLECTOR_UNHEALTHY_CHECKS if "collector" in name else APP_UNHEALTHY_CHECKS
+
+
+def _docker_restart(name: str) -> bool:
+    try:
+        subprocess.run(
+            ["docker", "restart", name],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _discovery_scan_running() -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "top", "app-collector-1"],
+            check=False,
+            capture_output=True,
+            timeout=30,
+            text=True,
+        )
+        return "api_discovery_worker" in (result.stdout or "")
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def remediate(
+    report: dict[str, Any],
+    previous: dict[str, Any],
+    *,
+    restart: Callable[[str], bool] = _docker_restart,
+    scan_is_running: Callable[[], bool] = _discovery_scan_running,
+    now: float | None = None,
+) -> list[str]:
+    """Restart what has been unhealthy long enough, within a per-hour cap.
+
+    Nothing else in this system acts on `unhealthy`, and with Pushover switched
+    off there is nobody to tell, so recovery has to happen here. Every restart
+    is recorded in the state file, which is the audit trail.
+    """
+
+    moment = time.time() if now is None else now
+    restarted: list[str] = []
+    for name, item in (report.get("containers") or {}).items():
+        if not isinstance(item, dict) or str(item.get("health")) != "unhealthy":
+            continue
+        streak = int(item.get("unhealthy_checks") or 0)
+        threshold = _restart_threshold(name)
+        if streak < threshold:
+            continue
+        if "collector" in name and streak < COLLECTOR_WEDGED_CHECKS and scan_is_running():
+            # A restart here throws away 45-60 minutes of scan. Only worth it
+            # once the container is wedged rather than merely slow.
+            continue
+        recent = [
+            stamp
+            for stamp in (item.get("restarts") or [])
+            if moment - float(stamp) < RESTART_WINDOW_SECONDS
+        ]
+        if len(recent) >= MAX_RESTARTS_PER_HOUR:
+            item["restart_suppressed"] = "cap_reached"
+            continue
+        if restart(name):
+            recent.append(moment)
+            item["restarts"] = recent
+            item["unhealthy_checks"] = 0
+            restarted.append(name)
+    return restarted
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime-dir", default=str(DEFAULT_RUNTIME))
@@ -344,6 +444,12 @@ def main(argv: list[str] | None = None) -> int:
     state_path = runtime / STATE_FILENAME
     previous = _load_state(state_path)
     report = evaluate(observations, previous, host)
+    if not args.print:
+        restarted = remediate(report, previous)
+        if restarted:
+            report["detail"] = (
+                f"restarted {', '.join(restarted)}; {report['detail']}"
+            )[:480]
 
     if args.print:
         json.dump(report, sys.stdout, indent=2, sort_keys=True)
