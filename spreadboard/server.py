@@ -16635,13 +16635,15 @@ def render_alerts_page(
       <section class="alert-status-grid">
         <article class="chart-summary-card"><span>Delivery</span><strong>Live</strong><em>{h(delivery_detail)}</em></article>
         <article class="chart-summary-card"><span>Saved rules</span><strong>{h(live_rule_count)}</strong><em>evaluated continuously</em></article>
-        <article class="chart-summary-card"><span>Rule types</span><strong>6</strong><em>price · funding · spread · rails · freshness</em></article>
+        <article class="chart-summary-card"><span>Rule types</span><strong>9</strong><em>price · funding · open/close spread · leg prices · rails · freshness</em></article>
         <article class="chart-summary-card"><span>Phone delivery</span><strong>{"Ready" if pushover_ready else "Setup needed"}</strong><em>per-account Pushover settings</em></article>
       </section>
       <section class="community-panel">
-        <div class="panel-head flat"><div><h2>Live alert types</h2><p>Create token alerts above, or use the Alert action on a current route. Each one-shot trigger is recorded in Portfolio, turns itself off, and is optionally sent through Pushover.</p></div></div>
+        <div class="panel-head flat"><div><h2>Live alert types</h2><p>Create token alerts above, or use the Alert action on a current route. Ordinary triggers are one-shot. Explicit emergency rules repeat through Pushover until acknowledged.</p></div></div>
         <div class="alert-template-grid">
           {render_alert_template("Route spread", "Fires when the exact route open spread holds at or above or below your threshold.", "Live")}
+          {render_alert_template("Close spread", "Fires from the exact crossing books when the route can be closed near your chosen level.", "Live")}
+          {render_alert_template("Leg price", "Fires when either exact route leg reaches an add-margin or risk-review price.", "Live")}
           {render_alert_template("Route funding", "Fires when the exact route 24-hour funding value holds at your threshold.", "Live")}
           {render_alert_template("Token price", "Uses a cross-venue median and fires when the selected token holds at your price.", "Live")}
           {render_alert_template("Token funding", "Fires when the best current 24-hour carry on the token reaches your level.", "Live")}
