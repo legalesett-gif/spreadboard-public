@@ -201,6 +201,29 @@ def test_proxy_batch_starts_multiple_visible_routes(tmp_path: Path, monkeypatch)
     assert status["history_proxies_started"] == 4
 
 
+def test_first_proxy_warm_at_clock_zero_then_observes_refresh_interval(tmp_path, monkeypatch) -> None:
+    clock = [0.0]
+    monkeypatch.setattr(tracked_route_warmer.time, "monotonic", lambda: clock[0])
+    monkeypatch.setenv("SPREADBOARD_TRACKED_PROXY_REFRESH_SECONDS", "900")
+    warmed = []
+    monkeypatch.setattr(
+        tracked_route_warmer.historical_spreads, "load_or_fetch",
+        lambda row, **_kwargs: warmed.append(row["route_key"])
+        or {"status": "warming", "started": True},
+    )
+    worker = tracked_route_warmer.Worker(
+        threading.Event(), accounts_path=tmp_path / "accounts.sqlite3",
+        route_resolver=lambda _key: None, quote_scheduler=lambda _row: {},
+    )
+    rows = {"R": _route("R", "GUA")}
+    assert worker._warm_proxies(["R"], rows) == 1
+    clock[0] = 1.0
+    assert worker._warm_proxies(["R"], rows) == 0
+    clock[0] = 900.0
+    assert worker._warm_proxies(["R"], rows) == 1
+    assert warmed == ["R", "R"]
+
+
 def test_saturated_proxy_pool_is_retried_next_pass(tmp_path: Path, monkeypatch) -> None:
     route = _route("WAIT", "GUA")
     universe = warm_query_projection.LiveRouteUniverse()

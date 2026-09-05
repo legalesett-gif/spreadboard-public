@@ -165,7 +165,10 @@ class Worker(threading.Thread):
         started = 0
         for key in _rotated(keys, self._proxy_cursor, len(keys)):
             inspected += 1
-            if now - self._proxy_warmed_at.get(key, 0.0) < minimum_age:
+            previous = self._proxy_warmed_at.get(key)
+            # No observation is different from an observation at clock zero.
+            # First use must not wait for the host/process clock to reach 900s.
+            if previous is not None and now - previous < minimum_age:
                 continue
             row = by_key.get(key) or self.route_resolver(key)
             if row is None:
