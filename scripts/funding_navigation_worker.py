@@ -50,6 +50,13 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     started = time.monotonic()
     restored = funding_catalog.restore_persisted_cache()
     if not restored.get("ready"):
+        # A missing, corrupt or retired-venue catalogue cannot seed navigation.
+        # This isolated worker already owns the supervisor's heavy-build slot;
+        # repair the catalogue here instead of waiting for a broad discovery
+        # completion while every Funding tab stays cold.
+        funding_catalog.refresh_cache()
+        restored = funding_catalog.status()
+    if not restored.get("ready"):
         raise RuntimeError("complete_funding_catalog_unavailable")
     initial_signature = source_signature(board_path)
     pages = funding_catalog.build_navigation_pages(

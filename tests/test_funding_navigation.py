@@ -221,9 +221,11 @@ def test_navigation_query_matrix_is_complete() -> None:
     assert len(identities) == 12
 
 
+@pytest.mark.parametrize("restored_ready", [True, False])
 def test_worker_publishes_loaded_snapshot_when_live_source_advances(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, restored_ready: bool
 ) -> None:
+    rebuilt = []
     signatures = iter(({"funding": [1, 1]}, {"funding": [2, 2]}))
     monkeypatch.setattr(
         funding_navigation_worker,
@@ -233,8 +235,10 @@ def test_worker_publishes_loaded_snapshot_when_live_source_advances(
     monkeypatch.setattr(
         funding_navigation_worker.funding_catalog,
         "restore_persisted_cache",
-        lambda: {"ready": True},
+        lambda: {"ready": restored_ready},
     )
+    monkeypatch.setattr(funding_catalog, "refresh_cache", lambda: rebuilt.append(True))
+    monkeypatch.setattr(funding_catalog, "status", lambda: {"ready": bool(rebuilt)})
     pages = {
         (
             str((query.get("kind") or [""])[0]),
@@ -293,6 +297,20 @@ def test_worker_publishes_loaded_snapshot_when_live_source_advances(
     assert result["empty_views"] == 0
     assert result["navigation_routes"] == 12
     assert result["source_advanced_during_build"] is True
+    assert rebuilt == ([] if restored_ready else [True])
+
+
+def test_worker_does_not_publish_when_catalogue_repair_fails(monkeypatch, tmp_path):
+    monkeypatch.setattr(funding_catalog, "restore_persisted_cache", lambda: {"ready": False})
+    monkeypatch.setattr(funding_catalog, "refresh_cache", dict)
+    monkeypatch.setattr(funding_catalog, "status", lambda: {"ready": False})
+    monkeypatch.setattr(
+        funding_catalog, "build_navigation_pages",
+        lambda **kwargs: pytest.fail("Cannot rank an unavailable catalogue"),
+    )
+    with pytest.raises(RuntimeError, match="complete_funding_catalog_unavailable"):
+        funding_navigation_worker.build(tmp_path / "board.jsonl", tmp_path / "navigation")
+    assert not (tmp_path / "navigation").exists()
 
 
 def test_worker_rejects_empty_lane_and_retains_previous_pointer(
