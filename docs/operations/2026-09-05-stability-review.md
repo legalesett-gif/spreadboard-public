@@ -127,3 +127,45 @@ comparison). No weakening or removal of that guard is proposed.
   errors before succeeding. Two subsequent successful timer invocations remain.
 
 No 24/7 or 48-hour reliability claim is made by this ledger.
+
+## Production rollout and preflight observations
+
+- App-only deployment completed at about 00:17 UTC. App source digest matched
+  `34127765168e4b70`; health returned 200. The combined command refused the
+  active discovery scan. `--force app` bypassed that broad script guard but
+  did not restart the collector: container ID and discovery PID `2406460`
+  remained unchanged. The collector image is still the previous revision.
+- `spreadboard-stability-preflight-20260905.service` records a two-hour
+  preliminary window under `/opt/spreadboard/runtime/stability/20260905-preflight/`.
+  This includes deployment/recovery work and is not the clean 48-hour window.
+  The Codex heartbeat `finish-spreadboard-stability-acceptance` continues the
+  open work every 15 minutes and stays quiet on unchanged evidence.
+- The first allocator measurement (2.640 -> 2.643 GiB, 2.416s) recovered no
+  measurable memory. Do not count the trim as a delivered memory saving.
+- The 00:21:01 backup timer run failed at 00:22:02 with
+  `backup_repository_unavailable`; the prior manual success does not satisfy
+  the two-timer gate. A direct repository probe succeeded with 24 snapshots,
+  but the exact hardened service environment is being checked separately.
+- Recovery drill: the initial 00:22 signal paused Docker's init wrapper and
+  left the web server healthy. That was not a valid unhealthy test. Init was
+  resumed, and the actual server PID `2410313` was paused at 00:25:37 UTC.
+  A 12-minute guarded same-PID/same-container-instance resume fallback was
+  scheduled first. The ordinary two-minute watchdog observed unhealthy at
+  00:28 with streak 1. Wait for recorded unaided restart and HTTP recovery;
+  never include this intentional interruption in the clean soak.
+
+- The watchdog restarted the actual app server unaided at 00:32:34 UTC. Its
+  durable state and remediation ledger show one reserved attempt and success.
+  Both `/api/health` and `/free` returned 200 at 00:34:28, and the fallback
+  timer was cancelled unused. This satisfies the controlled recovery drill;
+  cap simulation remains covered by persisted-state regression/mutant tests.
+- An exact-sandbox restic probe succeeded, but took 105.133 seconds and reported
+  read-only-filesystem/config-save failures. The configuration cannot persist
+  refreshed OAuth tokens in the prior read-only secret directory. The fix gives
+  rclone its own root-private writable directory and a private umask, while
+  keeping the other secrets read-only. Move the existing configuration by
+  rename, never copy or print credentials. Transient repository probes now retry
+  at most three times with bounded delays/timeouts and safe diagnostic codes.
+- Backup correction gates: `2340 passed in 95.47s`, exit 0; Ruff unchanged at
+  517 findings; five further mutants killed (35 total). The failed 00:21 timer
+  run remains in the record and is not counted as green.

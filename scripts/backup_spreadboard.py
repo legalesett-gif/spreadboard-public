@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import time
 
 
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_BACKUP_SOURCE", "/opt/spreadboard/runtime"))
@@ -87,18 +88,38 @@ def run_backup() -> None:
 
 
 def _ensure_repository() -> None:
-    probe = subprocess.run(
-        [RESTIC, "snapshots", "--json"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if probe.returncode == 0:
-        return
-    combined = f"{probe.stdout}\n{probe.stderr}".casefold()
-    if "unable to open config file" not in combined and "is there a repository at" not in combined:
-        raise RuntimeError("backup_repository_unavailable")
-    subprocess.run([RESTIC, "init"], check=True)
+    # A transient repository probe must not discard the entire six-hour run.
+    # Keep retries bounded and never echo provider stderr or configuration.
+    reason = "backend_unavailable"
+    for attempt, delay in enumerate((0, 10, 30), start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            probe = subprocess.run(
+                [RESTIC, "snapshots", "--json"], capture_output=True,
+                text=True, check=False, timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            reason = "backend_timeout"
+        else:
+            if probe.returncode == 0:
+                return
+            combined = f"{probe.stdout}\n{probe.stderr}".casefold()
+            if "unable to open config file" in combined or "is there a repository at" in combined:
+                subprocess.run([RESTIC, "init"], check=True)
+                return
+            reason = "backend_unavailable"
+            for marker, category in (
+                ("rate_limit_exceeded", "backend_rate_limited"),
+                ("ratelimitexceeded", "backend_rate_limited"),
+                ("read-only file system", "backend_config_write_denied"),
+                ("invalid_grant", "backend_auth_failed"),
+            ):
+                if marker in combined:
+                    reason = category
+                    break
+        print(f"backup repository probe attempt={attempt} status={reason}", flush=True)
+    raise RuntimeError(f"backup_repository_unavailable:{reason}")
 
 
 def _backup_sqlite(source: Path, destination: Path) -> None:

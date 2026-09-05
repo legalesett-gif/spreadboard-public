@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -114,7 +116,52 @@ def test_hardened_backup_unit_does_not_depend_on_root_home_for_rclone() -> None:
     unit = (ROOT / "deploy" / "spreadboard-backup.service").read_text(encoding="utf-8")
 
     assert "ProtectHome=true" in unit
-    assert "RCLONE_CONFIG=/opt/spreadboard/secrets/rclone.conf" in unit
+    assert "RCLONE_CONFIG=/opt/spreadboard/secrets/rclone/rclone.conf" in unit
+    assert "ReadWritePaths=/opt/spreadboard/secrets/rclone\n" in unit
+    assert "ReadWritePaths=/opt/spreadboard/secrets\n" not in unit
+    assert "UMask=0077" in unit
     assert "ReadWritePaths=/opt/spreadboard/runtime" in unit
     assert "ReadOnlyPaths=/opt/spreadboard/app" in unit
     assert "ReadOnlyPaths=/opt/spreadboard/runtime" not in unit
+
+
+def test_backup_retries_transient_repository_probe_before_staging(monkeypatch, tmp_path, capsys):
+    calls = []
+    sleeps = []
+    source = tmp_path / "runtime"
+    source.mkdir()
+    monkeypatch.setattr(backup_spreadboard, "RUNTIME_DIR", source)
+    monkeypatch.setattr(backup_spreadboard, "_require_restic_configuration", lambda: None)
+    monkeypatch.setattr(backup_spreadboard.time, "sleep", sleeps.append)
+    monkeypatch.setattr(backup_spreadboard, "stage_snapshot", lambda *a: [Path("evidence.json")])
+    def run(command, **kwargs):
+        calls.append(command)
+        if command[1] == "snapshots" and len(calls) == 1:
+            return SimpleNamespace(returncode=1, stdout="", stderr="RATE_LIMIT_EXCEEDED private-fixture-value")
+        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+    monkeypatch.setattr(backup_spreadboard.subprocess, "run", run)
+    backup_spreadboard.run_backup()
+    assert [x[1] for x in calls] == ["snapshots", "snapshots", "backup", "forget", "check"]
+    assert sleeps == [10]
+    assert "private-fixture-value" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_repository_probe_exhaustion_is_bounded_and_cannot_stage(monkeypatch, tmp_path, timeout, capsys):
+    calls = []
+    sleeps = []
+    monkeypatch.setattr(backup_spreadboard, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(backup_spreadboard, "_require_restic_configuration", lambda: None)
+    monkeypatch.setattr(backup_spreadboard.time, "sleep", sleeps.append)
+    monkeypatch.setattr(backup_spreadboard, "stage_snapshot", lambda *a: pytest.fail("staged after failed repository probe"))
+    def run(command, **kwargs):
+        calls.append(command)
+        assert command[1] == "snapshots" and kwargs["timeout"] == 120
+        if timeout:
+            raise subprocess.TimeoutExpired(command, 120)
+        return SimpleNamespace(returncode=1, stdout="", stderr="read-only file system private-fixture-value")
+    monkeypatch.setattr(backup_spreadboard.subprocess, "run", run)
+    with pytest.raises(RuntimeError, match="backup_repository_unavailable:backend_"):
+        backup_spreadboard.run_backup()
+    assert len(calls) == 3 and sleeps == [10, 30]
+    assert "private-fixture-value" not in capsys.readouterr().out
