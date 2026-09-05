@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from spreadarb.market_status import market_open_for_opportunities
 from spreadarb.venue_policy import opportunity_route_enabled
 
 from spreadarb.api_discovery.models import spread_pct
@@ -405,6 +406,8 @@ class FastQuoteRefresher:
                     break
             if market is None:
                 continue
+            if not market_open_for_opportunities(venue, market):
+                continue
             rate = _optional_number(item.get(str(spec["rate"])))
             if rate is None:
                 continue
@@ -464,6 +467,17 @@ class FastQuoteRefresher:
             if not isinstance(item, dict) or not item.get("symbol"):
                 continue
             symbol = str(item["symbol"])
+            if venue in {"Bitget", "Bingx", "XT"}:
+                market = (getattr(client, "markets", {}) or {}).get(symbol) or {}
+                # Some bulk feeds include test/delisted IDs which safe_symbol
+                # returns unchanged or resolves as spot. Funding needs an
+                # actual current perpetual definition, not just a rate print.
+                if (
+                    not market.get("swap")
+                    or str(market.get("settle") or "").upper() not in {"USD", "USDC", "USDT"}
+                    or not market_open_for_opportunities(venue, market)
+                ):
+                    continue
             index_price = item.get("indexPrice")
             if venue == "WhiteBIT":
                 # CCXT treats tradfiFutures as spot (AAPL/USDT), although the

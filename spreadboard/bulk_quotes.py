@@ -1035,9 +1035,12 @@ _FUNDING_SOURCE_CACHE: dict[str, Any] = {"signature": None, "payloads": []}
 def _funding_key_enabled(key: str) -> bool:
     venue, _, symbol = key.partition("|")
     # Older WhiteBIT refreshes cached tradfi perpetual rates under CCXT's
-    # erroneous spot symbols. Do not retain/count those beside corrected keys,
+    # erroneous spot symbols; Bitget also emits unlisted test IDs and spot
+    # symbols. Do not retain/count those beside corrected perpetual keys,
     # including when an old artifact is restored before the next refresh.
-    return opportunity_venue_enabled(venue) and (venue != "WhiteBIT" or ":" in symbol)
+    return opportunity_venue_enabled(venue) and (
+        venue not in {"WhiteBIT", "Bitget"} or ":" in symbol
+    )
 
 
 def _funding_entry(fields: dict[str, Any]) -> dict[str, Any]:

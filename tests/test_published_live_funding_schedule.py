@@ -12,7 +12,7 @@ from spreadboard import bulk_quotes, fast_quotes, funding_catalog
 @pytest.mark.parametrize(("token", "hours"), [("ONG", 1), ("ACE", 4), ("BTC", 8)])
 def test_bingx_schedule_survives_real_ccxt_parse_into_pair_carry(monkeypatch, reader, token, hours):
     symbol = f"{token}/USDT:USDT"
-    market = {"id": f"{token}-USDT", "symbol": symbol, "swap": True,
+    market = {"id": f"{token}-USDT", "symbol": symbol, "swap": True, "settle": "USDT",
               "info": {"fundingIntervalHours": 8}}
     raw = {"symbol": market["id"], "lastFundingRate": "-0.00096900",
            "fundingIntervalHours": hours, "nextFundingTime": 1788642000000,
