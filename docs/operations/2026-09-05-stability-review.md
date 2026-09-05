@@ -903,7 +903,7 @@ final clean 48-hour acceptance remain open. The Codex recurring automation is
 still paused. No trading, messages, paid access, cap increases or weaker
 accuracy/freshness guards are authorized by this work.
 
-## Current Codex checkpoint — 21:47 UTC
+## Release checkpoint — 21:47 UTC
 
 Production source **767e464 / 0e255781dba02cb5** started at **21:31:57 UTC** with
 both protected-worker guards clear and app/collector source parity. The final
@@ -928,3 +928,29 @@ publication, complete worker memory/CPU cycles, safe lower caps, a current-
 release hour and the final clean 48h remain **open**. No caps/headroom guards
 were lowered. The finite read-only schedules sampler ends about 22:56; split
 at the 21:31:57 deployment. Codex stability heartbeat is confirmed paused.
+
+## Current Codex checkpoint — 22:36 UTC
+
+Source **8a1ddeb / 0346ca22c4326ae9** is live in app and collector since
+**22:27:33 UTC**. Full final gate: **2,574 tests passed**, Ruff **517 known /
+zero new**. Both protected-worker guards were clear. The ordinary collector
+restored **632 previously missing funding keys** across WhiteBIT, BitMart,
+Coinbase International and Bitget. All **1,715 catalogue keys** and their
+published schedules were independently reconciled after normal rotation.
+Inactive native records were excluded, and obsolete WhiteBIT spot-shaped
+funding keys were removed. Details and limitations are in the UA comparison
+checkpoint above, including the operator-audit false-success correction.
+
+The fresh market catalogue still has 22,417 unique keys, no duplicates/Ourbit,
+2,171 futures and 3,962 spot token labels. Remaining BingX/XT feed differences
+and 12 extra Bitget cache keys need exact market-status/identity classification.
+Browser verification is currently blocked by the in-app client; do not claim
+new post-release UI proof. A fresh health read was 200 with 186,708 priced
+routes, but sampled `/free` latency was 18.098 seconds. Only 6.85 minutes of
+new-release host samples are available, with no OOM/restart. Caps unchanged.
+
+Goal remains ACTIVE. Still required: ordinary publication/history/heavy-worker
+cycles, current-release 30-sample hour, measured safe smaller caps and a clean
+48-hour run. The existing finite schedules observer ends around 22:56; split
+its data at this deployment. Stability heartbeat remains PAUSED. Prior
+watchdog/cap-persistence and two backup timer firings are already evidenced.

@@ -506,3 +506,80 @@ sustained navigation publication, remaining resident memory, safe lower caps,
 a deployment-free current-release hour and final clean 48-hour acceptance are
 still open. The finite sampler ends about 22:56 and must be segmented by
 container ID; the Codex stability heartbeat remains paused.
+
+## 22:36 UTC — native funding coverage restored, final acceptance open
+
+Release `8a1ddeb` (including `01bbf4a`) is live in app and collector with source
+digest `0346ca22c4326ae9`, started at 22:27:33 UTC. Both protected-worker checks
+were clear, including the immediate pre-recreation guard. No force was used.
+The final full suite passed **2,574 tests in 100.54s** and Ruff reported **517
+known findings, zero new**. The first native full run failed its Ruff test;
+product-family failures now log only venue/family names, and the full gate was
+rerun. Old-code mutants caught the identity, cache, audit and native-reader bugs.
+
+| Venue | Before: matched current keys | After: matched catalogue keys | Cause and correction |
+|---|---:|---:|---|
+| WhiteBIT | 305 | 398 / 398 | CCXT treats `tradfiFutures` as spot. Read the native perpetual identity from the same funding response and remove obsolete spot-shaped cache keys. |
+| BitMart | 0 | 359 / 359 | Installed CCXT has no BitMart adapter. Read active native perpetuals directly, preserve quote versus settlement identity, and use expected funding with its published schedule. |
+| Coinbase International | 0 | 131 / 131 | No CCXT bulk funding method and no native bulk reader. Read current predictions and convert published nanosecond intervals to hours. |
+| Bitget | 778 | 827 / 827 | The default bulk call reads USDT only. Request both USDT and USDC futures with current published schedules; isolate family failures. |
+
+The ordinary collector published these **632 previously missing exact funding
+keys** without manual cache injection. This is a count of contract data, not
+632 new enterable opportunities. At 22:32:37 all 1,715 catalogue keys matched.
+Independent native-field calculations at 22:33:26–28 found no missing keys or
+interval/provenance mismatches for those 1,715. Rates did change between the
+cache and source observations (ages approximately 20–103 seconds); this is not
+a claim of simultaneous exact-rate equality or exhaustive trading readiness.
+
+BitMart returned 1,215 records, of which 856 were delisted and excluded. Coinbase
+returned 310 instruments, of which 131 were active perpetuals. The BitMart
+current-rate choice follows its distinction between previous-period and next-
+period funding; Coinbase documents its interval in nanoseconds. See the
+[BitMart funding reference](https://developer-pro.bitmart.com/en/futuresv2/#get-current-funding-rate-v2)
+and [Coinbase instrument reference](https://docs.cdp.coinbase.com/api-reference/international-exchange-api/rest-api/instruments/list-instruments).
+
+The operator's Now audit also had false-success paths: it waived mismatches for
+hourly venues and routes carrying settled-history metadata, and passed empty
+or unverifiable runs. It now compares current projections for every venue,
+requires explicit finite values and usable intervals, and returns incomplete
+status when evidence is absent. Its existing tolerance is unchanged; this
+operator diagnostic is not a substitute for the product's 95% accuracy gate.
+
+The fresh 22:34:30 catalogue read contains **22,417 records and 22,417 distinct
+venue/type/symbol keys**, zero Ourbit and zero duplicate keys. It represents
+**2,171 futures token labels and 3,962 spot labels**. The owner's UA counts of
+2,534 / 4,370 are comparable to these labels, not the 220,196 directed funding
+alternatives. Eliminating every alternative would lose current, historical or
+exchange-filter winners; the site-facing positive-opportunity policy remains.
+
+Remaining discrepancies need explicit classification. At 22:24:55, 129 BingX
+and 65 XT catalogue keys had no exact native ID in their current bulk funding
+feeds. This does not prove delisting or an alias. Bitget's new feed also has
+12 cache keys outside the catalogue (including native test/spot-shaped names);
+they need an active-market identity check before retention is tightened. The
+cumulative UA comparison remains 59 observed exact route identities, subject
+to the earlier guest/premium restrictions. No exhaustive parity claim is made.
+
+New browser verification was blocked by `ERR_BLOCKED_BY_CLIENT`; the former
+authenticated tabs were gone. Backend/cache checks succeeded, but they are not
+new browser-rendering proof. The 22:32 health request returned 200 in 0.926s
+with 186,708 priced routes. All 12 navigation views were nonempty using the
+retained 22:23 generation; that is not a new post-release navigation build.
+
+Early new-release evidence covers only 27 host samples over 6.85 minutes:
+zero OOM kills/restarts, both latest healthy, anon peaks 2,011 MiB app and
+2,472 MiB collector. A sampled `/free` request returned 200 in **18.098s**.
+The preceding release reached sampled anon peaks 2,917 / 2,868 MiB and cgroup
+peaks 3,426 / 4,096 MiB. Neither window justifies smaller caps or 24/48h claims.
+
+The rejected decoder experiment is recorded without a performance claim:
+identical 99,822-row content, baseline 6.424s / 391.7 MiB versus prototype
+7.334s / 468.9 MiB. No production decoder change was made. Earlier archive
+compaction has not yet shown a delivered ordinary-worker RSS reduction.
+
+Evidence is in `output/stability-20260905/`: `native-coverage-deploy.txt`,
+`native-coverage-full-pytest-final.txt`, `native-coverage-ruff-final.txt`,
+`native-coverage-final-arrival.json`, `native-arrival-independent-comparison.jsonl`,
+`market-cardinality-native-release.json`, `native-release-early-soak-summary.json`,
+`whitebit-*mutant.txt`, and `native-coverage-mutant-final.txt`.
