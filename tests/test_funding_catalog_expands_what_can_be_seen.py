@@ -134,6 +134,46 @@ def test_a_budget_of_zero_disables_the_pruning(monkeypatch) -> None:
     assert funding_catalog._tokens_worth_expanding(["A", "B"]) == ["A", "B"]
 
 
+@pytest.mark.parametrize("rate", [-0.5, 0.5])
+@pytest.mark.parametrize("has_spot", [False, True])
+def test_build_includes_a_single_futures_payer_with_a_spot_hedge(
+    monkeypatch, rate: float, has_spot: bool
+) -> None:
+    markets = [
+        {"token": "SINGLE", "market_type": "Futures"},
+        {"token": "PAIR", "market_type": "Futures"},
+    ]
+    if has_spot:
+        markets.append({"token": "SINGLE", "market_type": "Spot"})
+    monkeypatch.setattr(funding_catalog.chart_catalog, "load", lambda: {"markets": markets})
+    monkeypatch.setattr(
+        bulk_quotes, "load_funding",
+        lambda: _funding(**{
+            "Gate|SINGLE/USDT:USDT": (rate, 1.0),
+            "Gate|PAIR/USDT:USDT": (0.1, 8.0),
+            "Mexc|PAIR/USDT:USDT": (-0.1, 8.0),
+        }),
+    )
+    expanded = []
+
+    def expand(tokens, **kwargs):
+        expanded.extend(tokens)
+        return {token: {"token": token, "routes": []} for token in tokens}
+
+    monkeypatch.setattr(funding_catalog.catalog_pairs, "for_tokens", expand)
+    monkeypatch.setattr(funding_catalog, "_persist_cache", lambda payloads: None)
+    monkeypatch.setattr(funding_catalog, "_CACHE_PAYLOADS", {})
+    monkeypatch.setattr(funding_catalog, "_CACHE_RESTORE_ATTEMPTED", True)
+    monkeypatch.setattr(funding_catalog, "_CACHE_AT", 0.0)
+    monkeypatch.setattr(funding_catalog, "_CACHE_BUILDING", False)
+    monkeypatch.setattr(funding_catalog, "CATALOG_TOKEN_BUDGET", 1)
+
+    result = funding_catalog._complete_payloads(force_refresh=True)
+    expected = "SINGLE" if has_spot else "PAIR"
+    assert expanded == [expected]
+    assert set(result) == {expected}
+
+
 def test_opening_a_pruned_token_still_answers(monkeypatch) -> None:
     """A token nobody could rank into a page is absent -- until it is asked for."""
 

@@ -342,12 +342,18 @@ def _funding_reach_bound() -> dict[str, float]:
     per-token-bounded discovery snapshot. That distinction is the whole point.
     This module expands the complete universe precisely because ranking a
     bounded index would bias the lane, and a bound taken from the unbounded
-    per-leg file keeps that guarantee: the true value is always at or below it,
-    so a token cut here could not have outranked one that was kept.
+    per-leg file avoids inheriting the scanner's token quota. This is an
+    optimistic prioritization bound, not proof that each selected token has an
+    executable route. The normal pair/identity gates still apply after expansion.
     """
 
     try:
         payload = bulk_quotes.load_funding()
+        spot_tokens = {
+            str(item.get("token") or "").strip().upper()
+            for item in chart_catalog.load().get("markets") or []
+            if isinstance(item, dict) and item.get("market_type") == "Spot"
+        }
     except Exception:  # noqa: BLE001 - no bound means expand everything.
         return {}
     reach: dict[str, list[float]] = {}
@@ -366,6 +372,11 @@ def _funding_reach_bound() -> dict[str, float]:
         token = symbol.split("/", 1)[0].split("_", 1)[0].strip().upper()
         if token:
             reach.setdefault(token, []).append(daily)
+    for token in spot_tokens & reach.keys():
+        # A single paying futures venue has max(rate)-min(rate) == zero.
+        # Its spot hedge pays no funding, so dropping that leg's zero hid
+        # current long-futures or short-futures carry from the shortlist.
+        reach[token].append(0.0)
     return {
         token: max(rates) - min(rates) for token, rates in reach.items() if rates
     }
