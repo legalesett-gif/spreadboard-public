@@ -1484,8 +1484,11 @@ def _route(
         "status": "live",
         "long_quote": long_leg.quote,
         "short_quote": short_leg.quote,
-        "quote_mismatch": bool(
-            long_leg.quote and short_leg.quote and long_leg.quote != short_leg.quote
+        # Keep the published evidence consistent with _reject_reason. Raw
+        # string inequality re-excluded the USDT/USDC pairs that construction
+        # had admitted, on both the spread and funding pages.
+        "quote_mismatch": not route_taxonomy.quotes_are_interchangeable(
+            long_leg.quote, short_leg.quote
         ),
         "long_funding_pct": long_funding.get("rate_pct"),
         "short_funding_pct": short_funding.get("rate_pct"),
