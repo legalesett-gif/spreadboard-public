@@ -56,7 +56,12 @@ hedge, venue, quote contract and observation time differed. Direct searches for
 1000BTT and BTT in UA Futures, and LCAP in UA Spot-Futures, returned no visible
 rows in this anonymous session with no minimum-spread value entered. UA lists
 both Kraken and XT in its referral menu; that menu is not proof of exact-market
-coverage. Do not invent a reason for those absences. Our reverse futures-long /
+coverage. The 19:05–19:08 follow-up inspected the actual filters: Spot-Futures
+marks Kraken and XT with crown badges and disabled styling; Futures marks XT
+the same way and does not offer Kraken in its visible exchange selector. These
+guest restrictions make the absent guest search results an invalid test of
+premium-market parity. Exact premium coverage remains unverified; no paywall
+was bypassed. Our reverse futures-long /
 spot-short rows also require inventory or borrow; they are research candidates,
 not a statement that an account can enter them.
 
@@ -181,7 +186,7 @@ namespace handling). Those changes were not part of the tested/deployed cc9b776
 release and have been left intact. Recheck shared-tree status before any further
 deployment; do not silently ship unrelated untested changes.
 
-## Independent publication correction — 19:00 UTC, deployment pending
+## Independent publication correction — release 19:04 UTC
 
 The separate Hyperliquid chart fix was committed and deployed as `57c4985`,
 digest `54d470476d775c64`. Both production digests were freshly checked at
@@ -219,8 +224,7 @@ resets its restore state. The final unmasked suite passed **2,473 tests in
 findings (an unrestricted `ruff check .` additionally scanned seven diagnostic
 and documentation findings outside the established source/test ratchet).
 
-Still required: guarded deployment, source parity, automatic v2 publication,
-reader and navigation refresh, refreshed UA references, production current-rate
+Still required: refreshed UA references, production current-rate
 checks and measured CPU/memory/latency. Do not call the finite sampler a clean
 release window: the intervening deployments changed its container identities.
 
@@ -229,3 +233,64 @@ Fresh 19:01 UTC streamed production audit: 22,417 exact market records and
 labels and 3,962 spot token labels. The active Aster STONKS/USDT:USDT definition
 is present. Funding remained v1: 500 tokens / 17,739 retained routes, 36,462,219
 bytes, saved 18:02:04. This is the explicit before-publication baseline.
+
+`861fae7`, source digest `54eb84e83a8185b3`, deployed to both containers at
+19:04:23 UTC. Initial and immediate pre-restart discovery/finalizer guards were
+clear. Both container source digests matched the tested source; HTTP health 200,
+restart counts zero and OOM false. The initial cheap health sample had zero
+priced rows while the index warmed; the 19:06:49 sample showed 174,555 priced
+routes, 1,243 priced token labels and 0.858-second health response.
+
+Automatic publication is now observed: saved 19:05:32 UTC, schema v2, 5,360
+token payloads (including empty/nonmatching candidates), **220,079 retained
+eligible pairs**, 50,731,947 file bytes. These payloads are not a count of unique
+futures tokens or positive displayed opportunities. The worker reported a
+40.002-second build and 258.6 MiB peak RSS; elapsed with scheduling was 61.9s.
+At 19:06:49, public health confirmed the web reader had loaded this saved
+generation and all 12 navigation views had refreshed using its source signature
+(19:06:33 build, zero empty views). This proves actual publication and reader
+arrival; detailed live arithmetic and route-reference verification are underway.
+
+## Live verification and exact-history scheduling — 19:19 UTC
+
+The new-generation funding probe passed: 146 sampled positive rows independently
+matched their exact live funding legs, zero math errors / Ourbit; 956 tokens and
+93,136 routes matched positive current carry. All twelve persisted views were
+nonempty. Isolated read-only probe peak 227.5 MiB. Token-detail queries returned
+STONKS, CATE, ASTEROID, ANSEM, ALIGN, KAITO, LCAP and 1000BTT. Exact detail includes
+negative hedge directions for comparison; the broad ranked list remains positive.
+The first isolated detail lookup took 12.75s, subsequent ones 0.06–0.62s: cold
+lookup cost remains relevant and must not be represented only by warm timings.
+
+The updated 45-case reference probe found 38 with both market definitions and
+37 with an indexed route; the one defined but excluded route was the OPENAI
+Gate spot/perp identity/index mismatch. The previously absent Aster STONKS route
+is now both indexed and in the complete funding catalogue. Its exact Mexc Spot
+to Aster Futures detail showed +0.03% current daily carry. The index still
+carried a conservative mirage flag from its scanner evidence at that sample;
+do not claim every indexed reference is immediately a positive, admitted spread.
+CATE/ASTEROID/ANSEM/ALIGN and KAITO had exact catalogue/reference matches.
+
+Actual authenticated Funding UI showed populated current leaders (including
+1000BTT Mexc→XT), per-leg intervals, age labels, and many blank exact historical
+columns marked settlement-refresh-overdue. Fresh collector logs repeatedly said
+`market evidence deferred; current route index pending`. This was a real scheduler
+starvation: the modern publisher's `publication_due()` overrode the older
+recent-publication check, allowing every 120-second quote-index demand to veto
+the 300-second history sweep even when a successful complete index was recent.
+
+The local correction restores the recent-index allowance specifically for
+history, retaining cold/stale index priority and all shared heavy-worker locks.
+The regression uses the actual publisher's request/check/publication lifecycle,
+proves history can take a turn with a recent complete index, proves cold and
+stale indexes still preempt it, proves no overlapping index build, and proves
+the pending publication runs after history releases the lock. The old scheduler
+fails the recent case. Full suite **2,476 passed in 95.95s**, Ruff 517 unchanged;
+old-method mutation caught. Deployment and actual settlement refresh remain to
+be verified. No settlement completeness guard or refresh age was weakened.
+
+A second finite read-only sampler began **19:14:36 UTC**, unit
+`spreadboard-stability-publication-20260905`, output
+`/opt/spreadboard/runtime/stability/20260905-publication`, duration two hours.
+It is preliminary and will be split by any further deployment. The Codex
+recurring automation remains paused; no notification or trading action occurred.

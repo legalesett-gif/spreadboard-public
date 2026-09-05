@@ -2609,13 +2609,23 @@ class MarketEvidenceLoop(threading.Thread):
             _log("market evidence deferred; token ranking still active")
             return
         try:
-            # Current spreads are the quote sweep's truth boundary. Publish
-            # that already-requested atomic index before another multi-minute
-            # history pass can reacquire the same heavy slot.
+            # Preserve cold/stale index priority, but a recent complete index
+            # lets exact history take its turn. Continuous bulk updates make
+            # publication_due() true again after 120s; treating that as an
+            # unconditional veto starved every 300s history sweep even while
+            # the index kept publishing successfully. The shared locks below
+            # still prevent overlapping builds; live quote I/O stays separate.
+            recent_publication = getattr(
+                self.route_index_publisher, "has_recent_publication", None
+            )
             if (
                 _route_publication_due(
                     self.route_index_publisher,
                     legacy_max_age_seconds=self.INTERVAL_SECONDS,
+                )
+                and not (
+                    callable(recent_publication)
+                    and recent_publication(max_age_seconds=self.INTERVAL_SECONDS)
                 )
             ):
                 _log("market evidence deferred; current route index pending")
