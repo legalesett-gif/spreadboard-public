@@ -2987,8 +2987,8 @@ def _exact_catalog_market_projection(
         min_abs_funding_24h_pct=_query_float(query, "min_abs_funding_24h_pct"),
         min_abs_funding_apr_pct=_query_float(query, "min_abs_funding_apr_pct"),
         limit=None,
-        # This is the one-token view. Keep the pairs that are not paying so the
-        # trust check below can decide; the ranked board never asks for them.
+        # Keep nonpositive basis candidates through the trust check: positive
+        # current funding can still make those relevant to the token view.
         include_unprofitable=not _query_bool(query, "funding_only"),
     )
     all_routes = list(selected.get("routes") or [])
@@ -3014,15 +3014,12 @@ def _exact_catalog_market_projection(
             route
             for route in all_routes
             if api_spreads.spread_evidence_state(route) in accepted_states
-            # Someone who searched for ONE token is investigating it, not
-            # scanning for an entry. A pair we trust and that simply is not
-            # paying belongs in that answer: on a futures-futures pair you
-            # cross the bid-ask on both legs, so a tight pair reads negative in
-            # either direction, and omitting it looks like missing coverage.
-            # These stay off the ranked board, where they would treble the row
-            # count with untradeable rows.
+            # The member list focuses on positive spread or positive funding.
+            # A nonpositive basis belongs here only when its current carry is
+            # positive and its price/identity evidence remains sound.
             or (
                 evidence == "all"
+                and (api_spreads._effective_funding_24h_dict(route) or 0.0) > 0
                 and api_spreads.spread_is_sound_but_unprofitable(route)
             )
         ]
@@ -3646,11 +3643,15 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(route, dict) and route.get("route_key"):
             route_copies.append(route)
 
-    live_updates = api_spreads.live_route_updates_for(route_copies, include_basis=True)
+    live_updates = api_spreads.live_route_updates_for(
+        route_copies, include_basis=True, include_index_prices=True
+    )
     for route in route_copies:
         update = live_updates.get(str(route.get("route_key") or ""))
         if update is None:
             continue
+        if len(update) >= 9:
+            route["live_index_prices"] = update[7:9]
         spread, funding, quote_ts_us = update[0], update[1], update[2]
         spread_basis = update[3] if len(update) > 3 else None
         executable_ask = update[4] if len(update) > 4 else None

@@ -128,6 +128,48 @@ comparison). No weakening or removal of that guard is proposed.
 
 No 24/7 or 48-hour reliability claim is made by this ledger.
 
+## Latest acceptance checkpoint and operator direction
+
+Both containers were deployed at 00:53:55 UTC with matching source digest
+`40f9bf266cb590f8`. The repaired manual backup completed at 01:00:38 UTC,
+exit 0 and Result=success. Two future green timer invocations remain required.
+
+The first resident-board probe found two additional failures. The startup
+materializer replaced the broad index with 4,058 scanner rows before the first
+bulk publication; the live publisher subsequently grew it to 74,517 and 99,822.
+This explains the low early memory reading and is not a retention improvement.
+The publication thread was alive: a stack-only py-spy check found it polling
+normally, with the funding navigation worker later owning the shared slot.
+The new materializer gate waits for the live publisher's matching source
+generation rather than replacing its broad structural artifact on restart.
+
+The inside-app `server.api_market_spreads` probe, after the normal resident
+restore, returned Hyperliquid futures routes but also the Gate Spot trap. The
+compact live-price tuple discarded current oracle observations. The new tuple
+option shares exact-leg index observations and their timestamps; warm and
+cached HTTP overlays now consume them. Retained prices take the new index,
+including explicit missing data, and a stopped refresher cannot freeze it.
+
+The owner clarified that the website should focus on positive spreads or
+positive funding rather than showing thousands of irrelevant pairs. Exact
+token search now keeps a nonpositive basis only when current funding is
+positive and price/identity checks pass. No arbitrary token cap is inferred.
+A captured 99,822-row structural index contained 27,442 rows with neither
+stored positive spread nor stored positive funding. These are snapshot fields,
+not a current opportunity count; assess active-index reduction against live
+coverage and new-opportunity delay before using it to justify lower limits.
+
+Latest correction gate: `2347 passed in 91.93s`, exit 0; Ruff 517 unchanged.
+Eight additional source mutants were killed (43 total). Results are in
+`output/stability-20260905/mutants/resident-results.json`.
+
+The initial 22-minute post-deploy sample recorded app anon peak 2,133.6 MiB,
+collector 3,052.2 MiB, CPU averages 0.875 and 2.116 cores, and zero cgroup OOM
+kills. The live-index worker's sampled HWM was 1,326.3 MiB, below the prior
+roughly 1.6 GB worker. Collector rows/books reached 0/0 between work. The
+startup coverage collapse contaminates this comparison: caps and the final
+48-hour acceptance window remain pending.
+
 ## Production rollout and preflight observations
 
 - App-only deployment completed at about 00:17 UTC. App source digest matched

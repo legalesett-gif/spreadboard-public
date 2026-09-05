@@ -121,7 +121,7 @@ class LiveRouteUniverse:
                     }
                 try:
                     observed = api_spreads.live_route_updates_for(
-                        list(selected.values()), include_basis=True
+                        list(selected.values()), include_basis=True, include_index_prices=True
                     )
                     refreshed = _merge_live_updates(
                         previous_slice,
@@ -196,7 +196,7 @@ class LiveRouteUniverse:
                 return self.status()
             try:
                 observed = api_spreads.live_route_updates_for(
-                    list(selected.values()), include_basis=True
+                    list(selected.values()), include_basis=True, include_index_prices=True
                 )
                 refreshed = _merge_live_updates(
                     {
@@ -571,6 +571,9 @@ def _merge_live_updates(
                     prior[4] if len(prior) > 4 else None,
                     prior[5] if len(prior) > 5 else None,
                     prior[6] if len(prior) > 6 else None,
+                    # An oracle is current evidence, not part of the retained
+                    # price. Explicit missing data must clear the prior index.
+                    *(current[7:9] if current is not None and len(current) >= 9 else ()),
                 )
                 continue
         if current is not None:
@@ -872,6 +875,8 @@ def _overlay(
 ) -> dict[str, Any]:
     row = dict(source)
     if update is not None:
+        if len(update) >= 9:
+            row["live_index_prices"] = update[7:9]
         spread, funding, quote_ts_us, basis = update[0], update[1], update[2], update[3]
         executable_ask = update[4] if len(update) > 4 else None
         executable_bid = update[5] if len(update) > 5 else None

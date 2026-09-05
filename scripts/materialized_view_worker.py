@@ -136,6 +136,15 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
             "metadata",
             "rails",
         )
+        if live_meta.get("ready") and any(
+            live_source.get(key) != initial_signature.get(key) for key in shared_keys
+        ):
+            # On restart, scanner quotes can already be older than 90 seconds.
+            # Rebuilding here replaced 145k live structural pairs with a 4k
+            # scanner subset before the first bulk sweep finished. The live
+            # publisher owns membership reconciliation; keep both complete
+            # artifacts until it has published this source generation.
+            raise RuntimeError("awaiting_current_live_route_index")
         route_index = (
             store.live_route_index(board_path=board_path)
             if live_meta.get("ready")

@@ -110,3 +110,19 @@ def test_the_token_view_can_ask_to_keep_them() -> None:
     ).get("routes") or []
 
     assert len(kept) == 2, "the pair that is not paying must survive for that view"
+
+
+def test_member_token_api_keeps_positive_spread_or_positive_current_funding(tmp_path, monkeypatch):
+    from spreadboard import catalog_pairs, server, warm_query_projection
+
+    candidates = [
+        _route(route_key="spread", displayed_open_spread_pct=0.5, executable_spread_pct=0.5, short_bid=1.005),
+        _route(route_key="carry", funding_projected_24h_pct=0.1),
+        _route(route_key="neither", funding_projected_24h_pct=-0.1),
+        _route(route_key="missing"),
+        _route(route_key="untrusted-carry", funding_projected_24h_pct=0.1, identity_mismatch=True),
+    ]
+    monkeypatch.setattr(catalog_pairs, "for_token", lambda *a, **kw: {"token": "VELVET", "routes": candidates})
+    monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", warm_query_projection.LiveRouteUniverse())
+    payload = server.api_market_spreads(tmp_path / "board.jsonl", {"q": ["VELVET"]})
+    assert {r["route_key"] for r in payload["rows"]} == {"spread", "carry"}

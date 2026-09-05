@@ -1541,6 +1541,7 @@ def live_route_updates_for(
     *,
     include_funding: bool = True,
     include_basis: bool = False,
+    include_index_prices: bool = False,
 ) -> dict[str, tuple[Any, ...]]:
     """Spread, carry and quote time straight from the current book store.
 
@@ -1602,7 +1603,7 @@ def live_route_updates_for(
     with _FAST_ROUTE_UPDATE_LOCK:
         fast_dex_quotes = dict(_FAST_ROUTE_UPDATE_CACHE.get("dex") or {})
     out: dict[str, tuple[Any, ...]] = {}
-    funding_legs = bulk_quotes.load_funding() if include_funding else {}
+    funding_legs = bulk_quotes.load_funding() if include_funding or include_index_prices else {}
     funding_leg_daily: dict[tuple[str, str], float | None] = {}
     funding_daily_by_route: dict[str, float | None] = {}
 
@@ -1877,6 +1878,27 @@ def live_route_updates_for(
                     existing[6] if len(existing) > 6 else None,
                 )
             out[route_key] = merged if include_basis else merged[:3]
+    if include_basis and include_index_prices:
+        # Share one tiny observation per exact leg across its many pairings.
+        # These travel independently of retained prices and carry the original
+        # observation time, so a paused refresher cannot freeze an oracle.
+        indexes: dict[str, tuple[float | None, float | None]] = {}
+        for route in routes:
+            route_key = str(route.get("route_key") or "")
+            existing = out.get(route_key)
+            if existing is None:
+                continue
+            pair = []
+            for side in ("long", "short"):
+                key = f"{route.get(f'{side}_venue')}|{route.get(f'{side}_market_symbol')}"
+                if key not in indexes:
+                    entry = funding_legs.get(key) or {}
+                    indexes[key] = (
+                        _float_or_none(entry.get("index_price")),
+                        _float_or_none(entry.get("observed_at")),
+                    )
+                pair.append(indexes[key])
+            out[route_key] = (*existing[:7], *([None] * max(0, 7 - len(existing))), *pair)
     return out
 
 
@@ -3462,6 +3484,17 @@ def _leg_index_price(row: SpreadTerminalRow, side: str) -> float | None:
     value onto the row. Reading only the row missed every board leg.
     """
 
+    live = _row_value(row, "live_index_prices")
+    if isinstance(live, (tuple, list)) and len(live) == 2:
+        from spreadboard import bulk_quotes
+
+        observation = live[0 if side == "long" else 1]
+        if not isinstance(observation, (tuple, list)) or len(observation) != 2:
+            return None
+        price, observed_at = map(_float_or_none, observation)
+        if observed_at is None or not -1 <= time.time() - observed_at <= bulk_quotes.FUNDING_MAX_AGE_SECONDS:
+            return None
+        return price
     notes = _row_value(row, "notes")
     if isinstance(notes, dict):
         inputs = notes.get("route_inputs")
