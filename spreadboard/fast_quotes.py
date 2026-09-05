@@ -2788,8 +2788,16 @@ def _symbol_base_quote(symbol: str) -> tuple[str, str]:
 
 def _hyperliquid_coin(base: str) -> str:
     normalized = str(base).upper()
-    if normalized.startswith("XYZ-"):
-        return f"xyz:{normalized.removeprefix('XYZ-')}"
+    # Hyperliquid builder perps use ``namespace:ticker`` at the public API,
+    # while CCXT and our catalogue expose the same instrument as
+    # ``NAMESPACE-TICKER/USDC:USDC``.  Supporting only the original ``xyz``
+    # namespace left newer markets such as EntropyIO's ``io:OAI`` asking the
+    # REST API for ``IO-OAI``.  Hyperliquid answers that unknown coin with an
+    # empty book rather than an error, so a chart worked only during the brief
+    # window in which the shared book cache was fresh and then froze.
+    namespace, separator, ticker = normalized.partition("-")
+    if separator and namespace and ticker:
+        return f"{namespace.lower()}:{ticker}"
     return normalized
 
 

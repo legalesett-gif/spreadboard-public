@@ -991,8 +991,23 @@ def test_relative_value_quote_applies_multiplier_without_rewriting_raw_prices(
     assert result["row"]["notes"]["route_inputs"]["short"]["bid"] == 13
 
 
-def test_hyperliquid_xyz_catalog_symbol_maps_to_xyz_coin() -> None:
-    assert fast_quotes._hyperliquid_coin("XYZ-SKHX") == "xyz:SKHX"
+@pytest.mark.parametrize(
+    ("catalog_base", "api_coin"),
+    [
+        ("XYZ-SKHX", "xyz:SKHX"),
+        ("IO-OAI", "io:OAI"),
+        ("VNTL-ANTHROPIC", "vntl:ANTHROPIC"),
+    ],
+)
+def test_hyperliquid_builder_catalog_symbol_maps_to_namespaced_coin(
+    catalog_base: str,
+    api_coin: str,
+) -> None:
+    assert fast_quotes._hyperliquid_coin(catalog_base) == api_coin
+
+
+def test_hyperliquid_core_catalog_symbol_stays_unchanged() -> None:
+    assert fast_quotes._hyperliquid_coin("BTC") == "BTC"
 
 
 def test_native_gate_spot_order_book_is_sorted_and_normalized(
@@ -1110,6 +1125,28 @@ def test_native_hyperliquid_book_uses_exact_l2_payload(
 
     bids, asks = _native_order_book("Hyperliquid", "Futures", "TEST/USDC:USDC") or ([], [])
 
+    assert bids == [[2.0, 3.0]]
+    assert asks == [[2.1, 4.0]]
+
+
+def test_native_hyperliquid_builder_book_uses_api_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict[str, str]] = []
+
+    def fake_post(_url: str, payload: dict[str, str]) -> dict[str, object]:
+        requests.append(payload)
+        return {
+            "levels": [[{"px": "2", "sz": "3"}], [{"px": "2.1", "sz": "4"}]]
+        }
+
+    monkeypatch.setattr("spreadboard.fast_quotes._json_post", fake_post)
+
+    bids, asks = _native_order_book(
+        "Hyperliquid", "Futures", "IO-OAI/USDC:USDC"
+    ) or ([], [])
+
+    assert requests == [{"type": "l2Book", "coin": "io:OAI"}]
     assert bids == [[2.0, 3.0]]
     assert asks == [[2.1, 4.0]]
 
