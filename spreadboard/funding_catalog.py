@@ -160,12 +160,11 @@ def refresh_cache() -> dict[str, dict[str, Any]]:
     return _complete_payloads(force_refresh=True)
 
 
-#: How many tokens the all-token catalogue actually expands, ranked by the
-#: bound below. The Funding lane paginates at
-#: ``SPREADBOARD_FUNDING_TOKENS_PER_LANE`` (90 in production), so this leaves
-#: several times the headroom a visible page can consume.
+#: Optional operator ceiling; zero covers the whole catalogue. Pair reduction
+#: now happens inside the token loop, so retaining the full temporary matrix
+#: is no longer a reason to hide positive tokens before pagination.
 CATALOG_TOKEN_BUDGET = max(
-    0, int(os.environ.get("SPREADBOARD_FUNDING_CATALOG_TOKENS", "500"))
+    0, int(os.environ.get("SPREADBOARD_FUNDING_CATALOG_TOKENS", "0"))
 )
 
 
@@ -218,6 +217,28 @@ def collapse_payloads_to_short_legs(
         payload["route_count"] = len(kept)
         payload["displayed_route_count"] = len(kept)
     return payloads
+
+
+def _catalog_funding_routes(routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reduce eligible alternatives within each Funding lane, token by token.
+
+    A futures hedge cannot displace the spot hedge of the same short leg:
+    they belong to different page filters even when their net rates are equal.
+    Reject ineligible alternatives before choosing a survivor, so an invalid
+    but wider spread cannot hide the valid hedge. Pure spot pairs pay no
+    perpetual funding and need no place in this cache.
+    """
+    by_lane: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for route in routes:
+        long_type = str(route.get("long_market_type") or "")
+        short_type = str(route.get("short_market_type") or "")
+        if "Futures" not in (long_type, short_type) or not _common_eligible(
+            route, route_kind=None, symbol=None, exchange=None, quote=None
+        ):
+            continue
+        lane = (str(route.get("route_kind") or ""), long_type, short_type)
+        by_lane.setdefault(lane, []).append(route)
+    return [row for lane in by_lane.values() for row in collapse_to_short_legs(lane)]
 
 
 #: How many longs a single short leg keeps. A token listed on fifteen futures
@@ -514,12 +535,10 @@ def _complete_payloads(*, force_refresh: bool = False) -> dict[str, dict[str, An
             # and blank-window semantics remain owned by funding_radar.
             include_history=False,
             include_short_spot=True,
+            route_reducer=_catalog_funding_routes,
         )
-        # Funding is a property of the short leg, so the routes that share one
-        # repeat its rate. Collapsing here rather than at render time is what
-        # makes the token budget affordable: 34.6x fewer routes to hold, which
-        # is the room that missing tokens like LOBSTER need.
-        built = collapse_payloads_to_short_legs(built)
+        # The pair builder reduces each token before starting the next one,
+        # so discarded long alternatives never accumulate across the build.
     except Exception:
         if not previous:
             raise

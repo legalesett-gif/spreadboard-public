@@ -20,6 +20,7 @@ the stored depth cannot actually fill $50.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import os
 import re
@@ -380,6 +381,7 @@ def for_tokens(
     include_short_spot: bool = False,
     admissible_spreads_only: bool = False,
     retain_reverse_pairs: bool = False,
+    route_reducer: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Build current CEX pair catalogues for several tokens from one book read.
 
@@ -498,6 +500,18 @@ def for_tokens(
                 "displayed_route_count": len(routes),
                 "routes": routes,
                 "admissible_spreads_only": True,
+            }
+        if route_reducer is not None:
+            # Reduce each completed token before constructing the next one.
+            # Reducing only the final all-token result retains the entire
+            # temporary pair matrix and defeats the memory bound.
+            routes = route_reducer(payload["routes"])
+            payload = {
+                **payload,
+                "ok": bool(routes),
+                "routes": routes,
+                "route_count": len(routes),
+                "displayed_route_count": len(routes),
             }
         output[token] = _limited(payload, limit_per_token)
     return output

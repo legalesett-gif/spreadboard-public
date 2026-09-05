@@ -192,7 +192,10 @@ class RefreshLoop:
     def run_chart_catalog(self) -> None:
         interval = max(
             900.0,
-            float(os.environ.get("SPREADBOARD_CHART_CATALOG_SECONDS", "21600")),
+            # Six hours left the newly active Aster STONKS contract absent
+            # long after native quotes and funding were available. Keep the
+            # isolated, serialized market-definition refresh on an hourly cap.
+            float(os.environ.get("SPREADBOARD_CHART_CATALOG_SECONDS", "3600")),
         )
         initial_delay = _remaining_discovery_delay_seconds(
             RUNTIME_DIR / "chart_market_catalog.json",

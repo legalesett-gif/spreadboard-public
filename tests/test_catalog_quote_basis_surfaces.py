@@ -43,9 +43,21 @@ def test_dollar_quote_pairs_reach_spreads_and_funding_but_eur_does_not(
     }
     monkeypatch.setattr(catalog_pairs.bulk_quotes, "load_funding", lambda: rates)
     monkeypatch.setattr(catalog_pairs.public_rails, "load_public_rails", dict)
-    payloads = catalog_pairs.for_tokens(["KAITO"])
+    reductions = []
+
+    def reduce_routes(routes):
+        reductions.append(len(routes))
+        return [r for r in routes if r["short_venue"] == "Hyperliquid"]
+
+    # The ordinary builder retains both directions. Its bounded caller can
+    # reduce a completed token without changing the exact-token API.
+    full = catalog_pairs.for_tokens(["KAITO"])
+    assert len(full["KAITO"]["routes"]) == 2
+    payloads = catalog_pairs.for_tokens(["KAITO"], route_reducer=reduce_routes)
     routes = payloads["KAITO"]["routes"]
-    assert len(routes) == 2
+    assert reductions == [2]
+    assert len(routes) == payloads["KAITO"]["route_count"] == 1
+    assert payloads["KAITO"]["displayed_route_count"] == 1
     assert all(r["long_quote"] != "EUR" and r["short_quote"] != "EUR" for r in routes)
     route = next(r for r in routes if r["short_venue"] == "Hyperliquid")
     if surface == "spreads":

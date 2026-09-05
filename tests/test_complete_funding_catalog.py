@@ -82,6 +82,7 @@ def test_catalog_rebuild_serves_last_complete_generation_to_concurrent_reader(
         assert result == [new]
         assert funding_catalog._complete_payloads() is new
         assert build_options["include_history"] is False
+        assert build_options["route_reducer"] is funding_catalog._catalog_funding_routes
     finally:
         release.set()
         worker.join(timeout=2)

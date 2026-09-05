@@ -23,6 +23,7 @@ from spreadboard import funding_catalog
 def _route(short_venue, *, long_venue, spread, funding=1.0, short_type="Futures", short_symbol=None):
     return {
         "token": "TKN",
+        "route_kind": "SPOT-FUTURES" if short_type == "Futures" else "SPOT",
         "long_venue": long_venue,
         "long_market_type": "Spot",
         "short_venue": short_venue,
@@ -230,11 +231,16 @@ def test_complete_payloads_collapses_what_it_publishes(monkeypatch) -> None:
     monkeypatch.setattr(
         funding_catalog, "_tokens_worth_expanding", lambda tokens, **k: list(tokens)
     )
-    monkeypatch.setattr(
-        funding_catalog.catalog_pairs,
-        "for_tokens",
-        lambda *a, **k: {k: dict(v, routes=list(v["routes"])) for k, v in uncollapsed.items()},
-    )
+    def build_tokens(*_args, route_reducer, **_kwargs):
+        # The production builder applies this callback inside its token loop;
+        # the integration test must exercise the callback supplied by Funding.
+        output = {}
+        for token, payload in uncollapsed.items():
+            routes = route_reducer(list(payload["routes"]))
+            output[token] = dict(payload, routes=routes, route_count=len(routes))
+        return output
+
+    monkeypatch.setattr(funding_catalog.catalog_pairs, "for_tokens", build_tokens)
     monkeypatch.setattr(funding_catalog, "_persist_cache", lambda payloads: None)
     monkeypatch.setattr(funding_catalog, "_CACHE_PAYLOADS", {})
     monkeypatch.setattr(funding_catalog, "_CACHE_AT", 0.0)

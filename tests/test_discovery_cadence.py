@@ -62,3 +62,34 @@ def test_recent_chart_catalog_does_not_race_startup_materialization() -> None:
     build = source.index("_artifact_worker")
     assert delay < build
     assert 'RUNTIME_DIR / "chart_market_catalog.json"' in source
+
+
+def test_two_hour_old_market_catalog_refreshes_without_waiting_four_more_hours(
+    monkeypatch, tmp_path,
+) -> None:
+    # Aster STONKS was live while a four-hour-old catalogue
+    # still omitted them. Exercise the actual refresh loop and its first wait.
+    snapshot = tmp_path / "chart_market_catalog.json"
+    snapshot.write_text("{}")
+    os.utime(snapshot, (1000, 1000))
+    monkeypatch.setattr(service, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(service.time, "time", lambda: 8200)
+    monkeypatch.delenv("SPREADBOARD_CHART_CATALOG_SECONDS", raising=False)
+    calls = []
+    monkeypatch.setattr(service, "_artifact_worker", lambda *args: calls.append(args))
+
+    class StopAfterWait:
+        stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, seconds):
+            self.stopped = True
+            calls.append(seconds)
+            return True
+
+    loop = service.RefreshLoop(7200)
+    loop.stop_event = StopAfterWait()
+    loop.run_chart_catalog()
+    assert calls == [("chart-catalog", "--workers", "4"), 3600.0]
