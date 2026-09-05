@@ -2669,10 +2669,13 @@ def api_market_spreads(
             )
             persisted["funding_navigation"] = navigation
             return _sync_telegram_client_universe(persisted)
-    exact_catalog = _exact_catalog_market_projection(
-        query,
-        limit=limit,
-        offset=offset,
+    # Funding paginates tokens and keeps every exact-token alternative. The
+    # spread projection paginates routes and lacks the live funding age, so
+    # exact Funding searches must reach the same reader as broad Funding.
+    exact_catalog = (
+        None
+        if complete_funding_request
+        else _exact_catalog_market_projection(query, limit=limit, offset=offset)
     )
     if (
         exact_catalog is not None
@@ -2682,10 +2685,6 @@ def api_market_spreads(
             or int((exact_catalog.get("summary") or {}).get("research_route_count") or 0)
         )
         and not historical_dex_request
-        and (
-            not complete_funding_request
-            or (_query_first(query, "funding_window") or "now").casefold() == "now"
-        )
     ):
         return _sync_telegram_client_universe(exact_catalog)
     if historical_dex_request and not _HISTORICAL_DEX_ARCHIVE_READY.is_set():
