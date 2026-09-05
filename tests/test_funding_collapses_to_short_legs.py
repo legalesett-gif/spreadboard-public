@@ -203,12 +203,12 @@ def test_an_unknown_rate_never_displaces_a_known_one() -> None:
     assert all(r["short_venue"] != "Unknown" for _, r in kept)
 
 
-def test_complete_payloads_collapses_what_it_publishes(monkeypatch) -> None:
+def test_complete_payloads_packs_every_eligible_pair(monkeypatch) -> None:
     """Drives the real generation build, not the helper.
 
     An earlier version of this file asserted only that the helper worked, and
     passed cleanly against the mutant that deletes the build's call to it --
-    which would have shipped the entire duplication untouched.
+    which would have retained every full row object in memory.
     """
 
     uncollapsed = {
@@ -249,10 +249,9 @@ def test_complete_payloads_collapses_what_it_publishes(monkeypatch) -> None:
     published = funding_catalog._complete_payloads(force_refresh=True)
 
     routes = published["TKN"]["routes"]
-    assert len(routes) == 2, (
-        f"the published generation carries {len(routes)} routes; the build did "
-        "not collapse them, so the duplication ships to production"
-    )
+    from spreadboard.packed_routes import PackedRoutes
+    assert isinstance(routes, PackedRoutes)
+    assert list(routes) == uncollapsed["TKN"]["routes"]
     assert {r["short_venue"] for r in routes} == {"Aster", "XT"}
 
 

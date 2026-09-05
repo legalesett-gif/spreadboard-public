@@ -27,7 +27,7 @@ def test_ineligible_widest_long_cannot_displace_a_valid_funding_route():
     good = row("good")
     bad = row("bad", spread=4.0, identity_mismatch=True)
     result = funding_catalog._catalog_funding_routes([good, bad])
-    assert result == [good]
+    assert list(result) == [good]
 
 
 def test_zero_budget_build_covers_positive_token_after_500(monkeypatch):

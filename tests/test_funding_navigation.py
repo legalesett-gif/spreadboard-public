@@ -27,14 +27,10 @@ def _route(token: str, route_kind: str = "FUTURES") -> dict:
 def test_navigation_build_ranks_now_and_exact_windows_in_one_generation(monkeypatch) -> None:
     fast = _route("FAST")
     persistent = _route("PERSIST")
-    monkeypatch.setattr(funding_catalog, "_complete_payloads", lambda: {"X": {}})
-    monkeypatch.setattr(
-        funding_catalog,
-        "_all_routes",
-        lambda **kwargs: [fast, persistent]
-        if kwargs.get("route_kind") == "FUTURES"
-        else [],
-    )
+    monkeypatch.setattr(funding_catalog, "_complete_payloads", lambda: {
+        "FAST": {"routes": [fast]}, "PERSIST": {"routes": [persistent]},
+    })
+    monkeypatch.setattr(funding_catalog.funding_radar, "routes_for", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         funding_catalog.bulk_quotes,
         "load_funding",

@@ -206,8 +206,8 @@ services:
       # Each reset costs seconds of websocket freshness on 64 routes, never a
       # quote -- the bulk/fast path covers every board row.
       SPREADBOARD_WS_RSS_LIMIT_MB: "1000"
-      # Reduce each token before constructing the next one; never retain the
-      # complete temporary pair matrix. The 500-token cutoff hid positive
+      # Pack each token losslessly before constructing the next one; never
+      # retain the complete temporary pair matrix. The 500-token cutoff hid positive
       # CATE/ASTEROID/ANSEM/ALIGN funding in the 2026-09-05 UA comparison.
       # Zero removes that coverage cutoff. Page/short-leg display limits remain.
       SPREADBOARD_FUNDING_CATALOG_TOKENS: "0"
@@ -230,7 +230,7 @@ services:
       #
       # The catalogue is a periodic job; the page is what a member waits on.
       SPREADBOARD_CHART_CATALOG_WORKERS: "2"
-      SPREADBOARD_CHART_CATALOG_SECONDS: "21600"
+      SPREADBOARD_CHART_CATALOG_SECONDS: "3600"
       SPREADBOARD_CHART_CATALOG_VENUE_TIMEOUT: "60"
       # 2026-09-02: 2 -> 15. Each pass calls live_book_cache.load_all(), which
       # JSON-parses EVERY fresh book -- hundreds of legs -- so that ~22 keys can

@@ -14,7 +14,9 @@ from __future__ import annotations
 import os
 import threading
 import time
+from collections.abc import Iterable, Iterator
 from contextlib import suppress
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,7 @@ from spreadboard import (
     funding_radar,
     venue_funding_history,
 )
+from spreadboard.packed_routes import PackedRoutes
 
 CACHE_SECONDS = max(
     30.0,
@@ -43,7 +46,8 @@ _CACHE_PAYLOADS: dict[str, dict[str, Any]] = {}
 _CACHE_BUILDING = False
 _CACHE_BUILD_DONE = threading.Event()
 _CACHE_BUILD_DONE.set()
-PERSISTED_SCHEMA = "spreadboard.complete_funding_catalog.v1"
+PERSISTED_SCHEMA = "spreadboard.complete_funding_catalog.v2"
+LEGACY_PERSISTED_SCHEMA = "spreadboard.complete_funding_catalog.v1"
 DEFAULT_CACHE_PATH = Path(
     os.environ.get(
         "SPREADBOARD_COMPLETE_FUNDING_CATALOG_PATH",
@@ -63,7 +67,7 @@ def _read_persisted_cache() -> tuple[dict[str, dict[str, Any]], float]:
     saved_at = float(envelope.get("saved_at_unix") or 0.0)
     if (
         not isinstance(envelope, dict)
-        or envelope.get("schema") != PERSISTED_SCHEMA
+        or envelope.get("schema") not in {PERSISTED_SCHEMA, LEGACY_PERSISTED_SCHEMA}
         or not isinstance(payloads, dict)
         or not payloads
         or not all(
@@ -72,6 +76,10 @@ def _read_persisted_cache() -> tuple[dict[str, dict[str, Any]], float]:
         )
     ):
         raise ValueError("invalid_persisted_funding_catalog")
+    for payload in payloads.values():
+        routes = payload.get("routes")
+        if isinstance(routes, dict):
+            payload["routes"] = PackedRoutes.restore(routes)
     if any(
         not api_spreads.opportunity_route_enabled(route)
         for payload in payloads.values()
@@ -115,7 +123,8 @@ def _persist_cache(payloads: dict[str, dict[str, Any]]) -> None:
             # 200 MB copy while the complete object graph was resident, which
             # pushed the bounded collector child over its cgroup limit. Each
             # token is an independent JSON value, so stream the envelope one
-            # token at a time without changing its schema or reader contract.
+            # token at a time. Version 2 keeps lossless packed token blocks;
+            # legacy list generations remain readable during a rolling release.
             handle.write(
                 b'{"schema":'
                 + orjson.dumps(PERSISTED_SCHEMA)
@@ -130,7 +139,12 @@ def _persist_cache(payloads: dict[str, dict[str, Any]]) -> None:
                 first = False
                 handle.write(orjson.dumps(str(token)))
                 handle.write(b":")
-                handle.write(orjson.dumps(payload))
+                handle.write(orjson.dumps({
+                    **payload,
+                    "routes": payload["routes"].envelope()
+                    if isinstance(payload.get("routes"), PackedRoutes)
+                    else payload.get("routes", []),
+                }))
             handle.write(b"}}")
             handle.flush()
             os.fsync(handle.fileno())
@@ -189,16 +203,16 @@ def top_short_legs(
     """
 
     limit = SHORT_LEG_BUDGET if budget is None else max(1, int(budget))
-    if len(candidates) <= limit:
-        return candidates
-    ranked = sorted(
-        candidates,
-        key=lambda item: (
-            item[0] if isinstance(item[0], (int, float)) else float("-inf")
-        ),
-        reverse=True,
-    )
-    return ranked[:limit]
+    best = {}
+    for value, row in candidates:
+        # Incomplete legacy fixtures retain their own route identity. Complete
+        # rows choose one hedge per exact short contract, not per venue label.
+        key = _short_leg_key(row) or (row.get("route_key"), id(row))
+        previous = best.get(key)
+        rank = (value if value is not None else float("-inf"), _entry_spread(row))
+        if previous is None or rank > previous[0]:
+            best[key] = (rank, (value, row))
+    return [item[1] for item in sorted(best.values(), key=lambda item: item[0], reverse=True)[:limit]]
 
 
 def collapse_payloads_to_short_legs(
@@ -219,26 +233,21 @@ def collapse_payloads_to_short_legs(
     return payloads
 
 
-def _catalog_funding_routes(routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Reduce eligible alternatives within each Funding lane, token by token.
+def _catalog_funding_routes(routes: list[dict[str, Any]]) -> PackedRoutes:
+    """Retain every eligible pair without retaining its repeated object graph.
 
-    A futures hedge cannot displace the spot hedge of the same short leg:
-    they belong to different page filters even when their net rates are equal.
-    Reject ineligible alternatives before choosing a survivor, so an invalid
-    but wider spread cannot hide the valid hedge. Pure spot pairs pay no
-    perpetual funding and need no place in this cache.
+    Early rate-based reduction hid a different long after rates changed, or
+    when a member chose a historical window/exchange. Compress each completed
+    token losslessly; ranking and display reduction happen after fresh values
+    and the requested filters are applied.
     """
-    by_lane: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
-    for route in routes:
-        long_type = str(route.get("long_market_type") or "")
-        short_type = str(route.get("short_market_type") or "")
-        if "Futures" not in (long_type, short_type) or not _common_eligible(
+    return PackedRoutes([
+        route for route in routes
+        if "Futures" in (route.get("long_market_type"), route.get("short_market_type"))
+        and _common_eligible(
             route, route_kind=None, symbol=None, exchange=None, quote=None
-        ):
-            continue
-        lane = (str(route.get("route_kind") or ""), long_type, short_type)
-        by_lane.setdefault(lane, []).append(route)
-    return [row for lane in by_lane.values() for row in collapse_to_short_legs(lane)]
+        )
+    ])
 
 
 #: How many longs a single short leg keeps. A token listed on fifteen futures
@@ -654,6 +663,8 @@ def _number(value: Any) -> float | None:
 
 def _kind_matches(route: dict[str, Any], wanted: str | None) -> bool:
     route_kind = str(route.get("route_kind") or "").upper()
+    if wanted == "FUNDING-ALL":
+        return route_kind in {"FUTURES", "SPOT-FUTURES", "FUTURES-SPOT", "DEX-FUTURES"}
     if wanted:
         return funding_radar.kind_matches(route_kind, wanted)
     return route_kind in {"FUTURES", "SPOT-FUTURES", "FUTURES-SPOT"}
@@ -883,7 +894,7 @@ def _copy_route(route: dict[str, Any], *, historical: bool) -> dict[str, Any]:
     return row
 
 
-def _all_routes(
+def _iter_routes(
     *,
     route_kind: str | None,
     symbol: str | None,
@@ -891,7 +902,7 @@ def _all_routes(
     quote: str | None,
     include_retained: bool,
     payloads: dict[str, dict[str, Any]] | None = None,
-) -> list[dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
     selected_payloads = payloads if payloads is not None else _complete_payloads()
     wanted_symbol = str(symbol or "").strip().upper()
     if wanted_symbol and wanted_symbol not in selected_payloads:
@@ -913,23 +924,18 @@ def _all_routes(
         # Economic-identity dedupe is required only when retained radar rows
         # are merged into a historical lane. Running that tuple construction
         # over 100k current candidates added ~1.6 seconds to every Now request.
-        return [
-            _copy_route(route, historical=False)
-            for payload in selected_payloads.values()
-            for route in payload.get("routes") or []
-            if isinstance(route, dict)
-            and _common_eligible(
-                route,
-                route_kind=route_kind,
-                symbol=symbol,
-                exchange=exchange,
-                quote=quote,
-            )
-        ]
-    rows: list[dict[str, Any]] = []
+        for payload in selected_payloads.values():
+            for route in payload.get("routes") or []:
+                if isinstance(route, dict) and _common_eligible(
+                    route, route_kind=route_kind, symbol=symbol,
+                    exchange=exchange, quote=quote,
+                ):
+                    yield _copy_route(route, historical=False)
+        return
     live_identities: set[tuple[Any, ...]] = set()
-    identity_indexes: dict[tuple[Any, ...], int] = {}
     for payload in selected_payloads.values():
+        rows = []
+        identity_indexes = {}
         for route in payload.get("routes") or []:
             if not isinstance(route, dict) or not _common_eligible(
                 route,
@@ -950,13 +956,14 @@ def _all_routes(
             identity_indexes[identity] = len(rows)
             live_identities.add(identity)
             rows.append(copied)
+        yield from rows
     if include_retained:
         for route in funding_radar.routes_for(
             symbol,
-            route_kind=route_kind,
+            route_kind=None if route_kind == "FUNDING-ALL" else route_kind,
         ):
             identity = catalog_pairs.route_identity(route)
-            if identity in live_identities or identity in identity_indexes or not _common_eligible(
+            if identity in live_identities or not _common_eligible(
                 route,
                 route_kind=route_kind,
                 symbol=symbol,
@@ -964,9 +971,24 @@ def _all_routes(
                 quote=quote,
             ):
                 continue
-            identity_indexes[identity] = len(rows)
-            rows.append(_copy_route(route, historical=True))
-    return rows
+            live_identities.add(identity)
+            yield _copy_route(route, historical=True)
+
+
+def _all_routes(**kwargs) -> list[dict[str, Any]]:
+    """Compatibility for explicit exports; ranked readers use bounded batches."""
+    return list(_iter_routes(**kwargs))
+
+
+def _batches(rows: Iterable[dict[str, Any]], size: int = 512) -> Iterator[list[dict[str, Any]]]:
+    iterator = iter(rows)
+    while batch := list(islice(iterator, size)):
+        yield batch
+
+
+def _overlaid_routes(rows: Iterable[dict[str, Any]], *, shared: bool = False) -> Iterator[dict[str, Any]]:
+    for batch in _batches(rows):
+        yield from (_shared_current_dex_overlay(batch) if shared else _resident_live_overlay(batch))
 
 
 def _group(
@@ -1059,7 +1081,7 @@ def page(
         }
     wanted_symbol = str(symbol or "").strip().upper()
     exact_symbol_detail = bool(wanted_symbol and wanted_symbol in payloads)
-    rows = _all_routes(
+    rows = _iter_routes(
         route_kind=route_kind,
         symbol=symbol,
         exchange=exchange,
@@ -1067,7 +1089,7 @@ def page(
         include_retained=selected_window != "now" or exact_symbol_detail,
         payloads=payloads,
     )
-    rows = _resident_live_overlay(rows)
+    rows = _overlaid_routes(rows)
     grouped: dict[str, list[tuple[float | None, dict[str, Any]]]] = {}
     history_labels = ("1d", "7d", "30d")
     window_routes = (
@@ -1090,6 +1112,7 @@ def page(
         if production_reader and selected_window != "now"
         else None
     )
+    matched_route_total = 0
     for route in rows:
         token = str(route.get("token") or "").upper()
         if not token:
@@ -1139,12 +1162,15 @@ def page(
             value = windows[selected_window]
             if not exact_symbol_detail and (value is None or value <= 0):
                 continue
-        grouped.setdefault(token, []).append((value, route))
+        matched_route_total += 1
+        candidates = grouped.setdefault(token, [])
+        candidates.append((value, route))
+        if not exact_symbol_detail and len(candidates) > SHORT_LEG_BUDGET * 2:
+            grouped[token] = top_short_legs(candidates)
 
     # Count what MATCHED before the display cap is applied. Capping first made
     # `matching_route_count` report the number shown rather than the number
     # found, which is a different question and the wrong answer to it.
-    matched_route_total = sum(len(candidates) for candidates in grouped.values())
     if not exact_symbol_detail:
         # A member scanning the list is choosing where to short, not auditing
         # one token. Someone who searched for an exact symbol IS auditing it,
@@ -1230,19 +1256,10 @@ def build_navigation_pages(
     if not payloads:
         return {}
     kinds = ("FUTURES", "FUTURES-SPOT-PAIR", "DEX-FUTURES")
-    rows = [
-        route
-        for kind in kinds
-        for route in _all_routes(
-            route_kind=kind,
-            symbol=None,
-            exchange=None,
-            quote=None,
-            include_retained=True,
-            payloads=payloads,
-        )
-    ]
-    rows = _shared_current_dex_overlay(rows)
+    rows = _overlaid_routes(_iter_routes(
+        route_kind="FUNDING-ALL", symbol=None, exchange=None, quote=None,
+        include_retained=True, payloads=payloads,
+    ), shared=True)
     current_funding = bulk_quotes.load_funding()
     if not current_funding:
         return {}
@@ -1251,6 +1268,16 @@ def build_navigation_pages(
     lanes: dict[
         tuple[str, str], dict[str, list[tuple[float | None, dict[str, Any]]]]
     ] = {(kind, window): {} for kind in kinds for window in windows}
+    match_counts: dict[tuple[str, str, str], int] = {}
+
+    def keep(kind, window, token, value, route):
+        key = (kind, window, token)
+        match_counts[key] = match_counts.get(key, 0) + 1
+        candidates = lanes[(kind, window)].setdefault(token, [])
+        candidates.append((value, route))
+        if len(candidates) > SHORT_LEG_BUDGET * 2:
+            lanes[(kind, window)][token] = top_short_legs(candidates)
+
     window_route_counts = {
         kind: {label: 0 for label in windows[1:]} for kind in kinds
     }
@@ -1284,15 +1311,13 @@ def build_navigation_pages(
         route["funding_navigation_windows"] = dict(realised)
         route["settled_funding_windows"] = dict(realised)
         if not route.get("radar_historical") and current_value is not None and current_value > 0:
-            lanes[(kind, "now")].setdefault(token, []).append(
-                (current_value, route)
-            )
+            keep(kind, "now", token, current_value, route)
         for label, value in realised.items():
             if value is None or value <= 0:
                 continue
             window_route_counts[kind][label] += 1
             window_tokens[kind][label].add(token)
-            lanes[(kind, label)].setdefault(token, []).append((value, route))
+            keep(kind, label, token, value, route)
 
     page_limit = max(1, min(10_000, int(limit or 500)))
     route_preview = max(1, min(20, int(preview_limit or 3)))
@@ -1304,10 +1329,11 @@ def build_navigation_pages(
             for token, candidates in lanes[(kind, window)].items():
                 if not candidates:
                     continue
-                group = _group(token, candidates, window=window)
+                group = _group(token, top_short_legs(candidates), window=window)
                 routes = list(group.get("routes") or [])
-                matching_routes += len(routes)
-                group["route_count"] = len(routes)
+                count = match_counts[(kind, window, token)]
+                matching_routes += count
+                group["route_count"] = count
                 group["displayed_route_count"] = min(len(routes), route_preview)
                 group["routes"] = routes[:route_preview]
                 group["materialized_route_preview"] = True
@@ -1367,7 +1393,7 @@ def build_navigation_pages(
 def archive_routes() -> list[dict[str, Any]]:
     """Every current route worth retaining for a settled historical lane."""
 
-    rows = _all_routes(
+    rows = _iter_routes(
         route_kind=None,
         symbol=None,
         exchange=None,

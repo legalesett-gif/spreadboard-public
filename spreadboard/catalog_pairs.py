@@ -26,6 +26,7 @@ import os
 import re
 import threading
 import time
+from collections.abc import Sequence
 from typing import Any
 
 from spreadarb.api_discovery.orderbook import depth_weighted_price
@@ -381,7 +382,7 @@ def for_tokens(
     include_short_spot: bool = False,
     admissible_spreads_only: bool = False,
     retain_reverse_pairs: bool = False,
-    route_reducer: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
+    route_reducer: Callable[[list[dict[str, Any]]], Sequence[dict[str, Any]]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Build current CEX pair catalogues for several tokens from one book read.
 
