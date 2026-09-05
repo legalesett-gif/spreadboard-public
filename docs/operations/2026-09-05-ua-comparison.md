@@ -157,3 +157,24 @@ full-test and mutant files. This document does not certify live entry readiness.
   Common navigation remains materialized, but uncommon full queries must be
   timed on production. Do not claim RAM recovery or lower memory caps from the
   local compressed-byte count alone. No new external or authenticated API path.
+
+## Release checkpoint — 18:33 UTC
+
+Full-candidate commit `cc9b776` deployed after both guards cleared. App and
+collector both verified digest `c3b22a143f494f61`; new containers started
+18:31:23 UTC. At 18:33:10, both healthy, restart 0 / OOM 0. Collector was running
+the ordinary chart definition workers, so the corrected hourly cadence now
+actually initiated a refresh. Persisted market and funding files were still the
+previous generations at that instant; publication and page acceptance remain open.
+
+The final local replay, while other work occupied the Mac, was slower: build
+88.23s, restore 24.52s, Now 27.09s, navigation 62.21s; peak 230.9 MiB. It retained
+the same 219,871 pairs and returned the same match counts. These timings are not
+an isolated CPU comparison and must not be represented by only the faster prior
+run. Production CPU and uncommon full-query latency still require measurement.
+
+After this deployment, separate work modified `spreadboard/fast_quotes.py` and
+`tests/test_live_charts.py` in the shared checkout (general Hyperliquid builder
+namespace handling). Those changes were not part of the tested/deployed cc9b776
+release and have been left intact. Recheck shared-tree status before any further
+deployment; do not silently ship unrelated untested changes.
