@@ -6,9 +6,10 @@ unchanged Ruff ratchet. No trading actions, Telegram sends, Pushover enablement,
 subscription increase, accuracy-gate relaxation, cgroup increase or droplet
 spend is authorized.
 
-Latest release: `c96d8f0`, app and collector source `4184965aa1d4e0af`, deployed
-02:27:00 UTC. Native cleanup candidate measurements are in progress. Memory
-caps and final 48-hour/two-scheduled-backup acceptance remain open.
+Latest app release: `6c2afb7`, source `181f6ecde1a5f335`, deployed 03:36:09 UTC.
+Collector remains `c96d8f0` / `4184965aa1d4e0af` while its discovery scan runs.
+App-only preflight observations are in progress. Source parity, memory caps
+and final 48-hour/two-scheduled-backup acceptance remain open.
 
 ## Fresh baseline
 
@@ -376,6 +377,45 @@ include the previously tested direct/custom lookup correction. They are not
 deployed yet; production remains `c96d8f0` in both services until the candidate
 hour is preserved and the protected-worker preflight is repeated.
 
+### App-only release with discovery preserved (03:39 UTC)
+
+The native-cleanup candidate was closed before deployment, with 32 health
+samples spanning 3,918 seconds, 14 free-page requests and 259 host samples.
+All HTTP responses were 200 and both containers stayed healthy with zero OOM
+kills. Priced counts nevertheless ranged 63,699–144,640 around a 128,304 mean,
+failing the ±10% gate. Refreshes peaked at 12.319 seconds and health latency at
+10.691 seconds. Full evidence is `output/stability-20260905/native-cleanup-full-hour*`.
+
+Observed app/collector CPU averaged 0.743/1.952 cores, versus 1.038/2.085 in
+the prior full candidate. These are measured periods with different discovery
+workloads, not a controlled attribution of each saving. App/collector anon
+peaks were 3,459/3,278 MiB and both cgroup peaks reached their original limits.
+App HWM was 3,590 MiB; index-worker HWM 1,821 MiB. Lower caps remain unproven.
+
+The clean local source still matched the tested `6c2afb7` digest. Discovery
+PID 2485336 was active in collector `9a36a719a35d0f4b2fc12ad353ee4b6cd2815cf98eba53a5e7828822054b3080`.
+The established `--force app` pattern bypassed the script's broad scan guard
+but targeted only the web container. Its generic warning about discarding a
+scan does not describe this rollout: the exact collector ID and discovery PID
+were checked unchanged afterward. No collector restart was performed.
+
+The app restarted at 03:36:09 UTC and matched source `181f6ecde1a5f335`.
+Collector source was independently verified as the previous `4184965aa1d4e0af`.
+Health and `/free` returned 200, both containers were healthy, and all restart
+and OOM flags remained zero. The bounded 03:38:32 OPENAI replay checksum-verified
+the published 149,051-row index, retained 95 OPENAI rows, and returned 48 API
+rows including six Hyperliquid futures pairs. The Gate Spot trap was excluded
+against the current 1,461.8 venue oracle. Helper HWM was 179,128 KiB.
+
+An explicitly preliminary two-hour sampler started at 03:39:35 UTC:
+`spreadboard-stability-all-lanes-preflight-20260905.service`, under
+`/opt/spreadboard/runtime/stability/20260905-all-lanes-preflight/`. It records
+the app-only release while waiting for the protected collector scan/finalizer.
+It is not a clean final acceptance window. Reconcile collector source when
+protected work finishes, preserve this preflight evidence, then begin the
+candidate hour with full source parity. Do not delay safe collector parity
+merely to preserve this explicitly preliminary measurement.
+
 ## Production rollout and preflight observations
 
 - App-only deployment completed at about 00:17 UTC. App source digest matched
@@ -417,3 +457,41 @@ hour is preserved and the protected-worker preflight is repeated.
 - Backup correction gates: `2340 passed in 95.47s`, exit 0; Ruff unchanged at
   517 findings; five further mutants killed (35 total). The failed 00:21 timer
   run remains in the record and is not counted as green.
+
+## Legacy saved-route construction scope (03:56 UTC)
+
+The post-all-lanes GIL profile (1,196 samples, requested 45 seconds; measured
+43.49 seconds) had zero native cleanup/target-row scan samples. Its remaining
+full discovery construction came from `tracked_route_warmer.check_once` through
+`_find_canonical_route` into `load_spreads(q=token)`: ordinary fuzzy filtering
+runs after every discovery dataclass is constructed. This explains the resident
+31,079-row cache; expiry had not removed it in fresh postflight counters.
+
+The legacy resolver now explicitly supplies an exact token scope. Snapshot and
+fast-delta ingestion select matching raw tokens before construction, with the
+same uppercase/strip normalization as `_row_from_api`. Funding propagation and
+all row/identity guards remain in their original order. General website search
+keeps its fuzzy semantics. Both result and single-entry row caches include the
+scope; no new resident token index is introduced. Exact route-key matching still
+returns no substitute when that route is missing.
+
+The real resolver regression exercises the real loader/parser and rejects any
+unrelated token construction. It checks both discovery buckets, delta-only
+routes, refreshed prices, normalization, missing exact routes and both cache
+orders against a normal fuzzy query. Nine mutants were killed, including the
+resolver/loader/delta call sites, either filter and either cache-key scope.
+
+Before this new scope change is deployed, the app-only preliminary sample has
+9 health observations over 962 seconds: priced 143,645–146,145, maximum deviation
+1.275% from the mean, all 9 health/4 free-page requests 200, all 68 host samples
+healthy and OOM-kill zero. It is too short and lacks collector source parity.
+App/collector average CPU is 0.718/1.905 cores; observed anon peaks are
+3,065.5/3,823.5 MiB, app HWM 3,422.3 MiB and index worker HWM 1,844.2 MiB.
+These are reasons to keep existing memory limits, not evidence for tightening.
+Discovery and its snapshot finalizer have completed; re-check for a new scan
+immediately before attempting a collector deployment.
+
+Final scope-change gate: 2,373 tests passed in 93.05 seconds, exit 0; Ruff
+unchanged at 517. The first run caught test-only style findings (2,372 passed,
+1 Ruff-ratchet failure); they were fixed before this full green run. Nine new
+mutants bring the reviewed total to 81. Prepared source digest: `cf3607b528c8dee1`.

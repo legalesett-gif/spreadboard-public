@@ -401,6 +401,7 @@ def load_spreads(
     api_path: Path | str = DEFAULT_API_DISCOVERY_PATH,
     board_path: Path | str = board.DEFAULT_BOARD_PATH,
     q: str | None = None,
+    exact_token: str | None = None,
     exchange: str | None = None,
     kind: str | None = None,
     source: str | None = None,
@@ -443,6 +444,10 @@ def load_spreads(
     """
 
     current_time = time.time() if now is None else now
+    # Internal saved-route lookups know the exact token. Scope construction,
+    # rather than building every discovery row before the ordinary fuzzy q.
+    if exact_token is not None:
+        exact_token = str(exact_token).upper().strip()
     api_path = Path(api_path)
     board_path = Path(board_path)
     # Grouping every route into a public payload is the dominant per-request
@@ -450,7 +455,7 @@ def load_spreads(
     # The board only moves every 20s, so identical queries against an unchanged
     # snapshot are served from the last result.
     cache_key = (
-        str(api_path), str(board_path), q, exchange, kind, source, min_spread_pct,
+        str(api_path), str(board_path), q, exact_token, exchange, kind, source, min_spread_pct,
         min_abs_funding_24h_pct, min_abs_funding_apr_pct, quote, min_volume_24h_usd,
         min_market_cap_usd, max_market_cap_usd, min_fdv_usd, max_fdv_usd,
         max_listing_age_days, persistence, asset_class, funding_only, spread_evidence, include_stale,
@@ -491,6 +496,7 @@ def load_spreads(
         now=current_time,
         metadata=metadata,
         rails=rails,
+        exact_token=exact_token,
     )
     board_rows, board_meta = _load_board_rows(board_path, now=current_time)
     # Applied per request rather than inside the row cache: a cached price is a
@@ -2200,6 +2206,7 @@ def _apply_fast_quote_delta(
     now: float,
     metadata: dict[str, dict[str, Any]],
     rails: dict[str, dict[str, Any]],
+    exact_token: str | None = None,
 ) -> list["SpreadTerminalRow"]:
     """Overlay the routes the fast worker just re-quoted.
 
@@ -2214,6 +2221,8 @@ def _apply_fast_quote_delta(
     fresh: dict[str, SpreadTerminalRow] = {}
     for raw in payload.get("rows") or []:
         if not isinstance(raw, dict):
+            continue
+        if exact_token is not None and str(raw.get("token") or "").upper().strip() != exact_token:
             continue
         bucket = (
             "dex_discovered_rows"
@@ -2247,7 +2256,10 @@ def _load_api_discovery_rows(
     now: float,
     metadata: dict[str, dict[str, Any]] | None = None,
     rails: dict[str, dict[str, Any]] | None = None,
+    exact_token: str | None = None,
 ) -> tuple[list[SpreadTerminalRow], dict[str, Any]]:
+    if exact_token is not None:
+        exact_token = str(exact_token).upper().strip()
     try:
         snapshot_mtime = path.stat().st_mtime_ns
     except OSError as exc:
@@ -2273,6 +2285,7 @@ def _load_api_discovery_rows(
 
     cache_key = (
         str(path),
+        exact_token,
         snapshot_mtime,
         _mtime_ns(delta_path),
         _mtime_ns(Path(bulk_quotes.FUNDING_CACHE_PATH)),
@@ -2308,9 +2321,11 @@ def _load_api_discovery_rows(
             for bucket in ("api_discovered_rows", "dex_discovered_rows")
             for raw in payload.get(bucket) or []
             if isinstance(raw, dict)
+            and (exact_token is None or str(raw.get("token") or "").upper().strip() == exact_token)
         ]
         rows = _apply_fast_quote_delta(
-            rows, delta_path, now=now, metadata=metadata or {}, rails=rails or {}
+            rows, delta_path, now=now, metadata=metadata or {}, rails=rails or {},
+            exact_token=exact_token,
         )
         snapshot_meta = {
             "updated_at": payload.get("updated_at"),
