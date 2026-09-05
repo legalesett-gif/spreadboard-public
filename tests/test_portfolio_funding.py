@@ -244,6 +244,36 @@ def test_hyperliquid_build_never_requests_a_secret(monkeypatch) -> None:
     assert requested == ["SPREADARB/hyperliquid/api_key"]
 
 
+def test_kucoin_uses_spot_adapter_for_spot_marks_and_futures_for_funding(
+    monkeypatch,
+) -> None:
+    built = []
+
+    class FakeExchange:
+        def __init__(self, params):
+            self.params = params
+            built.append(self)
+
+        def load_markets(self):
+            return {}
+
+    monkeypatch.setattr(sync_portfolio_funding.ccxt, "kucoin", FakeExchange)
+    monkeypatch.setattr(sync_portfolio_funding.ccxt, "kucoinfutures", FakeExchange)
+    credentials = {"api_key": "key", "secret": "secret", "passphrase": "pass"}
+
+    spot = sync_portfolio_funding.build_exchange(
+        "Kucoin", credentials, market_type="spot"
+    )
+    futures = sync_portfolio_funding.build_exchange(
+        "Kucoin", credentials, market_type="futures"
+    )
+
+    assert spot.params["options"]["defaultType"] == "spot"
+    assert futures.params["options"]["defaultType"] == "swap"
+    assert spot is built[0]
+    assert futures is built[1]
+
+
 def test_hyperliquid_public_mark_uses_exact_xyz_builder_context(monkeypatch) -> None:
     client = sync_portfolio_funding.HyperliquidPublicAccountClient(
         "0xabcdef0123456789abcdef0123456789abcdef01"

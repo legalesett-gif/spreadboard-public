@@ -238,7 +238,12 @@ class HyperliquidPublicAccountClient:
         }
 
 
-def build_exchange(venue: str, credentials: dict[str, str] | None = None) -> Any:
+def build_exchange(
+    venue: str,
+    credentials: dict[str, str] | None = None,
+    *,
+    market_type: str = "futures",
+) -> Any:
     spec = next(
         (item for label, item in VENUES.items() if label.casefold() == str(venue).casefold()),
         None,
@@ -246,6 +251,14 @@ def build_exchange(venue: str, credentials: dict[str, str] | None = None) -> Any
     if spec is None:
         raise RuntimeError(f"unsupported_venue:{venue}")
     ccxt_id, service = spec
+    normalized_market_type = str(market_type or "futures").casefold()
+    # CCXT exposes KuCoin spot and derivatives through different adapters.
+    # The encrypted credential bundle is shared, but a spot position must be
+    # marked through ``kucoin`` while funding and futures marks use
+    # ``kucoinfutures``.  Reusing the futures adapter makes a genuine spot
+    # symbol such as ESPORTS/USDT fail with BadSymbol.
+    if service == "kucoin":
+        ccxt_id = "kucoin" if normalized_market_type == "spot" else "kucoinfutures"
     api_key = str((credentials or {}).get("api_key") or "") or keychain(
         f"SPREADARB/{service}/api_key"
     )
@@ -258,7 +271,9 @@ def build_exchange(venue: str, credentials: dict[str, str] | None = None) -> Any
     )
     if not api_key or not secret:
         raise RuntimeError(f"missing_credentials:{venue}")
-    options: dict[str, Any] = {"defaultType": "swap"}
+    options: dict[str, Any] = {
+        "defaultType": "spot" if normalized_market_type == "spot" else "swap"
+    }
     if ccxt_id in {"binance", "mexc"}:
         options["adjustForTimeDifference"] = True
     params: dict[str, Any] = {
@@ -748,12 +763,13 @@ def main() -> None:
         user_id=args.user_id,
         container=args.container,
     )
-    exchanges: dict[str, Any] = {}
+    exchanges: dict[tuple[str, str], Any] = {}
 
     def fetcher(venue: str, symbol: str, since_ms: int) -> list[dict[str, Any]]:
-        if venue not in exchanges:
-            exchanges[venue] = build_exchange(venue)
-        return fetch_private_funding(exchanges[venue], symbol, since_ms)
+        key = (venue, "futures")
+        if key not in exchanges:
+            exchanges[key] = build_exchange(venue, market_type="futures")
+        return fetch_private_funding(exchanges[key], symbol, since_ms)
 
     def marker(
         position: dict[str, Any], side: str, leg: dict[str, Any]
@@ -762,9 +778,10 @@ def main() -> None:
         venue = str(position.get(f"{side}_venue") or "")
         if market_type == "dex" or " dex " in f" {venue.casefold()} ":
             return fetch_dex_reference_mark(position, side, leg)
-        if venue not in exchanges:
-            exchanges[venue] = build_exchange(venue)
-        return fetch_cex_reference_mark(exchanges[venue], position, side, leg)
+        key = (venue, market_type)
+        if key not in exchanges:
+            exchanges[key] = build_exchange(venue, market_type=market_type)
+        return fetch_cex_reference_mark(exchanges[key], position, side, leg)
 
     snapshot = build_snapshot(positions, fetcher, mark_fetcher=marker)
     body = write_atomic(args.local_output.expanduser().resolve(), snapshot)

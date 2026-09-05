@@ -88,21 +88,29 @@ def run_once() -> dict[str, Any]:
     for user_id, credential_map in by_user.items():
         positions = _positions(user_id)
         position_count += len(positions)
-        exchanges: dict[str, Any] = {}
+        exchanges: dict[tuple[str, str], Any] = {}
         used: set[str] = set()
 
-        def exchange_for(venue_label: str) -> Any:
+        def exchange_for(venue_label: str, market_type: str = "futures") -> Any:
             slug = exchange_credentials.normalize_venue(venue_label)
             credentials = credential_map.get(slug)
             if credentials is None:
                 raise RuntimeError("subscriber_connection_missing")
-            if slug not in exchanges:
-                exchanges[slug] = sync.build_exchange(venue_label, credentials)
+            normalized_market_type = str(market_type or "futures").casefold()
+            key = (slug, normalized_market_type)
+            if key not in exchanges:
+                exchanges[key] = sync.build_exchange(
+                    venue_label,
+                    credentials,
+                    market_type=normalized_market_type,
+                )
             used.add(slug)
-            return exchanges[slug]
+            return exchanges[key]
 
         def fetcher(venue: str, symbol: str, since_ms: int) -> list[dict[str, Any]]:
-            return sync.fetch_private_funding(exchange_for(venue), symbol, since_ms)
+            return sync.fetch_private_funding(
+                exchange_for(venue, "futures"), symbol, since_ms
+            )
 
         def marker(
             position: dict[str, Any], side: str, leg: dict[str, Any]
@@ -111,7 +119,9 @@ def run_once() -> dict[str, Any]:
             venue = str(position.get(f"{side}_venue") or "")
             if market_type == "dex" or " dex " in f" {venue.casefold()} ":
                 return sync.fetch_dex_reference_mark(position, side, leg)
-            return sync.fetch_cex_reference_mark(exchange_for(venue), position, side, leg)
+            return sync.fetch_cex_reference_mark(
+                exchange_for(venue, market_type), position, side, leg
+            )
 
         snapshot = sync.build_snapshot(
             positions,
