@@ -6,11 +6,14 @@ unchanged Ruff ratchet. No trading actions, Telegram sends, Pushover enablement,
 subscription increase, accuracy-gate relaxation, cgroup increase or droplet
 spend is authorized.
 
-Latest app and collector release: `fcdec15`, source `cf3607b528c8dee1`, deployed
+Last verified app and collector release: `fcdec15`, source `cf3607b528c8dee1`, deployed
 04:01:00 UTC with both digests verified. The source-parity candidate started
 04:06:16 UTC. Safe lower memory caps and final 48-hour/two-scheduled-backup
 acceptance remain open. The candidate has a 04:46 priced-count dip. A streaming
 reader is prepared (source `1070d86638e8df3b`) but not deployed.
+On the 12:37 UTC resume, SSH and public endpoints timed out from the Mac.
+Current production state, full candidate evidence and scheduled backups remain
+unverified pending restored access or the hosting dashboard session.
 
 ## Fresh baseline
 
@@ -622,3 +625,36 @@ previous-generation preservation. Evidence is under local
 Prepared source digest is `1070d86638e8df3b`; it is NOT deployed. Do not deploy
 before preserving the current hour through at least 05:08 UTC, then refresh
 protected discovery/finalizer status. Final acceptance and lower caps remain open.
+
+### Access failure after the measurement window (12:41 UTC resume)
+
+The user resumed after both bounded sampling windows should have elapsed.
+Repeated SSH attempts timed out, as did `/api/health` and `/free`. DNS still
+resolved to `178.128.126.204`; direct TCP ports 22, 80 and 443 timed out.
+A control request to example.com returned 200. This establishes failure from
+the current Mac's network path, not a proven global outage or host-side cause.
+The public web tool could not open the site, and Check-Host's API returned
+403 without producing an independent measurement. DigitalOcean's public status
+page reported operational services (https://status.digitalocean.com/), which
+does not establish this droplet's condition.
+
+The Chrome DigitalOcean dashboard required login. No doctl installation,
+usual config file or token environment was present. The user was asked to
+sign in to the opened dashboard so the existing droplet can be inspected.
+The VPN was not connected; no network settings were changed. No reboot,
+container restart, deployment, trading action or notification was performed.
+
+The prepared `842f6f2` source digest was reverified as `1070d86638e8df3b`.
+Only diagnostic output was untracked; the 2,396-test/517-Ruff gates and 97
+mutation checks remain the prepared-release evidence, not a production result.
+The measured 04:46 count dip already fails acceptance. Do not assume the later
+hour, host state, OOM counters or two scheduled backup invocations succeeded.
+Retrieve the full scoped-lookup samples and public-book-age evidence before
+deciding on this guarded reader trial. Keep caps unchanged until actual memory
+and CPU measurements support lowering them.
+
+Fresh local evidence: `output/stability-20260905/access-check-1243.json`
+(the record itself is timestamped `2026-09-05T12:40:44Z`). The existing quiet
+heartbeat now prioritizes access recovery and evidence retrieval. The goal
+control freshly reports active, but none of the remaining acceptance gates
+is marked complete.
