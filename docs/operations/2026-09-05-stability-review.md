@@ -107,11 +107,11 @@ comparison). No weakening or removal of that guard is proposed.
 
 ## Open acceptance gates
 
-- Deploy only after both full gates pass; record matching app/collector source
-  digests and freshly probe the OPENAI group inside the app container.
+- Latest deployment/probe passed as recorded below. Before any further deploy,
+  rerun both full gates and verify matching app/collector source digests.
 - Measure collector RSS/anon peak, row/book counters and CPU after release.
-- Exercise one controlled unhealthy app period, record watchdog recovery, then
-  begin the uncontaminated stability window.
+- The controlled unhealthy/recovery drill passed; keep it outside the clean
+  acceptance window and do not repeat it unnecessarily.
 - Obtain 30 priced-count samples over an hour within ±10%, with no deployment
   or intentional recovery drill during that window.
 - Run the host-side `scripts/stability_soak.py` sampler for 48 hours. It records
@@ -169,6 +169,29 @@ kills. The live-index worker's sampled HWM was 1,326.3 MiB, below the prior
 roughly 1.6 GB worker. Collector rows/books reached 0/0 between work. The
 startup coverage collapse contaminates this comparison: caps and the final
 48-hour acceptance window remain pending.
+
+### Deployed correction and candidate window
+
+Revision `01f8e06` deployed successfully at 01:20:58 UTC; both app and collector
+digests matched `f899e273d47c9c6b`, health 200 and no OOM or restart increment.
+The 104,680-row index survived startup. The inside-app probe checksum-verified
+the published artifact while streaming it, retained its 77 OPENAI rows, used
+the normal warm universe with real current production books, and called
+`server.api_market_spreads`. At 01:22 it returned 52 API rows including six
+Hyperliquid futures pairs and excluded the Gate Spot trap against the 1,467
+venue index. Peak helper RSS was 178,664 KiB. Its output is
+`output/stability-20260905/probe-resident-openai-result.jsonl`. This is a bounded
+published-token replay, not a claim to have authenticated a public HTTP session;
+the unauthenticated HTTP probe correctly returned 401.
+
+The two-hour candidate sampler started at 01:24:10 UTC, unit
+`spreadboard-stability-candidate-20260905.service`, under
+`/opt/spreadboard/runtime/stability/20260905-candidate/`. The previous preliminary
+sampler was stopped and preserved. Do not deploy during the hour being measured.
+This candidate window supports the memory-cap decision and the 30-sample gate;
+it is not yet the final 48-hour acceptance at the reduced limits. The existing
+15-minute heartbeat has been updated with these completed milestones and the
+remaining gates, including the owner's relevance guidance.
 
 ## Production rollout and preflight observations
 
