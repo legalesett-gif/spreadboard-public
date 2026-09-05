@@ -430,6 +430,27 @@ class FastQuoteRefresher:
         for item in items or []:
             if not isinstance(item, dict) or not item.get("symbol"):
                 continue
+            symbol = str(item["symbol"])
+            index_price = item.get("indexPrice")
+            if venue == "WhiteBIT":
+                # CCXT treats tradfiFutures as spot (AAPL/USDT), although the
+                # funding response identifies the actual perpetual. Use the
+                # same native identity as the chart catalogue, without another
+                # request or a guessed conversion of an arbitrary spot symbol.
+                native = item.get("info") or {}
+                if not isinstance(native, dict):
+                    continue
+                base = str(native.get("stock_currency") or "").upper()
+                quote = str(native.get("money_currency") or "").upper()
+                if (
+                    str(native.get("product_type") or "").casefold() != "perpetual"
+                    or not str(native.get("ticker_id") or "").upper().endswith("_PERP")
+                    or not base
+                    or quote not in {"USD", "USDC", "USDT"}
+                ):
+                    continue
+                symbol = f"{base}/{quote}:{quote}"
+                index_price = native.get("index_price")
             # CCXT can leave its unified interval empty while preserving the
             # current venue schedule in info (BingX publishes mixed 1/4/8h).
             # Read that before older market metadata or the assumed default.
@@ -446,7 +467,7 @@ class FastQuoteRefresher:
                     interval = _market_interval_hours(market)
             fields = _funding_fields(
                 item.get("fundingRate"),
-                index_price=item.get("indexPrice"),
+                index_price=index_price,
                 # Never leave a fresh rate sitting on a stale scan interval.
                 # A venue without a usable published schedule keeps an explicit
                 # assumed default; a published schedule clears that assumption.
@@ -455,7 +476,7 @@ class FastQuoteRefresher:
                 next_funding_ms=item.get("fundingTimestamp") or item.get("nextFundingTimestamp"),
             )
             if fields:
-                rates[str(item["symbol"])] = fields
+                rates[symbol] = fields
         # A venue that answers with nothing is indistinguishable from one that
         # cannot answer at all, and both leave the legs frozen at scan time.
         return rates or self._native_bulk_funding_rates(venue)

@@ -1008,7 +1008,7 @@ def sweep_funding(
         key: entry
         for key, entry in rates.items()
         if float(leg_updated_at.get(key) or 0.0) >= cutoff
-        and opportunity_venue_enabled(str(key).split("|", 1)[0])
+        and _funding_key_enabled(str(key))
     }
     leg_updated_at = {key: leg_updated_at[key] for key in rates}
     payload_out = {
@@ -1030,6 +1030,14 @@ def sweep_funding(
 
 _FUNDING_CACHE: dict[str, Any] = {"stamp": None, "legs": {}, "health": {}}
 _FUNDING_SOURCE_CACHE: dict[str, Any] = {"signature": None, "payloads": []}
+
+
+def _funding_key_enabled(key: str) -> bool:
+    venue, _, symbol = key.partition("|")
+    # Older WhiteBIT refreshes cached tradfi perpetual rates under CCXT's
+    # erroneous spot symbols. Do not retain/count those beside corrected keys,
+    # including when an old artifact is restored before the next refresh.
+    return opportunity_venue_enabled(venue) and (venue != "WhiteBIT" or ":" in symbol)
 
 
 def _funding_entry(fields: dict[str, Any]) -> dict[str, Any]:
@@ -1106,7 +1114,7 @@ def load_funding(*, cache_path: Path | str = FUNDING_CACHE_PATH) -> dict[str, di
         ages: list[float] = []
         for key, value in legs.items():
             observed_at = float(_float(timestamps.get(key)) or 0.0)
-            if observed_at < cutoff:
+            if observed_at < cutoff or not _funding_key_enabled(str(key)):
                 continue
             age_seconds = max(0.0, now - observed_at)
             accepted[str(key)] = {

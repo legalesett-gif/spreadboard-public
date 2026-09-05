@@ -53,6 +53,7 @@ def test_whitebit_minute_schedule_survives_real_ccxt_parse(monkeypatch, reader, 
     symbol = "LA/USDT:USDT"
     market = {"id": "LA_PERP", "symbol": symbol, "swap": True}
     raw = {"ticker_id": "LA_PERP", "funding_rate": "0.00005",
+           "stock_currency": "LA", "money_currency": "USDT", "product_type": "Perpetual",
            "funding_interval_minutes": minutes,
            "next_funding_rate_timestamp": "1788652800000"}
     parser = ccxt.whitebit()
