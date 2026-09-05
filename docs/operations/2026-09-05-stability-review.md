@@ -193,6 +193,53 @@ it is not yet the final 48-hour acceptance at the reduced limits. The existing
 15-minute heartbeat has been updated with these completed milestones and the
 remaining gates, including the owner's relevance guidance.
 
+### Candidate failure and native cleanup correction ready (02:01 UTC)
+
+The same-container candidate is failing the priced-count gate. Through 02:00:11
+UTC, 18 health samples ranged from 33,433 to 113,584 current priced routes.
+All 18 health and eight `/free` requests returned 200, all 142 host samples
+reported healthy containers, and both OOM-kill counters stayed zero. Entire
+futures or mixed families expired between refreshes despite recent bulk books.
+Observed warm refresh times reached 41 seconds; sampled venue book ages were
+35–74 seconds. Retaining old quotes cannot cure this without violating freshness.
+
+The app averaged 1.034 CPU cores, collector 2.145. Sampled anon peaks were
+2,741 and 2,806 MiB respectively. The app process high-water mark was 3,343
+MiB; cgroup peaks were 3,411 and 3,452 MiB. The index worker reached 1,572 MiB
+HWM. These measurements do not support lowering the app to 3,072 MiB yet.
+The earlier collector CPU baseline was 1.938 cores under a different workload;
+do not attribute the increase specifically to row-cache TTL without evidence.
+
+A 45-second, 30 Hz `py-spy --gil` profile of the actual web Python PID found
+74.7% of 1,309 GIL-owned samples in `FastQuoteRefresher.close`, on its forced
+`gc.collect()` call. Native charts accounted for 51.6 percentage points and
+custom alert quotes 23.1. The ordinary all-thread profile included sleeping
+thread stacks and is not a CPU-share measurement. Neither profile captured
+locals or complete command arguments. Raw GIL evidence is saved at
+`output/stability-20260905/app-cpu-gil-before.raw`; aggregate candidate evidence
+is in `candidate-before-cleanup-summary.json` alongside its JSONL samples.
+
+Native quote calls normally own no CCXT client, so their forced full collection
+scans unrelated resident web objects. The correction performs forced collection
+only after an actual client is released, both in final close and per-venue
+batch disposal. Normal Python collection, client closure, and cache cleanup
+remain enabled. Ten regressions execute the real native quote through chart,
+alert and batch call sites, including missing quotes and owned-client cleanup.
+Eight new mutants were caught, including deleted chart/alert close calls,
+deleted client closure and unconditional or missing client collection (51 total).
+
+Full gate: `2357 passed in 94.18s`, exit 0; Ruff unchanged at 517. This cleanup
+correction is **not deployed yet**. Preserve the current deployment-free hour
+through at least 02:24:15 UTC and collect its complete failed-gate evidence.
+Then, after fresh discovery/finalizer checks, deploy app and collector and
+verify their digests. Repeat the bounded OPENAI API replay, GIL profile and a
+new deployment-free candidate window; a predicted CPU saving is not a delivered
+one. Exact-key target lookups and custom chart matching also scan the full map
+(about 8% and 4% of the GIL profile); these remain measured follow-ups, not edits
+in this correction. Safe caps, the final 48-hour soak and two green scheduled
+backups remain open. The task heartbeat is active; the app goal control reports
+paused, so no claim is made that its goal runner is active.
+
 ## Production rollout and preflight observations
 
 - App-only deployment completed at about 00:17 UTC. App source digest matched

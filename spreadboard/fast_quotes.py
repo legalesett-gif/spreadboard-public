@@ -921,6 +921,7 @@ class FastQuoteRefresher:
         }
 
     def close(self) -> None:
+        had_clients = bool(self._clients)
         for client in self._clients.values():
             close = getattr(client, "close", None)
             if callable(close):
@@ -930,7 +931,12 @@ class FastQuoteRefresher:
                     pass
         self._clients.clear()
         self._client_request_locks.clear()
-        gc.collect()
+        # Native chart/alert samples usually own no CCXT metadata graph. A
+        # whole-heap collection per sample stalls the resident web process:
+        # production profiling put 75% of GIL-owned samples here. Keep forced
+        # collection for actual client cleanup; ordinary Python GC remains on.
+        if had_clients:
+            gc.collect()
 
     def _leg_quote(
         self,
@@ -1196,7 +1202,8 @@ class FastQuoteRefresher:
                 close()
             except Exception:
                 pass
-        gc.collect()
+        if client is not None:
+            gc.collect()
 
 
 def _carry_forward_funding(
