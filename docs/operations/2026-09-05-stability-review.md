@@ -6,10 +6,10 @@ unchanged Ruff ratchet. No trading actions, Telegram sends, Pushover enablement,
 subscription increase, accuracy-gate relaxation, cgroup increase or droplet
 spend is authorized.
 
-Latest app release: `6c2afb7`, source `181f6ecde1a5f335`, deployed 03:36:09 UTC.
-Collector remains `c96d8f0` / `4184965aa1d4e0af` while its discovery scan runs.
-App-only preflight observations are in progress. Source parity, memory caps
-and final 48-hour/two-scheduled-backup acceptance remain open.
+Latest app and collector release: `fcdec15`, source `cf3607b528c8dee1`, deployed
+04:01:00 UTC with both digests verified. The source-parity candidate started
+04:06:16 UTC. Safe lower memory caps and final 48-hour/two-scheduled-backup
+acceptance remain open; broad web row-cache retention still needs measurement.
 
 ## Fresh baseline
 
@@ -495,3 +495,58 @@ Final scope-change gate: 2,373 tests passed in 93.05 seconds, exit 0; Ruff
 unchanged at 517. The first run caught test-only style findings (2,372 passed,
 1 Ruff-ratchet failure); they were fixed before this full green run. Nine new
 mutants bring the reviewed total to 81. Prepared source digest: `cf3607b528c8dee1`.
+
+
+## Full source parity and new candidate (04:06 UTC)
+
+`fcdec15` shipped to app and collector at 04:01:00 UTC. Both digests matched
+`cf3607b528c8dee1`, both were healthy with restart count zero and OOM-kill zero.
+Fresh preflight at 03:59:59 proved the protected discovery/finalizer had ended;
+normal deployment used no force. App container is
+`5c194a27a8ea84711a96e4ba0560f3bd70d27936c019a0b2f7a88d39cbd0c8cf`, collector
+`1a0446771401ae8a3a7fa6c441f15066d8f9b0af7da5aa14c51d3b75b181f094`.
+The preceding app-only preliminary window closed with 11 health samples over
+1,203 seconds, priced 143,645–146,145 (maximum deviation 1.308%), all HTTP and
+80 host observations healthy, OOM-kill zero. Average app/collector CPU was
+0.705/1.969 cores. App HWM reached 3,577.9 MiB and collector anon 3,823.5 MiB;
+it neither satisfies the hour nor supports reduced limits.
+
+The inside-app published-index OPENAI replay passed at 04:02:57: checksum and
+row count 150,688 verified, 95 token rows installed, 53 API rows returned,
+five Hyperliquid futures pairs present. Gate Spot stayed excluded against
+oracle 1460.9. These remain research quotes, not verified matched VWAP.
+Use `/app/.venv/bin/python` for these application probes; system Python lacks
+CCXT. The initial system-Python probe failed at import and was then rerun with
+the correct interpreter; it is not evidence of a production dependency failure.
+
+The cold legacy fallback probe at 04:05:32 constructed and retained only
+42 OPENAI rows, one cache entry, 3.22 seconds and 317,316 KiB helper HWM. Its
+requested historical Kucoin-to-Hyperliquid exact key was absent and returned
+None, without substitution. The previous probe's expectation that this old
+key still existed was incorrect. The probe proves scoped construction and
+missing-route behavior; the separate live-index API replay proves current
+Hyperliquid visibility. Production startup still logged roughly 29,971 web
+SpreadTerminalRow objects from broader loads. The targeted fallback correction
+is therefore not proof that every source of broad row-cache retention is gone.
+
+A new 45-second GIL profile (46.23 seconds including instrument setup/teardown,
+733 samples) contained no `_load_api_discovery_rows` or native `close` stacks.
+Heap diagnostics and repeated persisted Telegram-cache decoding are visible
+residual CPU work, but no further behavior change is made on this short sample.
+App/collector CPU during it was 0.613/1.953 cores. The app HWM at its end was
+2,330.2 MiB. Treat all of these as startup observations, not full-window savings.
+Evidence files are under local `output/stability-20260905/` with scoped-lookup
+probe/profile names; the production postflight/profile files are beside the
+new sampler evidence.
+
+`spreadboard-stability-scoped-lookup-20260905.service` started at 04:06:16 UTC
+for two hours under `/opt/spreadboard/runtime/stability/20260905-scoped-lookup/`,
+after both source digests and the probes were rechecked. It uses 96 MiB/10% CPU.
+Initial fresh health was 200, priced 147,958 of 151,940 routes across all four
+lanes, refresh 6.318 seconds. Preserve its deployment-free hour through at
+least 05:08 UTC and require 30 samples spanning at least 3,600 seconds. Measure
+actual idle expiry, row/heap counts and representative CPU/memory before any
+further retention change or lowering caps. The final 48-hour soak has not begun.
+The repaired manual backup remains successful; next timer freshly confirmed
+06:21:08 UTC, and two future scheduled successes are still required. The prior
+watchdog recovery drill remains complete and must not be repeated.
