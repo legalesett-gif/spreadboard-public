@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import json
+import logging
 import math
 import os
 import re
@@ -162,8 +163,16 @@ NATIVE_FUNDING_SOURCES: dict[str, dict[str, Any]] = {
         "url": "https://api-cloud-v2.bitmart.com/contract/public/details",
         "path": ("data", "symbols"),
         "symbol": "symbol",
-        "rate": "funding_rate",
+        "rate": "expected_funding_rate",
         "interval": "funding_interval_hours",
+        "symbol_format": "venue_perpetual",
+    },
+    "Coinbase International": {
+        "url": "https://api.international.coinbase.com/api/v1/instruments",
+        "path": (),
+        "symbol": "symbol",
+        "rate": "predicted_funding",
+        "symbol_format": "venue_perpetual",
     },
     "XT": {
         "url": "https://fapi.xt.com/future/market/v1/public/cg/contracts",
@@ -341,6 +350,11 @@ class FastQuoteRefresher:
                 payload = payload[step]
             if not isinstance(payload, list):
                 return {}
+            if spec.get("symbol_format") == "venue_perpetual":
+                # These first-party feeds contain exact identity and status.
+                # BitMart has no installed CCXT class; Coinbase's class has no
+                # bulk funding method. Neither requires a metadata client.
+                return _native_perpetual_funding_rates(venue, payload)
             client = None
             if spec.get("symbol_format") != "underscore_swap":
                 client = self._client(venue, "Futures")
@@ -416,12 +430,31 @@ class FastQuoteRefresher:
 
     def _bulk_funding_rates(self, venue: str) -> dict[str, dict[str, Any]]:
         """One call per venue for every perpetual it lists."""
+        if (NATIVE_FUNDING_SOURCES.get(venue) or {}).get("symbol_format") == "venue_perpetual":
+            return self._native_bulk_funding_rates(venue)
         try:
             client = self._client(venue, "Futures")
             if client is None or not getattr(client, "has", {}).get("fetchFundingRates"):
                 return self._native_bulk_funding_rates(venue)
             with self._client_request_lock(venue, "Futures"):
-                payload = client.fetch_funding_rates()
+                if venue == "Bitget":
+                    # An unspecified productType only returns USDT contracts.
+                    # Keep each family independent so a USDC outage cannot
+                    # discard a successfully refreshed USDT family or vice versa.
+                    payload = {}
+                    for product in ("USDT-FUTURES", "USDC-FUTURES"):
+                        try:
+                            payload.update(client.fetch_funding_rates(params={
+                                "productType": product,
+                                "method": "publicMixGetV2MixMarketCurrentFundRate",
+                            }) or {})
+                        except Exception:  # noqa: BLE001 - isolate product-family failures.
+                            logging.getLogger(__name__).warning(
+                                "bulk funding unavailable: %s %s", venue, product,
+                            )
+                            continue
+                else:
+                    payload = client.fetch_funding_rates()
         except Exception:  # noqa: BLE001 - one venue must not stop the cycle.
             return self._native_bulk_funding_rates(venue)
         interval_overrides = self._bulk_funding_interval_overrides(venue)
@@ -2647,16 +2680,9 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                 next_funding_ms=item.get("next_funding_time"),
             )
         if venue == "BitMart":
-            payload = _json_url(
-                "https://api-cloud-v2.bitmart.com/contract/public/funding-rate?"
-                + urlencode({"symbol": compact})
-            )
-            item = payload.get("data") or {}
-            return _funding_fields(
-                item.get("rate_value") or item.get("expected_rate"),
-                interval_hours=8,
-                next_funding_ms=item.get("funding_time"),
-            )
+            payload = _json_url(NATIVE_FUNDING_SOURCES[venue]["url"])
+            rows = (payload.get("data") or {}).get("symbols") or []
+            return _native_perpetual_funding_rates(venue, rows).get(symbol, {})
         if venue == "XT":
             payload = _json_url(
                 "https://fapi.xt.com/future/market/v1/public/q/funding-rate?"
@@ -2736,6 +2762,69 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
 def _milliseconds_to_hours(value: Any) -> float | None:
     parsed = _optional_number(value)
     return parsed / 3_600_000.0 if parsed is not None and parsed > 0 else None
+
+
+def _native_perpetual_funding_rates(
+    venue: str, rows: list[Any],
+) -> dict[str, dict[str, Any]]:
+    """Current projections for active contracts with native identity fields."""
+    from spreadboard import funding_interval
+
+    rates: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        next_ms = None
+        if venue == "BitMart":
+            base = str(row.get("base_currency") or "").upper()
+            quote = str(row.get("quote_currency") or "").upper()
+            # Match BitMart's catalogue/CCXT settlement convention, including
+            # its USD- and USDC-quoted contracts: quote and settle differ.
+            settle = "USDT"
+            if (
+                row.get("status") != "Trading"
+                or str(row.get("product_type")) != "1"
+                or (row.get("expire_timestamp") is not None
+                    and _optional_number(row.get("expire_timestamp")) != 0)
+                or str(row.get("symbol") or "").upper() != f"{base}{quote}"
+            ):
+                continue
+            # The previous period's funding_rate is a settled value. Now uses
+            # expected_funding_rate, including an explicit zero, with its live
+            # published cadence rather than assuming all contracts settle 8h.
+            rate = row.get("expected_funding_rate")
+            hours = funding_interval.normalise(row.get("funding_interval_hours"))
+            index = row.get("index_price")
+            next_ms = row.get("funding_time")
+        elif venue == "Coinbase International":
+            base = str(row.get("base_asset_name") or "").upper()
+            quote = str(row.get("quote_asset_name") or "").upper()
+            settle = quote
+            if row.get("type") != "PERP" or row.get("trading_state") != "TRADING":
+                continue
+            current = row.get("quote") or {}
+            if not isinstance(current, dict):
+                continue
+            rate = current.get("predicted_funding")
+            nanos = _optional_number(row.get("funding_interval"))
+            hours = funding_interval.normalise(nanos / 3_600_000_000_000 if nanos else None)
+            index = current.get("index_price")
+        else:
+            continue
+        parsed_rate = _optional_number(rate)
+        if (not base or quote not in {"USD", "USDC", "USDT"}
+                or hours is None or hours <= 0
+                or parsed_rate is None or not math.isfinite(parsed_rate)):
+            continue
+        parsed_index = _optional_number(index)
+        fields = _funding_fields(
+            parsed_rate, interval_hours=hours, interval_assumed=False,
+            index_price=parsed_index if parsed_index is not None and math.isfinite(parsed_index) else None,
+            next_funding_ms=next_ms,
+        )
+        if fields:
+            rates[f"{base}/{quote}:{settle}"] = fields
+    return rates
 
 
 def _ccxt_current_funding(
