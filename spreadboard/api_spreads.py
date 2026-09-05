@@ -29,6 +29,7 @@ from spreadboard import (
     venue_funding_history,
 )
 from spreadarb.api_discovery.identity import WatchAsset, load_watchlist
+from spreadarb.venue_policy import opportunity_route_enabled
 
 ROOT = Path(__file__).resolve().parents[1]
 LOGGER = logging.getLogger("spreadboard.api_spreads")
@@ -191,6 +192,7 @@ def load_public_route_index(
         row
         for row in _dedupe_rows(rows)
         if row.route_kind not in RETIRED_ROUTE_KINDS
+        and opportunity_route_enabled(row)
         and not quote_basis_mismatch(row)
     ]
     discovery_public = [_index_row(row) for row in rows]
@@ -527,6 +529,7 @@ def load_spreads(
         row
         for row in all_rows
         if row.route_kind not in RETIRED_ROUTE_KINDS
+        and opportunity_route_enabled(row)
         and not quote_basis_mismatch(row)
     ]
     held_out = [row for row in all_rows if _is_mirage_guarded(row)]
@@ -2220,7 +2223,7 @@ def _apply_fast_quote_delta(
         return rows
     fresh: dict[str, SpreadTerminalRow] = {}
     for raw in payload.get("rows") or []:
-        if not isinstance(raw, dict):
+        if not isinstance(raw, dict) or not opportunity_route_enabled(raw):
             continue
         if exact_token is not None and str(raw.get("token") or "").upper().strip() != exact_token:
             continue
@@ -2321,6 +2324,7 @@ def _load_api_discovery_rows(
             for bucket in ("api_discovered_rows", "dex_discovered_rows")
             for raw in payload.get(bucket) or []
             if isinstance(raw, dict)
+            and opportunity_route_enabled(raw)
             and (exact_token is None or str(raw.get("token") or "").upper().strip() == exact_token)
         ]
         rows = _apply_fast_quote_delta(

@@ -6330,11 +6330,15 @@ def restore_materialized_route_index(board_path: Path) -> int:
         for key, row in rows.items()
         if str(row.get("route_kind") or "").upper()
         not in api_spreads.RETIRED_ROUTE_KINDS
+        and api_spreads.opportunity_route_enabled(row)
     }
     template = _MATERIALIZED_VIEW_STORE.payload_for(
         {"limit": ["500"], "sort": ["edge"], "direction": ["desc"]},
         board_path=board_path,
-    )
+    ) or {"ok": True}
+    # A retired-venue navigation page is not reusable, but the independently
+    # verified route index is. Give live projection an empty presentation shell
+    # so it can rank all remaining routes without rebuilding discovery in HTTP.
     signature = (
         str(board_path),
         _file_signature(board_path),
@@ -16221,7 +16225,6 @@ def render_profile_telegram() -> str:
         "KuCoin",
         "MEXC",
         "OKX",
-        "Ourbit",
         "XT",
     ]
     route_types = [

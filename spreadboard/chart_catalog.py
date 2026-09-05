@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 
 from spreadboard.fast_quotes import NATIVE_FUTURES_VENUES, NATIVE_SPOT_VENUES, VENUE_IDS
 from spreadboard import route_taxonomy
+from spreadarb.venue_policy import opportunity_venue_enabled
 from spreadarb.api_discovery.identity import load_watchlist
 
 
@@ -66,7 +67,7 @@ def refresh(path: Path | str = DEFAULT_PATH, *, workers: int = 4) -> dict[str, A
             ),
             ("Futures", venue in NATIVE_FUTURES_VENUES),
         )
-        if supported
+        if supported and opportunity_venue_enabled(venue)
     ]
     markets: list[dict[str, Any]] = []
     health: dict[str, dict[str, Any]] = {}
@@ -146,7 +147,10 @@ def load(path: Path | str = DEFAULT_PATH) -> dict[str, Any]:
         # the code release. Both file stamps are part of the cache key, so this
         # remains immediate without reparsing 22,000 markets on every keystroke.
         dex_markets = dex_market_entries()
-        markets = [item for item in payload.get("markets") or [] if isinstance(item, dict)]
+        markets = [
+            item for item in payload.get("markets") or []
+            if isinstance(item, dict) and opportunity_venue_enabled(item.get("venue"))
+        ]
         known = {
             (
                 str(item.get("token") or ""), str(item.get("venue") or ""),
@@ -167,7 +171,10 @@ def load(path: Path | str = DEFAULT_PATH) -> dict[str, Any]:
             str(item.get("token") or ""), str(item.get("venue") or ""),
             str(item.get("market_type") or ""), str(item.get("symbol") or ""),
         ))
-        health = dict(payload.get("health") or {})
+        health = {
+            key: value for key, value in (payload.get("health") or {}).items()
+            if opportunity_venue_enabled(str(key).split("|", 1)[0])
+        }
         health["OKX DEX|Spot"] = {"status": "ok", "markets": len(dex_markets)}
         result = {
             **payload,

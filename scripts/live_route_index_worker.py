@@ -17,6 +17,8 @@ for import_path in (ROOT / "src", ROOT):
         sys.path.remove(str(import_path))
     sys.path.insert(0, str(import_path))
 
+from spreadarb.venue_policy import opportunity_route_enabled
+
 from spreadboard import (
     api_spreads,
     bulk_quotes,
@@ -284,6 +286,7 @@ def _public_product_rows(
         for key, row in rows.items()
         if str(row.get("route_kind") or "").upper()
         not in api_spreads.RETIRED_ROUTE_KINDS
+        and opportunity_route_enabled(row)
     }
 
 

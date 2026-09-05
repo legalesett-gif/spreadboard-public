@@ -270,17 +270,8 @@ def test_catalog_refresh_retains_last_successful_venue(tmp_path, monkeypatch) ->
     assert payload["health"]["Gate|Spot"]["catalogued_at"] == "2026-07-31T10:00:00Z"
 
 
-def test_catalog_refresh_includes_native_only_ourbit_futures(tmp_path, monkeypatch) -> None:
-    """Ourbit has no ccxt class, so BOTH its sides need the retargeted adapter.
-
-    This previously asserted that Ourbit Spot was never requested. That was a
-    description of the then-current state rather than a rule: Ourbit's spot
-    books are already swept by ``ourbit_quotes.fetch_spot`` and its markets
-    load through the same MEXC-compatible client (831 spot alongside 703 swap).
-    Leaving spot out of the catalogue meant every route needing an Ourbit spot
-    leg was reported as a missing market -- the external comparator flagged
-    ``VELVET ourbit Spot -> gate Futures`` exactly that way.
-    """
+def test_catalog_refresh_excludes_ourbit_opportunities(tmp_path, monkeypatch) -> None:
+    """Adapters remain available, but opportunity enumeration obeys policy."""
 
     seen: list[tuple[str, str]] = []
 
@@ -293,8 +284,8 @@ def test_catalog_refresh_includes_native_only_ourbit_futures(tmp_path, monkeypat
 
     chart_catalog.refresh(path=tmp_path / "catalog.json", workers=2)
 
-    assert ("Ourbit", "Futures") in seen
-    assert ("Ourbit", "Spot") in seen
+    assert ("Ourbit", "Futures") not in seen
+    assert ("Ourbit", "Spot") not in seen
 
 
 def test_catalog_excludes_inverse_perpetuals_from_stablecoin_chart_path() -> None:

@@ -29,7 +29,8 @@ import time
 from typing import Any
 from urllib.request import Request, urlopen
 
-from spreadboard import fair_price, live_book_cache, ourbit_quotes
+from spreadboard import fair_price, live_book_cache
+from spreadarb.venue_policy import opportunity_venue_enabled
 from spreadboard.fast_quotes import VENUE_IDS
 
 LOGGER = logging.getLogger("spreadboard.bulk_quotes")
@@ -819,27 +820,6 @@ def sweep(
             aster_opening_count = sweep_venue("Aster", store=target)
         except Exception:
             LOGGER.warning("Aster opening bulk sweep failed", exc_info=True)
-    # Ourbit has no CCXT adapter, so it is absent from VENUE_IDS and would
-    # never be priced by the rotation below. It is swept natively first, on its
-    # own budget, so a slow rotation cannot starve the venue whose absence was
-    # costing us whole routes.
-    if venues is None:
-        try:
-            ourbit_count = ourbit_quotes.sweep(
-                store=target,
-                depth_priority=_ourbit_depth_priority(),
-                # Protection is DISABLED: skipping ticker refreshes starved the
-                # protected symbols, because depth reaches 25 of 711 contracts a
-                # pass and cannot refresh them faster than they go stale. A
-                # one-level book that is current beats a fifty-level book that
-                # is not, so the ticker keeps every symbol alive until depth
-                # coverage is dense enough to carry them on its own.
-                protected_symbols=None,
-            )
-            written += ourbit_count
-            covered += int(ourbit_count > 0)
-        except Exception:
-            LOGGER.warning("ourbit native sweep failed", exc_info=True)
     ordered = (
         venues
         if venues is not None
@@ -1000,6 +980,8 @@ def sweep_funding(
 
         all_venues = sorted(set(VENUE_IDS) | set(NATIVE_FUNDING_SOURCES))
         for venue in venues if venues is not None else all_venues:
+            if not opportunity_venue_enabled(venue):
+                continue
             if time.monotonic() >= deadline:
                 break
             try:
@@ -1026,6 +1008,7 @@ def sweep_funding(
         key: entry
         for key, entry in rates.items()
         if float(leg_updated_at.get(key) or 0.0) >= cutoff
+        and opportunity_venue_enabled(str(key).split("|", 1)[0])
     }
     leg_updated_at = {key: leg_updated_at[key] for key in rates}
     payload_out = {

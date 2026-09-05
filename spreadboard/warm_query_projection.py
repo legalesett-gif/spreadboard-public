@@ -834,6 +834,8 @@ def _route_volume(row: dict[str, Any]) -> float | None:
 
 
 def _matches_structural(row: dict[str, Any], filters: dict[str, Any]) -> bool:
+    if not api_spreads.opportunity_route_enabled(row):
+        return False
     if str(row.get("route_kind") or "").upper() in api_spreads.RETIRED_ROUTE_KINDS:
         return False
     q = str(filters.get("q") or "").upper().strip()

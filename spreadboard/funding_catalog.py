@@ -72,6 +72,16 @@ def _read_persisted_cache() -> tuple[dict[str, dict[str, Any]], float]:
         )
     ):
         raise ValueError("invalid_persisted_funding_catalog")
+    if any(
+        not api_spreads.opportunity_route_enabled(route)
+        for payload in payloads.values()
+        for route in payload.get("routes") or []
+        if isinstance(route, dict)
+    ):
+        # This file already collapsed equal-rate routes. A disabled long may
+        # have displaced an eligible alternative, so filtering after restore
+        # would lose that alternative until the next full build.
+        raise ValueError("persisted_funding_venue_policy_changed")
     return payloads, saved_at
 
 
@@ -271,7 +281,7 @@ def collapse_to_short_legs(
     best: dict[tuple[Any, ...], dict[str, Any]] = {}
     unkeyed: list[dict[str, Any]] = []
     for route in routes:
-        if not isinstance(route, dict):
+        if not isinstance(route, dict) or not api_spreads.opportunity_route_enabled(route):
             continue
         leg = _short_leg_key(route)
         if leg is None:
@@ -627,6 +637,8 @@ def _common_eligible(
     exchange: str | None,
     quote: str | None,
 ) -> bool:
+    if not api_spreads.opportunity_route_enabled(route):
+        return False
     if not _kind_matches(route, route_kind):
         return False
     token = str(route.get("token") or "").upper()

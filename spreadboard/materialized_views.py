@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import orjson
+from spreadarb.venue_policy import opportunity_payload_enabled
 
 from spreadboard import streaming_index
 
@@ -360,6 +361,8 @@ class Store:
             return None
         payload = self._read_verified_json(manifest, meta)
         if not isinstance(payload, dict):
+            return None
+        if not opportunity_payload_enabled(payload):
             return None
         if projected:
             payload["_materialized_projection"] = {"query": requested}

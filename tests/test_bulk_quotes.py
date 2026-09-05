@@ -684,7 +684,7 @@ def test_normal_sweep_refreshes_aster_again_at_publication(tmp_path, monkeypatch
 
     monkeypatch.setattr(bulk_quotes, "CURSOR_PATH", tmp_path / "cursor.json")
     monkeypatch.setattr(bulk_quotes, "VENUE_IDS", {"Aster": "aster", "Binance": "binance"})
-    monkeypatch.setattr(bulk_quotes.ourbit_quotes, "sweep", lambda **_kwargs: 0)
+    monkeypatch.setattr("spreadboard.ourbit_quotes.sweep", lambda **_kwargs: 0)
     monkeypatch.setattr(bulk_quotes.fair_price, "write", lambda rows, **_kwargs: 0)
     monkeypatch.setattr(bulk_quotes, "sweep_venue", record)
 
@@ -808,7 +808,7 @@ def test_the_funding_sweep_covers_venues_ccxt_cannot(monkeypatch) -> None:
 def test_the_sweep_writes_entries_keyed_by_venue_and_symbol(tmp_path, monkeypatch) -> None:
     class _Refresher:
         def _bulk_funding_rates(self, venue):
-            if venue != "Ourbit":
+            if venue != "XT":
                 return {}
             return {"QNTX/USDT:USDT": {"current_funding_pct": 0.02, "funding_interval_hours": 8.0}}
 
@@ -816,11 +816,11 @@ def test_the_sweep_writes_entries_keyed_by_venue_and_symbol(tmp_path, monkeypatc
             pass
 
     monkeypatch.setattr("spreadboard.fast_quotes.FastQuoteRefresher", lambda: _Refresher())
-    out = bulk_quotes.sweep_funding(["Ourbit"], cache_path=tmp_path / "f.json")
+    out = bulk_quotes.sweep_funding(["XT"], cache_path=tmp_path / "f.json")
 
     assert out["legs"] == 1
     legs = bulk_quotes.load_funding(cache_path=tmp_path / "f.json")
-    assert legs["Ourbit|QNTX/USDT:USDT"]["rate_pct"] == 0.02
+    assert legs["XT|QNTX/USDT:USDT"]["rate_pct"] == 0.02
 
 
 def test_rotating_funding_merge_expires_an_old_rate(tmp_path, monkeypatch) -> None:
@@ -843,12 +843,12 @@ def test_rotating_funding_merge_expires_an_old_rate(tmp_path, monkeypatch) -> No
     monkeypatch.setattr(bulk_quotes.time, "time", lambda: 10_000.0)
     monkeypatch.setattr(bulk_quotes, "FUNDING_MAX_AGE_SECONDS", 300.0)
     bulk_quotes.sweep_funding(
-        ["Ourbit"], cache_path=path, merge_existing=True
+        ["XT"], cache_path=path, merge_existing=True
     )
 
     payload = json.loads(path.read_text())
     assert "Gate|OLD/USDT:USDT" not in payload["legs"]
-    assert payload["legs"]["Ourbit|NEW/USDT:USDT"]["rate_pct"] == 0.02
+    assert payload["legs"]["XT|NEW/USDT:USDT"]["rate_pct"] == 0.02
 
 
 def test_funding_reader_refuses_stale_cache_file(tmp_path, monkeypatch) -> None:

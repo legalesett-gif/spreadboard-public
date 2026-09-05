@@ -17,6 +17,8 @@ from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from spreadarb.venue_policy import opportunity_route_enabled
+
 from spreadarb.api_discovery.models import spread_pct
 from spreadarb.api_discovery.orderbook import depth_weighted_price
 from spreadboard import (
@@ -266,7 +268,7 @@ class FastQuoteRefresher:
         legs: dict[str, list[tuple[dict[str, Any], str]]] = {}
         for bucket in ("api_discovered_rows", "dex_discovered_rows"):
             for row in payload.get(bucket) or []:
-                if not isinstance(row, dict):
+                if not isinstance(row, dict) or not opportunity_route_enabled(row):
                     continue
                 for side in ("long", "short"):
                     if row.get(f"{side}_market_type") != "Futures":
@@ -2146,6 +2148,8 @@ def _cannot_lead_public_lane(
     those rows consumed scarce warm capacity and pushed verified leaders out.
     """
 
+    if not opportunity_route_enabled(row):
+        return True
     token = str(row.get("token") or "").upper()
     if tokenized_assets.classify(row).get("status") == "blocked":
         return True

@@ -1986,10 +1986,10 @@ def test_only_active_product_families_have_markets_tabs() -> None:
     assert '("DEX-SPOT", "Spot-DEX")' not in source
 
 
-def test_ourbit_is_registered_on_both_market_types() -> None:
-    """Ourbit has no ccxt adapter; it is an MEXC white-label we retarget."""
-    assert "Ourbit" in sources.default_enabled_cex_source().venues
-    assert "Ourbit" in sources.default_enabled_cex_futures_source().venues
+def test_ourbit_is_removed_from_both_discovery_market_types() -> None:
+    """The operator removed Ourbit from opportunity coverage on September 5."""
+    assert "Ourbit" not in sources.default_enabled_cex_source().venues
+    assert "Ourbit" not in sources.default_enabled_cex_futures_source().venues
 
 
 def test_ourbit_exchange_points_at_ourbit_hosts_not_mexc() -> None:
