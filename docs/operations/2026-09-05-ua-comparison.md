@@ -450,3 +450,59 @@ The independent 21:27 catalogue read reproduced **22,417 unique market keys,
 zero duplicates / Ourbit, 2,171 futures / 3,962 spot labels**, and 220,196 packed
 funding pairs. Test-generated runtime data was preserved under output and
 restored to committed bytes. Deployment and live page proof follow this gate.
+
+## Funding coherence deployed and checked — 21:47 UTC
+
+Release **767e464** started both services at **21:31:57 UTC**; both source
+digests match **0e255781dba02cb5**. Initial and final protected-worker guards
+were clear. Health returned 200, restart counts zero and OOM flags false.
+The full gate remains 2,507 passing tests / Ruff 517 with zero new findings.
+No further source change was made after that validated release.
+
+Authenticated ONG detail rendered all **72 pairs**. At 21:35, a DOM-only audit
+recomputed every displayed pair from its displayed rate and interval: **72
+checked, zero arithmetic mismatches within explicit rounding tolerance, zero
+unavailable values, zero Ourbit**. BingX -0.0606% hourly and Bybit +0.1053% hourly
+corresponded to displayed +3.981% daily carry; the reverse matched -3.981%.
+At 21:40 the same open page showed new rates -0.0579%/+0.0792% hourly and
++/-3.291% carry without a manual reload. These are timestamped UI observations,
+not current trade recommendations. The browser initially lost a navigation
+target; reconnecting to the same authenticated tab recovered it. An initial
+DOM audit used unavailable parseFloat; the corrected Number-based audit ran.
+Neither tooling issue is counted as an application/data failure.
+
+The new ordinary Funding navigation generation at **21:38** reached all twelve
+views. At 21:43 health confirmed zero empty views, 3,831 summed per-view token
+memberships and 9,050 preview rows. Its worker reported **66.368s build time**,
+**203.6s parent elapsed** and **777.7 MiB peak RSS**. These memberships are not
+unique token counts. The earlier 20:44 generation had been delayed by headroom;
+one later publication does not establish reliable ongoing cadence.
+
+A post-release reconciliation of the same fifteen UA reference identities
+again found all **14 non-Ourbit cases** in definitions, the current index,
+complete Funding cache and fresh pairs. The excluded Ourbit route remains
+absent. ONG's cache-derived net was positive (+2.940624% projected daily at that
+later probe), so the prior wrong assumed-eight-hour sign mismatch is gone for
+this observed snapshot. Peak probe RSS was 172,540 KiB. These source times
+differ from UA's captured rows, so numerical equality is not asserted.
+
+The performance-profiler baseline used the saved public production catalogue,
+radar, history and funding files under a fixed clock. It produced twelve views,
+3,226 groups, 7,876 previews and 163,688 matching routes. Peak RSS was 452.72 MiB
+after ranking and 577.11 MiB after serializing the whole comparison result;
+81.77s wall time. The full 43,411,193-byte output hash is
+`1cd132005c64a443ff5047c67809d6b45c63efe046f3d52355f49f8459d7dfa1`.
+This is an allocation baseline, not live correctness or Linux cap safety; no
+speculative decoder, iterator or headroom change followed it. Graph extraction
+and report reading completed; the optional hook installer failed on the Git
+worktree's .git file, without affecting extraction or this release.
+
+At 21:42–43 both containers were healthy with zero restarts/OOM counters and
+about 184,900 priced routes. Initial sampled cgroup peaks were approximately
+3,062 MiB app / 3,034 MiB collector. The ordinary history worker was still
+running; its completed-cycle peak remains to be checked. **All memory limits
+and the 2,200 MiB navigation headroom guard remain unchanged.** Cold latency,
+sustained navigation publication, remaining resident memory, safe lower caps,
+a deployment-free current-release hour and final clean 48-hour acceptance are
+still open. The finite sampler ends about 22:56 and must be segmented by
+container ID; the Codex stability heartbeat remains paused.

@@ -902,3 +902,29 @@ lower limits, current-release one-hour acceptance, cold-request latency and the
 final clean 48-hour acceptance remain open. The Codex recurring automation is
 still paused. No trading, messages, paid access, cap increases or weaker
 accuracy/freshness guards are authorized by this work.
+
+## Current Codex checkpoint — 21:47 UTC
+
+Production source **767e464 / 0e255781dba02cb5** started at **21:31:57 UTC** with
+both protected-worker guards clear and app/collector source parity. The final
+unmasked gate passed **2,507 tests**, Ruff **517 known / zero new**. Initial
+Funding legs, live captions, cadence, net carry, age and unavailable/recovery
+states now use coherent exact snapshots; historical ranks remain separate.
+The authenticated ONG page passed all 72 displayed-pair arithmetic checks and
+later rates changed coherently without a manual reload. Earlier published
+schedule, exact-token completeness, archive and history-priority fixes are live.
+
+The latest market audit still shows 22,417 unique keys, zero duplicates/Ourbit,
+2,171 futures and 3,962 spot token labels. All fourteen non-Ourbit references
+from the additional UA sample remain available in all checked sources after
+this release. The cumulative comparison has 59 observed exact identities;
+guest/premium restrictions prevent an exhaustive parity claim.
+
+Ordinary navigation advanced to the 21:38 generation across all twelve views;
+its worker reported 777.7 MiB peak RSS. The offline navigation baseline and
+fresh production facts are detailed in `2026-09-05-ua-comparison.md`. Initial
+post-release health/OOM/restart samples are clean, but cold latency, continued
+publication, complete worker memory/CPU cycles, safe lower caps, a current-
+release hour and the final clean 48h remain **open**. No caps/headroom guards
+were lowered. The finite read-only schedules sampler ends about 22:56; split
+at the 21:31:57 deployment. Codex stability heartbeat is confirmed paused.
