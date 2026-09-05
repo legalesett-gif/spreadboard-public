@@ -2863,7 +2863,7 @@ def _refresh_live_route_index(*, install: bool = True) -> bool:
             _log("live route index produced no summary")
             return False
         routes = int(summary.get("routes") or 0)
-        if install:
+        if install and _service_role() != "collector":
             from spreadboard import server as server_module
 
             routes = server_module.restore_materialized_route_index(_board_path())
@@ -3224,11 +3224,18 @@ def _refresh_materialized_views(*, force: bool) -> bool:
         from spreadboard import server as server_module
 
         server_module._MATERIALIZED_VIEW_STORE.invalidate()
-        routes = server_module.restore_materialized_route_index(_board_path())
-        server_module.restore_materialized_intel(_board_path())
-        server_module.mark_historical_dex_archive_ready()
+        routes = int(summary.get("routes") or 0)
         if _service_role() != "collector":
+            routes = server_module.restore_materialized_route_index(_board_path())
+            server_module.restore_materialized_intel(_board_path())
+            server_module.mark_historical_dex_archive_ready()
             funding_catalog.reload_persisted_cache()
+        # Publication belongs to the collector; the web watcher installs it.
+        # Restoring here retained 193k route dictionaries and their live map in
+        # the collector parent (0.13 -> 1.17 GB in the observed cycle), leaving
+        # that duplicate resident alongside every subsequent heavy child.
+        # Collector chart warming resolves bounded exact/CUSTOM keys already;
+        # it does not need a resident copy of the complete public board.
         _LAST_MATERIALIZED_VIEW_AT = time.monotonic()
         _MATERIALIZED_VIEW_RETRY_AFTER = 0.0
         _log(
@@ -4046,6 +4053,7 @@ class MemoryWatchdog(threading.Thread):
                     f"rows={len(api_spreads._ROW_CACHE)} "
                     f"rows_expired={expired_rows} "
                     f"books={len(api_spreads._LAST_GOOD_LIVE_BOOKS)} "
+                    f"index_rows={len(server_module._ROUTE_INDEX['rows'])} "
                     f"threads={threading.active_count()}"
                     f"{_heap_summary(_rss_gb())}"
                     f"{_container_pressure()}"

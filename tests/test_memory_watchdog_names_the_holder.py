@@ -102,6 +102,9 @@ def test_the_watchdog_counts_the_caches_that_actually_hold_rows(monkeypatch) -> 
     """
 
     lines: list[str] = []
+    from spreadboard import server
+
+    monkeypatch.setattr(server, "_ROUTE_INDEX", {"rows": dict.fromkeys(range(19))})
     monkeypatch.setattr(service, "_log", lines.append)
     monkeypatch.setattr(service, "_rss_gb", lambda: 0.2)
     monkeypatch.setattr(service, "_container_pressure", lambda **_kwargs: "")
@@ -124,3 +127,4 @@ def test_the_watchdog_counts_the_caches_that_actually_hold_rows(monkeypatch) -> 
 
     assert "rows=2" in lines[0], lines[0]
     assert "books=7" in lines[0], lines[0]
+    assert "index_rows=19" in lines[0], lines[0]

@@ -83,3 +83,34 @@ def test_web_history_reader_enqueues_collector_and_never_fetches(
 
     assert enqueued == [([server._chart_link_route_key(ROUTE)], 720.0)]
     assert fetch_flags == [False]
+
+
+def test_collector_custom_chart_resolves_without_resident_public_index(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "collector")
+    custom_key = server._chart_link_route_key(ROUTE)
+    monkeypatch.setattr(server, "_ROUTE_INDEX", {"signature": None, "rows": {}})
+    monkeypatch.setattr(server, "_ROUTE_COMPAT_ROWS", {})
+    monkeypatch.setattr(server, "_ROUTE_COMPAT_PATHS", {})
+    monkeypatch.setattr(chart_warm_demand, "requests", lambda: [(custom_key, 24.0)])
+    monkeypatch.setattr(run_spreadboard_service, "_priority_funding_chart_route_keys", list)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("exact chart warm must not load the public universe")
+
+    monkeypatch.setattr(server.api_spreads, "load_spreads", forbidden)
+    monkeypatch.setattr(server.funding_radar, "route_for_key", forbidden)
+    fetched = []
+    monkeypatch.setattr(
+        historical_spreads, "load_or_fetch",
+        lambda row, **_kwargs: fetched.append(row) or {"status": "ready"},
+    )
+    worker = run_spreadboard_service.ChartHistoryWarmLoop(
+        threading.Event(), board_path=tmp_path / "board.jsonl",
+    )
+    assert worker.check_once()["attempted"] == 1
+    assert len(fetched) == 1
+    for field in ("token", "long_venue", "short_venue", "long_market_symbol", "short_market_symbol"):
+        assert fetched[0][field] == ROUTE[field]
+    assert server._ROUTE_INDEX["rows"] == {}
