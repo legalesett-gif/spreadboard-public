@@ -2631,16 +2631,20 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                 next_funding_ms=item.get("nextSettleTime"),
             )
         if venue == "Hyperliquid":
+            hyperliquid_coin = _hyperliquid_coin(base)
+            request = {"type": "metaAndAssetCtxs"}
+            if ":" in hyperliquid_coin:
+                request["dex"] = hyperliquid_coin.partition(":")[0]
             payload = _json_post(
                 "https://api.hyperliquid.xyz/info",
-                {"type": "metaAndAssetCtxs"},
+                request,
             )
             if not isinstance(payload, list) or len(payload) < 2:
                 return {}
             meta = payload[0] if isinstance(payload[0], dict) else {}
             contexts = payload[1] if isinstance(payload[1], list) else []
             universe = meta.get("universe") if isinstance(meta.get("universe"), list) else []
-            hyperliquid_coin = _hyperliquid_coin(base).upper()
+            hyperliquid_coin = hyperliquid_coin.upper()
             index = next(
                 (
                     index
@@ -2654,10 +2658,17 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
             )
             if index is None or index >= len(contexts) or not isinstance(contexts[index], dict):
                 return {}
+            if universe[index].get("isDelisted") is True:
+                return {}
+            funding_rate = _optional_number(contexts[index].get("funding"))
+            if funding_rate is None or not math.isfinite(funding_rate):
+                return {}
             next_hour_ms = int((time.time() // 3600 + 1) * 3600 * 1000)
             return _funding_fields(
-                contexts[index].get("funding"),
+                funding_rate,
                 interval_hours=1,
+                interval_assumed=False,
+                index_price=contexts[index].get("oraclePx"),
                 next_funding_ms=next_hour_ms,
             )
         if venue == "HTX":
@@ -2938,7 +2949,7 @@ def _hyperliquid_coin(base: str) -> str:
     # REST API for ``IO-OAI``.  Hyperliquid answers that unknown coin with an
     # empty book rather than an error, so a chart worked only during the brief
     # window in which the shared book cache was fresh and then froze.
-    namespace, separator, ticker = normalized.partition("-")
+    namespace, separator, ticker = normalized.partition(":" if ":" in normalized else "-")
     if separator and namespace and ticker:
         return f"{namespace.lower()}:{ticker}"
     return normalized

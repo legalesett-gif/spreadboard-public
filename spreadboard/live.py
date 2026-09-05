@@ -1142,9 +1142,11 @@ def _fetch_native_funding_24h(exchange_id: str, symbol: str) -> dict[str, Any] |
         )
         return _native_funding_result(history, exchange_id=exchange_id)
     if exchange_id == "hyperliquid":
+        from spreadboard.fast_quotes import _hyperliquid_coin
+
         data = _public_json(
             "https://api.hyperliquid.xyz/info",
-            payload={"type": "fundingHistory", "coin": base, "startTime": since_ms},
+            payload={"type": "fundingHistory", "coin": _hyperliquid_coin(base), "startTime": since_ms},
         )
         if not isinstance(data, list):
             return None
