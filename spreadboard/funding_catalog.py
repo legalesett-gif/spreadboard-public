@@ -1063,11 +1063,9 @@ def page(
         "SPREADBOARD_SERVICE_ROLE", ""
     ).casefold() in {"web", "combined"}
     current_funding = bulk_quotes.load_funding() if production_reader else None
-    if current_funding == {}:
-        # Keep the last complete catalogue useful during a transient atomic
-        # funding-handoff gap. Individual missing live legs remain unknown and
-        # are never backfilled from stale values once the cache is populated.
-        current_funding = None
+    # An empty live cache also means all observations may have expired. Keep
+    # it explicit so persisted carry cannot reappear as current funding after
+    # a stopped writer. Structural routes and exact history remain available.
     exact_legs = (
         venue_funding_history.load()
         if production_reader and selected_window != "now"

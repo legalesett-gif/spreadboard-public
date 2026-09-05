@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -464,6 +465,58 @@ def test_populated_live_cache_never_backfills_a_missing_leg_from_stale_catalog(
 
     assert page["groups"] == []
     assert page["matching_route_count"] == 0
+
+
+def test_web_funding_page_clears_now_after_all_live_rates_expire(
+    monkeypatch, tmp_path,
+) -> None:
+    """An unchanged rate file must not revive persisted carry when it expires."""
+    from spreadboard import bulk_quotes, warm_query_projection
+
+    route = _route("GUA", "gua", current=9.9, one_day=0.2)
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setattr(
+        funding_catalog, "_complete_payloads", lambda: {"GUA": {"routes": [route]}},
+    )
+    monkeypatch.setattr(
+        warm_query_projection.LIVE_UNIVERSE, "update_snapshot",
+        lambda: ({}, {"ready": True}),
+    )
+    monkeypatch.setattr(funding_catalog.venue_funding_history, "load", dict)
+    monkeypatch.setattr(funding_catalog, "_window_value", lambda *_a, **_k: None)
+    now = [time.time()]
+    monkeypatch.setattr(bulk_quotes.time, "time", lambda: now[0])
+    monkeypatch.setattr(bulk_quotes, "_FUNDING_CACHE", {"stamp": None})
+    monkeypatch.setattr(bulk_quotes, "_FUNDING_SOURCE_CACHE", {"signature": None})
+    path = tmp_path / "live_funding.json"
+    legs = {
+        "Long|GUA/USDT:USDT": {"rate_pct": 0.0, "interval_hours": 8.0},
+        "Short|GUA/USDT:USDT": {"rate_pct": 0.5, "interval_hours": 8.0},
+    }
+    path.write_text(json.dumps({
+        "legs": legs, "leg_updated_at": {key: now[0] for key in legs},
+    }))
+    stamp = path.stat().st_mtime_ns
+    loader = bulk_quotes.load_funding
+    monkeypatch.setattr(bulk_quotes, "load_funding", lambda: loader(cache_path=path))
+
+    def web_page():
+        return server._expand_complete_funding_groups(
+            {"ok": True}, {"kind": ["FUTURES"], "funding_window": ["now"]},
+            offset=0, limit=25,
+        )
+
+    assert web_page()["funding_catalog"]["largest_value"] == 1.5
+    now[0] += bulk_quotes.FUNDING_MAX_AGE_SECONDS + 1
+    assert bulk_quotes.load_funding() == {}
+    expired = web_page()
+    assert expired["groups"] == []
+    assert expired["rows"] == []
+    assert expired["funding_catalog"]["matching_route_count"] == 0
+    detail = funding_catalog.page(symbol="GUA", window="now")
+    assert detail["rows"] and detail["rows"][0]["funding_daily_pct"] is None
+    assert detail["rows"][0]["funding_age_min"] is None
+    assert path.stat().st_mtime_ns == stamp
 
 
 def test_production_historical_window_reads_current_exact_archive(monkeypatch) -> None:
