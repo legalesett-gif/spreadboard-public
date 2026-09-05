@@ -211,7 +211,7 @@ _MARKET_INTERVAL_KEYS: tuple[str, ...] = (
 
 
 def _market_interval_hours(market: Any) -> float | None:
-    """The funding schedule a market publishes about itself, in hours.
+    """A published schedule in market metadata or raw funding info, in hours.
 
     Returns None when the venue says nothing usable, so the caller falls back
     to the default and keeps flagging the value as assumed. Validation is
@@ -232,6 +232,11 @@ def _market_interval_hours(market: Any) -> float | None:
         hours = _funding_interval.normalise(info.get(key))
         if hours is not None:
             return hours
+    # WhiteBIT carries the current schedule in minutes in both its futures
+    # metadata and live funding payload, without a unified CCXT interval.
+    minutes = _optional_number(info.get("funding_interval_minutes"))
+    if minutes is not None:
+        return _funding_interval.normalise(minutes / 60.0)
     return None
 
 
@@ -425,23 +430,26 @@ class FastQuoteRefresher:
         for item in items or []:
             if not isinstance(item, dict) or not item.get("symbol"):
                 continue
-            interval = item.get("interval")
+            # CCXT can leave its unified interval empty while preserving the
+            # current venue schedule in info (BingX publishes mixed 1/4/8h).
+            # Read that before older market metadata or the assumed default.
+            interval = item.get("interval") or _market_interval_hours(item)
             if isinstance(interval, str) and interval.casefold().endswith("h"):
                 interval = interval[:-1]
             if not interval:
                 market = (getattr(client, "markets", {}) or {}).get(str(item["symbol"])) or {}
-                # The venue's own metadata before any venue-specific override:
-                # Bitget publishes a per-contract schedule here and omits it
-                # from the bulk funding payload entirely.
-                interval = _market_interval_hours(market)
-                if not interval and interval_overrides:
-                    interval = interval_overrides.get(str(market.get("id") or "").upper())
+                # Live schedule adjustments precede older market metadata.
+                # Bitget publishes its schedule only in that metadata, while
+                # Binance/Aster publish a separate current fundingInfo feed.
+                interval = interval_overrides.get(str(market.get("id") or "").upper())
+                if not interval:
+                    interval = _market_interval_hours(market)
             fields = _funding_fields(
                 item.get("fundingRate"),
                 index_price=item.get("indexPrice"),
-                # Never leave a fresh rate sitting on a stale interval. WhiteBIT
-                # publishes no interval, so DEXE kept a 1h interval from an old
-                # scan against an 8h rate and read 4.27%/day instead of 0.02%.
+                # Never leave a fresh rate sitting on a stale scan interval.
+                # A venue without a usable published schedule keeps an explicit
+                # assumed default; a published schedule clears that assumption.
                 interval_hours=interval if interval else DEFAULT_FUNDING_INTERVAL_HOURS,
                 interval_assumed=not interval,
                 next_funding_ms=item.get("fundingTimestamp") or item.get("nextFundingTimestamp"),
@@ -455,16 +463,16 @@ class FastQuoteRefresher:
     def _bulk_funding_interval_overrides(venue: str) -> dict[str, float]:
         """Return venue-published schedules missing from CCXT's bulk payload.
 
-        Aster's bulk funding response includes the live rate but omits its interval.
-        The separate public ``fundingInfo`` response publishes the exact schedule
-        per contract. Falling back to the market-wide 8h default understated BTW's
-        hourly carry by eight times.
+        Binance and Aster bulk responses can omit the interval. Their separate
+        public ``fundingInfo`` responses publish current per-contract schedules;
+        assuming 8h can understate an hourly leg's carry by eight times.
         """
 
-        if venue != "Aster":
+        if venue not in {"Aster", "Binance"}:
             return {}
+        host = "fapi.asterdex.com" if venue == "Aster" else "fapi.binance.com"
         try:
-            payload = _json_url("https://fapi.asterdex.com/fapi/v1/fundingInfo")
+            payload = _json_url(f"https://{host}/fapi/v1/fundingInfo")
         except Exception:  # noqa: BLE001 - the caller retains its explicit fallback.
             return {}
         result: dict[str, float] = {}
@@ -2719,13 +2727,13 @@ def _ccxt_current_funding(
         if not getattr(client, "has", {}).get("fetchFundingRate"):
             return {}
         payload = client.fetch_funding_rate(symbol) or {}
-        interval = payload.get("interval")
+        interval = payload.get("interval") or _market_interval_hours(payload)
         if isinstance(interval, str) and interval.casefold().endswith("h"):
             interval = interval[:-1]
         return _funding_fields(
             payload.get("fundingRate"),
             interval_hours=interval,
-            next_funding_ms=payload.get("fundingTimestamp"),
+            next_funding_ms=payload.get("fundingTimestamp") or payload.get("nextFundingTimestamp"),
         )
     except Exception:
         return {}
