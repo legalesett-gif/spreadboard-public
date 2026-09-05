@@ -17,6 +17,7 @@ import threading
 import time
 from contextlib import suppress
 from datetime import UTC, datetime
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -3555,9 +3556,13 @@ def _refresh_funding_windows() -> None:
         # A rate can lead for thirty minutes and cool before the next settlement
         # history refresh; that brief leader still belongs on the historical
         # radar, explicitly marked as no longer live.
+        # The full positive archive is much larger than a displayed page.
+        # Retaining its rich dictionaries until the radar write pushed this
+        # worker to 2 GB. Keep only the fields the radar actually persists;
+        # preserve the same last-wins identity and catalogue/warm/leader order.
         radar_routes_by_identity = {
-            catalog_pairs.route_identity(route): route
-            for route in [*funding_catalog.archive_routes(), *warm_routes, *leaders]
+            catalog_pairs.route_identity(route): funding_radar.compact_route(route)
+            for route in chain(funding_catalog.archive_routes(), warm_routes, leaders)
             if route.get("route_key")
         }
         radar_routes = list(radar_routes_by_identity.values())

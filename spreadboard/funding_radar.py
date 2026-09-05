@@ -86,15 +86,23 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
-def _route_snapshot(route: dict[str, Any]) -> dict[str, Any]:
-    snapshot = {
+def compact_route(route: dict[str, Any]) -> dict[str, Any]:
+    """Select only the exact-route fields persisted by the historical radar.
+
+    Collectors can compact each rich candidate before retaining the next one.
+    Identity, funding cadence, route guards and chart links survive unchanged.
+    """
+    return {
         key: value
         for key, value in route.items()
         if key in _ROUTE_FIELDS or key in _LEG_FIELDS
     }
+
+
+def _route_snapshot(route: dict[str, Any]) -> dict[str, Any]:
     # Round-trip through JSON so the cache can never receive a dataclass,
     # Decimal, or other process-only object from a future public row.
-    return json.loads(json.dumps(snapshot, default=str))
+    return json.loads(json.dumps(compact_route(route), default=str))
 
 
 def _window_snapshot(route: dict[str, Any]) -> dict[str, float | None]:

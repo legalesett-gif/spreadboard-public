@@ -44,7 +44,7 @@ def test_the_warm_mapping_matches_the_radar_key() -> None:
         "warm routes must be keyed by route_identity, matching the radar dict"
     )
     # The radar mapping downstream must still key on the same function.
-    assert "catalog_pairs.route_identity(route): route" in source
+    assert "catalog_pairs.route_identity(route): funding_radar.compact_route(route)" in source
 
 
 def test_each_query_payload_is_released(): 

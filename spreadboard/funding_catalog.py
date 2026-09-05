@@ -1390,8 +1390,8 @@ def build_navigation_pages(
     return pages
 
 
-def archive_routes() -> list[dict[str, Any]]:
-    """Every current route worth retaining for a settled historical lane."""
+def archive_routes() -> Iterator[dict[str, Any]]:
+    """Yield every relevant route without holding the positive universe."""
 
     rows = _iter_routes(
         route_kind=None,
@@ -1400,11 +1400,9 @@ def archive_routes() -> list[dict[str, Any]]:
         quote=None,
         include_retained=False,
     )
-    retained: list[dict[str, Any]] = []
     for route in rows:
         current = _current_value(route)
         if (current is not None and current > 0) or any(
             (_window_value(route, label) or 0.0) > 0.0 for label in ("1d", "7d", "30d")
         ):
-            retained.append(route)
-    return retained
+            yield route
