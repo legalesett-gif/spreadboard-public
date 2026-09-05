@@ -372,3 +372,81 @@ running, so no restart or source deployment was attempted. Production remains
 finish, then repeat both the initial and immediate pre-recreation guards.
 The 18:05–20:05 finite sampler ended successfully; the 19:14–21:14 sampler
 continues. Both span deployments and require container-ID segmentation.
+
+## Published schedule and exact-detail corrections — 21:25 UTC
+
+The guarded release at **20:55:32 UTC** deployed `1d7f26c` with matching app and
+collector source digest **1c6e27099ca47d3c**. Both discovery and finalizer guards
+were clear before build and immediately before recreation. This includes the
+previously pending archive compaction and history-schedule selector fixes.
+
+A fresh additional fifteen-row UA capture expands the comparison to **59 unique
+observed exact route identities**. All fourteen non-Ourbit references in that
+capture had both definitions, an index entry, cached funding and a fresh price
+pair; the fifteenth uses Ourbit and remains deliberately excluded. This is a
+sample comparison, not exhaustive guest/premium parity. Earlier count evidence
+remains 2,171 futures and 3,962 spot token labels, zero duplicate market keys;
+large directed-pair counts are not extra tokens.
+
+The comparison exposed incorrect assumed eight-hour funding schedules for BingX
+and WhiteBIT, and missing Binance current schedule overrides. Fresh public
+responses contain BingX 1h/4h/8h schedules, WhiteBIT explicit minute units, and
+Binance current fundingInfo adjustments. The deployed readers preserve those
+published schedules, prioritize current overrides over older market metadata,
+and recognize BingX's nextFundingTimestamp. Invalid values still fail the same
+normalization checks; unproven schedules remain explicitly estimated.
+
+The normal funding writer, without a forced refresh, delivered **911 BingX +
+305 WhiteBIT + 752 Binance = 1,968 matching exact legs with zero interval or
+assumption-provenance mismatches** at 21:02:35 UTC. This does not prove every
+WhiteBIT instrument was matched: the source has 398 rows and 305 matched keys
+in that probe. Aster and Binance still have estimated legs outside the checked
+published schedules. Evidence: `published-schedule-arrival-second.jsonl` and
+the read-only `probe_published_schedule_arrival.py` in output.
+
+A second defect was the exact-token Funding API taking the ordinary Spreads
+shortlist path. A KAITO request claimed all exact pairs while rendering only
+25 of 72. After bypass removal, the authenticated page rendered all **234 of
+234** current/retained alternatives and a real funding age. Expanded coverage
+can include negative or unavailable alternatives for exact-token investigation;
+the broad ranked list still selects relevant opportunities.
+
+Release validation: **2,500 tests passed in 174.54s**, Ruff **517 known, zero
+new**. The exact-API old implementation fails both farm tests. The schedule
+mutants fail 13 reader cases, 4 explicit-minute cases, and 3 current-override
+cases respectively. The earlier preliminary parser fixture omitted markets_by_id
+and was corrected; only the final tests/mutants are acceptance evidence.
+
+A live ONG page then exposed a further display defect: net carry used the new
+one-hour BingX rate while the leg caption still displayed the older rate and
+"every 8h". The local correction synchronizes initial per-leg fields and the
+SSE net/cadence/rate/age payload, updates collapsed groups by exact funding
+identity, clears expired current data, and allows a blank current value to
+recover. Historical selected totals are not converted to live projections.
+This further change is **under full validation, not yet deployed** at this
+checkpoint. Do not claim all Funding presentation is fixed yet.
+
+The finite read-only current-release sampler began about 20:56 and ends about
+22:56 (`spreadboard-stability-schedules-20260905`). Initial cold requests were
+HTTP 200 but slow: health 20.631s and /free 35.209s. Later health recovered to
+subsecond samples. Both containers remain healthy with zero observed OOM kills,
+but the collector touched its 4 GiB ceiling and Funding navigation deferred at
+2,165 MiB headroom versus its 2,200 MiB guard. At 21:20 the twelve nonempty views
+still referenced the 20:44 generation. Limits remain unchanged. These facts
+leave cold latency, navigation freshness, representative memory/CPU, safe lower
+caps, a current-release hour and final clean 48-hour acceptance **open**. The
+Codex recurring automation remains paused; no trading, messages, paid access,
+notifications, cap increases or weakened accuracy guards were performed.
+
+### Funding leg coherence release gate — 21:31 UTC
+
+Final full suite: **2,507 passed in 198.90s**; Ruff **517 known / zero new**.
+All thirty focused tests pass, including the unchanged 250 KB page budget.
+The first full run passed 2,506 and failed that size guard; source indentation
+and standalone JavaScript comment lines were removed from generated responses
+before the full rerun. All source comments remain available to maintainers.
+Old catalogue, stream-backend and browser-handler mutants are each caught.
+The independent 21:27 catalogue read reproduced **22,417 unique market keys,
+zero duplicates / Ourbit, 2,171 futures / 3,962 spot labels**, and 220,196 packed
+funding pairs. Test-generated runtime data was preserved under output and
+restored to committed bytes. Deployment and live page proof follow this gate.

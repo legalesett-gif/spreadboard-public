@@ -146,7 +146,7 @@ def test_token_funding_alert_uses_the_best_current_projection() -> None:
     assert metrics["ONG"]["token_funding_24h_pct"] == 3.3012
 
 
-def test_settled_only_fallback_is_never_labelled_live() -> None:
+def test_settled_only_fallback_is_never_substituted_for_live_carry() -> None:
     route = _route(
         funding_daily_pct=None,
         funding_projected_24h_pct=None,
@@ -158,7 +158,7 @@ def test_settled_only_fallback_is_never_labelled_live() -> None:
 
     assert "+2.371%" not in html
     assert "funding unavailable" in html
-    assert "data-live-funding" not in html
+    assert "<strong data-live-funding>—</strong>" in html
 
 
 def test_markets_child_row_shows_the_same_live_value_as_its_group() -> None:

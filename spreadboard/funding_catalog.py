@@ -748,11 +748,30 @@ def _live_current_value(
     return daily["short"] - daily["long"] if has_futures else None
 
 
-def _apply_live_current_value(route: dict[str, Any], value: float | None) -> None:
+def _apply_live_current_value(
+    route: dict[str, Any], value: float | None,
+    *, funding: dict[str, dict[str, Any]] | None = None,
+) -> None:
     route["funding_daily_pct"] = value
     route["funding_projected_24h_pct"] = value
     route["funding_spread_pct"] = value
     route["funding_apr_pct"] = value * 365.0 if value is not None else None
+    if funding is None:
+        return
+    # The per-leg explanation must use the same snapshot as the net carry.
+    # A durable route can still carry an old rate or assumed 8h schedule.
+    for side in ("long", "short"):
+        if str(route.get(f"{side}_market_type") or "") != "Futures":
+            continue
+        symbol = route.get(f"{side}_market_symbol") or route.get(f"{side}_symbol") or ""
+        leg = funding.get(f"{route.get(f'{side}_venue') or ''}|{symbol}") or {}
+        for suffix, field in (
+            ("funding_pct", "rate_pct"),
+            ("funding_interval_hours", "interval_hours"),
+            ("next_funding_ts_us", "next_funding_ts_us"),
+        ):
+            route[f"{side}_{suffix}"] = leg.get(field)
+        route[f"{side}_funding_interval_assumed"] = leg.get("interval_assumed")
 
 
 def _live_current_age(
@@ -1122,7 +1141,7 @@ def page(
             if current_funding is not None
             else _current_value(route)
         )
-        _apply_live_current_value(route, current_value)
+        _apply_live_current_value(route, current_value, funding=current_funding)
         route["funding_age_min"] = (
             _live_current_age(route, current_funding)
             if current_funding is not None
@@ -1300,7 +1319,7 @@ def build_navigation_pages(
         if kind is None or not token:
             continue
         current_value = _live_current_value(route, current_funding)
-        _apply_live_current_value(route, current_value)
+        _apply_live_current_value(route, current_value, funding=current_funding)
         route["funding_age_min"] = _live_current_age(route, current_funding)
         realised = {
             label: _window_value(route, label, exact_legs=exact_legs)
