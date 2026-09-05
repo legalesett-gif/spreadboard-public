@@ -1,4 +1,7 @@
+from io import BytesIO
 from pathlib import Path
+
+import pytest
 
 from spreadarb.dex import okx_quotes
 
@@ -171,6 +174,36 @@ def test_shared_request_slot_persists_process_rate_state(tmp_path: Path, monkeyp
 
     assert [round(value, 6) for value in sleeps] == [0.9]
     assert state_path.read_text(encoding="ascii") == "11.15"
+
+
+@pytest.mark.parametrize("saved_clock", ["2829213.908839341", "inf", "nan"])
+def test_http_request_recovers_persisted_clock_after_reboot(
+    tmp_path: Path, monkeypatch, saved_clock: str
+) -> None:
+    state_path = tmp_path / "okx-rate.state"
+    state_path.write_text(saved_clock, encoding="ascii")
+    moments = iter((100.0, 100.55, 100.65, 101.10))
+    sleeps = []
+    sent_after_clock = []
+    monkeypatch.delenv("SPREADBOARD_OKX_DEX_BACKGROUND", raising=False)
+    monkeypatch.setattr(okx_quotes, "OKX_DEX_RATE_STATE_PATH", str(state_path))
+    monkeypatch.setattr(okx_quotes, "OKX_DEX_MIN_REQUEST_INTERVAL_SECONDS", 0.55)
+    monkeypatch.setattr(okx_quotes.time, "monotonic", lambda: next(moments))
+    monkeypatch.setattr(okx_quotes.time, "sleep", sleeps.append)
+
+    def http_response(request, *, timeout):
+        assert timeout == 15
+        sent_after_clock.append(float(state_path.read_text(encoding="ascii")))
+        return BytesIO(b'{"code":"0","data":[]}')
+
+    monkeypatch.setattr(okx_quotes, "urlopen", http_response)
+    for _ in range(2):
+        assert okx_quotes._http_get("https://example.invalid/quote", {})["code"] == "0"
+
+    # Reboot recovery waits a full provider interval; the next request still
+    # shares the newly persisted rate state instead of bypassing the limiter.
+    assert sleeps == pytest.approx([0.55, 0.45])
+    assert sent_after_clock == [100.55, 101.10]
 
 
 def test_background_discovery_yields_to_current_board_quote_window(

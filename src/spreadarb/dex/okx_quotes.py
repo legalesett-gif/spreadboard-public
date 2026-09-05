@@ -421,9 +421,13 @@ def _wait_for_shared_request_slot() -> None:
                 last_started = float(state.read().strip() or "0")
             except ValueError:
                 last_started = 0.0
-            remaining = OKX_DEX_MIN_REQUEST_INTERVAL_SECONDS - (
-                time.monotonic() - last_started
-            )
+            # This file survives a container/host restart, but monotonic time
+            # starts over on host boot. A timestamp from the previous boot
+            # must not hold the cross-process lock for days. Wait one full
+            # provider interval when the clock moved backwards, then persist
+            # the current clock under the same lock.
+            elapsed = max(0.0, time.monotonic() - last_started)
+            remaining = OKX_DEX_MIN_REQUEST_INTERVAL_SECONDS - elapsed
             if remaining > 0:
                 time.sleep(remaining)
             state.seek(0)
