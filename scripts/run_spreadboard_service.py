@@ -1596,6 +1596,7 @@ def _run_collector_service() -> int:
         refresh_loop.stop_event,
         route_index_publisher=route_index_publisher,
     )
+    funding_catalog_publisher = FundingCatalogPublisher(refresh_loop.stop_event)
     market_evidence_loop = MarketEvidenceLoop(
         refresh_loop.stop_event,
         refresh_loop=refresh_loop,
@@ -1622,6 +1623,7 @@ def _run_collector_service() -> int:
     route_index_publisher.start()
     bulk_quote_loop.start()
     bulk_funding_loop.start()
+    funding_catalog_publisher.start()
     market_evidence_loop.start()
     chart_history_loop.start()
     MemoryWatchdog(refresh_loop.stop_event).start()
@@ -1634,6 +1636,7 @@ def _run_collector_service() -> int:
         route_index_publisher.join(timeout=5.0)
         bulk_quote_loop.join(timeout=5.0)
         bulk_funding_loop.join(timeout=5.0)
+        funding_catalog_publisher.join(timeout=5.0)
         market_evidence_loop.join(timeout=5.0)
         chart_history_loop.join(timeout=5.0)
     return 0
@@ -2430,6 +2433,31 @@ class BulkQuoteLoop(threading.Thread):
             # The route publisher schedules token rankings after its atomic
             # structural generation is complete. Starting both children here
             # made the derived ranking child steal CPU from current spreads.
+
+
+class FundingCatalogPublisher(threading.Thread):
+    """Publish the due funding catalogue independently of discovery and I/O.
+
+    The split collector never runs the web startup/warm path. Leaving its
+    refresh call there made the nominal fifteen-minute catalogue cadence wait
+    for a full discovery scan to finish. This lightweight scheduler delegates
+    due/retry checks and serialization to the existing bounded worker path.
+    """
+
+    INTERVAL_SECONDS = 60.0
+
+    def __init__(self, stop_event: threading.Event) -> None:
+        super().__init__(name="complete-funding-publisher", daemon=True)
+        self.stop_event = stop_event
+
+    def run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                if _refresh_complete_funding_catalog(force=False):
+                    _refresh_funding_navigation(force=True)
+            except Exception as exc:  # noqa: BLE001 - retain prior publication and retry.
+                _log(f"complete funding publisher retry: {type(exc).__name__}")
+            self.stop_event.wait(self.INTERVAL_SECONDS)
 
 
 class BulkFundingLoop(threading.Thread):

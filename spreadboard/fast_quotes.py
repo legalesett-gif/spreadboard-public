@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import json
+import math
 import os
 import re
 import time
@@ -2679,14 +2680,24 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                 {},
             )
             funding_velocity = _optional_number(item.get("fundingRate"))
-            index_price = _optional_number(item.get("indexPrice"))
-            if funding_velocity is None or index_price is None or index_price <= 0:
+            mark_price = _optional_number(item.get("markPrice"))
+            if (
+                item.get("suspended") is True
+                or funding_velocity is None or not math.isfinite(funding_velocity)
+                or mark_price is None or not math.isfinite(mark_price) or mark_price <= 0
+            ):
                 return {}
+            # Kraken publishes absolute quote units per base unit per hour.
+            # The bulk CCXT adapter divides by mark price: current-notional
+            # carry. Use that same basis here so refreshing one chart cannot
+            # change its rate merely by switching readers. This is distinct
+            # from Kraken's rate-calculation-time spot-relative UI percentage.
             next_hour_ms = int((time.time() // 3600 + 1) * 3600 * 1000)
             return _funding_fields(
-                funding_velocity / index_price,
+                funding_velocity / mark_price,
                 interval_hours=1,
                 next_funding_ms=next_hour_ms,
+                index_price=item.get("indexPrice"),
             )
     except Exception:
         return {}
