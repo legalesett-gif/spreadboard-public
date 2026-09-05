@@ -699,6 +699,7 @@ def _priority_refresh_due(
     values: dict[str, float | None] | None,
     *,
     now_ms: int,
+    live_leg: dict[str, Any] | None = None,
 ) -> bool:
     """Whether a subscriber-visible leg needs another provider check now."""
 
@@ -713,6 +714,21 @@ def _priority_refresh_due(
         return True
     if outcome != "ok":
         return False
+    if live_leg:
+        # The public reader can expire a total before the old inferred
+        # cadence when a venue switches to more frequent settlements. Queue
+        # that same missing settlement now, rather than leaving the visible
+        # cell blank until the old schedule says it is due.
+        current, _expiry = _current_leg_windows(
+            values, status, now_ms=now_ms, live_leg=live_leg,
+        )
+        if any(
+            (values or {}).get(label) is not None
+            and _window_expiry_ms(status, label) is not None
+            and current.get(label) is None
+            for label in ("1d", "7d", "30d")
+        ):
+            return True
     expiries = [
         expiry
         for label in ("1d", "7d", "30d")
@@ -904,6 +920,11 @@ def build(
     )
     rotated_priorities = priorities[priority_start:] + priorities[:priority_start]
     now_ms = int(time.time() * 1000)
+    live_legs: dict[str, dict[str, Any]] = {}
+    if path.resolve() == Path(DEFAULT_CACHE_PATH).resolve():
+        from spreadboard import bulk_quotes
+
+        live_legs = bulk_quotes.load_funding()
     due_priorities = [
         item
         for item in rotated_priorities
@@ -911,6 +932,7 @@ def build(
             leg_status.get(f"{item[0]}|{item[1]}"),
             windows.get(f"{item[0]}|{item[1]}"),
             now_ms=now_ms,
+            live_leg=live_legs.get(f"{item[0]}|{item[1]}"),
         )
     ]
     retryable_or_pending = [
