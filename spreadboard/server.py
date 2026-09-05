@@ -6451,11 +6451,18 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
         ):
             return custom
         with _ROUTE_INDEX_LOCK:
-            warm_candidates = tuple(_ROUTE_INDEX["rows"].values())
+            warm_index = _ROUTE_INDEX["rows"]
+            cached = (
+                _ROUTE_COMPAT_ROWS.get(route_key)
+                if _ROUTE_COMPAT_PATHS.get(route_key) == str(board_path)
+                else None
+            )
+        if cached is not None and _same_chart_route(cached, custom):
+            return cached
         indexed_match = next(
             (
                 candidate
-                for candidate in warm_candidates
+                for candidate in warm_index.values()
                 if _same_chart_route(candidate, custom)
             ),
             None,
@@ -6464,7 +6471,18 @@ def _find_canonical_route(route_key: str, board_path: Path) -> dict[str, Any] | 
         # SQLite generation is cold.  A chart needs only the exact structural
         # legs; its live sampler supplies current books asynchronously.  Never
         # make navigation own that catalogue read.
-        return indexed_match or custom
+        resolved = indexed_match or custom
+        with _ROUTE_INDEX_LOCK:
+            # This bounded compatibility cache is cleared on index install.
+            # Do not reinsert an old match if installation raced the scan.
+            if warm_index is _ROUTE_INDEX["rows"]:
+                _ROUTE_COMPAT_ROWS[route_key] = resolved
+                _ROUTE_COMPAT_PATHS[route_key] = str(board_path)
+                while len(_ROUTE_COMPAT_ROWS) > _ROUTE_COMPAT_ROW_LIMIT:
+                    evicted = next(iter(_ROUTE_COMPAT_ROWS))
+                    _ROUTE_COMPAT_ROWS.pop(evicted, None)
+                    _ROUTE_COMPAT_PATHS.pop(evicted, None)
+        return resolved
     resident, live_status = warm_query_projection.LIVE_UNIVERSE.target_rows(
         route_keys=(route_key,)
     )

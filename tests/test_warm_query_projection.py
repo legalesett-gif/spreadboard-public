@@ -88,6 +88,30 @@ def _template() -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize(
+    ("filters", "expected"),
+    [
+        ({"route_keys": ["a", "missing"], "tokens": ["BBB"]}, {"a", "b"}),
+        ({"route_keys": ["a"], "route_kinds": ["SPOT-FUTURES"]}, {"a", "c"}),
+        ({"route_keys": ["a"], "all_rows": True}, {"a", "b", "c"}),
+        ({"route_keys": ["b", "a", "b", "missing"]}, {"a", "b"}),
+        ({}, set()),
+    ],
+)
+def test_target_lookup_preserves_union_and_original_quote_times(filters, expected):
+    rows = {key: _route(token, route_key=key) for key, token in (("a", "AAA"), ("b", "BBB"), ("c", "CCC"))}
+    rows["c"]["route_kind"] = "SPOT-FUTURES"
+    universe = warm_query_projection.LiveRouteUniverse()
+    universe.install(rows)
+    selected, status = universe.target_rows(**filters)
+    assert status["ready"]
+    assert {row["route_key"] for row in selected} == expected
+    for row in selected:
+        original = rows[row["route_key"]]
+        assert row is not original
+        assert row["quote_ts_us"] == original["quote_ts_us"]
+
+
 def _ready_universe(
     monkeypatch: pytest.MonkeyPatch,
     rows: dict[str, dict[str, object]],

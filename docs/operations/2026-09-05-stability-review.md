@@ -6,6 +6,10 @@ unchanged Ruff ratchet. No trading actions, Telegram sends, Pushover enablement,
 subscription increase, accuracy-gate relaxation, cgroup increase or droplet
 spend is authorized.
 
+Latest release: `c96d8f0`, app and collector source `4184965aa1d4e0af`, deployed
+02:27:00 UTC. Native cleanup candidate measurements are in progress. Memory
+caps and final 48-hour/two-scheduled-backup acceptance remain open.
+
 ## Fresh baseline
 
 At 2026-09-04 23:19 UTC, app/collector image source digests both matched
@@ -239,6 +243,82 @@ one. Exact-key target lookups and custom chart matching also scan the full map
 in this correction. Safe caps, the final 48-hour soak and two green scheduled
 backups remain open. The task heartbeat is active; the app goal control reports
 paused, so no claim is made that its goal runner is active.
+
+### Native cleanup deployed and new candidate started (02:29 UTC)
+
+The complete pre-correction hour was preserved: 31 health samples spanning
+3,617 seconds, 242 host samples and 13 free-page requests. All HTTP requests
+were 200, both containers stayed healthy, and cgroup/kernel OOM-kill checks
+were clean. Nevertheless, current priced routes ranged 3,093–113,584 around a
+63,390 mean (maximum deviation 95.1%); refreshes reached 57.35 seconds and the
+slowest health request took 17.259 seconds. The route-count gate failed.
+
+Full-hour app/collector CPU averaged 1.038/2.085 cores. Sampled anon peaks were
+3,541/3,025 MiB; cgroup peaks were 3,584/4,043 MiB. The app process HWM reached
+3,584 MiB, and the index worker reached 1,669 MiB while structural coverage
+grew from 104,680 to over 131,000 routes. There is no safe app-cap reduction
+demonstrated by this baseline. Full evidence and its evaluator are in
+`output/stability-20260905/candidate-full-hour-before-cleanup*.json*`.
+
+The sampler was stopped and an end event recorded before deployment. Fresh
+checks found no discovery/finalization worker, including a repeated check
+during the build. Another full suite passed (`2357 passed in 95.97s`, exit 0),
+and Ruff stayed at 517. `c96d8f0` then deployed to both containers at 02:27:00
+UTC, with both source digests matching `4184965aa1d4e0af`. Deployment health
+was 200, restart counters zero and OOM flags false.
+
+At 02:28:19 UTC, the bounded inside-app OPENAI replay checksum-verified the
+136,857-row published index and retained 79 token rows. The real API call
+returned 48 rows including six Hyperliquid futures pairs, and excluded the
+Gate Spot trap against the current 1,467.2 venue oracle. Helper peak RSS was
+178,152 KiB. These remain research quotes with no matched-size VWAP claim.
+Both containers and `/free` passed the immediate post-release checks.
+
+The new two-hour sampler started at 02:29:05 UTC:
+`spreadboard-stability-native-cleanup-20260905.service`, evidence under
+`/opt/spreadboard/runtime/stability/20260905-native-cleanup/`. Preserve its
+deployment-free hour and require at least 30 health observations spanning
+3,600 seconds before evaluating the count gate. This is a candidate window,
+not the final 48-hour acceptance. Repeat profiling and measured CPU/memory
+checks determine the actual benefit; startup memory alone is not a saving.
+
+The matching 45-second, 30 Hz GIL-only profile completed at 02:30:26 UTC.
+It contained 770 GIL-owned samples and **zero** in native quote cleanup,
+versus 74.7% before. During this short profile the app/collector used
+0.685/1.802 cores. That is a short post-startup observation, not a comparable
+full-hour CPU saving or a memory-cap acceptance. Raw and summary evidence are
+`output/stability-20260905/app-cpu-gil-after-cleanup*`.
+
+The first four candidate samples had 133,074, 133,164, 86,762 and 134,608 priced
+routes; refreshes were 3.26–7.15 seconds. The GC correction removed its measured
+bottleneck but did not yet fix route stability. A separate read-only public-book
+age sampler now records ten-second venue/type age distributions beside the
+candidate samples, in `public-book-ages.jsonl`. It reads SQLite in read-only mode
+with a 64 MiB/5% CPU service budget and does not query venues or change quotes.
+Use that timing evidence to distinguish book publication age from the remaining
+40-second family revisit. Do not weaken the 90-second quote truth gate.
+
+### Exact lookup optimization prepared, not deployed
+
+After removing GC, exact `target_rows` scans accounted for over 20% of the
+GIL-owned samples; custom-route matching was another visible full-map scan.
+The next correction uses dictionary lookups when only exact keys are requested,
+while preserving token/lane/all-row union semantics and original quote times.
+Existing callers consume the results by route key; the exact-only result has
+deterministic key order. No additional full-size index is allocated.
+
+Custom chart matches (including structural misses) reuse the existing bounded
+compatibility cache. The lookup checks board path and exact route identity,
+uses the existing index-install invalidation, rejects a stale write when a new
+generation races the scan, and evicts associated path entries with their rows.
+Repeated unchanged charts no longer allocate and scan a tuple of all routes.
+
+Full suite: `2369 passed in 91.27s`, exit 0. Ruff remains 517. Eleven more source
+mutants were caught (62 total), including the real saved-route warmer call,
+cached lookup/write, identity/path guards, memory bound, paired eviction and
+the actual index-restore invalidation. This optimization is local, not deployed.
+Preserve the new candidate through at least 03:31 UTC and its full-hour sample
+span. Inspect book-age evidence and remeasure memory before the next release.
 
 ## Production rollout and preflight observations
 

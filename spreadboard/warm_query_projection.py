@@ -284,8 +284,9 @@ class LiveRouteUniverse:
         Alerts, saved charts and account surfaces should never rebuild or copy
         the complete route universe just to inspect a handful of targets.  The
         structural map and live update map are swapped atomically, so this is
-        one bounded dictionary/filter pass with no discovery parsing or public
-        API I/O.  Both current and cooled structural rows are returned; callers
+        direct key lookups for exact targets, or one filter pass for asset/lane
+        queries, with no discovery parsing or public API I/O. Both current and
+        cooled structural rows are returned; callers
         decide whether stale data is useful for their metric.
         """
 
@@ -303,6 +304,15 @@ class LiveRouteUniverse:
         if not rows or not status.get("ready"):
             return [], status
         now = time.time()
+        if not all_rows and not wanted_tokens and not wanted_kinds:
+            # Free-stream ticks, saved charts and exact alerts already know
+            # their keys. Scanning 130k unrelated rows for each small request
+            # dominated the web profile after native quote GC was removed.
+            return [
+                _overlay(rows[key], updates.get(key), now=now)
+                for key in sorted(wanted_keys)
+                if key in rows
+            ], status
         selected = [
             _overlay(row, updates.get(key), now=now)
             for key, row in rows.items()

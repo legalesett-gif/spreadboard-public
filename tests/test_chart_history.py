@@ -314,6 +314,8 @@ def test_custom_selection_reuses_the_exact_canonical_history(
         "dex_contract": "0xabc",
     }
     canonical = {**custom, "route_key": "ESPORTS|OKX DEX 56|Spot|Mexc|Futures"}
+    monkeypatch.setattr(server, "_ROUTE_COMPAT_ROWS", {})
+    monkeypatch.setattr(server, "_ROUTE_COMPAT_PATHS", {})
     monkeypatch.setattr(chart_catalog, "route_from_key", lambda _key: custom)
     monkeypatch.setitem(
         server._ROUTE_INDEX,

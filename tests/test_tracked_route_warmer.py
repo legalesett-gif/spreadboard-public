@@ -83,6 +83,17 @@ def test_worker_records_resident_route_and_schedules_only_cold_route(
         },
     )
     universe.refresh()
+    class ExactLookupOnly(dict):
+        def items(self):
+            raise AssertionError("saved-route lookup scanned the full universe")
+
+        def values(self):
+            raise AssertionError("saved-route lookup scanned the full universe")
+
+        def __iter__(self):
+            raise AssertionError("saved-route lookup scanned the full universe")
+
+    universe._rows = ExactLookupOnly(universe._rows)
     monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", universe)
     monkeypatch.setattr(
         tracked_route_warmer.accounts,
