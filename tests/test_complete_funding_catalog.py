@@ -207,8 +207,13 @@ def test_reader_never_owns_refresh_after_complete_generation_is_invalidated(
 
 
 def test_fresh_process_reader_returns_warming_without_owning_catalog_build(
-    monkeypatch,
+    monkeypatch, tmp_path,
 ) -> None:
+    # A cold reader has no persisted generation. Other tests (or a local
+    # service) may have populated the repository's default runtime path.
+    monkeypatch.setattr(funding_catalog, "DEFAULT_CACHE_PATH", tmp_path / "absent.json")
+    monkeypatch.setattr(funding_catalog, "_CACHE_RESTORE_ATTEMPTED", False)
+    monkeypatch.setattr(funding_catalog, "_CACHE_SAVED_AT", None)
     prior_payloads = funding_catalog._CACHE_PAYLOADS
     prior_at = funding_catalog._CACHE_AT
     prior_building = funding_catalog._CACHE_BUILDING

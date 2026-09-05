@@ -3758,6 +3758,8 @@ class WorkerResult:
 #: the cgroup on the way out. `market evidence` already waited up to 300s for
 #: the publication lock, so this is the established shape here.
 HEAVY_CHILD_SCRIPTS = (
+    # Independently scheduled complete funding must share this memory slot.
+    "complete_funding_catalog_worker.py",
     "market_evidence_worker.py",
     "live_route_index_worker.py",
     "funding_navigation_worker.py",

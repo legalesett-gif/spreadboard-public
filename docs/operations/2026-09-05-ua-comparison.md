@@ -69,10 +69,12 @@ per-unit hourly funding and a +/-0.50% hourly relative limit:
 - https://docs.kraken.com/api-reference/market-data/get-tickers
 - https://support.kraken.com/articles/4844359082772-linear-multi-collateral-derivatives-contract-specifications?mode=consumerapp
 
-The bulk adapter uses current mark as denominator while the point adapter uses
-index; their exact relative-basis convention still needs reconciliation. Do not
-silently label these current-notional calculations as Kraken's historical
-funding-calculation-time relative rate.
+The bulk adapter uses current mark as denominator; the point adapter previously
+used index. Candidate `7875f13` makes the point reader use the same current-mark
+basis and reject suspended/nonfinite observations. Its actual CCXT parser
+comparison and invalid-input tests failed before the correction. Do not label
+these current-notional calculations as Kraken's historical funding-calculation-time
+relative rate. Production verification of this correction is still pending.
 
 ## Implemented release and further correction
 
@@ -178,3 +180,52 @@ After this deployment, separate work modified `spreadboard/fast_quotes.py` and
 namespace handling). Those changes were not part of the tested/deployed cc9b776
 release and have been left intact. Recheck shared-tree status before any further
 deployment; do not silently ship unrelated untested changes.
+
+## Independent publication correction — 19:00 UTC, deployment pending
+
+The separate Hyperliquid chart fix was committed and deployed as `57c4985`,
+digest `54d470476d775c64`. Both production digests were freshly checked at
+18:59 UTC. The app started 18:41:16 and collector 18:44:22; both healthy,
+restart zero and OOM false. The new isolated working branch is
+`codex/funding-publication-cadence-20260905` in
+`tmp/spreadboard-funding-publication`. It includes `7875f13` plus the preserved
+chart fix, cherry-picked as `c072e41`.
+
+A fresh 18:41:53 probe still found the legacy 500-token funding cache, saved
+18:02:04 and 2,389 seconds old. Its sampled 148 positive rows had zero funding
+math errors and all twelve navigation views were nonempty; that did not prove
+expanded coverage. The ordinary chart definition refresh did publish active
+Aster STONKS at 18:34:46. Index and page arrival remain to be checked.
+
+The split collector returns before the web startup refresh thread is created;
+the web-role refresh helper intentionally declines to build. Consequently, the
+nominal fifteen-minute funding catalogue refresh was still coupled to discovery
+completion. The new independent collector publisher invokes the existing due,
+retry and build-lock path every sixty seconds. It requests navigation refresh
+only after a successful catalogue publication and leaves public quote/funding
+I/O on their existing threads.
+
+Review found that `complete_funding_catalog_worker.py` was also absent from the
+shared heavy-worker set. The correction adds it, so a busy slot defers/retries
+instead of allowing another heavy build. Actual collector bootstrap, publication
+retry, navigation ordering and busy-slot regression tests cover these paths.
+Removing bootstrap, navigation refresh or heavy-slot membership is detected.
+The first full run reported 2,472 passing tests and one old exact-membership
+assertion; that assertion was updated to include the deliberately serialized
+worker. A repeated full run exposed an existing cold-reader test consuming a
+cache left by an earlier run; that test now uses an isolated absent path and
+resets its restore state. The final unmasked suite passed **2,473 tests in
+101.00 seconds**, exit zero. Ruff ratchet remains 517 with no new
+findings (an unrestricted `ruff check .` additionally scanned seven diagnostic
+and documentation findings outside the established source/test ratchet).
+
+Still required: guarded deployment, source parity, automatic v2 publication,
+reader and navigation refresh, refreshed UA references, production current-rate
+checks and measured CPU/memory/latency. Do not call the finite sampler a clean
+release window: the intervening deployments changed its container identities.
+
+Fresh 19:01 UTC streamed production audit: 22,417 exact market records and
+22,417 unique keys, zero duplicate extra rows, zero Ourbit, 2,171 futures token
+labels and 3,962 spot token labels. The active Aster STONKS/USDT:USDT definition
+is present. Funding remained v1: 500 tokens / 17,739 retained routes, 36,462,219
+bytes, saved 18:02:04. This is the explicit before-publication baseline.

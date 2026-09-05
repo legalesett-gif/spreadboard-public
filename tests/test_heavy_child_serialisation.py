@@ -77,6 +77,9 @@ def test_the_heavy_set_is_exactly_the_measured_ones() -> None:
         "market_evidence_worker.py",
         "live_route_index_worker.py",
         "funding_navigation_worker.py",
+        # The independent publisher must serialize its complete catalogue build
+        # with route-index and navigation jobs, including its all-route replay.
+        "complete_funding_catalog_worker.py",
         "token_ranking_worker.py",
         "materialized_view_worker.py",
     }

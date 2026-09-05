@@ -67,3 +67,26 @@ def test_publisher_retries_without_blocking_quote_collection_or_forcing_build(mo
     service.FundingCatalogPublisher(Event()).run()
     assert calls==[False,False,False]
     assert publications==[{'force':True}]
+
+
+def test_due_catalogue_uses_the_shared_heavy_worker_slot(monkeypatch):
+    import threading
+    acquired=[]
+    executed=[]
+
+    class BusySlot:
+        def acquire(self,timeout):
+            acquired.append(timeout)
+            return False
+        def release(self): raise AssertionError('unowned slot')
+
+    monkeypatch.setattr(service,'_HEAVY_CHILD_SLOT',BusySlot())
+    monkeypatch.setattr(service,'_FUNDING_CATALOG_BUILD_LOCK',threading.Lock())
+    monkeypatch.setattr(service,'_FUNDING_CATALOG_RETRY_AFTER',0)
+    monkeypatch.setattr(service,'_service_role',lambda:'collector')
+    monkeypatch.setattr(service.funding_catalog,'persisted_status',lambda:{'ready':True,'age_seconds':99999})
+    monkeypatch.setattr(service,'_log',lambda _:None)
+    monkeypatch.setattr(service,'_run_worker_unslotted',lambda command,**kwargs:executed.append(command) or service.WorkerResult(1,'','blocked',False))
+    assert not service._refresh_complete_funding_catalog(force=False)
+    assert acquired==[service.HEAVY_CHILD_SLOT_WAIT_SECONDS]
+    assert executed==[]
