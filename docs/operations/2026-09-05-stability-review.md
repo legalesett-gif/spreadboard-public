@@ -6,14 +6,23 @@ unchanged Ruff ratchet. No trading actions, Telegram sends, Pushover enablement,
 subscription increase, accuracy-gate relaxation, cgroup increase or droplet
 spend is authorized.
 
-Last verified app and collector release: `fcdec15`, source `cf3607b528c8dee1`, deployed
-04:01:00 UTC with both digests verified. The source-parity candidate started
-04:06:16 UTC. Safe lower memory caps and final 48-hour/two-scheduled-backup
-acceptance remain open. The candidate has a 04:46 priced-count dip. A streaming
-reader is prepared (source `1070d86638e8df3b`) but not deployed.
-On the 12:37 UTC resume, SSH and public endpoints timed out from the Mac.
-Current production state, full candidate evidence and scheduled backups remain
-unverified pending restored access or the hosting dashboard session.
+Current runtime and built app/collector images match `aee0953` (including
+`a995b91`), source `3ed1500fd5c9b96a`, verified after recreation at 15:58:50 UTC.
+Both protected-worker checks were clear. At 16:01:50 both services were healthy,
+OOM 0, /api/health 200, /free 200 and 138,604 priced routes. The first startup
+/free request timed out at 45 seconds and later recovered without another restart.
+
+Ourbit is retired. Sampled funding math and all 12 tabs pass. The preceding
+14:55–15:56 deployment-free count hour PASSED with 31 samples over 3,623.598s,
+max deviation 0.67873%; both required scheduled backups also passed. The new
+cardinality audit found zero duplicate exact markets or economic routes: 2,171
+futures / 3,965 spot token labels, 142,711 routes for 1,232 tokens. Rich route
+storage, funding completeness beyond the 500-token shortlist, cold-start delay,
+safe lower caps and clean 48-hour acceptance remain open.
+
+The owner requested Claude continuation. Read
+`docs/claude-handoffs/2026-09-05-stability-cardinality-continuation.md` for exact
+source/container IDs, evidence, scope and next steps. The Codex schedule stays PAUSED.
 
 ## Fresh baseline
 
@@ -658,3 +667,213 @@ Fresh local evidence: `output/stability-20260905/access-check-1243.json`
 heartbeat now prioritizes access recovery and evidence retrieval. The goal
 control freshly reports active, but none of the remaining acceptance gates
 is marked complete.
+
+## Droplet recovery, Ourbit retirement and reboot repair (14:48 UTC)
+
+The owner powered the existing droplet on and resumed work. Boot ID is
+`0109f4f2-8c77-42d3-94df-2951c0f2fd94`; no agent-initiated droplet reboot or
+spend occurred. The prior fcdec15 source was reverified in both services before
+release. The recovered completed candidate spans 04:06:18–06:06:15 UTC:
+471 host samples, 42 health samples over 6,931.73 seconds, and 24 free-page
+requests. All HTTP and container-health observations were green, with zero
+cgroup OOM kills. Priced routes ranged 97,238–156,013, mean 149,233.238,
+maximum deviation 34.8416%, so the count gate FAILED. Mean app/collector CPU
+was 0.682762/2.000518 cores; app anon peak 3,268.5 MiB, HWM 3,581.617 MiB;
+collector anon peak 3,235.336 MiB and index-worker HWM 1,970.008 MiB.
+
+The recovered 540 book-age samples span 04:51:42–06:21:32. No contemporaneous
+book sample exists for the first 04:46 dip. The 05:21:42 dip to 126,103 priced
+rows has a sample 0.51 seconds earlier with 25,847 of 25,903 books aged at most
+90 seconds. This supports investigating resident refresh/install timing; it
+does not prove causation. Do not treat broad current-book coverage as a passed
+route-count gate. Evidence: `scoped-lookup-recovered-full.jsonl`,
+`scoped-lookup-recovered-summary.json`, `scoped-book-ages-recovered-full.jsonl`.
+
+The owner explicitly removed Ourbit from opportunity coverage. Commit b826ae9
+introduces one venue policy across discovery, native collection, chart markets,
+structural publication/restoration, warm queries and funding. Filter before
+ranking/pagination and before short-leg funding collapse: dropping an Ourbit
+winner afterward could hide an eligible alternative. Old ranked caches are
+rejected, while a separately verified structural index can still boot a warm
+projection through an empty presentation shell. Existing adapters and historical
+account records are retained. No other default discovery venue was removed.
+
+A fresh health check after boot found bulk prices, generation and snapshot
+current, but the last completed fast cycle was four hours old. Stack-only
+profiles identified discovery sleeping inside the OKX rate-file lock and fast
+workers waiting for that lock. The saved monotonic value was 2,829,213.908839341
+against current uptime-clock 2,258.823216778: a 32-day erroneous sleep after
+host reboot. The ordinary watchdog restarted the collector at 14:27:33 after
+15 unhealthy checks; this was autonomous remediation, not an agent-forced scan
+interruption. Commit edfe9d6 clamps backward elapsed time to zero, waits one
+full unchanged provider interval, and persists the new clock under the lock.
+Real HTTP call-site regressions also cover subsequent spacing and non-finite
+saved state. First post-release complete fast cycles at 14:33:29, 14:34:29 and
+14:35:50 updated 86, 84 and 85 of 93 selected routes. Collector health passed
+all five gates; the 14:34 check saw the completed cycle age at 19 seconds.
+
+Normal `deploy_production.sh app collector` shipped edfe9d6, including the
+previously prepared ijson streaming reader, at 14:32:36. Fresh protected-worker
+checks before the operation and before recreation found neither discovery nor
+finalizer. Both runtime digests matched `771e01736a0385d7`; ijson 3.5.1 was
+independently confirmed. No memory caps changed. At 132 seconds app HWM was
+2,171 MiB and collector cgroup peak 2,963 MiB, which are startup observations,
+not representative memory recovery or safe-cap evidence.
+
+The 14:35 inside-app bounded probe checksum-verified all 141,016 published
+rows: no Ourbit rows, 62,060 FUTURES, 39,167 SPOT-FUTURES, 38,939 FUTURES-SPOT
+and 850 DEX-FUTURES. The chart catalogue retained 22,411 markets without Ourbit.
+The OPENAI API returned six Hyperliquid pairs and excluded Gate Spot against
+the current 1,486.9 oracle. These include research quotes and positive-funding
+negative-entry-basis routes; they are not all matched-size execution claims.
+The public /free page returned 200 with zero Ourbit mentions. Token detail
+queries intentionally retain audit context; the main list still uses current
+positive-spread eligibility, and Funding Now uses positive current net carry.
+
+The first funding probe correctly failed with `funding catalogue still warming`.
+Its old 40.7 MB collapsed cache contained Ourbit and was rejected. The existing
+navigation worker retried that cache instead of repairing it until discovery
+finished. Commit ec5e770 rebuilds an unavailable catalogue in the isolated
+navigation worker that already owns the heavy-build slot; a failed repair
+cannot publish. At 14:48, only that standalone entrypoint was atomically replaced
+in both running containers. Matching replacement images were built and their
+full source digests verified in bounded network-disabled helper containers.
+No resident server module was patched. Runtime and image source all match
+`118c242fd853ac1f`, while both container IDs and discovery PID 22538 remain
+unchanged. Evidence is the remote resumed/funding-worker-rollout.json. Verify
+the ordinary worker's next successful publication and current funding math.
+
+Final gate: 2,430 tests passed in 92.48 seconds, exit 0; Ruff unchanged at 517.
+The first follow-up suite had one test-only PIE807 finding (2,429 passed), which
+was corrected before rerunning the full suite. Twenty venue-policy, three
+reboot-rate and three cold-funding mutants were caught, bringing the total to
+123. Evidence lives in output/stability-20260905/mutants/. No benchmark saving
+is inferred from the new venue count or from startup memory.
+
+Backup evidence now satisfies the two-scheduled-run gate: the scheduled
+06:20:32 invocation finished successfully at 07:13:59, and the persistent
+post-boot timer catch-up at 13:50:18 finished successfully at 14:26:46. Both
+are automatic timer invocations after the repaired manual 01:00:38 success.
+The earlier failed 00:21 invocation remains in the chronology.
+
+
+## 15:38 cardinality audit and Claude continuation
+
+Owner requested a duplicate/irrelevant-token memory audit using UA CryptoInvest's
+reported 2,534 futures and 4,370 spot token counts. The production catalogue has
+2,171 futures and 3,965 spot labels (union 5,363), across 22,411 distinct listing
+keys. A checksum-verified index had 142,711 directed routes for 1,232 tokens and
+13,692 distinct leg keys. There were zero duplicate exact market keys, zero
+duplicate routes under the real economic-identity helper and zero Ourbit legs.
+The comparator counts are owner-provided; anonymous website text did not expose them.
+
+The index is 347,633,474 bytes against a 3,324,045-byte market catalogue. Rich
+route representations and overlapping generations remain the larger memory
+priority. 4,591 current books mapped to spot-only catalogue tokens, but their
+stored depth JSON totalled just 156,539 bytes. Do not equate that with a measured
+large resident memory saving or drop chart/watchlist/position support blindly.
+Read-only probe peak was 214,220 KiB, 11.90 seconds, with streamed index inspection.
+
+Funding postflight succeeded: 171 sampled current routes, 329 matching tokens /
+6,450 routes, zero independent exact-leg funding math errors and no Ourbit.
+All 12 funding navigation views were populated. The earlier 512 MiB virtual
+address-limited diagnostic process failed decoding the 37 MB funding catalogue;
+this was a probe limit, not a production rebuild failure. The corrected 1 GiB
+virtual limit probe used only about 267 MiB actual peak RSS and passed.
+
+Real HTML rendering of the 15-token API sample also passed: 581 futures routes,
+1,623 per mixed lane, 183 excluded context rows per lane hidden. The earlier
+assertion that all raw API rows must be displayable was wrong; the renderer
+performs its own evidence filtering. Four fresh OPENAI/Hyperliquid rows remained
+visible at 15:46 and the Gate spot/oracle trap was excluded at index 1,494.8.
+
+New funding fixes: a995b91 includes the zero-rate spot hedge in shortlist bounds;
+aee0953 keeps an entirely expired live cache explicit instead of reviving old Now
+carry. Four bound mutants plus the restored-empty-fallback mutant were caught;
+total 128. Final full gate: 2,435 passed in 90.77 seconds, exit 0; Ruff 517 unchanged.
+An initial test-only PIE807 finding was corrected before the final full green run.
+Combined source digest is 3ed1500fd5c9b96a; see handover checkpoint for rollout state.
+
+The 500-token funding shortlist still limits completeness. The corrected bound
+addresses proven omissions but does not establish exhaustive opportunity coverage.
+Do not claim no missed funding routes. The new handover prioritizes compact
+market/leg storage and broad cheap funding selection with bounded detailed views.
+
+Continuation: `docs/claude-handoffs/2026-09-05-stability-cardinality-continuation.md`.
+Raw evidence and bounded probes are in local `output/stability-20260905/`.
+
+
+## Completed deployment-free hour preserved at 15:56 UTC
+
+`ourbit-hour.jsonl` and `ourbit-hour-summary.json`: 242 host observations,
+31 health requests spanning 3,623.598 seconds, plus 13 /free checks. Every HTTP
+response was 200, every sampled container was healthy, and cgroup OOM kills
+remained zero. Container IDs AND start timestamps were unchanged throughout;
+boot ID remained 0109f4f2-8c77-42d3-94df-2951c0f2fd94.
+Priced routes ranged 136,856–138,620 around mean 137,685.484, maximum deviation
+0.67873%: the required one-hour count gate PASSED for ec5e770 / 118c242fd853ac1f.
+
+Mean app/collector CPU was 0.71674 / 2.00726 cores. Sampled anon peaks were
+2,746.04 / 2,832.34 MiB; cgroup peaks 3,183.36 / 4,097.70 MiB. Index worker HWM
+was 1,835.48 MiB, websocket HWM 1,245.44 MiB. Small bounded probe processes were
+included in some cgroup samples. This is not evidence that lower caps are safe.
+No final 48-hour acceptance has been completed.
+
+The subsequent rollout uses a temporary copy of the normal deployment helper
+with the original worktree root preserved and an extra fail-closed protected
+worker check immediately before Compose recreation. The original source helper
+is unchanged. The guard reads process argv only in memory, emits script/PID
+matches only, and aborts if discovery or snapshot finalization is active. The
+pre-build guard was clear; final guard and source parity are recorded in the
+handover checkpoint. Sampler observations after recreation must be split from
+this preserved accepted hour.
+
+
+## Final checkpoint — 16:02 UTC
+
+Both services were recreated at **15:58:50 UTC** with `aee0953`, including
+`a995b91`, and both running source digests matched **3ed1500fd5c9b96a**.
+Normal helper steps ran via `output/stability-20260905/deploy_with_final_guard.sh`:
+only the original worktree root and an additional pre-recreation guard differed
+from the normal helper. Source `scripts/deploy_production.sh` was not edited.
+Both pre-build and immediate pre-recreation checks found no protected workers;
+no discovery/finalizer was killed. The copy and guard are reviewable in output/.
+
+- App container: `3e7d0a46128219aeaea504f831666c9f7c55b2d8085327c8a1eb62bf692c2897`.
+- Collector: `6180dcc3a96fc82cbb783ca5685f744c797433c1b02062a15fbd6263fb2a8b62`.
+- Boot unchanged: `0109f4f2-8c77-42d3-94df-2951c0f2fd94`.
+- At 16:01:50 both healthy, OOM 0, restart count 0. `/api/health` 200 in 1.003s,
+  `/free` 200 in 3.424s; 138,604 current priced routes / 1,236 priced tokens.
+- First post-restart sample at uptime 56s had priced=0 and `/free` timed out at
+  45.059s. The later check recovered without another restart. **Cold-start page
+  availability remains a concrete follow-up**, not a clean-availability claim.
+- After rollout, 170 funding routes independently matched live exact-leg math
+  with no errors, no Ourbit; all 12 tabs populated. Four Hyperliquid OPENAI
+  routes appeared and Gate Spot stayed excluded against oracle 1,495.8.
+- The current funding catalogue was still the previous valid 500-token generation
+  during postflight. Verify the next ordinary rebuild uses the new spot bound;
+  code deployment alone is not proof that LCAP/READY now rank into the stored page.
+  Do not force a concurrent heavy rebuild to obtain that proof.
+- At the last process read, materialized-view worker PID 63368 was active;
+  discovery/finalizer absent. Refresh before any next deploy.
+
+The deployment-free **14:55–15:56 hour PASSED**: 31 health samples over
+3,623.598s, 242 host samples, 13 `/free` requests, all HTTP 200/healthy/OOM 0;
+priced 136,856–138,620, max deviation 0.67873%. Container IDs and start times
+were constant. App/collector CPU 0.71674/2.00726 cores, sampled anon peaks
+2,746.04/2,832.34 MiB, cgroup peaks 3,183.36/4,097.70 MiB. This accepted hour
+belongs to the preceding `ec5e770` release. **Do not append post-deploy samples
+and call the combined window deployment-free.** Safe lower caps still unproven.
+
+Evidence: `ourbit-hour.jsonl`, `ourbit-hour-summary.json`,
+`final-runtime-postflight.jsonl`, `funding-postflight-final.jsonl`,
+`openai-postflight-final.jsonl` under `output/stability-20260905/`.
+The output directory contains local untracked evidence; preserve it when changing
+worktrees. Source fixes are committed; a separate docs commit records this handover.
+The finite samplers end around 16:55/16:57. No recurring automation was enabled.
+
+Continue in this order: inspect fresh runtime and sampler state; verify the next
+funding rebuild; investigate startup delay and measure compact route/leg storage
+plus complete cheap funding selection; validate representative memory headroom;
+only then reduce caps and start the clean 48-hour acceptance. No goal completion
+is claimed. The owner explicitly requested this Claude continuation note.
