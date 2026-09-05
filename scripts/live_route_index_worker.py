@@ -19,10 +19,12 @@ for import_path in (ROOT / "src", ROOT):
 
 from spreadboard import (
     api_spreads,
+    bulk_quotes,
     catalog_pairs,
     chart_catalog,
     coverage_reconciliation,
     materialized_views,
+    provider_routes,
 )
 
 
@@ -117,6 +119,22 @@ def _current_dex_rows(
 
     rails = api_spreads.public_rails.load_public_rails()
     books = api_spreads._live_books()
+    provider_snapshot = provider_routes.load(Path(api_spreads.DEFAULT_API_DISCOVERY_PATH))
+    if provider_snapshot is None and Path(api_spreads.DEFAULT_API_DISCOVERY_PATH).exists():
+        raise RuntimeError("provider_artifact_unavailable_for_current_discovery")
+    live_funding = bulk_quotes.load_funding()
+    provider_seeds = [
+        api_spreads._row_from_api(
+            raw, bucket=bucket, now=now, metadata=metadata, rails=rails,
+            live_funding=live_funding,
+        )
+        for bucket in provider_routes.BUCKETS
+        for raw in (provider_snapshot or {}).get(bucket, [])
+    ]
+    provider_public = [
+        api_spreads._index_row(row)
+        for row in api_spreads.apply_live_books(provider_seeds, books, now=now)
+    ]
     previous_seeds = [
         dict(row)
         for row in previous_rows.values()
@@ -158,7 +176,7 @@ def _current_dex_rows(
         seeds,
         limit=None,
     )
-    return [
+    dex_public = [
         row
         for row in merged.get("routes") or []
         if isinstance(row, dict)
@@ -166,6 +184,10 @@ def _current_dex_rows(
         and api_spreads.spread_evidence_state(row, now=now)
         in {"verified", "research"}
     ]
+    # Builder futures are structural identities too. Keep their own original
+    # timestamps when books are unavailable; presentation still enforces the
+    # ordinary freshness/identity/index gates. They are not DEX spot fan-out.
+    return [*dex_public, *provider_public]
 
 
 def _current_generation_rows(

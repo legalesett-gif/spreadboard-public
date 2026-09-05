@@ -26,15 +26,12 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_REFRESH_SECONDS = 10.0
 PRIORITY_ROUTE_KIND_GROUPS = (
     {"FUTURES"},
-    {"FUTURES-SPOT"},
-    {"DEX-FUTURES"},
-    {"FUTURES"},
-    {"SPOT-FUTURES"},
-    {"FUTURES"},
-    {"FUTURES-SPOT"},
-    {"DEX-FUTURES"},
-    {"FUTURES"},
-    {"SPOT-FUTURES"},
+    # At the approved 20-second cadence, the old ten-slot rotation revisited
+    # each mixed lane only every 100 seconds. Its 90-second prices necessarily
+    # expired even with perfect book reads. Share the smaller lanes' pass so
+    # all families are revisited every 40 seconds, without another full-board
+    # worker or changing the current-quote lifetime.
+    {"FUTURES-SPOT", "SPOT-FUTURES", "DEX-FUTURES"},
 )
 
 

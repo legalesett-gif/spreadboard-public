@@ -21,6 +21,7 @@ application virtualenv.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -37,6 +38,7 @@ DEFAULT_CONTAINERS = ("app-app-1", "app-collector-1")
 DEFAULT_RUNTIME = Path("/opt/spreadboard/runtime")
 HEALTH_FILENAME = "container_health.json"
 STATE_FILENAME = "container_health_state.json"
+LEDGER_FILENAME = "container_health_remediation.jsonl"
 #: Sustained use above this share of the cgroup limit is reported before the
 #: kernel kills the process, so the owner sees pressure rather than only the
 #: aftermath.
@@ -70,9 +72,20 @@ RESTART_WINDOW_SECONDS = 3600.0
 
 
 def _docker_inspect(container: str) -> dict[str, Any] | None:
+    # Do not retrieve environment values, healthcheck output or command args.
+    fields = (
+        '[{"Id":{{json .Id}},"RestartCount":{{.RestartCount}},'
+        '"State":{"Status":{{json .State.Status}},"OOMKilled":{{.State.OOMKilled}},'
+        '"StartedAt":{{json .State.StartedAt}}{{if .State.Health}},'
+        '"Health":{"Status":{{json .State.Health.Status}},'
+        '"FailingStreak":{{.State.Health.FailingStreak}}}{{end}}},'
+        '"HostConfig":{"Memory":{{.HostConfig.Memory}}},'
+        '"Config":{"Healthcheck":{"StartPeriod":{{if .Config.Healthcheck}}'
+        '{{.Config.Healthcheck.StartPeriod}}{{else}}0{{end}}}}}]'
+    )
     try:
         raw = subprocess.run(
-            ["docker", "inspect", container],
+            ["docker", "inspect", "--format", fields, container],
             capture_output=True,
             text=True,
             timeout=30,
@@ -195,11 +208,16 @@ def inspect_container(name: str) -> dict[str, Any]:
         limit = int(host_config.get("Memory") or 0) or None
     started_at = _iso_to_unix(str(state.get("StartedAt") or ""))
     health = state.get("Health") if isinstance(state.get("Health"), dict) else {}
+    config = info.get("Config") or {}
+    healthcheck = config.get("Healthcheck") or {}
     return {
         "name": name,
+        "container_id": container_id,
         "present": True,
         "status": str(state.get("Status") or "unknown"),
         "health": str(health.get("Status") or "none"),
+        "health_failing_streak": int(health.get("FailingStreak") or 0),
+        "start_period_seconds": float(healthcheck.get("StartPeriod") or 0) / 1e9,
         "restart_count": int(info.get("RestartCount") or 0),
         "oom_killed": bool(state.get("OOMKilled")),
         "started_at_unix": started_at,
@@ -264,11 +282,17 @@ def evaluate(
 
     for item in observations:
         name = str(item.get("name"))
-        if not item.get("present"):
-            faults.append(f"{name} is not running")
-            continue
         before = previous_containers.get(name)
         before = before if isinstance(before, dict) else {}
+        # Keep the restart budget even across a failed inspect or replacement.
+        item["restarts"] = list(before.get("restarts") or [])
+        item["restart_attempts"] = list(
+            before.get("restart_attempts", before.get("restarts")) or []
+        )
+        if not item.get("present"):
+            item["unhealthy_checks"] = 0
+            faults.append(f"{name} is not running")
+            continue
         restarts = int(item.get("restart_count") or 0)
         was_restarts = before.get("restart_count")
         if isinstance(was_restarts, int) and restarts > was_restarts:
@@ -289,9 +313,10 @@ def evaluate(
         # A container can be `running` and `unhealthy` for hours. That produced
         # no fault at all before, which is how the site stayed down.
         streak = int(before.get("unhealthy_checks") or 0)
-        streak = streak + 1 if str(item.get("health")) == "unhealthy" else 0
+        if item.get("started_at_unix") != before.get("started_at_unix"):
+            streak = 0
+        streak = streak + 1 if _restartable(item) else 0
         item["unhealthy_checks"] = streak
-        item["restarts"] = list(before.get("restarts") or [])
         if streak >= _restart_threshold(name):
             faults.append(f"{name} unhealthy for {streak} checks")
 
@@ -357,10 +382,32 @@ def _restart_threshold(name: str) -> int:
     return COLLECTOR_UNHEALTHY_CHECKS if "collector" in name else APP_UNHEALTHY_CHECKS
 
 
+def _restartable(item: dict[str, Any]) -> bool:
+    # A successful early healthcheck ends Docker's start-period grace. Enforce
+    # the full configured grace ourselves, and leave exits/restarting to Docker.
+    grace = max(
+        float(item.get("start_period_seconds") or 0),
+        600.0 if "collector" in str(item.get("name")) else 180.0,
+    )
+    uptime = item.get("uptime_seconds")
+    return bool(
+        item.get("present")
+        and item.get("status") == "running"
+        and item.get("health") == "unhealthy"
+        and isinstance(uptime, (int, float))
+        and uptime >= grace
+    )
+
+
 def _docker_restart(name: str) -> bool:
+    # Revalidate after the scan/budget checks. Target the observed ID so a
+    # concurrent compose replacement cannot bounce its healthy new container.
+    current = inspect_container(name)
+    if not _restartable(current):
+        return False
     try:
         subprocess.run(
-            ["docker", "restart", name],
+            ["docker", "restart", str(current["container_id"])],
             check=True,
             capture_output=True,
             timeout=120,
@@ -391,6 +438,7 @@ def remediate(
     restart: Callable[[str], bool] = _docker_restart,
     scan_is_running: Callable[[], bool] = _discovery_scan_running,
     now: float | None = None,
+    persist: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[str]:
     """Restart what has been unhealthy long enough, within a per-hour cap.
 
@@ -402,7 +450,7 @@ def remediate(
     moment = time.time() if now is None else now
     restarted: list[str] = []
     for name, item in (report.get("containers") or {}).items():
-        if not isinstance(item, dict) or str(item.get("health")) != "unhealthy":
+        if not isinstance(item, dict) or not _restartable(item):
             continue
         streak = int(item.get("unhealthy_checks") or 0)
         threshold = _restart_threshold(name)
@@ -414,17 +462,31 @@ def remediate(
             continue
         recent = [
             stamp
-            for stamp in (item.get("restarts") or [])
+            for stamp in (item.get("restart_attempts", item.get("restarts")) or [])
             if moment - float(stamp) < RESTART_WINDOW_SECONDS
         ]
+        item["restart_attempts"] = recent
         if len(recent) >= MAX_RESTARTS_PER_HOUR:
             item["restart_suppressed"] = "cap_reached"
             continue
+        # Reserve the attempt BEFORE Docker acts. A timeout or watchdog crash
+        # must not reset the hourly budget and trigger an unbounded retry loop.
+        recent.append(moment)
+        item["restart_result"] = "reserved"
+        if persist is not None:
+            persist(report)
         if restart(name):
-            recent.append(moment)
-            item["restarts"] = recent
+            item["restarts"] = [
+                stamp for stamp in item.get("restarts", [])
+                if moment - float(stamp) < RESTART_WINDOW_SECONDS
+            ] + [moment]
             item["unhealthy_checks"] = 0
+            item["restart_result"] = "succeeded"
             restarted.append(name)
+        else:
+            item["restart_result"] = "failed_or_state_changed"
+        if persist is not None:
+            persist(report)
     return restarted
 
 
@@ -439,22 +501,39 @@ def main(argv: list[str] | None = None) -> int:
 
     runtime = Path(args.runtime_dir)
     containers = tuple(args.container or DEFAULT_CONTAINERS)
-    observations = [inspect_container(name) for name in containers]
-    host = _host_memory()
-    state_path = runtime / STATE_FILENAME
-    previous = _load_state(state_path)
-    report = evaluate(observations, previous, host)
-    if not args.print:
-        restarted = remediate(report, previous)
-        if restarted:
-            report["detail"] = (
-                f"restarted {', '.join(restarted)}; {report['detail']}"
-            )[:480]
-
     if args.print:
+        report = evaluate(
+            [inspect_container(name) for name in containers],
+            _load_state(runtime / STATE_FILENAME), _host_memory(),
+        )
         json.dump(report, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
         return 0
+    runtime.mkdir(parents=True, exist_ok=True)
+    # systemd serializes timer invocations, but an operator can invoke the CLI
+    # concurrently. Hold one lock across read, budget reservation and restart.
+    with (runtime / "container_health.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _run_watchdog(runtime, containers)
+
+
+def _run_watchdog(runtime: Path, containers: tuple[str, ...]) -> int:
+    state_path = runtime / STATE_FILENAME
+    previous = _load_state(state_path)
+    report = evaluate([inspect_container(name) for name in containers], previous, _host_memory())
+
+    def persist(current: dict[str, Any]) -> None:
+        _atomic_write(state_path, current)
+        with (runtime / LEDGER_FILENAME).open("a", encoding="utf-8") as ledger:
+            ledger.write(json.dumps(current, separators=(",", ":")) + "\n")
+            ledger.flush()
+            os.fsync(ledger.fileno())
+
+    restarted = remediate(report, previous, persist=persist)
+    if restarted:
+        report["detail"] = (
+            f"restarted {', '.join(restarted)}; {report['detail']}"
+        )[:480]
 
     _atomic_write(runtime / HEALTH_FILENAME, report)
     _atomic_write(

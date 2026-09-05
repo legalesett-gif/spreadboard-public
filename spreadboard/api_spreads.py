@@ -21,6 +21,7 @@ from spreadboard import (
     exchange_links,
     market_events,
     probe_notional,
+    provider_routes,
     public_rails,
     route_taxonomy,
     token_metadata,
@@ -86,6 +87,8 @@ class SpreadTerminalRow:
     href: str
     long_price: float | None = None
     short_price: float | None = None
+    long_index_price: float | None = None
+    short_index_price: float | None = None
     long_funding_pct: float | None = None
     short_funding_pct: float | None = None
     funding_24h_pct: float | None = None
@@ -190,7 +193,7 @@ def load_public_route_index(
         if row.route_kind not in RETIRED_ROUTE_KINDS
         and not quote_basis_mismatch(row)
     ]
-    discovery_public = [_public_row(row) for row in rows]
+    discovery_public = [_index_row(row) for row in rows]
     complete_public, catalogue_meta = _complete_current_catalogue_rows(
         discovery_public,
         metadata=metadata,
@@ -221,7 +224,7 @@ def load_public_route_index(
 #: Deliberately not every `dex_discovered` row. That was measured at 4,916 extra
 #: rows across 587 tokens, a fifth of the index, and almost all of it Aster
 #: mirroring pairs the catalogue already carries.
-PROVIDER_ONLY_SOURCE_NAMES = frozenset({"hyperliquid_builder_dex"})
+PROVIDER_ONLY_SOURCE_NAMES = provider_routes.SOURCE_NAMES
 
 
 def _complete_current_catalogue_rows(
@@ -1460,13 +1463,16 @@ def _fast_quote_updates_for(
 #: the funding-only count moving in exact opposition and the total constant.
 _LAST_GOOD_ROUTE_BOOKS: dict[str, Any] = {}
 _ROUTE_BOOK_FALLBACK_LOCK = Lock()
+_LAST_ROUTE_BOOK_PRUNE = 0.0
 
 
 def reset_keyed_book_fallback() -> None:
     """Drop the retained keyed books. For tests and process handoffs."""
 
+    global _LAST_ROUTE_BOOK_PRUNE
     with _ROUTE_BOOK_FALLBACK_LOCK:
         _LAST_GOOD_ROUTE_BOOKS.clear()
+        _LAST_ROUTE_BOOK_PRUNE = 0.0
 
 
 def _with_retained_books(
@@ -1483,7 +1489,9 @@ def _with_retained_books(
     working set rather than every book ever seen.
     """
 
-    cutoff_us = int((time.time() - LIVE_BOOK_MAX_AGE_SECONDS) * 1_000_000)
+    global _LAST_ROUTE_BOOK_PRUNE
+    now = time.time()
+    cutoff_us = int((now - LIVE_BOOK_MAX_AGE_SECONDS) * 1_000_000)
 
     def still_current(book: Any) -> bool:
         try:
@@ -1492,6 +1500,14 @@ def _with_retained_books(
             return False
 
     with _ROUTE_BOOK_FALLBACK_LOCK:
+        # Pruning only wanted_keys leaks books for removed routes forever.
+        # Sweep expired entries periodically, without evicting another page's
+        # still-current fallback every time a small keyed request runs.
+        if now - _LAST_ROUTE_BOOK_PRUNE >= 30.0:
+            for key in list(_LAST_GOOD_ROUTE_BOOKS):
+                if not still_current(_LAST_GOOD_ROUTE_BOOKS[key]):
+                    del _LAST_GOOD_ROUTE_BOOKS[key]
+            _LAST_ROUTE_BOOK_PRUNE = now
         retained = {
             key: book
             for key in wanted_keys
@@ -1507,6 +1523,17 @@ def _with_retained_books(
             else:
                 _LAST_GOOD_ROUTE_BOOKS[key] = book
     return merged
+
+
+def expire_idle_row_cache(*, now: float | None = None) -> int:
+    """Release expired parsed rows even when nobody comes back to reload them."""
+    moment = time.time() if now is None else now
+    with _SNAPSHOT_CACHE_LOCK:
+        expired = [key for key, value in _ROW_CACHE.items()
+                   if moment - value[0] >= _ROW_CACHE_TTL_SECONDS]
+        for key in expired:
+            del _ROW_CACHE[key]
+    return len(expired)
 
 
 def live_route_updates_for(
@@ -1940,6 +1967,13 @@ def apply_live_books(
                 row,
                 long_price=ask,
                 short_price=bid,
+                # Serialization checks the headline against these BBO fields.
+                # Leaving discovery's old bid/ask here reintroduced the old
+                # spread while stamping it with the current books' time.
+                long_ask=ask,
+                short_bid=bid,
+                long_bid=(float(long_book.bids[0][0]) if long_book is not None and long_book.bids else row.long_bid),
+                short_ask=(float(short_book.asks[0][0]) if short_book is not None and short_book.asks else row.short_ask),
                 executable_spread_pct=executable,
                 depth_weighted_spread_pct=depth,
                 displayed_open_spread_pct=executable,
@@ -2530,6 +2564,8 @@ def _apply_live_funding(
             updated_notes["funding"] = dict(legacy) if isinstance(legacy, dict) else {}
         route_inputs = updated_notes["route_inputs"]
         leg = dict(route_inputs.get(side) or {})
+        touched = touched or leg.get("index_price") is not None or raw.get(f"{side}_index_price") is not None
+        leg.pop("index_price", None)
         legacy_funding = updated_notes["funding"]
         legacy_leg = legacy_funding.get(side)
         had_legacy_current = isinstance(legacy_leg, dict) and any(
@@ -2567,6 +2603,7 @@ def _apply_live_funding(
             touched = touched or had_current or had_legacy_current or top_level_current
             continue
         touched = True
+        leg["index_price"] = entry.get("index_price")
         leg["current_funding_pct"] = entry.get("rate_pct")
         age_seconds = _float_or_none(entry.get("age_seconds"))
         if age_seconds is not None:
@@ -2606,6 +2643,9 @@ def _apply_live_funding(
     if updated_notes is None or not touched:
         return raw
     updated = {**raw, "notes": updated_notes}
+    for side in ("long", "short"):
+        if raw.get(f"{side}_market_type") == "Futures":
+            updated[f"{side}_index_price"] = (updated_notes["route_inputs"].get(side) or {}).get("index_price")
     # Current carry fields are projections from live prints.  If either
     # futures leg is absent/expired, fail closed rather than preserving a
     # discovery-snapshot rate that may be tens of minutes old. Historical
@@ -2945,6 +2985,8 @@ def _row_from_api(
         age_min=age,
         quote_ts_us=quote_ts_us,
         href=f"/token/{token}" if token else "/markets",
+        long_index_price=_leg_index_price(raw, "long"),
+        short_index_price=_leg_index_price(raw, "short"),
         long_price=_float_or_none(
             raw.get("long_price"),
             raw.get("long_ask_vwap"),
@@ -4279,6 +4321,13 @@ def coherent_leg_spread_pct(
     if abs(implied - current) > LEG_SPREAD_COHERENCE_TOLERANCE_PCT:
         return implied
     return current
+
+
+def _index_row(row: SpreadTerminalRow) -> dict[str, Any]:
+    # The public serializer strips provenance and blockers. The structural
+    # index needs both: stripping source_name before catalogue admission made
+    # the provider carve-out unreachable on a cold/full build.
+    return {**_public_row(row), "source_name": getattr(row, "source_name", None), "blockers": row.blockers}
 
 
 def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:

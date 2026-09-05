@@ -1489,6 +1489,8 @@ def _route(
         ),
         "long_funding_pct": long_funding.get("rate_pct"),
         "short_funding_pct": short_funding.get("rate_pct"),
+        "long_index_price": long_funding.get("index_price"),
+        "short_index_price": short_funding.get("index_price"),
         "long_funding_interval_hours": long_funding.get("interval_hours"),
         "short_funding_interval_hours": short_funding.get("interval_hours"),
         "long_next_funding_ts_us": long_funding.get("next_funding_ts_us"),

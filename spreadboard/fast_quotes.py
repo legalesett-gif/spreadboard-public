@@ -435,7 +435,7 @@ class FastQuoteRefresher:
                     interval = interval_overrides.get(str(market.get("id") or "").upper())
             fields = _funding_fields(
                 item.get("fundingRate"),
-                index_price=item.get("indexPrice") or item.get("markPrice"),
+                index_price=item.get("indexPrice"),
                 # Never leave a fresh rate sitting on a stale interval. WhiteBIT
                 # publishes no interval, so DEXE kept a 1h interval from an old
                 # scan against an 8h rate and read 4.27%/day instead of 0.02%.

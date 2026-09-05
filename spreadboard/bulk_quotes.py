@@ -211,6 +211,7 @@ def _native_bulk_books(
     fetcher: Any = None,
     poster: Any = None,
     whitebit_snapshotter: Any = None,
+    funding_rates: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Fast first-party BBO snapshots for adapters CCXT leaves one-sided.
 
@@ -527,13 +528,27 @@ def _native_bulk_books(
                     continue
                 coin = str(market.get("name") or "").strip()
                 impact_prices = context.get("impactPxs")
-                if not coin or not isinstance(impact_prices, list) or len(impact_prices) < 2:
+                if not coin:
                     continue
                 if ":" in coin:
                     namespace, ticker = coin.split(":", 1)
                     base = f"{namespace.upper()}-{ticker.upper()}"
                 else:
                     base = coin.upper()
+                if funding_rates is not None:
+                    from spreadboard.fast_quotes import _funding_fields
+
+                    fields = _funding_fields(
+                        context.get("funding"), interval_hours=1,
+                        interval_assumed=False, index_price=context.get("oraclePx"),
+                        next_funding_ms=int((time.time() // 3600 + 1) * 3600 * 1000),
+                    )
+                    entry = {**_funding_entry(fields), "observed_at": time.time()}
+                    # Both are published spellings of this exact namespace.
+                    for symbol in (coin, f"{base}/USDC:USDC"):
+                        funding_rates[f"Hyperliquid|{symbol}"] = entry
+                if not isinstance(impact_prices, list) or len(impact_prices) < 2:
+                    continue
                 append(
                     market_type="Futures",
                     base=base,
@@ -662,7 +677,13 @@ def sweep_venue(
         )
     ):
         try:
-            native_books = _native_bulk_books(venue)
+            if venue == "Hyperliquid":
+                funding_rates: dict[str, dict[str, Any]] = {}
+                native_books = _native_bulk_books(venue, funding_rates=funding_rates)
+                if funding_rates:
+                    _publish_hyperliquid_funding(funding_rates)
+            else:
+                native_books = _native_bulk_books(venue)
         except Exception:  # The generic adapter remains a fallback.
             LOGGER.warning("%s native bulk sweep failed", venue, exc_info=True)
             native_books = []
@@ -1025,6 +1046,7 @@ def sweep_funding(
 
 
 _FUNDING_CACHE: dict[str, Any] = {"stamp": None, "legs": {}, "health": {}}
+_FUNDING_SOURCE_CACHE: dict[str, Any] = {"signature": None, "payloads": []}
 
 
 def _funding_entry(fields: dict[str, Any]) -> dict[str, Any]:
@@ -1037,6 +1059,8 @@ def _funding_entry(fields: dict[str, Any]) -> dict[str, Any]:
     """
 
     entry: dict[str, Any] = {}
+    if fields.get("index_price") is not None:
+        entry["index_price"] = fields["index_price"]
     if fields.get("current_funding_pct") is not None:
         entry["rate_pct"] = fields["current_funding_pct"]
     if fields.get("funding_interval_hours") is not None:
@@ -1048,27 +1072,57 @@ def _funding_entry(fields: dict[str, Any]) -> dict[str, Any]:
     return entry
 
 
+def _publish_hyperliquid_funding(rates: dict[str, dict[str, Any]]) -> None:
+    """Reuse the existing all-dex sweep's oracle/rate response, without more IO."""
+    path = Path(FUNDING_CACHE_PATH).with_name("live_funding_hyperliquid.json")
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({
+        "legs": rates,
+        "leg_updated_at": {key: entry["observed_at"] for key, entry in rates.items()},
+    }, separators=(",", ":")), encoding="utf-8")
+    temporary.replace(path)
+
+
 def load_funding(*, cache_path: Path | str = FUNDING_CACHE_PATH) -> dict[str, dict[str, Any]]:
     """The cached rates, re-read only when the file changes."""
     path = Path(cache_path)
-    try:
-        stamp = path.stat().st_mtime_ns
-    except OSError:
-        return {}
-    if _FUNDING_CACHE["stamp"] != stamp:
+    sources = (path, path.with_name("live_funding_hyperliquid.json"))
+    signatures = []
+    for source in sources:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        legs = payload.get("legs") or {}
-        timestamps = payload.get("leg_updated_at") or {}
-        fallback_stamp = _iso_timestamp(payload.get("updated_at"))
+            signatures.append((str(source), source.stat().st_mtime_ns))
+        except OSError:
+            signatures.append((str(source), None))
+    # Expiry advances even when a stopped writer leaves the file unchanged.
+    stamp = (tuple(signatures), int(time.time()))
+    if _FUNDING_CACHE["stamp"] != stamp:
+        if _FUNDING_SOURCE_CACHE["signature"] != tuple(signatures):
+            payloads = []
+            for source in sources:
+                try:
+                    payloads.append(json.loads(source.read_text(encoding="utf-8")))
+                except (OSError, ValueError):
+                    continue
+            _FUNDING_SOURCE_CACHE.update(signature=tuple(signatures), payloads=payloads)
+        legs: dict[str, Any] = {}
+        timestamps: dict[str, Any] = {}
+        updated_at = None
+        for payload in _FUNDING_SOURCE_CACHE["payloads"]:
+            try:
+                updated_at = payload.get("updated_at") or updated_at
+                fallback = _iso_timestamp(payload.get("updated_at")) or 0.0
+                for key, value in (payload.get("legs") or {}).items():
+                    observed = _float((payload.get("leg_updated_at") or {}).get(key)) or fallback
+                    if observed >= timestamps.get(key, 0.0):
+                        legs[key], timestamps[key] = value, observed
+            except (OSError, ValueError, AttributeError):
+                continue
         cutoff = time.time() - FUNDING_MAX_AGE_SECONDS
         now = time.time()
         accepted: dict[str, dict[str, Any]] = {}
         ages: list[float] = []
         for key, value in legs.items():
-            observed_at = float(_float(timestamps.get(key)) or fallback_stamp or 0.0)
+            observed_at = float(_float(timestamps.get(key)) or 0.0)
             if observed_at < cutoff:
                 continue
             age_seconds = max(0.0, now - observed_at)
@@ -1084,7 +1138,7 @@ def load_funding(*, cache_path: Path | str = FUNDING_CACHE_PATH) -> dict[str, di
         _FUNDING_CACHE["health"] = {
             "status": "fresh" if accepted else "stale_or_empty",
             "leg_count": len(accepted),
-            "updated_at": payload.get("updated_at"),
+            "updated_at": updated_at,
             "max_age_seconds": round(ages[-1], 1) if ages else None,
             "p95_age_seconds": round(ages[p95_index], 1) if ages else None,
             "ttl_seconds": FUNDING_MAX_AGE_SECONDS,

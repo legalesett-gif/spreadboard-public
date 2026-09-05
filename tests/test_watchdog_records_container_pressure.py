@@ -43,7 +43,7 @@ def _procfs(tmp_path: Path, processes: dict[str, int]) -> Path:
         entry = root / str(index)
         entry.mkdir()
         (entry / "status").write_text(f"Name:\tpython\nVmRSS:\t{rss_kb} kB\n", encoding="utf-8")
-        (entry / "cmdline").write_bytes(command.encode() + b"\0")
+        (entry / "cmdline").write_bytes(command.replace(" ", "\0").encode() + b"\0")
     (root / "notapid").mkdir()
     return root
 
@@ -124,3 +124,12 @@ def test_the_watchdog_logs_it(monkeypatch, tmp_path) -> None:
     service.MemoryWatchdog(_OnceEvent()).run()
 
     assert lines and "pressure[" in lines[0]
+
+
+def test_unknown_process_logs_no_arguments(tmp_path):
+    summary = service._container_pressure(
+        cgroup=_cgroup(tmp_path, 4_000_000_000, 4_294_967_296),
+        procfs=_procfs(tmp_path, {"python -c private-fixture-value": 800_000}),
+    )
+    assert "other=" in summary
+    assert "private-fixture-value" not in summary

@@ -342,6 +342,13 @@ class LiveBookStore:
 
 
 def cache_key(venue: str, market_type: str, symbol: str) -> str:
+    if venue == "Hyperliquid" and market_type == "Futures" and "/" not in symbol:
+        namespace, separator, ticker = str(symbol).partition(":")
+        if separator and namespace and ticker:
+            # Discovery/API coin io:OAI and CCXT IO-OAI/USDC:USDC identify the
+            # same exact builder instrument. Keep the route's public symbol;
+            # normalize only its book lookup, with the namespace preserved.
+            symbol = f"{namespace.upper()}-{ticker.upper()}/USDC:USDC"
     return "|".join((str(venue).strip(), str(market_type).strip(), str(symbol).strip()))
 
 

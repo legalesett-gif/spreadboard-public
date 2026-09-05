@@ -18,7 +18,11 @@ mid-scan, before that trade is worth making.
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 _SPEC = importlib.util.spec_from_file_location(
     "container_health_watchdog",
@@ -32,6 +36,7 @@ _SPEC.loader.exec_module(watchdog)
 def _observation(name: str, health: str = "healthy", **over) -> dict:
     item = {
         "name": name,
+        "container_id": "observed-container-id",
         "present": True,
         "status": "running",
         "health": health,
@@ -158,3 +163,76 @@ def test_recovery_clears_the_unhealthy_counter() -> None:
     report, _restarts = _run([_observation("app-app-1", "healthy")], previous)
 
     assert report["containers"]["app-app-1"]["unhealthy_checks"] == 0
+
+
+@pytest.mark.parametrize("overrides", [
+    {"status": "restarting"}, {"status": "exited"}, {"status": "paused"},
+    {"uptime_seconds": 179}, {"uptime_seconds": None},
+    {"uptime_seconds": 250, "start_period_seconds": 300},
+    {"health": "starting"},
+])
+def test_docker_recovery_and_startup_are_left_alone(overrides) -> None:
+    previous = _state(containers={"app-app-1": {"unhealthy_checks": 99}})
+    observation = _observation("app-app-1", "unhealthy")
+    observation.update(overrides)
+    report, restarts = _run([observation], previous)
+    assert restarts == []
+    assert report["containers"]["app-app-1"]["unhealthy_checks"] == 0
+
+
+def test_a_new_container_does_not_inherit_the_unhealthy_streak() -> None:
+    previous = _state(containers={"app-app-1": {
+        "unhealthy_checks": 99, "started_at_unix": 100,
+    }})
+    report, restarts = _run([
+        _observation("app-app-1", "unhealthy", started_at_unix=200),
+    ], previous)
+    assert restarts == []
+    assert report["containers"]["app-app-1"]["unhealthy_checks"] == 1
+
+
+@pytest.mark.parametrize("successful", [True, False])
+def test_main_persists_budget_before_docker_and_through_missing_inspect(
+    tmp_path, monkeypatch, successful,
+) -> None:
+    calls = []
+    missing = False
+    monkeypatch.setattr(watchdog, "_host_memory", lambda: {"mem_available_kb": 4_000_000})
+    monkeypatch.setattr(watchdog, "inspect_container", lambda name: (
+        {"name": name, "present": False} if missing
+        else _observation(name, "unhealthy")
+    ))
+
+    def restart(command, **kwargs):
+        persisted = json.loads((tmp_path / watchdog.STATE_FILENAME).read_text())
+        item = persisted["containers"]["app-app-1"]
+        assert len(item["restart_attempts"]) == len(calls) + 1
+        assert item["restart_result"] == "reserved"
+        assert command == ["docker", "restart", "observed-container-id"]
+        calls.append(command)
+        if not successful:
+            raise watchdog.subprocess.TimeoutExpired(command, 120)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(watchdog.subprocess, "run", restart)
+    for check in range(18):
+        # Losing inspect data used to discard all restart history.
+        missing = check == 10
+        assert watchdog.main(["--runtime-dir", str(tmp_path), "--container", "app-app-1"]) == 0
+    state = json.loads((tmp_path / watchdog.STATE_FILENAME).read_text())
+    assert len(calls) == 3
+    assert state["containers"]["app-app-1"]["restart_suppressed"] == "cap_reached"
+    ledger = [json.loads(line) for line in (tmp_path / watchdog.LEDGER_FILENAME).read_text().splitlines()]
+    assert len(ledger) == 6
+
+
+def test_inspect_requests_only_health_fields(monkeypatch):
+    def run(command, **kwargs):
+        assert "--format" in command
+        template = command[command.index("--format") + 1]
+        assert ".Config.Env" not in template and ".Config.Cmd" not in template
+        assert "{{json .State}}" not in template and "{{json .Config}}" not in template
+        assert ".State.Health.Status" in template and ".Config.Healthcheck.StartPeriod" in template
+        return SimpleNamespace(returncode=0, stdout='[{"Id":"safe-id"}]')
+    monkeypatch.setattr(watchdog.subprocess, "run", run)
+    assert watchdog._docker_inspect("app-app-1") == {"Id": "safe-id"}

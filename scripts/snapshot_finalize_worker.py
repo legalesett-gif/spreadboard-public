@@ -38,7 +38,7 @@ for import_path in (ROOT / "src", ROOT):
         sys.path.remove(str(import_path))
     sys.path.insert(0, str(import_path))
 
-from spreadboard import live, market_history  # noqa: E402
+from spreadboard import live, market_history, provider_routes  # noqa: E402
 
 # The same functions the pipeline used when it ran inline, so the two cannot
 # drift apart. Importing the service module costs its imports and nothing else;
@@ -65,11 +65,23 @@ def _write_atomic(path: Path, payload: dict) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=("enrich", "publish", "record"), required=True)
+    parser.add_argument("--stage", choices=("enrich", "publish", "record", "providers"), required=True)
     parser.add_argument("--staging-path", type=Path, required=True)
     parser.add_argument("--published-path", type=Path, required=True)
     parser.add_argument("--funding-workers", type=int, default=4)
     args = parser.parse_args()
+
+    if args.stage == "providers":
+        # Bootstrap an existing deployment once, outside the resident parent
+        # and outside the already memory-heavy route-index worker.
+        before = provider_routes.signature(args.published_path)
+        snapshot = _load(args.published_path)
+        if not snapshot or before != provider_routes.signature(args.published_path):
+            print(json.dumps({"status": "source_changed_or_missing"}), flush=True)
+            return 1
+        summary = provider_routes.publish(snapshot, args.published_path, source_signature=before)
+        print(json.dumps({"status": "ok", **summary}), flush=True)
+        return 0
 
     if args.stage == "record":
         # The published snapshot, straight to history. Once a minute in the
@@ -103,6 +115,7 @@ def main() -> int:
     # or not at all.
     del published
     _write_atomic(args.published_path, snapshot)
+    provider_summary = provider_routes.publish(snapshot, args.published_path)
     inserted = market_history.record_snapshot(snapshot)
     refresh = snapshot.get("source_refresh") or {}
     routes = len(snapshot.get("api_discovered_rows") or []) + len(
@@ -115,6 +128,7 @@ def main() -> int:
                 "routes": routes,
                 "history_inserted": inserted,
                 "refresh_status": refresh.get("status"),
+                **provider_summary,
             },
             default=str,
         ),

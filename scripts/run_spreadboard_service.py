@@ -1575,6 +1575,10 @@ def _run_collector_service() -> int:
         interval = max(600.0, interval)
     market_history.initialize()
     _seed_public_caches()
+    from spreadboard import provider_routes
+
+    if SNAPSHOT_PATH.exists() and provider_routes.load(SNAPSHOT_PATH) is None:
+        _finalize_snapshot("providers")
     _seed_funding_history_demand()
     refresh_loop = RefreshLoop(interval)
     route_index_publisher = LiveRouteIndexPublisher(
@@ -2781,6 +2785,16 @@ def _refresh_live_route_index(*, install: bool = True) -> bool:
         return False
     try:
         started = time.monotonic()
+        if _service_role() == "collector":
+            from spreadboard import provider_routes
+
+            if (
+                SNAPSHOT_PATH.exists()
+                and provider_routes.load(SNAPSHOT_PATH) is None
+                and _finalize_snapshot("providers") is None
+            ):
+                _log("live route index retained: provider handoff unavailable")
+                return False
         result = _run_worker(
             [
                 sys.executable,
@@ -3745,6 +3759,10 @@ HEAVY_CHILD_SLOT_WAIT_SECONDS = float(
 
 
 def _is_heavy_child(command: list[str]) -> bool:
+    if "providers" in command and any(
+        str(part).endswith("snapshot_finalize_worker.py") for part in command
+    ):
+        return True
     return any(
         str(part).endswith(HEAVY_CHILD_SCRIPTS) for part in command
     )
@@ -3913,7 +3931,7 @@ def _container_pressure(
                 name = Path(
                     next(
                         (part for part in command.split("\0") if part.endswith(".py")),
-                        command.replace("\0", " ").strip() or "?",
+                        "other",
                     )
                 ).name
                 processes.append((int(line.split()[1]), name))
@@ -3940,12 +3958,28 @@ class MemoryWatchdog(threading.Thread):
         super().__init__(name="memory-watchdog", daemon=True)
         self.stop_event = stop_event
         self.interval_seconds = interval_seconds
+        self.last_web_trim_at = float("-inf")
 
     def run(self) -> None:
         from spreadboard import server as server_module
 
         while not self.stop_event.wait(self.interval_seconds):
             try:
+                if _service_role() == "collector" and api_spreads.expire_idle_row_cache():
+                    _return_freed_memory()
+                before = _rss_gb()
+                now = time.monotonic()
+                if (
+                    _service_role() == "web" and before >= 2.0
+                    and now - self.last_web_trim_at >= 180.0
+                ):
+                    self.last_web_trim_at = now
+                    # Return freed arenas only. Live row/book caches stay intact.
+                    _return_freed_memory()
+                    _log(
+                        f"allocator trim before={before:.3f}GB after={_rss_gb():.3f}GB "
+                        f"seconds={time.monotonic() - now:.3f}"
+                    )
                 _log(
                     "memory "
                     f"market={len(server_module._MARKET_CACHE)} "

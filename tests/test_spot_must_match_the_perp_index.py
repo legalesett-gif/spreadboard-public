@@ -160,3 +160,110 @@ def test_the_index_is_read_from_the_leg_the_bulk_refresh_writes() -> None:
 
     assert api_spreads.spot_disagrees_with_perp_index(row) is True
     assert api_spreads.spread_evidence_state(row) == "excluded"
+
+
+def test_bulk_sweep_oracle_reaches_provider_index_and_excludes_spot(tmp_path, monkeypatch):
+    import json
+
+    from scripts import live_route_index_worker as worker
+    from spreadboard import bulk_quotes, live_book_cache, provider_routes
+
+    funding_path = tmp_path / "live_funding.json"
+    monkeypatch.setattr(bulk_quotes, "FUNDING_CACHE_PATH", funding_path)
+    actual_load = bulk_quotes.load_funding
+    monkeypatch.setattr(bulk_quotes, "load_funding", lambda: actual_load(cache_path=funding_path))
+    calls = []
+
+    def post(url, payload):
+        calls.append(payload)
+        if payload["type"] == "perpDexs":
+            return [None, {"name": "io"}]
+        if payload.get("dex") == "io":
+            return [{"universe": [{"name": "io:OAI"}]}, [{
+                "impactPxs": ["1461", "1462"], "oraclePx": "1461.35",
+                "markPx": "1500", "funding": "0.00005",
+            }]]
+        return [{"universe": []}, []]
+
+    monkeypatch.setattr(bulk_quotes, "_public_post_json", post)
+    store = live_book_cache.LiveBookStore(tmp_path / "books.sqlite3")
+    assert bulk_quotes.sweep_venue("Hyperliquid", store=store) == 1
+    assert len(calls) == 3  # existing main + builder metadata; no extra oracle call
+    rates = bulk_quotes.load_funding()
+    assert rates["Hyperliquid|io:OAI"]["index_price"] == 1461.35
+    assert rates["Hyperliquid|IO-OAI/USDC:USDC"]["index_price"] == 1461.35
+    stamp = int(time.time() * 1e6)
+    for market_type, symbol, price in [("Spot", "OPENAI/USDT", 846),
+                                      ("Futures", "OPENAI/USDT:USDT", 1383)]:
+        store.put("Gate", market_type, symbol, bids=[[price, 10]], asks=[[price+1, 10]], quote_ts_us=stamp)
+    rows = []
+    for market_type, symbol in [("Spot", "OPENAI/USDT"), ("Futures", "OPENAI/USDT:USDT")]:
+        rows.append(_route(long_market_type=market_type,
+            source_name="hyperliquid_builder_dex", quote_ts_us=1,
+            notes={"route_inputs": {"long": {"symbol": symbol}, "short": {"symbol": "io:OAI"}}}))
+    discovery = tmp_path / "discovery.json"
+    snapshot = {"dex_discovered_rows": rows}
+    discovery.write_text(json.dumps(snapshot))
+    provider_routes.publish(snapshot, discovery)
+    monkeypatch.setattr(api_spreads, "DEFAULT_API_DISCOVERY_PATH", discovery)
+    monkeypatch.setattr(api_spreads.public_rails, "load_public_rails", dict)
+    monkeypatch.setattr(api_spreads, "_live_books", lambda: store.load_all(max_age_seconds=90))
+    monkeypatch.setattr(api_spreads, "_apply_fast_quote_delta", lambda *a, **k: [])
+    monkeypatch.setattr(worker.catalog_pairs, "dex_futures_routes", lambda *a, **k: [])
+    output = worker._current_dex_rows({}, metadata={}, now=time.time())
+    spot = next(row for row in output if row["long_market_type"] == "Spot")
+    futures = next(row for row in output if row["long_market_type"] == "Futures")
+    assert spot["short_index_price"] == 1461.35
+    assert api_spreads.spread_evidence_state(spot) == "excluded"
+    assert api_spreads.spread_evidence_state(futures) != "excluded"
+
+
+def test_idle_funding_file_expires_and_clears_index(tmp_path, monkeypatch):
+    import json
+
+    from spreadboard import bulk_quotes
+    now = [10_000.0]
+    monkeypatch.setattr(bulk_quotes.time, "time", lambda: now[0])
+    path = tmp_path / "funding.json"
+    path.write_text(json.dumps({"legs": {"Hyperliquid|io:OAI": {
+        "index_price": 1461.35, "rate_pct": 0.005, "interval_hours": 1,
+    }}, "leg_updated_at": {"Hyperliquid|io:OAI": now[0]}}))
+    assert bulk_quotes.load_funding(cache_path=path)
+    now[0] += bulk_quotes.FUNDING_MAX_AGE_SECONDS + 2
+    expired = bulk_quotes.load_funding(cache_path=path)
+    assert expired == {}
+    raw = _route(short_index_price=1461.35,
+        notes={"route_inputs": {"short": {"symbol": "io:OAI", "index_price": 1461.35}}})
+    row = api_spreads._row_from_api(raw, bucket="dex_discovered_rows", now=now[0], live_funding=expired)
+    assert row.short_index_price is None
+
+
+def test_a_mark_price_is_not_an_index(monkeypatch):
+    class Client:
+        has: ClassVar[dict] = {"fetchFundingRates": True}
+        markets: ClassVar[dict] = {}
+        def fetch_funding_rates(self):
+            return {"x": {"symbol": "X/USDT:USDT", "fundingRate": 0.001,
+                          "interval": "8h", "markPrice": 1461.35}}
+    refresher = fast_quotes.FastQuoteRefresher()
+    monkeypatch.setattr(refresher, "_client", lambda *a: Client())
+    assert "index_price" not in refresher._bulk_funding_rates("Gate")["X/USDT:USDT"]
+
+
+def test_catalog_row_preserves_the_funding_oracle(monkeypatch):
+    from spreadboard import catalog_pairs, live_book_cache
+    stamp = int(time.time() * 1e6)
+    markets = [{"token": "OPENAI", "venue": "Gate", "market_type": "Spot", "symbol": "OPENAI/USDT", "quote": "USDT", "contract_size": 1},
+               {"token": "OPENAI", "venue": "Hyperliquid", "market_type": "Futures", "symbol": "IO-OAI/USDC:USDC", "quote": "USDC", "contract_size": 1}]
+    monkeypatch.setattr(catalog_pairs.chart_catalog, "load", lambda: {"markets": markets})
+    monkeypatch.setattr(catalog_pairs.public_rails, "load_public_rails", dict)
+    monkeypatch.setattr(catalog_pairs.venue_funding_history, "route_windows", lambda row: {})
+    monkeypatch.setattr(catalog_pairs.bulk_quotes, "load_funding", lambda: {"Hyperliquid|IO-OAI/USDC:USDC": {"rate_pct": 0.005, "interval_hours": 1, "index_price": 1461.35}})
+    def book(venue, *a, **k):
+        price = 846 if venue == "Gate" else 1461
+        return live_book_cache.CachedBook(bids=[[price, 10]], asks=[[price+1, 10]], quote_ts_us=stamp)
+    monkeypatch.setattr(catalog_pairs.live_book_cache, "load_live_book", book)
+    rows = catalog_pairs.for_token("OPENAI", use_cache=False)["routes"]
+    assert rows
+    assert all(row.get("short_index_price") == 1461.35 or row.get("long_index_price") == 1461.35 for row in rows)
+    assert all(api_spreads.spread_evidence_state(row) == "excluded" for row in rows)

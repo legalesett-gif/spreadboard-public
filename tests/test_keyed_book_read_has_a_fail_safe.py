@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import time
 
-from spreadboard import api_spreads, bulk_quotes, live_book_cache
+from spreadboard import api_spreads, bulk_quotes, live_book_cache, warm_query_projection
 
 
 def _book(price: float, *, age_seconds: float = 0.0) -> live_book_cache.CachedBook:
@@ -161,3 +161,34 @@ def test_a_key_nobody_asked_for_is_not_retained() -> None:
 
     assert wanted in merged
     assert other not in merged
+
+
+def test_retired_keys_are_released_without_ever_being_requested_again(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(api_spreads.time, "time", lambda: clock[0])
+    api_spreads.reset_keyed_book_fallback()
+    api_spreads._with_retained_books({"removed": _book(1.0)}, {"removed"})
+    clock[0] += api_spreads.LIVE_BOOK_MAX_AGE_SECONDS + 31
+    api_spreads._with_retained_books({"new": _book(2.0)}, {"new"})
+    assert "removed" not in api_spreads._LAST_GOOD_ROUTE_BOOKS
+
+
+def test_both_retention_layers_recover_from_cold_and_expire_together(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(api_spreads.time, "time", lambda: clock[0])
+    route = _route()
+    keys = _keys(route)
+    full = {keys[0]: _book(1), keys[1]: _book(1.02)}
+    _install(monkeypatch, [{}, full, {}, {}])
+    universe = warm_query_projection.LiveRouteUniverse()
+    universe.install({route["route_key"]: route})
+    universe.refresh_route_kinds({"FUTURES"})
+    assert universe.status()["current_priced_route_count"] == 0
+    universe.refresh_route_kinds({"FUTURES"})
+    assert universe.status()["current_priced_route_count"] == 1
+    clock[0] += 30
+    universe.refresh_route_kinds({"FUTURES"})
+    assert universe.status()["current_priced_route_count"] == 1
+    clock[0] += api_spreads.LIVE_BOOK_MAX_AGE_SECONDS
+    universe.refresh_route_kinds({"FUTURES"})
+    assert universe.status()["current_priced_route_count"] == 0

@@ -583,16 +583,38 @@ def test_worker_refreshes_every_lane_without_a_catalogue_wide_pass(
 
     assert actions == [
         {"FUTURES"},
-        {"FUTURES-SPOT"},
-        {"DEX-FUTURES"},
-        {"FUTURES"},
-        {"SPOT-FUTURES"},
-        {"FUTURES"},
-        {"FUTURES-SPOT"},
-        {"DEX-FUTURES"},
-        {"FUTURES"},
-        {"SPOT-FUTURES"},
+        {"FUTURES-SPOT", "SPOT-FUTURES", "DEX-FUTURES"},
     ]
+
+
+def test_twenty_second_worker_does_not_expire_a_lane_between_refreshes(monkeypatch):
+    # Exercise Worker.run with the production interval. Testing only that each
+    # name appears in the rotation accepted a 100-second refresh against a
+    # 90-second freshness limit.
+    clock = [0.0]
+    last_seen = {}
+    gaps = []
+
+    class Universe:
+        def refresh_route_kinds(self, kinds):
+            for kind in kinds:
+                if kind in last_seen:
+                    gaps.append(clock[0] - last_seen[kind])
+                last_seen[kind] = clock[0]
+
+    class Stop:
+        def is_set(self):
+            return clock[0] >= 400
+
+        def wait(self, seconds):
+            clock[0] += seconds
+
+    monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", Universe())
+    monkeypatch.setattr(warm_query_projection.time, "monotonic", lambda: clock[0])
+    warm_query_projection.Worker(Stop(), priority_interval_seconds=20).run()
+    assert set(last_seen) == {"FUTURES", "FUTURES-SPOT", "SPOT-FUTURES", "DEX-FUTURES"}
+    # Leave at least 30s for age already accumulated in the venue-wide sweep.
+    assert gaps and max(gaps) <= 60
 
 
 def test_new_structural_generation_immediately_wins_with_a_newer_quote() -> None:
