@@ -929,7 +929,7 @@ release hour and the final clean 48h remain **open**. No caps/headroom guards
 were lowered. The finite read-only schedules sampler ends about 22:56; split
 at the 21:31:57 deployment. Codex stability heartbeat is confirmed paused.
 
-## Current Codex checkpoint — 22:36 UTC
+## Historical Codex checkpoint — 22:36 UTC
 
 Source **8a1ddeb / 0346ca22c4326ae9** is live in app and collector since
 **22:27:33 UTC**. Full final gate: **2,574 tests passed**, Ruff **517 known /
@@ -954,3 +954,83 @@ cycles, current-release 30-sample hour, measured safe smaller caps and a clean
 48-hour run. The existing finite schedules observer ends around 22:56; split
 its data at this deployment. Stability heartbeat remains PAUSED. Prior
 watchdog/cap-persistence and two backup timer firings are already evidenced.
+
+
+## SpreadBoard stability and UA comparison — Codex continuation (2026-09-05, 23:18 UTC)
+
+- Goal ACTIVE. Owner chose continued Codex work over the former Claude handover.
+  Stability heartbeat `finish-spreadboard-stability-acceptance` is freshly
+  confirmed PAUSED. No trading, messages, spend, Pushover, cap/subscription
+  increases or weaker identity/freshness/exact-settlement gates.
+- Own checkout `tmp/spreadboard-funding-publication`, branch
+  `codex/funding-publication-cadence-20260905`. Leave separately dirty
+  `tmp/spreadboard-funding-current-truth` untouched.
+- LIVE source remains **8a1ddeb / 0346ca22c4326ae9**, started **22:27:33 UTC**.
+  App/collector were freshly healthy, restart 0 / OOM false at 23:18. Local
+  candidates **1b5a2bc** and **a90f108** are committed but NOT DEPLOYED.
+  Protected discovery PID285544 is still running; guard returns exit12.
+  Both discovery and snapshot-finalizer guards must clear before deploy and
+  immediately before recreation. Use the final-guard deploy helper, no force.
+- Latest full release gate: **2604 passed in 183.51s**, Ruff **517 known, zero
+  new**. Status-only gate was2585; its first run had three incomplete test
+  fixtures missing real settlement metadata, fixed without relaxing schedule
+  assertions. Old status code fails9 cases; old builder code fails17 cases.
+  Test-mutated tracked data is preserved under output and restored from HEAD.
+- 1b5a2bc: native status vetoes in discovery, catalogue and bulk funding. At
+  22:40, all128 BingX funding gaps were status25 despite true API flags; all65
+  XT gaps had tradeSwitch=false despite isOpenApi=true. Later active definitions
+  can reintroduce reopened contracts. Twelve Bitget funding-only extras were
+  absent from current native contract definitions; reject unknown/spot IDs and
+  prune their old malformed cache keys. Historical archives are not deleted.
+- a90f108: Hyperliquid's PARA-ANSEM catalogue contract was not joined to ANSEM.
+  Extend the existing per-market five-percent price-band alias gate across
+  single, bulk, Funding/navigation and summary paths. Keep exact symbols,
+  reject unpriced/disagreeing aliases, preserve native namespace for books,
+  current funding and legacy native history. Equivalent native/CCXT identities
+  dedupe; distinct builder contracts no longer collapse through shape fallback.
+- Frozen production candidate replay at23:14:48: ANSEM27 ->39 exact routes;
+  exact MEXC Futures -> Hyperliquid PARA-ANSEM route0 ->1, funding+0.43849008%
+  projected/day, schedules4h/1h, basis-1.7894%, no mirage/quote mismatch.
+  Both paths use one frozen book/funding cut. Probe peak129MiB. This is NOT
+  deployed page evidence or an execution recommendation.
+- Browser access recovered: authenticated Funding and UA tables were verified.
+  Ordinary new navigation published22:46 (generation1788648395656080032-35a3134d0203)
+  and a reloaded page consumed it. The older ranks label on an already-open
+  page and the long publication gap remain freshness/UI follow-up items.
+- UA funding sample at23:00:15 visible routes,12 exact matches in definitions,
+  live index, funding cache and fresh pair builder; two intentional Ourbit
+  exclusions; one ANSEM builder-alias gap now reproduced/fixed in candidate.
+  All12 matched routes funding-eligible; values reconcile after APR/365 daily
+  normalization with observation-time differences. Premium coverage prevents
+  exhaustive parity. Keep earlier59 observed identities as a historical count,
+  not an additive total with this overlapping sample.
+- HFT: native Kraken ticker at22:47 showed roughly-1.59% per hour, consistent
+  with the large current daily projection. Current Kraken/CEX long routes can
+  exceed the5% gap guard without exact rail-contract identity, so broad Funding
+  excludes them. Exact search showed a cooled retained route with fresh funding.
+  Preserve that blocker; it is not proof of current entry readiness. No gate
+  weakened to force comparator parity.
+- Delivered8a1ddeb coverage remains:632 formerly missing funding keys restored
+  across WhiteBIT/BitMart/Coinbase International/Bitget;1715 published schedules
+  independently checked after ordinary rotation. Last cardinality22:34:22417
+  distinct exact market keys, zero duplicates/Ourbit;2171 futures/3962 spot
+  labels. Owner's UA2534/4370 label counts are not directed pair counts.
+- Completed22:27:33–22:56:11 current-release segment:109 host samples, no OOM
+  kills/restarts; anon peaks app3572.8MiB/collector3566.0MiB and cgroup peaks
+ 3584/4096.3MiB. App/collector CPU averaged0.87/2.09 cores. Five health probes
+  200, priced186467–186707, max10.58s; five /free probes200, max18.098s.
+  Only20.2min endpoint span, NOT the30-sample hour or48h. Smaller caps unsafe.
+- Prior finite sampler finished successfully. New finite read-only observer
+  `spreadboard-stability-native-status-20260905.service` started22:57:52,
+  runs2h to00:57:52 UTC Sep6, runtime/stability/20260905-native-status/samples.jsonl.
+  Freshly active. Segment every deploy; do not create duplicate observers.
+- Next: wait for protected scan/finalizer completion; guarded deploy of both
+  tested commits, digest parity and ordinary cache/index/navigation/UI arrival.
+  Then investigate peak memory and cold/request latency, verify remaining exact
+  history/ranking cases, current-release30-sample hour, safe smaller caps and
+  clean48h. Prior watchdog drill/cap persistence and two backup timer firings
+  already passed. Rejected decoder experiment remains rejected.
+- Evidence: own `output/stability-20260905/` status/builder tests and mutants,
+  `gap-market-status.jsonl`, `ua-funding-2300-reconciliation.jsonl`,
+  `builder-alias-frozen-live-comparison.jsonl`, `hft-catalogue-gap.jsonl`,
+  `native-release-through2256-summary.json`, current guard and observer logs.
