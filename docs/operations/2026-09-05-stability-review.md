@@ -9,7 +9,8 @@ spend is authorized.
 Latest app and collector release: `fcdec15`, source `cf3607b528c8dee1`, deployed
 04:01:00 UTC with both digests verified. The source-parity candidate started
 04:06:16 UTC. Safe lower memory caps and final 48-hour/two-scheduled-backup
-acceptance remain open; broad web row-cache retention still needs measurement.
+acceptance remain open. The candidate has a 04:46 priced-count dip. A streaming
+reader is prepared (source `1070d86638e8df3b`) but not deployed.
 
 ## Fresh baseline
 
@@ -550,3 +551,74 @@ further retention change or lowering caps. The final 48-hour soak has not begun.
 The repaired manual backup remains successful; next timer freshly confirmed
 06:21:08 UTC, and two future scheduled successes are still required. The prior
 watchdog recovery drill remains complete and must not be repeated.
+
+## Candidate dip and prepared streaming reader (04:51 UTC)
+
+Production remains `fcdec15` / `cf3607b528c8dee1` in both containers. No deploy
+or memory-cap change was made during this heartbeat. The first 18 minutes were
+stable, but the 40-minute partial evidence now contains a real dip: 21 health
+samples over 2,418.5 seconds, priced 97,238–150,147, maximum deviation 33.627%.
+All 21 health and nine free-page requests were 200; all 160 host observations
+were healthy with no OOM kills. App/collector CPU averaged 0.667/1.995 cores,
+app anon peaked 3,268.5 MiB, app HWM 3,555.8 MiB and collector anon 2,825.4 MiB.
+The count gate has failed; preserve the full hour for representative evidence.
+
+The dip was observed at 04:46:37 in generation 6, 55 seconds after the
+155,615-row index install at 04:45:42. Its refresh took 15.253 seconds, with
+39,857 futures, 28,601 futures-spot and 28,580 spot-futures priced routes.
+This is timing correlation, not proof that index loading caused it. The normal
+worker already subtracts processing from its 20-second period; no further
+cadence correction was inferred. Book-age evidence from the earlier sampler
+ended before this event. A new 90-minute read-only age sampler,
+`spreadboard-stability-scoped-book-ages-20260905.service`, now writes
+`public-book-ages.jsonl` beside the current candidate to catch the next event.
+It uses 64 MiB/5% CPU and does not make venue API requests or change quotes.
+
+The remaining app peak overlaps decoded structural generations with a complete
+input/decoder buffer. Local experiments used an archived 241,758,200-byte,
+99,822-row artifact, SHA256
+`6cf5590eb7d2b620e4f05b3a82e0850325792af4a8f7c673cc234a49bf014b04`, while retaining
+a prior decoded generation. This is deliberately not a current route snapshot.
+All compared readers reproduced the full object exactly. Memory mapping did
+not establish a reliable RSS benefit and was not implemented. A plain streaming
+parser repeated field-name strings; bounded per-load sharing addresses that
+retention while returning ordinary dict/list objects.
+
+The prepared implementation adds locked `ijson==3.5.1` (no other dependency
+version changes), streams the actual Store.live_route_index call in at most
+64 KiB chunks, hashes exactly the consumed bytes and verifies total bytes/hash
+before returning any generation. It requires an object root containing object
+rows, validates numbers, rejects trailing/incomplete data, and uses a fresh
+2,048-field-key pool per load. Route keys, tokens, symbols, fields and quote
+values are preserved. Source/path/schema checks remain in the Store. Failed
+loads preserve the previous live generation through the real restore call site.
+
+Decimal parsing is intentional: the local YAJL backend with use_float=True
+rejected valid uint64 values above int64. Only decimal values become floats;
+integers preserve their exact value and the prior supported 64-bit range.
+This was checked with unsigned 64-bit max, signed min, quote microseconds,
+Unicode across chunks, nested values and signed floating zero. Sources for
+parser semantics: https://github.com/ICRAR/ijson#options and
+https://github.com/ijl/orjson#deserialize .
+
+The actual prepared Store reader reproduced every archived row. Untraced local
+wall/CPU time increased from 2.613/1.785 seconds to 7.376/6.145 seconds. Peak
+traced allocation fell from 4,150,362,830 to 938,228,535 bytes. Traced allocation
+is not RSS: the untraced Mac RSS observations did not demonstrate a reliable
+RSS reduction (671,072,256 versus 959,463,424 bytes in those runs). This remains
+a guarded production trial, not delivered memory recovery or safe-cap evidence.
+Measure the real app and index worker after deployment, including latency and
+collector CPU; correct/revert the reader if the tradeoff is not beneficial.
+The existing web structural-install minimum is 600 seconds; worker read cadence
+is separate and must be included in the CPU comparison.
+
+Prepared release gate: all 2,396 tests passed in 105.46 seconds, exit 0; Ruff
+unchanged at 517. Sixteen new mutants were caught (97 total), including the
+real store call site reverted to a whole-file read, chunk bounds, root/row
+validation, checksum/byte verification, numeric fidelity, field sharing and
+previous-generation preservation. Evidence is under local
+`output/stability-20260905/`, including `index-reader-experiments.json`,
+`index-reader-store-trace.json` and `mutants/stream-index-results.json`.
+Prepared source digest is `1070d86638e8df3b`; it is NOT deployed. Do not deploy
+before preserving the current hour through at least 05:08 UTC, then refresh
+protected discovery/finalizer status. Final acceptance and lower caps remain open.

@@ -26,6 +26,8 @@ from typing import Any
 
 import orjson
 
+from spreadboard import streaming_index
+
 SCHEMA = "spreadboard.materialized_views.v1"
 LIVE_ROUTE_SCHEMA = "spreadboard.live_route_index.v1"
 ROOT = Path(__file__).resolve().parents[1]
@@ -450,30 +452,14 @@ class Store:
             if expected and expected != str(Path(board_path).resolve()):
                 return None
         path = self.root / str(meta.get("file") or "")
-        try:
-            raw = path.read_bytes()
-        except OSError:
-            return None
-        if len(raw) != int(meta.get("bytes") or -1) or _sha256(raw) != str(
-            meta.get("sha256") or ""
-        ):
-            return None
-        try:
-            payload = orjson.loads(raw)
-        except orjson.JSONDecodeError:
-            return None
-        finally:
-            # The structural artifact is ~300MB.  Holding the raw bytes while
-            # the decoded generation, the previous generation and the seeded
-            # overlay are all resident is what pushed the web role over its
-            # cgroup.  The checksum has already been verified above.
-            del raw
-        if not isinstance(payload, dict) or not all(
-            isinstance(key, str) and isinstance(value, dict)
-            for key, value in payload.items()
-        ):
-            return None
-        return payload
+        # Decode one route at a time: the full orjson input/parse arena used to
+        # overlap the old and new generations during every structural install.
+        # The streamed bytes are hashed before any generation can be returned.
+        return streaming_index.read_index(
+            path,
+            expected_bytes=int(meta.get("bytes") or -1),
+            expected_sha256=str(meta.get("sha256") or ""),
+        )
 
     @staticmethod
     def _board_compatible(
