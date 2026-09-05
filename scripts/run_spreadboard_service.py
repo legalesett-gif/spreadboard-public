@@ -3965,8 +3965,15 @@ class MemoryWatchdog(threading.Thread):
 
         while not self.stop_event.wait(self.interval_seconds):
             try:
-                if _service_role() == "collector" and api_spreads.expire_idle_row_cache():
+                # Both roles must release entries whose existing TTL elapsed,
+                # even if no later request visits the cache. The web role
+                # retains its 900s policy; these entries would already miss
+                # on the next lookup. Readers holding rows keep their references.
+                expired_rows = api_spreads.expire_idle_row_cache()
+                if expired_rows:
                     _return_freed_memory()
+                    if _service_role() == "web":
+                        self.last_web_trim_at = time.monotonic()
                 before = _rss_gb()
                 now = time.monotonic()
                 if (
@@ -3989,6 +3996,7 @@ class MemoryWatchdog(threading.Thread):
                     # heap walk found 31,831 SpreadTerminalRow and 26,058
                     # CachedBook, which live in these two.
                     f"rows={len(api_spreads._ROW_CACHE)} "
+                    f"rows_expired={expired_rows} "
                     f"books={len(api_spreads._LAST_GOOD_LIVE_BOOKS)} "
                     f"threads={threading.active_count()}"
                     f"{_heap_summary(_rss_gb())}"

@@ -25,13 +25,12 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_REFRESH_SECONDS = 10.0
 PRIORITY_ROUTE_KIND_GROUPS = (
-    {"FUTURES"},
-    # At the approved 20-second cadence, the old ten-slot rotation revisited
-    # each mixed lane only every 100 seconds. Its 90-second prices necessarily
-    # expired even with perfect book reads. Share the smaller lanes' pass so
-    # all families are revisited every 40 seconds, without another full-board
-    # worker or changing the current-quote lifetime.
-    {"FUTURES-SPOT", "SPOT-FUTURES", "DEX-FUTURES"},
+    # A 40-second lane revisit still expired an entire family while 99.8% of
+    # cached books were current: venue sweeps had already used much of the
+    # 90-second quote lifetime. Refresh all priced lanes on each existing
+    # 20-second production tick. Exact lookup/cleanup work is kept off this
+    # hot path; no extra venue requests or headline rebuild are introduced.
+    {"FUTURES", "FUTURES-SPOT", "SPOT-FUTURES", "DEX-FUTURES"},
 )
 
 

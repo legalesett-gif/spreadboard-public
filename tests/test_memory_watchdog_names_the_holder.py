@@ -105,7 +105,9 @@ def test_the_watchdog_counts_the_caches_that_actually_hold_rows(monkeypatch) -> 
     monkeypatch.setattr(service, "_log", lines.append)
     monkeypatch.setattr(service, "_rss_gb", lambda: 0.2)
     monkeypatch.setattr(service, "_container_pressure", lambda **_kwargs: "")
-    monkeypatch.setattr(service.api_spreads, "_ROW_CACHE", {"a": 1, "b": 2})
+    monkeypatch.setattr(service.api_spreads, "_ROW_CACHE", {
+        "a": (1e15, [], {}), "b": (1e15, [], {}),
+    })
     monkeypatch.setattr(
         service.api_spreads, "_LAST_GOOD_LIVE_BOOKS", dict.fromkeys(range(7))
     )

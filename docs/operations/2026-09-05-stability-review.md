@@ -320,6 +320,62 @@ the actual index-restore invalidation. This optimization is local, not deployed.
 Preserve the new candidate through at least 03:31 UTC and its full-hour sample
 span. Inspect book-age evidence and remeasure memory before the next release.
 
+### Quote-age diagnosis and next corrections (03:14 UTC)
+
+Fresh correlation isolates a resident-lane gap: at 02:53 UTC futures had
+59,720 priced routes; at 02:55 it had 2,462 while the mixed lanes retained
+about 78,000 routes. A public-book sample 2.5 seconds before that health
+response had 99.78% of recent books inside the 90-second truth window. The
+main futures venue books were only 11.7–47.1 seconds old, with one stale
+Coinbase International book among 131. This is not broad source-book loss.
+The earlier two-slot schedule was insufficient, even after removing the GC
+bottleneck. At that dip the reported warm refresh took 12.32 seconds.
+
+The prepared correction refreshes all four priced lanes on each existing
+20-second production tick. It retains the 90-second quote lifetime, real book
+timestamps, exact oracle/funding observations and the separate headline path;
+it adds no public venue requests. The strengthened actual `Worker.run` test
+models 65-second provider age and five-second processing, checking served
+timestamps during both processing and waits. It catches the old 40-second
+revisit, a doubled wait and an omitted family (three further mutants).
+
+Through 03:00 UTC, the current candidate averaged 0.702 app and 2.001 collector
+CPU cores. It had 16 health/7 free-page requests, all 200, and 126 healthy host
+samples with no OOM kills. Priced routes ranged 80,784–138,002. Sampled anon
+peaks were 2,608/3,278 MiB; both cgroup peaks reached their current limits. The
+app HWM was 3,372 MiB and the index worker 1,765 MiB. Lower caps remain unsafe
+to claim from this window. Partial evidence is saved as
+`output/stability-20260905/native-cleanup-*-partial.jsonl`.
+
+Fresh memory logs still show 31,079 `SpreadTerminalRow` instances in the app,
+with one row-cache entry. Idle expiry only ran in the collector. The next
+correction enables the same expiry call in both roles: web keeps its existing
+900-second TTL and collector its 180-second TTL. Only entries already unusable
+under the normal lookup rule are released. Live rows, reader-held references
+and the last-good book fallback are preserved. The watchdog records expired
+entry counts and reserves its allocator-trim timestamp after expiry cleanup,
+preventing a second forced collection on the same high-memory web tick.
+
+Seven additional mutants cover the real web expiry call, physical-release
+hook, exact TTL boundary, preservation of a still-live entry, duplicate-trim
+guard and logged expiry evidence. This is an idle-retention correction, not
+a claim that every currently retained app row has expired or that a memory
+saving has already been delivered. Inspect post-release `rows_expired` counts,
+heap counts, RSS peaks and CPU before changing caps.
+
+At 03:13 UTC an active discovery worker (PID 2485336) was present. Preserve it
+and any subsequent finalizer. After the candidate hour, an app-only release
+can ship the web corrections while retaining the collector instance/scan;
+verify both the unchanged collector PID and the app digest. Reconcile the
+collector revision after discovery/finalization finishes, and do not start
+final 48-hour acceptance before full source parity and safe caps.
+
+Latest prepared release gate: `2370 passed in 95.15s`, exit 0; Ruff unchanged
+at 517. Ten new schedule/expiry mutants were caught (72 total). These changes
+include the previously tested direct/custom lookup correction. They are not
+deployed yet; production remains `c96d8f0` in both services until the candidate
+hour is preserved and the protected-worker preflight is repeated.
+
 ## Production rollout and preflight observations
 
 - App-only deployment completed at about 00:17 UTC. App source digest matched

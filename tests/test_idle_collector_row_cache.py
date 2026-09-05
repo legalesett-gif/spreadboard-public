@@ -1,24 +1,29 @@
-"""A TTL without a later reader cannot release idle collector memory."""
+"""Both roles must release idle rows only after their configured TTL."""
 
 import pytest
 
 from scripts import run_spreadboard_service as service
 
 
-@pytest.mark.parametrize("role,expected", [("collector", 1), ("web", 2)])
-def test_memory_watchdog_releases_only_expired_collector_rows(monkeypatch, role, expected):
+@pytest.mark.parametrize("role,ttl,rss", [("collector", 180, 0.2), ("web", 900, 0.2), ("web", 900, 2.8)])
+def test_memory_watchdog_releases_only_expired_rows_at_role_ttl(monkeypatch, role, ttl, rss):
     monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     api = service.api_spreads
-    monkeypatch.setattr(api, "_ROW_CACHE_TTL_SECONDS", 180)
+    monkeypatch.setattr(api, "_ROW_CACHE_TTL_SECONDS", ttl)
     monkeypatch.setattr(api.time, "time", lambda: 1000)
+    reader_rows = [object()]
+    live_book = object()
     monkeypatch.setattr(api, "_ROW_CACHE", {
-        "old": (819, [object()], {}), "fresh": (821, [object()], {}),
+        "old": (1000-ttl, reader_rows, {}), "fresh": (1001-ttl, [object()], {}),
     })
+    monkeypatch.setattr(api, "_LAST_GOOD_LIVE_BOOKS", {"book": live_book})
     freed = []
     monkeypatch.setattr(service, "_return_freed_memory", lambda: freed.append(True))
     monkeypatch.setattr(service, "_heap_summary", lambda _: "")
     monkeypatch.setattr(service, "_container_pressure", lambda: "")
-    monkeypatch.setattr(service, "_log", lambda _: None)
+    monkeypatch.setattr(service, "_rss_gb", lambda: rss)
+    lines = []
+    monkeypatch.setattr(service, "_log", lines.append)
 
     class Once:
         calls = 0
@@ -28,9 +33,12 @@ def test_memory_watchdog_releases_only_expired_collector_rows(monkeypatch, role,
             return self.calls > 1
 
     service.MemoryWatchdog(Once()).run()
-    assert len(api._ROW_CACHE) == expected
+    assert len(api._ROW_CACHE) == 1
     assert "fresh" in api._ROW_CACHE
-    assert len(freed) == (role == "collector")
+    assert len(freed) == 1
+    assert len(reader_rows) == 1  # Existing consumers retain their own reference.
+    assert api._LAST_GOOD_LIVE_BOOKS["book"] is live_book
+    assert "rows_expired=1" in lines[0]
 
 
 @pytest.mark.parametrize("role,rss,expected", [("web", 2.8, 2), ("web", 1.8, 0), ("collector", 2.8, 0)])

@@ -568,7 +568,7 @@ def test_full_refresh_publishes_a_finished_family_before_slower_families(
     assert worker.is_alive() is False
 
 
-def test_worker_refreshes_every_lane_without_a_catalogue_wide_pass(
+def test_worker_refreshes_all_priced_lanes_without_rebuilding_headlines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     actions: list[object] = []
@@ -605,40 +605,42 @@ def test_worker_refreshes_every_lane_without_a_catalogue_wide_pass(
 
     worker.run()
 
-    assert actions == [
-        {"FUTURES"},
-        {"FUTURES-SPOT", "SPOT-FUTURES", "DEX-FUTURES"},
-    ]
+    assert actions == [{"FUTURES", "FUTURES-SPOT", "SPOT-FUTURES", "DEX-FUTURES"}]
 
 
 def test_twenty_second_worker_does_not_expire_a_lane_between_refreshes(monkeypatch):
-    # Exercise Worker.run with the production interval. Testing only that each
-    # name appears in the rotation accepted a 100-second refresh against a
-    # 90-second freshness limit.
+    # Production books were still current at the count drop, but the lane had
+    # not consumed them for 40 seconds. Model 65 seconds of provider age plus
+    # five seconds of processing, checking the served timestamp throughout
+    # processing and waits. Merely checking a <=60s revisit missed this gap.
     clock = [0.0]
-    last_seen = {}
-    gaps = []
+    quote_times = {}
+    families = {"FUTURES", "FUTURES-SPOT", "SPOT-FUTURES", "DEX-FUTURES"}
+
+    def advance(seconds):
+        for _ in range(int(seconds)):
+            clock[0] += 1
+            if set(quote_times) == families:
+                assert all(clock[0]-stamp <= 90 for stamp in quote_times.values())
 
     class Universe:
         def refresh_route_kinds(self, kinds):
+            observed_at = clock[0]-65
+            advance(5)
             for kind in kinds:
-                if kind in last_seen:
-                    gaps.append(clock[0] - last_seen[kind])
-                last_seen[kind] = clock[0]
+                quote_times[kind] = observed_at
 
     class Stop:
         def is_set(self):
             return clock[0] >= 400
 
         def wait(self, seconds):
-            clock[0] += seconds
+            advance(seconds)
 
     monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", Universe())
     monkeypatch.setattr(warm_query_projection.time, "monotonic", lambda: clock[0])
     warm_query_projection.Worker(Stop(), priority_interval_seconds=20).run()
-    assert set(last_seen) == {"FUTURES", "FUTURES-SPOT", "SPOT-FUTURES", "DEX-FUTURES"}
-    # Leave at least 30s for age already accumulated in the venue-wide sweep.
-    assert gaps and max(gaps) <= 60
+    assert set(quote_times) == families
 
 
 def test_new_structural_generation_immediately_wins_with_a_newer_quote() -> None:
