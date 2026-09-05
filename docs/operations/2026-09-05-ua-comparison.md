@@ -294,3 +294,81 @@ A second finite read-only sampler began **19:14:36 UTC**, unit
 `/opt/spreadboard/runtime/stability/20260905-publication`, duration two hours.
 It is preliminary and will be split by any further deployment. The Codex
 recurring automation remains paused; no notification or trading action occurred.
+
+## Exact settlement publication verified — 19:55 UTC
+
+The scheduler fix `a6e82e1` deployed at 19:27:31 UTC with matching app/collector
+source digest `4a7e5f96478f5fd0` and both discovery/finalizer guards clear.
+The first ordinary market-evidence worker ran to completion at 19:42:13; its
+exact settlement file advanced at 19:34:56 and 19:38:46. At 19:51, public health
+confirmed all twelve navigation views had consumed the new exact-settlement
+and retained-radar generations, with zero empty views. An additional automatic
+full-catalogue publication completed at 19:43:24 (49,972,625 bytes), confirming
+that refresh continues beyond the first startup generation.
+
+Authenticated Funding Now showed new exact totals for VELO Kraken Futures→Bybit
+(9.20265008% / 63.61692023% / 47.38992667% for 24h / 7d / 30d) and ZIG
+Mexc→Kraken Futures (4.18673069% / 5.20197141% / 34.81362272%). A fresh read of
+the exact-leg cache reproduced those displayed numbers. These are observed
+settlement totals, not projected returns. BEL, ICX and 1000BTT still had overdue
+legs at that check; a second ordinary evidence worker was active by 19:54 and
+had already advanced the file again. Remaining blanks are not declared fixed
+from a file timestamp alone.
+
+The first read-only history probe used `Kraken` instead of the canonical
+`Kraken Futures` and an unsupported hypothetical LCAP hedge. Those probe cases
+were discarded. `history-arrival-canonical.jsonl` uses observed exact routes;
+do not use the preliminary `history-arrival-1945.jsonl` as missing-market proof.
+
+The completed worker reached about 1,995 MiB RSS during archive collection and
+the collector touched its 4,096 MiB cgroup ceiling, with OOM counters still zero.
+The archive path retained rich dictionaries for all positive candidates even
+after the earlier packed-catalogue change. A new regression invokes the actual
+evidence worker: the old code retains 200 rich positive rows; the proposed
+stream-and-compact path retains at most three, preserves all 200 records, and
+keeps the same catalogue/warm/leader overwrite order and exact totals. Reverting
+the archive iterator, the service call site, or compaction separately is caught.
+Production-data allocation/output replay and the final release gate are being
+completed before deploying this further reduction. Caps remain unchanged.
+
+## Tested corrections awaiting a protected deployment window — 20:13 UTC
+
+The final archive change yields positive/current-or-historical candidates and
+compacts each to the existing radar field whitelist before retaining it. It
+keeps the same identity key, catalogue/warm/leader ordering, JSON normalization,
+retention and record cap. The real production-artifact replay wrote exactly
+131,012,177 identical bytes before and after, SHA-256
+`d7234dc829f48a29043ba196c84196df6896583ad27062ff2929a4171da57f3d`.
+Initial local peak RSS fell from 1,207.80 to 798.03 MiB. An intermediate version
+duplicated JSON conversion and was replaced with a plain field projection.
+Local wall times varied substantially (65.53 / 88.59 seconds for the initial
+before/final runs); a further compact replay took 228.43 seconds / 132.36 CPU
+seconds and peaked at 561.66 MiB. Its comparison run was stopped to avoid
+contending with validation. These are local allocation/output observations,
+not delivered production savings or a passed production CPU gate.
+
+The fresh queue probe exposed a separate correctness defect: OKX ICX's stored
+history inferred a four-hour cadence, while its current funding schedule was
+two-hourly. The public reader correctly expired the totals, but the priority
+selector still said the leg was not due. The selector now receives the same
+live schedule snapshot and uses the existing expiry logic to request the missing
+settlement. No freshness or settlement-completeness guard is loosened. A real
+`build()` regression first proves the public cell is expired, then proves a
+provider fetch restores it; its companion proves a not-yet-due leg is left alone.
+The old call site fails that test.
+
+Final full gate: **2,479 passed in 153.99s**, Ruff **517 known / zero new**.
+An earlier full run had 2,478 passes and one failure from an import-order lint
+finding in the new test; the import was fixed and the entire suite rerun.
+The earlier archive-only implementation also passed 2,477 tests before the
+live-schedule regression was added. All three archive mutants and the old
+schedule-selector mutant were caught. Test-generated runtime fixtures were
+preserved in output and restored; source/runtime data from other tasks were
+not touched.
+
+Fresh deployment preflight at 20:06 found protected discovery worker **195600**
+running, so no restart or source deployment was attempted. Production remains
+`a6e82e1` / `4a7e5f96478f5fd0`. Wait for discovery and snapshot finalization to
+finish, then repeat both the initial and immediate pre-recreation guards.
+The 18:05–20:05 finite sampler ended successfully; the 19:14–21:14 sampler
+continues. Both span deployments and require container-ID segmentation.

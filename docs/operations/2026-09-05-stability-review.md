@@ -877,3 +877,28 @@ funding rebuild; investigate startup delay and measure compact route/leg storage
 plus complete cheap funding selection; validate representative memory headroom;
 only then reduce caps and start the clean 48-hour acceptance. No goal completion
 is claimed. The owner explicitly requested this Claude continuation note.
+
+## Codex continuation supersedes the handover — 19:55 UTC
+
+The owner subsequently chose continued Codex implementation. Current work is in
+`tmp/spreadboard-funding-publication`, branch
+`codex/funding-publication-cadence-20260905`. The historical 16:02 checkpoint
+above and its accepted hour belong to their stated revisions, not the current
+release. The current detailed continuation and UA discrepancy ledger is
+[`2026-09-05-ua-comparison.md`](2026-09-05-ua-comparison.md).
+
+Current production is `a6e82e1` / `4a7e5f96478f5fd0`, deployed 19:27:31 UTC.
+Full gate was 2,476 passing tests with Ruff 517. Full lossless funding candidates,
+independent ordinary catalogue publication, current-mark Kraken point/bulk
+agreement and exact-history scheduler fairness are deployed. All twelve views
+consumed a new settlement generation, with member-page values independently
+reproduced. Ourbit remains excluded. The updated comparison covers 45 visible
+UA exact-route references; premium Kraken/XT coverage is not verifiable from
+guest search absence. Token counts and directed route counts are distinguished.
+
+A further archive-memory correction is under test because the ordinary evidence
+worker still approached 2 GB RSS and the collector touched its ceiling. Safe
+lower limits, current-release one-hour acceptance, cold-request latency and the
+final clean 48-hour acceptance remain open. The Codex recurring automation is
+still paused. No trading, messages, paid access, cap increases or weaker
+accuracy/freshness guards are authorized by this work.
