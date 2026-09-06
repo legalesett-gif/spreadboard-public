@@ -723,3 +723,8 @@ tradeSwitch and Bitget listing evidence. Hyperliquid's public metaAndAssetCtxs
 response for dex para independently identifies para:ANSEM with active interest,
 volume and hourly funding; the live catalogue already held its CCXT symbol.
 Do not describe this as an absent exchange feed.
+
+
+### Additional UA guest comparison — 2026-09-06T03:37:47.872014+00:00
+
+CurrentUAguestFuturesleaderBMNRSTOCK WhiteBIT futures→Hyperliquid futures showed255.64%APR (~.70038%projected/day). Actualsigned-inSpreads exacttoken+WhiteBITfilter contains thatsame direction among12routes, displayed+.700%projected/day, -.4%indicativebasis, -.0373%/8h long and+.0245%/1h short. UA'searlier-.19%basis is a different-timequote, not anexecutioncomparison. Ourpageexplicitlymarks tokenidentityunresolved/DDpending and counts0eligibleFundingpairs. This is a presentresearchroute with stricterFundingeligibility, notmissingmarketcoverage. No identity/freshnessgate was weakened. Evidence `output/stability-20260906/ua-bmnrstock-ui-comparison.json`. Extends the boundedguestcomparison; do notsumoverlappingcases orclaimexhaustivepremiumparity. Normalbrowserrequests only; no diagnosticproductionchild, sourcechange or redeploy. SoleobserverPID434080confirmedliveatturnstart.
