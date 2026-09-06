@@ -2681,7 +2681,8 @@ def api_market_spreads(
     if (
         exact_catalog is not None
         and (
-            bool(exact_catalog.get("groups"))
+            bool(exact_catalog.get("exact_token_found"))
+            or bool(exact_catalog.get("groups"))
             or int((exact_catalog.get("summary") or {}).get("verified_route_count") or 0)
             or int((exact_catalog.get("summary") or {}).get("research_route_count") or 0)
         )
@@ -3018,6 +3019,15 @@ def _exact_catalog_market_projection(
             )
         ]
     )
+    filters = warm_query_projection._filters(query, limit=limit, offset=offset)
+    # Reuse the broad board's metadata/history policy. Facets below apply
+    # their own kind and asset filters independently of the remaining controls.
+    shared_filters = {**filters, "kind": None, "asset_class": None}
+    routes = [
+        row for row in routes
+        if warm_query_projection._matches_structural(row, shared_filters)
+        and warm_query_projection._matches_dynamic(row, shared_filters)
+    ]
     # Facets describe the available alternatives, including those beyond the
     # first route page. Each facet excludes only its own active filter.
     requested_kind = str(_query_first(query, "kind") or "").strip().upper()
@@ -3061,11 +3071,26 @@ def _exact_catalog_market_projection(
     page_payload["evidence_view"] = "all" if funding_only else evidence
     group = catalog_pairs.group(page_payload)
     groups = [group] if group else []
+    # Headline counts/leaders describe all matching routes, not just this page.
+    funding_routes = [
+        row for row in routes
+        if (api_spreads._effective_funding_24h_dict(row) or 0.0) > 0
+    ]
+    headline = catalog_pairs.group({**page_payload, "routes": routes})
+    best_funding = max(
+        funding_routes, key=api_spreads._effective_funding_24h_dict, default=None
+    )
+    if headline and best_funding is not None:
+        headline["best_funding_route"] = best_funding
+        headline["best_funding_24h_pct"] = api_spreads._effective_funding_24h_dict(best_funding)
+    best_spread = (headline.get("best_route") or {}) if headline else {}
     return {
         "ok": bool(groups),
+        "exact_token_found": bool(payload.get("routes")),
         "mode": "exact_token_complete_catalogue",
         "coverage_mode": "exact_token_complete_catalogue",
         "filters": {
+            **filters,
             "q": raw,
             "kind": _query_first(query, "kind"),
             "exchange": _query_first(query, "exchange"),
@@ -3078,14 +3103,21 @@ def _exact_catalog_market_projection(
         },
         "groups": groups,
         "rows": page_routes,
-        "top_edges": page_routes[:10],
-        "top_funding": page_routes[:10],
+        "top_edges": [headline] if best_spread and api_spreads._entrance_spread_dict(best_spread) > 0 else [],
+        "top_funding": [headline] if best_funding is not None else [],
         "summary": {
             "matching_tokens": 1 if routes else 0,
             "returned_tokens": 1 if groups else 0,
             "matching_rows": len(routes),
             "returned_rows": len(page_routes),
             "expanded_visible_route_count": len(routes),
+            "funding_rows": len(funding_routes),
+            "max_depth_weighted_spread_pct": max(
+                (float(row["depth_weighted_spread_pct"]) for row in routes
+                 if api_spreads.matched_probe_verified(row)
+                 and api_spreads.spread_quote_current(row)),
+                default=None,
+            ),
             "verified_route_count": evidence_counts["verified"],
             "research_route_count": evidence_counts["research"],
         },
@@ -7960,6 +7992,8 @@ def render_markets_page(
             "persistence",
         )
     )
+    if data.get("mode") == "exact_token_complete_catalogue":
+        market_wide_sidebar = False
     # Prices arrive over the stream, so a reload is only needed to pick up
     # structural changes -- a token entering or leaving the board. Reloading the
     # page every 30s on top of the push just made the board flicker.

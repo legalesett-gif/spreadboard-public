@@ -115,3 +115,63 @@ def test_carry_renderer_preserves_exclusions(override):
                displayed_open_spread_pct=-1,depth_weighted_spread_pct=-1)
     row.update(override)
     assert server.render_market_token_group({'token':'ONE','best_route':row,'routes':[row]}) == ''
+
+
+@pytest.mark.parametrize('name,field,value,threshold',[
+    ('min_market_cap_usd','market_cap_usd',100,101),
+    ('max_market_cap_usd','market_cap_usd',100,99),
+    ('min_fdv_usd','fdv_usd',200,201),
+    ('max_fdv_usd','fdv_usd',200,199),
+    ('max_listing_age_days','listing_age_days',10,9),
+    ('min_volume_24h_usd','short_volume_24h_usd',1000,1001),
+])
+def test_exact_advanced_filters_exclude_nonmatching_and_unknown(exact_catalog,name,field,value,threshold):
+    exact_catalog[:] = [route(0),route(1)]
+    exact_catalog[0][field]=value
+    exact_catalog[1].pop(field,None)
+    result=server._exact_catalog_market_projection({'q':['ONE'],name:[str(threshold)]},limit=25,offset=0)
+    assert result['rows']==[]
+    assert result['summary']['matching_rows']==result['summary']['funding_rows']==0
+    assert result['filters'][name]==threshold
+    assert result['exact_token_found'] is True
+
+
+def test_exact_persistence_uses_settled_windows(exact_catalog,monkeypatch):
+    monkeypatch.setattr(api_spreads.venue_funding_history,'route_windows',lambda row: {'1d':1,'7d':-1,'30d':None})
+    result=server._exact_catalog_market_projection({'q':['ONE'],'persistence':['persistent']},limit=25,offset=0)
+    assert result['rows']==[]
+    mixed=server._exact_catalog_market_projection({'q':['ONE'],'persistence':['mixed']},limit=25,offset=0)
+    assert mixed['summary']['matching_rows']==40
+
+
+def test_exact_headlines_use_all_matching_routes_and_correct_group_shape(exact_catalog):
+    for i,row in enumerate(exact_catalog):row['funding_daily_pct']=i/100
+    first=server._exact_catalog_market_projection({'q':['ONE'],'sort':['funding'],'direction':['asc']},limit=5,offset=0)
+    last=server._exact_catalog_market_projection({'q':['ONE'],'sort':['funding'],'direction':['asc']},limit=5,offset=35)
+    for page in (first,last):
+        assert page['summary']['funding_rows']==39
+        assert page['summary']['max_depth_weighted_spread_pct']==1
+        assert page['top_funding'][0]['best_funding_route']['route_key']=='ONE-39'
+        assert page['top_funding'][0]['best_funding_24h_pct']==.39
+        assert '+0.390%' in server.render_market_mini(page['top_funding'][0],'funding')
+
+
+def test_empty_exact_filter_does_not_fall_back_to_broad_cache(exact_catalog,monkeypatch,tmp_path):
+    monkeypatch.setattr(server,'_market_cache_lookup',lambda *a,**k:pytest.fail('empty exact result fell back'))
+    result=server.api_market_spreads(tmp_path/'unused.json',{'q':['ONE'],'min_market_cap_usd':['1']})
+    assert result['mode']=='exact_token_complete_catalogue'
+    assert result['rows']==[]
+
+
+def test_volume_sort_uses_thinner_leg_volume_not_probe_depth(exact_catalog):
+    from types import SimpleNamespace
+    exact_catalog[:] = [route(0),route(1)]
+    exact_catalog[0].update(depth_usd=500000,short_volume_24h_usd=10000)
+    exact_catalog[1].update(depth_usd=500,long_volume_24h_usd=2000000,short_volume_24h_usd=1000000)
+    page=server._exact_catalog_market_projection({'q':['ONE'],'sort':['depth']},limit=25,offset=0)
+    assert page['rows'][0]['route_key']=='ONE-1'
+    assert api_spreads._route_dict_sort_value(exact_catalog[0],'depth')==10000
+    assert api_spreads._sort_value(SimpleNamespace(**exact_catalog[0]),'depth')==10000
+    assert api_spreads._group_sort_value({'routes':exact_catalog},'depth')==1000000
+    missing={**exact_catalog[0],'short_volume_24h_usd':None}
+    assert api_spreads._route_dict_sort_value(missing,'depth')==0

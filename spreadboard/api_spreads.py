@@ -3350,12 +3350,12 @@ def _filter_rows(rows: list[SpreadTerminalRow], **filters: Any) -> list[SpreadTe
     return output
 
 
-def _route_volume_24h(row: SpreadTerminalRow) -> float | None:
+def _route_volume_24h(row: Any) -> float | None:
     values = [
         value
         for value in (
-            _float_or_none(row.long_volume_24h_usd),
-            _float_or_none(row.short_volume_24h_usd),
+            _float_or_none(_row_value(row, "long_volume_24h_usd")),
+            _float_or_none(_row_value(row, "short_volume_24h_usd")),
         )
         if value is not None and value >= 0
     ]
@@ -4209,7 +4209,7 @@ def _group_sort_value(group: dict[str, Any], sort_by: str) -> Any:
     if sort_by == "age":
         return _float_or_none(group.get("age_min")) or 999999999.0
     if sort_by == "depth":
-        return max((_float_or_none(row.get("depth_usd")) or 0.0 for row in routes), default=0.0)
+        return max((_route_volume_24h(row) or 0.0 for row in routes), default=0.0)
     if sort_by == "edge":
         # Guarded groups rank on their real edge, badged, rather than being
         # forced to the tail.
@@ -4245,7 +4245,7 @@ def _route_dict_sort_value(row: dict[str, Any], sort_by: str) -> Any:
         funding = _effective_funding_24h_dict(row)
         return abs(funding) if funding is not None else -999999.0
     if sort_by == "depth":
-        return _float_or_none(row.get("depth_usd")) or 0.0
+        return _route_volume_24h(row) or 0.0
     if sort_by == "age":
         return _float_or_none(row.get("age_min")) or 999999999.0
     if sort_by == "token":
@@ -4485,7 +4485,7 @@ def _sort_value(row: SpreadTerminalRow, sort_by: str) -> Any:
         funding = _effective_funding_24h(row)
         return abs(funding) if funding is not None else -999999.0
     if sort_by == "depth":
-        return _float_or_none(row.depth_usd) or 0.0
+        return _route_volume_24h(row) or 0.0
     if sort_by == "age":
         return row.age_min if row.age_min is not None else 999999999.0
     if sort_by == "token":

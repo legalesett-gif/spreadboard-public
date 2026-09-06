@@ -374,13 +374,19 @@ class Store:
         manifest = self._load_manifest()
         if manifest is None or not self._board_compatible(manifest, board_path):
             return None
-        payload = self._read_verified_json(manifest, manifest.get("route_index") or {})
-        if not isinstance(payload, dict) or not all(
-            isinstance(key, str) and isinstance(value, dict)
-            for key, value in payload.items()
-        ):
+        meta = manifest.get("route_index") or {}
+        filename = str(meta.get("file") or "")
+        if not filename or Path(filename).name != filename:
             return None
-        return payload
+        path = self.root / "generations" / str(manifest.get("generation") or "") / filename
+        # Navigation publication can become newer than the fast live index.
+        # Use the same bounded, checksum-verified reader on that fallback path
+        # so installing it never allocates a whole-file JSON decode buffer.
+        return streaming_index.read_index(
+            path,
+            expected_bytes=int(meta.get("bytes") or -1),
+            expected_sha256=str(meta.get("sha256") or ""),
+        )
 
     def write_live_route_index(
         self,
