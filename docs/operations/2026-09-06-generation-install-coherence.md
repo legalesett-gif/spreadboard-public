@@ -1,5 +1,13 @@
 # Preserve completed price observations during generation install
 
+## Install reconciliation measured locally — 2026-09-06 06:25 UTC
+
+Latest candidate remains **fc8e2f4**, source digest **593e42d43bb2a75d**, NOT deployed; no release waiter. Full2697tests/Ruff gates unchanged. Recurring automation freshly confirmed PAUSED. Production observer499780 and normalbackup532835 were freshly active06:22:34; preserve both, do not count backup's interim Result=success as completion.
+
+Synthetic offline208421-route Mac replay verifies all208421complete observations in every case. Untraced install:normal1.571s,forced concurrent-refresh2.099s; longestreaderlock0.757s in race versus0.000040s normal. Traced incremental peak allocation:normal39232952bytes,race58807196bytes,delta19574244bytes; retained27699196vs31226252bytes. Allocation excludes setup; profiler slows the tracedcase to11.19s, so use untraced timing. Not productionRSS/headroom or attribution of06:03coveragefailure. Rare reconciliation can stallreaders, requiring after-release latency observation, but the boundedlocalcost is now measured. Evidencecandidate-install-profile-manifest.json andinstall-profile-*.json; allprofileprocesses terminalexit0, no production profiling.
+
+Release preparation: retainfailedbaseline as evidence rather than callingitgreen. Wait for soleobserverterminalsuccess/finishedmarker, inspect completephase/coverage and backup, then make explicitcapdecision. No cap reduction justified yet. Afix release may use a documented failingbaseline; never reuse oldwaiters whose sourcepins or passpredicates differ. Freshbothprotected-worker guards remain mandatory before guardedhelper/recreation. No deploymentqueued now.
+
 The production observation failed priced-coverage acceptance at 06:03:06 UTC: generation5 initially reported64,083 priced routes, then202,127 on the same208,421-route structure at06:05:06. There was no restart/OOM. App logs place an index install between the surrounding health samples. This establishes the timing, not a complete causal explanation.
 
 Local source review found an independently reproducible install race. LiveRouteUniverse.install captures the immutable update-map reference, prepares structural seeds outside its reader lock, then publishes those seeds. A real refresh can publish a newer map during preparation. The original installer overwrites it with its earlier view, taking a currently priced route back to funding-only until another refresh.

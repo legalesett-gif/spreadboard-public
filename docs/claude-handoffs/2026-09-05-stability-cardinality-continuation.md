@@ -1,5 +1,13 @@
 # SpreadBoard continuation for Claude
 
+## Install reconciliation measured locally — 2026-09-06 06:25 UTC
+
+Latest candidate remains **fc8e2f4**, source digest **593e42d43bb2a75d**, NOT deployed; no release waiter. Full2697tests/Ruff gates unchanged. Recurring automation freshly confirmed PAUSED. Production observer499780 and normalbackup532835 were freshly active06:22:34; preserve both, do not count backup's interim Result=success as completion.
+
+Synthetic offline208421-route Mac replay verifies all208421complete observations in every case. Untraced install:normal1.571s,forced concurrent-refresh2.099s; longestreaderlock0.757s in race versus0.000040s normal. Traced incremental peak allocation:normal39232952bytes,race58807196bytes,delta19574244bytes; retained27699196vs31226252bytes. Allocation excludes setup; profiler slows the tracedcase to11.19s, so use untraced timing. Not productionRSS/headroom or attribution of06:03coveragefailure. Rare reconciliation can stallreaders, requiring after-release latency observation, but the boundedlocalcost is now measured. Evidencecandidate-install-profile-manifest.json andinstall-profile-*.json; allprofileprocesses terminalexit0, no production profiling.
+
+Release preparation: retainfailedbaseline as evidence rather than callingitgreen. Wait for soleobserverterminalsuccess/finishedmarker, inspect completephase/coverage and backup, then make explicitcapdecision. No cap reduction justified yet. Afix release may use a documented failingbaseline; never reuse oldwaiters whose sourcepins or passpredicates differ. Freshbothprotected-worker guards remain mandatory before guardedhelper/recreation. No deploymentqueued now.
+
 ## Generation-install candidate — 2026-09-06 06:22 UTC
 
 Latest local **fc8e2f4**, undeployed, includes2746e4e/6ab7440/7b7f904. Reconciles a price refresh completed during structural preparation before install publishes; retains all chosen quote tuple fields instead of truncating exact price/index evidence. Three original-source failures; isolated original-install-only mutant still yields priced0instead1 with fixed tuplemerge, proving the race separately.25focusedpass;full2697passed155.32s exit0;Ruffno new516against unchanged517baseline exit0. Tracked data restored;source unchanged aftergates. See2026-09-06-generation-install-coherence.md andinstall-coherence-*.txt.
