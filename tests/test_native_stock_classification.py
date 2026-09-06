@@ -17,7 +17,7 @@ from spreadboard import (
 )
 
 
-@pytest.mark.parametrize('venue,info', [('Bitget', {'isRwa':'YES'}), ('Binance', {'underlyingType':'EQUITY'})])
+@pytest.mark.parametrize('venue,info', [('Bitget', {'isRwa':'YES'}), ('Binance', {'underlyingType':'EQUITY'}), ('Bybit', {'symbolType':'stock'})])
 def test_exact_stock_market_survives_catalogue_pairs_and_cannot_bypass_guard(monkeypatch, venue, info):
     market = {'id':'BNCUSDT','base':'BNC','symbol':'BNC/USDT:USDT','quote':'USDT','settle':'USDT','swap':True,'active':True,'contractSize':1,'info':info}
     client = SimpleNamespace(load_markets=lambda: {market['symbol']:market})

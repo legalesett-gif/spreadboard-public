@@ -53,4 +53,6 @@ def native_market_asset_class(venue: str, market: Mapping[str, Any]) -> str | No
         return "tokenized"
     if venue == "Binance" and str(info.get("underlyingType") or "").upper() == "EQUITY":
         return "tokenized"
+    if venue == "Bybit" and str(info.get("symbolType") or "").casefold() == "stock":
+        return "tokenized"
     return None
