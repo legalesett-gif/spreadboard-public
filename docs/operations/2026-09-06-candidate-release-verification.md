@@ -2,7 +2,7 @@
 
 Prepared 2026-09-06 06:41 UTC. This is a runbook, not release or acceptance evidence.
 
-The tested candidate is `f260666`, source/data digest `c8b10e2fa4585bcd`. Production remains `f047ccf`. Full suite: 2,708 passed; Ruff: no new findings against unchanged 517 baseline. The frozen local manifest in `output/stability-20260906/candidate-release-manifest.json` also hashes build inputs and the guarded helper, which the Python source digest does not cover. Recheck these before release; source changes invalidate the recorded gates.
+The tested candidate is `b4230a7`, source/data digest `272beeec7e0e9f49`. Production remains `f047ccf`. Full suite: 2,710 passed; Ruff: no new findings against unchanged 517 baseline. The frozen local manifest in `output/stability-20260906/candidate-release-manifest.json` also hashes build inputs and the guarded helper, which the Python source digest does not cover. Recheck these before release; source changes invalidate the recorded gates.
 
 ## Before release
 
@@ -35,3 +35,9 @@ UA comparison remains guest-sample scope. Explain exact route exclusions: Ourbit
 ## Final acceptance still outstanding
 
 Choose a defensible memory budget from post-fix ordinary-load evidence, then validate the final deployed source and limits for 48 hours. Require no OOM, no unhealthy period over 90 seconds, endpoint checks every five minutes and two subsequent successful normal backup firings. Keep the goal active until these and the correctness/coverage checks pass. Recurring Codex automation stays paused; no trades or messages are authorized by this runbook.
+
+## Backup settings included in latest candidate
+
+The host backup script now adds rclone connection timeout5m/connections2 and default RCLONE_TPSLIMIT4/burst1, preserving explicit pacing and non-rclone behavior. Probe timeout360s allows the opening window. Unit adds TimeoutStartSec2h. These settings are tested locally, not proven to resolve the shared Drive quota. No retries of backup/prune were added.
+
+The guarded app/collector helper syncs scripts but does **not** install `deploy/spreadboard-backup.service`. After observer completion, recheck backup is terminal and apply/verify this exact unit separately with daemon-reload; do not start/restart a backup manually. Verify the effective TimeoutStartUSec and unit hash. Next normal timer was12:18:45UTC at the06:53 check; refresh before reporting it as current. Retention and integrity check remain required, and the failed06:21run is not green.

@@ -1,5 +1,14 @@
 # SpreadBoard continuation for Claude
 
+## Bounded backup candidate — 2026-09-06 06:58 UTC
+
+Latest **b4230a7 /272beeec7e0e9f49**, undeployed, includes all preceding fixes. Backup rclone calls use timeout5m/connections2, default request pacing4/sec/burst1 (preserve operator values); probe timeout360s. Non-rclone commands unchanged. Unit TimeoutStartSec2h prevents infinite stall across six-hour schedule. Retention7daily/4weekly/3monthly, check1/20 and failure propagation unchanged; no automatic mutation retry added. Installed restic0.16.4 advertises options; default opening timeout1m, production service currently timeoutinfinity. Official docs https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html and https://rclone.org/docs/ . Shared project quota may still fail; do not claim fixed until normal firings pass.
+
+Actual run_backup path test fails originalsource;12 focused pass; final **2710passed149.82s exit0**,Ruff no new516/unchanged517baseline exit0. Two preliminary full runs explicitly interrupted exit130 before wrapper/test correction; final clean run supersedes them. Tracked generated data restored, source frozen after final gates. Manifest pins new source and backupunit hash. Guarded deployment helper does NOT install the backup unit: after sole observer finishes and backup remains terminal, apply/verify unit separately with daemon-reload and no manualbackup start. No production changes made yet.
+
+Fresh06:58:14 observer499780 active/noexit; preserve to~07:12:50. Backup remains failed06:49 snapshotb691030d/forgettimeout after Drivequota. Next normal timer12:18:45 at prior freshcheck. Goal active; no waiter/capchanges/automation revival.
+
+
 ## Current headline fixed; normal backup failed — 2026-09-06 06:52 UTC
 
 Latest candidate **f260666 / c8b10e2fa4585bcd**, undeployed, includes all prior fixes. Collapsed Spreads headline now labels its Now-selected value with current-rate basis and retains live hooks through unavailability. Previously legacy settled provenance could label current funding as settled and disable updates/recovery. Two new tests fail original;73 focused pass; full **2708 passed146.98s exit0**, Ruff no new516/unchanged517baseline exit0. Source frozen and generated data restored. Manifest and runbook updated; no release waiter or cap change.
