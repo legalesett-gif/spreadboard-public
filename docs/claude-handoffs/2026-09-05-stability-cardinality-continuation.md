@@ -1,5 +1,18 @@
 # SpreadBoard continuation for Claude
 
+## Evidence cache retention fix tested — 2026-09-06 08:35 UTC
+
+Latest candidate **de647ee / 298e0cc8722c6c49**, NOT deployed, no waiter. After all funding/Spreads board selection, the isolated evidence pass now calls existing api_spreads.release_query_caches before settlement/radar work. Selected route/leader references remain intact; unselected parsed rows and grouped responses are released. This addresses retention through later phases, not a proved reduction in production peak RSS. No live price worker or guard was paused/changed.
+
+A weak-reference behavioral regression proves unselected cache objects are gone before both history and radar, while the selected route survives and both downstream phases actually finish despite the worker's outer exception guard. It fails old source. 17 focused passed; full **2740 passed in 164.25 seconds, exit 0**, Ruff no new findings (516 known, unchanged 517 baseline), exit 0. Evidence evidence-cache-{original,full,ruff}.txt and gate-exits.json. Source frozen and tracked generated data restored; manifest updated.
+
+Fresh 08:28:20 observer remains sole PID561510 active. Saved corrective-observer-0830.jsonl/comparison (filename approximate):4294.52s,33 coverage points/seven generations,202813–203758 within10%,full-hour proof true,no sampled issues. Ordinary index phase collector anon peak2884878336 (40 samples); websocket2582970368 (10); evidence3542568960 (130). No sampled index/websocket overlap. Different durations/phases still preclude a causal savings claim.
+
+Collector peak07:41:32 had evidence worker RSS2246824KiB, supervisor627476KiB, fast259584KiB, bulk423964KiB. Collector total4294111232bytes, anon3542568960, hostavailable1350064KiB. App peak08:12:14 anon3201028096/total3598045184. Evidence corrective-peak-processes-0830.json. Caps remain unsafe to lower from this evidence. Collector logs retain only the worker's final summary, not phase logs; market_evidence_worker always emits ok after the internally guarded function. Do not use that summary alone to prove successful settlement/radar publication; verify actual artifact advancement and consider improving this error reporting separately.
+
+Next: preserve observer to approximately09:16:39 and inspect terminal/full phases. Guarded deploy final candidate, verify source parity, then atomically install reviewed exact GPRO registry with hash/backup evidence; NEVER install it against live legacy b4230a7. Validate pages/aliases/native rates and ordinary coverage/RAM/latency. Final cap budget,48h and two subsequent normal green backups remain open. No duplicate observer/waiter, cap increases, trades or messages.
+
+
 ## Global stock alias duplication fixed locally — 2026-09-06 08:27 UTC
 
 Latest candidate **5b65b47 / 873d8444c0efd3bf**, NOT deployed, no release waiter. Shared exact stock leg identity now deduplicates global Spreads groups/shortlists and Funding page/navigation independently per selected window. It preserves exact-symbol searches, distinct contracts and opposite directions; incomplete canonical history cannot suppress complete alias history. Spreads prefers matched-depth evidence over a newer top-only duplicate. No ticker-only merge, DEX identity collapse or execution-policy change. Current catalogue still retains alias payloads for lookup; this is a public-list correctness fix, not a claimed structural RAM reduction.
