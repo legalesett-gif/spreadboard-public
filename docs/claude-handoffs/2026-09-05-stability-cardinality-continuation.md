@@ -1,5 +1,16 @@
 # SpreadBoard continuation for Claude
 
+## Refreshed two-way public comparison — 2026-09-06 09:15 UTC
+
+New UA guest table capture at~09:12 contains15exactFutures leaders. Copied production catalogue saved08:56:19 has12exact direction/venue/type counterparts. Other3: BNCSTOCK Bitget->Ourbit intentionally excluded (do not substitute earlier Binance pair); GPROSTOCK Bybit->Entropy missing live but pending candidate addresses it; PURRSTOCK Bybit->nativeHyperliquidPURR is a stock/token identity mismatch. Fresh native Bybit PURRUSDT says symbolType stock/fullName Hyperliquid Strategies Inc; native Hyperliquid PURR mark~0.11984 versus UA Bybit~12.318. Keep excluded. Files ua-futures-0913-comparison.json/.txt, ua-0913-catalog.json and purr-native-0913.json. No exhaustive paid-catalogue claim.
+
+Reverse comparison: visible UA exchange filter lists Aster,Binance,Bingx,Bitget,Bybit,BybitFi,Gate,GateFi,Hyperliquid,Kucoin,Mexc,OKX,Ourbit,Whitebit and premium CoinEx,HTX,Hashkey,Lighter,Phemex,Xt. Kraken Futures and Coinbase International are absent from that visible selector. Current SpreadBoard leading rows S,VELO,ZIG,ATH,BLUR,ICX,NIGHT and MORPHO use those venues, explaining several different leaders. Direct Kraken tickers freshly corroborate signed hourly quote funding: e.g PF_SUSD0.000154105 versus mark0.03081258654 is about+0.5001%/hour; PF_ICXUSD-0.0000505753 versus mark0.014315 is about-0.3533%/hour. Predicted next rates differ and are not the current rate. This is public rate evidence, not private entry/guaranteed return. kraken-leaders-0914.json; https://support.kraken.com/articles/4844359082772-linear-multi-collateral-derivatives-contract-specifications .
+
+Another display-unit difference: UA T Bybit->Whitebit row shows about0.96% F Spread, with roughly-0.53%/-0.05% each4h; this is consistent with8-hour-normalized carry. Our same row shows+2.880% projected24h. Do not compare these numbers as if they used the same horizon, and do not mix either with settled1d/7d/30d. This normalization is an inference from the displayed arithmetic, not a captured UA formula specification.
+
+Current board rendered849unique positive-funding tokens/24142routes; catalogue totals are not display totals or unique assets. Most visible historical cells state awaiting next exact refresh or incomplete windows; MORPHO had populated exact totals. Funding navigation timed out at14.55s in browser then same tab loaded; latency remains unresolved. No new production job or deployment. Observer561510 fresh09:14 stillactive.
+
+
 ## Release boundary — fresh 2026-09-06 09:09:39 UTC
 
 Production remains b4230a7 / 272beeec7e0e9f49. Candidate source e5c3b33 / 30de5e93e4ac8e4d has 2748 full tests and Ruff exit0; current docs/registry commit28f1eab does not change source digest. No deployment queued. Same observer561510 ACTIVE. Fresh protected_deploy_guard.py exited12 and reported discovery worker607244. Preserve both; no force or duplicate waiter. First complete/freeze observer around09:16:39; then refresh guard until protected work finishes before guarded helper.
