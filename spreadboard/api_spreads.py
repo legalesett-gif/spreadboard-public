@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import datetime, timezone
+from operator import attrgetter
 from pathlib import Path
 import gc
 import json
@@ -57,7 +58,7 @@ def _row_value(row: Any, key: str, default: Any = None) -> Any:
 RETIRED_ROUTE_KINDS = frozenset({"SPOT", "DEX-SPOT"})
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class SpreadTerminalRow:
     token: str
     token_name: str | None
@@ -144,10 +145,13 @@ class SpreadTerminalRow:
     dex_route_plan: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        # asdict() recurses and deep-copies; every field on this row is a scalar
-        # or a flat list, so the recursion was 9.8s of pure waste per request at
-        # 34k rows. Callers treat the result as read-only.
-        return dict(self.__dict__)
+        # Keep the shallow public mapping contract without retaining a large
+        # per-instance attribute dictionary for every parsed route.
+        return dict(zip(_ROW_FIELD_NAMES, _ROW_FIELD_VALUES(self)))
+
+
+_ROW_FIELD_NAMES = tuple(field.name for field in fields(SpreadTerminalRow))
+_ROW_FIELD_VALUES = attrgetter(*_ROW_FIELD_NAMES)
 
 
 def load_public_route_index(

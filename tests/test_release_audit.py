@@ -2894,7 +2894,10 @@ def test_row_dicts_are_not_deep_copied() -> None:
     )
     payload = row.to_dict()
     assert payload["token"] == "AAA"
-    assert payload is not row.__dict__, "callers must not be handed the row's own dict"
+    assert payload is not row.to_dict(), "each caller must get an independent mapping"
+    assert payload["blockers"] is row.blockers, "nested values remain shallow references"
+    payload["token"] = "CHANGED"
+    assert row.token == "AAA"
 
 
 def test_headline_lists_do_not_group_the_whole_universe() -> None:
