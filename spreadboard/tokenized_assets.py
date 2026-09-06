@@ -97,10 +97,30 @@ def classify(route: dict[str, Any], *, path: Path | str = DEFAULT_REGISTRY_PATH)
     registry_venues = set(entry.get("venues") or [])
     if registry_venues and not route_venues.issubset(registry_venues):
         missing.append("venue_instrument_mapping")
+    # A venue can list several instruments for one label. Evidence for one
+    # perpetual must not certify a spot wrapper or another builder's contract.
+    market_evidence = entry.get("markets") or []
+    for side in ("long", "short"):
+        identity = (
+            str(route.get(f"{side}_venue") or ""),
+            str(route.get(f"{side}_market_type") or ""),
+            str(route.get(f"{side}_market_symbol") or ""),
+        )
+        matches = [
+            market for market in market_evidence
+            if identity == (market["venue"], market["market_type"], market["market_symbol"])
+        ]
+        if not all(identity) or len(matches) != 1:
+            missing.append(f"{side}_market_mapping")
+        elif any(not matches[0].get(key) for key in (
+            "underlying_symbol", "instrument_type", "oracle_source",
+            "trading_hours", "source_url",
+        )) or matches[0]["underlying_symbol"] != entry["underlying_symbol"]:
+            missing.append(f"{side}_market_evidence")
     return {
         "asset_class": "tokenized",
         "status": "verified" if not missing else "blocked",
-        **entry,
+        **{key: value for key, value in entry.items() if key != "markets"},
         "reasons": [f"{key}_unresolved" for key in missing],
         "execution_policy": "research_only",
     }
@@ -128,4 +148,28 @@ def _normalize_entry(symbol: Any, value: Any) -> dict[str, Any] | None:
         "corporate_action_policy": " ".join(str(value.get("corporate_action_policy") or "").split())[:300],
         "venues": [" ".join(str(item).split())[:80] for item in value.get("venues") or [] if str(item).strip()][:30],
         "source_url": source_url or None,
+        "markets": _normalize_markets(value.get("markets")),
     }
+
+
+def _normalize_markets(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    markets = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        # Reuse field validation, without recursively accepting nested markets.
+        evidence = _normalize_entry("market", {**item, "markets": None})
+        if evidence is None:
+            continue
+        evidence.pop("markets")
+        evidence.pop("symbol")
+        evidence.pop("venues")
+        evidence.update({
+            "venue": str(item.get("venue") or "").strip(),
+            "market_type": str(item.get("market_type") or "").strip(),
+            "market_symbol": str(item.get("market_symbol") or "").strip(),
+        })
+        markets.append(evidence)
+    return markets
