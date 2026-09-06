@@ -72,6 +72,7 @@ class Leg:
     quote: str
     contract_size: float
     book: live_book_cache.CachedBook
+    asset_class: str | None = None
 
     @property
     def bid(self) -> float:
@@ -345,6 +346,7 @@ def for_token(
                 quote=str(item.get("quote") or "").upper(),
                 contract_size=contract_size if contract_size > 0 else 1.0,
                 book=book,
+                asset_class=item.get("asset_class"),
             )
         )
 
@@ -478,6 +480,7 @@ def for_tokens(
                     quote=str(item.get("quote") or "").upper(),
                     contract_size=contract_size if contract_size > 0 else 1.0,
                     book=book,
+                    asset_class=item.get("asset_class"),
                 )
             )
 
@@ -651,6 +654,7 @@ def dex_futures_routes(
                 quote=str(item.get("quote") or "").upper(),
                 contract_size=contract_size if contract_size > 0 else 1.0,
                 book=book,
+                asset_class=item.get("asset_class"),
             )
         )
 
@@ -1271,6 +1275,7 @@ def all_token_summaries(
                     quote=str(item.get("quote") or "").upper(),
                     contract_size=contract_size if contract_size > 0 else 1.0,
                     book=book,
+                    asset_class=item.get("asset_class"),
                 )
             )
         best_spread: dict[str, Any] | None = None
@@ -1606,6 +1611,8 @@ def _route(
     row["funding_24h_pct"] = windows.get("1d")
     row["settled_funding_windows"] = windows
     row["catalog_history_loaded"] = include_history
+    if "tokenized" in {long_leg.asset_class, short_leg.asset_class}:
+        row["asset_class"] = "tokenized"
     guard = tokenized_assets.classify(row)
     row["tokenized_guard"] = guard
     if guard.get("asset_class") == "tokenized" and guard.get("status") != "verified":

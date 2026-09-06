@@ -2947,6 +2947,9 @@ def _row_from_api(
         {
             "token": token,
             "token_name": token_metadata.token_name(token, metadata or {}),
+            "asset_class": raw.get("asset_class"),
+            "long_asset_class": long_identity.get("asset_class"),
+            "short_asset_class": short_identity.get("asset_class"),
             "long_market_symbol": long_market_symbol,
             "short_market_symbol": short_market_symbol,
         }

@@ -59,7 +59,10 @@ def classify(route: dict[str, Any], *, path: Path | str = DEFAULT_REGISTRY_PATH)
         for key in ("long_market_symbol", "short_market_symbol")
     )
     inferred = (
-        token.endswith("STOCK")
+        route.get("asset_class") == "tokenized"
+        or route.get("long_asset_class") == "tokenized"
+        or route.get("short_asset_class") == "tokenized"
+        or token.endswith("STOCK")
         or token in KNOWN_TOKENIZED
         or any(marker in token_name for marker in NAME_MARKERS)
         or bool(re.search(r"(?:^|[/:-])(XYZ|CASH|KM|MKTS):", markets))

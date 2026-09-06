@@ -20,7 +20,7 @@ from urllib.request import Request, urlopen
 from spreadboard.fast_quotes import NATIVE_FUTURES_VENUES, NATIVE_SPOT_VENUES, VENUE_IDS
 from spreadboard import route_taxonomy
 from spreadarb.venue_policy import opportunity_venue_enabled
-from spreadarb.market_status import public_market_definition
+from spreadarb.market_status import native_market_asset_class, public_market_definition
 from spreadarb.api_discovery.identity import load_watchlist
 
 
@@ -355,6 +355,7 @@ def _load_venue(venue: str, market_type: str) -> list[dict[str, Any]]:
                 "market_id": str(market.get("id") or ""),
                 "quote": str(market.get("quote") or "").upper(),
                 "contract_size": market.get("contractSize") if is_derivative else 1.0,
+                **({"asset_class": "tokenized"} if native_market_asset_class(venue, market) == "tokenized" else {}),
             })
         return rows
     finally:

@@ -40,3 +40,17 @@ def public_market_definition(venue: str, market: Mapping[str, Any]) -> dict[str,
     the original client and in the copied native info, and still need preflight.
     """
     return {**market, "active": market_open_for_opportunities(venue, market)}
+
+
+def native_market_asset_class(venue: str, market: Mapping[str, Any]) -> str | None:
+    """Positive native derivative evidence only; ticker spelling proves nothing."""
+    if not market.get("swap"):
+        return None
+    info = market.get("info")
+    if not isinstance(info, Mapping):
+        return None
+    if venue == "Bitget" and str(info.get("isRwa") or "").upper() == "YES":
+        return "tokenized"
+    if venue == "Binance" and str(info.get("underlyingType") or "").upper() == "EQUITY":
+        return "tokenized"
+    return None

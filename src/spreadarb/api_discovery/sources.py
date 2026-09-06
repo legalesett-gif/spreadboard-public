@@ -17,7 +17,7 @@ from urllib.request import Request, urlopen
 import ccxt
 
 from spreadboard import route_taxonomy
-from spreadarb.market_status import market_open_for_opportunities, public_market_definition
+from spreadarb.market_status import market_open_for_opportunities, native_market_asset_class, public_market_definition
 
 from spreadarb.api_discovery.attestations import ExecutorAttestationRegistry, route_key
 from spreadarb.api_discovery.identity import (
@@ -2204,6 +2204,7 @@ def _quote_identity_note(quote: MarketQuote) -> dict[str, Any]:
         "token_address": quote.token_address,
         "settle_asset": quote.settle_asset,
         "contract_size": quote.contract_size,
+        "asset_class": quote.asset_class,
     }
     for key, value in optional.items():
         if value is not None:
@@ -2443,6 +2444,7 @@ def _quote_from_book(
         source_name=source_name,
         symbol=symbol,
         quote_asset=source_quote.quote_asset,
+        asset_class=source_quote.asset_class,
         identity_key=identity_key,
         identity_source=(
             market_identity.source if market_identity is not None else source_quote.identity_source
@@ -2786,6 +2788,7 @@ def _ticker_quotes_for_symbols(
                 source_name=source_name,
                 symbol=str(symbol),
                 quote_asset=_market_quote(market, str(symbol)),
+                asset_class=native_market_asset_class(venue, market),
                 identity_key=identity.identity_key,
                 identity_source=market_identity.source if market_identity is not None else None,
                 decimals=market_identity.decimals if market_identity is not None else None,
