@@ -1070,3 +1070,12 @@ watchdog/cap-persistence and two backup timer firings are already evidenced.
   `gap-market-status.jsonl`, `ua-funding-2300-reconciliation.jsonl`,
   `builder-alias-frozen-live-comparison.jsonl`, `hft-catalogue-gap.jsonl`,
   `native-release-through2256-summary.json`, current guard and observer logs.
+
+
+## Continuation checkpoint — 2026-09-06 02:49 UTC
+
+The single deployment waiter PID59028/session78374 remains protected by discovery PID407100; no deployment observed through 02:48 UTC. Candidate source remains unchanged. The Claude continuation handover was rewritten around the correct collector-retention checkout and active waiter; stale instructions were archived as historical, superseded text.
+
+Saved ordinary-load baseline `output/stability-20260906/pre-held-release-observer.jsonl` and `pre-held-release-summary.json`: 02:35:02–02:48:45 UTC, 55 host samples, stable container IDs, both healthy with zero restarts and cgroup OOM kills. App sampled current peak3,758,043,136bytes (nearly its3,758,096,384-byte limit), anon3,346,644,992; collector current4,076,175,360, anon3,257,188,352. Mean sampled CPU app0.868cores/collector2.114cores. Process samples contained normal workers, no named diagnostic profiling child. This is a short pre-candidate baseline, not48h acceptance. All six endpoint probes200; priced counts198001/198126/198257 across generations4–5. Lower app caps remain unjustified.
+
+Next: observe the existing waiter; do not duplicate it or manually deploy. Verify actual source parity and direction/UI after success, then compare ordinary reload memory. Recurring automation stays paused.

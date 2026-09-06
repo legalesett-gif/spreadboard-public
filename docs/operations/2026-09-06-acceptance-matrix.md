@@ -38,3 +38,12 @@ Detailed chronology and raw evidence: `docs/operations/2026-09-05-stability-revi
 ## Active deployment wait
 
 One bounded local waiter is running: PID59028, tool session78374, started02:41:04UTC, with a two-hour guard-wait ceiling. Expected tested source digest is `3d0f3437aa390c87`. It polls the protected-worker guard every55seconds, refuses changed source, and invokes the existing guarded helper once when idle. The helper independently guards immediately before recreation. No recurring automation was created or reactivated. Do not start a duplicate waiter or deploy manually while it is active. Observe `output/stability-20260906/guarded-release-wait.jsonl`; eventual deployment output goes to `held-release-deploy.txt`. A nonzero deployment result requires inspection, not a blind retry.
+
+
+## Continuation checkpoint — 2026-09-06 02:49 UTC
+
+The single deployment waiter PID59028/session78374 remains protected by discovery PID407100; no deployment observed through 02:48 UTC. Candidate source remains unchanged. The Claude continuation handover was rewritten around the correct collector-retention checkout and active waiter; stale instructions were archived as historical, superseded text.
+
+Saved ordinary-load baseline `output/stability-20260906/pre-held-release-observer.jsonl` and `pre-held-release-summary.json`: 02:35:02–02:48:45 UTC, 55 host samples, stable container IDs, both healthy with zero restarts and cgroup OOM kills. App sampled current peak3,758,043,136bytes (nearly its3,758,096,384-byte limit), anon3,346,644,992; collector current4,076,175,360, anon3,257,188,352. Mean sampled CPU app0.868cores/collector2.114cores. Process samples contained normal workers, no named diagnostic profiling child. This is a short pre-candidate baseline, not48h acceptance. All six endpoint probes200; priced counts198001/198126/198257 across generations4–5. Lower app caps remain unjustified.
+
+Next: observe the existing waiter; do not duplicate it or manually deploy. Verify actual source parity and direction/UI after success, then compare ordinary reload memory. Recurring automation stays paused.
