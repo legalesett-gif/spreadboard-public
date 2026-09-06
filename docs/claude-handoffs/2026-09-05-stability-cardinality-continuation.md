@@ -80,3 +80,11 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --frozen --with ruff python scripts/ruff_ratch
 ```
 
 Raw evidence is in `output/stability-20260906/`. The previous handover is archived as `2026-09-05-stability-cardinality-history.md`; its operational directions are superseded.
+
+## Additional Spot category comparison — 2026-09-06 04:46 UTC
+
+A fresh guest inspection of UA's Spot tab found15visible spot-to-spot leaders. The exact category is deliberately retired from SpreadBoard: `api_spreads.RETIRED_ROUTE_KINDS` contains SPOT andDEX-SPOT, and the2026-08-28continuous-stream handover explicitly preserves that product decision. Spot market books remain necessary for the retained futures/spot routes, charts, portfolio marks and token-price alerts.
+
+Nine displayed routes used Binance Alpha (SIREN,MITO,MOG,SPX,CHIP,ONDO,POWER,CFG,MORPHO), and two used Ourbit (SHROOM,BULLA). The remaining four were UPC MexcSpot→BitgetSpot, FONE GateSpot→MexcSpot, LUNC KucoinSpot→BinanceSpot andNPC MexcSpot→GateSpot. Their venues are configured but the route family is retired. These overlapping scope reasons explain the guest leaders; they do not establish a missing retained futures/funding route. Do not restore spot-to-spot permutations in response to this comparison or present them as funding opportunities.
+
+Actual signed-in SpreadBoard `/markets?q=UPC` showed no rows and only Futures-Futures/Futures-Spot/Futures-DEX/Allroutes categories, consistent with policy. This is a category-scope check, not a native token-identity, transfer-rail or executable-arbitrage audit. UA's Spot-Dex/Futures-Dex tabs were visibly premium-disabled; no bypass attempted. Evidence `output/stability-20260906/ua-spot-family-comparison.json`. This15-row sample is separate from earlier samples and must not be summed into an exhaustive coverage claim.
