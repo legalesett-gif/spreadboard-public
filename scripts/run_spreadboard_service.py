@@ -15,7 +15,7 @@ import sys
 import tempfile
 import threading
 import time
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from itertools import chain
 from pathlib import Path
@@ -261,6 +261,20 @@ class RefreshLoop:
         self.websocket_paused.clear()
         self._ensure_websocket_worker()
 
+    @contextmanager
+    def _paused_websocket_worker(self):
+        """Keep the optional fast lane out of a heavy publication batch.
+
+        Use inside the collector heavy lock, so another publisher cannot resume
+        the worker during this batch. Bulk quotes continue providing books.
+        Early returns and failed finalization must restore the fast lane too.
+        """
+        self.pause_websocket_worker()
+        try:
+            yield
+        finally:
+            self.resume_websocket_worker()
+
     def refresh_once(self) -> None:
         lightweight_mode = _env_bool("SPREADBOARD_LIGHTWEIGHT_MODE")
         with self.snapshot_lock:
@@ -341,7 +355,10 @@ class RefreshLoop:
         if result.returncode != 0 and not partial_after_timeout:
             _log(f"refresh failed ({result.returncode}): {result.stderr[-500:]}")
             return
-        with _COLLECTOR_HEAVY_LOCK:
+        with _COLLECTOR_HEAVY_LOCK, self._paused_websocket_worker():
+            # The ordinary index publisher already pauses the fast lane. This
+            # post-discovery path needs the same exclusion: its index child
+            # overlapped a 959MiB websocket worker at the measured cgroup peak.
             # Every step below used to parse the 40MB snapshot here, in the web
             # server: the staging copy and the published one at the same time so the
             # merge could see both, then again for the identity registry. That is
