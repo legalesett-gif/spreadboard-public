@@ -1,0 +1,100 @@
+{
+  "schema": "spreadboard.tokenized_asset_registry.v2",
+  "updated_at": "2026-09-06T08:08:27.579618+00:00",
+  "assets": {
+    "GPRO": {
+      "underlying_symbol": "GPRO",
+      "instrument_type": "equity_perpetual",
+      "issuer_or_market": "GoPro Inc reference derivatives; no equity ownership",
+      "oracle_source": "Venue-specific equity indices; see exact market evidence and linked pricing specifications",
+      "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+      "corporate_action_policy": "Venue-specific adjustments or termination; instruments are not deliverable shares",
+      "venues": [
+        "Bybit",
+        "Hyperliquid"
+      ],
+      "source_url": "https://docs.entropy.io/asset-directory/equity-assets",
+      "markets": [
+        {
+          "underlying_symbol": "GPRO",
+          "instrument_type": "equity_perpetual",
+          "issuer_or_market": "GoPro Inc reference derivatives; no equity ownership",
+          "oracle_source": "Bybit TradFi weighted index with session-dependent components, transition smoothing and anchor constraints",
+          "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+          "corporate_action_policy": "Venue-specific adjustments or termination; instruments are not deliverable shares",
+          "source_url": "https://announcements.bybit.com/en/article/new-listing-gprousdt-tradfi-perpetual-contract-with-up-to-25x-leverage--art8e542b406998/",
+          "venue": "Bybit",
+          "market_type": "Futures",
+          "market_symbol": "GPRO/USDT:USDT",
+          "evidence_urls": [
+            "https://www.bybit.com/en/help-center/article/Introduction-to-TradFi-Perpetual-Contracts?category=4d5d8649cba144c1a8"
+          ]
+        },
+        {
+          "underlying_symbol": "GPRO",
+          "instrument_type": "equity_perpetual",
+          "issuer_or_market": "GoPro Inc reference derivatives; no equity ownership",
+          "oracle_source": "Entropy io / Redstone: public primary-venue price in session; depth-weighted internal/external blend outside session",
+          "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+          "corporate_action_policy": "No cash-dividend adjustment; splits, completed acquisition or delisting terminate via haltTrading per venue terms",
+          "source_url": "https://docs.entropy.io/asset-directory/equity-assets",
+          "venue": "Hyperliquid",
+          "market_type": "Futures",
+          "market_symbol": "IO-GPRO/USDC:USDC",
+          "evidence_urls": [
+            "https://docs.entropy.io/",
+            "https://docs.entropy.io/equity-perp-mechanics/oracle-price",
+            "https://docs.entropy.io/market-types/equity-perpetuals"
+          ]
+        }
+      ]
+    },
+    "GPROSTOCK": {
+      "underlying_symbol": "GPRO",
+      "instrument_type": "equity_perpetual",
+      "issuer_or_market": "GoPro Inc reference derivatives; no equity ownership",
+      "oracle_source": "Venue-specific equity indices; see exact market evidence and linked pricing specifications",
+      "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+      "corporate_action_policy": "Venue-specific adjustments or termination; instruments are not deliverable shares",
+      "venues": [
+        "Bybit",
+        "Hyperliquid"
+      ],
+      "source_url": "https://docs.entropy.io/asset-directory/equity-assets",
+      "markets": [
+        {
+          "underlying_symbol": "GPRO",
+          "instrument_type": "equity_perpetual",
+          "issuer_or_market": "GoPro Inc reference derivatives; no equity ownership",
+          "oracle_source": "Bybit TradFi weighted index with session-dependent components, transition smoothing and anchor constraints",
+          "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+          "corporate_action_policy": "Venue-specific adjustments or termination; instruments are not deliverable shares",
+          "source_url": "https://announcements.bybit.com/en/article/new-listing-gprousdt-tradfi-perpetual-contract-with-up-to-25x-leverage--art8e542b406998/",
+          "venue": "Bybit",
+          "market_type": "Futures",
+          "market_symbol": "GPRO/USDT:USDT",
+          "evidence_urls": [
+            "https://www.bybit.com/en/help-center/article/Introduction-to-TradFi-Perpetual-Contracts?category=4d5d8649cba144c1a8"
+          ]
+        },
+        {
+          "underlying_symbol": "GPRO",
+          "instrument_type": "equity_perpetual",
+          "issuer_or_market": "GoPro Inc reference derivatives; no equity ownership",
+          "oracle_source": "Entropy io / Redstone: public primary-venue price in session; depth-weighted internal/external blend outside session",
+          "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+          "corporate_action_policy": "No cash-dividend adjustment; splits, completed acquisition or delisting terminate via haltTrading per venue terms",
+          "source_url": "https://docs.entropy.io/asset-directory/equity-assets",
+          "venue": "Hyperliquid",
+          "market_type": "Futures",
+          "market_symbol": "IO-GPRO/USDC:USDC",
+          "evidence_urls": [
+            "https://docs.entropy.io/",
+            "https://docs.entropy.io/equity-perp-mechanics/oracle-price",
+            "https://docs.entropy.io/market-types/equity-perpetuals"
+          ]
+        }
+      ]
+    }
+  }
+}
