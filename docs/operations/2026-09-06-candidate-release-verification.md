@@ -2,7 +2,7 @@
 
 Updated 2026-09-06 08:00 UTC. This is a runbook, not release or acceptance evidence.
 
-The tested candidate is `ef5ea99`, source/data digest `553b9ae674866098`, not deployed and with no release waiter queued. Production is `b4230a7`, digest `272beeec7e0e9f49`. The candidate adds complete public Hyperliquid builder enumeration, exact-market stock classification for Binance, Bitget and Bybit, and per-contract registry evidence gates. Full suite: 2,728 passed (151.53 seconds, exit 0); Ruff: no new findings against unchanged 517 baseline (exit 0). Evidence: `exact-market-full.txt` and `exact-market-ruff.txt` in `output/stability-20260906/`. The frozen `candidate-release-manifest.json` also hashes build inputs and the guarded helper. Recheck these before release; source changes invalidate the recorded gates.
+The tested candidate is `5b65b47`, source/data digest `873d8444c0efd3bf`, not deployed and with no release waiter queued. Production is `b4230a7`, digest `272beeec7e0e9f49`. The candidate adds complete public Hyperliquid builder enumeration, exact-market stock classification for Binance, Bitget and Bybit, and per-contract registry evidence gates. Full suite: 2,739 passed (144.16 seconds, exit 0); Ruff: no new findings against unchanged 517 baseline (exit 0). Evidence: `stock-alias-final-full.txt` and `stock-alias-final-ruff.txt` in `output/stability-20260906/`. The frozen `candidate-release-manifest.json` also hashes build inputs and the guarded helper. Recheck these before release; source changes invalidate the recorded gates.
 
 ## Before release
 
@@ -41,3 +41,7 @@ Choose a defensible memory budget from post-fix ordinary-load evidence, then val
 Production `b4230a7` includes rclone connection timeout 5 minutes/connections 2 and default RCLONE_TPSLIMIT 4/burst 1, preserving explicit pacing and non-rclone behavior. Probe timeout is 360 seconds. No backup/prune retries were added; retention and integrity checks remain required.
 
 The host unit was separately verified and installed after the failed backup became terminal, with daemon-reload and no manual backup start. Effective TimeoutStartUSec is 2h; unit SHA256 is `44bf4298826351d5b2f3136692d3da68a421b5977f8f8eb2d4c3d690eb0630b8`. The app/collector helper does not install units. Do not repeat this installation unless the unit changes. Next normal timer was 12:18:27 UTC at the post-install check; refresh before stating it as current. The pacing change has not yet proved it resolves shared Drive quota failures. The failed 06:21 run is not green.
+
+## Reviewed stock registry installation order
+
+Global alias deduplication is now tested in candidate 5b65b47. Install `docs/operations/2026-09-06-reviewed-stock-registry.json` only AFTER deploying and verifying this source or a reviewed descendant. The currently deployed b4230a7 does not enforce the exact-contract scope. The runtime registry is separate from helper-synced baked data. Back up its previous bytes, use an atomic replacement, and verify its hash against the manifest before starting the next single observation. Do not mark the source or registry deployed from this runbook.

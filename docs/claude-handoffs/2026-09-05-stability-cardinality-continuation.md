@@ -1,5 +1,18 @@
 # SpreadBoard continuation for Claude
 
+## Global stock alias duplication fixed locally — 2026-09-06 08:27 UTC
+
+Latest candidate **5b65b47 / 873d8444c0efd3bf**, NOT deployed, no release waiter. Shared exact stock leg identity now deduplicates global Spreads groups/shortlists and Funding page/navigation independently per selected window. It preserves exact-symbol searches, distinct contracts and opposite directions; incomplete canonical history cannot suppress complete alias history. Spreads prefers matched-depth evidence over a newer top-only duplicate. No ticker-only merge, DEX identity collapse or execution-policy change. Current catalogue still retains alias payloads for lookup; this is a public-list correctness fix, not a claimed structural RAM reduction.
+
+Verification: initial 24 focused passed; six new cases fail the previous implementation. First full gate caught two style findings only; both fixed without changing the 517 baseline. Added depth-preference and spot/futures exact-pair regressions; 20 final focused/ratchet passed. Final **2739 passed in 144.16 seconds, exit 0**; Ruff no new findings (516 known), exit 0. Evidence stock-alias-final-{full,ruff}.txt and stock-alias-final-gate-exits.json. Tracked generated data restored, source frozen, manifest updated.
+
+Fresh public-data replay through actual bulk constructor, Funding page/navigation and Spreads grouping succeeds: global funding 1, navigation 1, Spreads 1; alias Spreads detail 1, alias Funding detail retains 2 opposite directions with exactly one Bybit->Hyperliquid copy. The first replay assertion incorrectly expected one total alias-detail row; corrected to assert one forward pair while preserving the valid reverse direction. Evidence gpro-public-list-replay.json/.txt and replay_gpro_public_lists.py. This is local copied-public-data evidence, not production membership or trade readiness. A synthetic 200,000-row crypto fast-path scan returns the original list, 360 extra traced bytes; untraced scan 0.083 seconds locally, not a production performance claim.
+
+Reviewed GPRO registry draft is now ready ONLY with this candidate or reviewed descendant. **Never install it against live b4230a7:** legacy code does not enforce the exact market mappings, and would ignore that scope. After protected candidate deployment/source parity, install the exact reviewed registry atomically into the runtime path with backup/hash evidence; helper does not sync this runtime file. Record registry hash alongside source before the next single observer. No production mutation yet.
+
+Fresh 08:20:36: existing corrective observer PID 561510 active. **Full-hour coverage passed**: 31 samples spanning 3621.57 seconds, six generations, 202813–203758 priced vs 202936 baseline; total host duration3837.60s. No sampled OOM/restart/unhealthy/endpoint failure. App anon peak3201028096/current3598045184; collector anon3542568960/current4294111232. /free max17.704s, health6.579s. Evidence corrective-observer-hour.jsonl/analysis-hour.json. Memory cap budget and latency remain unresolved; no final48h claim. Preserve same two-hour observer until about09:16:39, then inspect terminal marker/exit and final phase maxima before protected release. Two successful subsequent normal backups still needed.
+
+
 ## Reviewed GoPro mapping and alias duplication found — 2026-09-06 08:14 UTC
 
 Candidate ef5ea99 / 553b9ae674866098 remains frozen and undeployed. Prepared `docs/operations/2026-09-06-reviewed-stock-registry.json` with exact Bybit GPRO/USDT:USDT and Entropy IO-GPRO/USDC:USDC records, primary contract/pricing URLs, and both searchable labels GPRO/GPROSTOCK. **DRAFT, NOT READY TO INSTALL:** bulk generation duplicates the same economic route under both labels. No runtime registry changed.
