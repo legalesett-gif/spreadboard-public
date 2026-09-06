@@ -3914,8 +3914,9 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                 if funding_candidates:
                     best_funding = max(
                         funding_candidates,
-                        key=lambda route: _float_or_none(route.get("funding_daily_pct"))
-                        or float("-inf"),
+                        # Candidates already have a finite numeric value;
+                        # zero is a real rate and ranks above a negative one.
+                        key=lambda route: float(route["funding_daily_pct"]),
                     )
                     daily_funding = _float_or_none(best_funding.get("funding_daily_pct"))
                     # ``Now`` and the push stream are current-rate surfaces. A

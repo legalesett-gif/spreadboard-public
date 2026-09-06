@@ -1373,7 +1373,7 @@ def _fast_quote_updates_for(
             for item in payload.get("rows") or []:
                 if not isinstance(item, dict):
                     continue
-                raw = _project_route_funding(_mirror_if_spot_sale_required(item))
+                raw = _project_route_funding(item)
                 notes = raw.get("notes") if isinstance(raw.get("notes"), dict) else {}
                 inputs = (
                     notes.get("route_inputs")
@@ -2773,21 +2773,10 @@ def _project_route_funding(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _mirror_if_spot_sale_required(raw: dict[str, Any]) -> dict[str, Any]:
-    """Re-orient a route that could only be taken the other way round.
+    """Legacy explicit reverse-route conversion; never use during ingestion.
 
-    A route with the futures leg long and the spot leg short cannot be taken as
-    written -- it sells spot you do not own. The board handled that by negating
-    the carry while still printing the legs in the original order, so a row read
-    "long Gate Futures, short Gate Spot" while its +0.29%/day described the
-    opposite trade. Anyone following the label put on the losing side.
-
-    Worse, the spread was never re-derived. GUA showed 192.29% buying BitMart
-    futures at 0.05186 and selling Gate spot at 0.15158; the trade you can
-    actually do -- buy Gate spot at 0.15491, short BitMart futures at 0.05186 --
-    is -66.5%. The headline edge only existed in the direction nobody can trade.
-
-    Mirroring here, before the row is built, means the label, the spread, the
-    carry and the ranking all describe the same position.
+    Reversing the legs constructs a different candidate. Public source rows
+    must retain their exact identity and disclose spot inventory/borrow needs.
     """
     if str(raw.get("short_market_type") or "") != "Spot":
         return raw
@@ -2860,7 +2849,7 @@ def _row_from_api(
     rails: dict[str, dict[str, Any]] | None = None,
     live_funding: dict[str, dict[str, Any]] | None = None,
 ) -> SpreadTerminalRow:
-    raw = _apply_live_funding(_mirror_if_spot_sale_required(raw), live_funding)
+    raw = _apply_live_funding(raw, live_funding)
     raw = _project_route_funding(raw)
     token = str(raw.get("token") or "").upper().strip()
     long_venue = _str_or_none(raw.get("long_venue"))
@@ -3601,10 +3590,8 @@ def quote_basis_mismatch(row: "SpreadTerminalRow") -> bool:
 # a transfer rail.
 TRANSFER_ROUTE_KINDS = frozenset({"SPOT", "DEX-SPOT"})
 
-# Spot cannot be shorted. In a futures/spot pair the futures leg is the one that
-# gets shorted and the spot leg is simply held long. So a route printed as "long
-# futures / short spot" is not a fresh entry at all -- it requires spot inventory
-# you already hold. That is a stronger constraint than any deposit rail.
+# Selling the spot leg requires inventory or verified borrow support. Preserve
+# that candidate's direction; a spot-long/futures-short mirror is another route.
 SHORT_SPOT_ROUTE_KINDS = frozenset({"FUTURES-SPOT"})
 
 
@@ -4322,9 +4309,8 @@ def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | 
     """Net carry as (percent per day, APR percent), both legs on a common basis.
 
     A delta-neutral position pays funding on the long leg and receives it on the
-    short leg, so the net is short-minus-long. For routes that would require
-    selling spot you do not own, the executable trade is the mirror image (hold
-    spot long, short the futures), so the carry flips sign with it.
+    short leg, so the net is short-minus-long. A spot sale requires inventory
+    or borrow support; it does not change the direction of either funding leg.
 
     This is the live ``Now`` value, so current leg rates win. Settled 24h is a
     different, historical measurement exposed separately by the Funding radar;
@@ -4359,8 +4345,6 @@ def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | 
             net_daily = _float_or_none(getattr(row, "funding_daily_pct", None))
     if net_daily is None:
         return None, None
-    if requires_existing_spot_inventory(row):
-        net_daily = -net_daily
     return net_daily, net_daily * 365.0
 
 
@@ -4432,7 +4416,7 @@ def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
         else None
     )
     payload["executable_direction"] = (
-        "hold spot long, short futures"
+        "long the futures leg; short spot requires inventory or borrow"
         if requires_existing_spot_inventory(row)
         else "long the buy leg, short the sell leg"
     )
@@ -4524,9 +4508,8 @@ def _entrance_spread_dict(row: dict[str, Any]) -> float:
 
 
 # Selection, sorting and display must all read the SAME number. The raw
-# funding_24h_pct fields carry the route as printed, without the spot-inventory
-# direction flip that normalised_funding applies, so a FUTURES-SPOT row used to
-# publish best_funding_apr_pct and best_funding_24h_pct with opposite signs.
+# current leg rates and their intervals describe the exact printed direction;
+# a spot-inventory requirement must never change the sign of that route.
 def _effective_funding_24h(row: SpreadTerminalRow) -> float | None:
     return normalised_funding(row)[0]
 

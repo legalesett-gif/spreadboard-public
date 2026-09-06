@@ -204,3 +204,14 @@ def test_final_exact_count_uses_live_overlay_off_page_and_deduplicates(exact_cat
     assert result['summary']['funding_rows'] == 1
     assert len(result['rows']) == 25
     assert result['top_funding'][0]['best_funding_route']['route_key'] == 'ONE-29'
+
+
+def test_live_funding_leader_prefers_zero_to_negative(monkeypatch):
+    rows = [route(0), route(1)]
+    rows[0]['funding_daily_pct'] = 0.
+    rows[1]['funding_daily_pct'] = -.1
+    payload = {'groups':[{'token':'ONE','routes':rows,'best_route':rows[0]}]}
+    monkeypatch.setattr(api_spreads, 'live_route_updates_for', lambda *a, **k: {})
+    server._apply_spread_freshness(payload)
+    assert payload['groups'][0]['best_funding_24h_pct'] == 0.
+    assert payload['groups'][0]['best_funding_route']['route_key'] == 'ONE-0'
