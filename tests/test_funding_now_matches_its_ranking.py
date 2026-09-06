@@ -232,3 +232,16 @@ def test_net_edge_initial_current_value_never_substitutes_settled_history(curren
     assert payload["current_funding_24h_pct"] == expected
     assert payload["route_key"] == row["route_key"]
     assert payload["windows"] == server.venue_funding_history.route_windows(row)
+
+
+@pytest.mark.parametrize("current", [-1.25, None])
+def test_spreads_group_current_headline_ignores_legacy_settlement_basis_and_keeps_recovery_hook(current):
+    group = _group(funding_daily_pct=current, funding_projected_24h_pct=None, funding_24h_source="settled_public_events")
+    group["best_funding_24h_basis"] = "settled_public_events"
+    rendered = server.render_market_token_group(group).split("</summary>", 1)[0]
+    assert '<strong data-live-funding>' in rendered
+    assert 'data-live-funding-basis' in rendered
+    assert 'data-live-funding-direction' in rendered
+    assert 'settled 24h' not in rendered
+    assert ('24h at current rate' if current is not None else 'funding unavailable') in rendered
+    assert ('-1.250%' if current is not None else '<strong data-live-funding>—</strong>') in rendered

@@ -9018,19 +9018,10 @@ def render_market_token_group(group: dict[str, Any]) -> str:
             else float("-inf"),
         )
     funding = funding_rank_value(funding_route, "now")
-    group_funding_basis = str(group.get("best_funding_24h_basis") or "")
-    funding_basis = (
-        "settled 24h"
-        if group_funding_basis == "settled_public_events"
-        else "24h at current"
-        if group_funding_basis == "projected_current_rate"
-        else "settled 24h"
-        if funding_route.get("funding_24h_source") == "settled_public_events"
-        else "24h at current"
-        if funding_route.get("funding_projected_24h_pct") is not None
-        else "history unavailable"
-    )
-    funding_live_hook = " data-live-funding" if funding_basis == "24h at current" else ""
+    # This headline selects Now above; legacy settlement provenance must not
+    # relabel it or remove the live hook needed after temporary unavailability.
+    funding_basis = funding_rank_basis(funding_route, "now")
+    funding_live_hook = " data-live-funding"
     funding_pair = " → ".join(
         venue
         for venue in (
