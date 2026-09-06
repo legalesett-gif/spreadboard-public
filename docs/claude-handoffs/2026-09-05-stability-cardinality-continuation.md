@@ -1,5 +1,14 @@
 # SpreadBoard continuation for Claude
 
+## Corrective observer terminal — 2026-09-06 09:18 UTC
+
+Original observer561510 is TERMINAL: fresh09:17:12 MainPID0, inactive, Resultsuccess, ExecMainStatus0; JSONL finished1788686200.039878 (~09:16:40). Frozen corrective-observer-complete.jsonl and corrective-comparison-complete.json; terminal properties observer-terminal-0917.json. Do not restart this observer.
+
+473host samples span7189.21s;42coverage samples span6926.79s across9generations,202813–204257priced versus202936baseline. Full-hour within10% PASS; no sampledOOM/restart/unhealthy or endpoint failures. /free24samples max17.704s;health42 max6.579s. Appanon3423043584/current3757658112;collectoranon3542568960/current4294840320. MeanCPU app0.878,collector1.944cores. Index69samples peakcollectoranon2884878336,websocket31peak2863104000,evidence200peak3542568960;zero sampledindex/websocketoverlap. Different phase/duration samples do not establish causal savings. Prior combined observer's coverage failure remains preserved.
+
+Source e5c3b33 /30de5e93e4ac8e4d remains frozen/tested2748+Ruff and UNDEPLOYED. Fresh09:17:31 guard still refuses discovery607244; freshprocessread09:18 shows elapsed27min/RSS~629MB. Do not kill it or force deployment. Backup stillfailedexit1;nexttimer12:18:27. No release waiter/newobserver queued. Next available action is guarded deployment after this scan/finalizer complete, exact reviewedregistry install, livepage/native checks and one fresh ordinary observer. Memorycaps,48h,two normalbackupsuccesses remain open.
+
+
 ## Refreshed two-way public comparison — 2026-09-06 09:15 UTC
 
 New UA guest table capture at~09:12 contains15exactFutures leaders. Copied production catalogue saved08:56:19 has12exact direction/venue/type counterparts. Other3: BNCSTOCK Bitget->Ourbit intentionally excluded (do not substitute earlier Binance pair); GPROSTOCK Bybit->Entropy missing live but pending candidate addresses it; PURRSTOCK Bybit->nativeHyperliquidPURR is a stock/token identity mismatch. Fresh native Bybit PURRUSDT says symbolType stock/fullName Hyperliquid Strategies Inc; native Hyperliquid PURR mark~0.11984 versus UA Bybit~12.318. Keep excluded. Files ua-futures-0913-comparison.json/.txt, ua-0913-catalog.json and purr-native-0913.json. No exhaustive paid-catalogue claim.

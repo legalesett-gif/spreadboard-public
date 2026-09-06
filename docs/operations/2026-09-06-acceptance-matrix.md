@@ -1,5 +1,14 @@
 ## Corrective release LIVE — 2026-09-06 07:19 UTC
 
+## Corrective observer terminal — 2026-09-06 09:18 UTC
+
+Original observer561510 is TERMINAL: fresh09:17:12 MainPID0, inactive, Resultsuccess, ExecMainStatus0; JSONL finished1788686200.039878 (~09:16:40). Frozen corrective-observer-complete.jsonl and corrective-comparison-complete.json; terminal properties observer-terminal-0917.json. Do not restart this observer.
+
+473host samples span7189.21s;42coverage samples span6926.79s across9generations,202813–204257priced versus202936baseline. Full-hour within10% PASS; no sampledOOM/restart/unhealthy or endpoint failures. /free24samples max17.704s;health42 max6.579s. Appanon3423043584/current3757658112;collectoranon3542568960/current4294840320. MeanCPU app0.878,collector1.944cores. Index69samples peakcollectoranon2884878336,websocket31peak2863104000,evidence200peak3542568960;zero sampledindex/websocketoverlap. Different phase/duration samples do not establish causal savings. Prior combined observer's coverage failure remains preserved.
+
+Source e5c3b33 /30de5e93e4ac8e4d remains frozen/tested2748+Ruff and UNDEPLOYED. Fresh09:17:31 guard still refuses discovery607244; freshprocessread09:18 shows elapsed27min/RSS~629MB. Do not kill it or force deployment. Backup stillfailedexit1;nexttimer12:18:27. No release waiter/newobserver queued. Next available action is guarded deployment after this scan/finalizer complete, exact reviewedregistry install, livepage/native checks and one fresh ordinary observer. Memorycaps,48h,two normalbackupsuccesses remain open.
+
+
 ## Release boundary — fresh 2026-09-06 09:09:39 UTC
 
 Production remains b4230a7 / 272beeec7e0e9f49. Candidate source e5c3b33 / 30de5e93e4ac8e4d has 2748 full tests and Ruff exit0; current docs/registry commit28f1eab does not change source digest. No deployment queued. Same observer561510 ACTIVE. Fresh protected_deploy_guard.py exited12 and reported discovery worker607244. Preserve both; no force or duplicate waiter. First complete/freeze observer around09:16:39; then refresh guard until protected work finishes before guarded helper.
