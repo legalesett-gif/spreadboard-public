@@ -1,5 +1,12 @@
 # SpreadBoard continuation for Claude
 
+## Net edge initial funding corrected — 2026-09-06 06:48 UTC
+
+Latest candidate **c2192bf**, source/data digest **eb169789768c17d5**, NOT deployed. Includes all earlier candidate fixes. `render_net_edge_button` previously preferred settled 24-hour history when filling `current_funding_24h_pct`; only a later stream tick corrected it. It now uses the same current-only selection as the headline. No settled-history fallback when current funding is unavailable. Four regressions (negative, zero, projected fallback, unavailable) fail old code; all 25 focused tests pass. Full **2,706 passed in 158.56s, actual exit 0**; Ruff no new findings (516 against unchanged 517 baseline), actual exit 0. Test-generated tracked data restored; no source edits after gates.
+
+Release manifest/runbook updated to the new pin; old manifest archived locally. No release waiter, deployment or cap changes. Observer499780 and backup532835 freshly nonterminal at 06:44:51 UTC. Preserve the same jobs. Still required: completed baseline, protected corrective release, live funding/coverage validation, defensible caps and final 48-hour/backups evidence.
+
+
 ## Release verification runbook — 2026-09-06 06:41 UTC
 
 Start with `docs/operations/2026-09-06-candidate-release-verification.md`. It separates release success from coverage, UI coherence, safe-cap and final 48-hour acceptance. The local candidate manifest freezes source/data digest and build/helper hashes. No source changes, release or new waiter in this checkpoint.

@@ -2,7 +2,7 @@
 
 Prepared 2026-09-06 06:41 UTC. This is a runbook, not release or acceptance evidence.
 
-The tested candidate is `9ae48fb`, source/data digest `07c8589ad5765ecf`. Production remains `f047ccf`. Full suite: 2,702 passed; Ruff: no new findings against unchanged 517 baseline. The frozen local manifest in `output/stability-20260906/candidate-release-manifest.json` also hashes build inputs and the guarded helper, which the Python source digest does not cover. Recheck these before release; source changes invalidate the recorded gates.
+The tested candidate is `c2192bf`, source/data digest `eb169789768c17d5`. Production remains `f047ccf`. Full suite: 2,706 passed; Ruff: no new findings against unchanged 517 baseline. The frozen local manifest in `output/stability-20260906/candidate-release-manifest.json` also hashes build inputs and the guarded helper, which the Python source digest does not cover. Recheck these before release; source changes invalidate the recorded gates.
 
 ## Before release
 
