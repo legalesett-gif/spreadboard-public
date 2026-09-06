@@ -10,10 +10,14 @@ def test_collector_bootstrap_starts_and_joins_independent_catalog_publisher(monk
     started=[]
     joined=[]
     refresh=[]
+    components={}
+    arguments={}
     event=SimpleNamespace(wait=lambda _: True, set=lambda: None)
 
     class Component:
-        def __init__(self, name):
+        def __init__(self, name, **kwargs):
+            components[name]=self
+            arguments[name]=kwargs
             self.name=name
             self.stop_event=event
             self.first_sweep_done=object()
@@ -28,7 +32,7 @@ def test_collector_bootstrap_starts_and_joins_independent_catalog_publisher(monk
 
     for name in ('RefreshLoop','LiveRouteIndexPublisher','BulkQuoteLoop','BulkFundingLoop',
                  'MarketEvidenceLoop','ChartHistoryWarmLoop','FundingCatalogPublisher','MemoryWatchdog'):
-        monkeypatch.setattr(service,name,lambda *args,_name=name,**kwargs:Component(_name),raising=False)
+        monkeypatch.setattr(service,name,lambda *args,_name=name,**kwargs:Component(_name, **kwargs),raising=False)
     monkeypatch.setattr(service,'SNAPSHOT_PATH',tmp_path/'absent.json')
     monkeypatch.setattr(service.market_history,'initialize',lambda:None)
     monkeypatch.setattr(service,'_seed_public_caches',lambda:None)
@@ -40,6 +44,7 @@ def test_collector_bootstrap_starts_and_joins_independent_catalog_publisher(monk
     assert started.count('FundingCatalogPublisher')==1
     assert joined.count('FundingCatalogPublisher')==1
     assert refresh==[False]
+    assert arguments['FundingCatalogPublisher']['refresh_loop'] is components['RefreshLoop']
     assert {'BulkQuoteLoop','BulkFundingLoop','LiveRouteIndexPublisher'} <= set(started)
 
 

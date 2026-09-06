@@ -15,7 +15,7 @@ import sys
 import tempfile
 import threading
 import time
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from datetime import UTC, datetime
 from itertools import chain
 from pathlib import Path
@@ -1614,7 +1614,9 @@ def _run_collector_service() -> int:
         refresh_loop.stop_event,
         route_index_publisher=route_index_publisher,
     )
-    funding_catalog_publisher = FundingCatalogPublisher(refresh_loop.stop_event)
+    funding_catalog_publisher = FundingCatalogPublisher(
+        refresh_loop.stop_event, refresh_loop=refresh_loop
+    )
     market_evidence_loop = MarketEvidenceLoop(
         refresh_loop.stop_event,
         refresh_loop=refresh_loop,
@@ -2464,15 +2466,22 @@ class FundingCatalogPublisher(threading.Thread):
 
     INTERVAL_SECONDS = 60.0
 
-    def __init__(self, stop_event: threading.Event) -> None:
+    def __init__(
+        self, stop_event: threading.Event, *, refresh_loop: RefreshLoop | None = None
+    ) -> None:
         super().__init__(name="complete-funding-publisher", daemon=True)
         self.stop_event = stop_event
+        self.refresh_loop = refresh_loop
 
     def run(self) -> None:
         while not self.stop_event.is_set():
             try:
                 if _refresh_complete_funding_catalog(force=False):
-                    _refresh_funding_navigation(force=True)
+                    with _COLLECTOR_HEAVY_LOCK, (
+                        self.refresh_loop._paused_websocket_worker()
+                        if self.refresh_loop is not None else nullcontext()
+                    ):
+                        _refresh_funding_navigation(force=True)
             except Exception as exc:  # noqa: BLE001 - retain prior publication and retry.
                 _log(f"complete funding publisher retry: {type(exc).__name__}")
             self.stop_event.wait(self.INTERVAL_SECONDS)
@@ -3157,7 +3166,12 @@ def _schedule_funding_navigation(
                     legacy_max_age_seconds=FUNDING_NAVIGATION_REFRESH_SECONDS,
                 ):
                     return
-                _refresh_funding_navigation(force=False)
+                refresh_loop = getattr(route_index_publisher, "refresh_loop", None)
+                with (
+                    refresh_loop._paused_websocket_worker()
+                    if refresh_loop is not None else nullcontext()
+                ):
+                    _refresh_funding_navigation(force=False)
         finally:
             _FUNDING_NAVIGATION_SCHEDULE_LOCK.release()
 
