@@ -62,3 +62,9 @@ Next boundedmemoryinvestigation: scripts/websocket_book_worker.py::_client and _
 ## Latest investigation
 
 Read `2026-09-06-catalogue-memory-investigation.md`: local sharing measurements, required coverage regressions and unmeasured selection-cache retention. No source or cap changes. Copied observer now spans approximately79min; final48h remains open.
+
+### Selection-cache candidate — 2026-09-06 04:38 UTC
+
+Candidate **2a8a03b**, NOT deployed. Websocket selection now releases parsed row/response caches after the full lane batch, on its selection thread, including failure. Selected keys, saved-position priority,160cap/300srefresh floor and website-process caches remain unchanged. Offline30,504-row snapshot replay freed107,822,100bytes through the actual cleanup API; this is not whole-worker RSS/cap evidence. Full suite2673passed150.14s exit0; Ruff no new516against517baseline exit0; both new cases fail cleanup-bypass mutant exit1. No source edits after gates. Source/test changes committed; test-generated tracked data restored.
+
+Live source remainsfb814c3 /3d0f3437aa390c87. Sole observer434080 freshly active, both protected workers clear at last probe; preserve until terminal around05:08:53UTC, then refresh guards before any deployment. No deploy waiter queued or cap changes. See collector-retention/docs/operations/2026-09-06-selection-cache-cleanup.md. Next: finish ordinary baseline, guarded release, compare normal RAM/CPU/coverage, continue necessary memory work andfinal48h/backups. Goalactive/recurringautomationpaused.
