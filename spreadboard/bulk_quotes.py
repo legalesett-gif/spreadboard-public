@@ -18,6 +18,8 @@ instead of one call per symbol -- applied to prices.
 
 from __future__ import annotations
 
+from spreadarb.public_clients import configure_public_market_client
+
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 import json
@@ -82,6 +84,7 @@ def _client(venue: str, market_type: str) -> Any:
                 continue
             try:
                 client = klass({"enableRateLimit": True, "timeout": 25000})
+                configure_public_market_client(client, venue)
                 client.load_markets()
                 break
             except Exception:  # noqa: BLE001 - an unreachable venue is not fatal.

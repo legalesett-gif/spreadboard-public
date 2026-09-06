@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from spreadarb.public_clients import configure_public_market_client
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import base64
@@ -327,6 +329,7 @@ def _load_venue(venue: str, market_type: str) -> list[dict[str, Any]]:
             live_spot_symbols = set()
 
     try:
+        configure_public_market_client(client, venue)
         loaded = client.load_markets()
         rows = []
         for market in loaded.values():

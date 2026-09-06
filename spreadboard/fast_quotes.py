@@ -20,6 +20,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from spreadarb.market_status import market_open_for_opportunities
+from spreadarb.public_clients import configure_public_market_client
 from spreadarb.venue_policy import opportunity_route_enabled
 
 from spreadarb.api_discovery.models import spread_pct
@@ -365,6 +366,7 @@ class FastQuoteRefresher:
                     return {}
             if client is not None and not getattr(client, "markets", None):
                 with self._client_request_lock(venue, "Futures"):
+                    configure_public_market_client(client, venue)
                     client.load_markets()
         except Exception:  # noqa: BLE001 - one venue must not stop the cycle.
             return {}
@@ -1310,6 +1312,7 @@ class FastQuoteRefresher:
                     "options": {"defaultType": "spot" if market_type == "Spot" else "swap"},
                 }
             )
+            configure_public_market_client(client, venue)
             client.load_markets()
             self._clients[key] = client
             self._client_request_locks.setdefault(key, Lock())
