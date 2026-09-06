@@ -9757,7 +9757,7 @@ def render_net_edge_button(row: dict[str, Any]) -> str:
         "token": row.get("token"),
         "route_key": row.get("route_key"),
         "matched_edge_pct": _float_or_none(row.get("depth_weighted_spread_pct")),
-        "current_funding_24h_pct": funding_24h_value(row),
+        "current_funding_24h_pct": funding_rank_value(row, "now"),
         "has_futures_leg": any(
             str(row.get(f"{side}_market_type") or "").casefold() == "futures"
             for side in ("long", "short")

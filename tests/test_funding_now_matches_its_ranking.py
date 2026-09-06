@@ -218,3 +218,17 @@ def test_funding_recovers_quickly_only_while_its_generation_is_warming(
 
     assert f'class="funding-page terminal-page" data-refresh="{seconds}"' in html
     assert "location.reload()" not in html
+
+
+@pytest.mark.parametrize("current,projected,expected", [(-1.25, -2.0, -1.25), (0.0, 2.0, 0.0), (None, -2.0, -2.0), (None, None, None)])
+def test_net_edge_initial_current_value_never_substitutes_settled_history(current, projected, expected):
+    import html as html_module
+    import json
+    import re
+
+    row = _route(funding_daily_pct=current, funding_projected_24h_pct=projected, funding_24h_pct=4.0)
+    rendered = server.render_net_edge_button(row)
+    payload = json.loads(html_module.unescape(re.search(r'data-net-edge="([^"]+)"', rendered).group(1)))
+    assert payload["current_funding_24h_pct"] == expected
+    assert payload["route_key"] == row["route_key"]
+    assert payload["windows"] == server.venue_funding_history.route_windows(row)
