@@ -1,5 +1,13 @@
 # SpreadBoard continuation for Claude
 
+## Generation-install candidate — 2026-09-06 06:22 UTC
+
+Latest local **fc8e2f4**, undeployed, includes2746e4e/6ab7440/7b7f904. Reconciles a price refresh completed during structural preparation before install publishes; retains all chosen quote tuple fields instead of truncating exact price/index evidence. Three original-source failures; isolated original-install-only mutant still yields priced0instead1 with fixed tuplemerge, proving the race separately.25focusedpass;full2697passed155.32s exit0;Ruffno new516against unchanged517baseline exit0. Tracked data restored;source unchanged aftergates. See2026-09-06-generation-install-coherence.md andinstall-coherence-*.txt.
+
+Production06:03 generation5coverage drop remains a FAILEDhour gate. This reproducible race is not yet causal attribution for all of that drop; parsing/refresh delays and real quote expiry remain alternative contributors. New rare reconciliation allocates anothermap underreaderlock: benchmark/observe latency andRAM afterrelease. Do not weakenfreshness or fake coverage.
+
+Livef047ccf unchanged;no releasewaiter/capchanges;automationPAUSED. Soleobserver499780 freshlyactive06:20:42, preserveuntil07:12:50. Normalbackup started06:21:16, freshlyactivating/start PID532835 at06:21:31; NOT terminalsuccess despiteResult=success/ExecMainStatus0 duringstart. Poll sameunit/PID;no manualbackup. Next: finish baseline,reviewfailedcoverage/capdecision,guardedrelease andordinaryvalidation;full48h stillunproved.
+
 ## Coverage gate failure and tested coherence fix — 2026-09-06 06:14 UTC
 
 **Priority: investigate the generation-install coverage drop before release/cap changes.** Frozen combined-observer-hour-check.jsonl spans3638.85s,240hostsamples,31coverageover3618.64s. Priced coverage FAILED±10%:201856/gen4 at06:01:05,64083/gen5 at06:03:06,202127/samegen5 at06:05:06. Route_count remained208421 during the drop/recovery; funding_only jumped144329, refresh_seconds0 at the drop. This points toward generation install/first price overlay but is not yet causal proof. No container change/restart/OOM/unhealthy/endpointfailure. Do not claim one-hour success from issues=[]: coverage.within_10pct andone_hour_log_proof are false. Evidence combined-comparison-hour-check.json and combined-coverage-drop.json. Preserve observer499780 to07:12:50; no duplicate/restart.
