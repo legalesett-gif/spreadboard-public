@@ -1,5 +1,14 @@
 # SpreadBoard continuation for Claude
 
+## Exact-market RWA classification candidate — 2026-09-06 07:44 UTC
+
+Latest local **2041056 /98f6041c157621e8**, includes946d43dbuilderfix, NOTdeployed. Liveb4230a7/272beeec7e0e9f49unchanged. PositiveBitgetisRwaYES/BinanceunderlyingTypeEQUITYmetadataonSWAPmarketsonly nowcarriedincatalogueitem->Leg->_routeanddiscoverytickerMarketQuote->identitynote->_row_from_api->publicrow. Requotedbookpreservessourcequoteclassification. Classifyhonorsexactrow/legassetclass,so bareBNC/GPROcannotbypassguardthroughmissingSTOCKsuffix. Doesnotclassifysame-tickerspotcrypto ordeclarelegalinstrument/oracle/identityverified. UnprovedRWAremainsresearch-only; fundinggateconsistentacrossspellings. No newregistryentry/fundingadmissionrelaxation.
+
+Three newbehaviorcasescovernativecataloguepairsguardandspotnegativecontrol (bothvenues), plusdiscoveryticker->notes->publicserialization.27focusedpass;threeoriginalpipelinefailures; full **2717passed162.05s exit0**,Ruffno newexit0. Trackedgenerateddatarestored/sourcefrozenaftergates. Evidencestock-class-{targeted,original,full,ruff}.txt. Newfieldsarepositive-evidenceonly oncatalogue/rows; avoidnewper-rowmarketlookup/cache orbulkJSONparse. Changespublicdataonly.
+
+Freshobserver561510active07:41:32. Frozen corrective-observer-0740.jsonl/analysis:1492.49s (~24.87min),13coverage/3gens,202813–203345pricedvs202936base, within10%true buthourprooffalse; nosampledissues. Preserveuntil09:16:39;no waiter/deploy/capchanges. Next: reviewremainingstockidentity/oracle/hours evidence andadmissioncompleteness, verifyBNC/GPROexactnativecounterparts (no blanketalias), thenprotectedreleaseafterobservationandordinarycoverage/memory/UIvalidation. No claimthatclassificationfixalonemakesstockFundingcomplete.
+
+
 ## Builder catalogue fix tested — 2026-09-06 07:36 UTC
 
 Latest local **946d43d /af270de5de2d61b8, NOT deployed**. Production remainsb4230a7/272beeec7e0e9f49; observer561510 remainssolepreservedjob until09:16:39. Newsharedpublicclientconfiguration removesCCXT's first9builder truncation usinga looplimit sentinel; installedadapter stopsattheactualadvertisedmetadata length. Explicitdexlistsandotherexchangesunchanged. Wiredchartcatalogue,bulkclient,fastclient andfastfundingmetadatareload. Existingmarketstatus/price/identitygatesunchanged; executionclientsuntouched.
