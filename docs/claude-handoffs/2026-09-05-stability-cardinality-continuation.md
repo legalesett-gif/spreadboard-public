@@ -1,5 +1,15 @@
 # SpreadBoard continuation for Claude
 
+## Navigation callers candidate — 2026-09-06 05:57 UTC
+
+Latest local candidate **6ab7440**, not deployed, includes history exclusion 0b534e5 and cache revalidation 7b7f904. Live remains f047ccf. No release waiter queued; caps unchanged; automation PAUSED; preserve sole observer499780 until expected07:12:50UTC and freshly check terminal state before acting.
+
+The independent FundingCatalogPublisher now receives the actual collector RefreshLoop and takes the heavy lock plus websocket pause around navigation after catalogue publication completes. The bulk-funding scheduler pauses via its route publisher's refresh loop inside its existing heavy lock and after route-priority checks. Both restore on failure. No cadence/headroom/retry/source semantics changed; bulk quotes continue. Reviewed history/post-discovery paths also exclude websocket; actual production peak/freshness still needs proof after release.
+
+Final suite **2690 passed139.33s exit0**; Ruff no new516against unchanged517baseline exit0. Four new cases fail original caller methods. An initial full run overlapped a formatting edit and failed11 source-inspection checks (2679passed); it is rejected and retained as evidence. The clean final run supersedes it. Tracked generated data restored; no source edits after final gates. See docs/operations/2026-09-06-navigation-callers-memory.md.
+
+Frozen current-production pre-hour log:164host/2480.87seconds,21coverage/fourgenerations,201162–201998priced, no sampled failures/gaps. Index21samples, none withwebsocket. Collectoranonpeak3204747264bytes, total4294258688; appanon2826043392. Only41.35minutes, not an hour/savings/48h proof. Next: finish existing observation and backup, compare ordinary phases, decide safe caps then guarded release; do not reuse stale waiter/source pins.
+
 ## Evidence-navigation candidate — 2026-09-06 05:48 UTC
 
 **Live remains f047ccf. Latest local candidate is 0b534e5**, including same-key cache fix 7b7f904. It is not deployed and no release waiter is queued. Sole observer 499780 was freshly active at 05:48:19 UTC; preserve to expected 07:12:50 UTC. Caps unchanged; recurring automation PAUSED.
