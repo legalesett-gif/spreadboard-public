@@ -746,3 +746,13 @@ CurrentUAguestFuturesleaderBMNRSTOCK WhiteBIT futures→Hyperliquid futures show
 ### Native per-instrument limit correction — 2026-09-06 05:17UTC
 
 Post-release T appeared near47.56%/day projected carry. NativePF_TUSD ticker and instrument corroborated the large current rate and a2% relative limit; this is not a symbol-substitution or generic100x scaling proof. See `output/stability-20260906/kraken-t-native-funding.json`. Current rate, predicted next rate and settled history stay distinct. The earlier generic0.5% limit statement is superseded for instrument-specific validation. Primary APIs: https://futures.kraken.com/derivatives/api/v3/tickers and https://futures.kraken.com/derivatives/api/v3/instruments ; reference https://docs.kraken.com/api-reference/market-data/get-tickers .
+
+## Post-release funding generation audit — 2026-09-06 05:37 UTC
+
+Copied the published complete funding file to the Mac and audited locally; no diagnostic child was added to the production observation. Embedded saved_at is **2026-09-06 05:26:40.191552UTC**;51,049,746bytes; SHA256`5bd9aa25ee230f1d7c5ea11d57d346b1d16e3de32dff94036e5c5b79f291e40e`. The local copy mtime is download time, not source generation time.
+
+**222,522 routes independently recomputed, zero arithmetic mismatches, duplicate exact leg pairs, self-pairs, Ourbit entries, missing complete rate inputs or unavailable funding.** Families:80,740Futures→Futures;70,868Futures→Spot;70,914Spot→Futures. No retired Spot→Spot family.5,328token blocks,1,062nonempty.94,538positive daily carry,94,489negative,33,495zero. The sign counts do not establish public eligibility: positive basis can coexist with negative carry, and required alternatives/history must not be blindly pruned. Counts are not unique-token counts or a reason to reintroduce retired lanes.
+
+Evidence `funding-snapshot-arithmetic-post-release.json`, `funding-copy-metadata.json`, and the copied `funding-replay/complete_funding_catalog.json`. This verifies the stored snapshot's arithmetic and exact identities as keys, not native economic identity, present quote freshness, settlement completeness or enterability. Current live overlays are separate. The audit completes fresh post-memory-release regression evidence without changing source or limits.
+
+Live remainsf047ccf; localcandidate7b7f904/2682tests remains undeployed, no waiter. Sole observer499780 freshly active at this turn's check; preserve until07:12:50UTC. First15min raw data/analysis now frozen as`combined-observer-0015.jsonl` and`combined-observer-analysis-0015.json`. Goalactive, heartbeatpaused; full ordinary memory/caps/latency/backups/48h gates remain.
