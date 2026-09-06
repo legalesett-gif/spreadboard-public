@@ -1,5 +1,16 @@
 # SpreadBoard continuation for Claude
 
+## Bybit stock metadata and document review — 2026-09-06 07:52 UTC
+
+Latest local **a5f1706 /204ed15b27775248, NOTdeployed**, includesbuilder946d43d andclassification2041056. FreshBybitGPROUSDT nativeinstrument identifies symbolTypestock,fullNameGoProInc,underlyingTickerGPRO/regionUS (bybit-gpro-native.json). AddedexactSWAPsymbolTypestock tosamepropagationpath. Fourfocusedcasespass;Bybitcasefailsoriginal; full **2718passed153.76sexit0**,Ruffno newexit0. Sourcefrozen/datarestored;candidate manifestupdated. Liveb4230a7/272beeec7e0e9f49unchanged,observer561510freshlyactive07:45:52;preserveuntil09:16:39.
+
+FreshLOCALcatalogue actualthreevenuefetch: Binance754markets/155nativetagged,Bitget827/310,Bybit815/177;BNC/GPROtaggedtokenizedonall3. Evidence native-classified-catalog.json. Countsarevenue-markets,notuniquetokens ormemorysavings. Existingregistry/guardnotweakened; classificationisnotunderlyingequivalenceverification.
+
+Primarydocuments: BitgetBNC https://www.bitget.com/support/articles/12560603888404 identifiesCEAIndustriesInc and24/7stockperpetuals; GPRO https://www.bitget.com/support/articles/12560603894181 identifiesGoProInc. Generalpricing https://www.bitget.com/support/articles/12560603835927 namesPyth/dxFeed/Massive/Intrinio andoff-hoursmarkEMA,24/7. BybitofficialGPROannouncement https://announcements.bybit.com/pt-PT/article/new-listing-gprousdt-tradfi-perpetual-contract-with-up-to-25x-leverage--art8e542b406998/ confirmsGoPro/24x7. Binanceofficialsearch-visiblelisting https://www.binance.com/en-AE/support/announcement/detail/84ad610bdd284699bc451b7baaa0ff7d mapsBNCtoCEAIndustries;directopenredirectsUKannouncementlanding. GeneralTradFiFAQ similarlyredirects;do nottreatredirectpageaspricingevidence. No accesscircumvention. EntropyIOpricing/oracle documentationnotverified;entropyio.comsearchhit isunrelatedbusinesssiteandmustnotbeused. No registryentrywrittenorverifiedstatusgranted. Preserveunresolvedvenuepricing/tradingschedulewhereevidenceincomplete;do not fillnonemptyregistrystringsmerelytopassguard.
+
+Next: preserveordinaryobserver,reviewphaseRAM/coverageatfullhour; remainingexactstockcross-venuemapping/completeness andlatency;protectedcandidate releaseafterobservation,thenfinalcaps/48h/backups. No newwaiter/deploy/capchange.
+
+
 ## Exact-market RWA classification candidate — 2026-09-06 07:44 UTC
 
 Latest local **2041056 /98f6041c157621e8**, includes946d43dbuilderfix, NOTdeployed. Liveb4230a7/272beeec7e0e9f49unchanged. PositiveBitgetisRwaYES/BinanceunderlyingTypeEQUITYmetadataonSWAPmarketsonly nowcarriedincatalogueitem->Leg->_routeanddiscoverytickerMarketQuote->identitynote->_row_from_api->publicrow. Requotedbookpreservessourcequoteclassification. Classifyhonorsexactrow/legassetclass,so bareBNC/GPROcannotbypassguardthroughmissingSTOCKsuffix. Doesnotclassifysame-tickerspotcrypto ordeclarelegalinstrument/oracle/identityverified. UnprovedRWAremainsresearch-only; fundinggateconsistentacrossspellings. No newregistryentry/fundingadmissionrelaxation.
