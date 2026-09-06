@@ -1,5 +1,15 @@
 # SpreadBoard acceptance matrix
 
+## Evidence-navigation candidate — 2026-09-06 05:48 UTC
+
+**Live remains f047ccf. Latest local candidate is 0b534e5**, including same-key cache fix 7b7f904. It is not deployed and no release waiter is queued. Sole observer 499780 was freshly active at 05:48:19 UTC; preserve to expected 07:12:50 UTC. Caps unchanged; recurring automation PAUSED.
+
+MarketEvidenceLoop previously resumed websocket after the evidence child but before the funding-navigation child, while retaining the heavy lock. The candidate retains the pause through navigation and restores it on success, failed evidence, evidence exception and navigation exception. Other navigation callers remain a separate follow-up. Bulk quote collection, cadence, funding semantics and headroom guard are unchanged. The longer fast-lane pause requires production freshness validation after release.
+
+Validation: 57 focused tests passed (2.77s), four new behavior cases included. Original-source mutant fails two exclusion cases and passes the two evidence-failure cases, exit 1. Full suite 2,686 passed (154.46s), actual exit 0; Ruff no new findings, 516 known versus unchanged 517 baseline, actual exit 0. Tracked generated test data restored. No source edits after gates. Evidence and review: docs/operations/2026-09-06-evidence-navigation-memory.md and output/stability-20260906/evidence-navigation-*.txt.
+
+Next: review FundingCatalogPublisher and _schedule_funding_navigation lock/refresh-loop wiring; finish the existing normal observation, compare phases and normal backup outcome, then choose safe caps and guarded release. The measured navigation/websocket overlap alone does not identify which caller launched that production child. No whole-service overlap elimination or delivered memory-saving claim yet.
+
 ## Ordinary-load checkpoint — 2026-09-06 05:43 UTC
 
 Live remains f047ccf; candidate 7b7f904 is not deployed and no release waiter is queued. The sole observer, spreadboard-stability-combined-20260906.service (PID 499780), was freshly active at 05:41 UTC. Preserve it until its expected 07:12:50 UTC completion. The recurring automation is confirmed PAUSED.
