@@ -6,6 +6,8 @@ ConditionPathExists=/opt/spreadboard/secrets/backup.env
 
 [Service]
 Type=oneshot
+# Bound quota stalls well before the next six-hour timer firing.
+TimeoutStartSec=2h
 EnvironmentFile=/opt/spreadboard/secrets/backup.env
 Environment=RESTIC_CACHE_DIR=/tmp/restic-cache
 # ProtectHome deliberately hides root's default rclone configuration. Keep the
