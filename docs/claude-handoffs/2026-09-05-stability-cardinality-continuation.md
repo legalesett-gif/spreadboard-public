@@ -1,5 +1,16 @@
 # SpreadBoard continuation for Claude
 
+## Compact route rows validated — 2026-09-06 09:03 UTC
+
+Latest candidate **e5c3b33 / 30de5e93e4ac8e4d**, NOT deployed; no release waiter. Full suite **2,748 passed in 151.78 seconds, exit 0**; Ruff exit 0, 515 known findings against unchanged 517 baseline. The full gate runner session 97752 is terminal. Source is frozen and generated tracked data restored. Evidence: compact-row-full.txt, compact-row-ruff.txt and compact-row-gate-exits.json; manifest updated.
+
+SpreadTerminalRow now uses slots with weak-reference support, preserving all 83 fields/defaults, frozen/replace/copy/pickle behavior and independent shallow public mappings. The footprint regression fails the original implementation. Actual offline copied-discovery replay loaded 30,504 rows: retained traced bytes 107,926,688 -> 71,580,721; peak 231,226,424 -> 202,292,231. Every exported row and all 825 groups from the first 5,000 rows have identical hashes. Export time 2.478 -> 2.442 seconds; grouping 0.510 -> 0.568 seconds. These are local measurements, not production RAM or latency proof. Evidence real-row-layout-{old,compact}.json and profile_real_row_layout.py.
+
+Fresh 09:02:34 UTC: sole corrective observer PID 561510 remains active; do not deploy before its terminal exit and finished marker around 09:16:39. Both containers healthy with zero sampled OOM/restarts. Latest frozen 08:55 evidence covers about 99 minutes, eight generations and 202,813–204,257 priced routes with full-hour coverage passing. App anonymous peak 3,423,043,584 bytes; collector 3,542,568,960. Current limits remain unjustified as a safe host budget; no lowering or increases. Automation confirmed PAUSED.
+
+Next: finish and freeze this same observer, inspect full coverage/phase/latency evidence, then fresh protected guard and guarded source deployment. Install reviewed exact GPRO registry only after candidate parity. Verify public aliases/funding and actual ordinary-load memory before choosing caps. BNC pricing evidence, final 48-hour validation and two subsequent normal green backups remain open. Do not claim the goal complete.
+
+
 ## Radar writer allocation removed — 2026-09-06 08:47 UTC
 
 Latest candidate **d834ca5 / 7f6b47809182b834**, NOT deployed, no waiter. Radar publication now encodes one record at a time, flushes/fsyncs and atomically replaces the file; failure preserves the previous generation and cleans the partial temporary file. Schema, retention, record cap/order and bytes remain unchanged. Source frozen after full gates; generated tracked data restored.
