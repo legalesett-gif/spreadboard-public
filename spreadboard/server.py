@@ -7784,6 +7784,20 @@ def render_board_stream_script(
             }
             const legs = route.funding_legs;
             if (legs) {
+              for (const [selector, value] of [
+                ["[data-live-funding-direction]", legs.direction_label],
+                ["[data-live-funding-rates]", legs.rates_label]
+              ]) {
+                if (value === undefined) continue;
+                for (const node of liveScope.querySelectorAll(selector)) node.textContent = value;
+              }
+              for (const button of liveScope.querySelectorAll("[data-net-edge]")) {
+                try {
+                  const data = JSON.parse(button.dataset.netEdge);
+                  data.current_funding_24h_pct = route.funding_pct ?? null;
+                  button.dataset.netEdge = JSON.stringify(data);
+                } catch (error) { /* Keep unrelated malformed controls isolated. */ }
+              }
               for (const side of ["long", "short"]) {
                 if (!legs[side]) continue;
                 const label = (pct(legs[side].rate_pct, 4) || "—") + " · " + legs[side].cadence;
@@ -7801,6 +7815,11 @@ def render_board_stream_script(
                 node.textContent = legs.age_label;
               }
             }
+          }
+          if (route.funding_legs && document.dispatchEvent && typeof CustomEvent !== "undefined") {
+            document.dispatchEvent(new CustomEvent("spreadboard:funding", {detail: {
+              route_key: route.route_key, funding_pct: route.funding_pct ?? null
+            }}));
           }
         }
         const stamp = document.querySelector("[data-live-stamp]");
@@ -7930,7 +7949,7 @@ def _board_stream_rows(
             and (not only_keys or str(route.get("route_key")) in only_keys)
         ]
     live = api_spreads.live_route_updates_for(routes, include_basis=True)
-    funding_snapshot = bulk_quotes.load_funding() if _query_bool(query, "funding_only") else None
+    funding_snapshot = bulk_quotes.load_funding()
     rows: dict[str, tuple[Any, ...]] = {}
     for route in routes:
         key = str(route["route_key"])
@@ -7975,6 +7994,12 @@ def _board_stream_rows(
                 for side in ("long", "short")
                 if leg_pays_funding(coherent, side)
             }
+            legs["direction_label"] = funding_economic_label(funding, coherent)
+            legs["rates_label"] = " / ".join(
+                fmt_signed_pct(coherent.get(f"{side}_funding_pct"), digits=4)
+                if leg_pays_funding(coherent, side) else "n/a"
+                for side in ("long", "short")
+            )
             legs["cadence"] = funding_cadence_pair(coherent)
             legs["age_label"] = (
                 f"Live now · funding {fmt_age(age)} old"
@@ -9070,7 +9095,7 @@ def render_market_token_group(group: dict[str, Any]) -> str:
         <div class="group-number">
           <span>Best-route funding</span>
           <strong{funding_live_hook}>{fmt_signed_pct(funding, digits=3) if funding is not None else "—"}</strong>
-          <em>{h(funding_basis)} · {h(funding_economic_label(funding, funding_route))} · {h(funding_pair) if funding_pair else "not applicable"}</em>
+          <em><span{" data-live-funding-basis" if funding_live_hook else ""}>{h(funding_basis)}</span> · <span{" data-live-funding-direction" if funding_live_hook else ""}>{h(funding_economic_label(funding, funding_route))}</span> · {h(funding_pair) if funding_pair else "not applicable"}</em>
         </div>
         <div class="group-routes">
           <span>Routes</span>
@@ -9270,11 +9295,7 @@ def render_market_group_route(
     spread_current = api_spreads.spread_quote_current(row, now=now)
     shown_funding = funding_rank_value(row, "now")
     funding_basis = funding_rank_basis(row, "now")
-    funding_live_hook = (
-        " data-live-funding"
-        if shown_funding is not None and funding_basis == "24h at current rate"
-        else ""
-    )
+    funding_live_hook = " data-live-funding"
     # A stale row used to discard everything: its stored spread AND the ratio of
     # the two leg prices it prints immediately to the left. So the board showed
     #   $0.136375 -> $0.1362   —   refreshing both legs
@@ -9323,9 +9344,9 @@ def render_market_group_route(
       </div>
       <div class="route-funding">
         <strong{funding_live_hook}>{fmt_signed_pct(shown_funding, digits=3) if shown_funding is not None else "—"}</strong>
-        <b>{h(funding_basis)} · {h(funding_economic_label(shown_funding, row))}</b>
-        <span>{leg_funding_rates}</span>
-        <em>{h(funding_cadence_pair(row))}</em>
+        <b><span data-live-funding-basis>{h(funding_basis)}</span> · <span data-live-funding-direction>{h(funding_economic_label(shown_funding, row))}</span></b>
+        <span data-live-funding-rates>{leg_funding_rates}</span>
+        <em data-live-funding-cadence>{h(funding_cadence_pair(row))}</em>
       </div>
       <div class="route-rails">{render_market_dw(row)}{render_market_event_badges(row)}{render_tokenized_guard_badge(row)}</div>
       <div class="route-actions">
@@ -9858,6 +9879,11 @@ NET_EDGE_SCRIPT = r"""
     dialog.querySelector('[data-net-route]').textContent = matchedAvailable ? `${route.token || 'Route'} · matched edge ${Number(route.matched_edge_pct).toFixed(3)}%` : `${route.token || 'Route'} · matched edge unavailable at the standardized size`;
     calculate();
     if (typeof dialog.showModal === 'function') dialog.showModal();
+  });
+  document.addEventListener('spreadboard:funding', event => {
+    if (!route || event.detail?.route_key !== route.route_key) return;
+    route.current_funding_24h_pct = event.detail.funding_pct ?? null;
+    calculate();
   });
   dialog.querySelector('[data-net-requote]').addEventListener('click', quoteExact);
   dialog.querySelectorAll('input,select').forEach(input => input.addEventListener('input', calculate));
