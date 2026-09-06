@@ -1,5 +1,12 @@
 # SpreadBoard continuation for Claude
 
+## Current headline fixed; normal backup failed — 2026-09-06 06:52 UTC
+
+Latest candidate **f260666 / c8b10e2fa4585bcd**, undeployed, includes all prior fixes. Collapsed Spreads headline now labels its Now-selected value with current-rate basis and retains live hooks through unavailability. Previously legacy settled provenance could label current funding as settled and disable updates/recovery. Two new tests fail original;73 focused pass; full **2708 passed146.98s exit0**, Ruff no new516/unchanged517baseline exit0. Source frozen and generated data restored. Manifest and runbook updated; no release waiter or cap change.
+
+Fresh06:51:35 sole observer499780 remains active; preserve through expected07:12:50. Normal backup532835 is now terminal FAILED:06:21:16–06:49:00, Result=exit-code, ExecMainStatus1. Log confirms snapshot **b691030d saved**, followed by `restic forget --prune` repository-open rclone timeout after repeated Drive shared-project quota403/429 errors. Thus the complete run failed; do not count snapshot creation alone as successful backup. Service peak2.0G/swap98.8M. The later /var/crash read-only error is secondary exception reporting, not backup root cause. Evidence output/stability-20260906/backup-0621-terminal.txt. No manual retry/prune/config change performed. Next investigate bounded backup timeout/retry strategy while preserving observer and protected workers, then guarded corrective release and normal-load acceptance.
+
+
 ## Net edge initial funding corrected — 2026-09-06 06:48 UTC
 
 Latest candidate **c2192bf**, source/data digest **eb169789768c17d5**, NOT deployed. Includes all earlier candidate fixes. `render_net_edge_button` previously preferred settled 24-hour history when filling `current_funding_24h_pct`; only a later stream tick corrected it. It now uses the same current-only selection as the headline. No settled-history fallback when current funding is unavailable. Four regressions (negative, zero, projected fallback, unavailable) fail old code; all 25 focused tests pass. Full **2,706 passed in 158.56s, actual exit 0**; Ruff no new findings (516 against unchanged 517 baseline), actual exit 0. Test-generated tracked data restored; no source edits after gates.
