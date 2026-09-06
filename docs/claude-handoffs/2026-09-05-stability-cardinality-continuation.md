@@ -1,5 +1,13 @@
 # SpreadBoard continuation for Claude
 
+## Streaming index writer candidate — 2026-09-06 06:34 UTC
+
+**Latest local9ae48fb/digest07c8589ad5765ecf, NOT deployed**, includesfc8e2f4installation,2746e4efundingUI,6ab7440navigationmemory,7b7f904cache. Default live-index writer now serializes/hashes one route at a time and atomically replaces pointer only afterfsync. Samebytes/checksum/order, supplied-encoded path retained, previousindex readable onfailure. Full2702passed140.73s exit0;Ruffno new516/unchanged517baseline exit0;16focusedpass;originalwriter2fail3pass. Datarestored/sourcefrozenaftergates. Details2026-09-06-streaming-index-writer.md.
+
+Realcollectorpeak06:25:11 anon3879731200bytes withoutwebsocket; index2254924KiB/discovery643724KiB/supervisor504084KiB RSS, hostavailable552960KiB. Current index512479951bytes. Thus proposedcollector3.5GiB remainsunsafe. Synthetic208911-route512997577bytewriter comparison matchedSHA256exactly:incremental tracedpeak541884881->3521252bytes;tracedtime1.197->3.259s. This is encoding allocation only, not deliveredRSSsaving; do not subtractitfromrealpeak tochoosecaps.
+
+Fresh06:33:39:soleobserver499780active;normalbackup532835activating/noExecMainExitTimestamp, notyetcomplete. Preserveuntilobserverexpected07:12:50;no newobserver/waiter/restart. Livef047ccf/capsunchanged,automationPAUSED. CoveragehourstillFAILEDbecausegen5drop64083; retainedasbaseline. Nextcompleteobservation/backup,phaseandcapdecision,guardedfixrelease,thenordinarycoverage/memory/UIverificationandfinal48h.
+
 ## Install reconciliation measured locally — 2026-09-06 06:25 UTC
 
 Latest candidate remains **fc8e2f4**, source digest **593e42d43bb2a75d**, NOT deployed; no release waiter. Full2697tests/Ruff gates unchanged. Recurring automation freshly confirmed PAUSED. Production observer499780 and normalbackup532835 were freshly active06:22:34; preserve both, do not count backup's interim Result=success as completion.
