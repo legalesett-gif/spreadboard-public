@@ -759,7 +759,7 @@ def load_spreads(
         "route_kind_counts": dict(
             sorted(Counter(row.route_kind for row in public_universe).items())
         ),
-        "asset_class_counts": dict(Counter(row.asset_class for row in public_universe)),
+        "asset_class_counts": asset_token_counts(public_universe),
         "route_kind_token_counts": route_kind_token_counts,
         "lane_token_counts": release_lane_token_counts,
         "top_edges": _top_unique_groups(rankable_universe, metric="edge"),
@@ -827,6 +827,24 @@ def tokenized_route_rankable(row: "SpreadTerminalRow") -> bool:
     if getattr(row, "asset_class", "crypto") != "tokenized":
         return True
     return tokenized_assets.classify(row.to_dict()).get("status") == "verified"
+
+
+def public_asset_class(row: Any) -> str:
+    value = _row_value(row, "asset_class")
+    guard = _row_value(row, "tokenized_guard")
+    if not value and isinstance(guard, dict):
+        value = guard.get("asset_class")
+    return str(value or "crypto").casefold()
+
+
+def asset_token_counts(rows: Any) -> dict[str, int]:
+    """Asset filters count distinct tokens, not their venue permutations."""
+    tokens: dict[str, set[str]] = {}
+    for row in rows:
+        token = str(_row_value(row, "token") or "").strip().upper()
+        if token:
+            tokens.setdefault(public_asset_class(row), set()).add(token)
+    return {kind: len(values) for kind, values in tokens.items()}
 
 
 def _release_lane_token_counts(

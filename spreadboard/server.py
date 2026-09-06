@@ -2979,7 +2979,7 @@ def _exact_catalog_market_projection(
         payload = catalog_pairs.with_routes(payload, resident_routes, limit=None)
     selected = catalog_pairs.filtered(
         payload,
-        kind=_query_first(query, "kind"),
+        kind=None,
         exchange=_query_first(query, "exchange"),
         quote=_query_first(query, "quote"),
         funding_only=_query_bool(query, "funding_only"),
@@ -2994,12 +2994,6 @@ def _exact_catalog_market_projection(
     all_routes = list(selected.get("routes") or [])
     evidence = str(_query_first(query, "evidence") or "all").casefold()
     funding_only = _query_bool(query, "funding_only")
-    evidence_counts = {
-        state: sum(
-            api_spreads.spread_evidence_state(route) == state for route in all_routes
-        )
-        for state in ("verified", "research")
-    }
     accepted_states = (
         {"research"}
         if evidence == "research"
@@ -3024,9 +3018,40 @@ def _exact_catalog_market_projection(
             )
         ]
     )
+    # Facets describe the available alternatives, including those beyond the
+    # first route page. Each facet excludes only its own active filter.
+    requested_kind = str(_query_first(query, "kind") or "").strip().upper()
+    requested_kind = {
+        "FUTURES-FUTURES": "FUTURES", "FUTURES-SPOT": "FUTURES-SPOT-PAIR",
+        "SPOT-FUTURES": "FUTURES-SPOT-PAIR", "SPOT-SPOT": "SPOT",
+    }.get(requested_kind, requested_kind)
+    requested_asset = str(_query_first(query, "asset_class") or "").casefold()
+    kind_rows = [
+        row for row in routes
+        if not requested_asset or api_spreads.public_asset_class(row) == requested_asset
+    ]
+    asset_rows = [
+        row for row in routes
+        if not requested_kind or funding_radar.kind_matches(row.get("route_kind"), requested_kind)
+    ]
+    kinds = {str(row.get("route_kind") or "") for row in kind_rows}
+    kind_counts = {kind: sum(row.get("route_kind") == kind for row in kind_rows) for kind in kinds}
+    routes = [
+        row for row in asset_rows
+        if not requested_asset or api_spreads.public_asset_class(row) == requested_asset
+    ]
+    evidence_counts = {
+        state: sum(
+            api_spreads.spread_evidence_state(route) == state for route in routes
+        )
+        for state in ("verified", "research")
+    }
+    offset = max(0, int(offset))
     page_routes = routes[offset : offset + limit]
     page_payload = dict(selected)
     page_payload["routes"] = page_routes
+    page_payload["route_count"] = len(routes)
+    page_payload["displayed_route_count"] = len(page_routes)
     page_payload["returned_route_count"] = len(page_routes)
     page_payload["evidence_view"] = "all" if funding_only else evidence
     group = catalog_pairs.group(page_payload)
@@ -3040,6 +3065,7 @@ def _exact_catalog_market_projection(
             "kind": _query_first(query, "kind"),
             "exchange": _query_first(query, "exchange"),
             "quote": _query_first(query, "quote"),
+            "asset_class": requested_asset or None,
             "funding_only": _query_bool(query, "funding_only"),
             "evidence": "all" if funding_only else evidence,
             "sort": _query_first(query, "sort") or "edge",
@@ -3054,7 +3080,7 @@ def _exact_catalog_market_projection(
             "returned_tokens": 1 if groups else 0,
             "matching_rows": len(routes),
             "returned_rows": len(page_routes),
-            "expanded_visible_route_count": int(selected.get("route_count") or 0),
+            "expanded_visible_route_count": len(routes),
             "verified_route_count": evidence_counts["verified"],
             "research_route_count": evidence_counts["research"],
         },
@@ -3063,6 +3089,9 @@ def _exact_catalog_market_projection(
             "limit": limit,
             "matching_rows": len(routes),
             "returned_rows": len(page_routes),
+            "has_previous": offset > 0,
+            "has_more": offset + len(page_routes) < len(routes),
+            "unit": "routes",
         },
         "source_health": {
             "canonical_api": {
@@ -3079,8 +3108,14 @@ def _exact_catalog_market_projection(
                 if route.get(key)
             }
         ),
-        "route_kind_counts": {},
-        "asset_class_counts": {},
+        "route_kind_counts": kind_counts,
+        "route_kind_token_counts": {kind: 1 for kind in kinds},
+        "lane_token_counts": {
+            "FUTURES": int("FUTURES" in kinds),
+            "FUTURES-SPOT": int(bool(kinds & {"FUTURES-SPOT", "SPOT-FUTURES"})),
+            "DEX-FUTURES": int(bool(kinds & {"DEX-FUTURES", "FUTURES-DEX"})),
+        },
+        "asset_class_counts": api_spreads.asset_token_counts(asset_rows),
     }
 
 
@@ -10092,15 +10127,16 @@ def render_market_pagination(query: dict[str, list[str]], pagination: dict[str, 
     limit = int(pagination.get("limit") or api_spreads.DEFAULT_LIMIT)
     if matching <= 0:
         return ""
-    start = offset + 1
-    end = offset + returned
+    unit = "routes" if pagination.get("unit") == "routes" else "assets"
+    start = offset + 1 if returned else 0
+    end = offset + returned if returned else 0
     previous_href = "/markets?" + urlencode(
         _query_with(query, offset=max(0, offset - limit) or None)
     )
     next_href = "/markets?" + urlencode(_query_with(query, offset=offset + limit))
     return f"""
     <nav class="market-pagination" aria-label="Spread matrix pages">
-      <span>{h(start)}-{h(end)} of {h(matching)} assets</span>
+      <span>{h(start)}-{h(end)} of {h(matching)} {unit}</span>
       <div>
         {'<a href="' + h(previous_href) + '">Previous</a>' if pagination.get("has_previous") else '<span class="disabled">Previous</span>'}
         {'<a href="' + h(next_href) + '">Next</a>' if pagination.get("has_more") else '<span class="disabled">Next</span>'}

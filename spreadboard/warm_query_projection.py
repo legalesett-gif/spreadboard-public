@@ -1264,9 +1264,7 @@ def _build_headlines(
         "route_kind_counts": dict(
             sorted(Counter(str(row.get("route_kind") or "") for row in fresh).items())
         ),
-        "asset_class_counts": dict(
-            Counter(str(row.get("asset_class") or "crypto") for row in fresh)
-        ),
+        "asset_class_counts": api_spreads.asset_token_counts(fresh),
         "route_kind_token_counts": {
             kind: len(tokens) for kind, tokens in sorted(route_kind_tokens.items())
         },
