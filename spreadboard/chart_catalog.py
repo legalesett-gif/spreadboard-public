@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 from spreadboard.fast_quotes import NATIVE_FUTURES_VENUES, NATIVE_SPOT_VENUES, VENUE_IDS
 from spreadboard import route_taxonomy
 from spreadarb.venue_policy import opportunity_venue_enabled
-from spreadarb.market_status import market_open_for_opportunities
+from spreadarb.market_status import public_market_definition
 from spreadarb.api_discovery.identity import load_watchlist
 
 
@@ -336,7 +336,8 @@ def _load_venue(venue: str, market_type: str) -> list[dict[str, Any]]:
                 and str(market.get("symbol") or "") in live_spot_symbols
             ):
                 market = {**market, "active": True}
-            if not market_open_for_opportunities(venue, market) or not _catalog_market_supported(market, market_type):
+            market = public_market_definition(venue, market)
+            if not _catalog_market_supported(market, market_type):
                 continue
             is_derivative = bool(market.get("swap"))
             token = str(market.get("base") or "").upper()

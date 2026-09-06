@@ -17,7 +17,7 @@ from urllib.request import Request, urlopen
 import ccxt
 
 from spreadboard import route_taxonomy
-from spreadarb.market_status import market_open_for_opportunities
+from spreadarb.market_status import market_open_for_opportunities, public_market_definition
 
 from spreadarb.api_discovery.attestations import ExecutorAttestationRegistry, route_key
 from spreadarb.api_discovery.identity import (
@@ -718,7 +718,7 @@ class CexCcxtSource:
                     exchange_id, self.market_type, context.remaining_timeout(10.0)
                 )
                 markets = {
-                    symbol: market
+                    symbol: public_market_definition(venue, market)
                     for symbol, market in exchange.load_markets().items()
                     if market_open_for_opportunities(venue, market)
                 }

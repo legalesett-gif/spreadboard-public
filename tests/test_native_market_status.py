@@ -96,3 +96,53 @@ def test_bitget_retention_prunes_old_raw_and_spot_keys(tmp_path, reader):
     else:
         actual = bulk_quotes.load_funding(cache_path=path)
     assert set(actual) == set(keys[2:])
+
+
+def _bingx_api_disabled_client():
+    client = ccxt.bingx()
+    market = client.parse_market({
+        'symbol': 'CAP-USDT', 'currency': 'USDT', 'asset': 'CAP',
+        'status': 1, 'apiStateOpen': 'false', 'apiStateClose': 'false',
+    })
+    assert market['active'] is False
+    client.set_markets([market])
+    return client
+
+
+def test_catalog_keeps_publicly_active_bingx_without_enabling_api_orders(monkeypatch):
+    client = _bingx_api_disabled_client()
+    monkeypatch.setattr(ccxt, 'bingx', lambda *args: client)
+    rows = chart_catalog._load_venue('Bingx', 'Futures')
+    assert [r['symbol'] for r in rows] == ['CAP/USDT:USDT']
+    assert client.markets['CAP/USDT:USDT']['active'] is False
+    assert client.markets['CAP/USDT:USDT']['info']['apiStateOpen'] == 'false'
+
+
+def test_discovery_keeps_active_bingx_public_symbol_with_api_orders_disabled(monkeypatch):
+    client = _bingx_api_disabled_client()
+    monkeypatch.setattr(sources, '_build_ccxt_exchange', lambda *args: client)
+    calls = []
+    monkeypatch.setattr(sources, '_ticker_quotes_for_symbols', lambda **kw: calls.append(kw['symbol_map']) or [])
+    context = sources.DiscoveryContext(tokens=(), watchlist={}, deadline_monotonic=None, all_platform_tokens=True)
+    sources.CexCcxtSource(venues={'Bingx': 'bingx'}, market_type='Futures').collect(context)
+    assert calls == [{'CAP': 'CAP/USDT:USDT'}]
+    assert client.markets['CAP/USDT:USDT']['active'] is False
+
+
+def test_current_public_funding_is_not_private_entry_permission(monkeypatch):
+    client = _bingx_api_disabled_client()
+    client.has['fetchFundingRates'] = True
+    monkeypatch.setattr(client, 'fetch_funding_rates', lambda *args, **kwargs: {
+        'CAP/USDT:USDT': {'symbol': 'CAP/USDT:USDT', 'fundingRate': -0.001256, 'interval': '4h'},
+    })
+    monkeypatch.setattr(fast_quotes.FastQuoteRefresher, '_client', lambda *args: client)
+    rates = fast_quotes.FastQuoteRefresher()._bulk_funding_rates('Bingx')
+    assert rates['CAP/USDT:USDT']['current_funding_pct'] == pytest.approx(-0.1256)
+    assert rates['CAP/USDT:USDT']['funding_interval_hours'] == 4
+    assert client.markets['CAP/USDT:USDT']['active'] is False
+
+
+def test_unknown_native_status_cannot_override_inactive_unified_market():
+    from spreadarb.market_status import market_open_for_opportunities
+    assert not market_open_for_opportunities('Bingx', {'swap': True, 'active': False, 'info': {}})
+    assert not market_open_for_opportunities('Bingx', {'swap': True, 'active': False, 'info': {'status': 25}})

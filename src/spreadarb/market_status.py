@@ -10,17 +10,17 @@ def market_open_for_opportunities(venue: str, market: Mapping[str, Any]) -> bool
     Only current enumeration uses this check. A later definition refresh can
     reintroduce a reopened contract; historical settlements are not deleted.
     """
-    if market.get("active") is False:
-        return False
-    if not market.get("swap"):
-        return True
     info = market.get("info")
-    if not isinstance(info, Mapping):
-        return True
-    if venue == "Bingx" and "status" in info:
+    if venue == "Bingx" and market.get("swap") and isinstance(info, Mapping) and "status" in info:
         # BingX documents 1 as active. CCXT checks only apiStateOpen/Close,
         # which remain true on status=25 contracts absent from premiumIndex.
+        # The converse also occurs: CAP trades with status=1 while API order
+        # opening/closing is disabled. That is not a public-market closure.
         return str(info["status"]) == "1"
+    if market.get("active") is False:
+        return False
+    if not market.get("swap") or not isinstance(info, Mapping):
+        return True
     if venue == "XT":
         # isOpenApi alone stays true after trading is switched off. A hidden
         # display flag, by itself, is not evidence that trading is disabled.
@@ -30,3 +30,13 @@ def market_open_for_opportunities(venue: str, market: Mapping[str, Any]) -> bool
             if key in info
         )
     return True
+
+
+def public_market_definition(venue: str, market: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy the public status without altering the execution client's metadata.
+
+    Generic symbol selectors read ``active`` again after venue filtering. Keep
+    them aligned with native public status; API order permissions remain in
+    the original client and in the copied native info, and still need preflight.
+    """
+    return {**market, "active": market_open_for_opportunities(venue, market)}
