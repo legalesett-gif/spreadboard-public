@@ -2951,6 +2951,20 @@ def _can_use_persisted_funding_navigation(
     return not any(_query_first(query, key) for key in unsupported)
 
 
+def _funding_headline_eligible(route: Any) -> bool:
+    """Keep exact counts and final live leaders on the same identity policy."""
+    if not isinstance(route, dict):
+        return False
+    guard = route.get("tokenized_guard") or {}
+    return not (
+        route.get("mirage_guarded")
+        or route.get("identity_mismatch")
+        or route.get("quote_mismatch")
+        or route.get("deliverable") is False
+        or (isinstance(guard, dict) and guard.get("rankable") is False)
+    )
+
+
 def _exact_catalog_market_projection(
     query: dict[str, list[str]],
     *,
@@ -3074,7 +3088,8 @@ def _exact_catalog_market_projection(
     # Headline counts/leaders describe all matching routes, not just this page.
     funding_routes = [
         row for row in routes
-        if (api_spreads._effective_funding_24h_dict(row) or 0.0) > 0
+        if _funding_headline_eligible(row)
+        and (api_spreads._effective_funding_24h_dict(row) or 0.0) > 0
     ]
     headline = catalog_pairs.group({**page_payload, "routes": routes})
     best_funding = max(
@@ -3894,9 +3909,7 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
                     ]
                     if isinstance(route, dict)
                     and _float_or_none(route.get("funding_daily_pct")) is not None
-                    and not route.get("mirage_guarded")
-                    and not route.get("identity_mismatch")
-                    and route.get("deliverable") is not False
+                    and _funding_headline_eligible(route)
                 ]
                 if funding_candidates:
                     best_funding = max(
@@ -4009,6 +4022,15 @@ def _apply_spread_freshness(payload: dict[str, Any]) -> dict[str, Any]:
         visit_route(route)
     summary = payload.get("summary")
     if isinstance(summary, dict):
+        if payload.get("mode") == "exact_token_complete_catalogue":
+            # route_copies includes the complete matching headline universe,
+            # including off-page routes, after the current funding overlay.
+            summary["funding_rows"] = len({
+                str(route["route_key"])
+                for route in route_copies
+                if _funding_headline_eligible(route)
+                and (_float_or_none(route.get("funding_daily_pct")) or 0.0) > 0
+            })
         if not historical_funding_page:
             visible_funding = [
                 _float_or_none(group.get("best_funding_24h_pct"))

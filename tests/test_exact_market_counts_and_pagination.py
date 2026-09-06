@@ -175,3 +175,32 @@ def test_volume_sort_uses_thinner_leg_volume_not_probe_depth(exact_catalog):
     assert api_spreads._group_sort_value({'routes':exact_catalog},'depth')==1000000
     missing={**exact_catalog[0],'short_volume_24h_usd':None}
     assert api_spreads._route_dict_sort_value(missing,'depth')==0
+
+
+@pytest.mark.parametrize('guard', [
+    {'mirage_guarded': True}, {'identity_mismatch': True},
+    {'quote_mismatch': True}, {'deliverable': False},
+    {'tokenized_guard': {'rankable': False}},
+])
+def test_final_exact_funding_count_and_leader_share_identity_guards(exact_catalog, monkeypatch, tmp_path, guard):
+    exact_catalog[:] = [route(0), route(1)]
+    exact_catalog[0].update(guard)
+    # The excluded high rate must neither inflate the KPI nor win the sidebar.
+    monkeypatch.setattr(api_spreads, 'live_route_updates_for', lambda *a, **k: {
+        'ONE-0': (None, 99.0, None), 'ONE-1': (None, .2, None),
+    })
+    result = server.api_market_spreads(tmp_path/'unused.json', {'q':['ONE'],'limit':['25']})
+    assert result['summary']['funding_rows'] == 1
+    assert result['top_funding'][0]['best_funding_route']['route_key'] == 'ONE-1'
+    assert '+0.200%' in server.render_market_lane('Top Funding Pairs', result['top_funding'], 'funding')
+
+
+def test_final_exact_count_uses_live_overlay_off_page_and_deduplicates(exact_catalog, monkeypatch, tmp_path):
+    exact_catalog[:] = [route(i) for i in range(30)]
+    monkeypatch.setattr(api_spreads, 'live_route_updates_for', lambda *a, **k: {
+        f'ONE-{i}': (None, .3 if i == 29 else 0.0, None) for i in range(30)
+    })
+    result = server.api_market_spreads(tmp_path/'unused.json', {'q':['ONE'],'limit':['25']})
+    assert result['summary']['funding_rows'] == 1
+    assert len(result['rows']) == 25
+    assert result['top_funding'][0]['best_funding_route']['route_key'] == 'ONE-29'
