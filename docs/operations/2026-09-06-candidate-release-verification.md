@@ -45,3 +45,5 @@ The host unit was separately verified and installed after the failed backup beca
 ## Reviewed stock registry installation order
 
 Global alias deduplication is now tested in candidate 5b65b47. Install `docs/operations/2026-09-06-reviewed-stock-registry.json` only AFTER deploying and verifying this source or a reviewed descendant. The currently deployed b4230a7 does not enforce the exact-contract scope. The runtime registry is separate from helper-synced baked data. Back up its previous bytes, use an atomic replacement, and verify its hash against the manifest before starting the next single observation. Do not mark the source or registry deployed from this runbook.
+
+Prepared registry installer: `output/stability-20260906/install_reviewed_registry.py`, hashed in manifest and locally checked for success and fail-closed source/observer/hash cases. Run only after guarded source deployment/parity and original observer terminal evidence. Registry now includes exact GPRO and BNC pairs; current hash and expected previous hash are in manifest. No runtime installation yet. Fresh09:09 guard refused protected discovery PID607244; preserve and refresh later.

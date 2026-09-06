@@ -1,5 +1,14 @@
 ## Corrective release LIVE — 2026-09-06 07:19 UTC
 
+## Release boundary — fresh 2026-09-06 09:09:39 UTC
+
+Production remains b4230a7 / 272beeec7e0e9f49. Candidate source e5c3b33 / 30de5e93e4ac8e4d has 2748 full tests and Ruff exit0; current docs/registry commit28f1eab does not change source digest. No deployment queued. Same observer561510 ACTIVE. Fresh protected_deploy_guard.py exited12 and reported discovery worker607244. Preserve both; no force or duplicate waiter. First complete/freeze observer around09:16:39; then refresh guard until protected work finishes before guarded helper.
+
+Prepared registry now contains both exact GPRO Bybit/Entropy and BNC Bitget/Binance pairs and aliases; SHA2567d0e186ef9d0f6bb5624b2e7e6adbfa7e6311875f4abf485118099d7309341c2. After source parity, output/stability-20260906/install_reviewed_registry.py checks both container source digests, requires original observer inactive, verifies old and new registry hashes, backs up previous bytes, atomically replaces and verifies. It is PREPARED, NOT RUN. Local checks cover success and source/observer/old-hash/payload-hash refusal with old bytes unchanged; registry-installer-local-check.json. Script hash pinned in manifest. Refuse unexpected existing backup or concurrent registry edits; inspect instead of deleting/retrying blindly.
+
+Latest source and registry are still undeployed. Keep goal active; final memory budget, ordinary runtime savings/latency, remaining exact UA coverage review,48h and two subsequent normal green backups remain unproved. Recurring automation stays PAUSED. Claude handover is this file; historical sections below are chronology, not current release instructions.
+
+
 **b4230a7 /272beeec7e0e9f49 is now LIVE.** Guard clear before helper and immediately before recreation. Deployment session45823 terminalexit0; health200, both app/collector source+data digests match, oomfalse/running/restart0. Evidence corrective-release-deploy.txt. No caps changed. Backup unit separately syntax-verified and installed after PID0 check, daemon-reloaded only; effective TimeoutStartUSec2h, SHA25644bf4298826351d5b2f3136692d3da68a421b5977f8f8eb2d4c3d690eb0630b8. No backup started. Next normaltimer freshly12:18:27UTC. Failed06:49run remains failed.
 
 Previous combined observer499780 is **terminal**, inactive/PID0/Resultsuccess/exit0 and finishedmarker1788678770.8109705 (~07:12:50). Frozen combined-observer-complete.jsonl + combined-analysis-complete.json:473host/7195.36s,42coverage/6928.67s,10gens,priced64083–202974 vs201569baseline, **coverage FAILED**. No sampledOOM/restart/unhealthy/endpointfailures; /free max22.561s,health7.572s. Appanon3188183040/current3750916096,collectoranon3879731200/current4294447104. This does not justify proposed lowercaps.
