@@ -1,5 +1,21 @@
 # SpreadBoard continuation for Claude
 
+## Deployed combined release — 2026-09-06 05:17 UTC
+
+**Live app and collector are f047ccf, digest bc8129844c597cd1.** Sole combined waiter PID93680/session39465 finished exit0 at05:11:54UTC. Both guards cleared; both container source digests matched; health200. Containers started05:10:48UTC and were freshly healthy, restarts0/OOMfalse. Do not restart the terminal waiter. Former selection-only waiter89383/session7455 remains terminal143. No deployment queued; caps unchanged; recurring automationPAUSED.
+
+The previous observer434080 finished successfully. Frozen `release-observer-complete-before-combined.jsonl`/analysis:474host samples over7197.82s,42coverage samples over6922.19s,11generations,198399–200890priced. No sampledOOM/restart/unhealthy or endpoint failures/gaps. Baseline appanon3,164,200,960/collectoranon4,053,626,880bytes; CPU.812/1.989cores. `/free`max31.933s, health10.018s. Successful kernel read05:09:35 has no OOM records since03:08:53. This proves the prior two-hour baseline, not current-release savings orfinal48h.
+
+**NEW SOLE observer:** `spreadboard-stability-combined-20260906.service`, PID**499780**, started**05:12:50UTC**,2h untilabout**07:12:50UTC**, RuntimeMax7500s. Prior running/activating stability units were checked absent before start. Output `/opt/spreadboard/runtime/stability/20260906-combined/samples.jsonl`. Freshactive/running. Same15shost/120shealthfirsthourthen300s/free300s/backup300s cadence. Do not duplicate; no diagnostic child load inside its ordinary window. Compare against frozen prior baseline using localcompare_release_memory.py. Post-release public health05:12:22 ready/gen1,201423priced/207748routes,1249tokens; not an hourproof.
+
+Actual signed-in UI after deployment: OPENAI36routes/25onfirstpage, GateFutures→HyperliquidFutures~6.6% indicative, nativeio:OAI in chart link, DD/depth labels intact, eligibleFunding0. Funding849tokens/23862livepairs, projected versus settled windows distinct. `combined-release-ui.json` and `combined-release-health.json`. Page-level observation does not prove every native route or execution readiness.
+
+The unusually large T current funding headline (~47.56%day projection) is corroborated by nativeKrakenPF_TUSD data: fundingRate-.00009182quote/base, mark.00462894917 implies-1.9836%/hour at current notional. Nativeinstrument tradeabletrue, contractSize1, baseT, `maxRelativeFundingRate=.02`, tradfifalse; the older generic0.5% cap cannot be applied to all instruments. fundingRatePrediction is a separate, much smaller positive value and must not silently replace current funding. Snapshot `kraken-t-native-funding.json`; no forecast/realized-return/entry claim. T settled windows remainedblank on the renderedpage.
+
+Full release gates2677passed146.44s exit0; Ruff no new516against517baseline exit0; six new behavioural cases fail bypass mutants. No source changes since gates. GoalACTIVE: measure ordinary after-release RAM/CPU/phase overlap and coverage, resolve latency/safe caps, subsequent normal backup firings and final48h. No trades/messages/spend/force/guardweakening.
+
+## Earlier release checkpoints (historical)
+
 ## Combined memory candidate and sole waiter — 2026-09-06 04:59 UTC
 
 Candidate **f047ccf**, digest **bc8129844c597cd1**, includes selection cleanup2a8a03b. NOT deployed. It also pauses the optional websocket worker inside the heavy lock during post-discovery publication, with finally-resume. Actual peak/log correlation: discovery completed03:52:39, index finished03:56:28, collector anon peak03:56:04 had websocket959232KiB plus index1877432KiB. Ordinary publisher already paused it; this post-discovery call path did not. This is a measured overlap mechanism, not yet delivered RAM savings. Full2677tests passed146.44s exit0; Ruff no new516against517baseline exit0; four new publication-path cases fail a no-op pause mutant, and two selection cases fail cleanup bypass. No source edits after gates; test-generated tracked data restored.

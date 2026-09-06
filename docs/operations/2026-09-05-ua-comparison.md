@@ -134,8 +134,10 @@ Kraken's unusually large negative rates were checked against its public tickers.
 For PF_LCAPUSD at 17:53:56 UTC, raw hourly funding was -0.0345315 quote units per
 base unit, mark ~6.998391, index ~6.9291. The adapter's percent-of-current-notional
 normalization can therefore produce a daily projection near 12%. This is not a
-100x arithmetic error or a guaranteed daily return. Kraken documents absolute
-per-unit hourly funding and a +/-0.50% hourly relative limit:
+100x arithmetic error or a guaranteed daily return. Kraken documents absolute per-unit hourly funding. Do not apply a generic
++/-0.50% hourly relative limit to every instrument: the fresh2026-09-06
+PF_TUSD definition specifies maxRelativeFundingRate0.02. Read the exact native
+instrument before treating a large normalized rate as an arithmetic error:
 - https://docs.kraken.com/api-reference/market-data/get-tickers
 - https://support.kraken.com/articles/4844359082772-linear-multi-collateral-derivatives-contract-specifications?mode=consumerapp
 
@@ -740,3 +742,7 @@ Do not describe this as an absent exchange feed.
 ### Additional UA guest comparison — 2026-09-06T03:37:47.872014+00:00
 
 CurrentUAguestFuturesleaderBMNRSTOCK WhiteBIT futures→Hyperliquid futures showed255.64%APR (~.70038%projected/day). Actualsigned-inSpreads exacttoken+WhiteBITfilter contains thatsame direction among12routes, displayed+.700%projected/day, -.4%indicativebasis, -.0373%/8h long and+.0245%/1h short. UA'searlier-.19%basis is a different-timequote, not anexecutioncomparison. Ourpageexplicitlymarks tokenidentityunresolved/DDpending and counts0eligibleFundingpairs. This is a presentresearchroute with stricterFundingeligibility, notmissingmarketcoverage. No identity/freshnessgate was weakened. Evidence `output/stability-20260906/ua-bmnrstock-ui-comparison.json`. Extends the boundedguestcomparison; do notsumoverlappingcases orclaimexhaustivepremiumparity. Normalbrowserrequests only; no diagnosticproductionchild, sourcechange or redeploy. SoleobserverPID434080confirmedliveatturnstart.
+
+### Native per-instrument limit correction — 2026-09-06 05:17UTC
+
+Post-release T appeared near47.56%/day projected carry. NativePF_TUSD ticker and instrument corroborated the large current rate and a2% relative limit; this is not a symbol-substitution or generic100x scaling proof. See `output/stability-20260906/kraken-t-native-funding.json`. Current rate, predicted next rate and settled history stay distinct. The earlier generic0.5% limit statement is superseded for instrument-specific validation. Primary APIs: https://futures.kraken.com/derivatives/api/v3/tickers and https://futures.kraken.com/derivatives/api/v3/instruments ; reference https://docs.kraken.com/api-reference/market-data/get-tickers .
