@@ -173,3 +173,53 @@ def _normalize_markets(raw: Any) -> list[dict[str, Any]]:
         })
         markets.append(evidence)
     return markets
+
+
+def exact_stock_pair(row: Any) -> tuple[str, ...] | None:
+    """Identity for duplicate stock labels, never ticker-based equivalence."""
+    get = row.get if isinstance(row, dict) else lambda key, default=None: getattr(row, key, default)
+    guard = get("tokenized_guard") or {}
+    if get("asset_class") != "tokenized" and guard.get("asset_class") != "tokenized":
+        return None
+    identity = tuple(str(get(f"{side}_{field}") or "") for side in ("long", "short")
+                     for field in ("venue", "market_type", "market_symbol"))
+    if not all(identity) or identity[1] not in {"Spot", "Futures"} or identity[4] not in {"Spot", "Futures"}:
+        return None
+    return identity
+
+
+def claim_stock_pair(seen: set[tuple[str, ...]], row: Any) -> bool:
+    identity = exact_stock_pair(row)
+    if identity is None:
+        return True
+    if identity in seen:
+        return False
+    seen.add(identity)
+    return True
+
+
+def unique_stock_rows(rows: list[Any]) -> list[Any]:
+    """Keep fresh exact stock routes once; preserve filtered alias lookups."""
+    winners: dict[tuple[str, ...], Any] = {}
+    duplicate = False
+
+    def rank(row: Any) -> tuple[Any, ...]:
+        get = row.get if isinstance(row, dict) else lambda key, default=None: getattr(row, key, default)
+        token = str(get("token") or "")
+        return (bool(get("mirage_guarded")), get("depth_weighted_spread_pct") is None,
+                -(get("quote_ts_us") or 0), len(token), token)
+
+    for row in rows:
+        identity = exact_stock_pair(row)
+        if identity is None:
+            continue
+        previous = winners.get(identity)
+        if previous is None:
+            winners[identity] = row
+        else:
+            duplicate = True
+            if rank(row) < rank(previous):
+                winners[identity] = row
+    if not duplicate:
+        return rows
+    return [row for row in rows if (identity := exact_stock_pair(row)) is None or winners[identity] is row]

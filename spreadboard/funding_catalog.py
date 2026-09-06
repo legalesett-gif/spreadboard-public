@@ -30,6 +30,7 @@ from spreadboard import (
     chart_catalog,
     funding_radar,
     streaming_index,
+    tokenized_assets,
     venue_funding_history,
 )
 from spreadboard.packed_routes import PackedRoutes
@@ -974,7 +975,7 @@ def _iter_routes(
         # Economic-identity dedupe is required only when retained radar rows
         # are merged into a historical lane. Running that tuple construction
         # over 100k current candidates added ~1.6 seconds to every Now request.
-        for payload in selected_payloads.values():
+        for payload in (selected_payloads[key] for key in sorted(selected_payloads, key=lambda value: (len(value), value))):
             for route in payload.get("routes") or []:
                 if isinstance(route, dict) and _common_eligible(
                     route, route_kind=route_kind, symbol=symbol,
@@ -983,7 +984,7 @@ def _iter_routes(
                     yield _copy_route(route, historical=False)
         return
     live_identities: set[tuple[Any, ...]] = set()
-    for payload in selected_payloads.values():
+    for payload in (selected_payloads[key] for key in sorted(selected_payloads, key=lambda value: (len(value), value))):
         rows = []
         identity_indexes = {}
         for route in payload.get("routes") or []:
@@ -1163,6 +1164,8 @@ def page(
         else None
     )
     matched_route_total = 0
+    seen_stock_pairs: set[tuple[str, ...]] = set()
+    seen_stock_windows = {label: set() for label in history_labels}
     for route in rows:
         token = str(route.get("token") or "").upper()
         if not token:
@@ -1206,12 +1209,14 @@ def page(
             # from the current rate or a partial history sample.
             route["settled_funding_windows"] = dict(windows)
             for label, window_value in windows.items():
-                if window_value is not None and window_value > 0:
+                if window_value is not None and window_value > 0 and tokenized_assets.claim_stock_pair(seen_stock_windows[label], route):
                     window_routes[label] += 1
                     window_tokens[label].add(token)
             value = windows[selected_window]
             if not exact_symbol_detail and (value is None or value <= 0):
                 continue
+        if not tokenized_assets.claim_stock_pair(seen_stock_pairs, route):
+            continue
         matched_route_total += 1
         candidates = grouped.setdefault(token, [])
         candidates.append((value, route))
@@ -1320,13 +1325,18 @@ def build_navigation_pages(
     ] = {(kind, window): {} for kind in kinds for window in windows}
     match_counts: dict[tuple[str, str, str], int] = {}
 
+    seen_stock_pairs = {(kind, window): set() for kind in kinds for window in windows}
+
     def keep(kind, window, token, value, route):
+        if not tokenized_assets.claim_stock_pair(seen_stock_pairs[(kind, window)], route):
+            return False
         key = (kind, window, token)
         match_counts[key] = match_counts.get(key, 0) + 1
         candidates = lanes[(kind, window)].setdefault(token, [])
         candidates.append((value, route))
         if len(candidates) > SHORT_LEG_BUDGET * 2:
             lanes[(kind, window)][token] = top_short_legs(candidates)
+        return True
 
     window_route_counts = {
         kind: {label: 0 for label in windows[1:]} for kind in kinds
@@ -1365,9 +1375,9 @@ def build_navigation_pages(
         for label, value in realised.items():
             if value is None or value <= 0:
                 continue
-            window_route_counts[kind][label] += 1
-            window_tokens[kind][label].add(token)
-            keep(kind, label, token, value, route)
+            if keep(kind, label, token, value, route):
+                window_route_counts[kind][label] += 1
+                window_tokens[kind][label].add(token)
 
     page_limit = max(1, min(10_000, int(limit or 500)))
     route_preview = max(1, min(20, int(preview_limit or 3)))

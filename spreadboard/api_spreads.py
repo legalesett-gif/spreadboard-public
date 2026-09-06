@@ -670,6 +670,7 @@ def load_spreads(
         key=lambda row: _sort_value(row, normalized_sort),
         reverse=normalized_direction == "desc",
     )
+    filtered = tokenized_assets.unique_stock_rows(filtered)
     groups = _group_rows(filtered)
     for group in groups:
         (group.get("routes") or []).sort(
@@ -3997,6 +3998,7 @@ def _top_unique_groups(rows: list[SpreadTerminalRow], *, metric: str) -> list[di
     # the top 8 afterwards meant doing that for the whole universe three times a
     # request -- 17s at 12k rows. Rank tokens on the cheap row-level metric
     # first, then group just those.
+    candidates = tokenized_assets.unique_stock_rows(candidates)
     best_by_token: dict[str, float] = {}
     for row in candidates:
         value = (
@@ -4076,7 +4078,7 @@ def attach_funding_history(
 
 def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
     grouped: dict[str, list[SpreadTerminalRow]] = {}
-    for row in rows:
+    for row in tokenized_assets.unique_stock_rows(rows):
         grouped.setdefault(row.token, []).append(row)
     output: list[dict[str, Any]] = []
     for token, token_rows in grouped.items():
