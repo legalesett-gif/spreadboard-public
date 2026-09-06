@@ -1,5 +1,17 @@
 # SpreadBoard stability review and acceptance ledger
 
+## Ordinary-load checkpoint — 2026-09-06 05:43 UTC
+
+Live remains f047ccf; candidate 7b7f904 is not deployed and no release waiter is queued. The sole observer, spreadboard-stability-combined-20260906.service (PID 499780), was freshly active at 05:41 UTC. Preserve it until its expected 07:12:50 UTC completion. The recurring automation is confirmed PAUSED.
+
+Frozen combined-observer-0030.jsonl contains 116 host samples over 1,751.67 seconds (29.2 minutes, despite the rounded filename), 15 coverage samples, 201,162–201,699 priced routes and two generations. No sampled OOM, restart, unhealthy state, endpoint failure or gap flag. This is not an hour proof. Six /free requests peaked at 14.906 seconds; 15 health requests peaked at 5.045 seconds.
+
+Collector anonymous memory peaked at 3,204,747,264 bytes at 05:28:05, with websocket and funding-navigation workers present. Index was present in 15 samples, all without websocket; this supports the intended exclusion but cannot rule out brief unsampled overlap. Source inspection shows _schedule_funding_navigation takes the heavy lock without websocket pause; other navigation entry paths also require review before any change. App anonymous peak was 2,794,663,936 bytes. Mean CPU was 0.837 app / 2.036 collector cores. These short-window peaks are not a causal saving versus the prior two-hour baseline.
+
+Collector sampled total memory reached 4,293,664,768 bytes (99.97% of its 4 GiB limit). A separate host-side cgroup read at 05:43:02 reports memory.events max=2561, oom=0, oom_kill=0: the limit caused reclaim attempts, not an OOM. At that later instant, file cache was 1,140,932,608 bytes, predominantly inactive; anonymous memory was 1,019,781,120 bytes. Do not interpret total-memory pressure as all unreclaimable anonymous memory or infer safe lower limits from this one read. Caps remain unchanged pending the full phase comparison.
+
+Evidence under output/stability-20260906/: combined-comparison-0030.json, combined-collector-peaks-0030.json, collector-cgroup-0545.json (embedded timestamp is 05:43:02, filename is only a label). No production diagnostic child, restart, cap or source mutation was performed.
+
 ## SpreadBoard stability and UA comparison — Codex continuation (2026-09-06, 02:33 UTC)
 
 - Goal ACTIVE; this turn PROGRESS plus verified protected-worker wait. LIVE stillb42e595/digestbc130c63e6b760de, started02:02:29UTC; fresh02:24bothhealthy/restarts0/OOMfalse. READY BUT NOT DEPLOYED combined sourcecommitfb814c3 (includes d216037 direction/zero correction) in isolatedcollector-retention checkout. No source sync/build/recreation attempted because independentpredeployguard returnedexit12 with api_discovery_worker.py PID407100. Freshps02:24:45 confirmsPID407100aliveelapsed03:39,CPU10.8%,RSS374872KiB (~366MiB). Wait for BOTHdiscoveryANDsnapshot_finalize_worker to disappear, noforce. Expectedscan45-60min, not a deadline. Do not restart because an observationtimesout.

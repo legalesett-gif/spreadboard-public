@@ -1,5 +1,17 @@
 # SpreadBoard continuation for Claude
 
+## Ordinary-load checkpoint — 2026-09-06 05:43 UTC
+
+Live remains f047ccf; candidate 7b7f904 is not deployed and no release waiter is queued. The sole observer, spreadboard-stability-combined-20260906.service (PID 499780), was freshly active at 05:41 UTC. Preserve it until its expected 07:12:50 UTC completion. The recurring automation is confirmed PAUSED.
+
+Frozen combined-observer-0030.jsonl contains 116 host samples over 1,751.67 seconds (29.2 minutes, despite the rounded filename), 15 coverage samples, 201,162–201,699 priced routes and two generations. No sampled OOM, restart, unhealthy state, endpoint failure or gap flag. This is not an hour proof. Six /free requests peaked at 14.906 seconds; 15 health requests peaked at 5.045 seconds.
+
+Collector anonymous memory peaked at 3,204,747,264 bytes at 05:28:05, with websocket and funding-navigation workers present. Index was present in 15 samples, all without websocket; this supports the intended exclusion but cannot rule out brief unsampled overlap. Source inspection shows _schedule_funding_navigation takes the heavy lock without websocket pause; other navigation entry paths also require review before any change. App anonymous peak was 2,794,663,936 bytes. Mean CPU was 0.837 app / 2.036 collector cores. These short-window peaks are not a causal saving versus the prior two-hour baseline.
+
+Collector sampled total memory reached 4,293,664,768 bytes (99.97% of its 4 GiB limit). A separate host-side cgroup read at 05:43:02 reports memory.events max=2561, oom=0, oom_kill=0: the limit caused reclaim attempts, not an OOM. At that later instant, file cache was 1,140,932,608 bytes, predominantly inactive; anonymous memory was 1,019,781,120 bytes. Do not interpret total-memory pressure as all unreclaimable anonymous memory or infer safe lower limits from this one read. Caps remain unchanged pending the full phase comparison.
+
+Evidence under output/stability-20260906/: combined-comparison-0030.json, combined-collector-peaks-0030.json, collector-cgroup-0545.json (embedded timestamp is 05:43:02, filename is only a label). No production diagnostic child, restart, cap or source mutation was performed.
+
 ## Cache-revalidation candidate — 2026-09-06 05:30 UTC
 
 **Live remains f047ccf / bc8129844c597cd1. Candidate 7b7f904 / f276ddefc946e561 is NOT deployed.** No release waiter is queued. Sole production observer499780 (`spreadboard-stability-combined-20260906.service`) was freshly active; preserve it to about07:12:50UTC. Recurring automation staysPAUSED.
