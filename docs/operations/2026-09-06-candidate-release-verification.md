@@ -2,7 +2,7 @@
 
 Updated 2026-09-06 08:00 UTC. This is a runbook, not release or acceptance evidence.
 
-The tested candidate is `a5f1706`, source/data digest `204ed15b27775248`, not deployed and with no release waiter queued. Production is `b4230a7`, digest `272beeec7e0e9f49`. The candidate adds complete public Hyperliquid builder enumeration and exact-market stock classification for Binance, Bitget and Bybit. Full suite: 2,718 passed (153.76 seconds, exit 0); Ruff: no new findings against unchanged 517 baseline (exit 0). Evidence: `bybit-stock-full.txt` and `bybit-stock-ruff.txt` in `output/stability-20260906/`. The frozen `candidate-release-manifest.json` also hashes build inputs and the guarded helper. Recheck these before release; source changes invalidate the recorded gates.
+The tested candidate is `ef5ea99`, source/data digest `553b9ae674866098`, not deployed and with no release waiter queued. Production is `b4230a7`, digest `272beeec7e0e9f49`. The candidate adds complete public Hyperliquid builder enumeration, exact-market stock classification for Binance, Bitget and Bybit, and per-contract registry evidence gates. Full suite: 2,728 passed (151.53 seconds, exit 0); Ruff: no new findings against unchanged 517 baseline (exit 0). Evidence: `exact-market-full.txt` and `exact-market-ruff.txt` in `output/stability-20260906/`. The frozen `candidate-release-manifest.json` also hashes build inputs and the guarded helper. Recheck these before release; source changes invalidate the recorded gates.
 
 ## Before release
 

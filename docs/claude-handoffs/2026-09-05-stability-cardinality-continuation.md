@@ -1,5 +1,18 @@
 # SpreadBoard continuation for Claude
 
+## Exact contract evidence gate — 2026-09-06 08:06 UTC
+
+Latest candidate **ef5ea99 / 553b9ae674866098**, NOT deployed, no waiter. Includes prior builder/native stock fixes. The tokenized registry previously accepted only a token and venue list, so one reviewed instrument could certify another same-label market. Each side now requires exactly one matching venue, market type and market symbol, with its own underlying, instrument, oracle, schedule and source evidence. Conflicting underlying, duplicate mappings, missing leg evidence and missing exact symbols stay blocked. Execution policy remains research_only. The full market-evidence array is not copied into every public row payload.
+
+Tests: 22 focused passed; 8 new regressions fail the previous implementation. Full **2728 passed in 151.53 seconds, exit 0**; Ruff no new findings (516 known, unchanged 517 baseline), exit 0. Evidence exact-market-{original,full,ruff}.txt and exact-market-gate-exits.json. Source frozen after gates and generated tracked data restored. Manifest updated. Existing token-level-only registry entries now remain blocked until exact markets are reviewed; current bundled registry is empty. No registry entries installed and no production change.
+
+Fresh native 08:05 UTC: Bybit GPROUSDT Trading, LinearPerpetual, stock/GoPro Inc; Hyperliquid io:GPRO active with native market metadata and current oracle/mark/funding. Saved gpro-exact-native-0805.json. Together with primary documents in the prior checkpoint, this permits preparing an exact scoped mapping; it does not prove identical pricing constructions or executable hedge readiness.
+
+Fresh observer 08:03:55 remains sole PID 561510 active. Saved corrective-observer-0805.jsonl (filename approximate) spans 2,832.68 seconds with 24 coverage samples/five generations, 202,813–203,697 priced, within 10%, still not a full hour. No sampled OOM/restarts/unhealthy. Peaks unchanged from prior checkpoint. Preserve until approximately 09:16:39 UTC.
+
+Next: prepare/review exact GPRO Bybit and Entropy registry records using official contract and pricing sources, prove retained row admission with copied public data. Runtime registry is separate from the helper's four baked data files; any installation needs explicit source parity/review, never assume helper deploys it. Then guarded candidate release after this observer finishes, normal-load coverage and RAM evidence, final defensible caps/48h/two successful normal backups. No cap changes, duplicate observers, trades or messages.
+
+
 ## Official stock pricing evidence and release runbook — 2026-09-06 08:00 UTC
 
 Production remains b4230a7 / 272beeec7e0e9f49. Candidate a5f1706 / 204ed15b27775248 remains frozen, undeployed, with no waiter queued. Corrected the release runbook's stale source pins and observer instructions; it now preserves sole corrective observer PID 561510 until approximately 09:16:39 UTC and records the backup unit as already installed. Fresh observer liveness at 07:55:43 was active, same PID.
