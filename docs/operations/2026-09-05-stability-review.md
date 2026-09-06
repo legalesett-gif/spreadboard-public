@@ -1,28 +1,25 @@
 # SpreadBoard stability review and acceptance ledger
 
-Task: critically review commits through `16899ee` and finish the owner's
-24/7 handoff. Production changes remain gated on the full pytest suite and
-unchanged Ruff ratchet. No trading actions, Telegram sends, Pushover enablement,
-subscription increase, accuracy-gate relaxation, cgroup increase or droplet
-spend is authorized.
+## SpreadBoard stability and UA comparison — Codex continuation (2026-09-06, 00:13 UTC)
 
-Current runtime and built app/collector images match `aee0953` (including
-`a995b91`), source `3ed1500fd5c9b96a`, verified after recreation at 15:58:50 UTC.
-Both protected-worker checks were clear. At 16:01:50 both services were healthy,
-OOM 0, /api/health 200, /free 200 and 138,604 priced routes. The first startup
-/free request timed out at 45 seconds and later recovered without another restart.
+- Goal ACTIVE; owner chose continued Codex work. Stability heartbeat remains PAUSED. No orders, transfers, messages, spend, Pushover, cap/subscription increases or weakened accuracy/freshness/identity/settlement guards.
+- Own isolated checkout `tmp/spreadboard-collector-retention`, branch `codex/collector-retention-20260906`. Other accounting work in `tmp/spreadboard-funding-publication` (c115414) and dirty `tmp/spreadboard-funding-current-truth` untouched. Own branch was rebased to exclude unrelated accounting changes; accounting container has its independently deployed release.
+- LIVE app/collector **095a686 / 66eeb505e50c9f7e**, started **2026-09-06 00:08:03 UTC**. Deploy exited0, health200, exact source parity, healthy/restarts0/OOMfalse. App ID9357661d10850c41679d5048125ce7ddcd7319a2cfdb068855708ab9aa236429; collector ID74dd670ba5be0ab00715f88552c721b0d9627a44970d37bc336368ff88c50ab3. BOTH discovery/finalizer checks clear before deployment and immediately before recreation; no force.
+- Final gate **2612 passed in113.81s**, Ruff517 known/zero new. Five new collector-role regressions all fail old source. Test-mutated8 tracked data files preserved under output and restored individually from HEAD.
+- Delivered a361273: collector no longer loads full route index/Intel after child publication or installs the live index; web/combined installation remains. `index_rows` added to memory diagnostics. Archived installation replay avoided ~413MiB of index loading; production collector parent remains ~150–160MB with index_rows0. A successful ordinary materializer completion is still required to verify the full-cycle saving. Live-index child reached2357MBRSS / collector cgroup3704MiB on prior release: smaller caps remain unsafe.
+- Delivered9a0bbdf: newly requested chart history warms immediately when process monotonic clock starts at0; previous0 remains a real cooldown timestamp. Old-source regression failed; focused9 passed.
+- Delivered095a686: collector was omitted from production funding-page readers. It now shares current funding and exact-settlement snapshots like web, avoids repeated per-route archive loads, refuses expired/missing live carry, and never revives attached stale settlement windows. Source-coherence guard remains unchanged.
+- Profile before095a686:663 GIL samples,591 in funding expansion,456 under funding window lookup,397 in exact route windows. Prior15-minute materializer aborted with source_generation_changed_during_build and retained the old complete generation. New-release ordinary materializer still running at00:12; measured speedup not yet established.
+- Native status1b5a2bc and builder aliasa90f108 now deployed. Catalogue at00:05: **1987 futures tokens /3962 spot tokens**,9733 futures markets /12484 spot markets,2516/5189 distinct symbols, zero duplicate exact venue/type/symbol keys. UA2534/4370 are user-reported token counts, not comparable to directed route totals. Native catalogue rotated from22417 to22217 definitions. Reopened markets may re-enter; historical archives preserved.
+- Actual authenticated ANSEM Funding page on9a0bbdf showed12 exact futures pairs including MEXC ANSEM/USDT:USDT -> Hyperliquid PARA-ANSEM/USDC:USDC;4h/1h schedules, approximately+.877% projected/day at23:50, incomplete historical windows remain blank. Fresh paired builder and saved complete catalogue each contained that exact previously missing pair. OPENAI io:OAI routes also remained visible on the Markets page.
+- NEW OPENAI correctness follow-up: fresh00:10 bounded read-only probe confirms GateSpot~866.7 vs perpetual~1409 is correctly excluded where live index is supplied (Binance/Gate/Aster/Coinbase). HTX/MEXC/Phemex/Bitget/KuCoin funding legs lack index_price; those spot/perp pairs still classify research and were visibly listed. Fix the missing native oracle propagation using current venue evidence; do not weaken guard or call those real opportunities. Evidence `openai-indexes.json`; exact io:OAI futures routes must survive. Local unauthenticated HTTP probe returned401; use actual authenticated browser or bounded internal public-data probes, never extract cookies.
+- Last backup timer FAILED at18:20–18:23 Sep5 (exit1); earlier two successful scheduled backups are historical. Same-sandbox read-only restic snapshots check23:51 returned0,27 snapshots, latest13:52,26.8s. Backend currently readable is NOT a new successful backup. Next timer00:19:47 Sep6 needs observation; no config changes, no manual backup/prune/check invoked.
+- Existing finite observer `spreadboard-stability-native-status-20260905.service` ends00:57:52UTC; do not duplicate. Segment new release at1788653283.2727. Its cadence changes from2min to5min after23:57, so it cannot establish final-release30-sample/hour acceptance. Caps remain3584/4096/768/192MiB. Still open: native oracle propagation; ordinary successful materialization/history cycles; cold page latency; final-release30 samples/hour±10%; safely smaller caps; clean48h; full bidirectional comparator parity within accessible coverage. UA guest/premium limits remain; no paid bypass.
+- Evidence under `tmp/spreadboard-collector-retention/output/stability-20260906/`: collector-reader-full-pytest.txt, collector-reader-ruff.txt, collector-reader-mutant.txt, collector-reader-deploy.txt, materialized-cpu-gil.raw, catalogue-counts-0005.json, release-coverage-initial.jsonl, openai-indexes.json. Prior UA15-route sample had12 exact matches,2 intentional Ourbit exclusions,1 ANSEM gap now fixed; do not add overlapping historical59 identities.
 
-Ourbit is retired. Sampled funding math and all 12 tabs pass. The preceding
-14:55–15:56 deployment-free count hour PASSED with 31 samples over 3,623.598s,
-max deviation 0.67873%; both required scheduled backups also passed. The new
-cardinality audit found zero duplicate exact markets or economic routes: 2,171
-futures / 3,965 spot token labels, 142,711 routes for 1,232 tokens. Rich route
-storage, funding completeness beyond the 500-token shortlist, cold-start delay,
-safe lower caps and clean 48-hour acceptance remain open.
+## Historical acceptance ledger
 
-The owner requested Claude continuation. Read
-`docs/claude-handoffs/2026-09-05-stability-cardinality-continuation.md` for exact
-source/container IDs, evidence, scope and next steps. The Codex schedule stays PAUSED.
+The entries below are chronological evidence, not current readiness.
 
 ## Fresh baseline
 
