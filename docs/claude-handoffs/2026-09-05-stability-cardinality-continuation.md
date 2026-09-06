@@ -1,6 +1,12 @@
 # SpreadBoard continuation for Claude
 
-Checkpoint: 2026-09-06 03:10 UTC. The goal remains active. This is a continuation handover, not a completion claim.
+Checkpoint: 2026-09-06 04:29 UTC. The goal remains active. This is a continuation handover, not a completion claim.
+
+## Latest measured result
+
+One-hour priced-coverage gate passed; the current copied log spans approximately79min with no sampled OOM/restart/unhealthy or endpoint failures. Collector ordinary anonymous memory peaked at3.775GiB, so its proposed3.5GiB cap is unsafe at present. Caps remain unchanged. The finite observer is still the sole observation job, expected end05:08:53UTC; refresh its state before acting.
+
+Local catalogue sharing reduced paired-client retained Python allocations by67.8MB Gate and27.7MB Bybit, without symbol-count loss. This is not a deployed fix or production RAM saving. Read `docs/operations/2026-09-06-catalogue-memory-investigation.md` for exact evidence, dynamic-listing risks and the competing route-selection cache hypothesis. No source edits/deployment queued. Continue memory work locally while preserving the normal observation window.
 
 ## Start here
 
@@ -41,7 +47,7 @@ The 10,000-route allocation experiment reduced traced retained allocation by 17.
 ## Finish in this order
 
 1. Observe the same PID434080 and collect ordinary reload/coverage evidence. Do not run duplicate observers or diagnostic child profiles unnoticed inside that window.
-2. Compare against pre-held-release-observer.jsonl, pre-held-release-summary.json and pre-held-release-cache-counters.jsonl. App nearlyreachedits oldlimit; lowercaps still need proof. Current3584/4096/768/192MiB caps remain unchanged.
+2. Compare against pre-held-release-observer.jsonl, pre-held-release-summary.json and pre-held-release-cache-counters.jsonl. Collector measured anon3.775GiB exceeds its proposed3.5GiB cap; memory work is required before lowering it. Current3584/4096/768/192MiB caps remain unchanged.
 3. Decide safecaps from measuredheadroom, then establish the final uninterrupted48h and30-sample/hour evidence. No forced recoveryrepeatinsidecleanwindow.
 4. Verify subsequent normal backup timer firings. Latest success00:19:49–01:15:36; nexttimer previously06:20:56UTC. Do not countolder successes acrosslaterfailure.
 5. Keep goal open until every original acceptance gate is proved. Candidateallocationexperimentisnot deliveredmemoryproof. No further deploymentiscurrentlyqueued.

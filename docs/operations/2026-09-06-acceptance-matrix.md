@@ -1,6 +1,6 @@
 # SpreadBoard acceptance matrix
 
-Checkpoint: 2026-09-06 03:10 UTC. Goal remains open.
+Checkpoint: 2026-09-06 04:29 UTC. Goal remains open.
 Live app/collector source **fb814c3 / 3d0f3437aa390c87**, deployed successfully03:00:26UTC with both guards and source checks. Direction/zero-ranking/string-sharing fixes are now deployed. Ordinary memory savings and final stability gates remain unproved. No force, trades, messages, spend, cap increases, or alert reactivation.
 
 | Requirement | Evidence inspected | Verdict / remaining work |
@@ -16,9 +16,9 @@ Live app/collector source **fb814c3 / 3d0f3437aa390c87**, deployed successfully0
 | Durable restart cap and startup protection | Current full suite includes watchdog/state-roundtrip regressions and earlier mutant evidence | Regression verified; operational state continues to be observed |
 | Per-row spot/perp index-guard cost | Local30k-row synthetic microbenchmark:73.18msmedian,70.71msincrement aboveemptycall; sanitycasespassed | Boundedlocaltimingevidence only; no guardchange or productionlatencyclaim |
 | Stable priced coverage | Deployedfb814c3:31samples over3613.52s,198399–199902pricedroutes,6generations, stablecontainerIDs/no restart | One-hourgate proved for unchangedrelease;48h remainsopen |
-| Measured memory and CPU, safe caps | b42e595 sampled app anon peak~3,048 MiB/cgroup~3,417 MiB; collector anon~2,839 MiB/cgroup~3,865 MiB. Sampled string-sharing experiment saves 17.35% traced retention with equal data | Lower caps not justified yet. Measure ordinary final-release reloads and CPU; do not extrapolate sampled savings |
+| Measured memory and CPU, safe caps | fb814c3 ordinary observation: app anon peak3,164,200,960 bytes; collector anon4,053,626,880 bytes. Local paired-client catalogue sharing saves67.8MB Gate/27.7MB Bybit, not deployed or whole-worker evidence | Lower caps not justified yet. Measure ordinary final-release reloads and CPU; do not extrapolate sampled savings |
 | Host memory limits below physical RAM | Current caps remain 3,584/4,096/768/192 MiB. Collector target3,584MiB is below measured ordinaryanonpeak3.775GiB; more memory work is required | Not complete |
-| No OOM and endpoint/health durability for 48h | Current finite observer active; captured segment healthy with no OOM/restarts, but contains deployments and diagnostic children. `/free` varies~3.9–20.3s | Clean 48h final-release window and kernel OOM evidence missing |
+| No OOM and endpoint/health durability for 48h | Sole final-release finite observer: approximately79min, no sampled OOM/restarts/unhealthy, all endpoints200; no injected diagnostic-child load. `/free` max24.025s | Clean 48h final-release window and kernel OOM evidence missing |
 | Backup manual recovery plus two normal timer successes | Latest normal run 00:19:49→01:15:36 succeeded, including retention and check; 46 Drive quota errors retried. Next timer freshly scheduled 06:20:56 UTC | Do not count earlier successes across a later failure as future reliability. Further normal firings pending |
 | Deployment gates/source parity | Candidate full suite: 2,671 passed in 140.33s; Ruff no new findings, 516 remaining against unchanged 517 baseline; behavioral mutants fail | Tests and shipping complete; helper exit0 and both digests3d0f3437aa390c87 |
 
@@ -58,3 +58,7 @@ The unchanged fb814c3release/digest3d0f3437aa390c87 now has31health/coverage sam
 Collectorcap3584MiB is contradicted by actual ordinaryanonpeak**4,053,626,880bytes (~3.775GiB)** at1788666964.823; current4,255,207,424, existing4GiBcap. No lowercaps. Atpeak parentRSS597652KiB, websocket_book_worker.py959232KiB(HWM1209296), live_route_index_worker.py1877432KiB, fastquote257228 andbulk292540+79404. Evidence `release-collector-anon-peak-0100.json`. Appanonpeak2,948,149,248bytes; current3,667,263,488. MeanCPUapp.808/collector2.113cores. /free max24.025s; /healthmax10.018s. AllHTTP200doesnotclaimfastlatency.
 
 Next boundedmemoryinvestigation: scripts/websocket_book_worker.py::_client and _ensure_markets key clients/locks by(venue,market_type), independently loading the sameCCXTadapter's completecatalogue forspot/futures. InstalledCCXT exposes `set_markets_from_exchange`, preserving markets/markets_by_id/symbols/ids/currencytablesandmarketHelperProps. InstalledGate/Bybitfetch_markets defaultstofullspot/swap/future/optiontypes, independentofdefaultType. This is a SOURCE hypothesis forredundantmetadata, NOT measuredsavingsandNOTimplemented. Profilepairedclientslocally beforechanging. Preserveclientoptions, selectedsymbol/type/contractmetadata, dynamicnew-marketrefresh, 160cap, booksand20sfreshness; do notprunemarketsbasedonlyonassumptions. No productionprofilechildinsidecurrentordinaryobserver. No newcandidate/deployqueued. Soleobserver434080continuesto05:08:53UTC; preserveprotecteddiscovery/finalizationworkers.
+
+## Latest investigation
+
+Read `2026-09-06-catalogue-memory-investigation.md`: local sharing measurements, required coverage regressions and unmeasured selection-cache retention. No source or cap changes. Copied observer now spans approximately79min; final48h remains open.
