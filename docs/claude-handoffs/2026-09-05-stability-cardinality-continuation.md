@@ -1,5 +1,12 @@
 # SpreadBoard continuation for Claude
 
+## Spot–futures cross-check — 2026-09-06 09:20 UTC
+
+Fresh15-row UA spot–futures guest sample is accounted for:8exactUSDTspot/perpetual counterparts in copied08:56:19catalogue (ONE,FATCOIN,JIMOTHY,INDEX,ICX,ESPORTS,RUNE,BASECAT);3Ourbitexclusions (OPENAI,CATE,BULLA);4BinanceAlpha exactlegs outsidechosenvenuecoverage (USELESS,SIREN,AVNT,哈基米). Do not substitute ordinaryBinance/CEXvenues forAlpha. ONE additionallyhasUSD/USDCspotquotes andRUNEUSDC:distinctexactmarkets,notduplicates. Comparator nowdistinguishesvenue/typecountsfromexactUSDTsymbolcounts. Files ua-spot-futures-0919.json/.txt andcompare_ua_spot_futures_0919.py.
+
+StoredICXBybitSpot->MexcFutures has+1.055%basis but-2.1%dailycarry; keepSpreadspositive-basis relevance ratherthanpruningallnegativefunding. INDEXhadnegativebasisbutpositivecarryinsavedgeneration; UA'slaterspreadwaspositive. Thesechangesunderscoretimestampedcomparisons; savedquotesarenotcurrentexecutionproof. PublicglobalFunding ispositivecarry-oriented,SpreadsretainspositivebasisORcarry. No newsourcechanges/deployment; protecteddiscoveryremainsnextreleasegate.
+
+
 ## Corrective observer terminal — 2026-09-06 09:18 UTC
 
 Original observer561510 is TERMINAL: fresh09:17:12 MainPID0, inactive, Resultsuccess, ExecMainStatus0; JSONL finished1788686200.039878 (~09:16:40). Frozen corrective-observer-complete.jsonl and corrective-comparison-complete.json; terminal properties observer-terminal-0917.json. Do not restart this observer.

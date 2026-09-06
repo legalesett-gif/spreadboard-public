@@ -1,5 +1,12 @@
 # SpreadBoard / UA comparison, 2026-09-05
 
+## Spot–futures cross-check — 2026-09-06 09:20 UTC
+
+Fresh15-row UA spot–futures guest sample is accounted for:8exactUSDTspot/perpetual counterparts in copied08:56:19catalogue (ONE,FATCOIN,JIMOTHY,INDEX,ICX,ESPORTS,RUNE,BASECAT);3Ourbitexclusions (OPENAI,CATE,BULLA);4BinanceAlpha exactlegs outsidechosenvenuecoverage (USELESS,SIREN,AVNT,哈基米). Do not substitute ordinaryBinance/CEXvenues forAlpha. ONE additionallyhasUSD/USDCspotquotes andRUNEUSDC:distinctexactmarkets,notduplicates. Comparator nowdistinguishesvenue/typecountsfromexactUSDTsymbolcounts. Files ua-spot-futures-0919.json/.txt andcompare_ua_spot_futures_0919.py.
+
+StoredICXBybitSpot->MexcFutures has+1.055%basis but-2.1%dailycarry; keepSpreadspositive-basis relevance ratherthanpruningallnegativefunding. INDEXhadnegativebasisbutpositivecarryinsavedgeneration; UA'slaterspreadwaspositive. Thesechangesunderscoretimestampedcomparisons; savedquotesarenotcurrentexecutionproof. PublicglobalFunding ispositivecarry-oriented,SpreadsretainspositivebasisORcarry. No newsourcechanges/deployment; protecteddiscoveryremainsnextreleasegate.
+
+
 ## Refreshed two-way public comparison — 2026-09-06 09:15 UTC
 
 New UA guest table capture at~09:12 contains15exactFutures leaders. Copied production catalogue saved08:56:19 has12exact direction/venue/type counterparts. Other3: BNCSTOCK Bitget->Ourbit intentionally excluded (do not substitute earlier Binance pair); GPROSTOCK Bybit->Entropy missing live but pending candidate addresses it; PURRSTOCK Bybit->nativeHyperliquidPURR is a stock/token identity mismatch. Fresh native Bybit PURRUSDT says symbolType stock/fullName Hyperliquid Strategies Inc; native Hyperliquid PURR mark~0.11984 versus UA Bybit~12.318. Keep excluded. Files ua-futures-0913-comparison.json/.txt, ua-0913-catalog.json and purr-native-0913.json. No exhaustive paid-catalogue claim.
