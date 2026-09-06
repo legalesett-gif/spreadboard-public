@@ -1,3 +1,14 @@
+## Corrective release LIVE — 2026-09-06 07:19 UTC
+
+**b4230a7 /272beeec7e0e9f49 is now LIVE.** Guard clear before helper and immediately before recreation. Deployment session45823 terminalexit0; health200, both app/collector source+data digests match, oomfalse/running/restart0. Evidence corrective-release-deploy.txt. No caps changed. Backup unit separately syntax-verified and installed after PID0 check, daemon-reloaded only; effective TimeoutStartUSec2h, SHA25644bf4298826351d5b2f3136692d3da68a421b5977f8f8eb2d4c3d690eb0630b8. No backup started. Next normaltimer freshly12:18:27UTC. Failed06:49run remains failed.
+
+Previous combined observer499780 is **terminal**, inactive/PID0/Resultsuccess/exit0 and finishedmarker1788678770.8109705 (~07:12:50). Frozen combined-observer-complete.jsonl + combined-analysis-complete.json:473host/7195.36s,42coverage/6928.67s,10gens,priced64083–202974 vs201569baseline, **coverage FAILED**. No sampledOOM/restart/unhealthy/endpointfailures; /free max22.561s,health7.572s. Appanon3188183040/current3750916096,collectoranon3879731200/current4294447104. This does not justify proposed lowercaps.
+
+**NEW SOLE OBSERVER** spreadboard-stability-corrective-20260906.service, **PID561510**, started07:16:39UTC,2h/RuntimeMax7500s, expectedfinish09:16:39. Host-side standardstability_soak.py, remote /opt/spreadboard/runtime/stability/20260906-corrective/samples.jsonl. Preserve it; no secondobserver/restart/profiling children. No releasewaiter queued. Automation remainspaused. Old combined observer must not be restarted.
+
+Initial actual UI ICX /markets?q=ICX: current headline basis correct; expanded WhiteBIT Futures->Kucoin Spot current funding-.030%day/leg+.0100%every8h, calculator payload current-.03 distinctfrom settled1d+.205881. Open calculator preserved separate horizons:1d Settled1d+$2.06;3d Currentrateprojection-$0.90 at$1000perleg. This verifies initial rendered sign/basis distinction, not a natural live signflip. Evidence corrective-release-ui-initial.json; CUA tab27 maycloseafterturn. Candidate automated cases coverexpiry/recovery/signflip. Next: ordinary afterrelease coverage/RAM/CPU/latency acrossgenerations/navigation, broadercurrentUI/UAchecks, defensiblecaps thenfinal48h andnormalbackups. GoalACTIVE.
+
+
 # SpreadBoard acceptance matrix
 
 ## Streaming index writer candidate — 2026-09-06 06:34 UTC
