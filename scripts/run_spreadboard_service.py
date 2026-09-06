@@ -2676,23 +2676,22 @@ class MarketEvidenceLoop(threading.Thread):
                 ],
                 timeout=self.TIMEOUT_SECONDS,
             )
+            if result.timed_out or result.returncode != 0:
+                _log(
+                    "market evidence unavailable "
+                    f"exit={result.returncode} {result.stderr[-300:]}"
+                )
+                return
+            summary = (result.stdout or result.stderr).strip().splitlines()
+            _log(summary[-1] if summary else "market evidence completed")
+            # Exact funding navigation expands the catalogue too. Keep the
+            # optional websocket heap excluded through this publication, while
+            # bulk quotes continue and the previous generation stays readable.
+            _refresh_funding_navigation(force=True)
         finally:
             if self.refresh_loop is not None:
                 self.refresh_loop.resume_websocket_worker()
-        if result.timed_out or result.returncode != 0:
-            _log(
-                "market evidence unavailable "
-                f"exit={result.returncode} {result.stderr[-300:]}"
-            )
-            return
-        summary = (result.stdout or result.stderr).strip().splitlines()
-        _log(summary[-1] if summary else "market evidence completed")
-        _refresh_funding_navigation(force=True)
-        # Historical CEX readers rank the persisted complete catalogue against
-        # the exact settlement file, while DEX readers rank the durable radar.
-        # Neither needs the 19-view navigation generation rebuilt after every
-        # five-minute evidence slice. Keeping that multi-minute build here
-        # blocked the next provider catch-up cycle and prolonged blank windows.
+
 
 
 def _invalidate_market_price_caches() -> None:
