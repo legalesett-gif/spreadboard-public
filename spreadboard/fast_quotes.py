@@ -149,6 +149,7 @@ NATIVE_FUNDING_SOURCES: dict[str, dict[str, Any]] = {
         "path": ("data",),
         "symbol": "symbol",
         "rate": "fundingFeeRate",
+        "index": "indexPrice",
         "interval": "fundingRateGranularity",
         # Kucoin reports granularity in milliseconds: 14400000 is four hours,
         # not 14.4 million of them.
@@ -159,6 +160,7 @@ NATIVE_FUNDING_SOURCES: dict[str, dict[str, Any]] = {
         "path": ("result",),
         "symbol": "symbol",
         "rate": "fundingRateRr",
+        "index": "indexRp",
     },
     "BitMart": {
         "url": "https://api-cloud-v2.bitmart.com/contract/public/details",
@@ -426,12 +428,59 @@ class FastQuoteRefresher:
                 rate,
                 interval_hours=interval if interval else DEFAULT_FUNDING_INTERVAL_HOURS,
                 next_funding_ms=item.get(str(spec.get("next_ms") or "")),
+                index_price=item.get(str(spec.get("index") or "")),
             )
             if fields:
                 rates[str(market["symbol"])] = fields
         return rates
 
     def _bulk_funding_rates(self, venue: str) -> dict[str, dict[str, Any]]:
+        rates = self._bulk_funding_rates_raw(venue)
+        # Several funding-only feeds omit the oracle even though a separate
+        # all-contract ticker supplies it. Join exact native IDs, never prices
+        # from another venue or mark/last prices masquerading as an index.
+        specs = {
+            "Mexc": [("https://contract.mexc.com/api/v1/contract/ticker", "symbol", "indexPrice", "timestamp")],
+            "HTX": [("https://api.hbdm.com/linear-swap-api/v1/swap_index", "contract_code", "index_price", "index_ts")],
+            "Bitget": [
+                (f"https://api.bitget.com/api/v2/mix/market/tickers?productType={quote}-FUTURES", "symbol", "indexPrice", "ts")
+                for quote in ("USDT", "USDC")
+            ],
+        }
+        if venue not in specs or not rates:
+            return rates
+        client = self._client(venue, "Futures")
+        markets = getattr(client, "markets", {}) or {}
+        wanted = {
+            str(market["id"]): symbol
+            for symbol, fields in rates.items()
+            for market in [markets.get(symbol) or {}]
+            if fields.get("index_price") is None
+            and market.get("id") and market.get("swap")
+            and not market.get("inverse")
+        }
+        if not wanted:
+            return rates
+        for url, symbol_field, index_field, stamp_field in specs[venue]:
+            try:
+                payload = _json_url(url)
+                rows = payload.get("data", []) if isinstance(payload, dict) else []
+                now_ms = time.time() * 1000.0
+                for row in rows if isinstance(rows, list) else []:
+                    if not isinstance(row, dict):
+                        continue
+                    symbol = wanted.get(str(row.get(symbol_field) or ""))
+                    index = _optional_number(row.get(index_field))
+                    stamp = _optional_number(row.get(stamp_field))
+                    if (symbol and index is not None and math.isfinite(index) and index > 0
+                            and stamp is not None and -1000 <= now_ms - stamp <= 90_000):
+                        rates[symbol]["index_price"] = index
+            except Exception:  # noqa: BLE001 - failed oracle feed cannot erase current funding.
+                logging.getLogger(__name__).warning("bulk oracle feed unavailable: %s", venue)
+                continue
+        return rates
+
+    def _bulk_funding_rates_raw(self, venue: str) -> dict[str, dict[str, Any]]:
         """One call per venue for every perpetual it lists."""
         if (NATIVE_FUNDING_SOURCES.get(venue) or {}).get("symbol_format") == "venue_perpetual":
             return self._native_bulk_funding_rates(venue)
@@ -2902,7 +2951,7 @@ def _funding_fields(
     # The venue's own statement of what the contract settles against. Already on
     # the wire from `fetch_funding_rates`, and previously dropped here.
     index = _optional_number(index_price)
-    if index is not None and index > 0:
+    if index is not None and math.isfinite(index) and index > 0:
         output["index_price"] = index
     if interval is not None:
         output["funding_interval_hours"] = interval
