@@ -1,5 +1,16 @@
 # SpreadBoard continuation for Claude
 
+## Stock comparison root causes — 2026-09-06 07:30 UTC
+
+Liveb4230a7 unchanged; no source edits in this checkpoint. Observer561510 freshlyactive07:25:28, preserve to09:16:39.
+
+**GPRO missing io catalogue root cause found:** installed ccxt.hyperliquid options fetchMarkets.hip3.limit=10; actual fetch_hip3_markets uses `for i in range(1,maxLimit)`, so loads only first9builders. NativeperpDexs has10non-nullbuilders and io is10th. Thus freshlygeneratedchartcatalog07:24:38 advertises Hyperliquidok310markets but contains NOio markets; nativeio:GPROisactive. Existingdiscovery snapshot06:35:18 contains3HyperliquidGPROrows (HL->XT/HTX andHTX->HL), provingnativecollectorpath seesit, underGPRO notGPROSTOCK. Maincatalogue/completepair path lacksio, soBybit->io:GPROnotconstructed. FixpublicCCXTconfiguration toloadallreturnedbuilderDEXes consistently inchartcatalog/bulk/fast clientpaths; retainnativecontractidentity, pricecorroboration andguards. Do not merelyaddGPROalias orraiseRAMcaps. Inspectinstalledadapter behavior; useoffline actualadapter test demonstrating10thbuilderomission andcallerwiring. Nofixyet.
+
+**BNC comparison resolved as spelling, but classification defect found:** copiedfundingcatalog hasBNC20rows includingexactBitget Futures BNC/USDT:USDT->Binance Futures same symbol,+1.205754%day at saved07:07:57; BNCSTOCK0. So12priorcounterparts becomes13whenexactnativeidentityspellingmapped, plusOurbitexcluded andGPROHLremaininggap; do not justsumoverlappingcomparisons. BNCrow's tokenized_guard sayscrypto/not_applicable, mirage_guardedfalse. GPRO56rowsalso crypto, whileSTOCKspellingblocked. Fresh nativecontracts07:29:20: BitgetBNCUSDTandGPROUSDTisRwaYES; BinancebothcontractTypeTRADIFI_PERPETUAL/underlyingTypeEQUITY. Currentchartcatalogdrops these nativeclassification fields. `tokenized_assets.classify` infersSTOCKsuffix/knownnames/narrowbuildernamespacesonly, so baretickers bypassstockguards. Correctper-market metadata propagation/classification withoutclassifyingunrelatedBNCspotcrypto asstock, conflatinginstruments, orblanketweakeningrankability. ExactRWA/equityevidence is in stock-native-contracts.json. Nofixyet.
+
+Relevantfiles: spreadboard/chart_catalog.py _load_venue createsplainCCXTclient~300anddropsnativefields; spreadboard/bulk_quotes.py _client; spreadboard/fast_quotes.py _client~1283; spreadboard/catalog_pairs.py _builder_spelling_targets handleshyphenCCXTnames andprice-gatedstockjoining; _make_row classification~1609; spreadboard/tokenized_assets.py classify; src/spreadarb/api_discovery/sources.py buildercollect~988. Evidencechart-catalog-0727.json/chart-stock-markets.json,discovery-0725.json/discovery-stock-rows.json (snapshotactually06:35),stock-native-contracts.json,hyperliquid-gpro-bnc-native.json. Worklocallywhileordinaryobserverruns; no productiondiagnosticchildren or redeploy yet.
+
+
 ## Early release verification and new UA gaps — 2026-09-06 07:24 UTC
 
 Live remainsb4230a7/272beeec7e0e9f49. Soleobserver561510 freshlyactive07:19:23. Initial12hostsamples167.68s,2coveragepoints202936–203067/singlegen1, no sampledissues; /free17.704s. Too early forcoverage/memoryacceptance. Frozen corrective-observer-initial.jsonl/analysisinitial. Do not restart observer or altercaps.
