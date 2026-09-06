@@ -1304,11 +1304,15 @@ def load(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, dict[str, 
         if _CACHE.get("funding_stamp") != funding_stamp:
             _CACHE["funding_stamp"] = funding_stamp
             _CACHE["current_until_ms"] = None
-        live_legs = bulk_quotes.load_funding()
     if (
         _CACHE.get("current_until_ms") is None
         or now_ms >= int(_CACHE["current_until_ms"])
     ):
+        # File rotation above invalidates the cached schedule, and the clock
+        # expires it at settlement. Repeated route renderers inside that same
+        # generation need no new all-market funding snapshot.
+        if path.resolve() == Path(DEFAULT_CACHE_PATH).resolve():
+            live_legs = bulk_quotes.load_funding()
         current_legs: dict[str, dict[str, float | None]] = {}
         expiries: list[int] = []
         for key, values in _CACHE["legs"].items():

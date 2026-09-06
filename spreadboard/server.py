@@ -8020,7 +8020,7 @@ def render_markets_page(
         render_market_metric(
             "Assets",
             min(int(summary.get("matching_tokens") or 0), api_spreads.DEFAULT_LIMIT),
-            "top 25, grouped",
+            "exact token" if pagination.get("unit") == "routes" else "top 25, grouped",
         )
     }
         {render_market_metric("Venue pairs", summary.get("matching_rows"), "expandable routes")}
@@ -8050,6 +8050,8 @@ def render_markets_page(
               <p>{
         "One row per current venue route, with quote basis, DD evidence and actions."
         if pro_view
+        else f"{h(int(pagination.get('returned_rows') or 0))} venue routes on this page. Expand the token to inspect each pair."
+        if pagination.get("unit") == "routes"
         else f"Top {h(min(int(pagination.get('returned_rows') or 0), api_spreads.DEFAULT_LIMIT))} assets by live open spread. Select a token to reveal every venue route."
     }</p>
             </div>
