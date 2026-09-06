@@ -3046,6 +3046,11 @@ def _exact_catalog_market_projection(
         )
         for state in ("verified", "research")
     }
+    sort_by = api_spreads._normalize_sort(_query_first(query, "sort"))
+    routes.sort(
+        key=lambda row: api_spreads._route_dict_sort_value(row, sort_by),
+        reverse=str(_query_first(query, "direction") or "desc").casefold() != "asc",
+    )
     offset = max(0, int(offset))
     page_routes = routes[offset : offset + limit]
     page_payload = dict(selected)
@@ -8830,6 +8835,14 @@ def _market_render_evidence_state(
     state = api_spreads.spread_evidence_state(route, now=now)
     if state != "excluded":
         return state
+    # The exact-token API also admits sound negative-basis pairs paying
+    # positive current carry. Keep that same policy through HTML rendering;
+    # do not promote stale prices or weaken any structural evidence gate.
+    if (
+        (api_spreads._effective_funding_24h_dict(route) or 0.0) > 0
+        and api_spreads.spread_is_sound_but_unprofitable(route, now=now)
+    ):
+        return "research"
     age = api_spreads.quote_age_min(route, now=now)
     if (
         not route.get("quote_ts_us")

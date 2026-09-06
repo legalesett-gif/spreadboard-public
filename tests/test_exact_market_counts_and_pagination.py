@@ -82,3 +82,36 @@ def test_live_headline_asset_counts_do_not_grow_with_venue_permutations():
 def test_asset_count_accepts_native_guard_classification_without_counting_routes():
     rows = [{'token':'STOCK','tokenized_guard':{'asset_class':'tokenized'}}]*20 + [{'token':'ONE'}]*10
     assert api_spreads.asset_token_counts(rows) == {'tokenized':1,'crypto':1}
+
+
+def test_exact_sort_is_applied_before_pagination(exact_catalog):
+    for index, row in enumerate(exact_catalog):
+        row['funding_daily_pct'] = index / 100
+    low = server._exact_catalog_market_projection({'q':['ONE'],'sort':['funding'],'direction':['asc']},limit=5,offset=0)
+    high = server._exact_catalog_market_projection({'q':['ONE'],'sort':['funding'],'direction':['desc']},limit=5,offset=0)
+    assert [r['funding_daily_pct'] for r in low['rows']] == [0,.01,.02,.03,.04]
+    assert [r['funding_daily_pct'] for r in high['rows']] == [.39,.38,.37,.36,.35]
+
+
+def test_positive_carry_negative_basis_survives_group_render(exact_catalog):
+    exact_catalog[:] = [route(0)]
+    row = exact_catalog[0]
+    row.update(short_price=.99,short_bid=.99,executable_spread_pct=-1,
+               displayed_open_spread_pct=-1,depth_weighted_spread_pct=-1)
+    page = server._exact_catalog_market_projection({'q':['ONE']},limit=25,offset=0)
+    assert len(page['rows']) == 1
+    assert 'ONE' in server.render_market_token_group(page['groups'][0])
+    assert api_spreads.spread_evidence_state(row) == 'excluded'
+
+
+@pytest.mark.parametrize('override',[
+    {'funding_daily_pct':0}, {'funding_daily_pct':-.1},
+    {'identity_mismatch':True}, {'thin_book':True},
+    {'quote_ts_us':1}, {'long_quote':'BTC'},
+])
+def test_carry_renderer_preserves_exclusions(override):
+    row = route(0)
+    row.update(short_price=.99,short_bid=.99,executable_spread_pct=-1,
+               displayed_open_spread_pct=-1,depth_weighted_spread_pct=-1)
+    row.update(override)
+    assert server.render_market_token_group({'token':'ONE','best_route':row,'routes':[row]}) == ''
