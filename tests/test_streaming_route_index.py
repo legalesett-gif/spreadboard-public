@@ -134,3 +134,41 @@ def test_actual_store_checks_bytes_consumed_after_preflight(tmp_path, monkeypatc
     status["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     monkeypatch.setattr(store, "live_route_index_status", lambda: status)
     assert store.live_route_index() is None
+
+
+def test_actual_store_shares_repeated_strings_without_sharing_mutable_rows(tmp_path):
+    venue = 'Repeated exchange name 龍蝦 ' * 4
+    symbol = 'A-LONG-EXACT-MARKET-SYMBOL/USDT:USDT'
+    rows = {key: {'route_key':key, 'long_venue':venue, 'short_venue':venue,
+                  'long_market_symbol':symbol, 'nested':{'value':1}}
+            for key in ('first-route','second-route')}
+    store, _, _ = published(tmp_path, orjson.dumps(rows))
+    loaded = store.live_route_index()
+    assert loaded == rows
+    first, second = loaded.values()
+    assert first['long_venue'] is second['long_venue']
+    assert first['long_market_symbol'] is second['long_market_symbol']
+    first['nested']['value'] = 2
+    first['long_venue'] = 'changed'
+    assert second['nested']['value'] == 1
+    assert second['long_venue'] == venue
+
+
+def test_actual_store_bounds_and_releases_value_pool(tmp_path, monkeypatch):
+    monkeypatch.setattr(streaming_index, 'SHARED_VALUE_LIMIT', 2)
+    rows = {f'route-{i}': {'token':f'token-{i}', 'long_venue':'shared venue'} for i in range(20)}
+    store, _, _ = published(tmp_path, orjson.dumps(rows))
+    pools = []
+    original = streaming_index._shared_route_values
+    def checked(row, values):
+        result = original(row, values)
+        assert len(values) <= 2
+        pools.append(values)
+        return result
+    monkeypatch.setattr(streaming_index, '_shared_route_values', checked)
+    assert store.live_route_index() == rows
+    first = pools[0]
+    assert len(first) == 2
+    pools.clear()
+    assert store.live_route_index() == rows
+    assert pools[0] is not first
