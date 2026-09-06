@@ -20,6 +20,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Any
 
+import ijson
 import orjson
 
 from spreadboard import (
@@ -28,6 +29,7 @@ from spreadboard import (
     catalog_pairs,
     chart_catalog,
     funding_radar,
+    streaming_index,
     venue_funding_history,
 )
 from spreadboard.packed_routes import PackedRoutes
@@ -62,34 +64,60 @@ _CACHE_PERSIST_ERROR: str | None = None
 def _read_persisted_cache() -> tuple[dict[str, dict[str, Any]], float]:
     """Decode and validate one atomically published catalogue envelope."""
 
-    envelope = orjson.loads(DEFAULT_CACHE_PATH.read_bytes())
-    payloads = envelope.get("payloads")
-    saved_at = float(envelope.get("saved_at_unix") or 0.0)
-    if (
-        not isinstance(envelope, dict)
-        or envelope.get("schema") not in {PERSISTED_SCHEMA, LEGACY_PERSISTED_SCHEMA}
-        or not isinstance(payloads, dict)
-        or not payloads
-        or not all(
-            isinstance(key, str) and isinstance(value, dict)
-            for key, value in payloads.items()
-        )
-    ):
+    payloads: dict[str, dict[str, Any]] = {}
+    schema = None
+    saved_at = 0.0
+    saw_payloads = False
+    envelope_keys: set[str] = set()
+    keys: dict[str, str] = {}
+    try:
+        with DEFAULT_CACHE_PATH.open("rb") as handle:
+            events = iter(ijson.parse(handle, use_float=False))
+            if next(events, None) != ("", "start_map", None):
+                raise ValueError("invalid_persisted_funding_catalog")
+            for prefix, event, value in events:
+                if prefix == "" and event == "map_key":
+                    if value in envelope_keys:
+                        raise ValueError("invalid_persisted_funding_catalog")
+                    envelope_keys.add(value)
+                elif prefix == "schema":
+                    schema = value if event == "string" else None
+                elif prefix == "saved_at_unix":
+                    if event not in {"number", "string", "null"}:
+                        raise ValueError("invalid_persisted_funding_catalog")
+                    saved_at = float(value or 0.0)
+                elif prefix == "payloads" and event == "start_map":
+                    saw_payloads = True
+                elif prefix == "payloads" and event == "map_key":
+                    token = value
+                    first = next(events)
+                    if first[1] != "start_map":
+                        raise ValueError("invalid_persisted_funding_catalog")
+                    builder = ijson.ObjectBuilder()
+                    builder.event(first[1], first[2])
+                    depth = 1
+                    while depth:
+                        _, child_event, child_value = next(events)
+                        builder.event(child_event, child_value)
+                        depth += (child_event in {"start_map", "start_array"})
+                        depth -= (child_event in {"end_map", "end_array"})
+                    payload = streaming_index._shared_fields(builder.value, keys)
+                    routes = payload.get("routes")
+                    if isinstance(routes, dict):
+                        payload["routes"] = PackedRoutes.restore(routes)
+                    if any(
+                        not api_spreads.opportunity_route_enabled(route)
+                        for route in payload.get("routes") or []
+                        if isinstance(route, dict)
+                    ):
+                        # A disabled long could have displaced an alternative
+                        # in a legacy reduced generation. Reject, do not prune.
+                        raise ValueError("persisted_funding_venue_policy_changed")
+                    payloads[token] = payload
+    except (ijson.JSONError, StopIteration, OverflowError) as exc:
+        raise ValueError("invalid_persisted_funding_catalog") from exc
+    if schema not in {PERSISTED_SCHEMA, LEGACY_PERSISTED_SCHEMA} or not saw_payloads or not payloads:
         raise ValueError("invalid_persisted_funding_catalog")
-    for payload in payloads.values():
-        routes = payload.get("routes")
-        if isinstance(routes, dict):
-            payload["routes"] = PackedRoutes.restore(routes)
-    if any(
-        not api_spreads.opportunity_route_enabled(route)
-        for payload in payloads.values()
-        for route in payload.get("routes") or []
-        if isinstance(route, dict)
-    ):
-        # This file already collapsed equal-rate routes. A disabled long may
-        # have displaced an eligible alternative, so filtering after restore
-        # would lose that alternative until the next full build.
-        raise ValueError("persisted_funding_venue_policy_changed")
     return payloads, saved_at
 
 

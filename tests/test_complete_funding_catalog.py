@@ -1145,3 +1145,31 @@ def test_complete_funding_request_skips_the_bounded_scanner(monkeypatch) -> None
 
     assert [item["token"] for item in payload["groups"]] == ["FAST"]
     assert payload["coverage_mode"] == "complete_funding_catalogue_ranked_before_pagination"
+
+
+def test_persisted_funding_reader_streams_tokens_and_validates_entire_file(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    import orjson
+    from spreadboard.packed_routes import PackedRoutes
+    path = tmp_path/'funding.json'
+    monkeypatch.setattr(funding_catalog, 'DEFAULT_CACHE_PATH', path)
+    rows = [{'route_key':'X', 'long_venue':'Binance', 'short_venue':'Gate', 'quote_ts_us':2**63+1}]
+    envelope = {'payloads':{'A.B':{'routes':PackedRoutes(rows).envelope()}, 'LEGACY':{'routes':rows}},
+                'schema':funding_catalog.PERSISTED_SCHEMA, 'saved_at_unix':123.5}
+    path.write_bytes(orjson.dumps(envelope))
+    original = Path.read_bytes
+    def bounded(p):
+        if p == path:
+            pytest.fail('funding reader allocated whole-file bytes')
+        return original(p)
+    monkeypatch.setattr(Path, 'read_bytes', bounded)
+    restored, saved = funding_catalog._read_persisted_cache()
+    assert saved == 123.5
+    assert list(restored['A.B']['routes']) == rows
+    assert restored['LEGACY']['routes'] == rows
+    with path.open('ab') as handle: handle.write(b' trailing corrupt bytes')
+    with pytest.raises(ValueError): funding_catalog._read_persisted_cache()
+    envelope['payloads']['A.B']['routes'] = PackedRoutes([{**rows[0], 'long_venue':'Ourbit'}]).envelope()
+    path.write_bytes(orjson.dumps(envelope))
+    with pytest.raises(ValueError, match='venue_policy_changed'): funding_catalog._read_persisted_cache()
