@@ -1,5 +1,19 @@
 # SpreadBoard continuation for Claude
 
+## Cache-revalidation candidate — 2026-09-06 05:30 UTC
+
+**Live remains f047ccf / bc8129844c597cd1. Candidate 7b7f904 / f276ddefc946e561 is NOT deployed.** No release waiter is queued. Sole production observer499780 (`spreadboard-stability-combined-20260906.service`) was freshly active; preserve it to about07:12:50UTC. Recurring automation staysPAUSED.
+
+Local reproduction found that a20second-old projection was discarded after its10second short TTL for an unchanged request key, but reused if only the price-file key changed. The candidate preserves that completed projection within the unchanged900second structural TTL. Foreground reuse still applies current values and requests revalidation; background lookup remains a miss without removing concurrent readers' fallback. A new background projection replaces membership. Empty payloads, structurally expired entries and incompatible structural/query signatures remain excluded, and serving does not extend the timestamp or cache bound.
+
+Final gates:2,682tests passed139.30s exit0; Ruff no new516against unchanged517baseline exit0;23focused tests pass. Original lookup source fails both new foreground cases and passes3safety/rebuild cases. One initial mutant run exposed test-fixture in-flight state leakage under a frozen clock; that local process was stopped and fixture isolation corrected before final gates. Generated tracked test data restored. No product source changes after gates. Evidence `same-key-full-final.txt`, `same-key-original-source-final.txt`, `exact-key-expiry-{before,after}.json`; details `docs/operations/2026-09-06-same-key-cache-revalidation.md`.
+
+This is a proven redundant-rebuild path, not causal attribution for the specific31.933s production request or delivered HTTP latency improvement. Retaining a fallback during rebuild can affect peak allocation; validate ordinary RAM/CPU/coverage and latency after any later release. Do not deploy during the current memory observation. Review its complete phase comparison and safe-cap decision first.
+
+First15minute deployed-memory log:60host/8coverage samples,201341–201569priced,2generations, no sampledOOM/restart/unhealthy/endpoint failures. Appanonpeak2,794,663,936bytes; collectoranon2,858,545,152. CPU.865/2.195cores; `/free`3samples max14.906s; health8samples max2.47s. Different duration/phase mix means these smaller peaks are NOT a proved saving versus the prior2h log. `combined-observer-current.jsonl`, `combined-observer-analysis.json`, `combined-comparison-initial.json`. Current release still needs full-hour/ordinary publication evidence, safe limits, further backups andfinal48h.
+
+## Prior checkpoint details
+
 ## Deployed combined release — 2026-09-06 05:17 UTC
 
 **Live app and collector are f047ccf, digest bc8129844c597cd1.** Sole combined waiter PID93680/session39465 finished exit0 at05:11:54UTC. Both guards cleared; both container source digests matched; health200. Containers started05:10:48UTC and were freshly healthy, restarts0/OOMfalse. Do not restart the terminal waiter. Former selection-only waiter89383/session7455 remains terminal143. No deployment queued; caps unchanged; recurring automationPAUSED.
