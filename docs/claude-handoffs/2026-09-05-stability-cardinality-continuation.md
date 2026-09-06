@@ -1,5 +1,16 @@
 # SpreadBoard continuation for Claude
 
+## Early release verification and new UA gaps — 2026-09-06 07:24 UTC
+
+Live remainsb4230a7/272beeec7e0e9f49. Soleobserver561510 freshlyactive07:19:23. Initial12hostsamples167.68s,2coveragepoints202936–203067/singlegen1, no sampledissues; /free17.704s. Too early forcoverage/memoryacceptance. Frozen corrective-observer-initial.jsonl/analysisinitial. Do not restart observer or altercaps.
+
+Actual deployed Funding ICX page loaded after a navigationtimeout by rereading SAMEtab28. Mexc Futures->Kraken Futures +2.976%day; legs-.0833%/4h and+.1032%/1h corroborate arithmetic; exact24h/7d/30dblank due settlementcoverage. Fresh native07:20:43 Mexc-.0808%/4h;Krakenabsolute.0000147331744355/mark.01438972954 gives current%rate; signs/cadencesagree, ratesmoved slightly fromUI's2minsnapshot. Evidenceicx-native-post-release.json. UIlatency remainsopen.
+
+UA~07:21 visible15Futuresleaders: BONERMexc->Gate,ACEWhiteBIT->Bingx,ANSEMAster->HL,ONGBinance->Bybit,LAMexc->WhiteBIT,STORJMexc->WhiteBIT,GPROSTOCKBybit->HL,SPACEHOODMexc->Gate,BNCSTOCKBitget->Binance,COTIGate->Bingx,SKRBybit->Bingx,SHROOMGate->Aster,PONSHL->Ourbit,ESPORTSMexc->Bitget,NESOKX->Kucoin. Copiedcatalog saved07:07:57 has12exactcounterparts; PONSOurbit intentionallyexcluded. **GPROSTOCK and BNCSTOCK unresolved**, zeroFundingcatalogroutes; do not claimcompletecomparison. Evidenceua-futures-0722-comparison.json andcopiedfunding-replay/ua-0722-catalog.json (filenameapproximate).
+
+Actual GPROSTOCKSpreadsUI has31routes,0fundingpairs,8CEXvenues,noHLinvisiblefilters; DDpending tokenized. Fresh publicHyperliquidmetaAndAssetCtxs acrossall10builderDEXes finds **io:GPRO active**, funding.0005899426/hour,mark1.7855,mid1.7907,OI454653.6,volume947351.62. Sourcealreadyrecognizesstocktickers anddoespricecorroboration in src/spreadarb/api_discovery/sources.py~1030. Need tracewhy nativeio:GPRO notpresent incurrentSpreads andwhy stockFundingrowsineligible; separateidentity/collectorcoverage fromFundingeligibility. No blindalias/guardweakening. BNCSTOCK requires separate nativeidentity androutecheck. Evidencehyperliquid-gpro-bnc-native.json. CUA tab29UA/tab30GPRO maycloseafterturn.
+
+
 ## Corrective release LIVE — 2026-09-06 07:19 UTC
 
 **b4230a7 /272beeec7e0e9f49 is now LIVE.** Guard clear before helper and immediately before recreation. Deployment session45823 terminalexit0; health200, both app/collector source+data digests match, oomfalse/running/restart0. Evidence corrective-release-deploy.txt. No caps changed. Backup unit separately syntax-verified and installed after PID0 check, daemon-reloaded only; effective TimeoutStartUSec2h, SHA25644bf4298826351d5b2f3136692d3da68a421b5977f8f8eb2d4c3d690eb0630b8. No backup started. Next normaltimer freshly12:18:27UTC. Failed06:49run remains failed.
