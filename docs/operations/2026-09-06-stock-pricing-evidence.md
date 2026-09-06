@@ -1,5 +1,16 @@
 # Stock pricing evidence checkpoint
 
+## Exact BNC evidence completed locally — 2026-09-06 09:08 UTC
+
+Prepared registry now also covers BNC/BNCSTOCK labels, ONLY exact Bitget Futures BNC/USDT:USDT and Binance Futures BNC/USDT:USDT. Source remains tested e5c3b33 / 30de5e93e4ac8e4d. No runtime installation or deployment. Both primary listing notices identify CEA Industries; native reads at09:04–09:05 show Binance EQUITY/TRADIFI_PERPETUAL/TRADING and Bitget isRwaYES/normal. Actual adapter catalogue records contract_size1 for both.
+
+Binance's May13 announcement applies bounded orderbook EWMA to all equity perps during maintenance/weekends/holidays from May16. The FAQ describes external vendor index in regular hours, fast/slow EWMA in extended sessions, transition blending and USDT/USD conversion. Primary URLs: https://www.binance.com/en/support/announcement/detail/53bfc17634f54f2f90666dbc396f5cee and https://www.binance.com/es/support/faq/detail/fe7dcdf24f1943d98b368f5f9f744398 (search extraction succeeded; earlier direct English page redirected to UK landing). Exact listing: https://www.binance.com/fr/support/announcement/detail/84ad610bdd284699bc451b7baaa0ff7d . Native constituents endpoint lists dxfeed/kaiko/massive/binance_future; its timestamp is older and all prices -1, so this proves returned configuration only, NOT current component prices. Bitget listing https://www.bitget.com/support/articles/12560603888404 and mechanics https://www.bitget.com/support/articles/12560603835927 establish underlying,24/7 and off-hours mark EMA. Do not assume identical oracle, corporate-action or funding mechanics.
+
+Offline actual route/Funding page/navigation/Spreads replay: one global exact pair on each surface; BNCSTOCK direct search contains forward pair once; wrong venue and spot market negative controls blocked. Research-only policy retained. Snapshot09:05:22: Bitget0/8h, Binance+0.477643%/8h, net current carry+1.432929%/day; entry top-0.486421%, matchedVWAP-0.606631%. This is positive-current-funding relevance, not positive entry spread, guaranteed income, exact settled history or private entry readiness. Evidence bnc-native-0905.json, bnc-books-0906.json, bnc-reviewed-replay.json and replay_reviewed_bnc.py.
+
+Runtime registry freshly09:08 is still empty v1, SHA256105f371964c27f62fe65a3a8757ec2083b28712aa086ac984264ad0ce3ff9654. After candidate parity, atomic installer must compare expected old hash, preserve previous bytes and refuse unexpected concurrent changes. New registry hash is pinned in candidate manifest. No broad same-ticker admission; all other unreviewed stock contracts remain unresolved.
+
+
 ## Official stock pricing evidence and release runbook — 2026-09-06 08:00 UTC
 
 Production remains b4230a7 / 272beeec7e0e9f49. Candidate a5f1706 / 204ed15b27775248 remains frozen, undeployed, with no waiter queued. Corrected the release runbook's stale source pins and observer instructions; it now preserves sole corrective observer PID 561510 until approximately 09:16:39 UTC and records the backup unit as already installed. Fresh observer liveness at 07:55:43 was active, same PID.
