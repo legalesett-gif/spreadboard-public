@@ -14,6 +14,14 @@ One-hour priced-coverage gate passed; the current copied log spans approximately
 
 Local catalogue sharing reduced paired-client retained Python allocations by67.8MB Gate and27.7MB Bybit, without symbol-count loss. This is not a deployed fix or production RAM saving. Read `docs/operations/2026-09-06-catalogue-memory-investigation.md` for exact evidence, dynamic-listing risks and the competing route-selection cache hypothesis. Candidate2a8a03b now implements selection-cache cleanup; catalogue sharing remains unimplemented. No deployment queued. Preserve the normal observation window.
 
+### Sole selection release waiter — 2026-09-06 04:42 UTC
+
+One bounded local waiter is ACTIVE: tool session7455, `output/stability-20260906/wait_selection_release.py`, started04:41:36UTC with a2h bound. It holds the existing guarded-release-wait.lock, so no second release waiter can run. Fresh poll recorded observer_running PID434080. Do not restart/duplicate or edit candidate source while it waits. Previous waiter59028/session78374 remains terminal and is not reused.
+
+The waiter pins source digest74ceb35494a9c6d4 (candidate2a8a03b) and the deploy helper hash. It requires observer inactive/MainPID0/Resultsuccess AND a finished log marker, freezes and analyzes the complete baseline, requires one-hour coverage/no issue flags, checks both protected workers twice before calling the helper, which checks both again immediately before recreation. Failed/unknown observer completion stops without deployment; transient read errors retry within the bound. Seven completion predicate checks passed. Events `selection-release-wait.jsonl`; future deployment output `selection-release-deploy.txt`. No deployment has occurred at this checkpoint. Current live sourcefb814c3/digest3d0f3437aa390c87. Recurring automation remainsPAUSED.
+
+Next action: poll the SAME session7455, preserve observer434080 to terminal (~05:09UTC), inspect actual deploy exit/digests/endpoints if it ships, then measure normal candidate RAM/CPU/coverage. Do not treat waiter timeout as deployment or success. Goal remains active; safe caps, subsequent backups andfinal48h remain outstanding.
+
 ## Start here
 
 - Work only in `/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-collector-retention`, branch `codex/collector-retention-20260906`.
