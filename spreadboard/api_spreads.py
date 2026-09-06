@@ -1552,6 +1552,19 @@ def _with_retained_books(
     return merged
 
 
+def release_query_caches() -> None:
+    """Release parsed rows and responses after a background selection batch.
+
+    The web process benefits from retaining these between requests. A separate
+    subscription worker only needs its selected leg keys between batches, so
+    it can explicitly release the query objects after all lanes finish.
+    Existing callers' returned rows and payloads remain valid.
+    """
+    with _SNAPSHOT_CACHE_LOCK:
+        _ROW_CACHE.clear()
+        _RESULT_CACHE.clear()
+
+
 def expire_idle_row_cache(*, now: float | None = None) -> int:
     """Release expired parsed rows even when nobody comes back to reload them."""
     moment = time.time() if now is None else now
