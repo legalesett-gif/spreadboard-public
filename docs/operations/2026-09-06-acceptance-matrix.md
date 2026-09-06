@@ -1,5 +1,16 @@
 ## Corrective release LIVE — 2026-09-06 07:19 UTC
 
+## Exact settlement completeness corrected — 2026-09-06 09:29 UTC
+
+Latest frozen candidate **1c6c502 /507d2d3844d69c91**, NOT deployed. Full **2753tests passed128.04s exit0**, Ruff515known vs unchanged517baseline exit0. Session9518terminal0. Generatedtrackeddatarestored. Five new regressions allfailoldsource;58focusedhistorychecks pass. Manifestupdated; prior e5c3b33manifestarchived.
+
+Found an actual remaining historical correctness defect:90%coverage plus2xinternalgaptolerance labelled23/24hourlyevents,20/21eight-hourpayments and89/90monthlypayments complete. Newvalidatorrequires full inferred eventcount and rejects doubled internalgaps; extrafastpaymentscannotmask an unrelatedmissingordinaryevent. Existingcachedflagsare rechecked using theirrecordedeventcount/gap before serving, withpreciseincompletehistorynotes. Validotherwindowsretained; no schemawipe, projectedreplacementor historydeletion. Copied09:17:55historycontains66previouslycompletewindowsbelowrecordedexpectedcount, includingsomealreadyexpired; not66newlyblankvisiblecells. exact-history-{original,full,ruff}.txt, gate-exits.json andexact-history-cache-audit.json.
+
+Separate freshread-onlyLOCALnativehistorychecks completed09:27: KrakenS/USD:USD8pages5.72s,latest09:00, full1d/7d/30d totalsavailable;BybitICX/USDT:USDT1page3.54s,latest08:00, allwindowsavailable. CopiedproductionstatusstillhadSlastupdated02:51 andBybitICX03:39, despiteglobalartifact09:17:55. This provesactualrefreshlag for thesecopiedlegs, notmissingvenuehistory. Do not claimworkerok/filemtime provescurrentper-legcoverage. Investigate/verify the ordinarypriorityqueue afterrelease; no manualproductionhistoryjoblaunched. native-history-0927.json andvenue-history-0922.json.
+
+Originalcorrectiveobserveris terminal andfullcoveragepassed; no newobserver/waiter. Fresh09:26 protectedguard stillrefusesdiscovery607244. Preserveit,then guardedsource/registry release andordinarymeasurement. Memorycaps/latency/currenthistorycatch-up/48h/twonormalgreenbackups remainopen. AutomationPAUSED.
+
+
 ## Corrective observer terminal — 2026-09-06 09:18 UTC
 
 Original observer561510 is TERMINAL: fresh09:17:12 MainPID0, inactive, Resultsuccess, ExecMainStatus0; JSONL finished1788686200.039878 (~09:16:40). Frozen corrective-observer-complete.jsonl and corrective-comparison-complete.json; terminal properties observer-terminal-0917.json. Do not restart this observer.

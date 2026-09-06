@@ -1,5 +1,16 @@
 # SpreadBoard continuation for Claude
 
+## Exact settlement completeness corrected — 2026-09-06 09:29 UTC
+
+Latest frozen candidate **1c6c502 /507d2d3844d69c91**, NOT deployed. Full **2753tests passed128.04s exit0**, Ruff515known vs unchanged517baseline exit0. Session9518terminal0. Generatedtrackeddatarestored. Five new regressions allfailoldsource;58focusedhistorychecks pass. Manifestupdated; prior e5c3b33manifestarchived.
+
+Found an actual remaining historical correctness defect:90%coverage plus2xinternalgaptolerance labelled23/24hourlyevents,20/21eight-hourpayments and89/90monthlypayments complete. Newvalidatorrequires full inferred eventcount and rejects doubled internalgaps; extrafastpaymentscannotmask an unrelatedmissingordinaryevent. Existingcachedflagsare rechecked using theirrecordedeventcount/gap before serving, withpreciseincompletehistorynotes. Validotherwindowsretained; no schemawipe, projectedreplacementor historydeletion. Copied09:17:55historycontains66previouslycompletewindowsbelowrecordedexpectedcount, includingsomealreadyexpired; not66newlyblankvisiblecells. exact-history-{original,full,ruff}.txt, gate-exits.json andexact-history-cache-audit.json.
+
+Separate freshread-onlyLOCALnativehistorychecks completed09:27: KrakenS/USD:USD8pages5.72s,latest09:00, full1d/7d/30d totalsavailable;BybitICX/USDT:USDT1page3.54s,latest08:00, allwindowsavailable. CopiedproductionstatusstillhadSlastupdated02:51 andBybitICX03:39, despiteglobalartifact09:17:55. This provesactualrefreshlag for thesecopiedlegs, notmissingvenuehistory. Do not claimworkerok/filemtime provescurrentper-legcoverage. Investigate/verify the ordinarypriorityqueue afterrelease; no manualproductionhistoryjoblaunched. native-history-0927.json andvenue-history-0922.json.
+
+Originalcorrectiveobserveris terminal andfullcoveragepassed; no newobserver/waiter. Fresh09:26 protectedguard stillrefusesdiscovery607244. Preserveit,then guardedsource/registry release andordinarymeasurement. Memorycaps/latency/currenthistorycatch-up/48h/twonormalgreenbackups remainopen. AutomationPAUSED.
+
+
 ## Spot–futures cross-check — 2026-09-06 09:20 UTC
 
 Fresh15-row UA spot–futures guest sample is accounted for:8exactUSDTspot/perpetual counterparts in copied08:56:19catalogue (ONE,FATCOIN,JIMOTHY,INDEX,ICX,ESPORTS,RUNE,BASECAT);3Ourbitexclusions (OPENAI,CATE,BULLA);4BinanceAlpha exactlegs outsidechosenvenuecoverage (USELESS,SIREN,AVNT,哈基米). Do not substitute ordinaryBinance/CEXvenues forAlpha. ONE additionallyhasUSD/USDCspotquotes andRUNEUSDC:distinctexactmarkets,notduplicates. Comparator nowdistinguishesvenue/typecountsfromexactUSDTsymbolcounts. Files ua-spot-futures-0919.json/.txt andcompare_ua_spot_futures_0919.py.
