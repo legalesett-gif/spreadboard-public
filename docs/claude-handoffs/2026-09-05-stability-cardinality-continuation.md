@@ -1,5 +1,20 @@
 # SpreadBoard continuation for Claude
 
+## Radar writer allocation removed — 2026-09-06 08:47 UTC
+
+Latest candidate **d834ca5 / 7f6b47809182b834**, NOT deployed, no waiter. Radar publication now encodes one record at a time, flushes/fsyncs and atomically replaces the file; failure preserves the previous generation and cleans the partial temporary file. Schema, retention, record cap/order and bytes remain unchanged. Source frozen after full gates; generated tracked data restored.
+
+26 focused checks passed after fixing one test import-order finding. Actual-refresh regression fails original whole-payload encoder; byte equality, mid-write encoding failure and empty-record output covered. **2744 full tests passed153.26s, exit0; Ruff no new findings516 vs unchanged517 baseline, exit0.** Evidence radar-writer-{original,full,ruff}.txt and gate-exits.json.
+
+Copied production radar has75000records/130006144bytes. Old and streamed output SHA256 both ac76db0ca4140e57efdf1638ea77df6496339bc219680a3c1ed288972401c781. Local extra serialization allocation fell260019020 ->27589bytes; traced elapsed17.93 ->23.16seconds. This excludes input parsing/retained dictionaries and is NOT whole-worker or production RSS savings. Files radar-writer-profile-{old,streamed}.json; script profile_radar_writer.py.
+
+Fresh08:37:15 actual artifacts: venue_funding_history.v5 updated_at08:23:33,10611legs/11026status records; funding_radar.v2 updated_at08:29:15,75000records; mtimes08:25:42 and08:29:52. Thus these files actually advanced during the release, beyond the worker's ambiguous ok summary. Market-history SQLite mtime08:37:04,size5231452160. Observer561510stillactive; next normal backup12:18:27. Copied venue-history-0838.json/funding-radar-0838.json and history-artifact-check-0838.json. No production mutation/cap changes.
+
+Additional LOCAL SYNTHETIC experiment only:100000 rows/83fields, regular SpreadTerminalRow retained195790250 tracedbytes vs a slotted lookalike74990306; serialization0.178 vs0.744s via attrgetter+zip. No application layout change. The lookalike uses placeholder defaults: this is layout sizing, NOT semantic parity. If pursuing, preserve exact real defaults, shallow to_dict behavior, replace/frozen semantics and all serialization fields; measure actual query CPU/latency before adopting. Only current direct __dict__ use found in spreadboard is to_dict; inspect other callers too. Evidence row-slots-profile.json/profile_row_slots.py.
+
+Next: preserve sole observer until~09:16:39; inspect terminal/full phase evidence. Consider row-layout memory only with behavioral/performance validation. Guarded final candidate deploy/source parity then exact reviewed GPRO registry atomic install/hash; verify both pages and aliases, native funding, ordinary memory/latency. Final cap budget,48h and two subsequent normal green backups still unresolved. No duplicate observer/waiter, trades/messages or cap increases.
+
+
 ## Evidence cache retention fix tested — 2026-09-06 08:35 UTC
 
 Latest candidate **de647ee / 298e0cc8722c6c49**, NOT deployed, no waiter. After all funding/Spreads board selection, the isolated evidence pass now calls existing api_spreads.release_query_caches before settlement/radar work. Selected route/leader references remain intact; unselected parsed rows and grouped responses are released. This addresses retention through later phases, not a proved reduction in production peak RSS. No live price worker or guard was paused/changed.
