@@ -1,5 +1,15 @@
 # SpreadBoard acceptance matrix
 
+## New Spreads stream coherence defect — 2026-09-06 06:05 UTC
+
+**Next correctness fix: expanded Spreads funding updates are not coherent.** Current ICX page WhiteBIT Futures -> Kraken Futures displayed live +3.225% while static text still said pay, leg rates +0.0100% / -0.0805%, and Net edge retained -1.962087%. Fresh Kraken06:03:52 PF_ICXUSD rate=0.000020114131200275quote/base and mark0.0148081074 confirm the rate changed positive; the old metadata, not necessarily the live numeric sign, is wrong. _board_stream_rows only reads coherent funding snapshot/legs when funding_only is set; render_market_group_route omits live hooks for explanation/legs/cadence. Fix stream payload plus all dependent displayed values/actions together, retaining exact settled-window semantics and route identity. Add actual DOM event behavior tests, including sign flip/unavailable and net-edge data. No fix yet. Evidence ua-purr-icx-ui-0603.json and icx-native-kraken-ui-audit.json.
+
+UA05:58:59 guest futures15leaders:12saved exact counterparts after explicit Kucoin -> Kucoin Futures adapter-name normalization. Copied generation saved05:43:03, sha256db8efa8d2a8f96b7c06b53827c5e0a3dd1b6222eedc116429ed35df739f74689; not same-time UI proof. ICX OKX->WhiteBIT missing from saved generation but present in current expanded UI (+0.933%day, -0.1505%/4h and+0.0100%/8h; DDidentity warning). BMNRSTOCK remains earlier researched case, not freshly recertified here.
+
+UA PURRSTOCK Bitget->Hyperliquid shows12.483vs0.1203 and-99.04%basis. Fresh Bitget ticker12.487, native PURRUSDT contract isRwaYES; official listing identifies stock underlying Hyperliquid Strategies Inc. Hyperliquid native core PURR mark0.12033 corresponds to token PURR; official docs distinguish token. This is an identity mismatch, not a missing valid opportunity to add. Our current PURRSTOCK UI has6other routes,0Fundingpairs,noHyperliquid. Sources https://www.bitget.com/support/articles/12560603893437 and https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers ; native JSON files purr-native-{bitget,hyperliquid}.json.
+
+Production observer499780 freshlyactive05:57:26. Backup freshly success (00:19:49–01:15:36 exit0), nexttimer06:20:56UTC. Preserve observer until07:12:50. Livef047ccf; local6ab7440 stillundeployed; no waiter/capchanges; automationPAUSED. Browser navigation timeouts for T/ICX were followed by reading the SAME completed tabs, not duplicate requests. No production diagnostic child or orders/messages.
+
 ## Navigation callers candidate — 2026-09-06 05:57 UTC
 
 Latest local candidate **6ab7440**, not deployed, includes history exclusion 0b534e5 and cache revalidation 7b7f904. Live remains f047ccf. No release waiter queued; caps unchanged; automation PAUSED; preserve sole observer499780 until expected07:12:50UTC and freshly check terminal state before acting.
