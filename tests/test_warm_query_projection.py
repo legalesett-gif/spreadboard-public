@@ -655,7 +655,8 @@ def test_new_structural_generation_immediately_wins_with_a_newer_quote() -> None
     universe.install({"GUA-route": current})
 
     updates, status = universe.update_snapshot()
-    assert updates["GUA-route"] == (0.9, 0.1, now_us, "matched_vwap")
+    assert updates["GUA-route"][:4] == (0.9, 0.1, now_us, "matched_vwap")
+    assert len(updates["GUA-route"]) == 7
     assert status["ready"] is True
     assert status["current_priced_route_count"] == 1
 
