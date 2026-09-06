@@ -4209,7 +4209,13 @@ def _market_cache_lookup(
             and (cached[1].get("mode") == "materialized_live_query_projection")
             and now - cached[0] > _LIVE_QUERY_RESULT_TTL_SECONDS
         ):
-            _MARKET_CACHE.pop(cache_key, None)
+            # The short TTL asks for a fresh projection; it does not invalidate
+            # the completed structure. Preserve it for foreground reuse while
+            # a background caller builds, just as for a changed fast-quote key.
+            # Otherwise an unchanged key was slower than a changed price file,
+            # and the builder removed the only fallback for concurrent readers.
+            if now - cached[0] > _MARKET_CACHE_TTL_SECONDS:
+                _MARKET_CACHE.pop(cache_key, None)
             cached = None
         if cached and now - cached[0] <= _MARKET_CACHE_TTL_SECONDS:
             _MARKET_CACHE_LAST_USED[cache_key] = now
