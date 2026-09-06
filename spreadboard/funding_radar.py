@@ -183,13 +183,32 @@ def refresh(
             "retention_days": max(1, int(retention_days)),
             "records": records,
         }
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-        temporary.replace(path)
+        _write_atomic(path, payload)
         _CACHE["stamp"] = None
         _CACHE["records"] = {}
         _CACHE["routes_by_key"] = {}
     return len(records)
+
+
+def _write_atomic(path: Path, payload: dict[str, Any]) -> None:
+    """Publish the same JSON without a whole-radar text/encoding allocation."""
+    temporary = path.with_suffix(".tmp")
+    header = {key: value for key, value in payload.items() if key != "records"}
+    try:
+        with temporary.open("w", encoding="utf-8") as target:
+            target.write(json.dumps(header, separators=(",", ":"))[:-1])
+            target.write(("," if header else "") + '"records":{')
+            for index, (key, record) in enumerate(payload["records"].items()):
+                if index:
+                    target.write(",")
+                target.write(json.dumps({key: record}, separators=(",", ":"))[1:-1])
+            target.write("}}")
+            target.flush()
+            os.fsync(target.fileno())
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def load_records(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, dict[str, Any]]:
