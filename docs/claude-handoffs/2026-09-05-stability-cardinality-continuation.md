@@ -1,5 +1,14 @@
 # SpreadBoard continuation for Claude
 
+## Builder catalogue fix tested — 2026-09-06 07:36 UTC
+
+Latest local **946d43d /af270de5de2d61b8, NOT deployed**. Production remainsb4230a7/272beeec7e0e9f49; observer561510 remainssolepreservedjob until09:16:39. Newsharedpublicclientconfiguration removesCCXT's first9builder truncation usinga looplimit sentinel; installedadapter stopsattheactualadvertisedmetadata length. Explicitdexlistsandotherexchangesunchanged. Wiredchartcatalogue,bulkclient,fastclient andfastfundingmetadatareload. Existingmarketstatus/price/identitygatesunchanged; executionclientsuntouched.
+
+OfflineactualinstalledCCXTfetch_hip3_markets test throughallthreeclientcallers proves10thbuilderloadedexactlyonce; explicitlistcasepreserved. Originalthreecallers allfail. Fourfocusedpass; full **2714passed156.73s exit0**,Ruffno newexit0. Earlytargetedtestcaughtmissingfastclientwiring andwasfixedbeforefullgates;sourcefrozenaftergates/testgenerateddatarestored. Evidencebuilder-all-{targeted,original,full,ruff}.txt.
+
+FreshLOCALpubliccatalogfetch13.40s returned315supportedHLmarketsvsproduction310: addedIO-OAI,IO-ANTH,IO-SNDK,IO-NBIS,**IO-GPRO/USDC:USDC**, nativeid200006. Evidencebuilder-all-native-catalog.json. This provesdiscoverythroughrealadapter, notproductionmembership/carry/identityreadiness orRSS. Candidate manifestupdated; livepinretainedseparately. Needstockclassificationfixnext: per-marketBitgetRWA/BinanceEQUITYmetadatacurrentlydiscarded, plainBNC/GPRO wronglycrypto whileSTOCKspellingsblocked. No newreleasewaiter/deploy/capchange.
+
+
 ## Stock comparison root causes — 2026-09-06 07:30 UTC
 
 Liveb4230a7 unchanged; no source edits in this checkpoint. Observer561510 freshlyactive07:25:28, preserve to09:16:39.
