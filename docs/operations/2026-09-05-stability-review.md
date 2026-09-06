@@ -1,5 +1,13 @@
 # SpreadBoard stability review and acceptance ledger
 
+## Coverage gate failure and tested coherence fix — 2026-09-06 06:14 UTC
+
+**Priority: investigate the generation-install coverage drop before release/cap changes.** Frozen combined-observer-hour-check.jsonl spans3638.85s,240hostsamples,31coverageover3618.64s. Priced coverage FAILED±10%:201856/gen4 at06:01:05,64083/gen5 at06:03:06,202127/samegen5 at06:05:06. Route_count remained208421 during the drop/recovery; funding_only jumped144329, refresh_seconds0 at the drop. This points toward generation install/first price overlay but is not yet causal proof. No container change/restart/OOM/unhealthy/endpointfailure. Do not claim one-hour success from issues=[]: coverage.within_10pct andone_hour_log_proof are false. Evidence combined-comparison-hour-check.json and combined-coverage-drop.json. Preserve observer499780 to07:12:50; no duplicate/restart.
+
+**Latest local candidate2746e4e, NOT deployed**, includes6ab7440memory exclusions and7b7f904cache revalidation. Fixes confirmed Spreads funding-coherence defect: every board stream derives current funding/leg metadata from one snapshot; row/group live direction/rate/cadence hooks, expiry/recovery, Net edge dataset and already-open exact-route calculator update together. Settled windows and quote/user state preserved. Full2694passed174.13s exit0;27focusedpass3.32s; six original-source/JS failures, five unaffected casespass; Ruff no new516against unchanged517baseline exit0. Tracked generated data restored; no product edits after gates. Docs2026-09-06-spreads-funding-coherence.md.
+
+Live remainsf047ccf; no queued waiter/capchanges; automationPAUSED. Hour memory:appanon3035693056/current3446505472;collectoranon3204747264/current4294447104. CPU.859/1.936cores. /free13samplesmax14.906s;health31max5.251s. Index36samples,nonewithwebsocket. These observations do not establish safe lower caps or final48h. Nextnormalbackup06:20:56UTC, latestcompleted01:15:36success.
+
 ## Navigation callers candidate — 2026-09-06 05:57 UTC
 
 Latest local candidate **6ab7440**, not deployed, includes history exclusion 0b534e5 and cache revalidation 7b7f904. Live remains f047ccf. No release waiter queued; caps unchanged; automation PAUSED; preserve sole observer499780 until expected07:12:50UTC and freshly check terminal state before acting.
