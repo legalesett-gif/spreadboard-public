@@ -72,3 +72,46 @@ def test_actual_evidence_pass_keeps_last_route_per_identity_without_rich_rows(
     assert records['catalogue-199']['windows']['1d'] == 100
     assert all('unrelated_token_metadata' not in r['route'] for r in records.values())
     assert peak <= 3, f'evidence pass retained {peak} rich positive candidate rows'
+
+
+def test_evidence_releases_unselected_query_cache_before_history_and_radar(monkeypatch):
+    from spreadboard import api_spreads
+
+    class CachedRow(dict):
+        pass
+
+    unselected = CachedRow(token="UNSELECTED")
+    reference = weakref.ref(unselected)
+    monkeypatch.setattr(api_spreads, "_ROW_CACHE", {"selection": (0, [unselected])})
+    monkeypatch.setattr(api_spreads, "_RESULT_CACHE", {"selection": {"rows": [unselected]}})
+    del unselected
+    warm = _route(1)
+    phases = []
+    monkeypatch.setattr(service, "WARM_QUERIES", [{"funding_only": True}])
+    monkeypatch.setattr(service, "FUNDING_ARCHIVE_QUERIES", [])
+    monkeypatch.setattr(service, "_refresh_complete_funding_catalog", lambda **kw: None)
+    monkeypatch.setattr(server, "api_market_spreads", lambda *a: {
+        "groups": [{"routes": [warm], "best_funding_route": warm}],
+    })
+
+    def history(**kwargs):
+        assert reference() is None
+        assert kwargs["priority_routes"] == [warm]
+        phases.append("history")
+
+    def radar(routes):
+        assert reference() is None
+        assert len(routes) == 1 and routes[0]["token"] == "TOKEN1"
+        phases.append("radar")
+        return 1
+
+    monkeypatch.setattr(service, "_refresh_venue_funding_history", history)
+    monkeypatch.setattr(market_history, "write_funding_windows", lambda keys: len(keys))
+    monkeypatch.setattr(funding_catalog, "archive_routes", lambda: iter(()))
+    monkeypatch.setattr(funding_radar, "refresh", radar)
+    monkeypatch.setattr(research_calibration, "capture_routes", lambda routes: {"inserted": 1})
+    monkeypatch.setattr(research_calibration, "label_matured", lambda: {"labeled": 0})
+    service._refresh_funding_windows()
+    # The outer worker guard swallows failures, so both downstream phases
+    # must actually complete while preserving the selected route.
+    assert phases == ["history", "radar"]

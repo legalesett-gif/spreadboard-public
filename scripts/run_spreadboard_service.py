@@ -3500,6 +3500,7 @@ def _refresh_funding_windows() -> None:
     just built, means the page only ever reads the answer.
     """
     from spreadboard import (
+        api_spreads,
         catalog_pairs,
         funding_catalog,
         funding_radar,
@@ -3573,6 +3574,10 @@ def _refresh_funding_windows() -> None:
                         board_priority_legs.setdefault((str(venue), str(symbol)), None)
             del payload
 
+        # This isolated evidence worker has finished all board selection.
+        # Later settlement/radar work needs only the selected rows above,
+        # not every parsed row or grouped response retained by the web cache.
+        api_spreads.release_query_caches()
         route_keys: list[str] = list(route_key_set)
         leaders: list[dict[str, Any]] = list(leader_by_key.values())
         warm_routes: list[dict[str, Any]] = list(warm_by_identity.values())
