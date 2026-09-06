@@ -191,6 +191,8 @@ class RefreshLoop:
             _log("initial exact funding evidence complete; structural discovery may run")
 
     def run_chart_catalog(self) -> None:
+        from spreadboard import chart_catalog
+
         interval = max(
             900.0,
             # Six hours left the newly active Aster STONKS contract absent
@@ -202,6 +204,8 @@ class RefreshLoop:
             RUNTIME_DIR / "chart_market_catalog.json",
             interval_seconds=interval,
         )
+        if not chart_catalog.definitions_current(RUNTIME_DIR / "chart_market_catalog.json"):
+            initial_delay = 0.0
         if initial_delay and self.stop_event.wait(initial_delay):
             return
         while not self.stop_event.is_set():

@@ -28,6 +28,25 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_PATH = RUNTIME_DIR / "chart_market_catalog.json"
 STABLE_QUOTES = {"USD", "USDC", "USDT"}
+# Revision 2 adds native stock classification and all Hyperliquid builders.
+# An mtime from an older producer cannot prove these definitions are current.
+DEFINITION_REVISION = 2
+DEFINITION_REVISION_JOBS = frozenset(
+    f"{venue}|Futures" for venue in ("Binance", "Bitget", "Bybit", "Hyperliquid")
+)
+
+
+def definitions_current(path: Path | str = DEFAULT_PATH) -> bool:
+    """Read only the revision without retaining the full market catalogue."""
+    import ijson
+
+    try:
+        with Path(path).open("rb") as handle:
+            revision = next(ijson.items(handle, "definition_revision"), None)
+        return revision == DEFINITION_REVISION
+    except (OSError, ijson.JSONError, ValueError):
+        return False
+
 
 #: Spot venues that belong in the catalogue but are quoted by the bulk sweep
 #: rather than the native order-book fetcher.
@@ -98,6 +117,11 @@ def refresh(path: Path | str = DEFAULT_PATH, *, workers: int = 4) -> dict[str, A
     markets.sort(key=lambda item: (item["token"], item["venue"], item["market_type"], item["symbol"]))
     payload = {
         "ok": bool(markets),
+        "definition_revision": (
+            DEFINITION_REVISION
+            if all(health.get(job, {}).get("status") == "ok" for job in DEFINITION_REVISION_JOBS)
+            else previous.get("definition_revision")
+        ),
         "generated_at": datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z"),
         "count": len(markets),
         "token_count": len({item["token"] for item in markets}),
