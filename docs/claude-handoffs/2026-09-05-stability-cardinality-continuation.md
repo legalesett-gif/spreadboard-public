@@ -1,5 +1,11 @@
 # SpreadBoard continuation for Claude
 
+## Release verification runbook — 2026-09-06 06:41 UTC
+
+Start with `docs/operations/2026-09-06-candidate-release-verification.md`. It separates release success from coverage, UI coherence, safe-cap and final 48-hour acceptance. The local candidate manifest freezes source/data digest and build/helper hashes. No source changes, release or new waiter in this checkpoint.
+
+Fresh 06:38:07 UTC: observer PID 499780 remains active/running; backup PID 532835 remains activating/start, with no exit timestamp. Neither is terminal. Candidate digest rechecked `07c8589ad5765ecf`. Preserve both jobs; recurring automation remains paused. Historical checkpoints below are not instructions to restart old waiters.
+
 ## Streaming index writer candidate — 2026-09-06 06:34 UTC
 
 **Latest local9ae48fb/digest07c8589ad5765ecf, NOT deployed**, includesfc8e2f4installation,2746e4efundingUI,6ab7440navigationmemory,7b7f904cache. Default live-index writer now serializes/hashes one route at a time and atomically replaces pointer only afterfsync. Samebytes/checksum/order, supplied-encoded path retained, previousindex readable onfailure. Full2702passed140.73s exit0;Ruffno new516/unchanged517baseline exit0;16focusedpass;originalwriter2fail3pass. Datarestored/sourcefrozenaftergates. Details2026-09-06-streaming-index-writer.md.
