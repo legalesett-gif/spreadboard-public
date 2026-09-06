@@ -1095,3 +1095,10 @@ Next: observe the existing waiter; do not duplicate it or manually deploy. Verif
 ### Index-guard local timing — 2026-09-06 03:20 UTC
 
 The original per-row index-guard performance risk had no timing entry in the consolidated ledger. A local-only microbenchmark of30,000synthetic current rows (equal futures/futures, spot/futures, futures/spot), eight alternating measured passes, produced median73.18mswithguard versus2.47msempty-call baseline; incremental70.71ms. Soundrows passed and mismatchedspot sanitycase rejected. No guard/source modification and no production load. This is NOT production page-latency or full-classifier before/after proof. Evidence: `output/stability-20260906/benchmark_index_guard.py` and `index-guard-microbenchmark.json`. The sole production observer PID434080 remains active; no duplicate job or redeploy.
+
+
+### Ordinary generation and auxiliary headroom — 2026-09-06 03:23 UTC
+
+Fresh soleobserver PID434080 active. At12minutes:48hostsamples,6healthsamples, generations1and2, zeroendpointfailures/restarts/OOMkills. Appsampledanonpeak2,675,253,248bytes/current3,054,546,944; collector2,760,241,152/3,634,102,272. This proves another ordinaryindexgeneration was observed, not the finalhour/48hgate or a causal fullmemorysaving.
+
+Read-only auxiliarycgroups: accountinghealthy/restarts0/OOM0,uptime13,413s (~3.7h), peak365,543,424bytes (~348.6MiB), current350,773,248, cap805,306,368. That provides measuredheadroomtoward512MiB, but no capchanged pendingthecompletehostdecision. Caddyfreshdockerps/directcgroupcheck confirmsrunning, peak60,162,048bytes (~57.4MiB), current31,559,680, cap201,326,592. The generic app/collectorhealthinspector returnedpresentfalseforCaddy; thatwasnotrealcontainerabsence andisnotusedasitshealthproof. Evidence `auxiliary-container-headroom.json` and `caddy-headroom.json`. Source/config unchanged; no newobserverorproductionloadtest.
