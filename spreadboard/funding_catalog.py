@@ -807,6 +807,8 @@ def _window_value(
 ) -> float | None:
     """Use an exact window already attached to this coherent generation."""
 
+    # The collector also publishes member-facing rankings. It must use the
+    # current exact archive, never yesterday's values attached to a catalogue.
     # Production keeps exact venue settlements in a small independently
     # refreshed archive. Read that current rolling window at request time so a
     # durable catalogue restored after a restart never freezes yesterday's
@@ -814,6 +816,7 @@ def _window_value(
     if os.environ.get("SPREADBOARD_SERVICE_ROLE", "").casefold() in {
         "web",
         "combined",
+        "collector",
     }:
         return funding_radar.window_value(route, label, exact_legs=exact_legs)
     attached = (
@@ -1121,7 +1124,7 @@ def page(
     )
     production_reader = os.environ.get(
         "SPREADBOARD_SERVICE_ROLE", ""
-    ).casefold() in {"web", "combined"}
+    ).casefold() in {"web", "combined", "collector"}
     current_funding = bulk_quotes.load_funding() if production_reader else None
     # An empty live cache also means all observations may have expired. Keep
     # it explicit so persisted carry cannot reappear as current funding after

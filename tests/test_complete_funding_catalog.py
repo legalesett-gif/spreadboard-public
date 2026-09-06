@@ -7,6 +7,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from scripts import complete_funding_catalog_worker
 from spreadboard import funding_catalog, funding_radar, server
 
@@ -374,11 +376,12 @@ def test_current_ranking_happens_before_token_pagination(monkeypatch) -> None:
     assert page["groups"][0]["best_funding_route"]["route_key"] == "strong"
 
 
-def test_restored_catalog_now_uses_current_exact_leg_carry(monkeypatch) -> None:
+@pytest.mark.parametrize("role", ["web", "collector"])
+def test_restored_catalog_now_uses_current_exact_leg_carry(monkeypatch, role) -> None:
     from spreadboard import warm_query_projection
 
     stale = _route("GUA", "gua", current=0.1, one_day=0.2)
-    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     monkeypatch.setattr(
         funding_catalog,
         "_complete_payloads",
@@ -439,13 +442,14 @@ def test_restored_catalog_now_uses_current_exact_leg_carry(monkeypatch) -> None:
     assert page["window_token_counts"] == {}
 
 
+@pytest.mark.parametrize("role", ["web", "collector"])
 def test_populated_live_cache_never_backfills_a_missing_leg_from_stale_catalog(
-    monkeypatch,
+    monkeypatch, role,
 ) -> None:
     from spreadboard import warm_query_projection
 
     stale = _route("GUA", "gua", current=9.9, one_day=0.2)
-    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     monkeypatch.setattr(
         funding_catalog,
         "_complete_payloads",
@@ -473,14 +477,15 @@ def test_populated_live_cache_never_backfills_a_missing_leg_from_stale_catalog(
     assert page["matching_route_count"] == 0
 
 
+@pytest.mark.parametrize("role", ["web", "collector"])
 def test_web_funding_page_clears_now_after_all_live_rates_expire(
-    monkeypatch, tmp_path,
+    monkeypatch, role, tmp_path,
 ) -> None:
     """An unchanged rate file must not revive persisted carry when it expires."""
     from spreadboard import bulk_quotes, warm_query_projection
 
     route = _route("GUA", "gua", current=9.9, one_day=0.2)
-    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     monkeypatch.setattr(
         funding_catalog, "_complete_payloads", lambda: {"GUA": {"routes": [route]}},
     )
@@ -525,9 +530,10 @@ def test_web_funding_page_clears_now_after_all_live_rates_expire(
     assert path.stat().st_mtime_ns == stamp
 
 
-def test_production_historical_window_reads_current_exact_archive(monkeypatch) -> None:
+@pytest.mark.parametrize("role", ["web", "collector"])
+def test_production_historical_window_reads_current_exact_archive(monkeypatch, role) -> None:
     stale = _route("GUA", "gua", current=0.1, one_day=9.9)
-    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     monkeypatch.setattr(
         funding_catalog,
         "_complete_payloads",
@@ -565,14 +571,15 @@ def test_production_historical_window_reads_current_exact_archive(monkeypatch) -
     assert loads == [True]
 
 
+@pytest.mark.parametrize("role", ["web", "collector"])
 def test_production_now_enriches_only_visible_routes_with_exact_windows(
-    monkeypatch,
+    monkeypatch, role,
 ) -> None:
     from spreadboard import warm_query_projection
 
     hidden = _route("HIDDEN", "hidden", current=0.5, one_day=99.0)
     visible = _route("VISIBLE", "visible", current=1.0, one_day=99.0)
-    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     monkeypatch.setattr(
         funding_catalog,
         "_complete_payloads",
