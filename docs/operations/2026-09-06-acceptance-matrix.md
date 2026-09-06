@@ -1,6 +1,6 @@
 # SpreadBoard acceptance matrix
 
-Checkpoint: 2026-09-06 02:38 UTC. Goal remains open.
+Checkpoint: 2026-09-06 02:42 UTC. Goal remains open.
 Live source is **b42e595 / bc130c63e6b760de**. The tested **fb814c3** candidate includes exact fallback-direction, zero-ranking, and bounded string-sharing fixes but is **not deployed**. Discovery PID 407100 is running; both discovery and finalization must be idle before deployment. No force, trades, messages, spend, cap increases, or alert reactivation.
 
 | Requirement | Evidence inspected | Verdict / remaining work |
@@ -34,3 +34,7 @@ At 00:05 UTC, configured coverage contained **1,987 futures token labels / 9,733
 5. Verify subsequent normal backup timer outcomes. Close the goal only with complete evidence; recommend capacity honestly if the prescribed no-spend box cannot meet acceptance.
 
 Detailed chronology and raw evidence: `docs/operations/2026-09-05-stability-review.md`, `docs/operations/2026-09-05-ua-comparison.md`, and `output/stability-20260906/`. This matrix is an evidence map, not a completion claim or live-entry authorization.
+
+## Active deployment wait
+
+One bounded local waiter is running: PID59028, tool session78374, started02:41:04UTC, with a two-hour guard-wait ceiling. Expected tested source digest is `3d0f3437aa390c87`. It polls the protected-worker guard every55seconds, refuses changed source, and invokes the existing guarded helper once when idle. The helper independently guards immediately before recreation. No recurring automation was created or reactivated. Do not start a duplicate waiter or deploy manually while it is active. Observe `output/stability-20260906/guarded-release-wait.jsonl`; eventual deployment output goes to `held-release-deploy.txt`. A nonzero deployment result requires inspection, not a blind retry.
