@@ -29,9 +29,13 @@ service. Its prior version is backed up under `/opt/spreadboard/backups/`.
 The broad no-production-mutation boundary was supplied in the original user
 request that launched the SpreadExec dashboard implementation. It was not an
 assistant-platform restriction and was not encoded as a permanent repository
-policy. The user explicitly superseded it for the 2026-09-08 OPENAI Portfolio
-hotfix. Stale operator notes saying the fix was forbidden from deployment have
-been removed or rewritten to record the completed release.
+policy outside that master prompt. The user explicitly superseded it for the
+2026-09-08 OPENAI Portfolio hotfix. The master prompt now defaults to local-only
+verification but permits a later explicit authorization for an exact scoped
+deployment/restart with rollback, health, source-parity and unaffected-service
+evidence. That authority still never implies live trading or asset movement.
+Stale operator notes saying the fix was forbidden from deployment have been
+removed or rewritten to record the completed release.
 
 ## Retained controls
 
@@ -73,4 +77,3 @@ Rollback assets:
 - image tag: `app-app:pre-openai-spread-20260908T214413Z`
 - previous image ID:
   `ff1ab9c94d05fd48606f1f33dc2d30d138d57eb6bd7af9a185ef6be84033f80b`
-
