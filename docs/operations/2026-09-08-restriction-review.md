@@ -70,6 +70,14 @@ MEXC mark `1496.4`, Hyperliquid mark `1621.2005`, API spread
 was healthy with zero restarts/OOM, and collector/accounting container identities
 and start times were unchanged.
 
+After installing the narrowed deployment helper, the app was rebuilt and
+recreated once more so the host and running app contained the same reviewed
+source. Final verification at `2026-09-08T22:02:18Z` reported host/app source
+digest `aa5d860f0320f7f7`, identical Portfolio/helper file hashes, external health
+HTTP 200, and a live OPENAI price spread of `8.4010165864%` from MEXC
+`1495.2` and Hyperliquid `1620.812`; the rendered card emitted `+8.401%`.
+Collector and accounting retained their prior container IDs and start times.
+
 Rollback assets:
 
 - source backup:
