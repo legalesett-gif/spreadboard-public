@@ -45,7 +45,17 @@ scan_running() {
 
 restarts_before=$(ssh_do 'docker inspect app-app-1 app-collector-1 --format "{{.RestartCount}}" | paste -sd, -')
 
-RUNNING=$(scan_running)
+# Only the collector holds a scan. `docker compose up -d --no-deps` below
+# restarts exactly the named services, so an app-only deploy cannot touch it --
+# refusing those too taught the habit of reaching for --force, which is how a
+# deploy that really does discard a scan eventually slips through.
+COLLECTOR_TARGETED=0
+for service in "${SERVICES[@]}"; do
+  [[ "$service" == "collector" ]] && COLLECTOR_TARGETED=1
+done
+
+RUNNING=0
+[[ $COLLECTOR_TARGETED -eq 1 ]] && RUNNING=$(scan_running)
 if [[ "$RUNNING" != "0" && "$RUNNING" != "" ]]; then
   if [[ $FORCE -eq 0 ]]; then
     cat >&2 <<MSG
