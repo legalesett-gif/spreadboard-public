@@ -50,6 +50,17 @@ DEXSCREENER_CHAIN_NAMES = {56: "bsc"}
 # Keep the larger default for venues which accept it, but make pagination a
 # provider contract instead of assuming every CCXT adapter has the same cap.
 FUNDING_HISTORY_PAGE_LIMITS = {"hyperliquid": 500, "mexc": 100}
+#: How long the venue's builder-DEX list is reused. It changes on the order of
+#: weeks, and the lookup is one request.
+HYPERLIQUID_DEX_CACHE_SECONDS = 600.0
+#: A floor under the venue lookup, never a replacement for it. These names were
+#: read from `perpDexs` on 2026-09-04. If the lookup fails or comes back empty,
+#: resolution must not silently degrade to the main DEX -- that is precisely the
+#: failure being fixed, and it would hit the XYZ-SKHY/XYZ-SKHX position too. The
+#: venue's answer is unioned on top, so a newly listed DEX needs no code change.
+HYPERLIQUID_KNOWN_BUILDER_DEXES = frozenset(
+    {"xyz", "flx", "vntl", "hyna", "km", "abcd", "cash", "para", "mkts", "io"}
+)
 HYPERLIQUID_INFO_URL = "https://api.hyperliquid.xyz/info"
 HYPERLIQUID_PAGE_LIMIT = 500
 HYPERLIQUID_MAX_PAGES = 50
@@ -98,17 +109,60 @@ class HyperliquidPublicAccountClient:
         self.account_address = cleaned["api_key"]
         self._funding_cache: dict[str, tuple[int, float, list[dict[str, Any]]]] = {}
         self._context_cache: dict[str, tuple[float, dict[str, dict[str, Any]]]] = {}
+        self._dex_names: frozenset[str] | None = None
+        self._dex_names_at = 0.0
 
-    @staticmethod
-    def _coin(symbol: str) -> str:
+    def _builder_dex_names(self) -> frozenset[str]:
+        """Which builder DEXes exist, asked of the venue rather than hard-coded.
+
+        Hyperliquid runs many of these -- xyz, para, io, vntl and more -- and the
+        set changes without notice. Reading it keeps a newly listed one working
+        without another code change.
+        """
+
+        if (
+            self._dex_names is not None
+            and time.monotonic() - self._dex_names_at < HYPERLIQUID_DEX_CACHE_SECONDS
+        ):
+            return self._dex_names
+        try:
+            entries = self._post({"type": "perpDexs"}) or []
+        except Exception:  # noqa: BLE001 - a lookup failure must not lose a namespace.
+            return self._dex_names or HYPERLIQUID_KNOWN_BUILDER_DEXES
+        names = HYPERLIQUID_KNOWN_BUILDER_DEXES | frozenset(
+            str(entry.get("name") or "").casefold()
+            for entry in entries
+            if isinstance(entry, dict) and entry.get("name")
+        )
+        self._dex_names = names
+        self._dex_names_at = time.monotonic()
+        return names
+
+    def _coin(self, symbol: str) -> str:
+        """Resolve a saved symbol to the venue's own coin identifier.
+
+        A builder market is saved as `<DEX>-<COIN>/USDC:USDC` and the venue
+        knows it as `<dex>:<COIN>`. This translated only an `XYZ-` prefix,
+        written when XYZ-SKHY and XYZ-SKHX were the only builder-DEX positions.
+        `PARA-ANSEM` therefore fell through unchanged, `_dex` found no colon,
+        and the ledger was read from the MAIN perp DEX, which has no such coin.
+        Zero rows came back and were recorded as an exact zero -- for a position
+        earning 0.048% an hour.
+
+        The prefix is checked against the venue's live DEX list, so a coin that
+        merely contains a dash still resolves to the main DEX.
+        """
+
         base = str(symbol or "").split("/", 1)[0].strip()
         normalized = base.upper()
-        if normalized.startswith("XYZ-"):
-            return f"xyz:{normalized.removeprefix('XYZ-')}"
-        if normalized.startswith("XYZ:"):
-            return f"xyz:{normalized.removeprefix('XYZ:')}"
         if not normalized:
             raise RuntimeError("invalid_hyperliquid_symbol")
+        for separator in (":", "-"):
+            prefix, found, rest = normalized.partition(separator)
+            if not found or not rest:
+                continue
+            if prefix.casefold() in self._builder_dex_names():
+                return f"{prefix.casefold()}:{rest}"
         return normalized
 
     @staticmethod

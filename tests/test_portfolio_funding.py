@@ -200,14 +200,19 @@ def test_hyperliquid_public_ledger_uses_xyz_namespace_signed_usdc_and_pagination
 
     def post(payload):
         calls.append(payload)
-        return first_page if len(calls) == 1 else []
+        if payload.get("type") == "perpDexs":
+            return [{"name": "xyz"}]
+        funding_calls = [c for c in calls if c.get("type") == "userFunding"]
+        return first_page if len(funding_calls) == 1 else []
 
     monkeypatch.setattr(client, "_post", post)
     rows = sync_portfolio_funding.fetch_private_funding(
         client, "XYZ-SKHX/USDC:USDC", 1_000
     )
 
-    assert calls == [
+    # Resolving the builder-DEX namespace costs one `perpDexs` lookup, which is
+    # not part of the ledger contract this test pins.
+    assert [call for call in calls if call.get("type") == "userFunding"] == [
         {
             "type": "userFunding",
             "user": "0xabcdef0123456789abcdef0123456789abcdef01",
@@ -252,6 +257,8 @@ def test_hyperliquid_public_mark_uses_exact_xyz_builder_context(monkeypatch) -> 
 
     def post(payload):
         calls.append(payload)
+        if payload.get("type") == "perpDexs":
+            return [{"name": "xyz"}]
         return [
             {"universe": [{"name": "xyz:SKHX"}, {"name": "xyz:SKHY"}]},
             [
@@ -268,7 +275,11 @@ def test_hyperliquid_public_mark_uses_exact_xyz_builder_context(monkeypatch) -> 
     )
     mark = sync_portfolio_funding.fetch_cex_reference_mark(client, row, "short", {})
 
-    assert calls == [{"type": "metaAndAssetCtxs", "dex": "xyz"}]
+    # The namespace lookup is an implementation detail; what this pins is that
+    # the context is read from the exact builder DEX, not the main one.
+    assert [c for c in calls if c.get("type") == "metaAndAssetCtxs"] == [
+        {"type": "metaAndAssetCtxs", "dex": "xyz"}
+    ]
     assert mark["price_usd"] == "154.64275"
     assert mark["quote_currency"] == "USDC"
     assert mark["basis"] == "markPrice"
@@ -501,3 +512,142 @@ def test_cex_spot_reference_uses_midpoint_not_position_size() -> None:
     assert mark["price_usd"] == "10"
     assert mark["basis"] == "bid_ask_midpoint"
     assert mark["source"] == "local_book_midpoint"
+
+
+def _dex_aware_client(monkeypatch, funding_page):
+    """A client whose builder-dex names come from the venue, as in production."""
+
+    client = sync_portfolio_funding.HyperliquidPublicAccountClient(
+        "0xabcdef0123456789abcdef0123456789abcdef01"
+    )
+    calls = []
+
+    def post(payload):
+        calls.append(payload)
+        if payload.get("type") == "perpDexs":
+            # Hyperliquid runs many builder DEXes, not one.
+            return [
+                {"name": "xyz", "fullName": "XYZ"},
+                {"name": "para", "fullName": "Paradex"},
+                {"name": "io", "fullName": "EntropyIO"},
+            ]
+        return funding_page if payload.get("type") == "userFunding" else []
+
+    monkeypatch.setattr(client, "_post", post)
+    return client, calls
+
+
+def test_a_non_xyz_builder_dex_resolves_to_its_own_namespace(monkeypatch) -> None:
+    """`PARA-ANSEM` was queried against the MAIN dex and returned nothing.
+
+    The operator's ANSEM position is Mexc spot long against a Hyperliquid
+    `para:ANSEM` short. `_coin` only translated an `XYZ-` prefix, written when
+    XYZ-SKHY/XYZ-SKHX were the only builder-dex positions, so `PARA-ANSEM` fell
+    through unchanged, `_dex` found no colon and asked the main perp DEX, which
+    has no such coin. Zero rows came back and the worker recorded that as
+    `known: true, amount_usd: 0.0` -- an exact zero for a position earning
+    0.048% an hour.
+    """
+
+    page = [
+        {
+            "time": 2_000,
+            "delta": {"type": "funding", "coin": "para:ANSEM", "usdc": "-0.42"},
+        }
+    ]
+    client, calls = _dex_aware_client(monkeypatch, page)
+
+    rows = sync_portfolio_funding.fetch_private_funding(
+        client, "PARA-ANSEM/USDC:USDC", 1_000
+    )
+
+    funding_calls = [call for call in calls if call.get("type") == "userFunding"]
+    assert funding_calls[0]["dex"] == "para"
+    assert rows == [{"timestamp": 2_000, "amount": "-0.42", "code": "USDC"}]
+
+
+def test_the_xyz_namespace_still_works(monkeypatch) -> None:
+    """The operator's SKHY/SKHX position must not regress."""
+
+    page = [
+        {
+            "time": 2_000,
+            "delta": {"type": "funding", "coin": "xyz:SKHX", "usdc": "0.5"},
+        }
+    ]
+    client, calls = _dex_aware_client(monkeypatch, page)
+
+    rows = sync_portfolio_funding.fetch_private_funding(
+        client, "XYZ-SKHX/USDC:USDC", 1_000
+    )
+
+    funding_calls = [call for call in calls if call.get("type") == "userFunding"]
+    assert funding_calls[0]["dex"] == "xyz"
+    assert rows == [{"timestamp": 2_000, "amount": "0.5", "code": "USDC"}]
+
+
+def test_a_main_dex_coin_is_not_namespaced(monkeypatch) -> None:
+    """BTC must keep asking the main perp DEX, which takes no `dex` key."""
+
+    page = [
+        {"time": 2_000, "delta": {"type": "funding", "coin": "BTC", "usdc": "1.0"}}
+    ]
+    client, calls = _dex_aware_client(monkeypatch, page)
+
+    rows = sync_portfolio_funding.fetch_private_funding(client, "BTC/USDC:USDC", 1_000)
+
+    funding_calls = [call for call in calls if call.get("type") == "userFunding"]
+    assert "dex" not in funding_calls[0]
+    assert rows == [{"timestamp": 2_000, "amount": "1.0", "code": "USDC"}]
+
+
+def test_the_dex_list_comes_from_the_venue_not_a_hard_coded_name(monkeypatch) -> None:
+    """A new builder DEX must work without another code change."""
+
+    page = [
+        {"time": 2_000, "delta": {"type": "funding", "coin": "io:OAI", "usdc": "2.0"}}
+    ]
+    client, calls = _dex_aware_client(monkeypatch, page)
+
+    rows = sync_portfolio_funding.fetch_private_funding(
+        client, "IO-OAI/USDC:USDC", 1_000
+    )
+
+    assert any(call.get("type") == "perpDexs" for call in calls)
+    funding_calls = [call for call in calls if call.get("type") == "userFunding"]
+    assert funding_calls[0]["dex"] == "io"
+    assert rows == [{"timestamp": 2_000, "amount": "2.0", "code": "USDC"}]
+
+
+def test_a_failed_dex_lookup_does_not_lose_a_known_namespace(monkeypatch) -> None:
+    """The floor exists so a bad lookup cannot recreate the silent zero.
+
+    If `perpDexs` fails or comes back empty, resolving to the main DEX returns
+    no rows and the worker records an exact zero. That is the bug being fixed,
+    and it would then hit the XYZ-SKHY/XYZ-SKHX position as well.
+    """
+
+    client = sync_portfolio_funding.HyperliquidPublicAccountClient(
+        "0xabcdef0123456789abcdef0123456789abcdef01"
+    )
+    calls = []
+
+    def post(payload):
+        calls.append(payload)
+        if payload.get("type") == "perpDexs":
+            return []  # venue unreachable or answering with nothing
+        return [
+            {
+                "time": 2_000,
+                "delta": {"type": "funding", "coin": "xyz:SKHX", "usdc": "0.75"},
+            }
+        ]
+
+    monkeypatch.setattr(client, "_post", post)
+    rows = sync_portfolio_funding.fetch_private_funding(
+        client, "XYZ-SKHX/USDC:USDC", 1_000
+    )
+
+    funding_calls = [call for call in calls if call.get("type") == "userFunding"]
+    assert funding_calls[0]["dex"] == "xyz"
+    assert rows == [{"timestamp": 2_000, "amount": "0.75", "code": "USDC"}]

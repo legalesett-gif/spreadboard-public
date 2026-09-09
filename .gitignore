@@ -9,3 +9,7 @@ runtime/
 *.db
 *.jsonl
 .env
+
+# Stability/benchmark run artefacts: hundreds of MB, not source, never deployed
+# (the Dockerfile copies only spreadboard/, src/, scripts/ and named data files).
+output/
