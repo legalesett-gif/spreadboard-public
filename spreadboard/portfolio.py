@@ -324,6 +324,9 @@ def _hydrate_position(
             # estimate. New UI/API consumers should use the explicit key.
             "current_exit_spread_pct": marked_spread,
             "current_marked_spread_pct": marked_spread,
+            # Derived from the legs rather than trusted from the column, so it
+            # is always on the same basis as the mark above.
+            "entry_spread_pct": entry_spread_pct(position),
             # Measured against both funded legs. This divided by the raw
             # `capital_usd` column, which the position form labels "per leg",
             # so every return on the page read about twice its true size.
@@ -997,6 +1000,31 @@ def _route_kind(position: dict[str, Any]) -> str:
         short_market_type=position.get("short_market_type"),
         source_kind=position.get("source_kind"),
     )
+
+
+def entry_spread_pct(position: dict[str, Any]) -> float | None:
+    """The entry basis, measured the same way the mark is.
+
+    A stored `entry_spread_pct` is only comparable to the marked spread if both
+    were measured on the same thing. The owner's OPENAI row was not: its legs
+    are 1.478 long against 1.424 short -- unequal because the scale-in targeted
+    equal DOLLAR notionals -- and an accounting reconciliation wrote the PER-UNIT
+    figure, 6.7176%, straight to the row. The page marked it on notionals at
+    5.9355% and so displayed a 0.78pp narrowing beside a $79.18 loss. The spread
+    had actually widened on both bases; only the comparison was wrong.
+
+    Deriving it from the position's own legs makes the pair comparable by
+    construction and repairs every historical row, whichever basis wrote it.
+    The stored value still answers for a hand-journaled position that has no
+    quantities to derive from.
+    """
+
+    derived = paired_spread_pct(
+        position,
+        long_price=_number(position.get("long_entry_price")),
+        short_price=_number(position.get("short_entry_price")),
+    )
+    return derived if derived is not None else _number(position.get("entry_spread_pct"))
 
 
 def paired_spread_pct(
