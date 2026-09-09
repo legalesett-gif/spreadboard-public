@@ -34,7 +34,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-DEFAULT_CONTAINERS = ("app-app-1", "app-collector-1")
+DEFAULT_CONTAINERS = ("app-app-1", "app-collector-1", "app-accounting-worker-1")
 DEFAULT_RUNTIME = Path("/opt/spreadboard/runtime")
 HEALTH_FILENAME = "container_health.json"
 STATE_FILENAME = "container_health_state.json"

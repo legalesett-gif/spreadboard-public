@@ -236,3 +236,55 @@ def test_inspect_requests_only_health_fields(monkeypatch):
         return SimpleNamespace(returncode=0, stdout='[{"Id":"safe-id"}]')
     monkeypatch.setattr(watchdog.subprocess, "run", run)
     assert watchdog._docker_inspect("app-app-1") == {"Id": "safe-id"}
+
+
+def test_the_accounting_worker_is_supervised() -> None:
+    """Funding goes silently "unknown" if nothing restarts this worker.
+
+    `app-accounting-worker-1` declares a healthcheck asserting its status file
+    is under 900s old, and the portfolio treats a snapshot older than 900s as
+    `stale` -- so a wedged worker blanks funding for every open position. But
+    `restart: unless-stopped` fires on exit only, and the watchdog supervised
+    just the app and the collector, so nothing acted on it.
+    """
+
+    assert "app-accounting-worker-1" in watchdog.DEFAULT_CONTAINERS
+
+
+def test_a_stalled_accounting_worker_is_restarted() -> None:
+    previous = _state(
+        containers={
+            "app-accounting-worker-1": {
+                "unhealthy_checks": watchdog.APP_UNHEALTHY_CHECKS - 1
+            }
+        }
+    )
+
+    _report, restarts = _run(
+        [_observation("app-accounting-worker-1", "unhealthy")], previous
+    )
+
+    assert restarts == ["app-accounting-worker-1"]
+
+
+def test_the_accounting_worker_is_not_shielded_like_the_collector() -> None:
+    """It holds no scan, so a running discovery scan must not protect it."""
+
+    previous = _state(
+        containers={
+            "app-accounting-worker-1": {
+                "unhealthy_checks": watchdog.APP_UNHEALTHY_CHECKS - 1
+            }
+        }
+    )
+
+    _report, restarts = _run(
+        [_observation("app-accounting-worker-1", "unhealthy")],
+        previous,
+        scan_running=True,
+    )
+
+    assert restarts == ["app-accounting-worker-1"]
+    assert watchdog._restart_threshold("app-accounting-worker-1") == (
+        watchdog.APP_UNHEALTHY_CHECKS
+    )

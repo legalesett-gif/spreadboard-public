@@ -241,6 +241,11 @@ class HyperliquidPublicAccountClient:
             if stamp <= 0 or amount is None:
                 continue
             rows.append({"timestamp": stamp, "amount": str(amount), "code": "USDC"})
+        if not rows:
+            # A mistranslated namespace filters every row out and is otherwise
+            # indistinguishable from a market that never settled.  Only an
+            # existing market earns a zero.
+            self._context(symbol)
         return sorted(rows, key=lambda row: int(row["timestamp"]))
 
     def _contexts(self, dex: str) -> dict[str, dict[str, Any]]:
@@ -271,7 +276,11 @@ class HyperliquidPublicAccountClient:
             raise RuntimeError("hyperliquid_market_not_found")
         return context
 
-    def market(self, _symbol: str) -> dict[str, str]:
+    def market(self, symbol: str) -> dict[str, str]:
+        # `_context` is the existing proof that this coin trades on this dex.
+        # Proving it here lets the shared empty-result guard in
+        # `fetch_private_funding` cover Hyperliquid exactly as it covers ccxt.
+        self._context(symbol)
         return {"quote": "USDC"}
 
     def fetch_ticker(self, symbol: str) -> dict[str, Any]:
@@ -365,6 +374,11 @@ def fetch_private_funding(exchange: Any, symbol: str, since_ms: int) -> list[dic
         if not rows or len(rows) < page_limit or latest <= cursor:
             break
         cursor = latest + 1
+    if not events:
+        # An unknown or renamed symbol yields an empty page on some venues
+        # rather than raising.  Make it raise, so the snapshot records
+        # `sync_error` and the portfolio shows "unknown" instead of $0.00.
+        exchange.market(symbol)
     return [events[key] for key in sorted(events)]
 
 
