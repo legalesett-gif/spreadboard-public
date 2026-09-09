@@ -692,6 +692,12 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 "research_matched_notional_usd": "REAL",
                 "research_consent_version": "TEXT",
                 "research_consented_at": "TEXT",
+                # Short units per long unit, as the two ASSETS convert -- 10 for
+                # SKHX against its SKHY ADR. NULL means "not stated" = the same
+                # asset on two venues, which is every position but that pair.
+                # Never inferred from quantities: those are the hedge ratio,
+                # which a dollar-matched scale-in deliberately moves.
+                "conversion_ratio": "REAL",
             },
         )
         _ensure_columns(
@@ -2885,6 +2891,16 @@ def _optional_leverage(value: Any) -> float | None:
     return parsed if parsed > 0 else None
 
 
+def _conversion_ratio(raw: Any) -> float:
+    """Short units per long unit. Absent means "not stated" = the same asset."""
+
+    try:
+        ratio = float(raw) if raw is not None else 1.0
+    except (TypeError, ValueError):
+        return 1.0
+    return ratio if ratio > 0 else 1.0
+
+
 def _position_values(payload: dict[str, Any]) -> dict[str, Any]:
     required_text = ("token", "long_venue", "long_market_type", "short_venue", "short_market_type")
     text = {key: str(payload.get(key) or "").strip() for key in required_text}
@@ -2895,14 +2911,14 @@ def _position_values(payload: dict[str, Any]) -> dict[str, Any]:
         for key in ("long_quantity", "long_entry_price", "short_quantity", "short_entry_price")
     }
     opened_at = _normalize_iso(str(payload.get("opened_at") or _utc_iso()))
-    # Measured on what each leg is WORTH, not on its unit price. A paired
-    # position is not always 1:1 -- SKHX is 10:1 because one leg is an ADR of
-    # the other -- and comparing prices reported -86.78% for a +32.17% basis.
-    # Identical to the price ratio whenever the quantities are equal.
+    # Measured at what the two ASSETS convert at -- 10 for SKHX against its
+    # SKHY ADR -- not at the ratio currently held. Quantities are the HEDGE
+    # ratio; a deliberately dollar-matched scale-in moves it away from the
+    # conversion ratio and silently scales this figure (OPENAI: 6.7176 stored
+    # as 2.8186). Identical to the notional formula whenever the two agree.
+    conversion_ratio = _conversion_ratio(payload.get("conversion_ratio"))
     entry_spread = (
-        (numeric["short_quantity"] * numeric["short_entry_price"])
-        / (numeric["long_quantity"] * numeric["long_entry_price"])
-        - 1
+        conversion_ratio * numeric["short_entry_price"] / numeric["long_entry_price"] - 1
     ) * 100
     token = text["token"].upper()
     route_key = "|".join(
@@ -2922,6 +2938,7 @@ def _position_values(payload: dict[str, Any]) -> dict[str, Any]:
         "long_symbol": str(payload.get("long_symbol") or "").strip() or None,
         "short_symbol": str(payload.get("short_symbol") or "").strip() or None,
         "entry_spread_pct": entry_spread,
+        "conversion_ratio": conversion_ratio,
         "capital_usd": _optional_nonnegative_float(payload.get("capital_usd")),
         "long_leverage": _optional_leverage(payload.get("long_leverage")),
         "short_leverage": _optional_leverage(payload.get("short_leverage")),
@@ -2948,11 +2965,11 @@ def create_position(
                 user_id, token, route_key, long_venue, long_market_type, long_symbol,
                 long_quantity, long_entry_price, short_venue, short_market_type,
                 short_symbol, short_quantity, short_entry_price, entry_spread_pct,
-                capital_usd, long_leverage, short_leverage,
+                conversion_ratio, capital_usd, long_leverage, short_leverage,
                 entry_fees_usd, borrow_costs_usd, gas_costs_usd,
                 transfer_costs_usd, slippage_costs_usd, opened_at, notes,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -2969,6 +2986,7 @@ def create_position(
                 values["short_quantity"],
                 values["short_entry_price"],
                 values["entry_spread_pct"],
+                values["conversion_ratio"],
                 values["capital_usd"],
                 values["long_leverage"],
                 values["short_leverage"],
@@ -3009,6 +3027,10 @@ def update_position(
         ).fetchone()
         if existing is None:
             raise ValueError("position_not_found")
+        if payload.get("conversion_ratio") is None:
+            # An edit that does not mention the ratio must not silently
+            # recompute a 10:1 ADR pair as if it were the same asset.
+            payload = dict(payload, conversion_ratio=existing["conversion_ratio"])
         values = _position_values(payload)
         status = str(payload.get("status") or existing["status"] or "open").casefold()
         if status not in {"open", "closed"}:
@@ -3136,6 +3158,7 @@ def update_position(
                 long_symbol = ?, long_quantity = ?, long_entry_price = ?,
                 short_venue = ?, short_market_type = ?, short_symbol = ?,
                 short_quantity = ?, short_entry_price = ?, entry_spread_pct = ?,
+                conversion_ratio = ?,
                 capital_usd = ?, long_leverage = ?, short_leverage = ?,
                 entry_fees_usd = ?, borrow_costs_usd = ?,
                 gas_costs_usd = ?, transfer_costs_usd = ?, slippage_costs_usd = ?,
@@ -3163,6 +3186,7 @@ def update_position(
                 values["short_quantity"],
                 values["short_entry_price"],
                 values["entry_spread_pct"],
+                values["conversion_ratio"],
                 values["capital_usd"],
                 values["long_leverage"],
                 values["short_leverage"],

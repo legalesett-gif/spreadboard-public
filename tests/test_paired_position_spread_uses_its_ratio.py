@@ -1,4 +1,4 @@
-"""A paired position's spread is the ratio of its leg VALUES, not its prices.
+"""A paired position's spread is measured at its CONVERSION ratio, not its prices.
 
 The owner's SKHX position is 10:1 by construction -- long 2.186 units at
 $1,182.625 against short 21.86 at $156.3022 -- because one leg is an ADR of the
@@ -9,6 +9,11 @@ of this position had stored.
 Editing the position recomputed the stored value and replaced the correct 32.17
 with -86.78. For equal quantities the two formulas agree exactly, which is why
 this stayed hidden until a ratio position was edited.
+
+The ratio was first taken from the position's own quantities. That is the HEDGE
+ratio, and a deliberately dollar-matched scale-in moves it: at 26.90/2.885 the
+same position read 23.1688% for a 32.0974% basis. The ratio is a property of
+the two ASSETS, so it is stated on the position and defaults to 1.
 """
 
 from __future__ import annotations
@@ -27,6 +32,8 @@ SKHX = {
     "long_entry_price": 1182.625,
     "short_quantity": 21.86,
     "short_entry_price": 156.3022,
+    # One SKHX is ten SKHY. Stated, never inferred from what is held.
+    "conversion_ratio": 10.0,
 }
 
 
@@ -43,7 +50,8 @@ def test_equal_quantities_are_unchanged() -> None:
     """The old formula was right for 1:1, and must stay right."""
 
     values = accounts._position_values(
-        dict(SKHX, long_quantity=10.0, long_entry_price=100.0,
+        # The same asset on two venues: one unit for one unit.
+        dict(SKHX, conversion_ratio=1.0, long_quantity=10.0, long_entry_price=100.0,
              short_quantity=10.0, short_entry_price=102.0)
     )
 

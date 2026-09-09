@@ -1033,24 +1033,35 @@ def paired_spread_pct(
     long_price: float | None,
     short_price: float | None,
 ) -> float | None:
-    """The basis between two legs, measured on what each leg is WORTH.
+    """The basis between two legs, measured at what the ASSETS convert at.
 
     A paired position is not always 1:1. The owner's SKHX is 10:1 by
     construction -- one leg is an ADR of the other -- so comparing raw prices
     reported -86.78% for a position whose real basis is +32.17%.
 
-    Quantities are the position's own statement of its ratio and are always
-    present, so they are the basis. When either is missing the prices are
-    compared directly, which is the same answer whenever the legs are equal.
+    Quantities look like the position's statement of that ratio, but they are
+    the HEDGE ratio, which equals the conversion ratio only while the position
+    is balanced. The owner scales in deliberately dollar-matched, so every such
+    tranche pulls the two apart and silently scales the displayed spread by
+    (hedge ratio / conversion ratio) -- OPENAI's 6.7176% showed as 2.8186%, and
+    SKHX's 32.0974% as 23.1688%. Entry and mark are scaled alike, so the row
+    stays self-consistent and the error is invisible from inside.
+
+    The conversion ratio is a property of the two assets, so it is stated on the
+    position. It defaults to 1: the same token on two venues, which is every
+    live position but the ADR pair.
     """
 
     if long_price is None or short_price is None:
         return None
-    long_qty = _number(position.get("long_quantity"))
-    short_qty = _number(position.get("short_quantity"))
-    if long_qty and short_qty and long_qty > 0 and short_qty > 0:
-        return _spread(float(long_qty) * float(long_price), float(short_qty) * float(short_price))
-    return _spread(float(long_price), float(short_price))
+    return _spread(float(long_price), _conversion_ratio(position) * float(short_price))
+
+
+def _conversion_ratio(position: dict[str, Any]) -> float:
+    """Short units per long unit. NULL means "not stated" = the same asset."""
+
+    ratio = _number(position.get("conversion_ratio"))
+    return float(ratio) if ratio and ratio > 0 else 1.0
 
 
 def _spread(denominator: float | None, numerator: float | None) -> float | None:

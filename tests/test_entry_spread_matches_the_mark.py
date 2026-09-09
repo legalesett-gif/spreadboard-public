@@ -4,17 +4,19 @@ The owner's OPENAI position is 1.478 Mexc long at 1442.2675 against 1.424
 Hyperliquid `io:OAI` short at 1539.1534 -- quantities deliberately unequal
 because the scale-in targeted equal DOLLAR notionals.
 
-`paired_spread_pct` marks it on notionals (2026-08-31, the SKHX fix), but the
-stored `entry_spread_pct` of 6.7176% is the PER-UNIT figure, written straight to
-the row by an accounting reconciliation that bypassed the save path's formula.
-The page then showed entry 6.7176% against marked 5.9355% -- which reads as the
-spread NARROWING by 0.78pp while the position lost $79.18.
+The page showed entry 6.7176% against a marked 5.9355% -- a widening that read
+as a 0.78pp NARROWING beside a $79.18 loss, because entry was stored per-unit
+and the mark was computed on notionals.
 
-It had in fact widened, on both bases: per-unit 6.72% -> 9.95%, notional
-2.82% -> 5.94%. The loss was right and the comparison was not.
+Aligning entry to the notional mark fixed the comparison and broke the number:
+notionals divide by the ratio HELD, so a deliberately dollar-matched position
+(1.424/1.478 = 0.96346) showed 2.8186% for a 6.7176% spread. The operator, who
+had entered near 5.3% and watched it since, said plainly that 2.8% was wrong.
 
-Deriving entry from the position's own legs makes the two always comparable and
-self-corrects every historical row, whatever basis it was written on.
+Both legs are the same asset, one unit for one unit, so the conversion ratio is
+1 and the per-unit figure was right all along. Entry and mark now share that
+basis instead of the ratio held. See
+tests/test_spread_basis_is_the_conversion_ratio.py.
 """
 
 from __future__ import annotations
@@ -39,13 +41,15 @@ def test_entry_spread_is_derived_on_the_same_basis_as_the_mark() -> None:
     )
 
     assert derived == marked
-    assert abs(derived - 2.818) < 0.01, derived
+    assert abs(derived - 6.7176) < 0.01, derived
 
 
-def test_the_stored_per_unit_figure_is_not_used_when_legs_are_present() -> None:
-    """6.7176% against a notional mark is what made a widening look like a gain."""
+def test_a_deliberate_dollar_matched_tilt_does_not_move_the_entry() -> None:
+    """Scaling in at equal USD must not restate the spread already entered."""
 
-    assert abs(portfolio.entry_spread_pct(OPENAI) - 6.7176) > 1.0
+    tilted = dict(OPENAI, long_quantity=1.9)
+
+    assert portfolio.entry_spread_pct(tilted) == portfolio.entry_spread_pct(OPENAI)
 
 
 def test_equal_quantities_are_unchanged() -> None:
@@ -105,4 +109,4 @@ def test_the_row_reports_the_derived_entry_spread(monkeypatch) -> None:
         market_index={}, funding_snapshot={},
     )
 
-    assert abs(row["entry_spread_pct"] - 2.818) < 0.01, row["entry_spread_pct"]
+    assert abs(row["entry_spread_pct"] - 6.7176) < 0.01, row["entry_spread_pct"]
