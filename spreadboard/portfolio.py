@@ -1019,12 +1019,18 @@ def entry_spread_pct(position: dict[str, Any]) -> float | None:
     quantities to derive from.
     """
 
-    derived = paired_spread_pct(
+    stored = _number(position.get("entry_spread_pct"))
+    if stored is not None:
+        # A blended row cannot recover its own tranche history. Deriving from
+        # the averaged legs is not an average of the tranche spreads once the
+        # tranches differ in unit ratio -- SKHX blended 32.1654% and 38.5583%
+        # into 32.0972%, below both -- so the maintained value wins.
+        return stored
+    return paired_spread_pct(
         position,
         long_price=_number(position.get("long_entry_price")),
         short_price=_number(position.get("short_entry_price")),
     )
-    return derived if derived is not None else _number(position.get("entry_spread_pct"))
 
 
 def paired_spread_pct(

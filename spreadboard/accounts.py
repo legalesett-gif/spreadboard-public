@@ -2917,9 +2917,20 @@ def _position_values(payload: dict[str, Any]) -> dict[str, Any]:
     # conversion ratio and silently scales this figure (OPENAI: 6.7176 stored
     # as 2.8186). Identical to the notional formula whenever the two agree.
     conversion_ratio = _conversion_ratio(payload.get("conversion_ratio"))
-    entry_spread = (
-        conversion_ratio * numeric["short_entry_price"] / numeric["long_entry_price"] - 1
-    ) * 100
+    # A caller that knows the tranche history states the blend, because the
+    # averaged legs cannot recover it: blending 32.1654% and 38.5583% through
+    # the ratio of average prices gives 32.0972%, below both. Computing from
+    # prices remains right for a single tranche and for any balanced position.
+    supplied = payload.get("entry_spread_pct")
+    if supplied is not None:
+        try:
+            entry_spread = float(supplied)
+        except (TypeError, ValueError):
+            raise ValueError("invalid_entry_spread_pct") from None
+    else:
+        entry_spread = (
+            conversion_ratio * numeric["short_entry_price"] / numeric["long_entry_price"] - 1
+        ) * 100
     token = text["token"].upper()
     route_key = "|".join(
         (

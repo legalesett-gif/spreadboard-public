@@ -21,6 +21,8 @@ tests/test_spread_basis_is_the_conversion_ratio.py.
 
 from __future__ import annotations
 
+import pytest
+
 from spreadboard import portfolio
 
 OPENAI = {
@@ -40,7 +42,9 @@ def test_entry_spread_is_derived_on_the_same_basis_as_the_mark() -> None:
         short_price=OPENAI["short_entry_price"],
     )
 
-    assert derived == marked
+    # The maintained blend now answers, so the two agree on BASIS rather than
+    # bit-for-bit; a stored blend and a derived one differ in the last places.
+    assert derived == pytest.approx(marked, abs=1e-6)
     assert abs(derived - 6.7176) < 0.01, derived
 
 
