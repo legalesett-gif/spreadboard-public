@@ -842,9 +842,7 @@ def _matches_structural(row: dict[str, Any], filters: dict[str, Any]) -> bool:
     if q and q not in f"{row.get('token') or ''} {row.get('token_name') or ''}".upper():
         return False
     exchange = str(filters.get("exchange") or "").casefold().strip()
-    if exchange and exchange not in " ".join(
-        str(row.get(key) or "") for key in ("long_venue", "short_venue")
-    ).casefold():
+    if not api_spreads.exchange_filter_matches(row.get("long_venue"), row.get("short_venue"), exchange):
         return False
     kind = api_spreads._normalize_kind_filter(filters.get("kind"))
     row_kind = str(row.get("route_kind") or "")

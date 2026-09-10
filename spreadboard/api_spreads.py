@@ -29,7 +29,7 @@ from spreadboard import (
     venue_funding_history,
 )
 from spreadarb.api_discovery.identity import WatchAsset, load_watchlist
-from spreadarb.venue_policy import opportunity_route_enabled
+from spreadarb.venue_policy import exchange_filter_matches, opportunity_route_enabled
 
 ROOT = Path(__file__).resolve().parents[1]
 LOGGER = logging.getLogger("spreadboard.api_spreads")
@@ -3275,7 +3275,7 @@ def _filter_rows(rows: list[SpreadTerminalRow], **filters: Any) -> list[SpreadTe
     for row in rows:
         if q and q not in f"{row.token} {row.token_name or ''}".upper():
             continue
-        if exchange and exchange not in " ".join(filter(None, [row.long_venue, row.short_venue])).casefold():
+        if not exchange_filter_matches(row.long_venue, row.short_venue, exchange):
             continue
         if kind:
             if kind == "FUTURES-SPOT-PAIR":

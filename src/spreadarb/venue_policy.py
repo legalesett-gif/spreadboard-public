@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-EXCLUDED_OPPORTUNITY_VENUES = frozenset({"ourbit"})
+EXCLUDED_OPPORTUNITY_VENUES = frozenset({"ourbit", "htx", "huobi"})
 
 
 def opportunity_venue_enabled(venue: Any) -> bool:
@@ -39,3 +39,14 @@ def opportunity_payload_enabled(payload: dict[str, Any]) -> bool:
                 if isinstance(row, dict) and not opportunity_route_enabled(row):
                     return False
     return True
+
+
+def exchange_filter_matches(long_venue: Any, short_venue: Any, expression: Any) -> bool:
+    """Comma-separated inclusions and !exact-venue exclusions, applied to both legs."""
+    venues = {str(value or "").strip().casefold() for value in (long_venue, short_venue)}
+    terms = [part.strip().casefold() for part in str(expression or "").split(",") if part.strip()]
+    excluded = {part[1:] for part in terms if part.startswith("!")}
+    included = [part for part in terms if not part.startswith("!")]
+    if venues & excluded:
+        return False
+    return not included or any(term in venue for term in included for venue in venues)

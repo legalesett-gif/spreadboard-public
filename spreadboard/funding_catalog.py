@@ -686,14 +686,7 @@ def _common_eligible(
     wanted_symbol = str(symbol or "").strip().upper()
     if wanted_symbol and wanted_symbol not in token:
         return False
-    wanted_exchange = str(exchange or "").strip().casefold()
-    if (
-        wanted_exchange
-        and wanted_exchange
-        not in " ".join(
-            str(route.get(key) or "") for key in ("long_venue", "short_venue")
-        ).casefold()
-    ):
+    if not api_spreads.exchange_filter_matches(route.get("long_venue"), route.get("short_venue"), exchange):
         return False
     wanted_quote = str(quote or "").strip().upper()
     if wanted_quote and wanted_quote not in {

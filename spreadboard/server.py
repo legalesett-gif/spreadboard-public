@@ -2623,6 +2623,8 @@ def api_market_spreads(
     query: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     query = {key: list(values) for key, values in (query or {}).items()}
+    if query.get("exchange"):
+        query["exchange"] = [_query_first(query, "exchange") or ""]
     if not _query_bool(query, "funding_only"):
         # The member product has one admissible spread list. Preserve the
         # underlying verified/research evidence state on every row, but ignore
@@ -9189,6 +9191,25 @@ def render_market_source_card(
     """
 
 
+def render_exchange_filter(query: dict[str, list[str]], options: list[str]) -> str:
+    from spreadarb.venue_policy import opportunity_venue_enabled
+    from spreadboard.fast_quotes import VENUE_IDS
+
+    terms = [term.strip() for term in str(_query_first(query, "exchange") or "").split(",") if term.strip()]
+    excluded = {term[1:].casefold() for term in terms if term.startswith("!")}
+    included = ",".join(term for term in terms if not term.startswith("!"))
+    venues = sorted(venue for venue in set(options) | set(VENUE_IDS) | {"Hyperliquid"} if opportunity_venue_enabled(venue))
+    choices = "".join(
+        f'<label style="display:block"><input type="checkbox" name="exchange" value="!{h(venue)}" {"checked" if venue.casefold() in excluded else ""}> {h(venue)}</label>'
+        for venue in venues
+    )
+    return (
+        f'<label><span>Include exchange</span><input name="exchange" value="{h(included)}" placeholder="All exchanges"></label>'
+        f'<details class="exchange-exclusions"><summary>Exclude exchanges ({len(excluded)})</summary>'
+        f'<p>Hide pairs using any checked exchange on either side.</p>{choices}</details>'
+    )
+
+
 def render_market_filter_bar(
     data: dict[str, Any],
     query: dict[str, list[str]],
@@ -9253,10 +9274,7 @@ def render_market_filter_bar(
       </div>
       <form class="market-filter-form" data-refresh-preserve="markets-filters" method="get" action="/markets">
         <label><span>Token</span><input name="q" value="{h(_query_first(query, "q") or "")}" placeholder="SIREN, VANRY, GUA"></label>
-        <label><span>Exchanges</span><select name="exchange" data-refresh-options>
-          <option value="">All exchanges</option>
-          {"".join(f'<option value="{h(item)}" {"selected" if item == exchange else ""}>{h(item)}</option>' for item in exchange_options)}
-        </select></label>
+        {render_exchange_filter(query, exchange_options)}
         <label><span>Min edge %</span><input name="min_spread_pct" value="{h(_query_first(query, "min_spread_pct") or "")}" placeholder="0.50"></label>
         <label><span>Min 24h %</span><input name="min_abs_funding_24h_pct" value="{h(_query_first(query, "min_abs_funding_24h_pct") or "")}" placeholder="0.10"></label>
         <label><span>Sort</span><select name="sort">
@@ -10564,9 +10582,7 @@ def _historical_funding_page(
     wanted_quote = str(quote_filter or "").strip().upper()
 
     def eligible(route: dict[str, Any]) -> bool:
-        if wanted_exchange and wanted_exchange not in " ".join(
-            str(route.get(key) or "") for key in ("long_venue", "short_venue")
-        ).casefold():
+        if not api_spreads.exchange_filter_matches(route.get("long_venue"), route.get("short_venue"), wanted_exchange):
             return False
         return not wanted_quote or wanted_quote in {
             str(route.get("long_quote") or "").upper(),
@@ -10838,6 +10854,8 @@ def render_funding_page(
             "rank": rank or selected_window,
             "limit": page_limit,
         }
+        if _query_first(query, "exchange"):
+            params["exchange"] = _query_first(query, "exchange")
         search = _query_first(query, "q")
         if search and include_search:
             params["q"] = search
@@ -10913,6 +10931,7 @@ def render_funding_page(
         <input type="hidden" name="farm" value="{h(selected_farm)}">
         <input type="hidden" name="rank" value="{h(selected_window)}">
         <input type="hidden" name="limit" value="{h(page_limit)}">
+        {render_exchange_filter(query, market_data.get("exchange_options") or [])}
         <label for="funding-token-search">Find a token in the complete catalogue</label>
         <input id="funding-token-search" name="q" value="{h(_query_first(query, "q") or "")}" placeholder="e.g. ONG, GUA, BTC" autocomplete="off">
         <button type="submit">Search</button>
@@ -22313,7 +22332,7 @@ def _find_board_symbol(symbol: str, board_path: Path) -> list[dict[str, Any]]:
 
 def _query_first(query: dict[str, list[str]], key: str) -> str | None:
     values = query.get(key) or []
-    value = values[0] if values else None
+    value = ",".join(value for value in values if value) if key == "exchange" else (values[0] if values else None)
     return value if value not in (None, "") else None
 
 
@@ -22334,7 +22353,7 @@ def _query_float(
 
 
 def _query_with(query: dict[str, list[str]], **updates: Any) -> dict[str, str]:
-    output = {key: values[0] for key, values in query.items() if values and values[0] != ""}
+    output = {key: value for key in query if (value := _query_first(query, key)) is not None}
     for key, value in updates.items():
         if value is None:
             output.pop(key, None)
