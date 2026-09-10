@@ -86,15 +86,23 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
-def _route_snapshot(route: dict[str, Any]) -> dict[str, Any]:
-    snapshot = {
+def compact_route(route: dict[str, Any]) -> dict[str, Any]:
+    """Select only the exact-route fields persisted by the historical radar.
+
+    Collectors can compact each rich candidate before retaining the next one.
+    Identity, funding cadence, route guards and chart links survive unchanged.
+    """
+    return {
         key: value
         for key, value in route.items()
         if key in _ROUTE_FIELDS or key in _LEG_FIELDS
     }
+
+
+def _route_snapshot(route: dict[str, Any]) -> dict[str, Any]:
     # Round-trip through JSON so the cache can never receive a dataclass,
     # Decimal, or other process-only object from a future public row.
-    return json.loads(json.dumps(snapshot, default=str))
+    return json.loads(json.dumps(compact_route(route), default=str))
 
 
 def _window_snapshot(route: dict[str, Any]) -> dict[str, float | None]:
@@ -175,13 +183,32 @@ def refresh(
             "retention_days": max(1, int(retention_days)),
             "records": records,
         }
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-        temporary.replace(path)
+        _write_atomic(path, payload)
         _CACHE["stamp"] = None
         _CACHE["records"] = {}
         _CACHE["routes_by_key"] = {}
     return len(records)
+
+
+def _write_atomic(path: Path, payload: dict[str, Any]) -> None:
+    """Publish the same JSON without a whole-radar text/encoding allocation."""
+    temporary = path.with_suffix(".tmp")
+    header = {key: value for key, value in payload.items() if key != "records"}
+    try:
+        with temporary.open("w", encoding="utf-8") as target:
+            target.write(json.dumps(header, separators=(",", ":"))[:-1])
+            target.write(("," if header else "") + '"records":{')
+            for index, (key, record) in enumerate(payload["records"].items()):
+                if index:
+                    target.write(",")
+                target.write(json.dumps({key: record}, separators=(",", ":"))[1:-1])
+            target.write("}}")
+            target.flush()
+            os.fsync(target.fileno())
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def load_records(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, dict[str, Any]]:

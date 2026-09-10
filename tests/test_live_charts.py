@@ -1549,6 +1549,7 @@ def test_native_kraken_funding_converts_velocity_to_hourly_rate(
                     "symbol": "PF_XBTUSD",
                     "fundingRate": 0.8,
                     "indexPrice": 40_000,
+                    "markPrice": 40_000,
                 }
             ]
         },

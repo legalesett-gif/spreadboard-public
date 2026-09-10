@@ -1,11 +1,8 @@
-"""A route must be printed in the direction you could actually trade it.
+"""Legacy explicit reverse-candidate conversion, never automatic ingestion.
 
-A row with the futures leg long and the spot leg short cannot be taken as
-written -- it sells spot you do not own. The board negated the carry but kept
-the original leg order, so a row read "long Gate Futures, short Gate Spot"
-while its +0.29%/day described the opposite trade, and the spread was never
-re-derived at all: GUA showed 192.29% in a direction nobody can trade, against
--66.5% in the one they can.
+A reverse candidate has different legs, prices and carry. Public ingestion
+preserves the original direction and its inventory/borrow prerequisites; that
+call-site contract is covered in test_funding_projection.py.
 """
 
 from __future__ import annotations

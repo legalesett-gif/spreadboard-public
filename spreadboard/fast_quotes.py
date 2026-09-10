@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import gc
 import json
+import logging
+import math
 import os
 import re
 import time
@@ -17,6 +19,8 @@ from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from spreadarb.market_status import market_open_for_opportunities
+from spreadarb.public_clients import configure_public_market_client
 from spreadarb.venue_policy import opportunity_route_enabled
 
 from spreadarb.api_discovery.models import spread_pct
@@ -146,6 +150,7 @@ NATIVE_FUNDING_SOURCES: dict[str, dict[str, Any]] = {
         "path": ("data",),
         "symbol": "symbol",
         "rate": "fundingFeeRate",
+        "index": "indexPrice",
         "interval": "fundingRateGranularity",
         # Kucoin reports granularity in milliseconds: 14400000 is four hours,
         # not 14.4 million of them.
@@ -156,13 +161,22 @@ NATIVE_FUNDING_SOURCES: dict[str, dict[str, Any]] = {
         "path": ("result",),
         "symbol": "symbol",
         "rate": "fundingRateRr",
+        "index": "indexRp",
     },
     "BitMart": {
         "url": "https://api-cloud-v2.bitmart.com/contract/public/details",
         "path": ("data", "symbols"),
         "symbol": "symbol",
-        "rate": "funding_rate",
+        "rate": "expected_funding_rate",
         "interval": "funding_interval_hours",
+        "symbol_format": "venue_perpetual",
+    },
+    "Coinbase International": {
+        "url": "https://api.international.coinbase.com/api/v1/instruments",
+        "path": (),
+        "symbol": "symbol",
+        "rate": "predicted_funding",
+        "symbol_format": "venue_perpetual",
     },
     "XT": {
         "url": "https://fapi.xt.com/future/market/v1/public/cg/contracts",
@@ -210,7 +224,7 @@ _MARKET_INTERVAL_KEYS: tuple[str, ...] = (
 
 
 def _market_interval_hours(market: Any) -> float | None:
-    """The funding schedule a market publishes about itself, in hours.
+    """A published schedule in market metadata or raw funding info, in hours.
 
     Returns None when the venue says nothing usable, so the caller falls back
     to the default and keeps flagging the value as assumed. Validation is
@@ -231,6 +245,11 @@ def _market_interval_hours(market: Any) -> float | None:
         hours = _funding_interval.normalise(info.get(key))
         if hours is not None:
             return hours
+    # WhiteBIT carries the current schedule in minutes in both its futures
+    # metadata and live funding payload, without a unified CCXT interval.
+    minutes = _optional_number(info.get("funding_interval_minutes"))
+    if minutes is not None:
+        return _funding_interval.normalise(minutes / 60.0)
     return None
 
 
@@ -335,6 +354,11 @@ class FastQuoteRefresher:
                 payload = payload[step]
             if not isinstance(payload, list):
                 return {}
+            if spec.get("symbol_format") == "venue_perpetual":
+                # These first-party feeds contain exact identity and status.
+                # BitMart has no installed CCXT class; Coinbase's class has no
+                # bulk funding method. Neither requires a metadata client.
+                return _native_perpetual_funding_rates(venue, payload)
             client = None
             if spec.get("symbol_format") != "underscore_swap":
                 client = self._client(venue, "Futures")
@@ -342,6 +366,7 @@ class FastQuoteRefresher:
                     return {}
             if client is not None and not getattr(client, "markets", None):
                 with self._client_request_lock(venue, "Futures"):
+                    configure_public_market_client(client, venue)
                     client.load_markets()
         except Exception:  # noqa: BLE001 - one venue must not stop the cycle.
             return {}
@@ -385,6 +410,8 @@ class FastQuoteRefresher:
                     break
             if market is None:
                 continue
+            if not market_open_for_opportunities(venue, market):
+                continue
             rate = _optional_number(item.get(str(spec["rate"])))
             if rate is None:
                 continue
@@ -403,19 +430,85 @@ class FastQuoteRefresher:
                 rate,
                 interval_hours=interval if interval else DEFAULT_FUNDING_INTERVAL_HOURS,
                 next_funding_ms=item.get(str(spec.get("next_ms") or "")),
+                index_price=item.get(str(spec.get("index") or "")),
             )
             if fields:
                 rates[str(market["symbol"])] = fields
         return rates
 
     def _bulk_funding_rates(self, venue: str) -> dict[str, dict[str, Any]]:
+        rates = self._bulk_funding_rates_raw(venue)
+        # Several funding-only feeds omit the oracle even though a separate
+        # all-contract ticker supplies it. Join exact native IDs, never prices
+        # from another venue or mark/last prices masquerading as an index.
+        specs = {
+            "Mexc": [("https://contract.mexc.com/api/v1/contract/ticker", "symbol", "indexPrice", "timestamp")],
+            "HTX": [("https://api.hbdm.com/linear-swap-api/v1/swap_index", "contract_code", "index_price", "index_ts")],
+            "Bitget": [
+                (f"https://api.bitget.com/api/v2/mix/market/tickers?productType={quote}-FUTURES", "symbol", "indexPrice", "ts")
+                for quote in ("USDT", "USDC")
+            ],
+        }
+        if venue not in specs or not rates:
+            return rates
+        client = self._client(venue, "Futures")
+        markets = getattr(client, "markets", {}) or {}
+        wanted = {
+            str(market["id"]): symbol
+            for symbol, fields in rates.items()
+            for market in [markets.get(symbol) or {}]
+            if fields.get("index_price") is None
+            and market.get("id") and market.get("swap")
+            and not market.get("inverse")
+        }
+        if not wanted:
+            return rates
+        for url, symbol_field, index_field, stamp_field in specs[venue]:
+            try:
+                payload = _json_url(url)
+                rows = payload.get("data", []) if isinstance(payload, dict) else []
+                now_ms = time.time() * 1000.0
+                for row in rows if isinstance(rows, list) else []:
+                    if not isinstance(row, dict):
+                        continue
+                    symbol = wanted.get(str(row.get(symbol_field) or ""))
+                    index = _optional_number(row.get(index_field))
+                    stamp = _optional_number(row.get(stamp_field))
+                    if (symbol and index is not None and math.isfinite(index) and index > 0
+                            and stamp is not None and -1000 <= now_ms - stamp <= 90_000):
+                        rates[symbol]["index_price"] = index
+            except Exception:  # noqa: BLE001 - failed oracle feed cannot erase current funding.
+                logging.getLogger(__name__).warning("bulk oracle feed unavailable: %s", venue)
+                continue
+        return rates
+
+    def _bulk_funding_rates_raw(self, venue: str) -> dict[str, dict[str, Any]]:
         """One call per venue for every perpetual it lists."""
+        if (NATIVE_FUNDING_SOURCES.get(venue) or {}).get("symbol_format") == "venue_perpetual":
+            return self._native_bulk_funding_rates(venue)
         try:
             client = self._client(venue, "Futures")
             if client is None or not getattr(client, "has", {}).get("fetchFundingRates"):
                 return self._native_bulk_funding_rates(venue)
             with self._client_request_lock(venue, "Futures"):
-                payload = client.fetch_funding_rates()
+                if venue == "Bitget":
+                    # An unspecified productType only returns USDT contracts.
+                    # Keep each family independent so a USDC outage cannot
+                    # discard a successfully refreshed USDT family or vice versa.
+                    payload = {}
+                    for product in ("USDT-FUTURES", "USDC-FUTURES"):
+                        try:
+                            payload.update(client.fetch_funding_rates(params={
+                                "productType": product,
+                                "method": "publicMixGetV2MixMarketCurrentFundRate",
+                            }) or {})
+                        except Exception:  # noqa: BLE001 - isolate product-family failures.
+                            logging.getLogger(__name__).warning(
+                                "bulk funding unavailable: %s %s", venue, product,
+                            )
+                            continue
+                else:
+                    payload = client.fetch_funding_rates()
         except Exception:  # noqa: BLE001 - one venue must not stop the cycle.
             return self._native_bulk_funding_rates(venue)
         interval_overrides = self._bulk_funding_interval_overrides(venue)
@@ -424,29 +517,64 @@ class FastQuoteRefresher:
         for item in items or []:
             if not isinstance(item, dict) or not item.get("symbol"):
                 continue
-            interval = item.get("interval")
+            symbol = str(item["symbol"])
+            if venue in {"Bitget", "Bingx", "XT"}:
+                market = (getattr(client, "markets", {}) or {}).get(symbol) or {}
+                # Some bulk feeds include test/delisted IDs which safe_symbol
+                # returns unchanged or resolves as spot. Funding needs an
+                # actual current perpetual definition, not just a rate print.
+                if (
+                    not market.get("swap")
+                    or str(market.get("settle") or "").upper() not in {"USD", "USDC", "USDT"}
+                    or not market_open_for_opportunities(venue, market)
+                ):
+                    continue
+            index_price = item.get("indexPrice")
+            if venue == "WhiteBIT":
+                # CCXT treats tradfiFutures as spot (AAPL/USDT), although the
+                # funding response identifies the actual perpetual. Use the
+                # same native identity as the chart catalogue, without another
+                # request or a guessed conversion of an arbitrary spot symbol.
+                native = item.get("info") or {}
+                if not isinstance(native, dict):
+                    continue
+                base = str(native.get("stock_currency") or "").upper()
+                quote = str(native.get("money_currency") or "").upper()
+                if (
+                    str(native.get("product_type") or "").casefold() != "perpetual"
+                    or not str(native.get("ticker_id") or "").upper().endswith("_PERP")
+                    or not base
+                    or quote not in {"USD", "USDC", "USDT"}
+                ):
+                    continue
+                symbol = f"{base}/{quote}:{quote}"
+                index_price = native.get("index_price")
+            # CCXT can leave its unified interval empty while preserving the
+            # current venue schedule in info (BingX publishes mixed 1/4/8h).
+            # Read that before older market metadata or the assumed default.
+            interval = item.get("interval") or _market_interval_hours(item)
             if isinstance(interval, str) and interval.casefold().endswith("h"):
                 interval = interval[:-1]
             if not interval:
                 market = (getattr(client, "markets", {}) or {}).get(str(item["symbol"])) or {}
-                # The venue's own metadata before any venue-specific override:
-                # Bitget publishes a per-contract schedule here and omits it
-                # from the bulk funding payload entirely.
-                interval = _market_interval_hours(market)
-                if not interval and interval_overrides:
-                    interval = interval_overrides.get(str(market.get("id") or "").upper())
+                # Live schedule adjustments precede older market metadata.
+                # Bitget publishes its schedule only in that metadata, while
+                # Binance/Aster publish a separate current fundingInfo feed.
+                interval = interval_overrides.get(str(market.get("id") or "").upper())
+                if not interval:
+                    interval = _market_interval_hours(market)
             fields = _funding_fields(
                 item.get("fundingRate"),
-                index_price=item.get("indexPrice"),
-                # Never leave a fresh rate sitting on a stale interval. WhiteBIT
-                # publishes no interval, so DEXE kept a 1h interval from an old
-                # scan against an 8h rate and read 4.27%/day instead of 0.02%.
+                index_price=index_price,
+                # Never leave a fresh rate sitting on a stale scan interval.
+                # A venue without a usable published schedule keeps an explicit
+                # assumed default; a published schedule clears that assumption.
                 interval_hours=interval if interval else DEFAULT_FUNDING_INTERVAL_HOURS,
                 interval_assumed=not interval,
                 next_funding_ms=item.get("fundingTimestamp") or item.get("nextFundingTimestamp"),
             )
             if fields:
-                rates[str(item["symbol"])] = fields
+                rates[symbol] = fields
         # A venue that answers with nothing is indistinguishable from one that
         # cannot answer at all, and both leave the legs frozen at scan time.
         return rates or self._native_bulk_funding_rates(venue)
@@ -454,16 +582,16 @@ class FastQuoteRefresher:
     def _bulk_funding_interval_overrides(venue: str) -> dict[str, float]:
         """Return venue-published schedules missing from CCXT's bulk payload.
 
-        Aster's bulk funding response includes the live rate but omits its interval.
-        The separate public ``fundingInfo`` response publishes the exact schedule
-        per contract. Falling back to the market-wide 8h default understated BTW's
-        hourly carry by eight times.
+        Binance and Aster bulk responses can omit the interval. Their separate
+        public ``fundingInfo`` responses publish current per-contract schedules;
+        assuming 8h can understate an hourly leg's carry by eight times.
         """
 
-        if venue != "Aster":
+        if venue not in {"Aster", "Binance"}:
             return {}
+        host = "fapi.asterdex.com" if venue == "Aster" else "fapi.binance.com"
         try:
-            payload = _json_url("https://fapi.asterdex.com/fapi/v1/fundingInfo")
+            payload = _json_url(f"https://{host}/fapi/v1/fundingInfo")
         except Exception:  # noqa: BLE001 - the caller retains its explicit fallback.
             return {}
         result: dict[str, float] = {}
@@ -1184,6 +1312,7 @@ class FastQuoteRefresher:
                     "options": {"defaultType": "spot" if market_type == "Spot" else "swap"},
                 }
             )
+            configure_public_market_client(client, venue)
             client.load_markets()
             self._clients[key] = client
             self._client_request_locks.setdefault(key, Lock())
@@ -2554,16 +2683,20 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                 next_funding_ms=item.get("nextSettleTime"),
             )
         if venue == "Hyperliquid":
+            hyperliquid_coin = _hyperliquid_coin(base)
+            request = {"type": "metaAndAssetCtxs"}
+            if ":" in hyperliquid_coin:
+                request["dex"] = hyperliquid_coin.partition(":")[0]
             payload = _json_post(
                 "https://api.hyperliquid.xyz/info",
-                {"type": "metaAndAssetCtxs"},
+                request,
             )
             if not isinstance(payload, list) or len(payload) < 2:
                 return {}
             meta = payload[0] if isinstance(payload[0], dict) else {}
             contexts = payload[1] if isinstance(payload[1], list) else []
             universe = meta.get("universe") if isinstance(meta.get("universe"), list) else []
-            hyperliquid_coin = _hyperliquid_coin(base).upper()
+            hyperliquid_coin = hyperliquid_coin.upper()
             index = next(
                 (
                     index
@@ -2577,10 +2710,17 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
             )
             if index is None or index >= len(contexts) or not isinstance(contexts[index], dict):
                 return {}
+            if universe[index].get("isDelisted") is True:
+                return {}
+            funding_rate = _optional_number(contexts[index].get("funding"))
+            if funding_rate is None or not math.isfinite(funding_rate):
+                return {}
             next_hour_ms = int((time.time() // 3600 + 1) * 3600 * 1000)
             return _funding_fields(
-                contexts[index].get("funding"),
+                funding_rate,
                 interval_hours=1,
+                interval_assumed=False,
+                index_price=contexts[index].get("oraclePx"),
                 next_funding_ms=next_hour_ms,
             )
         if venue == "HTX":
@@ -2617,16 +2757,9 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                 next_funding_ms=item.get("next_funding_time"),
             )
         if venue == "BitMart":
-            payload = _json_url(
-                "https://api-cloud-v2.bitmart.com/contract/public/funding-rate?"
-                + urlencode({"symbol": compact})
-            )
-            item = payload.get("data") or {}
-            return _funding_fields(
-                item.get("rate_value") or item.get("expected_rate"),
-                interval_hours=8,
-                next_funding_ms=item.get("funding_time"),
-            )
+            payload = _json_url(NATIVE_FUNDING_SOURCES[venue]["url"])
+            rows = (payload.get("data") or {}).get("symbols") or []
+            return _native_perpetual_funding_rates(venue, rows).get(symbol, {})
         if venue == "XT":
             payload = _json_url(
                 "https://fapi.xt.com/future/market/v1/public/q/funding-rate?"
@@ -2679,14 +2812,24 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
                 {},
             )
             funding_velocity = _optional_number(item.get("fundingRate"))
-            index_price = _optional_number(item.get("indexPrice"))
-            if funding_velocity is None or index_price is None or index_price <= 0:
+            mark_price = _optional_number(item.get("markPrice"))
+            if (
+                item.get("suspended") is True
+                or funding_velocity is None or not math.isfinite(funding_velocity)
+                or mark_price is None or not math.isfinite(mark_price) or mark_price <= 0
+            ):
                 return {}
+            # Kraken publishes absolute quote units per base unit per hour.
+            # The bulk CCXT adapter divides by mark price: current-notional
+            # carry. Use that same basis here so refreshing one chart cannot
+            # change its rate merely by switching readers. This is distinct
+            # from Kraken's rate-calculation-time spot-relative UI percentage.
             next_hour_ms = int((time.time() // 3600 + 1) * 3600 * 1000)
             return _funding_fields(
-                funding_velocity / index_price,
+                funding_velocity / mark_price,
                 interval_hours=1,
                 next_funding_ms=next_hour_ms,
+                index_price=item.get("indexPrice"),
             )
     except Exception:
         return {}
@@ -2696,6 +2839,69 @@ def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
 def _milliseconds_to_hours(value: Any) -> float | None:
     parsed = _optional_number(value)
     return parsed / 3_600_000.0 if parsed is not None and parsed > 0 else None
+
+
+def _native_perpetual_funding_rates(
+    venue: str, rows: list[Any],
+) -> dict[str, dict[str, Any]]:
+    """Current projections for active contracts with native identity fields."""
+    from spreadboard import funding_interval
+
+    rates: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        next_ms = None
+        if venue == "BitMart":
+            base = str(row.get("base_currency") or "").upper()
+            quote = str(row.get("quote_currency") or "").upper()
+            # Match BitMart's catalogue/CCXT settlement convention, including
+            # its USD- and USDC-quoted contracts: quote and settle differ.
+            settle = "USDT"
+            if (
+                row.get("status") != "Trading"
+                or str(row.get("product_type")) != "1"
+                or (row.get("expire_timestamp") is not None
+                    and _optional_number(row.get("expire_timestamp")) != 0)
+                or str(row.get("symbol") or "").upper() != f"{base}{quote}"
+            ):
+                continue
+            # The previous period's funding_rate is a settled value. Now uses
+            # expected_funding_rate, including an explicit zero, with its live
+            # published cadence rather than assuming all contracts settle 8h.
+            rate = row.get("expected_funding_rate")
+            hours = funding_interval.normalise(row.get("funding_interval_hours"))
+            index = row.get("index_price")
+            next_ms = row.get("funding_time")
+        elif venue == "Coinbase International":
+            base = str(row.get("base_asset_name") or "").upper()
+            quote = str(row.get("quote_asset_name") or "").upper()
+            settle = quote
+            if row.get("type") != "PERP" or row.get("trading_state") != "TRADING":
+                continue
+            current = row.get("quote") or {}
+            if not isinstance(current, dict):
+                continue
+            rate = current.get("predicted_funding")
+            nanos = _optional_number(row.get("funding_interval"))
+            hours = funding_interval.normalise(nanos / 3_600_000_000_000 if nanos else None)
+            index = current.get("index_price")
+        else:
+            continue
+        parsed_rate = _optional_number(rate)
+        if (not base or quote not in {"USD", "USDC", "USDT"}
+                or hours is None or hours <= 0
+                or parsed_rate is None or not math.isfinite(parsed_rate)):
+            continue
+        parsed_index = _optional_number(index)
+        fields = _funding_fields(
+            parsed_rate, interval_hours=hours, interval_assumed=False,
+            index_price=parsed_index if parsed_index is not None and math.isfinite(parsed_index) else None,
+            next_funding_ms=next_ms,
+        )
+        if fields:
+            rates[f"{base}/{quote}:{settle}"] = fields
+    return rates
 
 
 def _ccxt_current_funding(
@@ -2708,13 +2914,13 @@ def _ccxt_current_funding(
         if not getattr(client, "has", {}).get("fetchFundingRate"):
             return {}
         payload = client.fetch_funding_rate(symbol) or {}
-        interval = payload.get("interval")
+        interval = payload.get("interval") or _market_interval_hours(payload)
         if isinstance(interval, str) and interval.casefold().endswith("h"):
             interval = interval[:-1]
         return _funding_fields(
             payload.get("fundingRate"),
             interval_hours=interval,
-            next_funding_ms=payload.get("fundingTimestamp"),
+            next_funding_ms=payload.get("fundingTimestamp") or payload.get("nextFundingTimestamp"),
         )
     except Exception:
         return {}
@@ -2748,7 +2954,7 @@ def _funding_fields(
     # The venue's own statement of what the contract settles against. Already on
     # the wire from `fetch_funding_rates`, and previously dropped here.
     index = _optional_number(index_price)
-    if index is not None and index > 0:
+    if index is not None and math.isfinite(index) and index > 0:
         output["index_price"] = index
     if interval is not None:
         output["funding_interval_hours"] = interval
@@ -2795,7 +3001,7 @@ def _hyperliquid_coin(base: str) -> str:
     # REST API for ``IO-OAI``.  Hyperliquid answers that unknown coin with an
     # empty book rather than an error, so a chart worked only during the brief
     # window in which the shared book cache was fresh and then froze.
-    namespace, separator, ticker = normalized.partition("-")
+    namespace, separator, ticker = normalized.partition(":" if ":" in normalized else "-")
     if separator and namespace and ticker:
         return f"{namespace.lower()}:{ticker}"
     return normalized

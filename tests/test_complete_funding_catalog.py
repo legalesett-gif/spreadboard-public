@@ -7,6 +7,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from scripts import complete_funding_catalog_worker
 from spreadboard import funding_catalog, funding_radar, server
 
@@ -207,8 +209,13 @@ def test_reader_never_owns_refresh_after_complete_generation_is_invalidated(
 
 
 def test_fresh_process_reader_returns_warming_without_owning_catalog_build(
-    monkeypatch,
+    monkeypatch, tmp_path,
 ) -> None:
+    # A cold reader has no persisted generation. Other tests (or a local
+    # service) may have populated the repository's default runtime path.
+    monkeypatch.setattr(funding_catalog, "DEFAULT_CACHE_PATH", tmp_path / "absent.json")
+    monkeypatch.setattr(funding_catalog, "_CACHE_RESTORE_ATTEMPTED", False)
+    monkeypatch.setattr(funding_catalog, "_CACHE_SAVED_AT", None)
     prior_payloads = funding_catalog._CACHE_PAYLOADS
     prior_at = funding_catalog._CACHE_AT
     prior_building = funding_catalog._CACHE_BUILDING
@@ -369,11 +376,12 @@ def test_current_ranking_happens_before_token_pagination(monkeypatch) -> None:
     assert page["groups"][0]["best_funding_route"]["route_key"] == "strong"
 
 
-def test_restored_catalog_now_uses_current_exact_leg_carry(monkeypatch) -> None:
+@pytest.mark.parametrize("role", ["web", "collector"])
+def test_restored_catalog_now_uses_current_exact_leg_carry(monkeypatch, role) -> None:
     from spreadboard import warm_query_projection
 
     stale = _route("GUA", "gua", current=0.1, one_day=0.2)
-    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     monkeypatch.setattr(
         funding_catalog,
         "_complete_payloads",
@@ -434,13 +442,14 @@ def test_restored_catalog_now_uses_current_exact_leg_carry(monkeypatch) -> None:
     assert page["window_token_counts"] == {}
 
 
+@pytest.mark.parametrize("role", ["web", "collector"])
 def test_populated_live_cache_never_backfills_a_missing_leg_from_stale_catalog(
-    monkeypatch,
+    monkeypatch, role,
 ) -> None:
     from spreadboard import warm_query_projection
 
     stale = _route("GUA", "gua", current=9.9, one_day=0.2)
-    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     monkeypatch.setattr(
         funding_catalog,
         "_complete_payloads",
@@ -468,14 +477,15 @@ def test_populated_live_cache_never_backfills_a_missing_leg_from_stale_catalog(
     assert page["matching_route_count"] == 0
 
 
+@pytest.mark.parametrize("role", ["web", "collector"])
 def test_web_funding_page_clears_now_after_all_live_rates_expire(
-    monkeypatch, tmp_path,
+    monkeypatch, role, tmp_path,
 ) -> None:
     """An unchanged rate file must not revive persisted carry when it expires."""
     from spreadboard import bulk_quotes, warm_query_projection
 
     route = _route("GUA", "gua", current=9.9, one_day=0.2)
-    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     monkeypatch.setattr(
         funding_catalog, "_complete_payloads", lambda: {"GUA": {"routes": [route]}},
     )
@@ -520,9 +530,10 @@ def test_web_funding_page_clears_now_after_all_live_rates_expire(
     assert path.stat().st_mtime_ns == stamp
 
 
-def test_production_historical_window_reads_current_exact_archive(monkeypatch) -> None:
+@pytest.mark.parametrize("role", ["web", "collector"])
+def test_production_historical_window_reads_current_exact_archive(monkeypatch, role) -> None:
     stale = _route("GUA", "gua", current=0.1, one_day=9.9)
-    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     monkeypatch.setattr(
         funding_catalog,
         "_complete_payloads",
@@ -560,14 +571,15 @@ def test_production_historical_window_reads_current_exact_archive(monkeypatch) -
     assert loads == [True]
 
 
+@pytest.mark.parametrize("role", ["web", "collector"])
 def test_production_now_enriches_only_visible_routes_with_exact_windows(
-    monkeypatch,
+    monkeypatch, role,
 ) -> None:
     from spreadboard import warm_query_projection
 
     hidden = _route("HIDDEN", "hidden", current=0.5, one_day=99.0)
     visible = _route("VISIBLE", "visible", current=1.0, one_day=99.0)
-    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "web")
+    monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     monkeypatch.setattr(
         funding_catalog,
         "_complete_payloads",
@@ -1133,3 +1145,31 @@ def test_complete_funding_request_skips_the_bounded_scanner(monkeypatch) -> None
 
     assert [item["token"] for item in payload["groups"]] == ["FAST"]
     assert payload["coverage_mode"] == "complete_funding_catalogue_ranked_before_pagination"
+
+
+def test_persisted_funding_reader_streams_tokens_and_validates_entire_file(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    import orjson
+    from spreadboard.packed_routes import PackedRoutes
+    path = tmp_path/'funding.json'
+    monkeypatch.setattr(funding_catalog, 'DEFAULT_CACHE_PATH', path)
+    rows = [{'route_key':'X', 'long_venue':'Binance', 'short_venue':'Gate', 'quote_ts_us':2**63+1}]
+    envelope = {'payloads':{'A.B':{'routes':PackedRoutes(rows).envelope()}, 'LEGACY':{'routes':rows}},
+                'schema':funding_catalog.PERSISTED_SCHEMA, 'saved_at_unix':123.5}
+    path.write_bytes(orjson.dumps(envelope))
+    original = Path.read_bytes
+    def bounded(p):
+        if p == path:
+            pytest.fail('funding reader allocated whole-file bytes')
+        return original(p)
+    monkeypatch.setattr(Path, 'read_bytes', bounded)
+    restored, saved = funding_catalog._read_persisted_cache()
+    assert saved == 123.5
+    assert list(restored['A.B']['routes']) == rows
+    assert restored['LEGACY']['routes'] == rows
+    with path.open('ab') as handle: handle.write(b' trailing corrupt bytes')
+    with pytest.raises(ValueError): funding_catalog._read_persisted_cache()
+    envelope['payloads']['A.B']['routes'] = PackedRoutes([{**rows[0], 'long_venue':'Ourbit'}]).envelope()
+    path.write_bytes(orjson.dumps(envelope))
+    with pytest.raises(ValueError, match='venue_policy_changed'): funding_catalog._read_persisted_cache()

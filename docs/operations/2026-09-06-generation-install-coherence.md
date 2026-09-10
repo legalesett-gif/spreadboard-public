@@ -1,0 +1,21 @@
+# Preserve completed price observations during generation install
+
+## Install reconciliation measured locally — 2026-09-06 06:25 UTC
+
+Latest candidate remains **fc8e2f4**, source digest **593e42d43bb2a75d**, NOT deployed; no release waiter. Full2697tests/Ruff gates unchanged. Recurring automation freshly confirmed PAUSED. Production observer499780 and normalbackup532835 were freshly active06:22:34; preserve both, do not count backup's interim Result=success as completion.
+
+Synthetic offline208421-route Mac replay verifies all208421complete observations in every case. Untraced install:normal1.571s,forced concurrent-refresh2.099s; longestreaderlock0.757s in race versus0.000040s normal. Traced incremental peak allocation:normal39232952bytes,race58807196bytes,delta19574244bytes; retained27699196vs31226252bytes. Allocation excludes setup; profiler slows the tracedcase to11.19s, so use untraced timing. Not productionRSS/headroom or attribution of06:03coveragefailure. Rare reconciliation can stallreaders, requiring after-release latency observation, but the boundedlocalcost is now measured. Evidencecandidate-install-profile-manifest.json andinstall-profile-*.json; allprofileprocesses terminalexit0, no production profiling.
+
+Release preparation: retainfailedbaseline as evidence rather than callingitgreen. Wait for soleobserverterminalsuccess/finishedmarker, inspect completephase/coverage and backup, then make explicitcapdecision. No cap reduction justified yet. Afix release may use a documented failingbaseline; never reuse oldwaiters whose sourcepins or passpredicates differ. Freshbothprotected-worker guards remain mandatory before guardedhelper/recreation. No deploymentqueued now.
+
+The production observation failed priced-coverage acceptance at 06:03:06 UTC: generation5 initially reported64,083 priced routes, then202,127 on the same208,421-route structure at06:05:06. There was no restart/OOM. App logs place an index install between the surrounding health samples. This establishes the timing, not a complete causal explanation.
+
+Local source review found an independently reproducible install race. LiveRouteUniverse.install captures the immutable update-map reference, prepares structural seeds outside its reader lock, then publishes those seeds. A real refresh can publish a newer map during preparation. The original installer overwrites it with its earlier view, taking a currently priced route back to funding-only until another refresh.
+
+The fix detects a changed update-map identity at publication and reconciles the completed latest map with structural seeds under the existing reader lock. Only keys in the new structural generation are retained. Newest real quote timestamp wins; latest funding expiry is preserved, and no quote timestamp is extended. The ordinary uncontended install keeps its existing path.
+
+A separate merge defect returned only four tuple fields, discarding exact leg prices/top-book spread/native index values. The fix preserves the entire selected price observation and changes only its funding slot, preventing a newer spread from inheriting unrelated structural price evidence.
+
+Three regressions fail on original source. A further original-install-only mutant with the fixed tuple merger still fails the actual priced-count assertion (0 instead of1), isolating the race from tuple truncation. The race test invokes the real refresh_route_kinds path during structural preparation. Focused25tests pass1.73s. Original cases3fail1.08s; isolated race1fail0.14s. Ruff no new516against unchanged517baseline, exit0. Full suite2697passed155.32s, actual exit0 (install-coherence-full.txt). No product source changed after gates; tracked test-generated data restored.
+
+Review limits: the rare reconciliation path allocates another update dictionary and computes metrics while holding the reader lock. Production lock duration, RAM and coverage need measurement after release. This patch does not prove that the race caused all of the observed production drop; long parsing/refresh time and quote expiry around installation remain alternative contributors. Do not count the failed observation as an hour pass. Preserve observer499780 until07:12:50, no deployment/cap changes yet. Livef047ccf; this candidate includes2746e4e funding/UI coherence,6ab7440 navigation exclusion and7b7f904 cache revalidation.

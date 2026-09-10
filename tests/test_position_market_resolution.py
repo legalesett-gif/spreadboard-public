@@ -173,6 +173,92 @@ def test_relative_value_position_resolves_two_exact_tickers_and_normalizes_sprea
     assert hydrated["funding_income_usd"] == pytest.approx(-53.4216385)
 
 
+def test_explicit_one_to_one_route_ignores_unequal_hedge_quantities_in_spread() -> None:
+    route_key = chart_catalog.custom_route_key(
+        "OPENAI",
+        {
+            "venue": "Mexc",
+            "market_type": "Futures",
+            "symbol": "OPENAI/USDT:USDT",
+        },
+        {
+            "venue": "Hyperliquid",
+            "market_type": "Futures",
+            "symbol": "IO-OAI/USDC:USDC",
+        },
+    )
+    position = {
+        **_dex_position(),
+        "token": "OPENAI",
+        "route_key": route_key,
+        "long_venue": "Mexc",
+        "long_market_type": "Futures",
+        "long_symbol": "OPENAI/USDT:USDT",
+        "long_quantity": 1.478,
+        "long_entry_price": 1442.2675236806495,
+        "short_venue": "Hyperliquid",
+        "short_market_type": "Futures",
+        "short_symbol": "IO-OAI/USDC:USDC",
+        "short_quantity": 1.424,
+        "short_entry_price": 1539.153441011236,
+    }
+    catalogue = {
+        "markets": [
+            {
+                "token": "OPENAI",
+                "venue": "Mexc",
+                "market_type": "Futures",
+                "symbol": "OPENAI/USDT:USDT",
+            },
+            {
+                "token": "IO-OAI",
+                "venue": "Hyperliquid",
+                "market_type": "Futures",
+                "symbol": "IO-OAI/USDC:USDC",
+            },
+        ]
+    }
+    timestamp = int(datetime.now(tz=UTC).timestamp() * 1_000_000)
+    books = {
+        live_book_cache.cache_key(
+            "Mexc", "Futures", "OPENAI/USDT:USDT"
+        ): live_book_cache.CachedBook(
+            bids=[[1494.0, 10.0]], asks=[[1494.4, 10.0]], quote_ts_us=timestamp
+        ),
+        live_book_cache.cache_key(
+            "Hyperliquid", "Futures", "IO-OAI/USDC:USDC"
+        ): live_book_cache.CachedBook(
+            bids=[[1620.9, 10.0]], asks=[[1621.3, 10.0]], quote_ts_us=timestamp
+        ),
+    }
+
+    hydrated = portfolio._hydrate_position(
+        position,
+        [],
+        books=books,
+        funding_legs={},
+        catalogue=catalogue,
+    )
+
+    expected = (1621.1 / 1494.2 - 1) * 100
+    quantity_weighted = ((1.424 * 1621.1) / (1.478 * 1494.2) - 1) * 100
+    assert hydrated["canonical_route"]["notes"]["relative_value"] == {
+        "long_multiplier": 1.0,
+        "short_multiplier": 1.0,
+    }
+    assert hydrated["current_marked_spread_pct"] == pytest.approx(expected)
+    assert hydrated["current_marked_spread_pct"] != pytest.approx(quantity_weighted)
+    assert "Current marked spread<strong>+8.493%</strong>" in server.render_position_card(
+        hydrated
+    )
+
+
+def test_incomplete_relative_value_metadata_falls_back_to_position_ratio() -> None:
+    route = {"notes": {"relative_value": {"long_multiplier": 1.0}}}
+
+    assert portfolio._has_relative_value_definition(route) is False
+
+
 def test_position_match_never_substitutes_a_different_saved_symbol() -> None:
     position = {
         **_dex_position(),

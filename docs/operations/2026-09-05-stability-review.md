@@ -1,28 +1,120 @@
 # SpreadBoard stability review and acceptance ledger
 
-Task: critically review commits through `16899ee` and finish the owner's
-24/7 handoff. Production changes remain gated on the full pytest suite and
-unchanged Ruff ratchet. No trading actions, Telegram sends, Pushover enablement,
-subscription increase, accuracy-gate relaxation, cgroup increase or droplet
-spend is authorized.
+## Streaming index writer candidate — 2026-09-06 06:34 UTC
 
-Current runtime and built app/collector images match `aee0953` (including
-`a995b91`), source `3ed1500fd5c9b96a`, verified after recreation at 15:58:50 UTC.
-Both protected-worker checks were clear. At 16:01:50 both services were healthy,
-OOM 0, /api/health 200, /free 200 and 138,604 priced routes. The first startup
-/free request timed out at 45 seconds and later recovered without another restart.
+**Latest local9ae48fb/digest07c8589ad5765ecf, NOT deployed**, includesfc8e2f4installation,2746e4efundingUI,6ab7440navigationmemory,7b7f904cache. Default live-index writer now serializes/hashes one route at a time and atomically replaces pointer only afterfsync. Samebytes/checksum/order, supplied-encoded path retained, previousindex readable onfailure. Full2702passed140.73s exit0;Ruffno new516/unchanged517baseline exit0;16focusedpass;originalwriter2fail3pass. Datarestored/sourcefrozenaftergates. Details2026-09-06-streaming-index-writer.md.
 
-Ourbit is retired. Sampled funding math and all 12 tabs pass. The preceding
-14:55–15:56 deployment-free count hour PASSED with 31 samples over 3,623.598s,
-max deviation 0.67873%; both required scheduled backups also passed. The new
-cardinality audit found zero duplicate exact markets or economic routes: 2,171
-futures / 3,965 spot token labels, 142,711 routes for 1,232 tokens. Rich route
-storage, funding completeness beyond the 500-token shortlist, cold-start delay,
-safe lower caps and clean 48-hour acceptance remain open.
+Realcollectorpeak06:25:11 anon3879731200bytes withoutwebsocket; index2254924KiB/discovery643724KiB/supervisor504084KiB RSS, hostavailable552960KiB. Current index512479951bytes. Thus proposedcollector3.5GiB remainsunsafe. Synthetic208911-route512997577bytewriter comparison matchedSHA256exactly:incremental tracedpeak541884881->3521252bytes;tracedtime1.197->3.259s. This is encoding allocation only, not deliveredRSSsaving; do not subtractitfromrealpeak tochoosecaps.
 
-The owner requested Claude continuation. Read
-`docs/claude-handoffs/2026-09-05-stability-cardinality-continuation.md` for exact
-source/container IDs, evidence, scope and next steps. The Codex schedule stays PAUSED.
+Fresh06:33:39:soleobserver499780active;normalbackup532835activating/noExecMainExitTimestamp, notyetcomplete. Preserveuntilobserverexpected07:12:50;no newobserver/waiter/restart. Livef047ccf/capsunchanged,automationPAUSED. CoveragehourstillFAILEDbecausegen5drop64083; retainedasbaseline. Nextcompleteobservation/backup,phaseandcapdecision,guardedfixrelease,thenordinarycoverage/memory/UIverificationandfinal48h.
+
+## Generation-install candidate — 2026-09-06 06:22 UTC
+
+Latest local **fc8e2f4**, undeployed, includes2746e4e/6ab7440/7b7f904. Reconciles a price refresh completed during structural preparation before install publishes; retains all chosen quote tuple fields instead of truncating exact price/index evidence. Three original-source failures; isolated original-install-only mutant still yields priced0instead1 with fixed tuplemerge, proving the race separately.25focusedpass;full2697passed155.32s exit0;Ruffno new516against unchanged517baseline exit0. Tracked data restored;source unchanged aftergates. See2026-09-06-generation-install-coherence.md andinstall-coherence-*.txt.
+
+Production06:03 generation5coverage drop remains a FAILEDhour gate. This reproducible race is not yet causal attribution for all of that drop; parsing/refresh delays and real quote expiry remain alternative contributors. New rare reconciliation allocates anothermap underreaderlock: benchmark/observe latency andRAM afterrelease. Do not weakenfreshness or fake coverage.
+
+Livef047ccf unchanged;no releasewaiter/capchanges;automationPAUSED. Soleobserver499780 freshlyactive06:20:42, preserveuntil07:12:50. Normalbackup started06:21:16, freshlyactivating/start PID532835 at06:21:31; NOT terminalsuccess despiteResult=success/ExecMainStatus0 duringstart. Poll sameunit/PID;no manualbackup. Next: finish baseline,reviewfailedcoverage/capdecision,guardedrelease andordinaryvalidation;full48h stillunproved.
+
+## Coverage gate failure and tested coherence fix — 2026-09-06 06:14 UTC
+
+**Priority: investigate the generation-install coverage drop before release/cap changes.** Frozen combined-observer-hour-check.jsonl spans3638.85s,240hostsamples,31coverageover3618.64s. Priced coverage FAILED±10%:201856/gen4 at06:01:05,64083/gen5 at06:03:06,202127/samegen5 at06:05:06. Route_count remained208421 during the drop/recovery; funding_only jumped144329, refresh_seconds0 at the drop. This points toward generation install/first price overlay but is not yet causal proof. No container change/restart/OOM/unhealthy/endpointfailure. Do not claim one-hour success from issues=[]: coverage.within_10pct andone_hour_log_proof are false. Evidence combined-comparison-hour-check.json and combined-coverage-drop.json. Preserve observer499780 to07:12:50; no duplicate/restart.
+
+**Latest local candidate2746e4e, NOT deployed**, includes6ab7440memory exclusions and7b7f904cache revalidation. Fixes confirmed Spreads funding-coherence defect: every board stream derives current funding/leg metadata from one snapshot; row/group live direction/rate/cadence hooks, expiry/recovery, Net edge dataset and already-open exact-route calculator update together. Settled windows and quote/user state preserved. Full2694passed174.13s exit0;27focusedpass3.32s; six original-source/JS failures, five unaffected casespass; Ruff no new516against unchanged517baseline exit0. Tracked generated data restored; no product edits after gates. Docs2026-09-06-spreads-funding-coherence.md.
+
+Live remainsf047ccf; no queued waiter/capchanges; automationPAUSED. Hour memory:appanon3035693056/current3446505472;collectoranon3204747264/current4294447104. CPU.859/1.936cores. /free13samplesmax14.906s;health31max5.251s. Index36samples,nonewithwebsocket. These observations do not establish safe lower caps or final48h. Nextnormalbackup06:20:56UTC, latestcompleted01:15:36success.
+
+## Navigation callers candidate — 2026-09-06 05:57 UTC
+
+Latest local candidate **6ab7440**, not deployed, includes history exclusion 0b534e5 and cache revalidation 7b7f904. Live remains f047ccf. No release waiter queued; caps unchanged; automation PAUSED; preserve sole observer499780 until expected07:12:50UTC and freshly check terminal state before acting.
+
+The independent FundingCatalogPublisher now receives the actual collector RefreshLoop and takes the heavy lock plus websocket pause around navigation after catalogue publication completes. The bulk-funding scheduler pauses via its route publisher's refresh loop inside its existing heavy lock and after route-priority checks. Both restore on failure. No cadence/headroom/retry/source semantics changed; bulk quotes continue. Reviewed history/post-discovery paths also exclude websocket; actual production peak/freshness still needs proof after release.
+
+Final suite **2690 passed139.33s exit0**; Ruff no new516against unchanged517baseline exit0. Four new cases fail original caller methods. An initial full run overlapped a formatting edit and failed11 source-inspection checks (2679passed); it is rejected and retained as evidence. The clean final run supersedes it. Tracked generated data restored; no source edits after final gates. See docs/operations/2026-09-06-navigation-callers-memory.md.
+
+Frozen current-production pre-hour log:164host/2480.87seconds,21coverage/fourgenerations,201162–201998priced, no sampled failures/gaps. Index21samples, none withwebsocket. Collectoranonpeak3204747264bytes, total4294258688; appanon2826043392. Only41.35minutes, not an hour/savings/48h proof. Next: finish existing observation and backup, compare ordinary phases, decide safe caps then guarded release; do not reuse stale waiter/source pins.
+
+## Evidence-navigation candidate — 2026-09-06 05:48 UTC
+
+**Live remains f047ccf. Latest local candidate is 0b534e5**, including same-key cache fix 7b7f904. It is not deployed and no release waiter is queued. Sole observer 499780 was freshly active at 05:48:19 UTC; preserve to expected 07:12:50 UTC. Caps unchanged; recurring automation PAUSED.
+
+MarketEvidenceLoop previously resumed websocket after the evidence child but before the funding-navigation child, while retaining the heavy lock. The candidate retains the pause through navigation and restores it on success, failed evidence, evidence exception and navigation exception. Other navigation callers remain a separate follow-up. Bulk quote collection, cadence, funding semantics and headroom guard are unchanged. The longer fast-lane pause requires production freshness validation after release.
+
+Validation: 57 focused tests passed (2.77s), four new behavior cases included. Original-source mutant fails two exclusion cases and passes the two evidence-failure cases, exit 1. Full suite 2,686 passed (154.46s), actual exit 0; Ruff no new findings, 516 known versus unchanged 517 baseline, actual exit 0. Tracked generated test data restored. No source edits after gates. Evidence and review: docs/operations/2026-09-06-evidence-navigation-memory.md and output/stability-20260906/evidence-navigation-*.txt.
+
+Next: review FundingCatalogPublisher and _schedule_funding_navigation lock/refresh-loop wiring; finish the existing normal observation, compare phases and normal backup outcome, then choose safe caps and guarded release. The measured navigation/websocket overlap alone does not identify which caller launched that production child. No whole-service overlap elimination or delivered memory-saving claim yet.
+
+## Ordinary-load checkpoint — 2026-09-06 05:43 UTC
+
+Live remains f047ccf; candidate 7b7f904 is not deployed and no release waiter is queued. The sole observer, spreadboard-stability-combined-20260906.service (PID 499780), was freshly active at 05:41 UTC. Preserve it until its expected 07:12:50 UTC completion. The recurring automation is confirmed PAUSED.
+
+Frozen combined-observer-0030.jsonl contains 116 host samples over 1,751.67 seconds (29.2 minutes, despite the rounded filename), 15 coverage samples, 201,162–201,699 priced routes and two generations. No sampled OOM, restart, unhealthy state, endpoint failure or gap flag. This is not an hour proof. Six /free requests peaked at 14.906 seconds; 15 health requests peaked at 5.045 seconds.
+
+Collector anonymous memory peaked at 3,204,747,264 bytes at 05:28:05, with websocket and funding-navigation workers present. Index was present in 15 samples, all without websocket; this supports the intended exclusion but cannot rule out brief unsampled overlap. Source inspection shows _schedule_funding_navigation takes the heavy lock without websocket pause; other navigation entry paths also require review before any change. App anonymous peak was 2,794,663,936 bytes. Mean CPU was 0.837 app / 2.036 collector cores. These short-window peaks are not a causal saving versus the prior two-hour baseline.
+
+Collector sampled total memory reached 4,293,664,768 bytes (99.97% of its 4 GiB limit). A separate host-side cgroup read at 05:43:02 reports memory.events max=2561, oom=0, oom_kill=0: the limit caused reclaim attempts, not an OOM. At that later instant, file cache was 1,140,932,608 bytes, predominantly inactive; anonymous memory was 1,019,781,120 bytes. Do not interpret total-memory pressure as all unreclaimable anonymous memory or infer safe lower limits from this one read. Caps remain unchanged pending the full phase comparison.
+
+Evidence under output/stability-20260906/: combined-comparison-0030.json, combined-collector-peaks-0030.json, collector-cgroup-0545.json (embedded timestamp is 05:43:02, filename is only a label). No production diagnostic child, restart, cap or source mutation was performed.
+
+## SpreadBoard stability and UA comparison — Codex continuation (2026-09-06, 02:33 UTC)
+
+- Goal ACTIVE; this turn PROGRESS plus verified protected-worker wait. LIVE stillb42e595/digestbc130c63e6b760de, started02:02:29UTC; fresh02:24bothhealthy/restarts0/OOMfalse. READY BUT NOT DEPLOYED combined sourcecommitfb814c3 (includes d216037 direction/zero correction) in isolatedcollector-retention checkout. No source sync/build/recreation attempted because independentpredeployguard returnedexit12 with api_discovery_worker.py PID407100. Freshps02:24:45 confirmsPID407100aliveelapsed03:39,CPU10.8%,RSS374872KiB (~366MiB). Wait for BOTHdiscoveryANDsnapshot_finalize_worker to disappear, noforce. Expectedscan45-60min, not a deadline. Do not restart because an observationtimesout.
+- Fresh production probe of storedCAP row confirmedlegacyfallback defect: HTXFutureslong/KrakenSpotshort, longrate-.1385284327275112%/8h andstored+.4155852981825336%/day. normalised_funding returnedtheoppositesign; _row_from_api swappedvenues/types intoKrakenSpotlong/HTXFuturesshort. Moderncompletecatalogue arithmetic previouslypassed222417routes; thisisaseparatefallback defect, not a contradictionofthataudit.
+- Candidated216037 removesautomaticmirroringinBOTH _row_from_api and _fast_quote_updates_for, removesnormalised_funding signflip, andstatesexactspot-shortinventory/borrowprerequisiteinpublicrow. Legacyexplicitmirrorutility remainsforitsconversiontestsbutnoproductingestioncallerremains (rgonlydefinition). Originalroutebooks/legidentity/ratesstaytogether. Updated2oldreleaseaudittests that encodedmirrorassumption tocheckprintedleg arithmetic; explicitreverseutilitytestdocnowclearlyseparatefromingestion.
+- Samecandidatecorrectsfinalfundingleaderzero-vs-negativebug: focusedbeforeprobe expected0butselected-.1because `or -inf` treatedzeroasmissing. Selectfinitecandidatevaluesdirectly. Sevennewcall-sitecases (positive/negativefundingCEX/DEXingestion,compactquoteexactidentityCEX/DEX,zeroabove negative) FAILoldsource; focused47passed. Finalfullsuite2669passed137.47s(exit0); Ruffnonewfindings516remainingagainstunchanged517baseline. Earlier2666/2667fullpasses supersededbyfinal2669afterfindingcompactquote callsite. Testdata individuallypreservedunder direction-test-data thenrestoredHEAD. No sourcechangesaftergates/commit.
+- Evidence: fallback-direction-before.json/probe_fallback_direction.py(remote /app/runtime/stability/20260905-coverage/); zero-rank-before.json; direction-final-{pytest,ruff,mutant}.txt. No newdeploylog becauseguardstoppedbeforehelper. Whenidle deploysameguardedhelper andrepeatfreshprobe toconfirmprintedlegs/sign; sourcecandidatealreadygatedunlessfurthereditsoccur.
+- Runtimebaseline last19.1minsegmentb42e595:76hostsamples,0OOMkills/restarts,bothhealthy. Appmaxanon3195977728bytes (~3048MiB),peak3582849024 (~3417MiB); collectorpeak4052553728 (~3865MiB),maxanon2976538624 (~2839MiB). Lowercaps stillunsafe/unproved. Poststartuppriced197272,197308,197680,197414 acrossindexgenerations1->3; everycapturedendpoint200but/free3.871-20.25s andhealth.446-6.609s. ThisisNOT30samples/houror48h. direction-baseline-observer.jsonl preservesfullsamplerhistory.
+- Existingfiniteobserver remainssoleobserveractivePID364378 until~03:07. HeartbeatremainsPAUSED. No newobserver, trades,messages,spend,capincrease,orweakeridentity/freshness/settlementguard. Do not markblocked: liveprotectedscanhasnotfinishedandindependentreview/observationcontinues. Nextprioritywaitwithoutdisruptingdiscovery, deployreadycandidatewhenfinalizeralsoidle, thenordinarymemory/coldlatency/finalhourand48h acceptance. Backupsnextnormalfiringsstillrequired.
+
+- Confirmed cold Funding allocation problem: full render_funding_page(CAP) in isolated768MiB address-space/90s child terminated139 twice at funding_catalog._read_persisted_cache whole-fileorjsondecode. File51212862bytes. Second probe usedfaulthandler and disabledcorefiles; trace containsstackonly. Mainappremainedhealthy. This is bounded child failure, not a production appOOM or valid beforelatency measurement.
+- Deployedtoken-at-a-time funding envelope reader with complete-file validation, packed+legacy rows, uint64 preservation, disabled-venue rejection and strict duplicateheader rejection. SamefullCAPprofile now exits0 with110renderedfundingrows/399192HTMLbytes, peak512308KiB(~500MiB),20.432scold/1.360swarm. API+HTML isolatedprocess measurement; does not includeHTTP/auth/steady broadresidentindex. Coldrestore15.572s, PackedRoutesdecode10.621s/6381calls, restore6.438s/5319calls and policyiteration5.268s/1062calls overlap; do not sumoverlappingcumulative times. Warmprofilecontainsbackgroundcachewarming, so cumulativefunctiontotalsarenotpureforegroundwall.
+- This proves the bounded fullpage now completes, not broad warm-latency or whole-cgroup savings. Coldrestore still slow. Profile executes normal demand enqueues (chart/history), no externalnotification/order. No source changes since deployedcandidate. Prefer sustained release observation and measured follow-up over further speculative redeploys.
+- Gates:2662tests passed165.91s(exit0); Ruff517known/no new afterimportsort; new whole-reader regression failsoldsource. Testsvalidatepacked/legacy,dottedtokenname,unsignedtimestamp,invalidtrailingdataandOurbitrejection. Trackedtestdata individuallypreservedunderfunding-stream-test-data/restoredHEAD. Sourceb42e595.
+- Actualpredeploy ordinarysite Funding navigationcompleted3.38stoolwall and FundingDOMconfirmed851tokens/24056livevenueroutes; this is one warm sample. Priorpost6ac315d CAP/OPENAIUI checks remain timestamped below, not newb42e595UIverification. Runtimeprofile verifiesactualnewfullrender; next actualbrowsercheck andordinarymemorycycle still useful.
+- Evidence: funding-stream-{pytest,ruff,mutant,deploy}.txt; full-funding-cap-bounded-trace.txt; full-funding-cap-after.jsonl; profile_full_funding.py (remote /app/runtime/stability/20260905-coverage/). Profilechildren terminated, do not include their intervals as ordinary-load capacity proof. Observerrelease segment now starts02:02:29 and crosses120s->300s cadence02:07; still cannotprove30samples/houror48h. BackuplatestResultsuccess/ExecMainStatus0 freshly02:05; nextnormalfirings remain required.
+- Next: finalreleasehour/48h evidence, ordinarynavigation/materializationCPU+anon/cgrouppeaks, safe lowercaps ifproved; coldcataloguerestore15.6s is measuredlatency follow-up. An own-service observer after currentfiniteobserverTERMINATES may be needed for correct30samples/hour+48h schedule; do not duplicate currentlyrunningobserver. No goalcompletionclaim.
+
+- Corrected the prior sidebar diagnosis using fresh bounded runtime probe: OPENAI exact helper counted27positive rates but all sampled routes were mirage_guarded. Final overlay correctly excluded these leaders; the count was wrong. New shared identity eligibility applies to exact count and final leaders, and unique positive counts are recomputed after live overlay over all matching routes, including off-page alternatives. No guard weakened. Existing explicit quote/tokenized eligibility now also applies to final leaders.
+- Regression evidence: full suite2661passed169.94s, Ruff517known/no new. Six full-response guard/live-overlay cases: prior source4failed/2passed; new source all pass. Tests cover an off-page winner, zero live rate replacing formerly positive rate, deduplication, and identity exclusions. Test-generated data individually preserved under funding-kpi-test-data then restored. Source commit6ac315d.
+- ACTUAL postdeploy authenticated UI: CAP125routes,99eligible funding pairs, Top Funding Pairs populated with OKX->Bybit +1.320%current daily projection. OPENAI39routes,0eligible funding pairs, empty funding sidebar consistent with identity guards; research group still marked TOKENIZED/DD PENDING. Hyperliquid is PRESENT, Bitget->Hyperliquid~6.1%top-book with depth unavailable, not an execution certification. StartupCAPnavigation timed out in CUA then completedHTTP200; subsequentOPENAI navigation5.7s. Fullnavigationlatency remains open.
+- Prior6eb1788 memory segment: ordinary live index advanced202689->203070, priced196345->196907 in two fresh health samples; noOOM/restarts. At~01:47 appVmHWM3115184KiB/cgrouppeak3386597376bytes (~3230MiB), below priorcappeak3584MiB but still above proposed3072MiB. Sidebar probe child appeared briefly; not pure ordinary-load acceptance. Collectorparent~149MiB, websocket worker~1138MiB, cgrouppeak3110043648bytes. CPU sampled cumulative collector850.8CPU-seconds over393.6seconds (~2.16cores). No comparable final sustained interval or safe lower-cap proof. Never claim48h/houracceptance from these samples.
+- Next: sustained ordinary navigation/materialization CPU+anon/cgroup evidence; full HTTP cold/warm Funding profiling; 30samples/hour±10% and clean48h after final changes; lower caps only with headroom; next normal backup firings. Review final funding ranking's zero-versus-negative key (`or -inf`) separately if relevant; do not broaden this deployed fix silently. Current sidebar discrepancy is CLOSED as a count-policy mismatch, not by admitting guarded opportunities.
+- New evidence: funding-kpi-{full-pytest,ruff,mutant,deploy}.txt, sidebar-probe.jsonl, probe_sidebar.py (remote /app/runtime/stability/20260905-coverage/), counts-observer-0153.jsonl (file label misleading: capture~01:47UTC; trust sample timestamps). Current finite observer is unchanged, release segment reset01:50:55.
+
+- Counts commit d90efa6: asset facets count unique token labels rather than venue permutations; exact-token kind/asset facets include off-page alternatives and respect filters; shared spot/futures lane counts a token once. Exact pages now report routes, include Next/Previous and coherent matching/displayed counts. 2635 tests passed137.08s; old-source mutant4failed; Ruff517known/zero new.
+- Rendering/sort commit feffc48: exact sort/direction now applied before pagination using the same route metrics as the broad page. Grouped renderer retains API-admitted sound negative-basis routes with positive current carry; stale/identity/thin-book/currency failures still excluded and spread_evidence_state is unchanged. 2643 tests passed147.96s; old-source mutant2failed; Ruff517known/zero new. Test-modified tracked data preserved under output then restored individually from HEAD. Source worktree clean apart from untracked evidence directory.
+- Actual authenticated UI: OPENAI shows1tokenized asset/1futures token, route pagination and working Next/Previous. Initial second page was empty because renderer dropped carry candidates; final release displays Coinbase International->Mexc with -0.7%basis/+0.061%projected daily carry on page26-35of35routes. Fresh route counts can change between requests. The route-page description and exact-token subtitle are now corrected and verified in actual HTML. Superseded by 01:44 verification: KPI and strict advanced-volume filtering work; funding sidebar/count mismatch corrected and verified in01:53 release. Do not equate those cosmetic labels with duplicate stored markets.
+- CAP catalogue ordinary rotation completed01:03:13Z. At01:04 all13non-Ourbit identities from the15-rowUA sample have fresh exact pairs;2Ourbit deliberately absent. CAP saved funding cache was still missing the pair in that probe, but actual Funding page later shows Bybit Futures->Bingx Futures: long-.1726%/4h, short-.1264%/4h, net+.277%projected/day, basis-.27%. Reverse direction also shown (+basis/negativecarry). Exact chart identity intact; incomplete24h/7d/30dsettlements remainblank. Thus sampled CAP visible coverage gap is CLOSED. ANSEM fresh pair exists through native alias joining even when raw catalogue-label lookup differs. Prior samples overlap; never sum them or claim exhaustive premium parity.
+- Funding navigation repeatedly exceeded20sCUA wait, but the last request completed and was inspected/expanded. This is slow navigation evidence, not a confirmed persistent outage. Remaining cold-latency work must profile complete Funding exact-token/history expansion. User-facing publication and pair arithmetic are now verified for CAP, but broader both-direction comparator checks remain bounded samples.
+- Earlier fixes retained: Ourbit exclusion; native closed-market filtering; public BingX status separate from API permission; ANSEM alias; native indexes from KuCoin/Phemex/MEXC/HTX/Bitget, with exact-ID joins and finite/fresh checks. Prior ordinary oracle rotation excluded all9false OPENAI GateSpot/perp routes while preserving io:OAI futures. No live-entry certification implied.
+- Cardinality baseline00:05:1987futures/3962spot token labels;9733/12484markets; zero duplicate exact venue/type/symbol keys. UA user-reported2534/4370 are token-label counts, not directed routes. Counts alone do not demonstrate memory waste. Prior successful materializer318.276s/333.3total published17views/197321routes with collector parent~150MB/index_rows0; heavy index child still~2357MBRSS/cgroup3704MiB on that older segment. Caps remain3584/4096/768/192MiB; lower3072/3584/512/192unproved.
+- Stability heartbeat remains **PAUSED**, freshly verified. Old finite native-status observer finished00:57:53UTC:566records,0host_errors,1healthtimeout23:48:50 and4HTTP502s at00:08/00:38 deployment windows. Not a clean final-release run. No active observer existed before starting one finite2h read-only observer **spreadboard-stability-counts-20260906.service**, PID364378, started01:07:19UTC, endsabout03:07:19,RuntimeMax7500. Evidence `/opt/spreadboard/runtime/stability/20260906-counts/samples.jsonl`; firsthourhealth120s, then300s; host15s/free300s. Do not duplicate. No recurring automation reactivated.
+- BACKUP normal scheduled run now VERIFIED SUCCESS: started00:19:49UTC, terminal01:15:36UTC, MainPID0/ActiveStateinactive/Resultsuccess/ExecMainStatus0. Snapshote46b3d4c saved, retention policy7daily/4weekly/3monthly applied,28snapshots reported, final check said no errors were found. Script runs backup then forget--prune then check--read-data-subset1/20 with check=True, so successful exit includes all three stages. No manual backup/prune/config changes/process interruption this turn.46rateLimitExceeded errors were retried before success; approximately56minute duration and sharedOAuth/noTPSlimit/infinite service timeout remain reliability follow-ups, not a currently failed backup. A successful run does not prove future backend availability.
+- Outstanding: cold Funding navigation; further advanced-filter UI review; final-release30samples/hour±10%, ordinary heavy/history/navigation cycles, safe lower caps and clean48h; backup retry/duration reliability; bounded bidirectional UA comparison evidence. Do not declare complete from tests or one healthy sample.
+- Evidence: `output/stability-20260906/counts-{full-pytest,ruff,mutant,deploy}.txt`, `render-sort-{full-pytest,ruff,mutant,deploy}.txt`, `ua-reconciliation-0100.jsonl` (pre-rotation), `ua-reconciliation-0104.jsonl` (CAP added), `ui-verification-0109.json`, `release-0108.txt`, `native-status-finished.jsonl`. Deploy with own `output/stability-20260906/deploy_with_final_guard.sh app collector`, independently run protected_deploy_guard.py first and let helper repeat it immediately before recreation.
+
+- New010882d verification:2644tests passed171.41s; Ruff517known/zero new. Old-source reuse regression fails. History reader now calls bulk funding only when archive/funding-file generation changes or an actual settlement boundary expires; a test proves immediate eight-hour->two-hour schedule rotation and expiry without weakening exact-window completeness. Test data mutations preserved individually under output/history-reuse-test-data and restored fromHEAD. Cosmetic exact-page wording now says "1 exact token" and "25 venue routes on this page".
+- Bounded production profile (768MiB virtual limit/90s timeout, actual CAP persisted token, real futures-kind page+group HTML; does not include full HTTP wrapper or resident broad price index):before110routes,cold5.624s/warm.743s,446bulk funding reads;after110routes,cold4.660s/warm.974s,113/112reads. PeakRSS~456MiB unchanged. No general warm-latency or memory-saving claim. Initial all-kind220route profile is not a duplicate-market finding: it included both route kinds. Profile children terminated normally; their samples must not be treated as ordinary-load acceptance. Actual broad Funding navigation via site's link took12.46s toolwall, so full HTTP/navigation performance remains open.
+- Fresh UA01:16 futures sample:15/15exact identities found in fresh pair construction;14also in saved fundingcache, ICX OKX->WhiteBIT absent there but fresh pair exists. This is sampled source coverage, not exhaustive proof of all currently published exact UI rows. Fresh01:17 spot-futures sample:9supported pairs found,2Ourbit exclusions,4BinanceAlpha legs outside configured coverage. ONE has distinct USDT/USD/USDC market symbols, not duplicate exact keys. ASTEROID quote moved to-.0523%basis while retaining+.12%daily funding; ICX positive2.17%basis has negative1.59%daily funding and belongs on Spreads. Other sampled pairs have positive spread and funding. Reference values are not simultaneous executions.
+- Reverse comparison:actual ourFunding UI leaders include Kraken Futures T,HFT,S,ZIG,VELO,NIGHT,ICX, unlike the visible UAguest winners. UAexchange dropdown explicitly shows Kraken with premium crown, likewiseCoinbase/HTX/Phemex/XT/CoinEx; do not bypass paid access or claim these venues absent from UAoverall. Freshnative Kraken01:22:39 confirms funding velocity/mark normalization and cached35-second-old rates:Thourly-1.9984%vs-1.9943%cached,HFT+.55374%vs+.55451%,S+.50246%vs+.50214%,ZIG+.50518%vs+.50515%,VELO-.50072%vs-.50066%;NIGHT+.08279%,ICX+.07204%. These are projections on current notional, not settled24h or entry certification. Officialticker endpoint/docs used: https://docs.kraken.com/api-reference/market-data/get-tickers .
+- The existing finite observer remainsactivePID364378 untilabout03:07:19UTC; no new observer or recurring automation created this turn. Currentrelease segment begins01:19:21, so firsthour cadence crosses the observer's120s->300s transition and does not provide30samples/hour for this release. Keep acceptance unproven and do not duplicate the observer. Stability heartbeat remainspaused.
+- New evidence:history-reuse-{full-pytest,ruff,mutant,deploy}.txt;exact-futures-profile-before/after.jsonl;ua-funding-0116.json;ua-reconciliation-0116.jsonl;ua-spot-futures-0117.json;ua-spot-reconciliation-0117.jsonl;kraken-leaders-0123.jsonl;backup-terminal-evidence.json. Nativekrakenprobe and boundedprofile script are in /app/runtime/stability/20260905-coverage/ onproduction.
+
+
+- 02:09 snapshot-wide read-only audit (audit_funding_snapshot.py): singleopenfilemtime1788660256.660728/51247526bytes;5319tokenblocks/1061nonempty/222417routes. Independently calculated short-rate*24/interval minus long-rate*24/interval for ALL222417storedroutes;0arithmeticmismatches,0numericvalueswithoutcompleteleginputs,0duplicateexact(venue,type,symbol)legpairs,0selfpairs,0Ourbit. EmptyCounterfields in rawJSON meanzero. Peak210296KiB, childexit0. This proves storedgeneration arithmetic/exact-key uniqueness, not freshness/identity/nativeexchange truth/executability of everyroute. No extraobserver, no redeploy thisturn.
+- Actualb42e595UI nowverified: CAPSpreads128routes/99eligiblefundingpairs, populatedsidebar; broadFunding850uniquetokens/23931livevenueroutes andcurrent/historytabs. Broadnavigation10.66stoolwall versusprior3.38swarmexample; variabilityremains. Freshobservercapture containsstartuppriced0 followed197272; latestappanon2482110464/current2581385216/peak2583994368,collectoranon1532567552/current2167074816/peak3671539712,uptime280s. Bothhealthy/restart0/OOMkill0. Tooearlyandprofilechildrencontaminateordinarymemoryacceptance; no lowercaps.
+- Next useful correctness review: api_spreads.normalised_funding and _public_row still describe/flip a FUTURES-SPOT candidate to a mirror trade without changingitslegidentity; tests/test_release_audit.py:2458-era testencodesoldmirrorassumption. Modern catalog/live-update/Funding paths use short-minus-long and snapshotauditpasses. Trace whether oldfallbackisreachable beforechanging; preserve exact route/no substitution. This is a SOURCE concern, not a freshly provenlivepage mismatch. Separately finalfundingmax keyuses `or -inf` sozero-vs-negativeorderingmerits focusedtest. Do not treatpotentialissuesascurrentmarketfailures.
+- Evidence added: funding-snapshot-arithmetic.json, audit_funding_snapshot.py (remote /app/runtime/stability/20260905-coverage/), observer-current.jsonl. GoalACTIVE; thisturn made evidenceprogress, notblocked. Leave currentrelease running for sustainedacceptance while conductingread-only orlocalreviews. ExistingobserverPID364378 is solefiniteobserver andwasfreshlyactiveatturnstart.
+
+
+- 02:33update: sameprotecteddiscoveryPID407100freshlyaliveelapsed12:16,CPU8.1%,RSS385524KiB; guardexit12. No sync/build/recreation andno force. Candidatefb814c3nowincludesstringpoolmemoryworkpluspriorcorrectnessfixd216037. Allcombinedgates2671passed140.33s(exit0); Ruffnonew516remaining/unchanged517baseline. Newactual-storeallocationregressionfailsoldreader;25streamingtests pass. Testdata individuallypreservedstring-pool-test-data/restoredHEAD. Source/testworktreecleanapartfromuntrackedevidence.
+- Isolatedbounded10000-routesame-fileexperiment: baseline tracedretained44480753bytes/peak44768137; boundedcommonstringpool36765173/peak37062920;17.35%retainedreduction,1933pooledstrings. BothserializedSHA256 exactly6c6e3c8ba602e404947103c0ce90a25848402beb44138daf5bff776abc653e12. Tracedtimings8.0345s/7.6680s are notproductionlatencyorCPUproof. Filelive-route-index-1788661608608922403-ed7341d546.json; samplefirst10000rowsnotfullindex. No extrapolatedproductionmemoryclaim.
+- Implementationfb814c3: per-readbounded32768immutablevaluepool for16commonfields(venues,symbols,tokenlabels,types,quotes,URLs,etc),inadditiontoexistingfield-keypool. Unique route IDs unchanged, fullchecksumandnumericvalidation retained; mutable row/nesteddicts independent. Pooldiscardedpergeneration; testsverifycapandfreshpool, roundtripcontent,identitysharingandmutableisolation. Existingfundingcatalogstreamingreaderunchanged; no discardedroutes/tokens/capchanges.
+- Evidence:index-string-profile.jsonl/profile_index_strings.py(remote /app/runtime/stability/20260905-coverage/, terminatedexit0); string-pool-{pytest,ruff,mutant}.txt. Profileintervalisnotordinarymemoryacceptance. Bothcontainersfreshlyhealthy/restart0/OOMfalseat02:31; observernotduplicated. ContinuewaitingonexistingPID407100andfinalizer, thenguardeddeployfromcurrentcheckoutandverifydirectionprobe+normalindexreloadmemory. Do not add more speculativechangeswhileawaitingthealreadytestedrelease.
+
+## Historical acceptance ledger
+
+The entries below are chronological evidence, not current readiness.
 
 ## Fresh baseline
 
@@ -877,3 +969,308 @@ funding rebuild; investigate startup delay and measure compact route/leg storage
 plus complete cheap funding selection; validate representative memory headroom;
 only then reduce caps and start the clean 48-hour acceptance. No goal completion
 is claimed. The owner explicitly requested this Claude continuation note.
+
+## Codex continuation supersedes the handover — 19:55 UTC
+
+The owner subsequently chose continued Codex implementation. Current work is in
+`tmp/spreadboard-funding-publication`, branch
+`codex/funding-publication-cadence-20260905`. The historical 16:02 checkpoint
+above and its accepted hour belong to their stated revisions, not the current
+release. The current detailed continuation and UA discrepancy ledger is
+[`2026-09-05-ua-comparison.md`](2026-09-05-ua-comparison.md).
+
+Current production is `a6e82e1` / `4a7e5f96478f5fd0`, deployed 19:27:31 UTC.
+Full gate was 2,476 passing tests with Ruff 517. Full lossless funding candidates,
+independent ordinary catalogue publication, current-mark Kraken point/bulk
+agreement and exact-history scheduler fairness are deployed. All twelve views
+consumed a new settlement generation, with member-page values independently
+reproduced. Ourbit remains excluded. The updated comparison covers 45 visible
+UA exact-route references; premium Kraken/XT coverage is not verifiable from
+guest search absence. Token counts and directed route counts are distinguished.
+
+A further archive-memory correction is under test because the ordinary evidence
+worker still approached 2 GB RSS and the collector touched its ceiling. Safe
+lower limits, current-release one-hour acceptance, cold-request latency and the
+final clean 48-hour acceptance remain open. The Codex recurring automation is
+still paused. No trading, messages, paid access, cap increases or weaker
+accuracy/freshness guards are authorized by this work.
+
+## Release checkpoint — 21:47 UTC
+
+Production source **767e464 / 0e255781dba02cb5** started at **21:31:57 UTC** with
+both protected-worker guards clear and app/collector source parity. The final
+unmasked gate passed **2,507 tests**, Ruff **517 known / zero new**. Initial
+Funding legs, live captions, cadence, net carry, age and unavailable/recovery
+states now use coherent exact snapshots; historical ranks remain separate.
+The authenticated ONG page passed all 72 displayed-pair arithmetic checks and
+later rates changed coherently without a manual reload. Earlier published
+schedule, exact-token completeness, archive and history-priority fixes are live.
+
+The latest market audit still shows 22,417 unique keys, zero duplicates/Ourbit,
+2,171 futures and 3,962 spot token labels. All fourteen non-Ourbit references
+from the additional UA sample remain available in all checked sources after
+this release. The cumulative comparison has 59 observed exact identities;
+guest/premium restrictions prevent an exhaustive parity claim.
+
+Ordinary navigation advanced to the 21:38 generation across all twelve views;
+its worker reported 777.7 MiB peak RSS. The offline navigation baseline and
+fresh production facts are detailed in `2026-09-05-ua-comparison.md`. Initial
+post-release health/OOM/restart samples are clean, but cold latency, continued
+publication, complete worker memory/CPU cycles, safe lower caps, a current-
+release hour and the final clean 48h remain **open**. No caps/headroom guards
+were lowered. The finite read-only schedules sampler ends about 22:56; split
+at the 21:31:57 deployment. Codex stability heartbeat is confirmed paused.
+
+## Historical Codex checkpoint — 22:36 UTC
+
+Source **8a1ddeb / 0346ca22c4326ae9** is live in app and collector since
+**22:27:33 UTC**. Full final gate: **2,574 tests passed**, Ruff **517 known /
+zero new**. Both protected-worker guards were clear. The ordinary collector
+restored **632 previously missing funding keys** across WhiteBIT, BitMart,
+Coinbase International and Bitget. All **1,715 catalogue keys** and their
+published schedules were independently reconciled after normal rotation.
+Inactive native records were excluded, and obsolete WhiteBIT spot-shaped
+funding keys were removed. Details and limitations are in the UA comparison
+checkpoint above, including the operator-audit false-success correction.
+
+The fresh market catalogue still has 22,417 unique keys, no duplicates/Ourbit,
+2,171 futures and 3,962 spot token labels. Remaining BingX/XT feed differences
+and 12 extra Bitget cache keys need exact market-status/identity classification.
+Browser verification is currently blocked by the in-app client; do not claim
+new post-release UI proof. A fresh health read was 200 with 186,708 priced
+routes, but sampled `/free` latency was 18.098 seconds. Only 6.85 minutes of
+new-release host samples are available, with no OOM/restart. Caps unchanged.
+
+Goal remains ACTIVE. Still required: ordinary publication/history/heavy-worker
+cycles, current-release 30-sample hour, measured safe smaller caps and a clean
+48-hour run. The existing finite schedules observer ends around 22:56; split
+its data at this deployment. Stability heartbeat remains PAUSED. Prior
+watchdog/cap-persistence and two backup timer firings are already evidenced.
+
+
+## SpreadBoard stability and UA comparison — Codex continuation (2026-09-05, 23:18 UTC)
+
+- Goal ACTIVE. Owner chose continued Codex work over the former Claude handover.
+  Stability heartbeat `finish-spreadboard-stability-acceptance` is freshly
+  confirmed PAUSED. No trading, messages, spend, Pushover, cap/subscription
+  increases or weaker identity/freshness/exact-settlement gates.
+- Own checkout `tmp/spreadboard-funding-publication`, branch
+  `codex/funding-publication-cadence-20260905`. Leave separately dirty
+  `tmp/spreadboard-funding-current-truth` untouched.
+- LIVE source remains **8a1ddeb / 0346ca22c4326ae9**, started **22:27:33 UTC**.
+  App/collector were freshly healthy, restart 0 / OOM false at 23:18. Local
+  candidates **1b5a2bc** and **a90f108** are committed but NOT DEPLOYED.
+  Protected discovery PID285544 is still running; guard returns exit12.
+  Both discovery and snapshot-finalizer guards must clear before deploy and
+  immediately before recreation. Use the final-guard deploy helper, no force.
+- Latest full release gate: **2604 passed in 183.51s**, Ruff **517 known, zero
+  new**. Status-only gate was2585; its first run had three incomplete test
+  fixtures missing real settlement metadata, fixed without relaxing schedule
+  assertions. Old status code fails9 cases; old builder code fails17 cases.
+  Test-mutated tracked data is preserved under output and restored from HEAD.
+- 1b5a2bc: native status vetoes in discovery, catalogue and bulk funding. At
+  22:40, all128 BingX funding gaps were status25 despite true API flags; all65
+  XT gaps had tradeSwitch=false despite isOpenApi=true. Later active definitions
+  can reintroduce reopened contracts. Twelve Bitget funding-only extras were
+  absent from current native contract definitions; reject unknown/spot IDs and
+  prune their old malformed cache keys. Historical archives are not deleted.
+- a90f108: Hyperliquid's PARA-ANSEM catalogue contract was not joined to ANSEM.
+  Extend the existing per-market five-percent price-band alias gate across
+  single, bulk, Funding/navigation and summary paths. Keep exact symbols,
+  reject unpriced/disagreeing aliases, preserve native namespace for books,
+  current funding and legacy native history. Equivalent native/CCXT identities
+  dedupe; distinct builder contracts no longer collapse through shape fallback.
+- Frozen production candidate replay at23:14:48: ANSEM27 ->39 exact routes;
+  exact MEXC Futures -> Hyperliquid PARA-ANSEM route0 ->1, funding+0.43849008%
+  projected/day, schedules4h/1h, basis-1.7894%, no mirage/quote mismatch.
+  Both paths use one frozen book/funding cut. Probe peak129MiB. This is NOT
+  deployed page evidence or an execution recommendation.
+- Browser access recovered: authenticated Funding and UA tables were verified.
+  Ordinary new navigation published22:46 (generation1788648395656080032-35a3134d0203)
+  and a reloaded page consumed it. The older ranks label on an already-open
+  page and the long publication gap remain freshness/UI follow-up items.
+- UA funding sample at23:00:15 visible routes,12 exact matches in definitions,
+  live index, funding cache and fresh pair builder; two intentional Ourbit
+  exclusions; one ANSEM builder-alias gap now reproduced/fixed in candidate.
+  All12 matched routes funding-eligible; values reconcile after APR/365 daily
+  normalization with observation-time differences. Premium coverage prevents
+  exhaustive parity. Keep earlier59 observed identities as a historical count,
+  not an additive total with this overlapping sample.
+- HFT: native Kraken ticker at22:47 showed roughly-1.59% per hour, consistent
+  with the large current daily projection. Current Kraken/CEX long routes can
+  exceed the5% gap guard without exact rail-contract identity, so broad Funding
+  excludes them. Exact search showed a cooled retained route with fresh funding.
+  Preserve that blocker; it is not proof of current entry readiness. No gate
+  weakened to force comparator parity.
+- Delivered8a1ddeb coverage remains:632 formerly missing funding keys restored
+  across WhiteBIT/BitMart/Coinbase International/Bitget;1715 published schedules
+  independently checked after ordinary rotation. Last cardinality22:34:22417
+  distinct exact market keys, zero duplicates/Ourbit;2171 futures/3962 spot
+  labels. Owner's UA2534/4370 label counts are not directed pair counts.
+- Completed22:27:33–22:56:11 current-release segment:109 host samples, no OOM
+  kills/restarts; anon peaks app3572.8MiB/collector3566.0MiB and cgroup peaks
+ 3584/4096.3MiB. App/collector CPU averaged0.87/2.09 cores. Five health probes
+  200, priced186467–186707, max10.58s; five /free probes200, max18.098s.
+  Only20.2min endpoint span, NOT the30-sample hour or48h. Smaller caps unsafe.
+- Prior finite sampler finished successfully. New finite read-only observer
+  `spreadboard-stability-native-status-20260905.service` started22:57:52,
+  runs2h to00:57:52 UTC Sep6, runtime/stability/20260905-native-status/samples.jsonl.
+  Freshly active. Segment every deploy; do not create duplicate observers.
+- Next: wait for protected scan/finalizer completion; guarded deploy of both
+  tested commits, digest parity and ordinary cache/index/navigation/UI arrival.
+  Then investigate peak memory and cold/request latency, verify remaining exact
+  history/ranking cases, current-release30-sample hour, safe smaller caps and
+  clean48h. Prior watchdog drill/cap persistence and two backup timer firings
+  already passed. Rejected decoder experiment remains rejected.
+- Evidence: own `output/stability-20260905/` status/builder tests and mutants,
+  `gap-market-status.jsonl`, `ua-funding-2300-reconciliation.jsonl`,
+  `builder-alias-frozen-live-comparison.jsonl`, `hft-catalogue-gap.jsonl`,
+  `native-release-through2256-summary.json`, current guard and observer logs.
+
+
+## Continuation checkpoint — 2026-09-06 02:49 UTC
+
+The single deployment waiter PID59028/session78374 remains protected by discovery PID407100; no deployment observed through 02:48 UTC. Candidate source remains unchanged. The Claude continuation handover was rewritten around the correct collector-retention checkout and active waiter; stale instructions were archived as historical, superseded text.
+
+Saved ordinary-load baseline `output/stability-20260906/pre-held-release-observer.jsonl` and `pre-held-release-summary.json`: 02:35:02–02:48:45 UTC, 55 host samples, stable container IDs, both healthy with zero restarts and cgroup OOM kills. App sampled current peak3,758,043,136bytes (nearly its3,758,096,384-byte limit), anon3,346,644,992; collector current4,076,175,360, anon3,257,188,352. Mean sampled CPU app0.868cores/collector2.114cores. Process samples contained normal workers, no named diagnostic profiling child. This is a short pre-candidate baseline, not48h acceptance. All six endpoint probes200; priced counts198001/198126/198257 across generations4–5. Lower app caps remain unjustified.
+
+Next: observe the existing waiter; do not duplicate it or manually deploy. Verify actual source parity and direction/UI after success, then compare ordinary reload memory. Recurring automation stays paused.
+
+## SpreadBoard stability and UA comparison — Codex continuation (2026-09-06 03:10 UTC)
+
+- Goal ACTIVE. Deployment completed successfully at03:00:26UTC: live source **fb814c3** (includesd216037), app and collector both digest **3d0f3437aa390c87**. Guard returned no protected workers both before deployment and immediately before recreation. Single local waiter PID59028/session78374 is TERMINAL exit0; do not reuse it or deploy again. Last full gates2671passed140.33s; Ruff no new516against unchanged517baseline. No source changes after those gates.
+- Fresh deployed CAP regression probe passed: HTX futures long / Kraken spot short stays in that direction; long funding-.1458083340441289%/8h gives+.4374250021323867%/day, and normalised output agrees. Evidence: `output/stability-20260906/fallback-direction-after.json`, `held-release-deploy.txt`.
+- Actual signed-in UI: CAP127routes/99fundingpairs and populated sidebar. Broad Funding848tokens/23832livepairs, projected and exact-history labels intact. OPENAI first-page Binance→Hyperliquid and Bitget→Hyperliquid around6.1% indicative spread; Binance slightly negative funding correctly does not hide its positive spread. DD/identity/execution warnings remain. Final source-side provider probe confirms short symbolio:OAI, nativebooks~34s old, correct signs and research state. A separate isolated exact projection had no resident provider universe, so its missingHLrows was not a production-page defect. Internal unauthenticatedHTTP correctly401; browser directAPI navigation blocked; no access changes or credential extraction. UI and bounded provider probe supply the evidence instead.
+- Pre-release ordinary baseline02:35–02:48:45:55samples bothhealthy/restarts0/OOMkill0. Appcurrentpeak3,758,043,136bytes almostat3,758,096,384limit; anon3,346,644,992. Collectorcurrent4,076,175,360/anon3,257,188,352. CPUmeans.868/2.114cores. Named heavyworker overlap0in55samples (15ssampling cannot exclude brief unsampled overlap). Cachecountercapturelast15minbefore03:00: app204742indexrows/23666books; collector0rows/0indexrows/23675books. One row-cache entry is not one token object. Keep current caps until ordinary released-memory evidence supports a change.
+- Old finite observer `spreadboard-stability-counts-20260906.service` confirmed TERMINAL inactive/dead/MainPID0/Resultsuccess; no other stability units loaded. NEW SOLE read-only2h observer **spreadboard-stability-release-20260906.service**, PID**434080**, started**03:08:53UTC**, expectedend**05:08:53UTC** (7500sruntimebound). Fresh active/running; initial/free200. Data `/opt/spreadboard/runtime/stability/20260906-release/samples.jsonl`. Do not duplicate. Host15s, health120sfirsthour then300s, free300s. This is ordinary-load/cap-decision observation; it is not yet final48hacceptance. No more diagnosticchildprofiles inside its normal-load window without noting contamination.
+- Latest health at03:07~198733pricedroutes/205062total, ready/gen1. Both containersfreshlyhealthy/restarts0/OOMfalseafterdeployment. Ordinaryreloads, final30-samplecoverage, safeunderphysicalcaps, subsequentbackups andclean48hremainOPEN. Nextbackup timerpreviouslyverified06:20:56UTC; verifyfreshwhenneeded. Latestnormalbackupsuccess00:19:49–01:15:36; do notcountpastsuccessesacrosslaterfailures.
+- Cardinality/UAfindings unchanged: configuredtokens1987futures/3962spot versus user-reportedUA2534/4370, nothundredsthousandsoftokens; audited222417exactdirectedpairs0duplicates/Ourbit/arithmeticmismatches. Sampledguestcomparison explained configuredexchange/Ourbit/BinanceAlpha/premiumKrakendifferences; notexhaustivepaidparityortradecertification.
+- WorkingcheckoutONLY `/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-collector-retention`. Read `docs/operations/2026-09-06-acceptance-matrix.md` and updatedClaudehandover. Recurringautomation remainsPAUSED; noorders/transfers/messages/spend/capincreases/force/guardweakening/subagents.
+
+
+### Index-guard local timing — 2026-09-06 03:20 UTC
+
+The original per-row index-guard performance risk had no timing entry in the consolidated ledger. A local-only microbenchmark of30,000synthetic current rows (equal futures/futures, spot/futures, futures/spot), eight alternating measured passes, produced median73.18mswithguard versus2.47msempty-call baseline; incremental70.71ms. Soundrows passed and mismatchedspot sanitycase rejected. No guard/source modification and no production load. This is NOT production page-latency or full-classifier before/after proof. Evidence: `output/stability-20260906/benchmark_index_guard.py` and `index-guard-microbenchmark.json`. The sole production observer PID434080 remains active; no duplicate job or redeploy.
+
+
+### Ordinary generation and auxiliary headroom — 2026-09-06 03:23 UTC
+
+Fresh soleobserver PID434080 active. At12minutes:48hostsamples,6healthsamples, generations1and2, zeroendpointfailures/restarts/OOMkills. Appsampledanonpeak2,675,253,248bytes/current3,054,546,944; collector2,760,241,152/3,634,102,272. This proves another ordinaryindexgeneration was observed, not the finalhour/48hgate or a causal fullmemorysaving.
+
+Read-only auxiliarycgroups: accountinghealthy/restarts0/OOM0,uptime13,413s (~3.7h), peak365,543,424bytes (~348.6MiB), current350,773,248, cap805,306,368. That provides measuredheadroomtoward512MiB, but no capchanged pendingthecompletehostdecision. Caddyfreshdockerps/directcgroupcheck confirmsrunning, peak60,162,048bytes (~57.4MiB), current31,559,680, cap201,326,592. The generic app/collectorhealthinspector returnedpresentfalseforCaddy; thatwasnotrealcontainerabsence andisnotusedasitshealthproof. Evidence `auxiliary-container-headroom.json` and `caddy-headroom.json`. Source/config unchanged; no newobserverorproductionloadtest.
+
+
+### Reproducible log analysis and collector peak — 2026-09-06 03:31 UTC
+
+Local-only `output/stability-20260906/analyze_observation.py` now summarizes host/endpoint gaps, containerIDs, counters, CPU, coverage and duration; fullacceptance is explicitly outside its scope. Eight tests pass; three mutants (ignoreprice swing/minimumwindow/badlog) are caught. No production source changed; digest3d0f3437aa390c87. Evidence `test_observation_analysis.py`, `observation-analysis-mutants.json`, `release-observer-analysis.json`.
+
+Fresh21mincapture:83hostsamples,11healthsamples,generations1/2,0issues/endpointerrors/restarts/OOM,priced198532–199110. Appanonpeak2,675,253,248bytes/current3,054,546,944; collectoranon3,263,811,584/current4,287,291,392 (within~7.3MiBof4GiBlimit). Atcurrentpeak anononly2,594,611,200, so substantialreclaimablecache; do not equatecurrentwithunreclaimableRAM. Atanonpeak market_evidence_worker.pyRSS1,698,624KiB, parent544,256, protected discoveryPID435674RSS388,672, fastquote257,424 andbulk395,284. No forcedrestartornewprofileload. `release-collector-peaks.json` preservesprocesssample. SoleobserverPID434080 remainsactive untilabout05:08:53UTC. Capsunchanged; finalonehour/48hproofnotyetmet.
+
+
+### Additional UA guest comparison — 2026-09-06T03:37:47.872014+00:00
+
+CurrentUAguestFuturesleaderBMNRSTOCK WhiteBIT futures→Hyperliquid futures showed255.64%APR (~.70038%projected/day). Actualsigned-inSpreads exacttoken+WhiteBITfilter contains thatsame direction among12routes, displayed+.700%projected/day, -.4%indicativebasis, -.0373%/8h long and+.0245%/1h short. UA'searlier-.19%basis is a different-timequote, not anexecutioncomparison. Ourpageexplicitlymarks tokenidentityunresolved/DDpending and counts0eligibleFundingpairs. This is a presentresearchroute with stricterFundingeligibility, notmissingmarketcoverage. No identity/freshnessgate was weakened. Evidence `output/stability-20260906/ua-bmnrstock-ui-comparison.json`. Extends the boundedguestcomparison; do notsumoverlappingcases orclaimexhaustivepremiumparity. Normalbrowserrequests only; no diagnosticproductionchild, sourcechange or redeploy. SoleobserverPID434080confirmedliveatturnstart.
+
+
+### First full-hour gate and measured cap blocker — 2026-09-06 04:17 UTC
+
+The unchanged fb814c3release/digest3d0f3437aa390c87 now has31health/coverage samples spanning3613.52seconds across6generations. Pricedroutes198399–199902 versus198902baseline (range~.76%), allHTTP200, stablecontainerIDs, no restart/OOM/unhealthy or samplinggapflags. Host239samples/3623.47s. The explicit30-samples/hourcoveragegate is now proved for this release. Frozen `release-observer-0100.jsonl` and `release-observer-analysis-0100.json`; previoushalf-hour `*-0030` captures remain. Full48hstillNOTproved.
+
+Collectorcap3584MiB is contradicted by actual ordinaryanonpeak**4,053,626,880bytes (~3.775GiB)** at1788666964.823; current4,255,207,424, existing4GiBcap. No lowercaps. Atpeak parentRSS597652KiB, websocket_book_worker.py959232KiB(HWM1209296), live_route_index_worker.py1877432KiB, fastquote257228 andbulk292540+79404. Evidence `release-collector-anon-peak-0100.json`. Appanonpeak2,948,149,248bytes; current3,667,263,488. MeanCPUapp.808/collector2.113cores. /free max24.025s; /healthmax10.018s. AllHTTP200doesnotclaimfastlatency.
+
+Next boundedmemoryinvestigation: scripts/websocket_book_worker.py::_client and _ensure_markets key clients/locks by(venue,market_type), independently loading the sameCCXTadapter's completecatalogue forspot/futures. InstalledCCXT exposes `set_markets_from_exchange`, preserving markets/markets_by_id/symbols/ids/currencytablesandmarketHelperProps. InstalledGate/Bybitfetch_markets defaultstofullspot/swap/future/optiontypes, independentofdefaultType. This is a SOURCE hypothesis forredundantmetadata, NOT measuredsavingsandNOTimplemented. Profilepairedclientslocally beforechanging. Preserveclientoptions, selectedsymbol/type/contractmetadata, dynamicnew-marketrefresh, 160cap, booksand20sfreshness; do notprunemarketsbasedonlyonassumptions. No productionprofilechildinsidecurrentordinaryobserver. No newcandidate/deployqueued. Soleobserver434080continuesto05:08:53UTC; preserveprotecteddiscovery/finalizationworkers.
+
+## Catalogue memory investigation — 2026-09-06 04:29 UTC
+
+Local public CCXT paired-client experiments completed successfully; no application source, production configuration or limits changed. Sharing a loaded catalogue with the second client BEFORE its load avoided duplicate retained allocations:
+
+| Venue | Independent retained bytes | Shared retained bytes | Reduction | Markets per client |
+|---|---:|---:|---:|---:|
+| Gate | 135,790,373 | 67,941,390 | 67,848,983 (49.97%) | 6,579 |
+| Bybit | 56,943,048 | 29,223,666 | 27,719,382 (48.68%) | 3,703 |
+
+Both clients retained their spot/swap defaultType settings and identical symbol sets within each run. These are fresh public loads in separate local processes, not frozen identical responses or whole-worker/production RSS savings. Earlier independent Gate comparisons differed only in limits (examples show moving price bounds), not symbol/type/contractSize/precision. Earlier Bybit had 3,699 markets versus 3,703 later: catalogue coverage can change during operation and must not be frozen indefinitely.
+
+Evidence: `output/stability-20260906/ccxt-catalog-preload-comparison.json`, `ccxt-*-preload-*.json`, `ccxt-gate-sharing-detail.jsonl`, and the two `profile_ccxt_catalog_*.py` scripts. All local profile processes ended exit0. Sharing AFTER both clients already loaded retained extra memory because a completed async markets_loading task may still hold the original map; use the supported set_markets_from_exchange API before the second load, not undocumented task surgery.
+
+No fix is implemented yet. Before implementation, prove same adapter/configuration compatibility; serialize the initial shared load without merging book connections; preserve marketHelperProps and contract-size conversion; handle unknown newly selected symbols and catalogue refresh; test concurrent initial calls, failed load/retry, reset, and new listings. Do not generalize Gate/Bybit evidence to every venue. Keep all current 160-subscription, freshness and identity constraints.
+
+A competing source remains unmeasured: `_board_legs` runs ten board queries; `api_spreads._ROW_CACHE` retains the parsed route universe with a 900s TTL, while selection can repeat every 300s. `_desired_legs_cached` calls gc.collect but does not evict referenced rows. This is a source-level retention hypothesis, not a measured leak. Profile that cache locally before deciding whether catalogue sharing is enough; indiscriminate eviction can increase reparsing CPU/peak memory. Do not load profiling children on production during the sole ordinary observer.
+
+Fresh copied observation: 311 host samples over 4,719.86s; 34 coverage samples over 4,515.43s; 198,399–199,902 priced routes over six generations. No sampled OOM/restart/unhealthy, endpoint failure or cadence-gap flags. Collector anon peak remains 4,053,626,880 bytes, above the proposed 3.5GiB cap. App anon peak now 3,164,200,960 bytes. `/free` maximum 24.025s and health maximum 10.018s: all200 is not fast latency. Frozen evidence `release-observer-0120.jsonl` and `release-observer-analysis-0120.json` (approximately79min, filename is a checkpoint label).
+
+Sole observer PID434080 was freshly active; scheduled end05:08:53UTC. Do not duplicate/restart it. Live source remains fb814c3 / 3d0f3437aa390c87, no deployment queued; recurring automation remains paused. Goal remains active: memory/cap work, final48h and further normal backup firings remain outstanding.
+
+### Selection-cache candidate — 2026-09-06 04:38 UTC
+
+Candidate **2a8a03b**, NOT deployed. Websocket selection now releases parsed row/response caches after the full lane batch, on its selection thread, including failure. Selected keys, saved-position priority,160cap/300srefresh floor and website-process caches remain unchanged. Offline30,504-row snapshot replay freed107,822,100bytes through the actual cleanup API; this is not whole-worker RSS/cap evidence. Full suite2673passed150.14s exit0; Ruff no new516against517baseline exit0; both new cases fail cleanup-bypass mutant exit1. No source edits after gates. Source/test changes committed; test-generated tracked data restored.
+
+Live source remainsfb814c3 /3d0f3437aa390c87. Sole observer434080 freshly active, both protected workers clear at last probe; preserve until terminal around05:08:53UTC, then refresh guards before any deployment. No deploy waiter queued or cap changes. See collector-retention/docs/operations/2026-09-06-selection-cache-cleanup.md. Next: finish ordinary baseline, guarded release, compare normal RAM/CPU/coverage, continue necessary memory work andfinal48h/backups. Goalactive/recurringautomationpaused.
+
+### Sole selection release waiter — 2026-09-06 04:42 UTC
+
+One bounded local waiter is ACTIVE: tool session7455, `output/stability-20260906/wait_selection_release.py`, started04:41:36UTC with a2h bound. It holds the existing guarded-release-wait.lock, so no second release waiter can run. Fresh poll recorded observer_running PID434080. Do not restart/duplicate or edit candidate source while it waits. Previous waiter59028/session78374 remains terminal and is not reused.
+
+The waiter pins source digest74ceb35494a9c6d4 (candidate2a8a03b) and the deploy helper hash. It requires observer inactive/MainPID0/Resultsuccess AND a finished log marker, freezes and analyzes the complete baseline, requires one-hour coverage/no issue flags, checks both protected workers twice before calling the helper, which checks both again immediately before recreation. Failed/unknown observer completion stops without deployment; transient read errors retry within the bound. Seven completion predicate checks passed. Events `selection-release-wait.jsonl`; future deployment output `selection-release-deploy.txt`. No deployment has occurred at this checkpoint. Current live sourcefb814c3/digest3d0f3437aa390c87. Recurring automation remainsPAUSED.
+
+Next action: poll the SAME session7455, preserve observer434080 to terminal (~05:09UTC), inspect actual deploy exit/digests/endpoints if it ships, then measure normal candidate RAM/CPU/coverage. Do not treat waiter timeout as deployment or success. Goal remains active; safe caps, subsequent backups andfinal48h remain outstanding.
+
+## Additional Spot category comparison — 2026-09-06 04:46 UTC
+
+A fresh guest inspection of UA's Spot tab found15visible spot-to-spot leaders. The exact category is deliberately retired from SpreadBoard: `api_spreads.RETIRED_ROUTE_KINDS` contains SPOT andDEX-SPOT, and the2026-08-28continuous-stream handover explicitly preserves that product decision. Spot market books remain necessary for the retained futures/spot routes, charts, portfolio marks and token-price alerts.
+
+Nine displayed routes used Binance Alpha (SIREN,MITO,MOG,SPX,CHIP,ONDO,POWER,CFG,MORPHO), and two used Ourbit (SHROOM,BULLA). The remaining four were UPC MexcSpot→BitgetSpot, FONE GateSpot→MexcSpot, LUNC KucoinSpot→BinanceSpot andNPC MexcSpot→GateSpot. Their venues are configured but the route family is retired. These overlapping scope reasons explain the guest leaders; they do not establish a missing retained futures/funding route. Do not restore spot-to-spot permutations in response to this comparison or present them as funding opportunities.
+
+Actual signed-in SpreadBoard `/markets?q=UPC` showed no rows and only Futures-Futures/Futures-Spot/Futures-DEX/Allroutes categories, consistent with policy. This is a category-scope check, not a native token-identity, transfer-rail or executable-arbitrage audit. UA's Spot-Dex/Futures-Dex tabs were visibly premium-disabled; no bypass attempted. Evidence `output/stability-20260906/ua-spot-family-comparison.json`. This15-row sample is separate from earlier samples and must not be summed into an exhaustive coverage claim.
+
+## Combined memory candidate and sole waiter — 2026-09-06 04:59 UTC
+
+Candidate **f047ccf**, digest **bc8129844c597cd1**, includes selection cleanup2a8a03b. NOT deployed. It also pauses the optional websocket worker inside the heavy lock during post-discovery publication, with finally-resume. Actual peak/log correlation: discovery completed03:52:39, index finished03:56:28, collector anon peak03:56:04 had websocket959232KiB plus index1877432KiB. Ordinary publisher already paused it; this post-discovery call path did not. This is a measured overlap mechanism, not yet delivered RAM savings. Full2677tests passed146.44s exit0; Ruff no new516against517baseline exit0; four new publication-path cases fail a no-op pause mutant, and two selection cases fail cleanup bypass. No source edits after gates; test-generated tracked data restored.
+
+Former release waiter PID89383/session7455 was intentionally stopped before edits, terminal exit143, no deploy. Do not restart it. NEW SOLE bounded release waiter **PID93680 / tool session39465**, `output/stability-20260906/wait_combined_release.py`, started04:58:44UTC,2hbound. It holds the same singleton lock and pins the combined source/helper. Fresh poll confirms observer434080 still running; preserve to finished around05:09UTC. The waiter requires successful terminal service+finished log, baseline analysis/noissues/onehourcoverage, and both protected-worker guards before guarded recreation. Events `combined-release-wait.jsonl`; deployment output `combined-release-deploy.txt`; frozen baseline will be `release-observer-complete-before-combined.jsonl`. No combined deployment yet. Source must remain unchanged while it waits.
+
+Live remains **fb814c3 /3d0f3437aa390c87**. Latest99min baseline:391host/38coverage samples,9generations,198399–200503priced, no sampledOOM/restart/unhealthy/endpointfailures. `/free` max31.933s, so latency remains open independently of200status. Physical8,326,938,624bytes versus9,059,696,640declared limits. Collector target3.5GiB is295,530,496bytes below anon peak; hypothetical cleanup alone stillleaves187,708,396bytes beforemargin. App3GiB target has only57,024,512anon-only headroom. Do not lower caps or treat local allocation savings as production totals.
+
+Next: poll SAME session39465; inspect actual terminal deployment/digests/endpoints if it ships, then observe ordinary RAM/CPU/coverage across publication and evidence cycles. Keep goalactive until safe caps, final48h and further normal backup firings are proved. No trades/messages/spend/force/guardweakening; recurring automation remainsPAUSED. Detailed evidence: `docs/operations/2026-09-06-post-discovery-memory.md`.
+
+## Phase comparison preparation — 2026-09-06 05:05 UTC
+
+The frozen99minute baseline (`release-observer-99min.jsonl`) contains67index samples:10overlapped websocket and peaked at4,053,626,880collector anon bytes;57without websocket peaked at3,173,052,416.146evidence samples peaked at3,329,355,776. These are sampled phase maxima, not a causal/additive delivered saving, and15s sampling can miss brief overlap.
+
+Local `output/stability-20260906/compare_release_memory.py BEFORE AFTER` reports both original observation analyses, phase presence/counts/peaks and anon/CPU deltas. It never claims acceptance; unequal duration/coverage/phases/load require review. A same-log comparison produced zero deltas; five missing-counter/process checks passed and retained unknown values instead of zero savings. Candidate digestbc8129844c597cd1 remains unchanged. Sole combined waiter93680/session39465 remains active; no deployment at this checkpoint. Preserve it and observer434080 until terminal.
+
+## Deployed combined release — 2026-09-06 05:17 UTC
+
+**Live app and collector are f047ccf, digest bc8129844c597cd1.** Sole combined waiter PID93680/session39465 finished exit0 at05:11:54UTC. Both guards cleared; both container source digests matched; health200. Containers started05:10:48UTC and were freshly healthy, restarts0/OOMfalse. Do not restart the terminal waiter. Former selection-only waiter89383/session7455 remains terminal143. No deployment queued; caps unchanged; recurring automationPAUSED.
+
+The previous observer434080 finished successfully. Frozen `release-observer-complete-before-combined.jsonl`/analysis:474host samples over7197.82s,42coverage samples over6922.19s,11generations,198399–200890priced. No sampledOOM/restart/unhealthy or endpoint failures/gaps. Baseline appanon3,164,200,960/collectoranon4,053,626,880bytes; CPU.812/1.989cores. `/free`max31.933s, health10.018s. Successful kernel read05:09:35 has no OOM records since03:08:53. This proves the prior two-hour baseline, not current-release savings orfinal48h.
+
+**NEW SOLE observer:** `spreadboard-stability-combined-20260906.service`, PID**499780**, started**05:12:50UTC**,2h untilabout**07:12:50UTC**, RuntimeMax7500s. Prior running/activating stability units were checked absent before start. Output `/opt/spreadboard/runtime/stability/20260906-combined/samples.jsonl`. Freshactive/running. Same15shost/120shealthfirsthourthen300s/free300s/backup300s cadence. Do not duplicate; no diagnostic child load inside its ordinary window. Compare against frozen prior baseline using localcompare_release_memory.py. Post-release public health05:12:22 ready/gen1,201423priced/207748routes,1249tokens; not an hourproof.
+
+Actual signed-in UI after deployment: OPENAI36routes/25onfirstpage, GateFutures→HyperliquidFutures~6.6% indicative, nativeio:OAI in chart link, DD/depth labels intact, eligibleFunding0. Funding849tokens/23862livepairs, projected versus settled windows distinct. `combined-release-ui.json` and `combined-release-health.json`. Page-level observation does not prove every native route or execution readiness.
+
+The unusually large T current funding headline (~47.56%day projection) is corroborated by nativeKrakenPF_TUSD data: fundingRate-.00009182quote/base, mark.00462894917 implies-1.9836%/hour at current notional. Nativeinstrument tradeabletrue, contractSize1, baseT, `maxRelativeFundingRate=.02`, tradfifalse; the older generic0.5% cap cannot be applied to all instruments. fundingRatePrediction is a separate, much smaller positive value and must not silently replace current funding. Snapshot `kraken-t-native-funding.json`; no forecast/realized-return/entry claim. T settled windows remainedblank on the renderedpage.
+
+Full release gates2677passed146.44s exit0; Ruff no new516against517baseline exit0; six new behavioural cases fail bypass mutants. No source changes since gates. GoalACTIVE: measure ordinary after-release RAM/CPU/phase overlap and coverage, resolve latency/safe caps, subsequent normal backup firings and final48h. No trades/messages/spend/force/guardweakening.
+
+## Cache-revalidation candidate — 2026-09-06 05:30 UTC
+
+**Live remains f047ccf / bc8129844c597cd1. Candidate 7b7f904 / f276ddefc946e561 is NOT deployed.** No release waiter is queued. Sole production observer499780 (`spreadboard-stability-combined-20260906.service`) was freshly active; preserve it to about07:12:50UTC. Recurring automation staysPAUSED.
+
+Local reproduction found that a20second-old projection was discarded after its10second short TTL for an unchanged request key, but reused if only the price-file key changed. The candidate preserves that completed projection within the unchanged900second structural TTL. Foreground reuse still applies current values and requests revalidation; background lookup remains a miss without removing concurrent readers' fallback. A new background projection replaces membership. Empty payloads, structurally expired entries and incompatible structural/query signatures remain excluded, and serving does not extend the timestamp or cache bound.
+
+Final gates:2,682tests passed139.30s exit0; Ruff no new516against unchanged517baseline exit0;23focused tests pass. Original lookup source fails both new foreground cases and passes3safety/rebuild cases. One initial mutant run exposed test-fixture in-flight state leakage under a frozen clock; that local process was stopped and fixture isolation corrected before final gates. Generated tracked test data restored. No product source changes after gates. Evidence `same-key-full-final.txt`, `same-key-original-source-final.txt`, `exact-key-expiry-{before,after}.json`; details `docs/operations/2026-09-06-same-key-cache-revalidation.md`.
+
+This is a proven redundant-rebuild path, not causal attribution for the specific31.933s production request or delivered HTTP latency improvement. Retaining a fallback during rebuild can affect peak allocation; validate ordinary RAM/CPU/coverage and latency after any later release. Do not deploy during the current memory observation. Review its complete phase comparison and safe-cap decision first.
+
+First15minute deployed-memory log:60host/8coverage samples,201341–201569priced,2generations, no sampledOOM/restart/unhealthy/endpoint failures. Appanonpeak2,794,663,936bytes; collectoranon2,858,545,152. CPU.865/2.195cores; `/free`3samples max14.906s; health8samples max2.47s. Different duration/phase mix means these smaller peaks are NOT a proved saving versus the prior2h log. `combined-observer-current.jsonl`, `combined-observer-analysis.json`, `combined-comparison-initial.json`. Current release still needs full-hour/ordinary publication evidence, safe limits, further backups andfinal48h.
+
+## Post-release funding generation audit — 2026-09-06 05:37 UTC
+
+Copied the published complete funding file to the Mac and audited locally; no diagnostic child was added to the production observation. Embedded saved_at is **2026-09-06 05:26:40.191552UTC**;51,049,746bytes; SHA256`5bd9aa25ee230f1d7c5ea11d57d346b1d16e3de32dff94036e5c5b79f291e40e`. The local copy mtime is download time, not source generation time.
+
+**222,522 routes independently recomputed, zero arithmetic mismatches, duplicate exact leg pairs, self-pairs, Ourbit entries, missing complete rate inputs or unavailable funding.** Families:80,740Futures→Futures;70,868Futures→Spot;70,914Spot→Futures. No retired Spot→Spot family.5,328token blocks,1,062nonempty.94,538positive daily carry,94,489negative,33,495zero. The sign counts do not establish public eligibility: positive basis can coexist with negative carry, and required alternatives/history must not be blindly pruned. Counts are not unique-token counts or a reason to reintroduce retired lanes.
+
+Evidence `funding-snapshot-arithmetic-post-release.json`, `funding-copy-metadata.json`, and the copied `funding-replay/complete_funding_catalog.json`. This verifies the stored snapshot's arithmetic and exact identities as keys, not native economic identity, present quote freshness, settlement completeness or enterability. Current live overlays are separate. The audit completes fresh post-memory-release regression evidence without changing source or limits.
+
+Live remainsf047ccf; localcandidate7b7f904/2682tests remains undeployed, no waiter. Sole observer499780 freshly active at this turn's check; preserve until07:12:50UTC. First15min raw data/analysis now frozen as`combined-observer-0015.jsonl` and`combined-observer-analysis-0015.json`. Goalactive, heartbeatpaused; full ordinary memory/caps/latency/backups/48h gates remain.

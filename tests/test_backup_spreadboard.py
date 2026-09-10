@@ -165,3 +165,36 @@ def test_repository_probe_exhaustion_is_bounded_and_cannot_stage(monkeypatch, tm
         backup_spreadboard.run_backup()
     assert len(calls) == 3 and sleeps == [10, 30]
     assert "private-fixture-value" not in capsys.readouterr().out
+
+
+def test_actual_rclone_backup_paces_every_phase_and_allows_connection_window(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setenv("RESTIC_REPOSITORY", "rclone:fixture:backup")
+    monkeypatch.delenv("RCLONE_TPSLIMIT", raising=False)
+    monkeypatch.delenv("RCLONE_TPSLIMIT_BURST", raising=False)
+    monkeypatch.setattr(backup_spreadboard, "RUNTIME_DIR", tmp_path)
+    monkeypatch.setattr(backup_spreadboard, "_require_restic_configuration", lambda: None)
+    monkeypatch.setattr(backup_spreadboard, "stage_snapshot", lambda *a: [Path("evidence.json")])
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        assert command[-4:] == ["-o", "rclone.timeout=5m", "-o", "rclone.connections=2"]
+        assert kwargs["env"]["RCLONE_TPSLIMIT"] == "4"
+        assert kwargs["env"]["RCLONE_TPSLIMIT_BURST"] == "1"
+        if command[1] == "snapshots":
+            assert kwargs["timeout"] == 360
+        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+    monkeypatch.setattr(backup_spreadboard.subprocess, "run", run)
+    backup_spreadboard.run_backup()
+    assert [command[1] for command, _ in calls] == ["snapshots", "backup", "forget", "check"]
+
+
+def test_non_rclone_commands_and_operator_pacing_are_preserved(monkeypatch):
+    calls = []
+    monkeypatch.setattr(backup_spreadboard.subprocess, "run", lambda command, **kwargs: calls.append((command, kwargs)))
+    monkeypatch.setenv("RESTIC_REPOSITORY", "s3:fixture")
+    backup_spreadboard._run_restic(["restic", "snapshots"], timeout=120)
+    assert calls[-1] == (["restic", "snapshots"], {"timeout": 120, "check": False})
+    monkeypatch.setenv("RESTIC_REPOSITORY", "rclone:fixture:backup")
+    monkeypatch.setenv("RCLONE_TPSLIMIT", "1")
+    backup_spreadboard._run_restic(["restic", "check"])
+    assert calls[-1][1]["env"]["RCLONE_TPSLIMIT"] == "1"

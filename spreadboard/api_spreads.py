@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import datetime, timezone
+from operator import attrgetter
 from pathlib import Path
 import gc
 import json
@@ -57,7 +58,7 @@ def _row_value(row: Any, key: str, default: Any = None) -> Any:
 RETIRED_ROUTE_KINDS = frozenset({"SPOT", "DEX-SPOT"})
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class SpreadTerminalRow:
     token: str
     token_name: str | None
@@ -144,10 +145,13 @@ class SpreadTerminalRow:
     dex_route_plan: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        # asdict() recurses and deep-copies; every field on this row is a scalar
-        # or a flat list, so the recursion was 9.8s of pure waste per request at
-        # 34k rows. Callers treat the result as read-only.
-        return dict(self.__dict__)
+        # Keep the shallow public mapping contract without retaining a large
+        # per-instance attribute dictionary for every parsed route.
+        return dict(zip(_ROW_FIELD_NAMES, _ROW_FIELD_VALUES(self)))
+
+
+_ROW_FIELD_NAMES = tuple(field.name for field in fields(SpreadTerminalRow))
+_ROW_FIELD_VALUES = attrgetter(*_ROW_FIELD_NAMES)
 
 
 def load_public_route_index(
@@ -670,6 +674,7 @@ def load_spreads(
         key=lambda row: _sort_value(row, normalized_sort),
         reverse=normalized_direction == "desc",
     )
+    filtered = tokenized_assets.unique_stock_rows(filtered)
     groups = _group_rows(filtered)
     for group in groups:
         (group.get("routes") or []).sort(
@@ -759,7 +764,7 @@ def load_spreads(
         "route_kind_counts": dict(
             sorted(Counter(row.route_kind for row in public_universe).items())
         ),
-        "asset_class_counts": dict(Counter(row.asset_class for row in public_universe)),
+        "asset_class_counts": asset_token_counts(public_universe),
         "route_kind_token_counts": route_kind_token_counts,
         "lane_token_counts": release_lane_token_counts,
         "top_edges": _top_unique_groups(rankable_universe, metric="edge"),
@@ -827,6 +832,24 @@ def tokenized_route_rankable(row: "SpreadTerminalRow") -> bool:
     if getattr(row, "asset_class", "crypto") != "tokenized":
         return True
     return tokenized_assets.classify(row.to_dict()).get("status") == "verified"
+
+
+def public_asset_class(row: Any) -> str:
+    value = _row_value(row, "asset_class")
+    guard = _row_value(row, "tokenized_guard")
+    if not value and isinstance(guard, dict):
+        value = guard.get("asset_class")
+    return str(value or "crypto").casefold()
+
+
+def asset_token_counts(rows: Any) -> dict[str, int]:
+    """Asset filters count distinct tokens, not their venue permutations."""
+    tokens: dict[str, set[str]] = {}
+    for row in rows:
+        token = str(_row_value(row, "token") or "").strip().upper()
+        if token:
+            tokens.setdefault(public_asset_class(row), set()).add(token)
+    return {kind: len(values) for kind, values in tokens.items()}
 
 
 def _release_lane_token_counts(
@@ -1355,7 +1378,7 @@ def _fast_quote_updates_for(
             for item in payload.get("rows") or []:
                 if not isinstance(item, dict):
                     continue
-                raw = _project_route_funding(_mirror_if_spot_sale_required(item))
+                raw = _project_route_funding(item)
                 notes = raw.get("notes") if isinstance(raw.get("notes"), dict) else {}
                 inputs = (
                     notes.get("route_inputs")
@@ -1532,6 +1555,19 @@ def _with_retained_books(
             else:
                 _LAST_GOOD_ROUTE_BOOKS[key] = book
     return merged
+
+
+def release_query_caches() -> None:
+    """Release parsed rows and responses after a background selection batch.
+
+    The web process benefits from retaining these between requests. A separate
+    subscription worker only needs its selected leg keys between batches, so
+    it can explicitly release the query objects after all lanes finish.
+    Existing callers' returned rows and payloads remain valid.
+    """
+    with _SNAPSHOT_CACHE_LOCK:
+        _ROW_CACHE.clear()
+        _RESULT_CACHE.clear()
 
 
 def expire_idle_row_cache(*, now: float | None = None) -> int:
@@ -2755,21 +2791,10 @@ def _project_route_funding(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _mirror_if_spot_sale_required(raw: dict[str, Any]) -> dict[str, Any]:
-    """Re-orient a route that could only be taken the other way round.
+    """Legacy explicit reverse-route conversion; never use during ingestion.
 
-    A route with the futures leg long and the spot leg short cannot be taken as
-    written -- it sells spot you do not own. The board handled that by negating
-    the carry while still printing the legs in the original order, so a row read
-    "long Gate Futures, short Gate Spot" while its +0.29%/day described the
-    opposite trade. Anyone following the label put on the losing side.
-
-    Worse, the spread was never re-derived. GUA showed 192.29% buying BitMart
-    futures at 0.05186 and selling Gate spot at 0.15158; the trade you can
-    actually do -- buy Gate spot at 0.15491, short BitMart futures at 0.05186 --
-    is -66.5%. The headline edge only existed in the direction nobody can trade.
-
-    Mirroring here, before the row is built, means the label, the spread, the
-    carry and the ranking all describe the same position.
+    Reversing the legs constructs a different candidate. Public source rows
+    must retain their exact identity and disclose spot inventory/borrow needs.
     """
     if str(raw.get("short_market_type") or "") != "Spot":
         return raw
@@ -2842,7 +2867,7 @@ def _row_from_api(
     rails: dict[str, dict[str, Any]] | None = None,
     live_funding: dict[str, dict[str, Any]] | None = None,
 ) -> SpreadTerminalRow:
-    raw = _apply_live_funding(_mirror_if_spot_sale_required(raw), live_funding)
+    raw = _apply_live_funding(raw, live_funding)
     raw = _project_route_funding(raw)
     token = str(raw.get("token") or "").upper().strip()
     long_venue = _str_or_none(raw.get("long_venue"))
@@ -2927,6 +2952,9 @@ def _row_from_api(
         {
             "token": token,
             "token_name": token_metadata.token_name(token, metadata or {}),
+            "asset_class": raw.get("asset_class"),
+            "long_asset_class": long_identity.get("asset_class"),
+            "short_asset_class": short_identity.get("asset_class"),
             "long_market_symbol": long_market_symbol,
             "short_market_symbol": short_market_symbol,
         }
@@ -3332,12 +3360,12 @@ def _filter_rows(rows: list[SpreadTerminalRow], **filters: Any) -> list[SpreadTe
     return output
 
 
-def _route_volume_24h(row: SpreadTerminalRow) -> float | None:
+def _route_volume_24h(row: Any) -> float | None:
     values = [
         value
         for value in (
-            _float_or_none(row.long_volume_24h_usd),
-            _float_or_none(row.short_volume_24h_usd),
+            _float_or_none(_row_value(row, "long_volume_24h_usd")),
+            _float_or_none(_row_value(row, "short_volume_24h_usd")),
         )
         if value is not None and value >= 0
     ]
@@ -3583,10 +3611,8 @@ def quote_basis_mismatch(row: "SpreadTerminalRow") -> bool:
 # a transfer rail.
 TRANSFER_ROUTE_KINDS = frozenset({"SPOT", "DEX-SPOT"})
 
-# Spot cannot be shorted. In a futures/spot pair the futures leg is the one that
-# gets shorted and the spot leg is simply held long. So a route printed as "long
-# futures / short spot" is not a fresh entry at all -- it requires spot inventory
-# you already hold. That is a stronger constraint than any deposit rail.
+# Selling the spot leg requires inventory or verified borrow support. Preserve
+# that candidate's direction; a spot-long/futures-short mirror is another route.
 SHORT_SPOT_ROUTE_KINDS = frozenset({"FUTURES-SPOT"})
 
 
@@ -3976,6 +4002,7 @@ def _top_unique_groups(rows: list[SpreadTerminalRow], *, metric: str) -> list[di
     # the top 8 afterwards meant doing that for the whole universe three times a
     # request -- 17s at 12k rows. Rank tokens on the cheap row-level metric
     # first, then group just those.
+    candidates = tokenized_assets.unique_stock_rows(candidates)
     best_by_token: dict[str, float] = {}
     for row in candidates:
         value = (
@@ -4055,7 +4082,7 @@ def attach_funding_history(
 
 def _group_rows(rows: list[SpreadTerminalRow]) -> list[dict[str, Any]]:
     grouped: dict[str, list[SpreadTerminalRow]] = {}
-    for row in rows:
+    for row in tokenized_assets.unique_stock_rows(rows):
         grouped.setdefault(row.token, []).append(row)
     output: list[dict[str, Any]] = []
     for token, token_rows in grouped.items():
@@ -4191,7 +4218,7 @@ def _group_sort_value(group: dict[str, Any], sort_by: str) -> Any:
     if sort_by == "age":
         return _float_or_none(group.get("age_min")) or 999999999.0
     if sort_by == "depth":
-        return max((_float_or_none(row.get("depth_usd")) or 0.0 for row in routes), default=0.0)
+        return max((_route_volume_24h(row) or 0.0 for row in routes), default=0.0)
     if sort_by == "edge":
         # Guarded groups rank on their real edge, badged, rather than being
         # forced to the tail.
@@ -4227,7 +4254,7 @@ def _route_dict_sort_value(row: dict[str, Any], sort_by: str) -> Any:
         funding = _effective_funding_24h_dict(row)
         return abs(funding) if funding is not None else -999999.0
     if sort_by == "depth":
-        return _float_or_none(row.get("depth_usd")) or 0.0
+        return _route_volume_24h(row) or 0.0
     if sort_by == "age":
         return _float_or_none(row.get("age_min")) or 999999999.0
     if sort_by == "token":
@@ -4304,9 +4331,8 @@ def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | 
     """Net carry as (percent per day, APR percent), both legs on a common basis.
 
     A delta-neutral position pays funding on the long leg and receives it on the
-    short leg, so the net is short-minus-long. For routes that would require
-    selling spot you do not own, the executable trade is the mirror image (hold
-    spot long, short the futures), so the carry flips sign with it.
+    short leg, so the net is short-minus-long. A spot sale requires inventory
+    or borrow support; it does not change the direction of either funding leg.
 
     This is the live ``Now`` value, so current leg rates win. Settled 24h is a
     different, historical measurement exposed separately by the Funding radar;
@@ -4341,8 +4367,6 @@ def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | 
             net_daily = _float_or_none(getattr(row, "funding_daily_pct", None))
     if net_daily is None:
         return None, None
-    if requires_existing_spot_inventory(row):
-        net_daily = -net_daily
     return net_daily, net_daily * 365.0
 
 
@@ -4414,7 +4438,7 @@ def _public_row(row: SpreadTerminalRow) -> dict[str, Any]:
         else None
     )
     payload["executable_direction"] = (
-        "hold spot long, short futures"
+        "long the futures leg; short spot requires inventory or borrow"
         if requires_existing_spot_inventory(row)
         else "long the buy leg, short the sell leg"
     )
@@ -4467,7 +4491,7 @@ def _sort_value(row: SpreadTerminalRow, sort_by: str) -> Any:
         funding = _effective_funding_24h(row)
         return abs(funding) if funding is not None else -999999.0
     if sort_by == "depth":
-        return _float_or_none(row.depth_usd) or 0.0
+        return _route_volume_24h(row) or 0.0
     if sort_by == "age":
         return row.age_min if row.age_min is not None else 999999999.0
     if sort_by == "token":
@@ -4506,9 +4530,8 @@ def _entrance_spread_dict(row: dict[str, Any]) -> float:
 
 
 # Selection, sorting and display must all read the SAME number. The raw
-# funding_24h_pct fields carry the route as printed, without the spot-inventory
-# direction flip that normalised_funding applies, so a FUTURES-SPOT row used to
-# publish best_funding_apr_pct and best_funding_24h_pct with opposite signs.
+# current leg rates and their intervals describe the exact printed direction;
+# a spot-inventory requirement must never change the sign of that route.
 def _effective_funding_24h(row: SpreadTerminalRow) -> float | None:
     return normalised_funding(row)[0]
 

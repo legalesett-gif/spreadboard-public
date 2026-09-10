@@ -13,8 +13,9 @@
 # earlier -- health was 200 and the restart counts were flat, and neither says
 # anything about which code came back up. The source digest at the end does.
 #
+#   ./scripts/deploy_production.sh app                # does not touch the scan
 #   ./scripts/deploy_production.sh app collector      # refuses during a scan
-#   ./scripts/deploy_production.sh --force app        # deliberate, scan is lost
+#   ./scripts/deploy_production.sh --force collector  # deliberate, scan is lost
 #
 set -euo pipefail
 
@@ -45,29 +46,29 @@ scan_running() {
 
 restarts_before=$(ssh_do 'docker inspect app-app-1 app-collector-1 --format "{{.RestartCount}}" | paste -sd, -')
 
-# Only the collector holds a scan. `docker compose up -d --no-deps` below
-# restarts exactly the named services, so an app-only deploy cannot touch it --
-# refusing those too taught the habit of reaching for --force, which is how a
-# deploy that really does discard a scan eventually slips through.
-COLLECTOR_TARGETED=0
+COLLECTOR_REQUESTED=0
 for service in "${SERVICES[@]}"; do
-  [[ "$service" == "collector" ]] && COLLECTOR_TARGETED=1
+  if [[ "$service" == "collector" ]]; then
+    COLLECTOR_REQUESTED=1
+    break
+  fi
 done
 
-RUNNING=0
-[[ $COLLECTOR_TARGETED -eq 1 ]] && RUNNING=$(scan_running)
-if [[ "$RUNNING" != "0" && "$RUNNING" != "" ]]; then
-  if [[ $FORCE -eq 0 ]]; then
-    cat >&2 <<MSG
+if [[ $COLLECTOR_REQUESTED -eq 1 ]]; then
+  RUNNING=$(scan_running)
+  if [[ "$RUNNING" != "0" && "$RUNNING" != "" ]]; then
+    if [[ $FORCE -eq 0 ]]; then
+      cat >&2 <<MSG
 REFUSING: a discovery scan is in flight ($RUNNING worker(s)).
 
 Restarting the collector now destroys 45-60 minutes of scan work and nothing
 structural advances until another completes. Wait for it to finish, or re-run
 with --force if losing it is the intended trade.
 MSG
-    exit 1
+      exit 1
+    fi
+    echo "WARNING: --force given; discarding an in-flight discovery scan." >&2
   fi
-  echo "WARNING: --force given; discarding an in-flight discovery scan." >&2
 fi
 
 echo "==> syncing source"

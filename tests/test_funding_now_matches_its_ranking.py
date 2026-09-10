@@ -146,7 +146,7 @@ def test_token_funding_alert_uses_the_best_current_projection() -> None:
     assert metrics["ONG"]["token_funding_24h_pct"] == 3.3012
 
 
-def test_settled_only_fallback_is_never_labelled_live() -> None:
+def test_settled_only_fallback_is_never_substituted_for_live_carry() -> None:
     route = _route(
         funding_daily_pct=None,
         funding_projected_24h_pct=None,
@@ -158,7 +158,7 @@ def test_settled_only_fallback_is_never_labelled_live() -> None:
 
     assert "+2.371%" not in html
     assert "funding unavailable" in html
-    assert "data-live-funding" not in html
+    assert "<strong data-live-funding>—</strong>" in html
 
 
 def test_markets_child_row_shows_the_same_live_value_as_its_group() -> None:
@@ -218,3 +218,30 @@ def test_funding_recovers_quickly_only_while_its_generation_is_warming(
 
     assert f'class="funding-page terminal-page" data-refresh="{seconds}"' in html
     assert "location.reload()" not in html
+
+
+@pytest.mark.parametrize("current,projected,expected", [(-1.25, -2.0, -1.25), (0.0, 2.0, 0.0), (None, -2.0, -2.0), (None, None, None)])
+def test_net_edge_initial_current_value_never_substitutes_settled_history(current, projected, expected):
+    import html as html_module
+    import json
+    import re
+
+    row = _route(funding_daily_pct=current, funding_projected_24h_pct=projected, funding_24h_pct=4.0)
+    rendered = server.render_net_edge_button(row)
+    payload = json.loads(html_module.unescape(re.search(r'data-net-edge="([^"]+)"', rendered).group(1)))
+    assert payload["current_funding_24h_pct"] == expected
+    assert payload["route_key"] == row["route_key"]
+    assert payload["windows"] == server.venue_funding_history.route_windows(row)
+
+
+@pytest.mark.parametrize("current", [-1.25, None])
+def test_spreads_group_current_headline_ignores_legacy_settlement_basis_and_keeps_recovery_hook(current):
+    group = _group(funding_daily_pct=current, funding_projected_24h_pct=None, funding_24h_source="settled_public_events")
+    group["best_funding_24h_basis"] = "settled_public_events"
+    rendered = server.render_market_token_group(group).split("</summary>", 1)[0]
+    assert '<strong data-live-funding>' in rendered
+    assert 'data-live-funding-basis' in rendered
+    assert 'data-live-funding-direction' in rendered
+    assert 'settled 24h' not in rendered
+    assert ('24h at current rate' if current is not None else 'funding unavailable') in rendered
+    assert ('-1.250%' if current is not None else '<strong data-live-funding>—</strong>') in rendered

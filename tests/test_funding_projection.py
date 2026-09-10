@@ -174,3 +174,58 @@ def test_one_live_futures_leg_cannot_stand_in_for_a_missing_second_leg() -> None
     )
 
     assert api_spreads.normalised_funding(row) == (None, None)
+
+
+@pytest.mark.parametrize('venue,kind', [('Gate','FUTURES-SPOT'), ('OKX DEX','DEX-FUTURES')])
+@pytest.mark.parametrize('rate', [-.1, .1])
+def test_source_ingestion_and_public_row_preserve_spot_short_direction(venue, kind, rate):
+    import time
+    raw = {
+        'token':'AAA', 'long_venue':'HTX', 'short_venue':venue,
+        'long_market_type':'Futures', 'short_market_type':'Spot',
+        'long_market_symbol':'AAA/USDT:USDT', 'short_market_symbol':'AAA/USDT',
+        'quote_ts_us':int(time.time()*1000000), 'executable_spread_pct':2.,
+        'long_price':1., 'short_price':1.02,
+        'notes':{'route_inputs':{
+            'long':{'symbol':'AAA/USDT:USDT','ask':1.,'bid':.999},
+            'short':{'symbol':'AAA/USDT','bid':1.02,'ask':1.021},
+        }},
+    }
+    row=api_spreads._row_from_api(raw,bucket='executable',now=time.time(),live_funding={
+        'HTX|AAA/USDT:USDT':{'rate_pct':rate,'interval_hours':8.,'age_seconds':0.},
+    })
+    result=api_spreads._public_row(row)
+    assert row.route_kind == kind
+    assert (result['long_venue'], result['short_venue']) == ('HTX',venue)
+    assert (result['long_market_type'],result['short_market_type']) == ('Futures','Spot')
+    assert result['funding_daily_pct'] == pytest.approx(-rate*3)
+    assert result['funding_apr_pct'] == pytest.approx(-rate*3*365)
+    assert result['executable_spread_pct'] == pytest.approx(2.)
+    assert result['requires_spot_inventory'] is True
+    assert 'inventory or borrow' in result['executable_direction']
+
+
+@pytest.mark.parametrize('venue', ['Gate', 'OKX DEX'])
+def test_fast_quote_source_preserves_exact_spot_short_route(tmp_path, monkeypatch, venue):
+    import json
+    import time
+    raw = {
+        'route_key':'AAA-exact', 'token':'AAA',
+        'long_venue':'HTX', 'long_market_type':'Futures', 'long_market_symbol':'AAA/USDT:USDT',
+        'short_venue':venue, 'short_market_type':'Spot', 'short_market_symbol':'AAA/USDT',
+        'quote_ts_us':int(time.time()*1000000), 'executable_spread_pct':2.,
+        'long_ask':1., 'short_bid':1.02,
+        'notes':{'route_inputs':{
+            'long':{'symbol':'AAA/USDT:USDT','current_funding_pct':-.1,'funding_interval_hours':8.},
+            'short':{'symbol':'AAA/USDT'},
+        }},
+    }
+    path=tmp_path/'fast.json'
+    path.write_text(json.dumps({'rows':[raw]}))
+    monkeypatch.setattr(api_spreads, '_fast_quote_delta_path', lambda p:path)
+    monkeypatch.setattr(api_spreads, '_FAST_ROUTE_UPDATE_CACHE', {})
+    updates=api_spreads._fast_quote_updates_for([raw])
+    assert set(updates) == {'AAA-exact'}
+    assert updates['AAA-exact'][0] == 2.
+    assert updates['AAA-exact'][1] == pytest.approx(.3)
+    assert updates['AAA-exact'][4:6] == (1.,1.02)

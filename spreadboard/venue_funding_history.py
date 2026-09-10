@@ -48,21 +48,43 @@ CLASSIFIED_STATUSES = frozenset(
 RETRYABLE_STATUSES = frozenset({"api_error", "client_unavailable"})
 
 WINDOW_DAYS: tuple[int, ...] = (1, 7, 30)
-#: A displayed realised window must be supported by a nearly complete sequence
+#: A displayed realised window must be supported by a complete sequence
 #: of exact settlement events.  A start/end span alone is insufficient: two
 #: rows thirty days apart do not make a truthful thirty-day return.
-MIN_EVENT_COVERAGE = 0.90
+MIN_EVENT_COVERAGE = 1.0
 MAX_BOUNDARY_INTERVALS = 1.5
-MAX_INTERNAL_GAP_INTERVALS = 2.0
+MAX_INTERNAL_GAP_INTERVALS = 1.5
 HISTORY_PAGE_SIZE = 100
 PRIORITY_HISTORY_PAGES = 10
+
+
+def _recorded_completeness_failure(detail: dict[str, Any]) -> str | None:
+    """Recheck old cached evidence; a prior complete flag cannot excuse gaps."""
+    try:
+        if detail.get("expected_event_count") is not None:
+            expected = float(detail["expected_event_count"])
+            count = float(detail.get("event_count") or 0)
+            if not math.isfinite(expected) or not math.isfinite(count) or expected <= 0:
+                return "settlement_cadence_unresolved"
+            if count < expected:
+                return "insufficient_event_coverage"
+        if detail.get("max_gap_hours") is not None:
+            gap = float(detail["max_gap_hours"])
+            interval = float(detail.get("inferred_interval_hours") or 0)
+            if not math.isfinite(gap) or not math.isfinite(interval) or interval <= 0:
+                return "settlement_cadence_unresolved"
+            if gap > interval * MAX_INTERNAL_GAP_INTERVALS:
+                return "internal_settlement_gap"
+    except (TypeError, ValueError, OverflowError):
+        return "settlement_cadence_unresolved"
+    return None
 
 
 def _window_expiry_ms(status: dict[str, Any] | None, label: str) -> int | None:
     """Return the first instant when a cached rolling total stops being exact."""
 
     detail = ((status or {}).get("window_details") or {}).get(label) or {}
-    if not detail.get("complete"):
+    if not detail.get("complete") or _recorded_completeness_failure(detail):
         return None
     try:
         latest_event_at = int(detail["latest_event_at"])
@@ -699,6 +721,7 @@ def _priority_refresh_due(
     values: dict[str, float | None] | None,
     *,
     now_ms: int,
+    live_leg: dict[str, Any] | None = None,
 ) -> bool:
     """Whether a subscriber-visible leg needs another provider check now."""
 
@@ -713,6 +736,21 @@ def _priority_refresh_due(
         return True
     if outcome != "ok":
         return False
+    if live_leg:
+        # The public reader can expire a total before the old inferred
+        # cadence when a venue switches to more frequent settlements. Queue
+        # that same missing settlement now, rather than leaving the visible
+        # cell blank until the old schedule says it is due.
+        current, _expiry = _current_leg_windows(
+            values, status, now_ms=now_ms, live_leg=live_leg,
+        )
+        if any(
+            (values or {}).get(label) is not None
+            and _window_expiry_ms(status, label) is not None
+            and current.get(label) is None
+            for label in ("1d", "7d", "30d")
+        ):
+            return True
     expiries = [
         expiry
         for label in ("1d", "7d", "30d")
@@ -904,6 +942,11 @@ def build(
     )
     rotated_priorities = priorities[priority_start:] + priorities[:priority_start]
     now_ms = int(time.time() * 1000)
+    live_legs: dict[str, dict[str, Any]] = {}
+    if path.resolve() == Path(DEFAULT_CACHE_PATH).resolve():
+        from spreadboard import bulk_quotes
+
+        live_legs = bulk_quotes.load_funding()
     due_priorities = [
         item
         for item in rotated_priorities
@@ -911,6 +954,7 @@ def build(
             leg_status.get(f"{item[0]}|{item[1]}"),
             windows.get(f"{item[0]}|{item[1]}"),
             now_ms=now_ms,
+            live_leg=live_legs.get(f"{item[0]}|{item[1]}"),
         )
     ]
     retryable_or_pending = [
@@ -1282,11 +1326,15 @@ def load(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, dict[str, 
         if _CACHE.get("funding_stamp") != funding_stamp:
             _CACHE["funding_stamp"] = funding_stamp
             _CACHE["current_until_ms"] = None
-        live_legs = bulk_quotes.load_funding()
     if (
         _CACHE.get("current_until_ms") is None
         or now_ms >= int(_CACHE["current_until_ms"])
     ):
+        # File rotation above invalidates the cached schedule, and the clock
+        # expires it at settlement. Repeated route renderers inside that same
+        # generation need no new all-market funding snapshot.
+        if path.resolve() == Path(DEFAULT_CACHE_PATH).resolve():
+            live_legs = bulk_quotes.load_funding()
         current_legs: dict[str, dict[str, float | None]] = {}
         expiries: list[int] = []
         for key, values in _CACHE["legs"].items():
@@ -1326,7 +1374,9 @@ def route_history_status(route: dict[str, Any]) -> dict[str, Any]:
         for label in ("1d", "7d", "30d"):
             if raw_values.get(label) is not None and values.get(label) is None:
                 details.setdefault(label, {})["complete"] = False
-                details[label]["incomplete_reason"] = "settlement_refresh_overdue"
+                details[label]["incomplete_reason"] = (
+                    _recorded_completeness_failure(details[label]) or "settlement_refresh_overdue"
+                )
         status.update(
             {
                 "status": status.get("status") or ("collecting" if key not in _CACHE["legs"] else "partial"),

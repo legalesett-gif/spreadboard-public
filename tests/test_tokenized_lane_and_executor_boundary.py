@@ -66,7 +66,7 @@ def test_tokenized_ticker_is_visible_but_blocked_without_registry(tmp_path):
     assert "tokenized_registry_missing" in guard["reasons"]
 
 
-def test_complete_registry_verifies_evidence_but_never_enables_execution(tmp_path):
+def test_venue_only_registry_cannot_verify_unspecified_instruments(tmp_path):
     registry = tmp_path / "registry.json"
     registry.write_text(
         json.dumps(
@@ -97,8 +97,9 @@ def test_complete_registry_verifies_evidence_but_never_enables_execution(tmp_pat
         path=registry,
     )
 
-    assert guard["status"] == "verified"
-    assert guard["reasons"] == []
+    assert guard["status"] == "blocked"
+    assert "long_market_mapping_unresolved" in guard["reasons"]
+    assert "short_market_mapping_unresolved" in guard["reasons"]
     assert guard["execution_policy"] == "research_only"
 
 

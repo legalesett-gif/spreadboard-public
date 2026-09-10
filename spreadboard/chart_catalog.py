@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from spreadarb.public_clients import configure_public_market_client
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import base64
@@ -18,6 +20,7 @@ from urllib.request import Request, urlopen
 from spreadboard.fast_quotes import NATIVE_FUTURES_VENUES, NATIVE_SPOT_VENUES, VENUE_IDS
 from spreadboard import route_taxonomy
 from spreadarb.venue_policy import opportunity_venue_enabled
+from spreadarb.market_status import native_market_asset_class, public_market_definition
 from spreadarb.api_discovery.identity import load_watchlist
 
 
@@ -25,6 +28,25 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_PATH = RUNTIME_DIR / "chart_market_catalog.json"
 STABLE_QUOTES = {"USD", "USDC", "USDT"}
+# Revision 2 adds native stock classification and all Hyperliquid builders.
+# An mtime from an older producer cannot prove these definitions are current.
+DEFINITION_REVISION = 2
+DEFINITION_REVISION_JOBS = frozenset(
+    f"{venue}|Futures" for venue in ("Binance", "Bitget", "Bybit", "Hyperliquid")
+)
+
+
+def definitions_current(path: Path | str = DEFAULT_PATH) -> bool:
+    """Read only the revision without retaining the full market catalogue."""
+    import ijson
+
+    try:
+        with Path(path).open("rb") as handle:
+            revision = next(ijson.items(handle, "definition_revision"), None)
+        return revision == DEFINITION_REVISION
+    except (OSError, ijson.JSONError, ValueError):
+        return False
+
 
 #: Spot venues that belong in the catalogue but are quoted by the bulk sweep
 #: rather than the native order-book fetcher.
@@ -95,6 +117,11 @@ def refresh(path: Path | str = DEFAULT_PATH, *, workers: int = 4) -> dict[str, A
     markets.sort(key=lambda item: (item["token"], item["venue"], item["market_type"], item["symbol"]))
     payload = {
         "ok": bool(markets),
+        "definition_revision": (
+            DEFINITION_REVISION
+            if all(health.get(job, {}).get("status") == "ok" for job in DEFINITION_REVISION_JOBS)
+            else previous.get("definition_revision")
+        ),
         "generated_at": datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z"),
         "count": len(markets),
         "token_count": len({item["token"] for item in markets}),
@@ -326,6 +353,7 @@ def _load_venue(venue: str, market_type: str) -> list[dict[str, Any]]:
             live_spot_symbols = set()
 
     try:
+        configure_public_market_client(client, venue)
         loaded = client.load_markets()
         rows = []
         for market in loaded.values():
@@ -335,6 +363,7 @@ def _load_venue(venue: str, market_type: str) -> list[dict[str, Any]]:
                 and str(market.get("symbol") or "") in live_spot_symbols
             ):
                 market = {**market, "active": True}
+            market = public_market_definition(venue, market)
             if not _catalog_market_supported(market, market_type):
                 continue
             is_derivative = bool(market.get("swap"))
@@ -350,6 +379,7 @@ def _load_venue(venue: str, market_type: str) -> list[dict[str, Any]]:
                 "market_id": str(market.get("id") or ""),
                 "quote": str(market.get("quote") or "").upper(),
                 "contract_size": market.get("contractSize") if is_derivative else 1.0,
+                **({"asset_class": "tokenized"} if native_market_asset_class(venue, market) == "tokenized" else {}),
             })
         return rows
     finally:

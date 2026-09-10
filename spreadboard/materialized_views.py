@@ -74,6 +74,31 @@ def _write_bytes(path: Path, payload: bytes) -> None:
         os.fsync(handle.fileno())
 
 
+def _write_index_rows(path: Path, rows: dict[str, dict[str, Any]]) -> tuple[int, str]:
+    """Write deterministic sorted JSON without a whole-index byte allocation."""
+    digest = hashlib.sha256()
+    size = 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb", buffering=1024 * 1024) as handle:
+        def emit(chunk: bytes) -> None:
+            nonlocal size
+            handle.write(chunk)
+            digest.update(chunk)
+            size += len(chunk)
+
+        emit(b"{")
+        for index, key in enumerate(sorted(rows)):
+            if index:
+                emit(b",")
+            emit(_json_bytes(key))
+            emit(b":")
+            emit(_json_bytes(rows[key]))
+        emit(b"}")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return size, digest.hexdigest()
+
+
 def _fsync_directory(path: Path) -> None:
     try:
         descriptor = os.open(path, os.O_RDONLY)
@@ -374,13 +399,19 @@ class Store:
         manifest = self._load_manifest()
         if manifest is None or not self._board_compatible(manifest, board_path):
             return None
-        payload = self._read_verified_json(manifest, manifest.get("route_index") or {})
-        if not isinstance(payload, dict) or not all(
-            isinstance(key, str) and isinstance(value, dict)
-            for key, value in payload.items()
-        ):
+        meta = manifest.get("route_index") or {}
+        filename = str(meta.get("file") or "")
+        if not filename or Path(filename).name != filename:
             return None
-        return payload
+        path = self.root / "generations" / str(manifest.get("generation") or "") / filename
+        # Navigation publication can become newer than the fast live index.
+        # Use the same bounded, checksum-verified reader on that fallback path
+        # so installing it never allocates a whole-file JSON decode buffer.
+        return streaming_index.read_index(
+            path,
+            expected_bytes=int(meta.get("bytes") or -1),
+            expected_sha256=str(meta.get("sha256") or ""),
+        )
 
     def write_live_route_index(
         self,
@@ -396,15 +427,19 @@ class Store:
         than paying for a second ~300MB serialisation of the same rows.
         """
 
-        payload = encoded if encoded is not None else _json_bytes(rows)
         identity = f"{time.time_ns()}-{uuid.uuid4().hex[:10]}"
         filename = f"live-route-index-{identity}.json"
         path = self.root / filename
+        if encoded is None:
+            payload_size, payload_sha256 = _write_index_rows(path, rows)
+        else:
+            _write_bytes(path, encoded)
+            payload_size, payload_sha256 = len(encoded), _sha256(encoded)
         meta = {
             "schema": LIVE_ROUTE_SCHEMA,
             "file": filename,
-            "bytes": len(payload),
-            "sha256": _sha256(payload),
+            "bytes": payload_size,
+            "sha256": payload_sha256,
             "row_count": len(rows),
             "built_at_unix": time.time(),
             "source_signature": source_signature,
@@ -412,7 +447,6 @@ class Store:
         }
         pointer = _json_bytes(meta)
         pointer_temp = self.root / f".{self.live_route_pointer_path.name}.{uuid.uuid4().hex}.tmp"
-        _write_bytes(path, payload)
         _write_bytes(pointer_temp, pointer)
         os.replace(pointer_temp, self.live_route_pointer_path)
         _fsync_directory(self.root)

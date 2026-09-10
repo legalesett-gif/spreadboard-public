@@ -1,0 +1,194 @@
+{
+  "schema": "spreadboard.tokenized_asset_registry.v2",
+  "updated_at": "2026-09-06T09:06:00Z",
+  "assets": {
+    "GPRO": {
+      "underlying_symbol": "GPRO",
+      "instrument_type": "equity_perpetual",
+      "issuer_or_market": "GoPro Inc reference derivatives; no equity ownership",
+      "oracle_source": "Venue-specific equity indices; see exact market evidence and linked pricing specifications",
+      "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+      "corporate_action_policy": "Venue-specific adjustments or termination; instruments are not deliverable shares",
+      "venues": [
+        "Bybit",
+        "Hyperliquid"
+      ],
+      "source_url": "https://docs.entropy.io/asset-directory/equity-assets",
+      "markets": [
+        {
+          "underlying_symbol": "GPRO",
+          "instrument_type": "equity_perpetual",
+          "issuer_or_market": "GoPro Inc reference derivatives; no equity ownership",
+          "oracle_source": "Bybit TradFi weighted index with session-dependent components, transition smoothing and anchor constraints",
+          "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+          "corporate_action_policy": "Venue-specific adjustments or termination; instruments are not deliverable shares",
+          "source_url": "https://announcements.bybit.com/en/article/new-listing-gprousdt-tradfi-perpetual-contract-with-up-to-25x-leverage--art8e542b406998/",
+          "venue": "Bybit",
+          "market_type": "Futures",
+          "market_symbol": "GPRO/USDT:USDT",
+          "evidence_urls": [
+            "https://www.bybit.com/en/help-center/article/Introduction-to-TradFi-Perpetual-Contracts?category=4d5d8649cba144c1a8"
+          ]
+        },
+        {
+          "underlying_symbol": "GPRO",
+          "instrument_type": "equity_perpetual",
+          "issuer_or_market": "GoPro Inc reference derivatives; no equity ownership",
+          "oracle_source": "Entropy io / Redstone: public primary-venue price in session; depth-weighted internal/external blend outside session",
+          "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+          "corporate_action_policy": "No cash-dividend adjustment; splits, completed acquisition or delisting terminate via haltTrading per venue terms",
+          "source_url": "https://docs.entropy.io/asset-directory/equity-assets",
+          "venue": "Hyperliquid",
+          "market_type": "Futures",
+          "market_symbol": "IO-GPRO/USDC:USDC",
+          "evidence_urls": [
+            "https://docs.entropy.io/",
+            "https://docs.entropy.io/equity-perp-mechanics/oracle-price",
+            "https://docs.entropy.io/market-types/equity-perpetuals"
+          ]
+        }
+      ]
+    },
+    "GPROSTOCK": {
+      "underlying_symbol": "GPRO",
+      "instrument_type": "equity_perpetual",
+      "issuer_or_market": "GoPro Inc reference derivatives; no equity ownership",
+      "oracle_source": "Venue-specific equity indices; see exact market evidence and linked pricing specifications",
+      "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+      "corporate_action_policy": "Venue-specific adjustments or termination; instruments are not deliverable shares",
+      "venues": [
+        "Bybit",
+        "Hyperliquid"
+      ],
+      "source_url": "https://docs.entropy.io/asset-directory/equity-assets",
+      "markets": [
+        {
+          "underlying_symbol": "GPRO",
+          "instrument_type": "equity_perpetual",
+          "issuer_or_market": "GoPro Inc reference derivatives; no equity ownership",
+          "oracle_source": "Bybit TradFi weighted index with session-dependent components, transition smoothing and anchor constraints",
+          "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+          "corporate_action_policy": "Venue-specific adjustments or termination; instruments are not deliverable shares",
+          "source_url": "https://announcements.bybit.com/en/article/new-listing-gprousdt-tradfi-perpetual-contract-with-up-to-25x-leverage--art8e542b406998/",
+          "venue": "Bybit",
+          "market_type": "Futures",
+          "market_symbol": "GPRO/USDT:USDT",
+          "evidence_urls": [
+            "https://www.bybit.com/en/help-center/article/Introduction-to-TradFi-Perpetual-Contracts?category=4d5d8649cba144c1a8"
+          ]
+        },
+        {
+          "underlying_symbol": "GPRO",
+          "instrument_type": "equity_perpetual",
+          "issuer_or_market": "GoPro Inc reference derivatives; no equity ownership",
+          "oracle_source": "Entropy io / Redstone: public primary-venue price in session; depth-weighted internal/external blend outside session",
+          "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+          "corporate_action_policy": "No cash-dividend adjustment; splits, completed acquisition or delisting terminate via haltTrading per venue terms",
+          "source_url": "https://docs.entropy.io/asset-directory/equity-assets",
+          "venue": "Hyperliquid",
+          "market_type": "Futures",
+          "market_symbol": "IO-GPRO/USDC:USDC",
+          "evidence_urls": [
+            "https://docs.entropy.io/",
+            "https://docs.entropy.io/equity-perp-mechanics/oracle-price",
+            "https://docs.entropy.io/market-types/equity-perpetuals"
+          ]
+        }
+      ]
+    },
+    "BNC": {
+      "underlying_symbol": "BNC",
+      "instrument_type": "equity_perpetual",
+      "issuer_or_market": "CEA Industries Inc reference derivatives; no equity ownership",
+      "oracle_source": "Venue-specific stock indices; external vendors in session and venue-specific off-hours pricing",
+      "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+      "corporate_action_policy": "Venue-specific contract adjustments; no deliverable shares",
+      "venues": [
+        "Bitget",
+        "Binance"
+      ],
+      "source_url": "https://www.bitget.com/support/articles/12560603888404",
+      "markets": [
+        {
+          "underlying_symbol": "BNC",
+          "instrument_type": "equity_perpetual",
+          "issuer_or_market": "CEA Industries Inc reference derivatives; no equity ownership",
+          "oracle_source": "Stock index from external data providers; off-hours mark uses order-book EMA",
+          "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+          "corporate_action_policy": "Venue-specific contract adjustments; no deliverable shares",
+          "source_url": "https://www.bitget.com/support/articles/12560603888404",
+          "venue": "Bitget",
+          "market_type": "Futures",
+          "market_symbol": "BNC/USDT:USDT",
+          "evidence_urls": [
+            "https://www.bitget.com/support/articles/12560603835927"
+          ]
+        },
+        {
+          "underlying_symbol": "BNC",
+          "instrument_type": "equity_perpetual",
+          "issuer_or_market": "CEA Industries Inc reference derivatives; no equity ownership",
+          "oracle_source": "Vendor-weighted regular-session index; extended-session EWMA; bounded orderbook EWMA off-hours; USDT/USD conversion",
+          "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+          "corporate_action_policy": "Venue-specific contract adjustments; no deliverable shares",
+          "source_url": "https://www.binance.com/en/support/announcement/detail/84ad610bdd284699bc451b7baaa0ff7d",
+          "venue": "Binance",
+          "market_type": "Futures",
+          "market_symbol": "BNC/USDT:USDT",
+          "evidence_urls": [
+            "https://www.binance.com/en/support/faq/detail/fe7dcdf24f1943d98b368f5f9f744398",
+            "https://www.binance.com/en/support/announcement/detail/53bfc17634f54f2f90666dbc396f5cee",
+            "https://fapi.binance.com/fapi/v1/constituents?symbol=BNCUSDT"
+          ]
+        }
+      ]
+    },
+    "BNCSTOCK": {
+      "underlying_symbol": "BNC",
+      "instrument_type": "equity_perpetual",
+      "issuer_or_market": "CEA Industries Inc reference derivatives; no equity ownership",
+      "oracle_source": "Venue-specific stock indices; external vendors in session and venue-specific off-hours pricing",
+      "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+      "corporate_action_policy": "Venue-specific contract adjustments; no deliverable shares",
+      "venues": [
+        "Bitget",
+        "Binance"
+      ],
+      "source_url": "https://www.bitget.com/support/articles/12560603888404",
+      "markets": [
+        {
+          "underlying_symbol": "BNC",
+          "instrument_type": "equity_perpetual",
+          "issuer_or_market": "CEA Industries Inc reference derivatives; no equity ownership",
+          "oracle_source": "Stock index from external data providers; off-hours mark uses order-book EMA",
+          "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+          "corporate_action_policy": "Venue-specific contract adjustments; no deliverable shares",
+          "source_url": "https://www.bitget.com/support/articles/12560603888404",
+          "venue": "Bitget",
+          "market_type": "Futures",
+          "market_symbol": "BNC/USDT:USDT",
+          "evidence_urls": [
+            "https://www.bitget.com/support/articles/12560603835927"
+          ]
+        },
+        {
+          "underlying_symbol": "BNC",
+          "instrument_type": "equity_perpetual",
+          "issuer_or_market": "CEA Industries Inc reference derivatives; no equity ownership",
+          "oracle_source": "Vendor-weighted regular-session index; extended-session EWMA; bounded orderbook EWMA off-hours; USDT/USD conversion",
+          "trading_hours": "24/7 derivative trading; underlying cash-session and off-hours pricing differ",
+          "corporate_action_policy": "Venue-specific contract adjustments; no deliverable shares",
+          "source_url": "https://www.binance.com/en/support/announcement/detail/84ad610bdd284699bc451b7baaa0ff7d",
+          "venue": "Binance",
+          "market_type": "Futures",
+          "market_symbol": "BNC/USDT:USDT",
+          "evidence_urls": [
+            "https://www.binance.com/en/support/faq/detail/fe7dcdf24f1943d98b368f5f9f744398",
+            "https://www.binance.com/en/support/announcement/detail/53bfc17634f54f2f90666dbc396f5cee",
+            "https://fapi.binance.com/fapi/v1/constituents?symbol=BNCUSDT"
+          ]
+        }
+      ]
+    }
+  }
+}

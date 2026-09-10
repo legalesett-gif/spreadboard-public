@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from scripts import run_spreadboard_service as service
 
 
@@ -38,7 +40,8 @@ def test_restored_telegram_snapshots_skip_large_view_decoding(monkeypatch) -> No
     service._warm_telegram_payload_at_startup(service._board_path())
 
 
-def test_collector_can_publish_route_index_without_loading_it(monkeypatch) -> None:
+@pytest.mark.parametrize("install", [False, True])
+def test_collector_can_publish_route_index_without_loading_it(monkeypatch, install) -> None:
     monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", "collector")
     monkeypatch.setattr(
         service,
@@ -60,7 +63,7 @@ def test_collector_can_publish_route_index_without_loading_it(monkeypatch) -> No
         ),
     )
 
-    assert service._refresh_live_route_index(install=False) is True
+    assert service._refresh_live_route_index(install=install) is True
 
 
 def test_web_watcher_installs_collector_funding_catalogue(tmp_path, monkeypatch) -> None:

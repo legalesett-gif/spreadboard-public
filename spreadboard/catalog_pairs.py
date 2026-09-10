@@ -72,6 +72,7 @@ class Leg:
     quote: str
     contract_size: float
     book: live_book_cache.CachedBook
+    asset_class: str | None = None
 
     @property
     def bid(self) -> float:
@@ -114,6 +115,8 @@ def _market_mid(item: dict[str, Any], max_age_seconds: float) -> float | None:
 def _admit_other_spellings_bulk(
     markets_by_token: dict[str, dict[tuple[str, str, str], dict[str, Any]]],
     books: dict[str, Any],
+    *,
+    catalog_markets: Sequence[dict[str, Any]] = (),
 ) -> None:
     """The same one-asset-two-tickers merge, for the bulk path.
 
@@ -130,6 +133,14 @@ def _admit_other_spellings_bulk(
     """
 
     original = {token: dict(markets) for token, markets in markets_by_token.items()}
+    builder_candidates: dict[str, dict[tuple[str, str, str], dict[str, Any]]] = {}
+    for item in catalog_markets:
+        if not isinstance(item, dict):
+            continue
+        key = (str(item.get("venue") or ""), str(item.get("market_type") or ""), str(item.get("symbol") or ""))
+        for token in _builder_spelling_targets(item):
+            if token in original:
+                builder_candidates.setdefault(token, {})[key] = item
 
     def mid(key: tuple[str, str, str]) -> float | None:
         book = books.get(live_book_cache.cache_key(*key))
@@ -164,8 +175,8 @@ def _admit_other_spellings_bulk(
             if token.endswith(suffix) and len(token) > len(suffix)
             else f"{token}{suffix}"
         )
-        theirs = original.get(other)
-        if not theirs or other == token:
+        theirs = {**original.get(other, {}), **builder_candidates.get(token, {})}
+        if not theirs:
             continue
         own = [price for price in (mid(key) for key in markets) if price]
         if not own:
@@ -177,6 +188,22 @@ def _admit_other_spellings_bulk(
                 continue
             if max(price, high) / min(price, low) <= SAME_ASSET_PRICE_RATIO:
                 markets_by_token.setdefault(token, {}).setdefault(key, item)
+
+
+def _builder_spelling_targets(item: dict[str, Any]) -> tuple[str, ...]:
+    """Name candidates only; each exact market must still pass the price gate.
+
+    CCXT files para:ANSEM as PARA-ANSEM, while the native builder discovery
+    calls the asset ANSEM. Preserve the full contract symbol when joining it
+    to an existing CEX group; never strip arbitrary venues' ticker prefixes.
+    """
+    if item.get("venue") != "Hyperliquid" or item.get("market_type") != "Futures":
+        return ()
+    base = str(item.get("symbol") or "").split("/", 1)[0].upper()
+    namespace, separator, ticker = base.partition("-")
+    if not separator or not namespace or not ticker or base != _token(item.get("token")):
+        return ()
+    return (ticker, f"{ticker}STOCK")
 
 
 def _other_spelling_markets(
@@ -223,7 +250,10 @@ def _other_spelling_markets(
     low, high = min(own_prices), max(own_prices)
     admitted: list[dict[str, Any]] = []
     for item in catalog.get("markets") or []:
-        if not isinstance(item, dict) or _token(item.get("token")) != other:
+        if not isinstance(item, dict) or (
+            _token(item.get("token")) != other
+            and symbol not in _builder_spelling_targets(item)
+        ):
             continue
         if _is_onchain_spot(item) or str(item.get("market_type") or "") not in {
             "Spot",
@@ -316,6 +346,7 @@ def for_token(
                 quote=str(item.get("quote") or "").upper(),
                 contract_size=contract_size if contract_size > 0 else 1.0,
                 book=book,
+                asset_class=item.get("asset_class"),
             )
         )
 
@@ -424,7 +455,7 @@ def for_tokens(
         if all(key) and key[1] in {"Spot", "Futures"}:
             markets_by_token.setdefault(token, {})[key] = item
 
-    _admit_other_spellings_bulk(markets_by_token, books)
+    _admit_other_spellings_bulk(markets_by_token, books, catalog_markets=catalog.get("markets") or [])
 
     funding = bulk_quotes.load_funding()
     rails = public_rails.load_public_rails()
@@ -449,6 +480,7 @@ def for_tokens(
                     quote=str(item.get("quote") or "").upper(),
                     contract_size=contract_size if contract_size > 0 else 1.0,
                     book=book,
+                    asset_class=item.get("asset_class"),
                 )
             )
 
@@ -622,6 +654,7 @@ def dex_futures_routes(
                 quote=str(item.get("quote") or "").upper(),
                 contract_size=contract_size if contract_size > 0 else 1.0,
                 book=book,
+                asset_class=item.get("asset_class"),
             )
         )
 
@@ -1046,7 +1079,13 @@ def with_routes(
         # has them. Merge only when this venue/type shape is unique across the
         # combined evidence; otherwise two genuine contracts could collapse.
         if route_index is None and structural_counts.get(structural_identity) == 2:
-            route_index = structural_seen.get(structural_identity)
+            structural_index = structural_seen.get(structural_identity)
+            if structural_index is not None and any(
+                not candidate.get(f"{side}_market_symbol")
+                for candidate in (row, routes[structural_index])
+                for side in ("long", "short")
+            ):
+                route_index = structural_index
         if route_index is not None:
             existing = routes[route_index]
             # The warm catalogue owns the current exact-book economics. The
@@ -1151,6 +1190,13 @@ def route_identity(row: dict[str, Any]) -> tuple[Any, ...]:
                 str(row.get("dex_contract") or "").casefold(),
             )
         elif symbol:
+            if venue == "hyperliquid" and market_type == "futures":
+                from spreadboard.fast_quotes import _hyperliquid_coin
+
+                # Native para:ANSEM and CCXT PARA-ANSEM/USDC:USDC identify one
+                # contract. Different namespaces still identify different
+                # contracts and must retain their own rates and books.
+                symbol = _hyperliquid_coin(symbol.split("/", 1)[0]).upper()
             locator = ("symbol", symbol)
         else:
             # Incomplete identities must never collapse merely because both
@@ -1208,6 +1254,7 @@ def all_token_summaries(
         if token and all(key) and key[1] in {"Spot", "Futures"}:
             markets_by_token.setdefault(token, {})[key] = item
 
+    _admit_other_spellings_bulk(markets_by_token, books, catalog_markets=catalog.get("markets") or [])
     output: dict[str, dict[str, Any]] = {}
     for token, token_markets in markets_by_token.items():
         legs: list[Leg] = []
@@ -1228,6 +1275,7 @@ def all_token_summaries(
                     quote=str(item.get("quote") or "").upper(),
                     contract_size=contract_size if contract_size > 0 else 1.0,
                     book=book,
+                    asset_class=item.get("asset_class"),
                 )
             )
         best_spread: dict[str, Any] | None = None
@@ -1563,6 +1611,8 @@ def _route(
     row["funding_24h_pct"] = windows.get("1d")
     row["settled_funding_windows"] = windows
     row["catalog_history_loaded"] = include_history
+    if "tokenized" in {long_leg.asset_class, short_leg.asset_class}:
+        row["asset_class"] = "tokenized"
     guard = tokenized_assets.classify(row)
     row["tokenized_guard"] = guard
     if guard.get("asset_class") == "tokenized" and guard.get("status") != "verified":

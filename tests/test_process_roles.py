@@ -676,6 +676,9 @@ def test_materialized_builder_is_an_isolated_low_priority_worker(
 ) -> None:
     seen = []
     catalogue_reloads = []
+    index_reloads = []
+    intel_reloads = []
+    archive_ready = []
     monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     monkeypatch.setattr(service, "_LAST_MATERIALIZED_VIEW_AT", 0.0)
     monkeypatch.setattr(service, "_MATERIALIZED_VIEW_RETRY_AFTER", 0.0)
@@ -693,9 +696,9 @@ def test_materialized_builder_is_an_isolated_low_priority_worker(
     from spreadboard import server
 
     monkeypatch.setattr(server._MATERIALIZED_VIEW_STORE, "invalidate", lambda: None)
-    monkeypatch.setattr(server, "restore_materialized_route_index", lambda _path: 100)
-    monkeypatch.setattr(server, "restore_materialized_intel", lambda _path: True)
-    monkeypatch.setattr(server, "mark_historical_dex_archive_ready", lambda: None)
+    monkeypatch.setattr(server, "restore_materialized_route_index", lambda _path: index_reloads.append(True) or 100)
+    monkeypatch.setattr(server, "restore_materialized_intel", lambda _path: intel_reloads.append(True) or True)
+    monkeypatch.setattr(server, "mark_historical_dex_archive_ready", lambda: archive_ready.append(True))
     monkeypatch.setattr(
         service.funding_catalog,
         "reload_persisted_cache",
@@ -710,6 +713,9 @@ def test_materialized_builder_is_an_isolated_low_priority_worker(
     assert any(str(item).endswith("materialized_view_worker.py") for item in command)
     assert options["timeout"] == 1800.0
     assert len(catalogue_reloads) == expected_catalogue_reloads
+    assert len(index_reloads) == expected_catalogue_reloads
+    assert len(intel_reloads) == expected_catalogue_reloads
+    assert len(archive_ready) == expected_catalogue_reloads
 
 
 def test_web_role_never_owns_materialized_navigation_build(monkeypatch) -> None:

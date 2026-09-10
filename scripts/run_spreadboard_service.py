@@ -15,8 +15,9 @@ import sys
 import tempfile
 import threading
 import time
-from contextlib import suppress
+from contextlib import contextmanager, nullcontext, suppress
 from datetime import UTC, datetime
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -190,6 +191,8 @@ class RefreshLoop:
             _log("initial exact funding evidence complete; structural discovery may run")
 
     def run_chart_catalog(self) -> None:
+        from spreadboard import chart_catalog
+
         interval = max(
             900.0,
             # Six hours left the newly active Aster STONKS contract absent
@@ -201,6 +204,8 @@ class RefreshLoop:
             RUNTIME_DIR / "chart_market_catalog.json",
             interval_seconds=interval,
         )
+        if not chart_catalog.definitions_current(RUNTIME_DIR / "chart_market_catalog.json"):
+            initial_delay = 0.0
         if initial_delay and self.stop_event.wait(initial_delay):
             return
         while not self.stop_event.is_set():
@@ -259,6 +264,20 @@ class RefreshLoop:
             return
         self.websocket_paused.clear()
         self._ensure_websocket_worker()
+
+    @contextmanager
+    def _paused_websocket_worker(self):
+        """Keep the optional fast lane out of a heavy publication batch.
+
+        Use inside the collector heavy lock, so another publisher cannot resume
+        the worker during this batch. Bulk quotes continue providing books.
+        Early returns and failed finalization must restore the fast lane too.
+        """
+        self.pause_websocket_worker()
+        try:
+            yield
+        finally:
+            self.resume_websocket_worker()
 
     def refresh_once(self) -> None:
         lightweight_mode = _env_bool("SPREADBOARD_LIGHTWEIGHT_MODE")
@@ -340,7 +359,10 @@ class RefreshLoop:
         if result.returncode != 0 and not partial_after_timeout:
             _log(f"refresh failed ({result.returncode}): {result.stderr[-500:]}")
             return
-        with _COLLECTOR_HEAVY_LOCK:
+        with _COLLECTOR_HEAVY_LOCK, self._paused_websocket_worker():
+            # The ordinary index publisher already pauses the fast lane. This
+            # post-discovery path needs the same exclusion: its index child
+            # overlapped a 959MiB websocket worker at the measured cgroup peak.
             # Every step below used to parse the 40MB snapshot here, in the web
             # server: the staging copy and the published one at the same time so the
             # merge could see both, then again for the identity registry. That is
@@ -1596,6 +1618,9 @@ def _run_collector_service() -> int:
         refresh_loop.stop_event,
         route_index_publisher=route_index_publisher,
     )
+    funding_catalog_publisher = FundingCatalogPublisher(
+        refresh_loop.stop_event, refresh_loop=refresh_loop
+    )
     market_evidence_loop = MarketEvidenceLoop(
         refresh_loop.stop_event,
         refresh_loop=refresh_loop,
@@ -1622,6 +1647,7 @@ def _run_collector_service() -> int:
     route_index_publisher.start()
     bulk_quote_loop.start()
     bulk_funding_loop.start()
+    funding_catalog_publisher.start()
     market_evidence_loop.start()
     chart_history_loop.start()
     MemoryWatchdog(refresh_loop.stop_event).start()
@@ -1634,6 +1660,7 @@ def _run_collector_service() -> int:
         route_index_publisher.join(timeout=5.0)
         bulk_quote_loop.join(timeout=5.0)
         bulk_funding_loop.join(timeout=5.0)
+        funding_catalog_publisher.join(timeout=5.0)
         market_evidence_loop.join(timeout=5.0)
         chart_history_loop.join(timeout=5.0)
     return 0
@@ -2432,6 +2459,38 @@ class BulkQuoteLoop(threading.Thread):
             # made the derived ranking child steal CPU from current spreads.
 
 
+class FundingCatalogPublisher(threading.Thread):
+    """Publish the due funding catalogue independently of discovery and I/O.
+
+    The split collector never runs the web startup/warm path. Leaving its
+    refresh call there made the nominal fifteen-minute catalogue cadence wait
+    for a full discovery scan to finish. This lightweight scheduler delegates
+    due/retry checks and serialization to the existing bounded worker path.
+    """
+
+    INTERVAL_SECONDS = 60.0
+
+    def __init__(
+        self, stop_event: threading.Event, *, refresh_loop: RefreshLoop | None = None
+    ) -> None:
+        super().__init__(name="complete-funding-publisher", daemon=True)
+        self.stop_event = stop_event
+        self.refresh_loop = refresh_loop
+
+    def run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                if _refresh_complete_funding_catalog(force=False):
+                    with _COLLECTOR_HEAVY_LOCK, (
+                        self.refresh_loop._paused_websocket_worker()
+                        if self.refresh_loop is not None else nullcontext()
+                    ):
+                        _refresh_funding_navigation(force=True)
+            except Exception as exc:  # noqa: BLE001 - retain prior publication and retry.
+                _log(f"complete funding publisher retry: {type(exc).__name__}")
+            self.stop_event.wait(self.INTERVAL_SECONDS)
+
+
 class BulkFundingLoop(threading.Thread):
     """Refresh current funding independently of price freshness.
 
@@ -2581,13 +2640,23 @@ class MarketEvidenceLoop(threading.Thread):
             _log("market evidence deferred; token ranking still active")
             return
         try:
-            # Current spreads are the quote sweep's truth boundary. Publish
-            # that already-requested atomic index before another multi-minute
-            # history pass can reacquire the same heavy slot.
+            # Preserve cold/stale index priority, but a recent complete index
+            # lets exact history take its turn. Continuous bulk updates make
+            # publication_due() true again after 120s; treating that as an
+            # unconditional veto starved every 300s history sweep even while
+            # the index kept publishing successfully. The shared locks below
+            # still prevent overlapping builds; live quote I/O stays separate.
+            recent_publication = getattr(
+                self.route_index_publisher, "has_recent_publication", None
+            )
             if (
                 _route_publication_due(
                     self.route_index_publisher,
                     legacy_max_age_seconds=self.INTERVAL_SECONDS,
+                )
+                and not (
+                    callable(recent_publication)
+                    and recent_publication(max_age_seconds=self.INTERVAL_SECONDS)
                 )
             ):
                 _log("market evidence deferred; current route index pending")
@@ -2620,23 +2689,22 @@ class MarketEvidenceLoop(threading.Thread):
                 ],
                 timeout=self.TIMEOUT_SECONDS,
             )
+            if result.timed_out or result.returncode != 0:
+                _log(
+                    "market evidence unavailable "
+                    f"exit={result.returncode} {result.stderr[-300:]}"
+                )
+                return
+            summary = (result.stdout or result.stderr).strip().splitlines()
+            _log(summary[-1] if summary else "market evidence completed")
+            # Exact funding navigation expands the catalogue too. Keep the
+            # optional websocket heap excluded through this publication, while
+            # bulk quotes continue and the previous generation stays readable.
+            _refresh_funding_navigation(force=True)
         finally:
             if self.refresh_loop is not None:
                 self.refresh_loop.resume_websocket_worker()
-        if result.timed_out or result.returncode != 0:
-            _log(
-                "market evidence unavailable "
-                f"exit={result.returncode} {result.stderr[-300:]}"
-            )
-            return
-        summary = (result.stdout or result.stderr).strip().splitlines()
-        _log(summary[-1] if summary else "market evidence completed")
-        _refresh_funding_navigation(force=True)
-        # Historical CEX readers rank the persisted complete catalogue against
-        # the exact settlement file, while DEX readers rank the durable radar.
-        # Neither needs the 19-view navigation generation rebuilt after every
-        # five-minute evidence slice. Keeping that multi-minute build here
-        # blocked the next provider catch-up cycle and prolonged blank windows.
+
 
 
 def _invalidate_market_price_caches() -> None:
@@ -2824,7 +2892,7 @@ def _refresh_live_route_index(*, install: bool = True) -> bool:
             _log("live route index produced no summary")
             return False
         routes = int(summary.get("routes") or 0)
-        if install:
+        if install and _service_role() != "collector":
             from spreadboard import server as server_module
 
             routes = server_module.restore_materialized_route_index(_board_path())
@@ -3102,7 +3170,12 @@ def _schedule_funding_navigation(
                     legacy_max_age_seconds=FUNDING_NAVIGATION_REFRESH_SECONDS,
                 ):
                     return
-                _refresh_funding_navigation(force=False)
+                refresh_loop = getattr(route_index_publisher, "refresh_loop", None)
+                with (
+                    refresh_loop._paused_websocket_worker()
+                    if refresh_loop is not None else nullcontext()
+                ):
+                    _refresh_funding_navigation(force=False)
         finally:
             _FUNDING_NAVIGATION_SCHEDULE_LOCK.release()
 
@@ -3185,11 +3258,18 @@ def _refresh_materialized_views(*, force: bool) -> bool:
         from spreadboard import server as server_module
 
         server_module._MATERIALIZED_VIEW_STORE.invalidate()
-        routes = server_module.restore_materialized_route_index(_board_path())
-        server_module.restore_materialized_intel(_board_path())
-        server_module.mark_historical_dex_archive_ready()
+        routes = int(summary.get("routes") or 0)
         if _service_role() != "collector":
+            routes = server_module.restore_materialized_route_index(_board_path())
+            server_module.restore_materialized_intel(_board_path())
+            server_module.mark_historical_dex_archive_ready()
             funding_catalog.reload_persisted_cache()
+        # Publication belongs to the collector; the web watcher installs it.
+        # Restoring here retained 193k route dictionaries and their live map in
+        # the collector parent (0.13 -> 1.17 GB in the observed cycle), leaving
+        # that duplicate resident alongside every subsequent heavy child.
+        # Collector chart warming resolves bounded exact/CUSTOM keys already;
+        # it does not need a resident copy of the complete public board.
         _LAST_MATERIALIZED_VIEW_AT = time.monotonic()
         _MATERIALIZED_VIEW_RETRY_AFTER = 0.0
         _log(
@@ -3424,6 +3504,7 @@ def _refresh_funding_windows() -> None:
     just built, means the page only ever reads the answer.
     """
     from spreadboard import (
+        api_spreads,
         catalog_pairs,
         funding_catalog,
         funding_radar,
@@ -3497,6 +3578,10 @@ def _refresh_funding_windows() -> None:
                         board_priority_legs.setdefault((str(venue), str(symbol)), None)
             del payload
 
+        # This isolated evidence worker has finished all board selection.
+        # Later settlement/radar work needs only the selected rows above,
+        # not every parsed row or grouped response retained by the web cache.
+        api_spreads.release_query_caches()
         route_keys: list[str] = list(route_key_set)
         leaders: list[dict[str, Any]] = list(leader_by_key.values())
         warm_routes: list[dict[str, Any]] = list(warm_by_identity.values())
@@ -3517,9 +3602,13 @@ def _refresh_funding_windows() -> None:
         # A rate can lead for thirty minutes and cool before the next settlement
         # history refresh; that brief leader still belongs on the historical
         # radar, explicitly marked as no longer live.
+        # The full positive archive is much larger than a displayed page.
+        # Retaining its rich dictionaries until the radar write pushed this
+        # worker to 2 GB. Keep only the fields the radar actually persists;
+        # preserve the same last-wins identity and catalogue/warm/leader order.
         radar_routes_by_identity = {
-            catalog_pairs.route_identity(route): route
-            for route in [*funding_catalog.archive_routes(), *warm_routes, *leaders]
+            catalog_pairs.route_identity(route): funding_radar.compact_route(route)
+            for route in chain(funding_catalog.archive_routes(), warm_routes, leaders)
             if route.get("route_key")
         }
         radar_routes = list(radar_routes_by_identity.values())
@@ -3730,6 +3819,8 @@ class WorkerResult:
 #: the cgroup on the way out. `market evidence` already waited up to 300s for
 #: the publication lock, so this is the established shape here.
 HEAVY_CHILD_SCRIPTS = (
+    # Independently scheduled complete funding must share this memory slot.
+    "complete_funding_catalog_worker.py",
     "market_evidence_worker.py",
     "live_route_index_worker.py",
     "funding_navigation_worker.py",
@@ -4001,6 +4092,7 @@ class MemoryWatchdog(threading.Thread):
                     f"rows={len(api_spreads._ROW_CACHE)} "
                     f"rows_expired={expired_rows} "
                     f"books={len(api_spreads._LAST_GOOD_LIVE_BOOKS)} "
+                    f"index_rows={len(server_module._ROUTE_INDEX['rows'])} "
                     f"threads={threading.active_count()}"
                     f"{_heap_summary(_rss_gb())}"
                     f"{_container_pressure()}"

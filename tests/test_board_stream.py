@@ -134,7 +134,8 @@ def test_stream_does_not_erase_a_current_quote_when_fast_books_are_absent(
 
     rows = server._board_stream_rows(tmp_path / "board.jsonl", {})
 
-    assert rows[route["route_key"]] == (1.125, 0.4, "retained_matched_vwap")
+    assert rows[route["route_key"]][:3] == (1.125, None, "retained_matched_vwap")
+    assert rows[route["route_key"]][3]["age_label"] == "Current funding unavailable"
 
 
 def test_public_stream_reprices_only_its_preapproved_visible_keys(
@@ -178,7 +179,9 @@ def test_public_stream_reprices_only_its_preapproved_visible_keys(
     )
 
     assert seen == [["GUA|visible"]]
-    assert rows == {"GUA|visible": (1.5, 0.5, "matched_vwap")}
+    assert set(rows) == {"GUA|visible"}
+    assert rows["GUA|visible"][:3] == (1.5, None, "matched_vwap")
+    assert rows["GUA|visible"][3]["age_label"] == "Current funding unavailable"
 
 
 def test_free_stream_mapping_reuses_the_completed_page_generation(

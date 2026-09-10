@@ -117,6 +117,7 @@ class MarketQuote:
     #: equal to top of book -- so there was no way to check whether the
     #: depth_unverified blocker, set on 100% of rows, was accurate.
     quote_source: str | None = None
+    asset_class: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

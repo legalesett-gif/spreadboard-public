@@ -27,6 +27,21 @@ MAX_COPIED_FILE_BYTES = int(
 )
 
 
+def _run_restic(command: list[str], **kwargs):
+    """Pace the rclone backend without changing other repository backends."""
+    if os.environ.get("RESTIC_REPOSITORY", "").strip().startswith("rclone:"):
+        command = [*command, "-o", "rclone.timeout=5m", "-o", "rclone.connections=2"]
+        environment = dict(os.environ)
+        environment.setdefault("RCLONE_TPSLIMIT", "4")
+        environment.setdefault("RCLONE_TPSLIMIT_BURST", "1")
+        kwargs["env"] = environment
+        # Allow the backend's five-minute opening window to finish before
+        # the bounded repository probe kills it at the former two minutes.
+        if "timeout" in kwargs:
+            kwargs["timeout"] = max(360, kwargs["timeout"])
+    return subprocess.run(command, check=kwargs.pop("check", False), **kwargs)
+
+
 def stage_snapshot(source: Path, target: Path) -> list[Path]:
     """Stage consistent databases plus small operational state files."""
     copied: list[Path] = []
@@ -64,11 +79,11 @@ def run_backup() -> None:
         copied = stage_snapshot(RUNTIME_DIR, stage)
         if not copied:
             raise RuntimeError("backup_source_empty")
-        subprocess.run(
+        _run_restic(
             [RESTIC, "backup", "--tag", "spreadboard", "--host", "spreadboard-prod", str(stage)],
             check=True,
         )
-        subprocess.run(
+        _run_restic(
             [
                 RESTIC,
                 "forget",
@@ -84,7 +99,7 @@ def run_backup() -> None:
             ],
             check=True,
         )
-        subprocess.run([RESTIC, "check", "--read-data-subset=1/20"], check=True)
+        _run_restic([RESTIC, "check", "--read-data-subset=1/20"], check=True)
 
 
 def _ensure_repository() -> None:
@@ -95,7 +110,7 @@ def _ensure_repository() -> None:
         if delay:
             time.sleep(delay)
         try:
-            probe = subprocess.run(
+            probe = _run_restic(
                 [RESTIC, "snapshots", "--json"], capture_output=True,
                 text=True, check=False, timeout=120,
             )
@@ -106,7 +121,7 @@ def _ensure_repository() -> None:
                 return
             combined = f"{probe.stdout}\n{probe.stderr}".casefold()
             if "unable to open config file" in combined or "is there a repository at" in combined:
-                subprocess.run([RESTIC, "init"], check=True)
+                _run_restic([RESTIC, "init"], check=True)
                 return
             reason = "backend_unavailable"
             for marker, category in (

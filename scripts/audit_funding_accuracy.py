@@ -16,6 +16,7 @@ product's own blind spot and reports them as unverifiable.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 from pathlib import Path
 import sys
@@ -28,13 +29,6 @@ for import_path in (ROOT / "src", ROOT):
 
 from spreadboard.fast_quotes import FastQuoteRefresher  # noqa: E402
 from spreadboard.server import api_market_spreads, _query_lists_with  # noqa: E402
-
-#: Venues settling more often than the 8h standard. One instantaneous print
-#: times 24 is a forecast, not a measurement, and on these it is a bad one:
-#: AGLD's print once extrapolated to 9.78%/day against the 5.66%/day the 24
-#: rates it actually paid summed to. The board uses the settled sum, so a
-#: disagreement here is this script being naive, not the board being wrong.
-SUB_8H_VENUES = {"Kraken Futures", "Hyperliquid"}
 
 LANES = (
     ("FUTURES-FUTURES", {"kind": "FUTURES"}),
@@ -50,10 +44,16 @@ def _daily_pct(fields: dict | None) -> float | None:
     rate = fields.get("current_funding_pct")
     if rate is None:
         return None
-    hours = fields.get("funding_interval_hours") or 8.0
+    hours = fields.get("funding_interval_hours")
+    if fields.get("funding_interval_assumed") or hours is None:
+        return None
     try:
-        return float(rate) * (24.0 / float(hours))
-    except (TypeError, ValueError, ZeroDivisionError):
+        rate, hours = float(rate), float(hours)
+        if not math.isfinite(rate) or not math.isfinite(hours) or hours <= 0:
+            return None
+        daily = rate * (24.0 / hours)
+        return daily if math.isfinite(daily) else None
+    except (TypeError, ValueError):
         return None
 
 
@@ -82,11 +82,11 @@ def main() -> int:
                 venue_rates[venue] = {}
         return venue_rates[venue]
 
-    totals = {"ok": 0, "mismatch": 0, "forecast": 0, "unverifiable": 0}
+    totals = {"ok": 0, "mismatch": 0, "unverifiable": 0}
     try:
         for lane_name, lane in LANES:
             query = _query_lists_with(
-                {}, funding_only="1", sort="funding", direction="desc", limit="25", **lane
+                {}, funding_only="1", funding_window="now", sort="funding", direction="desc", limit="25", **lane
             )
             groups = (api_market_spreads(board_path, query).get("groups") or [])[: args.top]
             print(f"\n== {lane_name} ==")
@@ -107,29 +107,27 @@ def main() -> int:
                     )
 
                 long_leg, short_leg = leg("long"), leg("short")
-                ours = float(group.get("best_funding_24h_pct") or 0.0)
-                if long_leg is None or short_leg is None:
+                try:
+                    ours = float(group.get("best_funding_24h_pct"))
+                    if not math.isfinite(ours):
+                        ours = None
+                except (TypeError, ValueError):
+                    ours = None
+                if ours is None or long_leg is None or short_leg is None:
                     totals["unverifiable"] += 1
+                    shown = f"{ours:>9.4f}" if ours is not None else f"{'n/a':>9}"
                     print(
-                        f"   {group.get('token'):<12} {ours:>9.4f} {'n/a':>9} {'-':>9}  "
+                        f"   {group.get('token'):<12} {shown} {'n/a':>9} {'-':>9}  "
                         f"{route.get('long_venue')} -> {route.get('short_venue')}"
                     )
                     continue
                 real = short_leg - long_leg
-                # The paired carry is the short leg's receipt less the long
-                # leg's payment; a route is fine if it is within drift of that.
-                # A row whose carry came from the rates that actually settled
-                # over 24h is a measurement. This script can only build a
-                # forecast from the current print, so the two are not the same
-                # quantity and a gap between them is not an error.
-                measured = route.get("funding_24h_source") == "settled_public_events"
-                hourly = {route.get("long_venue"), route.get("short_venue")} & SUB_8H_VENUES
+                # Now compares two current-rate projections on every venue.
+                # An hourly venue or attached settled history cannot excuse a
+                # disagreement; settled totals belong to different tabs.
                 if abs(ours - real) <= max(0.15, abs(real) * args.tolerance):
                     verdict = "OK"
                     totals["ok"] += 1
-                elif measured or hourly:
-                    verdict = "MEASURED" if measured else "FORECAST"
-                    totals["forecast"] += 1
                 else:
                     verdict = "MISMATCH"
                     totals["mismatch"] += 1
@@ -143,12 +141,14 @@ def main() -> int:
     verifiable = totals["ok"] + totals["mismatch"]
     print(
         f"\nmatched {totals['ok']}, mismatched {totals['mismatch']}, "
-        f"measured-vs-forecast {totals['forecast']}, "
         f"unverifiable {totals['unverifiable']}"
     )
     if verifiable:
         print(f"agreement on comparable rows: {100.0 * totals['ok'] / verifiable:.0f}%")
-    return 1 if totals["mismatch"] else 0
+    if totals["mismatch"]:
+        return 1
+    # An unreachable provider or unknown schedule cannot produce a green audit.
+    return 2 if totals["unverifiable"] or not verifiable else 0
 
 
 if __name__ == "__main__":

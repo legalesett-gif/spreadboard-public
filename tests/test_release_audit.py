@@ -2455,14 +2455,14 @@ def test_equal_rates_on_equal_intervals_net_to_zero() -> None:
     assert daily == 0.0 and apr == 0.0
 
 
-def test_inventory_required_routes_report_the_executable_direction() -> None:
-    """Spot cannot be shorted, so the executable trade is the mirror image and
-    its carry has the opposite sign."""
-    kw = dict(long_funding_pct=0.1, long_funding_interval_hours=4.0,
-              short_funding_pct=0.05, short_funding_interval_hours=1.0)
-    normal, _ = api_spreads.normalised_funding(_frow(**kw))
-    flipped, _ = api_spreads.normalised_funding(_frow(route_kind="FUTURES-SPOT", **kw))
-    assert flipped == -normal
+def test_inventory_required_routes_preserve_the_printed_direction() -> None:
+    """Borrow or inventory is a prerequisite, not a different funding trade."""
+    row = _frow(route_kind="FUTURES-SPOT", long_market_type="Futures",
+                short_market_type="Spot", long_funding_pct=.1,
+                long_funding_interval_hours=4.0)
+    daily, apr = api_spreads.normalised_funding(row)
+    assert daily == pytest.approx(-.6)
+    assert apr == pytest.approx(-219.)
 
 
 def test_missing_interval_falls_back_to_the_exchange_default() -> None:
@@ -2573,15 +2573,14 @@ def test_best_funding_route_is_the_one_that_receives_not_its_mirror() -> None:
 
 
 def test_best_funding_apr_and_24h_never_disagree_in_sign() -> None:
-    """A FUTURES-SPOT row flips direction, and the raw 24h field does not. The
-    group used to publish the two with opposite signs."""
+    """The printed long futures leg pays its positive rate; both units agree."""
     row = _funding_row(
         "ESPORTS", long_venue="Gate", long_type="Futures",
         short_venue="Mexc", short_type="Spot", long_pct=0.0366, long_iv=4.0,
     )
     group = api_spreads._group_rows([row])[0]
-    assert group["best_funding_apr_pct"] > 0
-    assert group["best_funding_24h_pct"] > 0
+    assert group["best_funding_24h_pct"] == pytest.approx(-0.0366 * 6)
+    assert group["best_funding_apr_pct"] == pytest.approx(-0.0366 * 6 * 365)
 
 
 def test_kraken_native_funding_sums_relative_rates_over_24h(monkeypatch) -> None:
@@ -2895,7 +2894,10 @@ def test_row_dicts_are_not_deep_copied() -> None:
     )
     payload = row.to_dict()
     assert payload["token"] == "AAA"
-    assert payload is not row.__dict__, "callers must not be handed the row's own dict"
+    assert payload is not row.to_dict(), "each caller must get an independent mapping"
+    assert payload["blockers"] is row.blockers, "nested values remain shallow references"
+    payload["token"] = "CHANGED"
+    assert row.token == "AAA"
 
 
 def test_headline_lists_do_not_group_the_whole_universe() -> None:

@@ -218,14 +218,15 @@ def _hydrate_position(
     )
     long_ask = _number(movement_quote.get("long_entry"))
     short_bid = _number(movement_quote.get("short_entry"))
-    long_multiplier, short_multiplier = _relative_value_multipliers(
-        market.get("canonical_route") or current
-    )
+    spread_route = market.get("canonical_route") or current
+    long_multiplier, short_multiplier = _relative_value_multipliers(spread_route)
     # The route's relative-value note wins when it exists; otherwise the
     # position's own leg quantities carry the ratio. Applying both would count
-    # the same 10:1 twice.
-    ratio_from_route = long_multiplier != 1.0 or short_multiplier != 1.0
-    if ratio_from_route:
+    # the same ratio twice. Presence matters here, not merely a non-1 value:
+    # an explicit 1:1 route still means deliberately unequal hedge quantities
+    # must not be folded into the market-price spread.
+    relative_value_from_route = _has_relative_value_definition(spread_route)
+    if relative_value_from_route:
         open_spread = _spread(
             long_ask * long_multiplier if long_ask is not None else None,
             short_bid * short_multiplier if short_bid is not None else None,
@@ -1088,6 +1089,21 @@ def _relative_value_multipliers(route: dict[str, Any] | None) -> tuple[float, fl
     return (
         long_multiplier if long_multiplier > 0 else 1.0,
         short_multiplier if short_multiplier > 0 else 1.0,
+    )
+
+
+def _has_relative_value_definition(route: dict[str, Any] | None) -> bool:
+    notes = route.get("notes") if isinstance(route, dict) else {}
+    relative = notes.get("relative_value") if isinstance(notes, dict) else None
+    if not isinstance(relative, dict):
+        return False
+    long_multiplier = _number(relative.get("long_multiplier"))
+    short_multiplier = _number(relative.get("short_multiplier"))
+    return bool(
+        long_multiplier is not None
+        and long_multiplier > 0
+        and short_multiplier is not None
+        and short_multiplier > 0
     )
 
 

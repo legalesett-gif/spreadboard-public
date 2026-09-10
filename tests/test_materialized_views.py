@@ -280,3 +280,24 @@ def test_cleanup_removes_only_old_builder_staging_directories(tmp_path: Path) ->
     assert not old.exists()
     assert fresh.exists()
     assert unrelated.exists()
+
+
+def test_navigation_route_index_uses_bounded_reads_and_keeps_integrity(tmp_path,monkeypatch):
+    store=materialized_views.Store(tmp_path)
+    query={'kind':['FUTURES'],'limit':['500']}
+    writer=materialized_views.GenerationWriter(store,required_queries=(query,),source_signature={})
+    writer.write_view(query,_payload(['A']))
+    rows={'a':{'route_key':'a','quote_ts_us':2**63+123,'value':.123,'nested':{'none':None}}}
+    writer.write_route_index(rows)
+    writer.publish()
+    read_bytes=Path.read_bytes
+    def bounded(path):
+        if path.name=='route-index.json':
+            pytest.fail('navigation index allocated a whole-file buffer')
+        return read_bytes(path)
+    monkeypatch.setattr(Path,'read_bytes',bounded)
+    assert store.route_index()==rows
+    manifest=store._load_manifest()
+    path=tmp_path/'generations'/manifest['generation']/'route-index.json'
+    with path.open('ab') as handle:handle.write(b' ')
+    assert store.route_index() is None

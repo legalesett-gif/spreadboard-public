@@ -73,6 +73,18 @@ class LiveRouteUniverse:
         }
         live_metrics = _live_update_metrics(rows, seeded_updates, now=now)
         with self._lock:
+            if self._updates is not previous_updates:
+                # A refresh can finish while structural seeds are prepared
+                # outside this lock. Reconcile that completed observation before
+                # publishing so installation cannot roll its prices back.
+                seeded_updates = {
+                    key: update
+                    for key in rows
+                    if (update := _newest_route_update(
+                        self._updates.get(key), seeded_updates.get(key)
+                    )) is not None
+                }
+                live_metrics = _live_update_metrics(rows, seeded_updates, now=time.time())
             self._rows = rows
             self._template = template
             # The collector's new structural generation already carries a
@@ -490,8 +502,10 @@ def _newest_route_update(
 
     price_update = structural if timestamp(structural) >= timestamp(previous) else previous
     funding = previous[1] if len(previous) > 1 else structural[1]
-    basis = price_update[3] if len(price_update) > 3 else None
-    return (price_update[0], funding, price_update[2], basis)
+    # The tail carries the exact legs, top-book spread and native index prices.
+    # Keep the chosen observation intact; mixing it with structural prices can
+    # make the displayed spread disagree with its own evidence after install.
+    return (price_update[0], funding, *price_update[2:])
 
 
 LIVE_UNIVERSE = LiveRouteUniverse()
@@ -1262,9 +1276,7 @@ def _build_headlines(
         "route_kind_counts": dict(
             sorted(Counter(str(row.get("route_kind") or "") for row in fresh).items())
         ),
-        "asset_class_counts": dict(
-            Counter(str(row.get("asset_class") or "crypto") for row in fresh)
-        ),
+        "asset_class_counts": api_spreads.asset_token_counts(fresh),
         "route_kind_token_counts": {
             kind: len(tokens) for kind, tokens in sorted(route_kind_tokens.items())
         },

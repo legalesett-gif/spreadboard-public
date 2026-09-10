@@ -20,6 +20,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Any
 
+import ijson
 import orjson
 
 from spreadboard import (
@@ -28,6 +29,8 @@ from spreadboard import (
     catalog_pairs,
     chart_catalog,
     funding_radar,
+    streaming_index,
+    tokenized_assets,
     venue_funding_history,
 )
 from spreadboard.packed_routes import PackedRoutes
@@ -62,34 +65,60 @@ _CACHE_PERSIST_ERROR: str | None = None
 def _read_persisted_cache() -> tuple[dict[str, dict[str, Any]], float]:
     """Decode and validate one atomically published catalogue envelope."""
 
-    envelope = orjson.loads(DEFAULT_CACHE_PATH.read_bytes())
-    payloads = envelope.get("payloads")
-    saved_at = float(envelope.get("saved_at_unix") or 0.0)
-    if (
-        not isinstance(envelope, dict)
-        or envelope.get("schema") not in {PERSISTED_SCHEMA, LEGACY_PERSISTED_SCHEMA}
-        or not isinstance(payloads, dict)
-        or not payloads
-        or not all(
-            isinstance(key, str) and isinstance(value, dict)
-            for key, value in payloads.items()
-        )
-    ):
+    payloads: dict[str, dict[str, Any]] = {}
+    schema = None
+    saved_at = 0.0
+    saw_payloads = False
+    envelope_keys: set[str] = set()
+    keys: dict[str, str] = {}
+    try:
+        with DEFAULT_CACHE_PATH.open("rb") as handle:
+            events = iter(ijson.parse(handle, use_float=False))
+            if next(events, None) != ("", "start_map", None):
+                raise ValueError("invalid_persisted_funding_catalog")
+            for prefix, event, value in events:
+                if prefix == "" and event == "map_key":
+                    if value in envelope_keys:
+                        raise ValueError("invalid_persisted_funding_catalog")
+                    envelope_keys.add(value)
+                elif prefix == "schema":
+                    schema = value if event == "string" else None
+                elif prefix == "saved_at_unix":
+                    if event not in {"number", "string", "null"}:
+                        raise ValueError("invalid_persisted_funding_catalog")
+                    saved_at = float(value or 0.0)
+                elif prefix == "payloads" and event == "start_map":
+                    saw_payloads = True
+                elif prefix == "payloads" and event == "map_key":
+                    token = value
+                    first = next(events)
+                    if first[1] != "start_map":
+                        raise ValueError("invalid_persisted_funding_catalog")
+                    builder = ijson.ObjectBuilder()
+                    builder.event(first[1], first[2])
+                    depth = 1
+                    while depth:
+                        _, child_event, child_value = next(events)
+                        builder.event(child_event, child_value)
+                        depth += (child_event in {"start_map", "start_array"})
+                        depth -= (child_event in {"end_map", "end_array"})
+                    payload = streaming_index._shared_fields(builder.value, keys)
+                    routes = payload.get("routes")
+                    if isinstance(routes, dict):
+                        payload["routes"] = PackedRoutes.restore(routes)
+                    if any(
+                        not api_spreads.opportunity_route_enabled(route)
+                        for route in payload.get("routes") or []
+                        if isinstance(route, dict)
+                    ):
+                        # A disabled long could have displaced an alternative
+                        # in a legacy reduced generation. Reject, do not prune.
+                        raise ValueError("persisted_funding_venue_policy_changed")
+                    payloads[token] = payload
+    except (ijson.JSONError, StopIteration, OverflowError) as exc:
+        raise ValueError("invalid_persisted_funding_catalog") from exc
+    if schema not in {PERSISTED_SCHEMA, LEGACY_PERSISTED_SCHEMA} or not saw_payloads or not payloads:
         raise ValueError("invalid_persisted_funding_catalog")
-    for payload in payloads.values():
-        routes = payload.get("routes")
-        if isinstance(routes, dict):
-            payload["routes"] = PackedRoutes.restore(routes)
-    if any(
-        not api_spreads.opportunity_route_enabled(route)
-        for payload in payloads.values()
-        for route in payload.get("routes") or []
-        if isinstance(route, dict)
-    ):
-        # This file already collapsed equal-rate routes. A disabled long may
-        # have displaced an eligible alternative, so filtering after restore
-        # would lose that alternative until the next full build.
-        raise ValueError("persisted_funding_venue_policy_changed")
     return payloads, saved_at
 
 
@@ -741,11 +770,30 @@ def _live_current_value(
     return daily["short"] - daily["long"] if has_futures else None
 
 
-def _apply_live_current_value(route: dict[str, Any], value: float | None) -> None:
+def _apply_live_current_value(
+    route: dict[str, Any], value: float | None,
+    *, funding: dict[str, dict[str, Any]] | None = None,
+) -> None:
     route["funding_daily_pct"] = value
     route["funding_projected_24h_pct"] = value
     route["funding_spread_pct"] = value
     route["funding_apr_pct"] = value * 365.0 if value is not None else None
+    if funding is None:
+        return
+    # The per-leg explanation must use the same snapshot as the net carry.
+    # A durable route can still carry an old rate or assumed 8h schedule.
+    for side in ("long", "short"):
+        if str(route.get(f"{side}_market_type") or "") != "Futures":
+            continue
+        symbol = route.get(f"{side}_market_symbol") or route.get(f"{side}_symbol") or ""
+        leg = funding.get(f"{route.get(f'{side}_venue') or ''}|{symbol}") or {}
+        for suffix, field in (
+            ("funding_pct", "rate_pct"),
+            ("funding_interval_hours", "interval_hours"),
+            ("next_funding_ts_us", "next_funding_ts_us"),
+        ):
+            route[f"{side}_{suffix}"] = leg.get(field)
+        route[f"{side}_funding_interval_assumed"] = leg.get("interval_assumed")
 
 
 def _live_current_age(
@@ -781,6 +829,8 @@ def _window_value(
 ) -> float | None:
     """Use an exact window already attached to this coherent generation."""
 
+    # The collector also publishes member-facing rankings. It must use the
+    # current exact archive, never yesterday's values attached to a catalogue.
     # Production keeps exact venue settlements in a small independently
     # refreshed archive. Read that current rolling window at request time so a
     # durable catalogue restored after a restart never freezes yesterday's
@@ -788,6 +838,7 @@ def _window_value(
     if os.environ.get("SPREADBOARD_SERVICE_ROLE", "").casefold() in {
         "web",
         "combined",
+        "collector",
     }:
         return funding_radar.window_value(route, label, exact_legs=exact_legs)
     attached = (
@@ -917,7 +968,7 @@ def _iter_routes(
         # Economic-identity dedupe is required only when retained radar rows
         # are merged into a historical lane. Running that tuple construction
         # over 100k current candidates added ~1.6 seconds to every Now request.
-        for payload in selected_payloads.values():
+        for payload in (selected_payloads[key] for key in sorted(selected_payloads, key=lambda value: (len(value), value))):
             for route in payload.get("routes") or []:
                 if isinstance(route, dict) and _common_eligible(
                     route, route_kind=route_kind, symbol=symbol,
@@ -926,7 +977,7 @@ def _iter_routes(
                     yield _copy_route(route, historical=False)
         return
     live_identities: set[tuple[Any, ...]] = set()
-    for payload in selected_payloads.values():
+    for payload in (selected_payloads[key] for key in sorted(selected_payloads, key=lambda value: (len(value), value))):
         rows = []
         identity_indexes = {}
         for route in payload.get("routes") or []:
@@ -1095,7 +1146,7 @@ def page(
     )
     production_reader = os.environ.get(
         "SPREADBOARD_SERVICE_ROLE", ""
-    ).casefold() in {"web", "combined"}
+    ).casefold() in {"web", "combined", "collector"}
     current_funding = bulk_quotes.load_funding() if production_reader else None
     # An empty live cache also means all observations may have expired. Keep
     # it explicit so persisted carry cannot reappear as current funding after
@@ -1106,6 +1157,8 @@ def page(
         else None
     )
     matched_route_total = 0
+    seen_stock_pairs: set[tuple[str, ...]] = set()
+    seen_stock_windows = {label: set() for label in history_labels}
     for route in rows:
         token = str(route.get("token") or "").upper()
         if not token:
@@ -1115,7 +1168,7 @@ def page(
             if current_funding is not None
             else _current_value(route)
         )
-        _apply_live_current_value(route, current_value)
+        _apply_live_current_value(route, current_value, funding=current_funding)
         route["funding_age_min"] = (
             _live_current_age(route, current_funding)
             if current_funding is not None
@@ -1149,12 +1202,14 @@ def page(
             # from the current rate or a partial history sample.
             route["settled_funding_windows"] = dict(windows)
             for label, window_value in windows.items():
-                if window_value is not None and window_value > 0:
+                if window_value is not None and window_value > 0 and tokenized_assets.claim_stock_pair(seen_stock_windows[label], route):
                     window_routes[label] += 1
                     window_tokens[label].add(token)
             value = windows[selected_window]
             if not exact_symbol_detail and (value is None or value <= 0):
                 continue
+        if not tokenized_assets.claim_stock_pair(seen_stock_pairs, route):
+            continue
         matched_route_total += 1
         candidates = grouped.setdefault(token, [])
         candidates.append((value, route))
@@ -1263,13 +1318,18 @@ def build_navigation_pages(
     ] = {(kind, window): {} for kind in kinds for window in windows}
     match_counts: dict[tuple[str, str, str], int] = {}
 
+    seen_stock_pairs = {(kind, window): set() for kind in kinds for window in windows}
+
     def keep(kind, window, token, value, route):
+        if not tokenized_assets.claim_stock_pair(seen_stock_pairs[(kind, window)], route):
+            return False
         key = (kind, window, token)
         match_counts[key] = match_counts.get(key, 0) + 1
         candidates = lanes[(kind, window)].setdefault(token, [])
         candidates.append((value, route))
         if len(candidates) > SHORT_LEG_BUDGET * 2:
             lanes[(kind, window)][token] = top_short_legs(candidates)
+        return True
 
     window_route_counts = {
         kind: {label: 0 for label in windows[1:]} for kind in kinds
@@ -1293,7 +1353,7 @@ def build_navigation_pages(
         if kind is None or not token:
             continue
         current_value = _live_current_value(route, current_funding)
-        _apply_live_current_value(route, current_value)
+        _apply_live_current_value(route, current_value, funding=current_funding)
         route["funding_age_min"] = _live_current_age(route, current_funding)
         realised = {
             label: _window_value(route, label, exact_legs=exact_legs)
@@ -1308,9 +1368,9 @@ def build_navigation_pages(
         for label, value in realised.items():
             if value is None or value <= 0:
                 continue
-            window_route_counts[kind][label] += 1
-            window_tokens[kind][label].add(token)
-            keep(kind, label, token, value, route)
+            if keep(kind, label, token, value, route):
+                window_route_counts[kind][label] += 1
+                window_tokens[kind][label].add(token)
 
     page_limit = max(1, min(10_000, int(limit or 500)))
     route_preview = max(1, min(20, int(preview_limit or 3)))
@@ -1383,8 +1443,8 @@ def build_navigation_pages(
     return pages
 
 
-def archive_routes() -> list[dict[str, Any]]:
-    """Every current route worth retaining for a settled historical lane."""
+def archive_routes() -> Iterator[dict[str, Any]]:
+    """Yield every relevant route without holding the positive universe."""
 
     rows = _iter_routes(
         route_kind=None,
@@ -1393,11 +1453,9 @@ def archive_routes() -> list[dict[str, Any]]:
         quote=None,
         include_retained=False,
     )
-    retained: list[dict[str, Any]] = []
     for route in rows:
         current = _current_value(route)
         if (current is not None and current > 0) or any(
             (_window_value(route, label) or 0.0) > 0.0 for label in ("1d", "7d", "30d")
         ):
-            retained.append(route)
-    return retained
+            yield route
