@@ -18,21 +18,21 @@ instead of one call per symbol -- applied to prices.
 
 from __future__ import annotations
 
-from spreadarb.public_clients import configure_public_market_client
-
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from datetime import datetime, timezone
 import json
 import logging
 import math
 import os
-from pathlib import Path
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
+from spreadarb.public_clients import configure_public_market_client
+from spreadarb.venue_policy import funding_venue_enabled
+
 from spreadboard import fair_price, live_book_cache
-from spreadarb.venue_policy import opportunity_venue_enabled
 from spreadboard.fast_quotes import VENUE_IDS
 
 LOGGER = logging.getLogger("spreadboard.bulk_quotes")
@@ -983,7 +983,7 @@ def sweep_funding(
 
         all_venues = sorted(set(VENUE_IDS) | set(NATIVE_FUNDING_SOURCES))
         for venue in venues if venues is not None else all_venues:
-            if not opportunity_venue_enabled(venue):
+            if not funding_venue_enabled(venue):
                 continue
             if time.monotonic() >= deadline:
                 break
@@ -1041,7 +1041,7 @@ def _funding_key_enabled(key: str) -> bool:
     # erroneous spot symbols; Bitget also emits unlisted test IDs and spot
     # symbols. Do not retain/count those beside corrected perpetual keys,
     # including when an old artifact is restored before the next refresh.
-    return opportunity_venue_enabled(venue) and (
+    return funding_venue_enabled(venue) and (
         venue not in {"WhiteBIT", "Bitget"} or ":" in symbol
     )
 

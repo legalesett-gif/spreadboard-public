@@ -387,7 +387,7 @@ class Store:
         payload = self._read_verified_json(manifest, meta)
         if not isinstance(payload, dict):
             return None
-        if not opportunity_payload_enabled(payload):
+        if not opportunity_payload_enabled(payload, funding_only=str(requested.get("funding_only") or "").casefold() in {"1", "true", "yes"}):
             return None
         if projected:
             payload["_materialized_projection"] = {"query": requested}

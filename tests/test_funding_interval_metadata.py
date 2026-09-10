@@ -13,6 +13,8 @@ exchange whose markets publish the interval now gets it.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from spreadboard.fast_quotes import _market_interval_hours
 
 
@@ -135,3 +137,34 @@ def test_the_sweep_updates_the_flag_with_the_interval_it_applies() -> None:
 
     assert leg["funding_interval_hours"] == 4.0
     assert leg["funding_interval_assumed"] is False
+
+
+def test_binance_live_schedule_overrides_ccxt_eight_hour_default(monkeypatch):
+    from spreadboard.fast_quotes import FastQuoteRefresher
+    class Client:
+        has: ClassVar[dict] = {'fetchFundingRates': True}
+        markets: ClassVar[dict] = {'ONG/USDT:USDT': {'id': 'ONGUSDT', 'symbol': 'ONG/USDT:USDT', 'swap': True}}
+        def fetch_funding_rates(self):
+            return {'ONG/USDT:USDT': {'symbol': 'ONG/USDT:USDT', 'fundingRate': -0.00103729, 'interval': '8h'}}
+    refresher = FastQuoteRefresher()
+    monkeypatch.setattr(refresher, '_client', lambda *_: Client())
+    monkeypatch.setattr(refresher, '_bulk_funding_interval_overrides', lambda _: {'ONGUSDT': 1.0})
+    rates = refresher._bulk_funding_rates('Binance')
+    assert rates['ONG/USDT:USDT']['funding_interval_hours'] == 1.0
+    assert rates['ONG/USDT:USDT']['current_funding_pct'] == -0.103729
+
+
+def test_xt_bulk_uses_native_hourly_collection_schedule(monkeypatch):
+    from types import SimpleNamespace
+
+    from spreadboard import fast_quotes
+    symbol = "ONG/USDT:USDT"
+    market = {"symbol": symbol, "swap": True}
+    client = SimpleNamespace(markets={symbol:market}, markets_by_id={"ong_usdt":[market]})
+    refresher = fast_quotes.FastQuoteRefresher()
+    monkeypatch.setattr(refresher, "_client", lambda *_: client)
+    monkeypatch.setattr(fast_quotes, "_json_url", lambda _: [{"symbol":"ong_usdt", "funding_rate":"-0.000312", "collection_internal":1}])
+    fields = refresher._native_bulk_funding_rates("XT")[symbol]
+    assert fields["funding_interval_hours"] == 1
+    assert fields["funding_interval_assumed"] is False
+    assert fields["current_funding_pct"] == -0.0312

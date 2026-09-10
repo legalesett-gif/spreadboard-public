@@ -13,17 +13,19 @@ take.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
 import json
 import math
 import os
-from pathlib import Path
-from itertools import pairwise
 import threading
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from itertools import pairwise
+from pathlib import Path
 from typing import Any
+
+from spreadarb.venue_policy import funding_venue_enabled
 
 from spreadboard.fast_quotes import VENUE_IDS
 
@@ -93,7 +95,16 @@ def _window_expiry_ms(status: dict[str, Any] | None, label: str) -> int | None:
         return None
     if latest_event_at <= 0 or interval_ms <= 0:
         return None
-    return latest_event_at + interval_ms
+    expiry = latest_event_at + interval_ms
+    try:
+        # A rolling total also changes when its oldest included payment exits.
+        # This can precede the next payment after a schedule change.
+        first = int(detail["earliest_event_at"])
+        duration = int(label.removesuffix("d")) * 86_400_000
+        expiry = min(expiry, first + duration)
+    except (KeyError, TypeError, ValueError):
+        pass
+    return expiry
 
 
 def _current_leg_windows(
@@ -580,6 +591,7 @@ def leg_history_outcome(
     client_factory: Any = None,
     days: int = 30,
     max_pages: int = PRIORITY_HISTORY_PAGES,
+    event_store_path: Path | str | None = None,
 ) -> dict[str, Any]:
     """Return rows plus a truthful, retry-aware source classification."""
     if venue in NATIVE_HISTORY:
@@ -607,6 +619,22 @@ def leg_history_outcome(
         # One extra day lets the completeness validator infer the cadence at
         # the trailing-window boundary without counting that older settlement.
         since = now_ms - (days + 1) * 86_400_000
+        from spreadboard import settlement_store
+
+        store_path = Path(event_store_path) if event_store_path is not None else RUNTIME_DIR / "funding_settlements.sqlite3"
+        persist = client_factory is None or event_store_path is not None
+        cached = settlement_store.read(store_path, venue, symbol, now_ms) if persist else []
+        if cached:
+            latest = max(int(row["timestamp"]) for row in cached)
+            prior = realised_window_details(cached, now_ms=latest)
+            if all(value is not None for value in prior["windows"].values()):
+                # Re-read a day of overlap for corrections; retain the older
+                # exact events locally rather than downloading 30 days again.
+                since = max(since, latest - 86_400_000)
+                intervals = [detail.get("inferred_interval_hours") for detail in prior["window_details"].values()]
+                interval_ms = min(float(value) * 3_600_000 for value in intervals if value)
+                needed_pages = math.ceil((now_ms - since) / interval_ms / HISTORY_PAGE_SIZE) + 1
+                max_pages = min(max_pages, max(1, needed_pages))
         entries, pages = _history_pages(
             client,
             venue,
@@ -615,6 +643,8 @@ def leg_history_outcome(
             now_ms=now_ms,
             max_pages=max_pages,
         )
+        if persist and entries:
+            entries = settlement_store.merge(store_path, venue, symbol, entries, now_ms)
         return {
             "status": "ok" if entries else "no_history_rows",
             "entries": entries,
@@ -658,6 +688,9 @@ def _client(exchange_id: str) -> Any:
             continue
         try:
             client = klass({"enableRateLimit": True, "timeout": 20000})
+            from spreadarb.public_clients import configure_public_market_client
+
+            configure_public_market_client(client, "Hyperliquid" if exchange_id == "hyperliquid" else exchange_id)
             client.load_markets()
             break
         except Exception as exc:  # noqa: BLE001
@@ -927,9 +960,13 @@ def build(
     leg_status: dict[str, dict[str, Any]] = (
         dict(previous.get("leg_status") or {}) if same_schema else {}
     )
-    ordered = list(dict.fromkeys(legs))
+    for mapping in (windows, leg_updated_at, leg_status):
+        for key in list(mapping):
+            if not funding_venue_enabled(key.partition("|")[0]):
+                mapping.pop(key)
+    ordered = list(dict.fromkeys(item for item in legs if funding_venue_enabled(item[0])))
     start = int(previous.get("next_cursor") or 0) % max(1, len(ordered))
-    priorities = list(dict.fromkeys(priority_legs or []))
+    priorities = list(dict.fromkeys(item for item in (priority_legs or []) if funding_venue_enabled(item[0])))
     # Cross-process subscriber demand is already sorted newest-first. Reusing
     # a cursor from the previous ordering can jump into the middle of the new
     # list and leave the route the member just opened overdue. Once a recent
@@ -1195,7 +1232,7 @@ def coverage_summary(
     keeping the catch-up worker in a permanent tight loop, while a never-seen
     catalog leg remains pending until it has genuinely been queried.
     """
-    keys = {f"{venue}|{symbol}" for venue, symbol in legs if venue and symbol}
+    keys = {f"{venue}|{symbol}" for venue, symbol in legs if venue and symbol and funding_venue_enabled(venue)}
     try:
         payload = json.loads(Path(cache_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):

@@ -84,7 +84,7 @@ def test_preserved_market_filter_learns_exchange_options_after_warmup() -> None:
 
     assert "[data-refresh-options]" in source
     assert "existingSelect.append(option.cloneNode(true))" in source
-    assert 'select name="exchange" data-refresh-options' in filter_source
+    assert "render_exchange_filter(query, exchange_options)" in filter_source
 
 
 def test_no_page_shell_forces_a_reload() -> None:

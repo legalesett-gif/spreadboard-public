@@ -2,21 +2,28 @@
 
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import dataclass, fields, replace
-from datetime import datetime, timezone
-from operator import attrgetter
-from pathlib import Path
 import gc
 import json
 import logging
 import os
 import re
 import statistics
-from threading import Lock
 import time
+from collections import Counter
+from dataclasses import dataclass, fields, replace
+from datetime import datetime, timezone
+from operator import attrgetter
+from pathlib import Path
+from threading import Lock
 from typing import Any
 
+from spreadarb.venue_policy import (
+    exchange_filter_matches,
+    funding_route_enabled,
+    opportunity_route_enabled,
+)
+
+from spreadarb.api_discovery.identity import WatchAsset, load_watchlist
 from spreadboard import (
     board,
     exchange_links,
@@ -29,8 +36,6 @@ from spreadboard import (
     tokenized_assets,
     venue_funding_history,
 )
-from spreadarb.api_discovery.identity import WatchAsset, load_watchlist
-from spreadarb.venue_policy import exchange_filter_matches, opportunity_route_enabled
 
 ROOT = Path(__file__).resolve().parents[1]
 LOGGER = logging.getLogger("spreadboard.api_spreads")
@@ -1599,8 +1604,7 @@ def live_route_updates_for(
     """
     if not routes:
         return {}
-    from spreadboard import live_book_cache
-    from spreadboard import bulk_quotes
+    from spreadboard import bulk_quotes, live_book_cache
 
     # A rendered page usually contains 25-100 routes. Loading and JSON-decoding
     # every ~20k resident book for those few keys made 7D/30D Rankings take
@@ -2687,6 +2691,8 @@ def _apply_live_funding(
             observed_ages.append(age_seconds)
             leg["funding_observed_at"] = entry.get("observed_at")
             leg["funding_age_seconds"] = age_seconds
+        leg["funding_interval_hours"] = None
+        leg["funding_interval_assumed"] = True
         if entry.get("interval_hours") is not None:
             from spreadboard import funding_interval as _fi
 
@@ -2710,9 +2716,9 @@ def _apply_live_funding(
         #
         rate = _float_or_none(entry.get("rate_pct"))
         interval = _float_or_none(
-            entry.get("interval_hours") or leg.get("funding_interval_hours")
+            entry.get("interval_hours")
         )
-        if rate is not None and interval and interval > 0:
+        if rate is not None and interval and interval > 0 and not entry.get("interval_assumed"):
             leg["projected_24h_pct"] = rate * 24.0 / interval
         else:
             leg.pop("projected_24h_pct", None)
@@ -3349,7 +3355,7 @@ def _filter_rows(rows: list[SpreadTerminalRow], **filters: Any) -> list[SpreadTe
         effective_funding = _effective_funding_24h(row)
         # The funding lane is about carry you RECEIVE. A route that pays is not a
         # farm, and ranking on magnitude put a -500% payer above a +200% earner.
-        if funding_only and not (effective_funding is not None and effective_funding > 0):
+        if funding_only and (not funding_route_enabled(row) or not (effective_funding is not None and effective_funding > 0)):
             continue
         if (
             min_funding is not None
@@ -4300,10 +4306,7 @@ def _per_day(rate_pct: float | None, interval_hours: float | None) -> float | No
         return None
     hours = funding_interval.normalise(interval_hours)
     if hours is None:
-        # Not a schedule we recognise. Fall back to the common one rather than
-        # drop the row, and funding_intervals_known() still reports it as
-        # unverified so nothing presents it as measured.
-        hours = funding_interval.DEFAULT_INTERVAL_HOURS
+        return None
     return rate * (24.0 / hours)
 
 
@@ -4320,6 +4323,8 @@ def funding_intervals_known(row: "SpreadTerminalRow") -> bool:
     futures-futures while the reference product's is mostly spot-futures.
     """
     for side in ("long", "short"):
+        if getattr(row, f"{side}_funding_interval_assumed", False):
+            return False
         if _float_or_none(getattr(row, f"{side}_funding_pct", None)) is None:
             continue
         if not _float_or_none(getattr(row, f"{side}_funding_interval_hours", None)):
@@ -4340,6 +4345,12 @@ def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | 
     exchanges. If no fresh current leg or projection exists, this value is
     deliberately unavailable.
     """
+    if any(
+        str(getattr(row, f"{side}_market_type", "")) == "Futures"
+        and getattr(row, f"{side}_funding_interval_assumed", False)
+        for side in ("long", "short")
+    ):
+        return None, None
     long_daily = _per_day(
         getattr(row, "long_funding_pct", None),
         getattr(row, "long_funding_interval_hours", None),
@@ -4355,7 +4366,8 @@ def normalised_funding(row: "SpreadTerminalRow") -> tuple[float | None, float | 
     if has_leg_rate:
         for side, value in (("long", long_daily), ("short", short_daily)):
             if (
-                str(getattr(row, f"{side}_market_type", "") or "") == "Futures"
+                (str(getattr(row, f"{side}_market_type", "") or "") == "Futures"
+                 or _float_or_none(getattr(row, f"{side}_funding_pct", None)) is not None)
                 and value is None
             ):
                 return None, None

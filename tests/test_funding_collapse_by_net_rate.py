@@ -40,7 +40,7 @@ def test_identical_rates_on_one_short_leg_collapse() -> None:
     routes = [
         _r("Aster", long_venue="Gate", rate=116.797, spread=0.1),
         _r("Aster", long_venue="Mexc", rate=116.797, spread=0.9),
-        _r("Aster", long_venue="HTX", rate=116.797, spread=0.4),
+        _r("Aster", long_venue="OKX", rate=116.797, spread=0.4),
     ]
 
     kept = funding_catalog.collapse_to_short_legs(routes)
@@ -67,7 +67,7 @@ def test_different_rates_on_one_short_leg_are_all_kept() -> None:
 
     routes = [
         _r("Gate", long_venue="Mexc", rate=91.761, long_type="Futures"),
-        _r("Gate", long_venue="HTX", rate=86.286, long_type="Futures"),
+        _r("Gate", long_venue="OKX", rate=86.286, long_type="Futures"),
         _r("Gate", long_venue="Bitget", rate=80.811, long_type="Futures"),
     ]
 

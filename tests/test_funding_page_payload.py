@@ -92,7 +92,8 @@ def test_complete_page_previews_three_pairs_per_token_without_bloating_html(
     assert "limit=25&amp;offset=0" in html
     assert "T00|Mexc|Spot|Gate|Futures|2" in html
     assert "T00|Mexc|Spot|Gate|Futures|3" not in html
-    assert len(html.encode("utf-8")) < 250_000
+    # The venue exclusion controls add a fixed ~3 KB, independent of pair count.
+    assert len(html.encode("utf-8")) < 255_000
 
 
 def test_group_renderer_remains_complete_without_an_explicit_preview_limit(

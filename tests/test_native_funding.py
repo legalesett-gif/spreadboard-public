@@ -40,7 +40,7 @@ def test_htx_zhipu_zero_rate_is_published_not_dropped(monkeypatch: pytest.Monkey
 
     # The interval is always stated, so a rate can never sit on a stale one.
     assert rates == {
-        "ZHIPU/USDT:USDT": {"current_funding_pct": 0.0, "funding_interval_hours": 8.0}
+        "ZHIPU/USDT:USDT": {"current_funding_pct": 0.0, "funding_interval_hours": 8.0, "funding_interval_assumed": True}
     }
 
 
@@ -81,9 +81,9 @@ def test_ccxt_returning_empty_falls_back_to_the_native_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An empty answer and no answer both leave the legs frozen at scan time."""
-    payload = {"data": [{"contract_code": "ZHIPU-USDT", "funding_rate": "0.001"}]}
+    payload = {"data": [{"symbol": "ZHIPU_USDT", "fundingRate": "0.001"}]}
     refresher = _refresher(
-        monkeypatch, payload, {"ZHIPU-USDT": {"symbol": "ZHIPU/USDT:USDT", "swap": True}}
+        monkeypatch, payload, {"ZHIPU_USDT": {"symbol": "ZHIPU/USDT:USDT", "swap": True}}
     )
 
     class _Empty(_Client):
@@ -93,10 +93,10 @@ def test_ccxt_returning_empty_falls_back_to_the_native_source(
             return {}
 
     monkeypatch.setattr(
-        refresher, "_client", lambda *_a, **_k: _Empty({"ZHIPU-USDT": {"symbol": "ZHIPU/USDT:USDT", "swap": True}})
+        refresher, "_client", lambda *_a, **_k: _Empty({"ZHIPU_USDT": {"symbol": "ZHIPU/USDT:USDT", "swap": True}})
     )
 
-    rates = refresher._bulk_funding_rates("HTX")
+    rates = refresher._bulk_funding_rates("Mexc")
 
     assert rates["ZHIPU/USDT:USDT"]["current_funding_pct"] == pytest.approx(0.1)
 

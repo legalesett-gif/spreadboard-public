@@ -14,7 +14,7 @@ def _fake_command(path: Path, body: str) -> None:
 
 
 def _run_deploy(
-    tmp_path: Path, *services: str
+    tmp_path: Path, *services: str, late_scan: bool = False
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -24,7 +24,10 @@ def _run_deploy(
         """
 printf '%s\\n' "$*" >> "$FAKE_SSH_LOG"
 case "$*" in
-  *"docker top app-collector-1"*) printf '1\\n' ;;
+  *"docker top app-collector-1"*)
+    if [ "$FAKE_LATE_SCAN" = "1" ] && [ ! -f "$FAKE_SSH_LOG.seen" ]; then
+      touch "$FAKE_SSH_LOG.seen"; printf '0\\n'
+    else printf '1\\n'; fi ;;
   *"RestartCount"*) printf '0,0\\n' ;;
   *"source_digest.py"*) printf '%s\\n' "$FAKE_SOURCE_DIGEST" ;;
 esac
@@ -43,6 +46,7 @@ esac
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "FAKE_SSH_LOG": str(ssh_log),
+        "FAKE_LATE_SCAN": "1" if late_scan else "0",
         "FAKE_SOURCE_DIGEST": digest,
     }
     result = subprocess.run(
@@ -70,3 +74,11 @@ def test_collector_deploy_still_refuses_during_active_scan(tmp_path: Path) -> No
     assert result.returncode == 1
     assert "docker top app-collector-1" in ssh_log
     assert "REFUSING: a discovery scan is in flight" in result.stderr
+
+
+def test_collector_is_not_recreated_if_discovery_starts_during_build(tmp_path):
+    result, log = _run_deploy(tmp_path, "collector", late_scan=True)
+    assert result.returncode == 1
+    assert "started during the build" in result.stderr
+    assert " build collector" in log
+    assert "up -d" not in log

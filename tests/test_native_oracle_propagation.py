@@ -31,7 +31,6 @@ def test_native_funding_retains_its_own_index(monkeypatch, venue, native, key):
 
 @pytest.mark.parametrize('venue,native,index_key,stamp_key', [
     ('Mexc', 'OPENAI_USDT', 'indexPrice', 'timestamp'),
-    ('HTX', 'OPENAI-USDT', 'index_price', 'index_ts'),
     ('Bitget', 'OPENAIUSDT', 'indexPrice', 'ts'),
 ])
 def test_funding_only_feed_joins_fresh_native_index_without_changing_carry(

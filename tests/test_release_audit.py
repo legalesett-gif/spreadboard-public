@@ -2465,11 +2465,11 @@ def test_inventory_required_routes_preserve_the_printed_direction() -> None:
     assert apr == pytest.approx(-219.)
 
 
-def test_missing_interval_falls_back_to_the_exchange_default() -> None:
+def test_missing_interval_withholds_the_public_projection() -> None:
     daily, _ = api_spreads.normalised_funding(_frow(
         long_funding_pct=0.0, short_funding_pct=0.01, short_funding_interval_hours=None,
     ))
-    assert round(daily, 6) == 0.03  # 0.01% per 8h
+    assert daily is None
 
 
 def test_no_funding_data_returns_none() -> None:

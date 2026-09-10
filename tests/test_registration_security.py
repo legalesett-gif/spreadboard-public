@@ -97,7 +97,7 @@ def test_no_javascript_registration_posts_credentials_and_redirects_safely(
         set_cookies = response.getheaders()
 
         assert response.status == 303
-        assert response.getheader("Location") == "/subscription"
+        assert response.getheader("Location") == "/account#settings"
         assert "email" not in response.getheader("Location")
         assert "password" not in response.getheader("Location")
         session_cookie = next(
@@ -110,7 +110,7 @@ def test_no_javascript_registration_posts_credentials_and_redirects_safely(
         response = client.getresponse()
         response.read()
         assert response.status == 303
-        assert response.getheader("Location") == "/subscription"
+        assert response.getheader("Location") == "/account#settings"
 
         user_id = accounts.user_id_for_email("no-js@example.test", db_path=db_path)
         assert user_id is not None
@@ -360,7 +360,7 @@ def test_registration_attaches_referral_once_and_clears_cookie(
         ]
 
         assert response.status == 201
-        assert payload["next"] == "/subscription"
+        assert payload["next"] == "/account#settings"
         assert any(accounts.SESSION_COOKIE in value for value in cookies)
         assert any(
             affiliates.REFERRAL_COOKIE in value and "Max-Age=0" in value

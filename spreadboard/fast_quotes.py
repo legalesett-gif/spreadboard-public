@@ -21,7 +21,7 @@ from urllib.request import Request, urlopen
 
 from spreadarb.market_status import market_open_for_opportunities
 from spreadarb.public_clients import configure_public_market_client
-from spreadarb.venue_policy import opportunity_route_enabled
+from spreadarb.venue_policy import funding_venue_enabled, opportunity_route_enabled
 
 from spreadarb.api_discovery.models import spread_pct
 from spreadarb.api_discovery.orderbook import depth_weighted_price
@@ -185,6 +185,8 @@ NATIVE_FUNDING_SOURCES: dict[str, dict[str, Any]] = {
         "symbol_keys": ("symbol", "ticker_id"),
         "rate": "funding_rate",
         "next_ms": "next_funding_rate_timestamp",
+        "interval": "collection_internal",
+        "index": "index_price",
     },
     "Ourbit": {
         # An MEXC white-label with no CCXT adapter, so there are no markets to
@@ -426,9 +428,12 @@ class FastQuoteRefresher:
                 scale = spec.get("interval_scale")
                 if interval is not None and scale:
                     interval = interval * float(scale)
+            if interval is None and venue == "Phemex":
+                interval = _seconds_to_hours((market.get("info") or {}).get("fundingInterval"))
             fields = _funding_fields(
                 rate,
                 interval_hours=interval if interval else DEFAULT_FUNDING_INTERVAL_HOURS,
+                interval_assumed=not interval,
                 next_funding_ms=item.get(str(spec.get("next_ms") or "")),
                 index_price=item.get(str(spec.get("index") or "")),
             )
@@ -437,6 +442,8 @@ class FastQuoteRefresher:
         return rates
 
     def _bulk_funding_rates(self, venue: str) -> dict[str, dict[str, Any]]:
+        if not funding_venue_enabled(venue):
+            return {}
         rates = self._bulk_funding_rates_raw(venue)
         # Several funding-only feeds omit the oracle even though a separate
         # all-contract ticker supplies it. Join exact native IDs, never prices
@@ -552,26 +559,32 @@ class FastQuoteRefresher:
             # CCXT can leave its unified interval empty while preserving the
             # current venue schedule in info (BingX publishes mixed 1/4/8h).
             # Read that before older market metadata or the assumed default.
-            interval = item.get("interval") or _market_interval_hours(item)
+            market = (getattr(client, "markets", {}) or {}).get(symbol) or {}
+            # Binance's CCXT parser can supply its default "8h" even after
+            # fundingInfo switches this exact contract to hourly settlements.
+            # The native current schedule outranks that unified fallback.
+            native_interval = (interval_overrides or {}).get(str(market.get("id") or "").upper())
+            interval = native_interval or _market_interval_hours(item) or item.get("interval")
             if isinstance(interval, str) and interval.casefold().endswith("h"):
                 interval = interval[:-1]
             if not interval:
-                market = (getattr(client, "markets", {}) or {}).get(str(item["symbol"])) or {}
                 # Live schedule adjustments precede older market metadata.
                 # Bitget publishes its schedule only in that metadata, while
                 # Binance/Aster publish a separate current fundingInfo feed.
-                interval = interval_overrides.get(str(market.get("id") or "").upper())
+                interval = (interval_overrides or {}).get(str(market.get("id") or "").upper())
                 if not interval:
                     interval = _market_interval_hours(market)
+            if interval_overrides is None:
+                interval = None
             fields = _funding_fields(
-                item.get("fundingRate"),
+                item.get("nextFundingRate") if venue == "CoinEx" else item.get("fundingRate"),
                 index_price=index_price,
                 # Never leave a fresh rate sitting on a stale scan interval.
                 # A venue without a usable published schedule keeps an explicit
                 # assumed default; a published schedule clears that assumption.
                 interval_hours=interval if interval else DEFAULT_FUNDING_INTERVAL_HOURS,
                 interval_assumed=not interval,
-                next_funding_ms=item.get("fundingTimestamp") or item.get("nextFundingTimestamp"),
+                next_funding_ms=(item.get("nextFundingTimestamp") if venue == "CoinEx" else item.get("fundingTimestamp") or item.get("nextFundingTimestamp")),
             )
             if fields:
                 rates[symbol] = fields
@@ -579,7 +592,7 @@ class FastQuoteRefresher:
         # cannot answer at all, and both leave the legs frozen at scan time.
         return rates or self._native_bulk_funding_rates(venue)
     @staticmethod
-    def _bulk_funding_interval_overrides(venue: str) -> dict[str, float]:
+    def _bulk_funding_interval_overrides(venue: str) -> dict[str, float] | None:
         """Return venue-published schedules missing from CCXT's bulk payload.
 
         Binance and Aster bulk responses can omit the interval. Their separate
@@ -592,8 +605,8 @@ class FastQuoteRefresher:
         host = "fapi.asterdex.com" if venue == "Aster" else "fapi.binance.com"
         try:
             payload = _json_url(f"https://{host}/fapi/v1/fundingInfo")
-        except Exception:  # noqa: BLE001 - the caller retains its explicit fallback.
-            return {}
+        except Exception:  # noqa: BLE001 - an unverified schedule cannot support a projection.
+            return None
         result: dict[str, float] = {}
         for item in payload if isinstance(payload, list) else []:
             if not isinstance(item, dict):
@@ -1340,24 +1353,26 @@ class FastQuoteRefresher:
 def _carry_forward_funding(
     row: dict[str, Any], side: str, quote: dict[str, Any]
 ) -> None:
-    """Keep a recent board rate when the exact book endpoint omits funding."""
+    """A book-only update may reuse only the unexpired exact funding cache.
 
-    if str(row.get(f"{side}_market_type") or "") != "Futures":
+    A new rate with a missing schedule is explicit uncertainty; never patch
+    that schedule from an older discovery row or refresh its observation age.
+    """
+    if "current_funding_pct" in quote:
         return
-    if quote.get("current_funding_pct") is None:
-        current = _optional_number(
-            row.get(f"{side}_current_funding_pct", row.get(f"{side}_funding_pct"))
-        )
-        if current is not None:
-            quote["current_funding_pct"] = current
-    if quote.get("funding_interval_hours") is None:
-        interval = _optional_number(row.get(f"{side}_funding_interval_hours"))
-        if interval is not None:
-            quote["funding_interval_hours"] = interval
-    if quote.get("next_funding_ts_us") is None:
-        upcoming = _optional_int(row.get(f"{side}_next_funding_ts_us"))
-        if upcoming is not None:
-            quote["next_funding_ts_us"] = upcoming
+    key = _route_leg_key(row, side)
+    if key is None or key[1] != "Futures" or not funding_venue_enabled(key[0]):
+        return
+    from spreadboard import bulk_quotes
+
+    entry = bulk_quotes.load_funding().get(f"{key[0]}|{key[2]}") or {}
+    rate = _optional_number(entry.get("rate_pct"))
+    if rate is not None:
+        quote.update(_funding_fields(
+            rate / 100.0, interval_hours=entry.get("interval_hours"),
+            interval_assumed=entry.get("interval_assumed"),
+            next_funding_ms=(_optional_number(entry.get("next_funding_ts_us")) or 0) / 1000 or None,
+        ))
 
 
 def _sync_quoted_funding(
@@ -1367,31 +1382,33 @@ def _sync_quoted_funding(
 ) -> None:
     """Make exact sampled cadence the row's displayed funding cadence."""
 
-    daily: dict[str, float] = {"long": 0.0, "short": 0.0}
+    daily: dict[str, float | None] = {"long": 0.0, "short": 0.0}
     for side, quote in (("long", long_quote), ("short", short_quote)):
         if str(row.get(f"{side}_market_type") or "") != "Futures":
             continue
+        from spreadboard import funding_interval
+
         rate = _optional_number(quote.get("current_funding_pct"))
-        interval = _optional_number(quote.get("funding_interval_hours"))
+        interval = funding_interval.normalise(quote.get("funding_interval_hours"))
+        assumed = interval is None or bool(quote.get("funding_interval_assumed"))
+        daily[side] = None
         upcoming = _optional_int(quote.get("next_funding_ts_us"))
         index = _optional_number(quote.get("index_price"))
         if index is not None and index > 0:
             row[f"{side}_index_price"] = index
-        if rate is not None:
-            row[f"{side}_current_funding_pct"] = rate
-            row[f"{side}_funding_pct"] = rate
-        if interval is not None and interval > 0:
-            row[f"{side}_funding_interval_hours"] = interval
-            row[f"{side}_funding_interval_assumed"] = False
+        row[f"{side}_current_funding_pct"] = rate
+        row[f"{side}_funding_pct"] = rate
+        row[f"{side}_funding_interval_hours"] = interval
+        row[f"{side}_funding_interval_assumed"] = assumed
         if upcoming is not None:
             row[f"{side}_next_funding_ts_us"] = upcoming
-        if rate is not None and interval is not None and interval > 0:
+        if rate is not None and math.isfinite(rate) and interval is not None and not assumed:
             daily[side] = rate * (24.0 / interval)
-    projected = daily["short"] - daily["long"]
+    projected = daily["short"] - daily["long"] if all(value is not None for value in daily.values()) else None
     row["funding_projected_24h_pct"] = projected
     row["funding_daily_pct"] = projected
     row["funding_spread_pct"] = projected
-    row["funding_apr_pct"] = projected * 365.0
+    row["funding_apr_pct"] = projected * 365.0 if projected is not None else None
 
 
 def _external_funding_is_fresh(*, max_age_seconds: float = 600.0) -> bool:
@@ -2582,6 +2599,8 @@ def _native_spot_order_book(
 
 
 def _native_current_funding(venue: str, symbol: str) -> dict[str, Any]:
+    if not funding_venue_enabled(venue):
+        return {}
     base, quote = _symbol_base_quote(symbol)
     compact = _native_linear_symbol(venue, base, quote)
     try:
@@ -2910,15 +2929,19 @@ def _ccxt_current_funding(
     *,
     venue: str | None = None,
 ) -> dict[str, Any]:
+    if venue and not funding_venue_enabled(venue):
+        return {}
+    if venue in {"Binance", "Aster"}:
+        return _native_current_funding(venue, symbol)
     try:
         if not getattr(client, "has", {}).get("fetchFundingRate"):
             return {}
         payload = client.fetch_funding_rate(symbol) or {}
-        interval = payload.get("interval") or _market_interval_hours(payload)
+        interval = _market_interval_hours(payload) or payload.get("interval")
         if isinstance(interval, str) and interval.casefold().endswith("h"):
             interval = interval[:-1]
         return _funding_fields(
-            payload.get("fundingRate"),
+            payload.get("nextFundingRate") if venue == "CoinEx" else payload.get("fundingRate"),
             interval_hours=interval,
             next_funding_ms=payload.get("fundingTimestamp") or payload.get("nextFundingTimestamp"),
         )
@@ -2943,14 +2966,17 @@ def _funding_fields(
     be trusted either way.
     """
     parsed = _optional_number(rate)
-    if parsed is None:
+    if parsed is None or not math.isfinite(parsed):
         return {}
-    interval = _optional_number(interval_hours)
+    from spreadboard import funding_interval
+
+    interval = funding_interval.normalise(interval_hours)
     next_ms = _optional_number(next_funding_ms)
     if next_ms is None:
         next_seconds = _optional_number(next_funding_seconds)
         next_ms = next_seconds * 1000 if next_seconds is not None else None
-    output = {"current_funding_pct": parsed * 100.0}
+    output = {"current_funding_pct": parsed * 100.0, "funding_interval_hours": interval,
+              "funding_interval_assumed": interval is None or bool(interval_assumed)}
     # The venue's own statement of what the contract settles against. Already on
     # the wire from `fetch_funding_rates`, and previously dropped here.
     index = _optional_number(index_price)

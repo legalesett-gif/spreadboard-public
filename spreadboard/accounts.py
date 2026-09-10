@@ -146,6 +146,17 @@ def initialize(db_path: Path | str = DEFAULT_DB_PATH) -> None:
                 updated_at TEXT NOT NULL,
                 last_login_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS trial_eligibility (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS trial_claims (
+                email_hash TEXT PRIMARY KEY,
+                telegram_hash TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS password_tokens (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -950,6 +961,10 @@ def register_user(
         except sqlite3.IntegrityError as exc:
             raise ValueError("email_already_registered") from exc
         user_id = int(cursor.lastrowid)
+        connection.execute(
+            "INSERT INTO trial_eligibility (user_id, created_at) VALUES (?, ?)",
+            (user_id, _utc_iso(now)),
+        )
         affiliates.attach_registration_in_transaction(
             connection,
             user_id,
@@ -1317,6 +1332,41 @@ def create_telegram_link_token(
         connection.close()
 
 
+def _claim_linked_trial(connection: sqlite3.Connection, user_id: int, chat_id: int) -> None:
+    """One immutable seven-day claim per new account/email and verified private chat.
+
+    Runs inside the link transaction. Claims deliberately survive account deletion
+    and unlinking; relinking must never extend or replace an entitlement.
+    """
+    if chat_id <= 0:
+        return
+    row = connection.execute(
+        "SELECT u.* FROM users u JOIN trial_eligibility t ON t.user_id=u.id WHERE u.id=?",
+        (user_id,),
+    ).fetchone()
+    if row is None or row["role"] != "member" or row["subscription_status"] != "inactive":
+        return
+    email = str(row["email"]).strip().casefold()
+    local, domain = email.rsplit("@", 1)
+    if domain in {"gmail.com", "googlemail.com"}:
+        email = local.split("+", 1)[0].replace(".", "") + "@gmail.com"
+    email_hash = _token_hash("trial-email:" + email)
+    telegram_hash = _token_hash("trial-telegram:" + str(chat_id))
+    now = datetime.now(tz=UTC)
+    expires = _utc_iso(now + timedelta(days=7))
+    claimed = connection.execute(
+        "INSERT OR IGNORE INTO trial_claims (email_hash, telegram_hash, user_id, started_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+        (email_hash, telegram_hash, user_id, _utc_iso(now), expires),
+    )
+    if claimed.rowcount != 1:
+        return
+    connection.execute(
+        "UPDATE users SET subscription_status='trialing', subscription_tier='research_pro', subscription_expires_at=?, updated_at=? WHERE id=?",
+        (expires, _utc_iso(now), user_id),
+    )
+    connection.execute("DELETE FROM trial_eligibility WHERE user_id=?", (user_id,))
+
+
 def bind_telegram_chat(
     token: str,
     chat_id: int,
@@ -1348,6 +1398,7 @@ def bind_telegram_chat(
             "UPDATE telegram_link_tokens SET used_at = ? WHERE token_hash = ?",
             (now, row["token_hash"]),
         )
+        _claim_linked_trial(connection, user_id, int(chat_id))
         connection.commit()
     except Exception:
         connection.rollback()

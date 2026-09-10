@@ -179,9 +179,9 @@ def test_the_sweep_asks_an_obsolete_leg_early(tmp_path, monkeypatch) -> None:
         "updated_at": "2026-08-30T00:00:00+00:00",
     }
     legs = [("Gate", f"T{n}/USDT:USDT") for n in range(40)]
-    legs.append(("Ourbit", "A/USDT:USDT"))
+    legs.append(("BitMart", "A/USDT:USDT"))
     leg_status = {f"Gate|T{n}/USDT:USDT": dict(fresh) for n in range(40)}
-    leg_status["Ourbit|A/USDT:USDT"] = {
+    leg_status["BitMart|A/USDT:USDT"] = {
         "status": "unsupported_venue",
         "last_attempt_at": "2026-08-30T00:00:00+00:00",
         "last_attempt_status": "unsupported_venue",
@@ -204,8 +204,8 @@ def test_the_sweep_asks_an_obsolete_leg_early(tmp_path, monkeypatch) -> None:
 
     vfh.build(legs, cache_path=cache, budget_seconds=5.0)
 
-    assert ("Ourbit", "A/USDT:USDT") in asked
-    position = asked.index(("Ourbit", "A/USDT:USDT"))
+    assert ("BitMart", "A/USDT:USDT") in asked
+    position = asked.index(("BitMart", "A/USDT:USDT"))
     assert position < 5, (
         f"asked at position {position} of {len(asked)}: a leg whose reader just "
         "shipped is still waiting behind the ordinary rotation"

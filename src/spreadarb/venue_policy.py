@@ -11,6 +11,18 @@ from typing import Any
 EXCLUDED_OPPORTUNITY_VENUES = frozenset({"ourbit", "htx", "huobi"})
 
 
+EXCLUDED_FUNDING_VENUES = frozenset({"coinex", "phemex"})
+
+
+def funding_venue_enabled(venue: Any) -> bool:
+    return opportunity_venue_enabled(venue) and str(venue or "").strip().casefold() not in EXCLUDED_FUNDING_VENUES
+
+
+def funding_route_enabled(row: Any) -> bool:
+    get = row.get if isinstance(row, dict) else lambda key: getattr(row, key, None)
+    return all(funding_venue_enabled(get(f"{side}_venue")) for side in ("long", "short"))
+
+
 def opportunity_venue_enabled(venue: Any) -> bool:
     return str(venue or "").strip().casefold() not in EXCLUDED_OPPORTUNITY_VENUES
 
@@ -21,22 +33,23 @@ def opportunity_route_enabled(row: Any) -> bool:
     return opportunity_venue_enabled(getattr(row, "long_venue", None)) and opportunity_venue_enabled(getattr(row, "short_venue", None))
 
 
-def opportunity_payload_enabled(payload: dict[str, Any]) -> bool:
+def opportunity_payload_enabled(payload: dict[str, Any], *, funding_only: bool = False) -> bool:
     """Reject an old ranked page so remaining routes can be ranked before slicing.
 
     Removing a disabled leader after pagination would leave a partial page and
     keep eligible alternatives hidden. The caller rebuilds from the complete
     current catalogue when an older persisted page fails this boundary.
     """
+    enabled = funding_route_enabled if funding_only else opportunity_route_enabled
     for row in payload.get("rows") or []:
-        if isinstance(row, dict) and not opportunity_route_enabled(row):
+        if isinstance(row, dict) and not enabled(row):
             return False
     for name in ("groups", "top_edges", "top_funding"):
         for group in payload.get(name) or []:
             if not isinstance(group, dict):
                 continue
-            for row in [group.get("best_route"), group.get("best_funding_route"), *(group.get("routes") or [])]:
-                if isinstance(row, dict) and not opportunity_route_enabled(row):
+            for row in [group, group.get("best_route"), group.get("best_funding_route"), *(group.get("routes") or [])]:
+                if isinstance(row, dict) and not enabled(row):
                     return False
     return True
 

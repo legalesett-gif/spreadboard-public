@@ -2,29 +2,29 @@
 
 from __future__ import annotations
 
-import html
 import hashlib
 import hmac
-import ipaddress
+import html
 import io
+import ipaddress
 import json
 import os
 import re
 import sqlite3
-from http.cookies import SimpleCookie
 import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
-import urllib.request
 
 import click
 import segno
@@ -51,8 +51,8 @@ from spreadboard import (  # noqa: E402
     executor_boundary,
     fair_price,
     funding_catalog,
-    funding_navigation,
     funding_history_demand,
+    funding_navigation,
     funding_radar,
     historical_spreads,
     intel,
@@ -615,7 +615,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                     ):
                         destination = "/partner"
                     else:
-                        destination = "/subscription"
+                        destination = "/account#settings"
                     self._redirect(destination)
             elif parsed.path == "/forgot-password":
                 self._send_html(
@@ -2246,7 +2246,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
             return
         if form_request:
             self._redirect(
-                "/subscription",
+                "/account#settings",
                 session_token=token,
                 clear_referral=True,
             )
@@ -2256,7 +2256,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "user": user.public_dict(),
                 "csrf_token": user.csrf_token,
-                "next": "/subscription",
+                "next": "/account#settings",
             },
             status=HTTPStatus.CREATED,
             session_token=token,
@@ -2487,7 +2487,7 @@ class SpreadBoardHandler(BaseHTTPRequestHandler):
                         if _float_or_none(values[1]) is not None
                     ]
                     payload = {
-                        "updated_at": datetime.now(tz=timezone.utc)
+                        "updated_at": datetime.now(tz=UTC)
                         .replace(microsecond=0)
                         .isoformat()
                         .replace("+00:00", "Z"),
@@ -7289,7 +7289,7 @@ def _iso_datetime(value: Any) -> datetime | None:
         moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment
+    return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment
 
 
 def funding_history_health() -> dict[str, Any]:
@@ -7652,7 +7652,7 @@ def api_public_status(
         "overall_status": overall_status,
         "gates": gates,
         "service": "SpreadBoard",
-        "checked_at": datetime.now(tz=timezone.utc).isoformat(),
+        "checked_at": datetime.now(tz=UTC).isoformat(),
         "components": components,
     }
 
@@ -8586,7 +8586,7 @@ def render_free_page(board_path: Path) -> str:
       <section class="free-cta">
         <div>
           <h2>{hidden:,} more tokens, with the entry shown</h2>
-          <p>A membership names the asset and both venues on every route, across available CEX and verified DEX lanes,
+          <p>New members: register and link Telegram for 7 days of full website access free. One trial per person and Telegram identity. A membership names the asset and both venues on every route, across available CEX and verified DEX lanes,
              with filters, convergence charts, saved pairs, transfer-rail checks, fair-price gaps
              and alerts on any token's price, spread or funding.</p>
         </div>
@@ -9366,14 +9366,16 @@ def render_market_source_card(
     """
 
 
-def render_exchange_filter(query: dict[str, list[str]], options: list[str]) -> str:
-    from spreadarb.venue_policy import opportunity_venue_enabled
+def render_exchange_filter(query: dict[str, list[str]], options: list[str], *, funding_only: bool = False) -> str:
+    from spreadarb.venue_policy import funding_venue_enabled, opportunity_venue_enabled
+
     from spreadboard.fast_quotes import VENUE_IDS
 
     terms = [term.strip() for term in str(_query_first(query, "exchange") or "").split(",") if term.strip()]
     excluded = {term[1:].casefold() for term in terms if term.startswith("!")}
     included = ",".join(term for term in terms if not term.startswith("!"))
-    venues = sorted(venue for venue in set(options) | set(VENUE_IDS) | {"Hyperliquid"} if opportunity_venue_enabled(venue))
+    enabled = funding_venue_enabled if funding_only else opportunity_venue_enabled
+    venues = sorted(venue for venue in set(options) | set(VENUE_IDS) | {"Hyperliquid"} if enabled(venue))
     choices = "".join(
         f'<label style="display:block"><input type="checkbox" name="exchange" value="!{h(venue)}" {"checked" if venue.casefold() in excluded else ""}> {h(venue)}</label>'
         for venue in venues
@@ -9393,7 +9395,6 @@ def render_market_filter_bar(
     signed_in: bool = False,
 ) -> str:
     selected_kind = _query_first(query, "kind") or ""
-    exchange = _query_first(query, "exchange") or ""
     selected_sort = _query_first(query, "sort") or "edge"
     selected_direction = _query_first(query, "direction") or "desc"
     selected_view = _query_first(query, "view") or "grouped"
@@ -9558,7 +9559,9 @@ FILTER_PRESET_SCRIPT = r"""
     event.preventDefault();
     const form = event.currentTarget;
     const name = new FormData(form).get('name');
-    const query = Object.fromEntries(new URLSearchParams(location.search));
+    const params = new URLSearchParams(location.search);
+    const query = Object.fromEntries(params);
+    if (params.has("exchange")) query.exchange = params.getAll("exchange").filter(Boolean).join(",");
     delete query.offset; delete query.limit;
     try {
       const data = await request('/api/filter-presets', {name, query});
@@ -11112,7 +11115,7 @@ def render_funding_page(
         <input type="hidden" name="farm" value="{h(selected_farm)}">
         <input type="hidden" name="rank" value="{h(selected_window)}">
         <input type="hidden" name="limit" value="{h(page_limit)}">
-        {render_exchange_filter(query, market_data.get("exchange_options") or [])}
+        {render_exchange_filter(query, market_data.get("exchange_options") or [], funding_only=True)}
         <label for="funding-token-search">Find a token in the complete catalogue</label>
         <input id="funding-token-search" name="q" value="{h(_query_first(query, "q") or "")}" placeholder="e.g. ONG, GUA, BTC" autocomplete="off">
         <button type="submit">Search</button>
@@ -11176,6 +11179,7 @@ def render_funding_page(
                             "rank": selected_window,
                             "limit": page_limit,
                             "q": str(group.get("token") or "").strip().upper(),
+                            **({"exchange": _query_first(query, "exchange")} if _query_first(query, "exchange") else {}),
                         }
                     )
                 ),
@@ -12237,7 +12241,7 @@ def _position_opened_us(value: Any) -> int | None:
     except ValueError:
         return None
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
+        moment = moment.replace(tzinfo=UTC)
     timestamp = int(moment.timestamp() * 1_000_000)
     now_us = int(time.time() * 1_000_000)
     if timestamp > now_us:
@@ -14037,7 +14041,7 @@ def render_status_page(payload: dict[str, Any]) -> str:
             parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         except (TypeError, ValueError):
             return "unavailable"
-        return parsed.astimezone(timezone.utc).strftime("%d %b %Y · %H:%M UTC")
+        return parsed.astimezone(UTC).strftime("%d %b %Y · %H:%M UTC")
 
     try:
         checked_at = datetime.fromisoformat(str(payload.get("checked_at"))).strftime(
@@ -14141,7 +14145,7 @@ def render_register_page(query: dict[str, list[str]] | None = None) -> str:
 *{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}}.login-shell{{width:min(376px,100%)}}.login-brand{{display:flex;align-items:center;gap:9px;margin-bottom:24px;font-size:15px;font-weight:650}}.login-mark{{width:10px;height:10px;border:0;border-radius:50%;background:var(--accent);box-shadow:none}}.login-panel{{padding:24px 0;border:1px solid var(--line);border-width:1px 0;border-radius:0;background:transparent}}h1{{margin:0 0 8px;font-size:27px;font-weight:650;letter-spacing:-.03em}}p{{color:var(--muted);margin:0 0 24px;line-height:1.5;font-size:12.5px}}label{{display:grid;gap:7px;margin:0 0 16px;color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}}input{{width:100%;min-height:42px;border:1px solid var(--line);background:var(--field);color:var(--ink);border-radius:2px;padding:0 13px;font:inherit}}input:focus{{outline:2px solid var(--accent);outline-offset:1px}}.field-hint{{margin-top:-10px;margin-bottom:16px;color:var(--muted);font-size:11px}}.login-panel button{{width:100%;min-height:42px;border:0;border-radius:2px;background:var(--accent);color:var(--button-ink);font:inherit;font-weight:700;cursor:pointer}}button:disabled{{opacity:.55;cursor:wait}}.login-error{{min-height:20px;margin:14px 0 0;color:var(--danger);font-size:13px;line-height:1.45}}.login-note{{margin-top:18px;color:var(--muted);font-size:11px;line-height:1.5;text-align:center}}.login-note a{{color:var(--accent);font-weight:800}}
 .auth-theme-toggle{{position:fixed;top:18px;right:18px;display:inline-flex;align-items:center;gap:7px;width:auto;min-height:34px;padding:0 10px;border:1px solid var(--line);border-radius:3px;background:var(--toggle);color:var(--ink);font:inherit;font-size:11px;font-weight:700;cursor:pointer}}.theme-swatch{{width:13px;height:13px;border:1px solid var(--line);border-radius:50%;background:linear-gradient(90deg,var(--accent) 0 50%,var(--panel) 50% 100%)}}
 @media(max-width:560px){{.auth-theme-toggle{{top:12px;right:12px}}}}
-</style><noscript><style>.auth-theme-toggle{{display:none}}</style></noscript></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div><section class="login-panel"><h1>Create your account</h1><p>Set up your private workspace, then choose prepaid crypto access.</p><form id="registerForm" action="/api/register" method="post"><label>Name<input name="display_name" maxlength="100" autocomplete="name" required autofocus></label><label>Email<input name="email" type="email" maxlength="254" autocomplete="email" inputmode="email" autocapitalize="none" spellcheck="false" required></label><label>Password<input name="password" type="password" minlength="12" maxlength="1024" autocomplete="new-password" aria-describedby="passwordHint" required></label><div class="field-hint" id="passwordHint">At least 12 characters.</div><button type="submit">Continue</button><div class="login-error" role="alert" aria-live="polite">{h(error_message)}</div></form></section><div class="login-note">Already registered? <a href="/login">Sign in</a><br><br><a href="/forgot-password">Reset your password</a> · <a href="/pricing">See membership details</a></div></main>
+</style><noscript><style>.auth-theme-toggle{{display:none}}</style></noscript></head><body><main class="login-shell"><div class="login-brand"><span class="login-mark"></span>SpreadBoard</div><section class="login-panel"><h1>Create your account</h1><p>Create your account and link Telegram to start 7 days of full website access free. One trial per person and Telegram account. No payment required; access expires automatically.</p><form id="registerForm" action="/api/register" method="post"><label>Name<input name="display_name" maxlength="100" autocomplete="name" required autofocus></label><label>Email<input name="email" type="email" maxlength="254" autocomplete="email" inputmode="email" autocapitalize="none" spellcheck="false" required></label><label>Password<input name="password" type="password" minlength="12" maxlength="1024" autocomplete="new-password" aria-describedby="passwordHint" required></label><div class="field-hint" id="passwordHint">At least 12 characters.</div><button type="submit">Continue</button><div class="login-error" role="alert" aria-live="polite">{h(error_message)}</div></form></section><div class="login-note">Already registered? <a href="/login">Sign in</a><br><br><a href="/forgot-password">Reset your password</a> · <a href="/pricing">See membership details</a></div></main>
 <button class="auth-theme-toggle" id="themeToggle" type="button" aria-label="Toggle light and dark mode" aria-pressed="false"><span class="theme-swatch" aria-hidden="true"></span><span data-theme-label>Theme</span></button>
 <script>
 (() => {{
@@ -14504,7 +14508,7 @@ def render_pricing_page(query: dict[str, list[str]] | None = None) -> str:
       {referral_banner}
       <header class="pricing-intro"><span class="page-kicker">Membership</span><h1>Current market evidence, clearly labelled.</h1><p>Start with proof, then pay once in USDC or USDT on Arbitrum. No card, no automatic renewal. Scanner unlocks discovery; Research Pro adds evidence. Coverage is source-dependent, and unavailable sources stay labelled.</p></header>
       <section class="pricing-tiers">{"".join(cards)}</section>
-      <section class="pricing-block"><h2>What you get &mdash; and how to start</h2><div class="pricing-steps"><article><b>01</b><h3>Create your account</h3><p>Compare the free proof pages first, then sign in to choose Scanner or Research Pro.</p></article><article><b>02</b><h3>Pay the exact crypto invoice</h3><p>Select USDC or USDT on Arbitrum, scan the token-specific QR, and send the exact amount shown.</p></article><article><b>03</b><h3>Open your exact tier</h3><p>The invoice activates only the tier printed on it. Research Pro also unlocks the private Telegram forum.</p></article></div></section>
+      <section class="pricing-block"><h2>What you get &mdash; and how to start</h2><div class="pricing-steps"><article><b>01</b><h3>Create your account</h3><p>Register and link Telegram for 7 days of full website access. One trial per person and Telegram identity; no payment required.</p></article><article><b>02</b><h3>Continue after your trial</h3><p>Select USDC or USDT on Arbitrum, scan the token-specific QR, and send the exact amount shown.</p></article><article><b>03</b><h3>Open your exact tier</h3><p>The invoice activates only the tier printed on it. Research Pro also unlocks the private Telegram forum.</p></article></div></section>
       <section class="pricing-block"><h2>Scanner prepaid terms</h2>{render_membership_terms(tier="scanner")}<h2 class="pricing-term-heading">Research Pro prepaid terms</h2>{render_membership_terms(tier="research_pro")}<p class="pricing-note">Each amount is billed once in crypto. Access lapses unless you create and pay a new invoice.</p></section>
       <section class="pricing-block"><h2>Why membership</h2><div class="reason-grid">{render_membership_reasons()}</div></section>
       <p class="pricing-note">Public market data, not investment advice. Every route carries execution risk.</p>
@@ -15300,7 +15304,7 @@ def render_legal_page(page: str) -> str:
                 ),
                 (
                     "Notifications",
-                    "Pushover user keys are encrypted at rest. Telegram and Pushover identifiers are used only to deliver the features you enable. For optional browser alerts, the Web Push subscription endpoint, browser public-key material, and user-agent label are stored so alerts can reach that browser; SpreadBoard never stores a browser private key.",
+                    "Pushover user keys are encrypted at rest. Telegram and Pushover identifiers deliver the features you enable. For free-trial abuse prevention, hashes of the linked Telegram identity and normalized email, plus claim and expiry timestamps, are retained after unlinking or account deletion so another registration does not reset eligibility. For optional browser alerts, the Web Push subscription endpoint, browser public-key material, and user-agent label are stored so alerts can reach that browser; SpreadBoard never stores a browser private key.",
                 ),
                 (
                     "Exchange credentials",
@@ -16024,9 +16028,14 @@ def render_account_settings(
     if telegram_state["configured"] and telegram_link["linked"]:
         telegram_action = '<button class="sheet-button" type="button" data-telegram-action="unlink">Disconnect Telegram</button>'
         telegram_note = f"Linked since {h(telegram_link.get('linked_at') or '')}."
+        if user.subscription_status == "trialing":
+            telegram_note += f" Your trial expires {h(user.subscription_expires_at or '')}. Unlinking does not restart it."
+        elif not user.subscription_active:
+            telegram_note += " No free trial is available for this account and linked Telegram identity. One trial is available per new member and Telegram identity."
+
     elif telegram_state["configured"]:
         telegram_action = '<button class="sheet-button primary" type="button" data-telegram-action="link">Connect Telegram bot</button>'
-        telegram_note = "The one-time link expires after 10 minutes."
+        telegram_note = "Link Telegram to activate your eligible 7-day full-access trial. One trial per Telegram identity; unlinking or creating another account does not reset it. This connection link expires after 10 minutes."
     else:
         telegram_action = "<span>Telegram subscription commands are awaiting the dedicated bot credentials.</span>"
         telegram_note = "No Telegram account data is stored until you explicitly link it."
@@ -16061,7 +16070,7 @@ def render_account_settings(
       <div class="account-panel-head"><div><h2>Account settings</h2><p>Capital is optional and is used only as the denominator for return statistics; it never changes position PnL.</p></div></div>
       <form data-account-settings><label><span>Display name</span><input name="display_name" value="{h(user.display_name)}" required></label><label><span>Total capital allocated to this strategy, USD</span><input name="monthly_capital_usd" type="number" min="0" step="0.01" value="{h(user.monthly_capital_usd or "")}"><em>Optional portfolio-level denominator. Leave blank to use each position's per-leg allocation.</em></label><button class="sheet-button primary" type="submit">Save settings</button><p class="wide" role="status" data-account-settings-status></p></form>
       <div class="account-empty-panel"><strong>Prepaid membership</strong><p>{h(user.subscription_status)} · {h(cancel_note)}</p>{billing_action}<p role="alert" data-billing-error></p></div>
-      <div class="account-empty-panel" data-telegram-access><strong>Telegram subscriber access</strong><p>{telegram_note}</p>{telegram_action}<a class="sheet-button" data-telegram-fallback hidden rel="noopener">Open Telegram manually</a><p>{h(telegram_access_note)}</p><p role="alert" data-telegram-error></p></div>
+      <div class="account-empty-panel" data-telegram-access><strong>Telegram linking and free trial</strong><p>{telegram_note}</p>{telegram_action}<a class="sheet-button" data-telegram-fallback hidden rel="noopener">Open Telegram manually</a><p>{h(telegram_access_note)}</p><p role="alert" data-telegram-error></p></div>
       <form data-pushover-settings>
         <label><span>Pushover user key</span><input name="pushover_user_key" type="password" autocomplete="off" placeholder="{h(push_key_note)}"></label>
         <label><span>Device</span><input name="pushover_device" value="{h(push.get("pushover_device") or "")}" placeholder="Optional"></label>
@@ -19336,7 +19345,7 @@ def fmt_next_funding(timestamp_us: Any) -> str:
         return "not reported"
     seconds = value / 1_000_000.0
     remaining = max(0, int(seconds - time.time()))
-    when = datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%H:%M UTC")
+    when = datetime.fromtimestamp(seconds, tz=UTC).strftime("%H:%M UTC")
     if remaining <= 0:
         return when
     hours, remainder = divmod(remaining, 3600)
@@ -19363,7 +19372,7 @@ def render_funding_history_dialog(detail: dict[str, Any]) -> str:
     for timestamp_ms in timestamps:
         long_item = long_history.get(timestamp_ms) or {}
         short_item = short_history.get(timestamp_ms) or {}
-        stamp = datetime.fromtimestamp(float(timestamp_ms) / 1000.0, tz=timezone.utc).strftime(
+        stamp = datetime.fromtimestamp(float(timestamp_ms) / 1000.0, tz=UTC).strftime(
             "%d %b %H:%M"
         )
         rows.append(

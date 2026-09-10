@@ -971,7 +971,7 @@ def _matches_dynamic(row: dict[str, Any], filters: dict[str, Any]) -> bool:
     ):
         return False
     funding = api_spreads._effective_funding_24h_dict(row)
-    if filters.get("funding_only") and not (funding is not None and funding > 0):
+    if filters.get("funding_only") and (not api_spreads.funding_route_enabled(row) or not (funding is not None and funding > 0)):
         return False
     threshold = filters.get("min_abs_funding_24h_pct")
     return threshold is None or abs(funding or 0.0) >= float(threshold)

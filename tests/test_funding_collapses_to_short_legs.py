@@ -38,7 +38,7 @@ def test_one_route_survives_per_short_leg() -> None:
     routes = [
         _route("Aster", long_venue="Gate", spread=0.10),
         _route("Aster", long_venue="Mexc", spread=0.90),
-        _route("Aster", long_venue="HTX", spread=0.40),
+        _route("Aster", long_venue="OKX", spread=0.40),
         _route("XT", long_venue="Gate", spread=0.20),
     ]
 
@@ -71,8 +71,8 @@ def test_the_same_venue_on_different_contracts_is_not_collapsed() -> None:
 
 def test_spot_and_futures_shorts_stay_distinct() -> None:
     routes = [
-        _route("HTX", long_venue="A", spread=0.1, short_type="Spot"),
-        _route("HTX", long_venue="B", spread=0.2, short_type="Futures"),
+        _route("OKX", long_venue="A", spread=0.1, short_type="Spot"),
+        _route("OKX", long_venue="B", spread=0.2, short_type="Futures"),
     ]
 
     kept = funding_catalog.collapse_to_short_legs(routes)
@@ -89,14 +89,14 @@ def test_collapsing_preserves_every_short_leg() -> None:
 
     routes = [
         _route(v, long_venue=lv, spread=0.1 * i)
-        for i, v in enumerate(["Aster", "XT", "Gate", "Bitget", "HTX", "Binance", "Bybit", "Mexc"])
+        for i, v in enumerate(["Aster", "XT", "Gate", "Bitget", "OKX", "Binance", "Bybit", "Mexc"])
         for lv in ("L1", "L2", "L3")
     ]
 
     kept = funding_catalog.collapse_to_short_legs(routes)
 
     assert {r["short_venue"] for r in kept} == {
-        "Aster", "XT", "Gate", "Bitget", "HTX", "Binance", "Bybit", "Mexc"
+        "Aster", "XT", "Gate", "Bitget", "OKX", "Binance", "Bybit", "Mexc"
     }
     assert len(kept) == 8
 
@@ -145,7 +145,7 @@ def test_the_generation_build_actually_collapses(monkeypatch) -> None:
                 _route("Aster", long_venue="Gate", spread=0.1),
                 _route("Aster", long_venue="Mexc", spread=0.9),
                 _route("XT", long_venue="Gate", spread=0.2),
-                _route("XT", long_venue="HTX", spread=0.3),
+                _route("XT", long_venue="OKX", spread=0.3),
             ],
         }
     }
@@ -345,7 +345,7 @@ def test_futures_futures_routes_are_not_merged_on_the_short_alone() -> None:
 
     routes = [
         _ff_route("Gate", long_venue="Mexc", long_funding=0.0),
-        _ff_route("Gate", long_venue="HTX", long_funding=0.05),
+        _ff_route("Gate", long_venue="OKX", long_funding=0.05),
         _ff_route("Gate", long_venue="Bitget", long_funding=0.11),
     ]
 
@@ -361,14 +361,14 @@ def test_a_spot_long_pays_no_funding_so_those_do_collapse() -> None:
 
     routes = [
         _route("Gate", long_venue="Mexc", spread=0.1),
-        _route("Gate", long_venue="HTX", spread=0.9),
+        _route("Gate", long_venue="OKX", spread=0.9),
         _route("Gate", long_venue="Bitget", spread=0.3),
     ]
 
     kept = funding_catalog.collapse_to_short_legs(routes)
 
     assert len(kept) == 1
-    assert kept[0]["long_venue"] == "HTX"
+    assert kept[0]["long_venue"] == "OKX"
 
 
 def test_a_dex_long_also_collapses() -> None:

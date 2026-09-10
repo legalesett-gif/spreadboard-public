@@ -107,7 +107,7 @@ def _read_persisted_cache() -> tuple[dict[str, dict[str, Any]], float]:
                     if isinstance(routes, dict):
                         payload["routes"] = PackedRoutes.restore(routes)
                     if any(
-                        not api_spreads.opportunity_route_enabled(route)
+                        not api_spreads.funding_route_enabled(route)
                         for route in payload.get("routes") or []
                         if isinstance(route, dict)
                     ):
@@ -340,7 +340,7 @@ def collapse_to_short_legs(
     best: dict[tuple[Any, ...], dict[str, Any]] = {}
     unkeyed: list[dict[str, Any]] = []
     for route in routes:
-        if not isinstance(route, dict) or not api_spreads.opportunity_route_enabled(route):
+        if not isinstance(route, dict) or not api_spreads.funding_route_enabled(route):
             continue
         leg = _short_leg_key(route)
         if leg is None:
@@ -707,7 +707,7 @@ def _common_eligible(
     exchange: str | None,
     quote: str | None,
 ) -> bool:
-    if not api_spreads.opportunity_route_enabled(route):
+    if not api_spreads.funding_route_enabled(route):
         return False
     if not _kind_matches(route, route_kind):
         return False
@@ -764,7 +764,7 @@ def _live_current_value(
             return None
         rate = _number(leg.get("rate_pct"))
         interval = _number(leg.get("interval_hours"))
-        if rate is None or interval is None or interval <= 0:
+        if rate is None or interval is None or interval <= 0 or leg.get("interval_assumed"):
             return None
         daily[side] = rate * 24.0 / interval
     return daily["short"] - daily["long"] if has_futures else None

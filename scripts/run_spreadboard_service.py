@@ -3745,10 +3745,10 @@ def _refresh_venue_funding_history(
                     budget_seconds=30.0,
                 )
                 modes.append("demand")
-            demanded_set = set(demanded_legs)
-            ordinary_priorities = [
-                leg for leg in priority_legs if leg not in demanded_set
-            ]
+            # The 30-second newest-first pass may not reach thousands of
+            # demanded legs. Keep them in the fair rotating pass too; build()
+            # skips legs already refreshed through their next settlement.
+            ordinary_priorities = list(dict.fromkeys([*priority_legs, *demanded_legs]))
             if ordinary_priorities:
                 windows = venue_funding_history.build(
                     list(dict.fromkeys(catalog_legs)),

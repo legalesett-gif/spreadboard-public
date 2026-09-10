@@ -95,7 +95,7 @@ def test_authenticated_http_boundary_and_csrf(tmp_path, monkeypatch: pytest.Monk
         response = connection.getresponse()
         assert response.status == 201
         member_cookie = response.getheader("Set-Cookie")
-        assert json.loads(response.read())["next"] == "/subscription"
+        assert json.loads(response.read())["next"] == "/account#settings"
         connection.request("GET", "/api/board", headers={"Cookie": member_cookie})
         response = connection.getresponse()
         assert response.status == 402

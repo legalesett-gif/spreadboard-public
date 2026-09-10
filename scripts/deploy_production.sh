@@ -41,7 +41,7 @@ fi
 ssh_do() { ssh -i "$KEY" -o ConnectTimeout=60 "$HOST" "$@"; }
 
 scan_running() {
-  ssh_do 'docker top app-collector-1 2>/dev/null | grep -c api_discovery_worker || true' | tr -d '[:space:]'
+  ssh_do 'docker top app-collector-1 2>/dev/null | grep -Ec "api_discovery_worker|snapshot_finalize_worker" || true' | tr -d '[:space:]'
 }
 
 restarts_before=$(ssh_do 'docker inspect app-app-1 app-collector-1 --format "{{.RestartCount}}" | paste -sd, -')
@@ -92,6 +92,17 @@ rsync -a -e "ssh -i $KEY -o ConnectTimeout=60" \
 
 echo "==> building: ${SERVICES[*]}"
 ssh_do "cd $APP_DIR && docker compose -f $COMPOSE build ${SERVICES[*]}"
+
+# A scan or its finalizer can start while the image builds. Recheck at the
+# actual recreation boundary; a clear pre-build inventory is not permission
+# to kill a newer worker. App-only releases remain independent of discovery.
+if [[ $COLLECTOR_REQUESTED -eq 1 && $FORCE -eq 0 ]]; then
+  RUNNING=$(scan_running)
+  if [[ "$RUNNING" != "0" && "$RUNNING" != "" ]]; then
+    echo "REFUSING: discovery or snapshot finalization started during the build." >&2
+    exit 1
+  fi
+fi
 
 echo "==> restarting: ${SERVICES[*]}"
 ssh_do "cd $APP_DIR && docker compose -f $COMPOSE up -d --no-deps ${SERVICES[*]}"
