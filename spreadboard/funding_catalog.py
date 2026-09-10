@@ -69,6 +69,8 @@ def _read_persisted_cache() -> tuple[dict[str, dict[str, Any]], float]:
     schema = None
     saved_at = 0.0
     saw_payloads = False
+    removed_venues = False
+    removed_from_legacy_rows = False
     envelope_keys: set[str] = set()
     keys: dict[str, str] = {}
     try:
@@ -106,17 +108,25 @@ def _read_persisted_cache() -> tuple[dict[str, dict[str, Any]], float]:
                     routes = payload.get("routes")
                     if isinstance(routes, dict):
                         payload["routes"] = PackedRoutes.restore(routes)
-                    if any(
-                        not api_spreads.funding_route_enabled(route)
-                        for route in payload.get("routes") or []
-                        if isinstance(route, dict)
-                    ):
-                        # A disabled long could have displaced an alternative
-                        # in a legacy reduced generation. Reject, do not prune.
-                        raise ValueError("persisted_funding_venue_policy_changed")
+                    current_routes = payload.get("routes") or []
+                    kept = [route for route in current_routes if api_spreads.funding_route_enabled(route)]
+                    if len(kept) != len(current_routes):
+                        removed_venues = True
+                        removed_from_legacy_rows |= not isinstance(current_routes, PackedRoutes)
+                        # Version 2 packed blocks retain every pair. Filtering
+                        # before ranking cannot hide an eligible alternative,
+                        # and keeps Funding available during a queued rebuild.
+                        payload["routes"] = PackedRoutes(kept)
+                        payload["route_count"] = len(kept)
+                        payload["displayed_route_count"] = len(kept)
+                        if not kept:
+                            continue
                     payloads[token] = payload
     except (ijson.JSONError, StopIteration, OverflowError) as exc:
         raise ValueError("invalid_persisted_funding_catalog") from exc
+    if removed_venues and (schema != PERSISTED_SCHEMA or removed_from_legacy_rows):
+        # Reduced legacy rows may already have discarded the allowed long.
+        raise ValueError("persisted_funding_venue_policy_changed")
     if schema not in {PERSISTED_SCHEMA, LEGACY_PERSISTED_SCHEMA} or not saw_payloads or not payloads:
         raise ValueError("invalid_persisted_funding_catalog")
     return payloads, saved_at

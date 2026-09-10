@@ -1172,4 +1172,20 @@ def test_persisted_funding_reader_streams_tokens_and_validates_entire_file(tmp_p
     with pytest.raises(ValueError): funding_catalog._read_persisted_cache()
     envelope['payloads']['A.B']['routes'] = PackedRoutes([{**rows[0], 'long_venue':'Ourbit'}]).envelope()
     path.write_bytes(orjson.dumps(envelope))
+    restored, _ = funding_catalog._read_persisted_cache()
+    assert 'A.B' not in restored
+    assert restored['LEGACY']['routes'] == rows
+    envelope['schema'] = funding_catalog.LEGACY_PERSISTED_SCHEMA
+    path.write_bytes(orjson.dumps(envelope))
     with pytest.raises(ValueError, match='venue_policy_changed'): funding_catalog._read_persisted_cache()
+
+
+@pytest.mark.parametrize('retired', ['HTX','CoinEx','Phemex','Ourbit'])
+def test_lossless_restore_keeps_every_allowed_alternative_before_ranking(tmp_path, monkeypatch, retired):
+    from spreadboard.packed_routes import PackedRoutes
+    monkeypatch.setattr(funding_catalog,'DEFAULT_CACHE_PATH',tmp_path/'catalog.json')
+    rows=[{'route_key':str(i),'long_venue':v,'short_venue':'Bybit'} for i,v in enumerate([retired,'Gate','Mexc','Hyperliquid'])]
+    funding_catalog._persist_cache({'ONE':{'routes':PackedRoutes(rows),'route_count':4}})
+    restored,_=funding_catalog._read_persisted_cache()
+    assert [r['route_key'] for r in restored['ONE']['routes']] == ['1','2','3']
+    assert restored['ONE']['route_count'] == 3

@@ -48,3 +48,11 @@ The first live parser audit covered 20 enabled venue labels, including spot-only
 - Funding count audit: 9,877 venue-contract rows versus 2,370 distinct base labels before active-status/identity deduplication, excluding CoinEx/Phemex. These labels are not a verified asset count. Negative contracts must remain available because two negative legs can form a positive net pair.
 - Rollback backup: `/opt/spreadboard/backups/release-20260910T231424Z-funding-trial`; online SQLite backup checked `ok`, source archive and original image IDs saved with restrictive permissions.
 - Candidate source digest: `745eddbf3b028a1e`. Production verification will be recorded below; these checks alone do not assert deployment.
+
+## First deployment and recovery follow-up
+
+- Both containers verified `745eddbf3b028a1e`; health returned 200, restart counts zero and OOM flags false after recreation. Trial tables were created successfully.
+- Native production cache now publishes hourly Binance/BingX ONG schedules. Funding refresh rotates all enabled venues; old entries age out or are replaced per leg.
+- Fresh health showed 207,908 priced routes / 215,062 indexed routes, with 1,310 priced token groups. This is one warm sample, not stability acceptance.
+- Initial exact funding searches stayed empty while the previous catalogue was rejected for retired venues and a new build waited behind a structural materializer. Native prices were unaffected. The normal publisher completed a new 44,814,105-byte catalogue at 23:30:23 UTC, 5,902 tokens, 32.7 seconds of child work, 177.2 MB peak child RSS and 204.9 seconds including queue wait.
+- Recovery follow-up: lossless v2 packed catalogues can filter retired venues before ranking while preserving every allowed alternative. Reduced legacy generations still fail closed. This avoids page-wide warming on later venue-policy changes. Full follow-up suite: **2864 passed in 117.36s**; unchanged Ruff ratchet, 502 known findings.
