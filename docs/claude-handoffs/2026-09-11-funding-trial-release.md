@@ -4,7 +4,7 @@
 
 Use `/Users/sviatoslav/Desktop/Spread Arbitrage/tmp/spreadboard-exchanges-trial`, branch `codex/exchanges-funding-trial-20260910`. The root project and older clones have unrelated changes. Do not reset/clean them or deploy an older clone.
 
-The parent source is the exact Sep10 deployed web revision. Merge `29d3cf9` incorporates the earlier stability/retention source while preserving recent Portfolio work. Feature commit `f95cce6` deployed to both web and collector as source digest `745eddbf3b028a1e`; a subsequent bounded catalogue recovery fix is being verified and will be recorded below.
+The parent source is the exact Sep10 deployed web revision. Merge `29d3cf9` incorporates the earlier stability/retention source while preserving recent Portfolio work. Feature commit `f95cce6` deployed to both web and collector as source digest `745eddbf3b028a1e`; follow-up commit `d349e95` is now deployed to both services with source digest `4c532517549fed61`.
 
 No trades, borrowing, repayment, conversion, transfer or withdrawal. No Telegram channel messages. Status Pushover remains off. The old scheduled stability task remains paused; do not restart it. No raised RAM limits, subscription caps, or weakened accuracy gate.
 
@@ -40,3 +40,12 @@ The first accepted suite was 2860 passing tests and unchanged Ruff ratchet (502 
 ## Required release procedure
 
 Run unmasked full pytest and the existing Ruff ratchet; inspect actual exit codes. Preserve generated/runtime data and current identity registry. `scripts/deploy_production.sh app collector` checks discovery/finalization before build and again before recreation. Do not use `--force`. Avoid destroying other long-running structural rebuilds unnecessarily. Confirm both container source digests including baked data, then verify actual UI/API behavior; a health 200 alone is insufficient.
+
+## Final deployment verification
+
+- Follow-up deployment exited 0: health 200, app and collector source both `4c532517549fed61`, zero restarts and no OOM flags immediately after recreation. Full suite: **2864 passed**, Ruff ratchet unchanged at 502 known findings.
+- Production browser recovered ONG with 56 exact pairs; group headline and Now cell agreed (+2.808% projected at that snapshot). Gate 30d remained unavailable with an explicit cadence-gap reason. This is evidence of truthful missing-data handling, not proof of complete coverage.
+- Final health: 9400 catalogue legs, 3116 current 24h, 2992 current 7d, 2576 current 30d; 5 retryable errors. `catch_up_complete=false`.
+- Fresh memory snapshot: app 1.79 GiB/3.5 GiB; collector 1.77 GiB/4 GiB. No limit changes.
+- **Settlement ledger population remains unverified:** a fresh search in runtime and `/app` found no `funding_settlements.sqlite3` yet. Inspect ordinary history-worker scheduling and first successful write before claiming incremental production operation. Native BitMart history still bypasses the new CCXT incremental-store path; extend and test that separately.
+- Final source worktree is clean before documentation-only closeout. Production exclusions and parser no-network behavior were covered by regression tests; complete post-release expanded-row, exchange-filter and Hyperliquid UI acceptance remains to be recorded.

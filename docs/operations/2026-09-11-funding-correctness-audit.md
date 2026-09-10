@@ -56,3 +56,9 @@ The first live parser audit covered 20 enabled venue labels, including spot-only
 - Fresh health showed 207,908 priced routes / 215,062 indexed routes, with 1,310 priced token groups. This is one warm sample, not stability acceptance.
 - Initial exact funding searches stayed empty while the previous catalogue was rejected for retired venues and a new build waited behind a structural materializer. Native prices were unaffected. The normal publisher completed a new 44,814,105-byte catalogue at 23:30:23 UTC, 5,902 tokens, 32.7 seconds of child work, 177.2 MB peak child RSS and 204.9 seconds including queue wait.
 - Recovery follow-up: lossless v2 packed catalogues can filter retired venues before ranking while preserving every allowed alternative. Reduced legacy generations still fail closed. This avoids page-wide warming on later venue-policy changes. Full follow-up suite: **2864 passed in 117.36s**; unchanged Ruff ratchet, 502 known findings.
+
+## Follow-up release accepted
+
+Commit `d349e95` deployed successfully to both services, source digest `4c532517549fed61`; deployment exit 0 and health 200. Full tests: 2864 passed; no new Ruff findings. Lossless packed funding catalogues now retain allowed routes across venue-policy changes without waiting for a whole rebuild.
+
+Final health still reports incomplete historical coverage: 3116/9400 current 24h, 2992/9400 current 7d and 2576/9400 current 30d legs. ONG production showed consistent projected group values and an explicit unavailable Gate 30d gap. Incremental SQLite production writes have not yet been observed; native BitMart also needs equivalent storage integration. The 48h stability and normal-backup acceptance remain open. See the Claude handover for concrete follow-ups.
