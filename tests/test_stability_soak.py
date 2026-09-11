@@ -7,7 +7,7 @@ from scripts import stability_soak as soak
 
 
 def test_health_probe_records_metrics_and_drops_unrelated_payload(monkeypatch):
-    payload = {"unrelated_private_field": "do-not-save", "source_health": {
+    payload = {"unrelated_private_field": "do-not-save", "funding_history": {"catalog_leg_count": 10, "private": "do-not-save"}, "source_health": {
         "materialized_views": {"live_query_universe": {"current_priced_route_count": 12}},
     }}
     response = io.StringIO(json.dumps(payload))
@@ -16,6 +16,7 @@ def test_health_probe_records_metrics_and_drops_unrelated_payload(monkeypatch):
     sample = soak.endpoint_sample("/api/health")
     assert sample["code"] == 200
     assert sample["universe"]["current_priced_route_count"] == 12
+    assert sample["funding_history"]["catalog_leg_count"] == 10
     assert "do-not-save" not in json.dumps(sample)
 
 

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -124,6 +125,14 @@ def _ensure_repository() -> None:
                 _run_restic([RESTIC, "init"], check=True)
                 return
             reason = "backend_unavailable"
+            if "repository is already locked" in combined:
+                # Never remove live locks. restic's default unlock checks age
+                # and owner liveness; --remove-all must never be used here.
+                unlock = _run_restic(
+                    [RESTIC, "unlock"], capture_output=True, text=True,
+                    check=False, timeout=120,
+                )
+                reason = "backend_locked" if unlock.returncode == 0 else "backend_unlock_failed"
             for marker, category in (
                 ("rate_limit_exceeded", "backend_rate_limited"),
                 ("ratelimitexceeded", "backend_rate_limited"),
@@ -139,8 +148,8 @@ def _ensure_repository() -> None:
 
 def _backup_sqlite(source: Path, destination: Path) -> None:
     try:
-        with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as source_db:
-            with sqlite3.connect(destination) as destination_db:
+        with closing(sqlite3.connect(f"file:{source}?mode=ro", uri=True)) as source_db:
+            with closing(sqlite3.connect(destination)) as destination_db:
                 source_db.backup(destination_db)
     except sqlite3.DatabaseError:
         # A file with a database suffix may be an incomplete cache. Never turn
@@ -152,7 +161,7 @@ def _backup_sqlite(source: Path, destination: Path) -> None:
 def _excluded(path: Path, root: Path) -> bool:
     relative = path.relative_to(root)
     name = path.name.casefold()
-    if any(part in {"__pycache__", "historical_spread_cache"} for part in relative.parts):
+    if any(part in {"__pycache__", "historical_spread_cache", "restic-cache"} for part in relative.parts):
         return True
     if name.endswith(("-wal", "-shm", ".tmp", ".log")):
         return True

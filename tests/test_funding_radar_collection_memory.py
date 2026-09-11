@@ -43,7 +43,7 @@ def test_actual_evidence_pass_keeps_last_route_per_identity_without_rich_rows(
     monkeypatch.setattr(service, 'WARM_QUERIES', [{'funding_only': True}])
     monkeypatch.setattr(service, 'FUNDING_ARCHIVE_QUERIES', [])
     monkeypatch.setattr(service, '_refresh_complete_funding_catalog', lambda **kwargs: None)
-    monkeypatch.setattr(service, '_refresh_venue_funding_history', lambda **kwargs: None)
+    monkeypatch.setattr(service.funding_history_demand, 'enqueue', lambda legs: None)
     monkeypatch.setattr(server, 'api_market_spreads', lambda *args: {
         'groups': [{'routes': [warm], 'best_funding_route': leader}],
     })
@@ -94,9 +94,9 @@ def test_evidence_releases_unselected_query_cache_before_history_and_radar(monke
         "groups": [{"routes": [warm], "best_funding_route": warm}],
     })
 
-    def history(**kwargs):
+    def history(legs):
         assert reference() is None
-        assert kwargs["priority_routes"] == [warm]
+        assert legs == [("Gate", "TOKEN1/USDT:USDT")]
         phases.append("history")
 
     def radar(routes):
@@ -105,7 +105,7 @@ def test_evidence_releases_unselected_query_cache_before_history_and_radar(monke
         phases.append("radar")
         return 1
 
-    monkeypatch.setattr(service, "_refresh_venue_funding_history", history)
+    monkeypatch.setattr(service.funding_history_demand, "enqueue", history)
     monkeypatch.setattr(market_history, "write_funding_windows", lambda keys: len(keys))
     monkeypatch.setattr(funding_catalog, "archive_routes", lambda: iter(()))
     monkeypatch.setattr(funding_radar, "refresh", radar)

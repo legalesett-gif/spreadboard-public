@@ -31,7 +31,7 @@ def test_collector_bootstrap_starts_and_joins_independent_catalog_publisher(monk
         def stop(self): pass
 
     for name in ('RefreshLoop','LiveRouteIndexPublisher','BulkQuoteLoop','BulkFundingLoop',
-                 'MarketEvidenceLoop','ChartHistoryWarmLoop','FundingCatalogPublisher','MemoryWatchdog'):
+                 'MarketEvidenceLoop','SettlementHistoryLoop','ChartHistoryWarmLoop','FundingCatalogPublisher','MemoryWatchdog'):
         monkeypatch.setattr(service,name,lambda *args,_name=name,**kwargs:Component(_name, **kwargs),raising=False)
     monkeypatch.setattr(service,'SNAPSHOT_PATH',tmp_path/'absent.json')
     monkeypatch.setattr(service.market_history,'initialize',lambda:None)
@@ -41,6 +41,8 @@ def test_collector_bootstrap_starts_and_joins_independent_catalog_publisher(monk
     monkeypatch.setattr(service,'_log',lambda _:None)
     monkeypatch.setattr(service,'_refresh_complete_funding_catalog',lambda *,force:refresh.append(force))
     assert service._run_collector_service()==0
+    assert started.count('SettlementHistoryLoop')==1
+    assert joined.count('SettlementHistoryLoop')==1
     assert started.count('FundingCatalogPublisher')==1
     assert joined.count('FundingCatalogPublisher')==1
     assert refresh==[False]

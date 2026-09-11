@@ -38,6 +38,12 @@ def endpoint_sample(path: str) -> dict:
                     "current_priced_token_count", "funding_only_route_count",
                     "current_priced_route_kind_counts", "generation", "refresh_seconds",
                 )}
+                funding = payload.get("funding_history") or {}
+                result["funding_history"] = {key: funding.get(key) for key in (
+                    "catalog_leg_count", "window_leg_counts", "window_coverage_pct",
+                    "overdue_window_leg_counts", "retryable_error_leg_count",
+                    "deep_history_pending_leg_count", "current_window_catch_up_complete",
+                )}
     except urllib.error.HTTPError as exc:
         result["code"] = exc.code
     except Exception as exc:  # noqa: BLE001 - keep collecting evidence after probe failures.

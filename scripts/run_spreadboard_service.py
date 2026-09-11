@@ -1626,6 +1626,7 @@ def _run_collector_service() -> int:
         refresh_loop=refresh_loop,
         route_index_publisher=route_index_publisher,
     )
+    settlement_history_loop = SettlementHistoryLoop(refresh_loop.stop_event)
     refresh_loop.startup_evidence_ready = market_evidence_loop.first_sweep_done
     chart_history_loop = ChartHistoryWarmLoop(
         refresh_loop.stop_event,
@@ -1649,6 +1650,7 @@ def _run_collector_service() -> int:
     bulk_funding_loop.start()
     funding_catalog_publisher.start()
     market_evidence_loop.start()
+    settlement_history_loop.start()
     chart_history_loop.start()
     MemoryWatchdog(refresh_loop.stop_event).start()
     _log("collector role started")
@@ -1662,6 +1664,7 @@ def _run_collector_service() -> int:
         bulk_funding_loop.join(timeout=5.0)
         funding_catalog_publisher.join(timeout=5.0)
         market_evidence_loop.join(timeout=5.0)
+        settlement_history_loop.join(timeout=5.0)
         chart_history_loop.join(timeout=5.0)
     return 0
 
@@ -2573,6 +2576,40 @@ class BulkFundingLoop(threading.Thread):
         if (funding.get("legs") or 0) > 0:
             _publish_shared_market_generation("bulk_funding")
             _schedule_funding_navigation(self.route_index_publisher)
+
+
+class SettlementHistoryLoop(threading.Thread):
+    """Refresh exact events without expanding or waiting on the route universe."""
+
+    INTERVAL_SECONDS = 300.0
+
+    def __init__(self, stop_event: threading.Event) -> None:
+        super().__init__(name="settlement-history", daemon=True)
+        self.stop_event = stop_event
+
+    def run(self) -> None:
+        if self.stop_event.wait(10.0):
+            return
+        while not self.stop_event.is_set():
+            started = time.monotonic()
+            try:
+                result = self.check_once()
+                if result.returncode != 0 or result.timed_out:
+                    _log(f"settlement history worker failed exit={result.returncode} timeout={result.timed_out}")
+                else:
+                    _log("settlement history worker completed")
+            except Exception as exc:  # noqa: BLE001 - one launch failure must not stop collection.
+                _log(f"settlement history launch failed: {type(exc).__name__}")
+            self.stop_event.wait(max(5.0, self.INTERVAL_SECONDS - (time.monotonic() - started)))
+
+    def check_once(self):
+        # This child reads the compact market catalogue and bounded demand
+        # queue only. It never builds/ranks route pairs or pauses live books.
+        return _run_worker(
+            [*_low_priority_prefix(), sys.executable,
+             str(Path(__file__).with_name("settlement_history_worker.py"))],
+            timeout=600.0,
+        )
 
 
 class MarketEvidenceLoop(threading.Thread):
@@ -3588,13 +3625,18 @@ def _refresh_funding_windows() -> None:
         priority_routes: list[dict[str, Any]] = list(priority_by_key.values())
         if not route_keys:
             return
-        # Refresh exact settlement evidence before the heavier radar/calibration
-        # work. Member-visible totals therefore publish as soon as their next
-        # settlement is due instead of waiting behind a multi-minute archive.
-        _refresh_venue_funding_history(
-            priority_routes=priority_routes,
-            extra_priority_legs=list(board_priority_legs),
-        )
+        # Publish priorities for the independent settlement worker. Historical
+        # refresh must not wait for this expensive radar/calibration cycle.
+        funding_history_demand.enqueue([
+            *board_priority_legs,
+            *[
+                (str(route[f"{side}_venue"]), str(route[f"{side}_market_symbol"]))
+                for route in priority_routes
+                for side in ("long", "short")
+                if route.get(f"{side}_market_type") == "Futures"
+                and route.get(f"{side}_venue") and route.get(f"{side}_market_symbol")
+            ],
+        ])
         started = time.monotonic()
         count = market_history.write_funding_windows(route_keys)
         _log(f"funding windows computed for {count} routes in {time.monotonic() - started:.1f}s")
@@ -3654,7 +3696,7 @@ def _refresh_venue_funding_history(
     *,
     priority_routes: list[dict[str, Any]] | None = None,
     extra_priority_legs: list[tuple[str, str]] | None = None,
-) -> None:
+) -> bool:
     """Pull each venue's settled funding for the legs the board is showing."""
     global _LAST_VENUE_HISTORY_PRIORITY_AT, _LAST_VENUE_HISTORY_CATALOG_AT
 
@@ -3687,7 +3729,7 @@ def _refresh_venue_funding_history(
         priority_due = now - _LAST_VENUE_HISTORY_PRIORITY_AT >= VENUE_HISTORY_PRIORITY_SECONDS
         catalog_due = now - _LAST_VENUE_HISTORY_CATALOG_AT >= interval
         if not priority_due and not catalog_due:
-            return
+            return True
 
         demanded_legs = funding_history_demand.legs()
         priority_legs: list[tuple[str, str]] = [
@@ -3722,7 +3764,7 @@ def _refresh_venue_funding_history(
         # static first-120 slice starve later symbols forever.
         priority_legs = list(dict.fromkeys(priority_legs))
         if not catalog_legs and not priority_legs:
-            return
+            return True
         if priority_due:
             _LAST_VENUE_HISTORY_PRIORITY_AT = now
         if catalog_due:
@@ -3785,8 +3827,10 @@ def _refresh_venue_funding_history(
             f"mode={'+'.join(modes) or 'idle'} "
             f"in {time.monotonic() - started:.1f}s"
         )
+        return True
     except Exception as exc:  # noqa: BLE001 - best effort beside everything else.
         _log(f"venue funding history skipped: {type(exc).__name__}: {exc}")
+        return False
 
 
 #: How much of a worker's output the parent keeps. Enough to diagnose a

@@ -6,10 +6,14 @@ ConditionPathExists=/opt/spreadboard/secrets/backup.env
 
 [Service]
 Type=oneshot
-# Bound quota stalls well before the next six-hour timer firing.
-TimeoutStartSec=2h
+# A measured catch-up upload took 1h51m; the former 2h limit killed its
+# integrity check and left an exclusive lock. Keep time for verification while
+# still bounding the entire run below the next six-hour timer firing.
+TimeoutStartSec=4h
 EnvironmentFile=/opt/spreadboard/secrets/backup.env
-Environment=RESTIC_CACHE_DIR=/tmp/restic-cache
+# Preserve encrypted repository indexes between runs; PrivateTmp is removed
+# after each service invocation and forced repeated downloads through Drive.
+Environment=RESTIC_CACHE_DIR=/opt/spreadboard/runtime/restic-cache
 # ProtectHome deliberately hides root's default rclone configuration. Keep the
 # production-only copy beside the other root-readable backup secrets instead.
 Environment=RCLONE_CONFIG=/opt/spreadboard/secrets/rclone/rclone.conf

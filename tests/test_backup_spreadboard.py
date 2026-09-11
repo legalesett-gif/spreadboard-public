@@ -198,3 +198,51 @@ def test_non_rclone_commands_and_operator_pacing_are_preserved(monkeypatch):
     monkeypatch.setenv("RCLONE_TPSLIMIT", "1")
     backup_spreadboard._run_restic(["restic", "check"])
     assert calls[-1][1]["env"]["RCLONE_TPSLIMIT"] == "1"
+
+
+def test_repository_lock_recovery_uses_only_stale_unlock_and_rechecks(monkeypatch):
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        if len(calls) == 1:
+            return SimpleNamespace(returncode=1, stdout='', stderr='repository is already locked exclusively')
+        return SimpleNamespace(returncode=0, stdout='[]', stderr='')
+    monkeypatch.setattr(backup_spreadboard, '_run_restic', run)
+    monkeypatch.setattr(backup_spreadboard.time, 'sleep', lambda _: None)
+    backup_spreadboard._ensure_repository()
+    assert [c[1] for c in calls] == ['snapshots', 'unlock', 'snapshots']
+    assert all('--remove-all' not in c for c in calls)
+
+
+def test_live_repository_lock_remains_a_failure(monkeypatch):
+    def run(command, **kwargs):
+        if command[1] == 'unlock':
+            return SimpleNamespace(returncode=0, stdout='', stderr='')
+        return SimpleNamespace(returncode=1, stdout='', stderr='repository is already locked exclusively')
+    monkeypatch.setattr(backup_spreadboard, '_run_restic', run)
+    monkeypatch.setattr(backup_spreadboard.time, 'sleep', lambda _: None)
+    with pytest.raises(RuntimeError, match='backend_locked'):
+        backup_spreadboard._ensure_repository()
+
+
+def test_snapshot_closes_both_database_handles_before_upload(tmp_path, monkeypatch):
+    closed = []
+    class Connection:
+        def __init__(self, name): self.name = name
+        def backup(self, target): assert target.name == 'destination'
+        def close(self): closed.append(self.name)
+    connections = iter([Connection('source'), Connection('destination')])
+    monkeypatch.setattr(backup_spreadboard.sqlite3, 'connect', lambda *a, **kw: next(connections))
+    backup_spreadboard._backup_sqlite(tmp_path/'source', tmp_path/'destination')
+    assert closed == ['destination', 'source']
+
+
+def test_persistent_repository_cache_is_never_backed_up_recursively(tmp_path):
+    root = tmp_path/'runtime'
+    cache = root/'restic-cache'/'repository'/'index'
+    cache.mkdir(parents=True)
+    path = cache/'cached-index'
+    path.write_text('repository metadata')
+    assert backup_spreadboard._excluded(path, root)
+    unit = (ROOT/'deploy'/'spreadboard-backup.service').read_text()
+    assert 'RESTIC_CACHE_DIR=/opt/spreadboard/runtime/restic-cache' in unit

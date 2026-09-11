@@ -22,7 +22,7 @@ from spreadboard import server as spreadboard_server
 
 
 def test_visible_board_legs_are_passed_to_the_priority_refresh(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
 ) -> None:
     board_row = {
         "route_key": "T|Gate|Futures|Bybit|Futures",
@@ -44,22 +44,17 @@ def test_visible_board_legs_are_passed_to_the_priority_refresh(
     monkeypatch.setattr(service, "FUNDING_ARCHIVE_QUERIES", [])
     monkeypatch.setattr(service, "_refresh_complete_funding_catalog", lambda **_k: None)
 
-    captured: dict[str, Any] = {}
+    demand = service.funding_history_demand
+    monkeypatch.setattr(demand, "DEFAULT_PATH", tmp_path / "demand.json")
 
-    def _history(*, priority_routes=None, extra_priority_legs=None):
-        captured["extra"] = list(extra_priority_legs or [])
+    def stop_after_enqueue(*args):
         raise RuntimeError("stop after the call under test")
 
-    monkeypatch.setattr(service, "_refresh_venue_funding_history", _history)
-
-    # The function under test guards broadly, so the sentinel may be swallowed;
-    # the assertions below are what actually decide the result.
+    monkeypatch.setattr(service.market_history, "write_funding_windows", stop_after_enqueue)
     service._refresh_funding_windows()
-
-    assert ("Gate", "T/USDT:USDT") in captured.get("extra", []), (
-        "a futures leg shown on the spread board must enter the fast lane"
-    )
-    assert ("Bybit", "T/USDT:USDT") in captured.get("extra", [])
+    # The separate worker reads this exact durable queue, so a process restart
+    # between selection and collection cannot lose the displayed priorities.
+    assert set(demand.legs()) == {("Gate", "T/USDT:USDT"), ("Bybit", "T/USDT:USDT")}
 
 
 def test_a_spot_leg_is_not_queued_for_funding_history() -> None:

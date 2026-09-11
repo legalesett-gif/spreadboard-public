@@ -294,7 +294,7 @@ def _fetch_json(url: str) -> Any:
 
 
 def _bitmart_history(symbol: str, *, days: int, max_pages: int) -> dict[str, Any]:
-    """BitMart returns its whole recent archive in one call."""
+    """BitMart exposes only its latest 100 settlements; retain successive reads."""
 
     del days, max_pages
     # urllib requires an ASCII URL. BitMart lists Unicode market ids (for
@@ -306,7 +306,7 @@ def _bitmart_history(symbol: str, *, days: int, max_pages: int) -> dict[str, Any
     try:
         payload = _fetch_json(
             "https://api-cloud-v2.bitmart.com/contract/public/funding-rate-history"
-            f"?symbol={native_symbol}&limit=500"
+            f"?symbol={native_symbol}&limit=100"
         )
     except Exception as exc:  # noqa: BLE001 - one venue must not stop the sweep.
         return {"status": "api_error", "entries": [], "error_type": type(exc).__name__}
@@ -595,9 +595,22 @@ def leg_history_outcome(
 ) -> dict[str, Any]:
     """Return rows plus a truthful, retry-aware source classification."""
     if venue in NATIVE_HISTORY:
-        return _native_leg_history_outcome(
+        outcome = _native_leg_history_outcome(
             venue, symbol, days=days, max_pages=max_pages
         )
+        # Limited native archives must accumulate too. Keep provider failures
+        # explicit: cached rows must never turn an unsuccessful read into ok.
+        if outcome.get("status") == "ok" and outcome.get("entries"):
+            from spreadboard import settlement_store
+
+            store_path = Path(event_store_path) if event_store_path is not None else RUNTIME_DIR / "funding_settlements.sqlite3"
+            try:
+                outcome["entries"] = settlement_store.merge(
+                    store_path, venue, symbol, outcome["entries"], int(time.time() * 1000)
+                )
+            except Exception as exc:  # noqa: BLE001 - preserve truthful storage failure.
+                return {"status": "api_error", "entries": [], "error_type": type(exc).__name__}
+        return outcome
     exchange_id = VENUE_IDS.get(venue)
     if not exchange_id:
         return {"status": "unsupported_venue", "entries": []}

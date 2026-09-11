@@ -65,3 +65,35 @@ def test_window_expires_when_oldest_payment_leaves_before_next_settlement():
         label=f'{days}d'
         status={'window_details':{label:{'complete':True,'latest_event_at':NOW,'inferred_interval_hours':8,'earliest_event_at':NOW-days*24*HOUR+HOUR}}}
         assert history._window_expiry_ms(status,label) == NOW+HOUR
+
+
+def test_native_limited_archive_accumulates_and_corrects_exact_events(tmp_path, monkeypatch):
+    clock = [NOW]
+    monkeypatch.setattr(history.time, 'time', lambda: clock[0]/1000)
+    monkeypatch.setattr(history, '_native_leg_history_outcome', lambda *a, **kw: {
+        'status': 'ok', 'entries': events(clock[0], 100)
+    })
+    path = tmp_path/'native.sqlite3'
+    kwargs = {'event_store_path': path}
+    first = history.leg_history_outcome('BitMart', 'ONE', **kwargs)
+    clock[0] += 24*HOUR
+    second = history.leg_history_outcome('BitMart', 'ONE', **kwargs)
+    assert len(first['entries']) == 100
+    assert len(second['entries']) == 124
+    assert history.realised_windows(second['entries'], now_ms=clock[0])['7d'] is None
+    # A provider failure must stay retryable even with a populated cache.
+    monkeypatch.setattr(history, '_native_leg_history_outcome', lambda *a, **kw: {
+        'status': 'api_error', 'entries': [], 'error_type': 'TimeoutError'
+    })
+    assert history.leg_history_outcome('BitMart', 'ONE', **kwargs)['status'] == 'api_error'
+    assert len(settlement_store.read(path, 'BitMart', 'ONE', clock[0])) == 124
+
+
+def test_retention_prunes_inactive_contracts_on_other_contract_refresh(tmp_path):
+    path = tmp_path/'events.sqlite3'
+    settlement_store.merge(path, 'Retired', 'OLD', events(NOW, 2), NOW)
+    later = NOW + settlement_store.RETENTION_MS + HOUR
+    settlement_store.merge(path, 'Active', 'NEW', events(later, 2), later)
+    import sqlite3
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT DISTINCT venue FROM funding_events").fetchall() == [('Active',)]
