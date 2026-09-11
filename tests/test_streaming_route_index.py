@@ -145,6 +145,7 @@ def test_actual_store_shares_repeated_strings_without_sharing_mutable_rows(tmp_p
     store, _, _ = published(tmp_path, orjson.dumps(rows))
     loaded = store.live_route_index()
     assert loaded == rows
+    assert all(row['route_key'] is key for key, row in loaded.items())
     first, second = loaded.values()
     assert first['long_venue'] is second['long_venue']
     assert first['long_market_symbol'] is second['long_market_symbol']
@@ -152,6 +153,13 @@ def test_actual_store_shares_repeated_strings_without_sharing_mutable_rows(tmp_p
     first['long_venue'] = 'changed'
     assert second['nested']['value'] == 1
     assert second['long_venue'] == venue
+
+
+def test_actual_store_preserves_nonmatching_or_absent_payload_route_ids(tmp_path):
+    rows = {'lookup-route': {'route_key': 'different-payload-route'},
+            'absent-route': {'token': 'BTC'}, 'null-route': {'route_key': None}}
+    store, _, _ = published(tmp_path, orjson.dumps(rows))
+    assert store.live_route_index() == rows
 
 
 def test_actual_store_bounds_and_releases_value_pool(tmp_path, monkeypatch):

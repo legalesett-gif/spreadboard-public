@@ -130,7 +130,15 @@ def read_index(
                 if selected is None:
                     rows.pop(key, None)
                 elif isinstance(selected, dict):
-                    rows[key] = _shared_route_values(_shared_fields(selected, keys), values)
+                    normalized = _shared_route_values(_shared_fields(selected, keys), values)
+                    # Exact route IDs can be hundreds of bytes long. The JSON
+                    # parser creates separate strings for the lookup key and
+                    # its identical row field (67 MiB across 215k live rows).
+                    # Share only equal immutable strings; mismatched or absent
+                    # payload IDs must retain their original meaning.
+                    if normalized.get("route_key") == key:
+                        normalized["route_key"] = key
+                    rows[key] = normalized
                 else:
                     raise ValueError("invalid_index_selection")
             if reader.bytes_read != expected_bytes or reader.digest.hexdigest() != expected_sha256:
