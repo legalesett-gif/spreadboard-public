@@ -1,12 +1,12 @@
 # SpreadBoard completion and continuity record
 
-Updated: 11 September 2026, 04:56 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
+Updated: 11 September 2026, 05:00 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
 
 ## Current release
 
 - **Production:** `56362cd`, source digest `2dcdb127627ba3db`, verified in both web and collector. Guarded deployment exited successfully; `/api/health` and `/free` returned 200 after warm-up. The warm index contained 209,066 priced routes.
 - **Ready for deployment:** `ce8f3c4`, which classifies native history correctly when all returned settlements fall outside the retained window. It has passed 2,923 tests and the canonical Ruff ratchet, with 500 known findings and none new. Deployment is deferred while discovery and its finalizer run.
-- **Live processes checked at 04:56 UTC:** discovery PID `2497121`; sole finite observer PID `2494056`, unit `spreadboard-funding-acceptance-20260911.service`. Both application containers were healthy, with zero OOM kills and restart counts.
+- **Live processes checked at 05:00 UTC:** discovery PID `2497121`; sole finite observer PID `2494056`, unit `spreadboard-funding-acceptance-20260911.service`. Both application containers were healthy, with zero OOM kills and restart counts.
 - **Working location:** `tmp/spreadboard-exchanges-trial`, branch `codex/exchanges-funding-trial-20260910`. Use this isolated worktree; preserve unrelated root-worktree changes.
 
 ## Requirements and evidence

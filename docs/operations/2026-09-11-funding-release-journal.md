@@ -300,3 +300,7 @@ Official endpoint contract: https://developer-pro.bitmart.com/en/futuresv2/#get-
 
 Fresh04:54UTC: discovery2497121 and observer2494056 live; both containers healthy/OOMfalse/restarts0. Pressure-triggered allocator-only trims observed04:50:27(2.596→2.159GiB,71ms) and04:50:51(2.556→2.422GiB,132ms),24.2s apart, confirming the bounded higher-pressure path executes. Clean9.72minute segment:five priced samples208817–209367, no endpoint failures; anonymous peaksweb2650.3MiB,collector3110.2MiB,accounting267.9MiB. Full discovery/finalizer and safe caps remain unproven; no deployment or cap change during the active scan.
 Evidence:native-empty-deferred-live.txt and latest-acceptance.json.
+
+
+## Completion record consolidated —05:00UTC
+The current checklist now separates production56362cd from ready-but-undeployedce8f3c4, product evidence, remaining acceptance gates and exact release procedure. Earlier snapshots remain in this journal. Advertisement remains unsent; duplicate-trial wording now specifically refers to reuse of the same Telegram identity. Links/evidence paths checked. Fresh observer2494056 and discovery2497121 remained live (scan elapsed10:56); both containers healthy/OOMfalse/restarts0. No deployment or cap change during this interval.
