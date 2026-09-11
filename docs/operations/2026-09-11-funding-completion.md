@@ -18,7 +18,7 @@ Owner: Codex in the current chat. There is no external Claude handoff. The older
 | Seven-day full trial | Telegram identity and email claims are atomic and persistent; live registration terms verified. Local HTTP checks prove entitlement before/during/after trial on four protected pages. Native Telegram callback was simulated locally, not exercised through a real live identity. |
 | Telegram advertisement | Draft written; no channel message sent. |
 | Spread continuity | OPENAI builder pairing verified; latest-generation route samples narrowly bounded so far. Required 30-sample hour remains open. No weakened quote/identity gates. |
-| Memory budget | Funding-only client retention/concurrent construction reduction measured locally and tested. Production savings and ordinary rebuild peaks must be measured before caps change. Web anonymous memory reached about 3,001 MiB, making an immediate 3,072 MiB cap unsafe. |
+| Memory budget | Accounting cap reduced in place from 768 to 512 MiB after a 290 MiB lifetime peak over nearly 26h. Web/collector caps remain outstanding. Funding-only client retention/concurrent construction reduction measured locally and tested. Production savings and ordinary rebuild peaks must be measured before caps change. Web anonymous memory reached about 3,001 MiB, making an immediate 3,072 MiB cap unsafe. |
 | Backup | Stale lock recovered, bounded stale-only retry and persistent cache/four-hour deadline installed. Catch-up upload still active; two normal successful timer runs remain open. |
 | 48h reliability | One finite read-only observer; same unit resets only after a new deployed generation. No short sample or reset OOM flag counts as 48h acceptance. |
 | Continuity record | This document and linked chronology remain owned by Codex in this chat. No external Claude dependency. |
@@ -89,3 +89,13 @@ The collector logged one successful settlement-worker completion. Observed proce
 At 01:00:22, the production funding reader withheld all expired ONG Bitget/XT and IO-OAI windows. By 01:04:26, the ordinary worker had fetched the new 01:00 settlements and the same reader returned updated 24h/7d/30d ONG totals and updated 24h/7d IO-OAI totals. IO-OAI 30d remained unavailable. No manual queue insertion, competing aggregate writer, forced refresh or special token override was used for this rollover. Read-only helper processes were temporary validation overhead, not ordinary-worker RSS samples.
 
 Evidence: `output/continuation-20260911/hourly-rollover-{expired,reader}.json`. This closes the sampled live expiry/recovery path, not full-universe archive coverage. Backup PID 2307267 and finite observer PID 2340559 were freshly confirmed active; no terminal backup result yet. Current source remains a6e4ff2 / 3209e2e14790ee10, with no additional source deployment this turn.
+
+
+## Accounting memory cap applied — 01:11:27 UTC
+
+Commit `03dd62d` changes the persistent accounting limit to 512 MiB. Fresh preflight showed nearly 26h uptime, lifetime kernel peak 290 MiB, no OOM kills and no restarts. Docker update reduced RAM 768→512 MiB and total RAM+swap 1536→1024 MiB in place. Container ID `cbc37a3f…`, PID 1911798 and restart count 0 remained identical; health stayed healthy. Web/collector Python source remains `3209e2e14790ee10`; neither was recreated.
+
+- Required full suite: 2,879 passed in 183.43s, exit 0; one test-server connection-reset/teardown warning. Ruff: no new findings, 502 known. Compose validation exit 0.
+- Persistent production Compose SHA256: `7416a768f6342be8dab164f2b4f79d8b77cb3b3956db80c56491d672ac7010f8`. Before-copy retained under `/opt/spreadboard/backups/funding-continuation-20260911/compose.before-accounting-cap.yml`.
+- Evidence: `output/continuation-20260911/accounting-cap-change.json`. Total declared container RAM is now 8,384 MiB; this first reduction alone does not close the host overcommit requirement.
+- The acceptance summarizer now tracks stable memory configuration separately from stable container/source generation. Final 48h acceptance must cover the final cap configuration; retain existing evidence and reset/extend the single finite observer only when the remaining cap decisions are final.
