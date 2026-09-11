@@ -41,7 +41,7 @@ def test_memory_watchdog_releases_only_expired_rows_at_role_ttl(monkeypatch, rol
     assert "rows_expired=1" in lines[0]
 
 
-@pytest.mark.parametrize("role,rss,expected", [("web", 2.8, 2), ("web", 1.8, 0), ("collector", 2.8, 0)])
+@pytest.mark.parametrize("role,rss,expected", [("web", 2.8, 4), ("web", 1.8, 0), ("collector", 2.8, 0)])
 def test_web_trim_is_bounded_and_preserves_live_caches(monkeypatch, role, rss, expected):
     monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     api = service.api_spreads
@@ -56,7 +56,7 @@ def test_web_trim_is_bounded_and_preserves_live_caches(monkeypatch, role, rss, e
     monkeypatch.setattr(service.time, "monotonic", lambda: clock[0])
     trimmed = []
     lines = []
-    monkeypatch.setattr(service, "_return_freed_memory", lambda **_kwargs: trimmed.append(clock[0]))
+    monkeypatch.setattr(service, "_return_freed_memory", lambda **kwargs: trimmed.append((clock[0], kwargs.get("collect"))))
     monkeypatch.setattr(service, "_log", lines.append)
     class Ticks:
         def wait(self, _):
@@ -65,7 +65,20 @@ def test_web_trim_is_bounded_and_preserves_live_caches(monkeypatch, role, rss, e
     service.MemoryWatchdog(Ticks()).run()
     assert len(trimmed) == expected
     if expected:
-        assert trimmed == [20, 200]
+        assert trimmed == [(20, True), (80, False), (140, False), (200, True)]
         assert sum("allocator trim before=" in x and "after=" in x for x in lines) == expected
     assert api._ROW_CACHE is rows and "row" in rows
     assert api._LAST_GOOD_LIVE_BOOKS is books and "book" in books
+
+
+def test_allocator_only_cleanup_does_not_run_gc(monkeypatch):
+    calls = []
+    class Allocator:
+        def malloc_trim(self, value):
+            calls.append(value)
+    monkeypatch.setattr(service.ctypes, "CDLL", lambda _: Allocator())
+    monkeypatch.setattr(service.gc, "collect", lambda: pytest.fail("allocator-only trim must not walk the heap"))
+    monkeypatch.setattr(service, "_rss_gb", lambda: 2.3)
+    result = service._return_freed_memory(measure=True, collect=False)
+    assert calls == [0]
+    assert result["gc_ran"] is False and result["gc_collected"] == 0

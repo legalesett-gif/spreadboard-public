@@ -3345,7 +3345,7 @@ def _yield_to_requests() -> None:
         time.sleep(WARM_YIELD_SECONDS)
 
 
-def _return_freed_memory(*, measure: bool = False) -> dict[str, float] | None:
+def _return_freed_memory(*, measure: bool = False, collect: bool = True) -> dict[str, float | bool] | None:
     """Hand freed arenas back to the kernel.
 
     Every snapshot write invalidates the caches and a fresh generation of
@@ -3358,7 +3358,7 @@ def _return_freed_memory(*, measure: bool = False) -> dict[str, float] | None:
     malloc_trim is glibc-only and advisory; anywhere else this is a no-op.
     """
     started = time.monotonic() if measure else 0.0
-    collected = gc.collect()
+    collected = gc.collect() if collect else 0
     after_gc = _rss_gb() if measure else 0.0
     gc_finished = time.monotonic() if measure else 0.0
     try:
@@ -3367,6 +3367,7 @@ def _return_freed_memory(*, measure: bool = False) -> dict[str, float] | None:
         pass
     if measure:
         return {
+            "gc_ran": collect,
             "after_gc_gb": round(after_gc, 3),
             "gc_seconds": round(gc_finished - started, 3),
             "gc_collected": collected,
@@ -4108,6 +4109,7 @@ class MemoryWatchdog(threading.Thread):
         self.stop_event = stop_event
         self.interval_seconds = interval_seconds
         self.last_web_trim_at = float("-inf")
+        self.last_web_gc_at = float("-inf")
 
     def run(self) -> None:
         from spreadboard import server as server_module
@@ -4123,15 +4125,22 @@ class MemoryWatchdog(threading.Thread):
                     _return_freed_memory()
                     if _service_role() == "web":
                         self.last_web_trim_at = time.monotonic()
+                        self.last_web_gc_at = self.last_web_trim_at
                 before = _rss_gb()
                 now = time.monotonic()
                 if (
                     _service_role() == "web" and before >= 2.0
-                    and now - self.last_web_trim_at >= 180.0
+                    and now - self.last_web_trim_at >= 60.0
                 ):
                     self.last_web_trim_at = now
-                    # Return freed arenas only. Live row/book caches stay intact.
-                    cleanup = _return_freed_memory(measure=True)
+                    # Keep the original full-GC cadence. Measured GC took
+                    # 1.55s with no RSS change; glibc alone returned 0.3GiB in
+                    # 43ms. Return freed arenas sooner without repeating the
+                    # full heap walk or evicting any live rows/books.
+                    collect = now - self.last_web_gc_at >= 180.0
+                    if collect:
+                        self.last_web_gc_at = now
+                    cleanup = _return_freed_memory(measure=True, collect=collect)
                     _log(
                         f"allocator trim before={before:.3f}GB after={_rss_gb():.3f}GB "
                         f"seconds={time.monotonic() - now:.3f} "
