@@ -780,6 +780,18 @@ def _priority_refresh_due(
     )
     if outcome in RETRYABLE_STATUSES:
         return True
+    if outcome in {"symbol_not_indexed", "no_history_rows", "market_paused"}:
+        # Listings, archives and pause states change. A historical rejection
+        # must not permanently exclude a newly visible contract from demand.
+        # Retry at most hourly so genuinely unavailable legs do not consume
+        # every five-minute priority pass.
+        try:
+            attempted_at = datetime.fromisoformat(str((status or {}).get("last_attempt_at") or ""))
+            if attempted_at.tzinfo is None:
+                return True
+            return now_ms >= int(attempted_at.timestamp() * 1000) + 3_600_000
+        except (ValueError, OverflowError):
+            return True
     if outcome != "ok":
         return False
     if live_leg:

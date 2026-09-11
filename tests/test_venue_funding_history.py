@@ -1160,3 +1160,30 @@ def test_the_fetch_pool_has_its_own_knob(monkeypatch) -> None:
         monkeypatch.delenv("SPREADBOARD_FUNDING_HISTORY_FETCH_WORKERS", raising=False)
         monkeypatch.delenv("SPREADBOARD_FUNDING_HISTORY_WORKERS", raising=False)
         importlib.reload(vfh)
+
+
+@pytest.mark.parametrize('outcome', ['symbol_not_indexed', 'no_history_rows', 'market_paused'])
+def test_demand_rechecks_expired_source_classification(tmp_path, monkeypatch, outcome):
+    """An old provider classification cannot suppress a newly available leg."""
+    now_ms = int(vfh.datetime.now(tz=vfh.timezone.utc).timestamp() * 1000)
+    monkeypatch.setattr(vfh.time, 'time', lambda: now_ms / 1000)
+    path = tmp_path / 'funding.json'
+    calls = []
+    def fetch(venue, symbol, **kwargs):
+        calls.append((venue, symbol))
+        return {'status': outcome, 'entries': []}
+    monkeypatch.setattr(vfh, 'leg_history_outcome', fetch)
+    path.write_text(json.dumps({
+        'schema': vfh.SCHEMA,
+        'leg_status': {'A|ONE': {'status': outcome, 'last_attempt_status': outcome,
+            'last_attempt_at': vfh.datetime.fromtimestamp((now_ms - 3_600_000) / 1000, tz=vfh.timezone.utc).isoformat()}},
+    }))
+    vfh.build([('A', 'ONE')], priority_legs=[('A', 'ONE')], priority_only=True,
+              priority_recency_order=True, cache_path=path, budget_seconds=5)
+    assert calls == [('A', 'ONE')]
+    # A repeated failure remains blank and waits an hour, even under demand.
+    payload = json.loads(path.read_text())
+    assert 'A|ONE' not in payload['legs']
+    vfh.build([('A', 'ONE')], priority_legs=[('A', 'ONE')], priority_only=True,
+              cache_path=path, budget_seconds=5)
+    assert calls == [('A', 'ONE')]
