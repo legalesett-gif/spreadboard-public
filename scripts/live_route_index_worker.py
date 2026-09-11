@@ -290,6 +290,61 @@ def _public_product_rows(
     }
 
 
+def _prior_rebuild_evidence(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep DEX seeds and exact CEX identities/safety, without old economics.
+
+    Keep even an empty CEX safety record: a later duplicate economic identity
+    with no warning must still supersede an earlier serialization's warning,
+    exactly as the prior full-dictionary lookup did.
+    """
+    if str(row.get("route_kind") or "").startswith("DEX-"):
+        return row
+    evidence = {
+        key: row[key]
+        for key in (
+            "route_key", "token", "route_kind", "long_venue", "short_venue",
+            "long_market_type", "short_market_type", "long_market_symbol",
+            "short_market_symbol", "dex_chain", "dex_contract",
+        )
+        if key in row
+    }
+    catalog_pairs._merge_conservative_route_evidence(evidence, row)
+    return evidence
+
+
+def _missing_previous_rows(
+    store: materialized_views.Store, board_path: Path, generation: dict[str, Any],
+    current: dict[str, dict[str, Any]], *, same_structural_generation: bool,
+) -> dict[str, dict[str, Any]]:
+    """Stream full old rows only for still-listed identities not rebuilt now."""
+    identities = {catalog_pairs.route_identity(row) for row in current.values()}
+    markets = {
+        (str(item.get("venue") or ""), str(item.get("market_type") or ""), str(item.get("symbol") or ""))
+        for item in chart_catalog.load().get("markets") or []
+        if isinstance(item, dict) and item.get("market_type") in {"Spot", "Futures"}
+    }
+
+    def select(row: dict[str, Any]) -> dict[str, Any] | None:
+        kind = str(row.get("route_kind") or "")
+        if kind.upper() in api_spreads.RETIRED_ROUTE_KINDS or not opportunity_route_enabled(row):
+            return None
+        if catalog_pairs.route_identity(row) in identities:
+            return None
+        if kind.startswith("DEX-"):
+            return row if same_structural_generation else None
+        legs = {
+            (str(row.get(f"{side}_venue") or ""), str(row.get(f"{side}_market_type") or ""),
+             str(row.get(f"{side}_market_symbol") or ""))
+            for side in ("long", "short")
+        }
+        return row if len(legs) == 2 and legs.issubset(markets) else None
+
+    retained = store.live_route_index(board_path=board_path, generation=generation, select_row=select)
+    if retained is None:
+        raise RuntimeError("previous_index_changed_during_continuity_read")
+    return retained
+
+
 def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     started = time.monotonic()
     initial = source_signature(board_path)
@@ -297,7 +352,10 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     previous_meta = store.live_route_index_status()
     previous_rows: dict[str, dict[str, Any]] = {}
     if previous_meta.get("ready"):
-        previous_rows = store.live_route_index(board_path=board_path) or {}
+        previous_rows = store.live_route_index(
+            board_path=board_path, generation=previous_meta,
+            select_row=_prior_rebuild_evidence,
+        ) or {}
     same_structural_generation = bool(
         previous_rows and previous_meta.get("source_signature") == initial
     )
@@ -307,9 +365,6 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
     else:
         rows, source_health = api_spreads.load_public_route_index()
         build_mode = "full_discovery_catalogue"
-    final = source_signature(board_path)
-    if final != initial:
-        raise RuntimeError("source_generation_changed_during_live_index_build")
     # Retired permutations should not contribute to current/retained metrics or
     # spend time in the continuity merge. The spot instruments remain in the
     # catalogue; only their standalone pair products leave the route index.
@@ -324,24 +379,20 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         # turn an old price into a current opportunity. Catalogue membership,
         # rather than quote age, permits genuine CEX removals. DEX identities
         # bridge only an unchanged structural generation.
-        retained = _public_product_rows(
-            _retained_structural_cex_rows(previous_rows)
+        previous_rows = {}
+        gc.collect()
+        retained = _missing_previous_rows(
+            store, board_path, previous_meta, rows,
+            same_structural_generation=same_structural_generation,
         )
-        if same_structural_generation:
-            retained.update(
-                _public_product_rows(_retained_structural_dex_rows(previous_rows))
-            )
         rows = _merge_by_economic_identity(retained, rows)
-        # Both the previous generation and the merged one are live at this
-        # point -- roughly 107k route dicts each -- and the encoding built
-        # below allocates a further ~300MB on top. That peak is what the web
-        # cgroup actually has to hold: it OOM-killed this worker at 3.5GiB on
-        # 2026-08-30 00:01:05, taking the container with it. Nothing reads the
-        # previous generation after the merge, so release it before the
-        # encoding rather than carrying it through the high-water mark.
+        # Release the continuity lookup before streaming the merged output.
+        # Full old rows which current identities replaced were never retained.
         del retained
         previous_rows = {}
         gc.collect()
+    if source_signature(board_path) != initial:
+        raise RuntimeError("source_generation_changed_during_live_index_build")
     coverage = source_health.get("complete_catalogue") or source_health
     coverage = {
         key: coverage.get(key)

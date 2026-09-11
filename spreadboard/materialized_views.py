@@ -20,7 +20,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -474,10 +474,17 @@ class Store:
         }
 
     def live_route_index(
-        self, *, board_path: Path | str | None = None
+        self, *, board_path: Path | str | None = None,
+        generation: dict[str, Any] | None = None,
+        select_row: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     ) -> dict[str, dict[str, Any]] | None:
-        meta = self.live_route_index_status()
+        # A multi-pass rebuild must read the same immutable file even if a
+        # concurrent publisher changes the pointer between passes.
+        meta = generation if generation is not None else self.live_route_index_status()
         if not meta.get("ready"):
+            return None
+        filename = str(meta.get("file") or "")
+        if meta.get("schema") != LIVE_ROUTE_SCHEMA or not filename or Path(filename).name != filename:
             return None
         if board_path is not None:
             source = (
@@ -496,6 +503,7 @@ class Store:
             path,
             expected_bytes=int(meta.get("bytes") or -1),
             expected_sha256=str(meta.get("sha256") or ""),
+            select_row=select_row,
         )
 
     @staticmethod
@@ -706,7 +714,8 @@ class Store:
                 (
                     path
                     for path in self.root.glob("live-route-index-*.json")
-                    if path.is_file() and not path.is_symlink()
+                    if path != self.live_route_pointer_path
+                    and path.is_file() and not path.is_symlink()
                 ),
                 key=lambda path: path.stat().st_mtime_ns,
                 reverse=True,

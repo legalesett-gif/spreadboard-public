@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -74,8 +75,30 @@ def _shared_route_values(row: dict[str, Any], values: dict[str, str]) -> dict[st
     return row
 
 
-def read_index(path: Path, *, expected_bytes: int, expected_sha256: str) -> dict[str, dict[str, Any]] | None:
-    """Return complete validated rows, or None; partial generations never escape."""
+def _validate_numbers(value: Any) -> None:
+    """Validate discarded fields without allocating a normalized copy."""
+    if isinstance(value, dict):
+        for item in value.values():
+            _validate_numbers(item)
+    elif isinstance(value, list):
+        for item in value:
+            _validate_numbers(item)
+    elif isinstance(value, Decimal) and not math.isfinite(float(value)):
+        raise ValueError("nonfinite_index_number")
+    elif isinstance(value, int) and not -(2**63) <= value < 2**64:
+        raise ValueError("index_integer_out_of_range")
+
+
+def read_index(
+    path: Path, *, expected_bytes: int, expected_sha256: str,
+    select_row: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
+) -> dict[str, dict[str, Any]] | None:
+    """Return validated rows, or None; partial generations never escape.
+
+    Optional selection receives each parser-owned row (fractional numbers are
+    Decimal). Retained output is normalized as usual. Even discarded fields
+    must pass numeric validation and the complete file must match its digest.
+    """
     try:
         with path.open("rb") as source:
             # kvitems alone would turn a scalar/array root into an empty dict.
@@ -95,7 +118,15 @@ def read_index(path: Path, *, expected_bytes: int, expected_sha256: str) -> dict
             for key, row in ijson.kvitems(reader, "", use_float=False, buf_size=CHUNK_BYTES):
                 if not isinstance(key, str) or not isinstance(row, dict):
                     return None
-                rows[key] = _shared_route_values(_shared_fields(row, keys), values)
+                if select_row is not None:
+                    _validate_numbers(row)
+                selected = select_row(row) if select_row is not None else row
+                if selected is None:
+                    rows.pop(key, None)
+                elif isinstance(selected, dict):
+                    rows[key] = _shared_route_values(_shared_fields(selected, keys), values)
+                else:
+                    raise ValueError("invalid_index_selection")
             if reader.bytes_read != expected_bytes or reader.digest.hexdigest() != expected_sha256:
                 return None
             return rows
