@@ -6,7 +6,7 @@ Explore the full website: cross-exchange spreads, funding opportunities, exchang
 
 Create an account at https://spreadarbitrage.ink/register, then link your Telegram account in Account settings to activate your trial. No payment is required. Access expires automatically after seven days.
 
-One trial per new member and Telegram identity. Creating another website account does not reset eligibility.
+One trial per new member and Telegram identity. Reusing the same Telegram identity on another website account does not restart the trial.
 
 Funding estimates can change. Historical funding shows settled payments; it does not promise future returns.
 
