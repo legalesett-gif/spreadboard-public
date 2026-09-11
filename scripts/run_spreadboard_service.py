@@ -3345,7 +3345,7 @@ def _yield_to_requests() -> None:
         time.sleep(WARM_YIELD_SECONDS)
 
 
-def _return_freed_memory() -> None:
+def _return_freed_memory(*, measure: bool = False) -> dict[str, float] | None:
     """Hand freed arenas back to the kernel.
 
     Every snapshot write invalidates the caches and a fresh generation of
@@ -3357,11 +3357,22 @@ def _return_freed_memory() -> None:
 
     malloc_trim is glibc-only and advisory; anywhere else this is a no-op.
     """
-    gc.collect()
+    started = time.monotonic() if measure else 0.0
+    collected = gc.collect()
+    after_gc = _rss_gb() if measure else 0.0
+    gc_finished = time.monotonic() if measure else 0.0
     try:
         ctypes.CDLL("libc.so.6").malloc_trim(0)
     except (OSError, AttributeError):  # noqa: S110 - musl, macOS: nothing to do.
         pass
+    if measure:
+        return {
+            "after_gc_gb": round(after_gc, 3),
+            "gc_seconds": round(gc_finished - started, 3),
+            "gc_collected": collected,
+            "trim_seconds": round(time.monotonic() - gc_finished, 3),
+        }
+    return None
 
 
 def _warm_board_cache(*, force: bool = False) -> None:
@@ -4120,10 +4131,11 @@ class MemoryWatchdog(threading.Thread):
                 ):
                     self.last_web_trim_at = now
                     # Return freed arenas only. Live row/book caches stay intact.
-                    _return_freed_memory()
+                    cleanup = _return_freed_memory(measure=True)
                     _log(
                         f"allocator trim before={before:.3f}GB after={_rss_gb():.3f}GB "
-                        f"seconds={time.monotonic() - now:.3f}"
+                        f"seconds={time.monotonic() - now:.3f} "
+                        f"phases={json.dumps(cleanup, separators=(',', ':'))}"
                     )
                 _log(
                     "memory "

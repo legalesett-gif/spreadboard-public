@@ -56,7 +56,7 @@ def test_web_trim_is_bounded_and_preserves_live_caches(monkeypatch, role, rss, e
     monkeypatch.setattr(service.time, "monotonic", lambda: clock[0])
     trimmed = []
     lines = []
-    monkeypatch.setattr(service, "_return_freed_memory", lambda: trimmed.append(clock[0]))
+    monkeypatch.setattr(service, "_return_freed_memory", lambda **_kwargs: trimmed.append(clock[0]))
     monkeypatch.setattr(service, "_log", lines.append)
     class Ticks:
         def wait(self, _):
