@@ -1,12 +1,12 @@
 # SpreadBoard completion and continuity record
 
-Updated: 11 September 2026, 05:00 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
+Updated: 11 September 2026, 05:11 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
 
 ## Current release
 
 - **Production:** `56362cd`, source digest `2dcdb127627ba3db`, verified in both web and collector. Guarded deployment exited successfully; `/api/health` and `/free` returned 200 after warm-up. The warm index contained 209,066 priced routes.
-- **Ready for deployment:** `ce8f3c4`, which classifies native history correctly when all returned settlements fall outside the retained window. It is now bundled with the versioned acceptance CLI. The combined candidate has passed 2,924 tests and the canonical Ruff ratchet, with 500 known findings and none new. Deployment is deferred while discovery and its finalizer run.
-- **Live processes checked at 05:00 UTC:** discovery PID `2497121`; sole finite observer PID `2494056`, unit `spreadboard-funding-acceptance-20260911.service`. Both application containers were healthy, with zero OOM kills and restart counts.
+- **Ready for deployment:** `56adbe1`, source digest `4430d9f68e5e62f7`, which includes `ce8f3c4` and classifies native history correctly when all returned settlements fall outside the retained window. It is now bundled with the versioned acceptance CLI. The combined candidate has passed 2,924 tests and the canonical Ruff ratchet, with 500 known findings and none new. Deployment is deferred while discovery and its finalizer run.
+- **Live processes checked at 05:11 UTC:** discovery PID `2497121`; sole finite observer PID `2494056`, unit `spreadboard-funding-acceptance-20260911.service`. Both application containers were healthy, with zero OOM kills and restart counts.
 - **Working location:** `tmp/spreadboard-exchanges-trial`, branch `codex/exchanges-funding-trial-20260910`. Use this isolated worktree; preserve unrelated root-worktree changes.
 
 ## Requirements and evidence
@@ -28,7 +28,7 @@ Updated: 11 September 2026, 05:00 UTC. Owner: Codex in this chat. The full task 
 
 ## Open acceptance gates
 
-1. **Deploy and verify `ce8f3c4` after the active discovery/finalizer completes.** Run the guarded deployment from the isolated worktree, check actual exit status, both source digests, warm priced routes and HTTP responses. Verify ordinary workers classify empty recent archives correctly; never manually change history flags.
+1. **Deploy and verify `56adbe1` after the active discovery/finalizer completes.** Run the guarded deployment from the isolated worktree, check actual exit status, both source digests, warm priced routes and HTTP responses. Verify ordinary workers classify empty recent archives correctly; never manually change history flags.
 2. **Finish ordinary-load memory measurements and safely lower limits.** Current limits are web 3,584 MiB, collector 4,096 MiB and accounting 512 MiB. Targets are 3,072 / 3,584 / 512 MiB, plus Caddy 192 MiB: 7,360 MiB total against about 7,941 MiB physical RAM. Accounting is already reduced. Full discovery, finalization, index publication and normal worker overlap must fit before reducing the other limits.
 3. **Verify 30 priced-route samples over an hour, within ±10%, without deployment contamination.** The latest clean window is too short. The analyzer separates container, observer and cap generations.
 4. **Complete the final 48-hour reliability window.** `/api/health` and `/free` must return 200 on a five-minute cadence; no unhealthy period may exceed 90 seconds; both cgroups must have zero OOM kills. Inspect kernel OOM records for the same period. A reset counter or short observation does not satisfy this gate.
@@ -69,7 +69,7 @@ Paths below are relative to the isolated worktree:
 
 - `output/continuation-20260911/versioned-report-full-tests.txt`: combined candidate, 2,924 passed in 217.59 seconds, exit 0.
 - `output/continuation-20260911/versioned-report-parity.json`: exact report parity on real observations.
-- `output/continuation-20260911/native-empty-ruff-ratchet.txt`: no new findings, 500 known.
+- `output/continuation-20260911/versioned-report-ruff-ratchet.txt`: no new findings, 500 known.
 - `output/continuation-20260911/mutant-native-empty.txt`: original-code failure.
 - `output/continuation-20260911/bitmart-old-native-archive-evidence.json`: dated native history/projection samples.
 - `output/continuation-20260911/all-venue-ledger-audit.json`: 25,606 aggregate checks across 15 venues.
