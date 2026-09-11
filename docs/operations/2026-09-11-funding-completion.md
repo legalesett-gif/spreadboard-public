@@ -4,7 +4,7 @@ Owner: Codex in the current chat. There is no external Claude handoff. The older
 
 ## Latest verified deployment
 
-`a886b08`, source digest `06e1c30be5a20324`, is verified in both app and collector. Guarded deployment completed after the scan ended, exit0/health200/no OOM or restart-count increments. Full suite:2,889 passed in171.06s, no new Ruff findings(502 known). Ordinary BitMart catalogue publication verified53 spot/355 linear futures, both healthy, no malformed symbols. Global revision remains2 because Hyperliquid refresh retained its cached317 markets after a worker failure; diagnose that failure before claiming complete catalogue refresh. Catch-up backup exited successfully at01:56:59UTC with integrity checks passed. Two normal timer firings, remaining memory reductions and full duration acceptance remain open. The single finite observer continues; extend/reset its final window after remaining source/cap decisions. Older checkpoints below are chronological.
+Web now runs `8463178` / digest `3173a7a6e7de31e8`, verified by guarded app-only deployment (exit0, health200, no OOM/restart-count increment). Collector remains `a886b08` / `06e1c30be5a20324` while discovery2387856 runs. The compact prior-index producer is not active in the collector yet. Full suite:2,899 passed in198.92s; Ruff unchanged. The web adds separate GC/allocator phase measurements; limits and cleanup cadence are unchanged. Existing backup, venue, trial and continuity results below retain their explicit scope. Full source parity and final memory/hour/48h/two-normal-backup acceptance remain open.
 
 ## Requirement-by-requirement status
 
@@ -157,3 +157,14 @@ The production Hyperliquid catalogue function succeeded with317 markets in13.17s
 At02:18:57 the live funding file contained355 BitMart contracts, exactBTC/USDC:USDC and zero malformed aliases. At02:20:18 its settled-history entry was statusok with all three windows present and zero malformed BitMart history keys. At02:22 the public book store held24,398 books, each one level per side, so reducing stored book depth is not a measured useful memory fix and was not attempted.
 
 The single finite observer is still running. Final acceptance must begin after final source/caps and warm readiness, avoiding deployment startup samples (the latest generation currently includes a priced=0 startup sample). Preserve earlier samples as chronology; reset/extend the same observer for the final clean window rather than treating this short generation as an hour/48h pass.
+
+
+## Web cleanup measurement deployed — September 11 02:33UTC
+
+A prior web cleanup reduced RSS from2.598GiB to2.090GiB in1.787s. The deployed measurement separates GC duration/collected-object count/post-GC RSS from allocator-trim duration, so further tuning need not assume which phase actually returned memory. Only the periodic web cleanup requests these measurements; existing cleanup behaviour and cadence remain unchanged. No limit or book depth was reduced.
+
+- Commit8463178, digest3173a7a6e7de31e8, web deployed and verified. Collector remains06e1c30be5a20324. Discovery2387856 and observer2340559 freshly confirmed live at02:33:13UTC. Web startup samples around1.58–1.62GiB have not reached the2GiB periodic-cleanup trigger; phase results remain pending.
+- 60 targeted tests and full2,899 tests passed (198.92s, actual exit0); Ruff no new findings502. No new mirrored tests were added for this measurement-only change.
+- Rollback source/image references: `source-before-compact-phase.tgz` (1,085,742 bytes) and `images-before-compact-phase.txt` in the existing production continuation-backup directory.
+- Production trial schema was checked in `spreadboard_accounts.sqlite3`: eligibility and claim tables present, unique Telegram-hash and email-hash indexes present, zero claims. This confirms installed constraints, not real-user Telegram activation; the advertisement remains an unsent draft. The separate unused `accounts.sqlite3` was not treated as the application database. No account data was printed or changed.
+- Evidence: `pytest-allocator-phase-release.txt`, `allocator-phase-tests.txt`, `deploy-allocator-phase-web.txt`. Next: observe phase measurements, make a measured web-memory decision, and deploy collector after its scan/finalizer completes.
