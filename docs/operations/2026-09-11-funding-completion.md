@@ -82,3 +82,10 @@ The deployed worker recovered Hyperliquid `IO-OAI/USDC:USDC` from its stale miss
 ### First ordinary optimized history cycle, 00:55 UTC
 
 The collector logged one successful settlement-worker completion. Observed process lifetime high-water RSS was 568.2 MiB, below the earlier roughly 697 MiB observation; the queue/workloads differ, so this is not a controlled whole-worker percentage-saving claim. Publication advanced to 3,485 current 24h / 3,387 current 7d / 2,923 current 30d contracts. The next ordinary worker is active. Backup PID 2307267 and finite observer PID 2340559 remain active; neither duration gate is complete.
+
+
+### Live hourly rollover acceptance — 01:00 to 01:04 UTC
+
+At 01:00:22, the production funding reader withheld all expired ONG Bitget/XT and IO-OAI windows. By 01:04:26, the ordinary worker had fetched the new 01:00 settlements and the same reader returned updated 24h/7d/30d ONG totals and updated 24h/7d IO-OAI totals. IO-OAI 30d remained unavailable. No manual queue insertion, competing aggregate writer, forced refresh or special token override was used for this rollover. Read-only helper processes were temporary validation overhead, not ordinary-worker RSS samples.
+
+Evidence: `output/continuation-20260911/hourly-rollover-{expired,reader}.json`. This closes the sampled live expiry/recovery path, not full-universe archive coverage. Backup PID 2307267 and finite observer PID 2340559 were freshly confirmed active; no terminal backup result yet. Current source remains a6e4ff2 / 3209e2e14790ee10, with no additional source deployment this turn.
