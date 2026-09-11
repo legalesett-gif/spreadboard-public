@@ -4,7 +4,7 @@ Owner: Codex in the current chat. There is no external Claude handoff. The older
 
 ## Latest verified deployment
 
-Web now runs `8463178` / digest `3173a7a6e7de31e8`, verified by guarded app-only deployment (exit0, health200, no OOM/restart-count increment). Collector remains `a886b08` / `06e1c30be5a20324` while discovery2387856 runs. The compact prior-index producer is not active in the collector yet. Full suite:2,899 passed in198.92s; Ruff unchanged. The web adds separate GC/allocator phase measurements; limits and cleanup cadence are unchanged. Existing backup, venue, trial and continuity results below retain their explicit scope. Full source parity and final memory/hour/48h/two-normal-backup acceptance remain open.
+Both web and collector now run `0852327`, source digest `a0c51127cc386193`, independently verified at02:53–02:54UTC with health200/free200 and healthy containers. The guarded deployment recreated both services but its initial startup health probe timed out; it did not report success. Subsequent fresh checks establish recovery and exact source parity, not uninterrupted deployment availability. Full frozen-source suite:2,900 passed in191.81s, exit0; Ruff unchanged. The compact prior-index producer and allocator-only60s/full-GC180s cadence are now deployed. App/collector memory limits remain unchanged pending ordinary-cycle measurements. Final hour/48h/two-normal-backup acceptance remains open.
 
 ## Requirement-by-requirement status
 
@@ -168,3 +168,15 @@ A prior web cleanup reduced RSS from2.598GiB to2.090GiB in1.787s. The deployed m
 - Rollback source/image references: `source-before-compact-phase.tgz` (1,085,742 bytes) and `images-before-compact-phase.txt` in the existing production continuation-backup directory.
 - Production trial schema was checked in `spreadboard_accounts.sqlite3`: eligibility and claim tables present, unique Telegram-hash and email-hash indexes present, zero claims. This confirms installed constraints, not real-user Telegram activation; the advertisement remains an unsent draft. The separate unused `accounts.sqlite3` was not treated as the application database. No account data was printed or changed.
 - Evidence: `pytest-allocator-phase-release.txt`, `allocator-phase-tests.txt`, `deploy-allocator-phase-web.txt`. Next: observe phase measurements, make a measured web-memory decision, and deploy collector after its scan/finalizer completes.
+
+
+## Combined memory release — September11 02:54UTC
+
+- First guarded attempt refused active discovery/finalization. Fresh inventory cleared before retry; no force or worker interruption. Both deployed services match digest a0c51127cc386193. Initial deployment probe timed out; independent later health and source checks passed.
+- GC measurement on the prior release:1.547s, zero collected objects, unchanged2.112GiB RSS; allocator trim43ms reduced RSS to1.811GiB. This justified separate60s allocator-only cleanup while preserving180s full GC. Latest deployed full cleanup:2.213→1.611GiB, GC1.339s/zero objects, trim76ms. An allocator-only cycle still needs fresh runtime evidence.
+- Targeted61 tests and full2,900 tests191.81s passed. The compact benchmark and injected-fault checks above remain scoped to local evidence.
+- At02:54:28, six-minute startup segment: web anonymous peak2250MiB, collector2115MiB, accounting267.8MiB; zero observed OOM/restarts. This is not enough to lower caps. Web startup included61.42s conservative unhealthy bound, so final observation must start after warm readiness.
+- Funding history coverage:24h95.75%,7d92.58%,30d79.84%;20 overdue7d legs,210 deep-history pending. Missing/gapped windows remain unavailable. Catch-up is not complete.
+- Acceptance analyzer now separates observer, container and cap generations, checks an actual30-sample hour, endpoint/host gaps, unhealthy bounds and valid runtime fields. Eleven synthetic cases passed, including rejection of OOM, missing samples, deployment/startup contamination and short windows. This verifies the reporting logic, not production acceptance.
+- Single observer remains active. Final48h must follow final source/caps and warm readiness; extend/reset this same finite unit when ready. Normal backup timer next06:21:05UTC; catch-up exit01:56:59 is not a normal firing.
+- Evidence: deploy-compact-and-allocator.txt (initial verification failure retained), allocator-cadence-tests.txt, pytest-allocator-cadence-release.txt, acceptance-summary-checks.json, samples.jsonl.
