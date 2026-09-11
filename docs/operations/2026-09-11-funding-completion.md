@@ -1,12 +1,12 @@
 # SpreadBoard completion and continuity record
 
-Updated: 11 September 2026, 05:11 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
+Updated: 11 September 2026, 05:18 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
 
 ## Current release
 
 - **Production:** `56362cd`, source digest `2dcdb127627ba3db`, verified in both web and collector. Guarded deployment exited successfully; `/api/health` and `/free` returned 200 after warm-up. The warm index contained 209,066 priced routes.
 - **Ready for deployment:** `56adbe1`, source digest `4430d9f68e5e62f7`, which includes `ce8f3c4` and classifies native history correctly when all returned settlements fall outside the retained window. It is now bundled with the versioned acceptance CLI. The combined candidate has passed 2,924 tests and the canonical Ruff ratchet, with 500 known findings and none new. Deployment is deferred while discovery and its finalizer run.
-- **Live processes checked at 05:11 UTC:** discovery PID `2497121`; sole finite observer PID `2494056`, unit `spreadboard-funding-acceptance-20260911.service`. Both application containers were healthy, with zero OOM kills and restart counts.
+- **Live processes checked at 05:18 UTC:** discovery PID `2497121`; sole finite observer PID `2494056`, unit `spreadboard-funding-acceptance-20260911.service`. Both application containers were healthy, with zero OOM kills and restart counts.
 - **Working location:** `tmp/spreadboard-exchanges-trial`, branch `codex/exchanges-funding-trial-20260910`. Use this isolated worktree; preserve unrelated root-worktree changes.
 
 ## Requirements and evidence
@@ -40,7 +40,9 @@ The pressure cleanup returns already-freed allocator memory, preserving live cac
 
 Production observed allocator-only trims at 04:50:27 and 04:50:51, 24.2 seconds apart: 2.596→2.159 GiB in 71 ms, then 2.556→2.422 GiB in 132 ms. This verifies that the new pressure path runs. It does not by itself prove the final lower cap is safe.
 
-The 04:54 snapshot covered only 9.72 minutes: five priced samples ranged from 208,817 to 209,367, with no endpoint failures. Anonymous memory peaks were web 2,650.3 MiB, collector 3,110.2 MiB and accounting 267.9 MiB. Discovery was still running, so final peaks remain unknown.
+The 05:13 snapshot covered 28.35 minutes: 15 priced samples ranged from 208,817 to 209,649, with no endpoint failures. Anonymous memory peaks were web 2,976.6 MiB, collector 3,110.2 MiB and accounting 272.6 MiB. Discovery was still running, so final peaks remain unknown.
+
+Process-level evidence records a web RSS high-water mark of 3,086 MiB. The collector peak coincided with the materialized-view builder, settlement worker and quote workers; the builder’s recorded RSS high-water mark was 2,054.2 MiB. RSS and cgroup anonymous memory are distinct measurements. Neither a sampled partial-cycle peak nor a successful trim certifies the proposed lower limits. See `output/continuation-20260911/ordinary-peak-processes.json`.
 
 ## Pending native-history correction
 

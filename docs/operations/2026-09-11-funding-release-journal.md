@@ -312,3 +312,7 @@ The report now lives in scripts/summarize_stability_soak.py with tests/test_stab
 
 ## Candidate ready, scan preserved —05:11UTC
 05:11UTC: production remains56362cd/2dcdb127627ba3db. Ready candidate56adbe1/4430d9f68e5e62f7 includes native-empty-history correctionce8f3c4 and versioned scripts/summarize_stability_soak.py. Full required suite2924passed217.59s, canonical Ruff500/no new;30 synthetic evidence scenarios, required-container mutant failure and exact real-file report parity. Discovery2497121 liveelapsed21:37, observer2494056 live, both containers healthy/OOMfalse/restarts0. No deployment/cap changes during the scan. Latest copied21.72min window:11 priced samples208817–209380, no endpoint failures; anon peaksweb2887.2MiB/collector3110.2MiB/accounting272.6MiB. Full cycle/caps, final hour/48h and two normal backups remain open. Use the versioned report going forward; temporary report is historical.
+
+
+## Ordinary peak attribution —05:18UTC
+05:18UTC verified wait: discovery2497121 liveelapsed28:28, observer2494056 active. No deployment or cap mutation. New process-level peak evidence: web recorded RSS HWM3086MiB; sampled cgroup anon2976.6MiB. Collector sampled anon3110.2MiB coincided with materialized-view/settlement/quote workers; builder recorded RSS HWM2054.2MiB. Distinguish RSS from anonymous cgroup memory; full cycle/finalizer still required before choosing limits. Latest05:13 report has15priced samples208817–209649 over28.35min, no endpoint failures. Pending56adbe1 remains ready; production56362cd unchanged.
