@@ -612,6 +612,11 @@ def leg_history_outcome(
                 )
             except Exception as exc:  # noqa: BLE001 - preserve truthful storage failure.
                 return {"status": "api_error", "entries": [], "error_type": type(exc).__name__}
+        if outcome.get("status") == "ok" and not outcome.get("entries"):
+            # A native response can contain only payments outside retention.
+            # Match the CCXT path: no usable settlements is not a successful
+            # archive awaiting endless deeper checks. Never invent a zero.
+            outcome["status"] = "no_history_rows"
         return outcome
     exchange_id = VENUE_IDS.get(venue)
     if not exchange_id:

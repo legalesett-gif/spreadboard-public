@@ -97,3 +97,20 @@ def test_retention_prunes_inactive_contracts_on_other_contract_refresh(tmp_path)
     import sqlite3
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT DISTINCT venue FROM funding_events").fetchall() == [('Active',)]
+
+
+def test_native_old_archive_is_not_reported_as_success_or_deep_pending(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(history.time, 'time', lambda: NOW / 1000)
+    monkeypatch.setattr(history, 'RUNTIME_DIR', tmp_path)
+    monkeypatch.setattr(history, '_fetch_json', lambda _: {'code': 1000, 'data': {'list': [
+        {'funding_time': str(NOW - 40 * 24 * HOUR), 'funding_rate': '0.0001'}]}})
+    leg = ('BitMart', 'ONE/USDT:USDT')
+    result = history.leg_history_outcome(*leg)
+    assert result['status'] == 'no_history_rows' and result['entries'] == []
+    path = tmp_path / 'history.json'
+    history.build([leg], cache_path=path, budget_seconds=5)
+    persisted = json.loads(path.read_text())
+    assert persisted['leg_status']['|'.join(leg)]['status'] == 'no_history_rows'
+    assert persisted['deep_history_pending_leg_count'] == 0
+    assert '|'.join(leg) not in persisted['legs']
