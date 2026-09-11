@@ -2872,19 +2872,12 @@ def _native_perpetual_funding_rates(
             continue
         next_ms = None
         if venue == "BitMart":
-            base = str(row.get("base_currency") or "").upper()
-            quote = str(row.get("quote_currency") or "").upper()
-            # Match BitMart's catalogue/CCXT settlement convention, including
-            # its USD- and USDC-quoted contracts: quote and settle differ.
-            settle = "USDT"
-            if (
-                row.get("status") != "Trading"
-                or str(row.get("product_type")) != "1"
-                or (row.get("expire_timestamp") is not None
-                    and _optional_number(row.get("expire_timestamp")) != 0)
-                or str(row.get("symbol") or "").upper() != f"{base}{quote}"
-            ):
+            from spreadarb.market_status import bitmart_perpetual_market
+
+            market = bitmart_perpetual_market(row)
+            if market is None:
                 continue
+            base, quote, settle = market["base"], market["quote"], market["settle"]
             # The previous period's funding_rate is a settled value. Now uses
             # expected_funding_rate, including an explicit zero, with its live
             # published cadence rather than assuming all contracts settle 8h.

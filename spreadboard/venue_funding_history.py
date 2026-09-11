@@ -25,7 +25,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from spreadarb.venue_policy import funding_venue_enabled
+from spreadarb.venue_policy import funding_leg_enabled, opportunity_market_enabled
 
 from spreadboard.fast_quotes import VENUE_IDS
 
@@ -594,6 +594,8 @@ def leg_history_outcome(
     event_store_path: Path | str | None = None,
 ) -> dict[str, Any]:
     """Return rows plus a truthful, retry-aware source classification."""
+    if not opportunity_market_enabled(venue, "Futures", symbol):
+        return {"status": "symbol_not_indexed", "entries": []}
     if venue in NATIVE_HISTORY:
         outcome = _native_leg_history_outcome(
             venue, symbol, days=days, max_pages=max_pages
@@ -1015,11 +1017,12 @@ def build(
     )
     for mapping in (windows, leg_updated_at, leg_status):
         for key in list(mapping):
-            if not funding_venue_enabled(key.partition("|")[0]):
+            venue, _, symbol = key.partition("|")
+            if not funding_leg_enabled(venue, symbol):
                 mapping.pop(key)
-    ordered = list(dict.fromkeys(item for item in legs if funding_venue_enabled(item[0])))
+    ordered = list(dict.fromkeys(item for item in legs if funding_leg_enabled(item[0], item[1])))
     start = int(previous.get("next_cursor") or 0) % max(1, len(ordered))
-    priorities = list(dict.fromkeys(item for item in (priority_legs or []) if funding_venue_enabled(item[0])))
+    priorities = list(dict.fromkeys(item for item in (priority_legs or []) if funding_leg_enabled(item[0], item[1])))
     # Cross-process subscriber demand is already sorted newest-first. Reusing
     # a cursor from the previous ordering can jump into the middle of the new
     # list and leave the route the member just opened overdue. Once a recent
@@ -1285,7 +1288,7 @@ def coverage_summary(
     keeping the catch-up worker in a permanent tight loop, while a never-seen
     catalog leg remains pending until it has genuinely been queried.
     """
-    keys = {f"{venue}|{symbol}" for venue, symbol in legs if venue and symbol and funding_venue_enabled(venue)}
+    keys = {f"{venue}|{symbol}" for venue, symbol in legs if venue and symbol and funding_leg_enabled(venue, symbol)}
     try:
         payload = json.loads(Path(cache_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -1428,6 +1431,9 @@ def load(*, cache_path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, dict[str, 
         current_legs: dict[str, dict[str, float | None]] = {}
         expiries: list[int] = []
         for key, values in _CACHE["legs"].items():
+            venue, _, symbol = key.partition("|")
+            if not funding_leg_enabled(venue, symbol):
+                continue
             current, expiry = _current_leg_windows(
                 values,
                 _CACHE["leg_status"].get(key),

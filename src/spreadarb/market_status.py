@@ -55,4 +55,28 @@ def native_market_asset_class(venue: str, market: Mapping[str, Any]) -> str | No
         return "tokenized"
     if venue == "Bybit" and str(info.get("symbolType") or "").casefold() == "stock":
         return "tokenized"
+    if venue == "BitMart" and isinstance(info.get("tradfi_info"), Mapping) and info["tradfi_info"].get("market_group"):
+        return "tokenized"
     return None
+
+
+def bitmart_perpetual_market(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Native stablecoin-settled perpetual identity; USD contracts are inverse."""
+    import math
+
+    base = str(row.get("base_currency") or "").upper()
+    quote = str(row.get("quote_currency") or "").upper()
+    market_id = str(row.get("symbol") or "").upper()
+    try:
+        size = float(row.get("contract_size"))
+        expires = float(row.get("expire_timestamp") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if (not base or quote not in {"USDT", "USDC"} or market_id != base + quote
+            or row.get("status") != "Trading" or str(row.get("product_type")) != "1"
+            or expires != 0 or not math.isfinite(size) or size <= 0):
+        return None
+    return {"id": market_id, "symbol": f"{base}/{quote}:{quote}",
+            "base": base, "quote": quote, "settle": quote, "contractSize": size,
+            "active": True, "swap": True, "spot": False, "linear": True,
+            "inverse": False, "info": row}

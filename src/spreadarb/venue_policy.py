@@ -20,7 +20,7 @@ def funding_venue_enabled(venue: Any) -> bool:
 
 def funding_route_enabled(row: Any) -> bool:
     get = row.get if isinstance(row, dict) else lambda key: getattr(row, key, None)
-    return all(funding_venue_enabled(get(f"{side}_venue")) for side in ("long", "short"))
+    return opportunity_route_enabled(row) and all(funding_venue_enabled(get(f"{side}_venue")) for side in ("long", "short"))
 
 
 def opportunity_venue_enabled(venue: Any) -> bool:
@@ -28,9 +28,25 @@ def opportunity_venue_enabled(venue: Any) -> bool:
 
 
 def opportunity_route_enabled(row: Any) -> bool:
-    if isinstance(row, dict):
-        return opportunity_venue_enabled(row.get("long_venue")) and opportunity_venue_enabled(row.get("short_venue"))
-    return opportunity_venue_enabled(getattr(row, "long_venue", None)) and opportunity_venue_enabled(getattr(row, "short_venue", None))
+    get = row.get if isinstance(row, dict) else lambda key: getattr(row, key, None)
+    return all(opportunity_market_enabled(get(f"{side}_venue"), get(f"{side}_market_type"),
+                                         get(f"{side}_market_symbol")) for side in ("long", "short"))
+
+
+def opportunity_market_enabled(venue: Any, market_type: Any, symbol: Any) -> bool:
+    if not opportunity_venue_enabled(venue):
+        return False
+    if str(venue or "").casefold() == "bitmart" and str(market_type or "").casefold() == "futures":
+        # Old cached definitions hardcoded USDT for every settlement currency,
+        # including inverse BTCUSD. Never reinterpret such a cached route.
+        pair, _, settle = str(symbol or "").upper().partition(":")
+        base, _, quote = pair.partition("/")
+        return bool(base) and quote in {"USDT", "USDC"} and settle == quote
+    return True
+
+
+def funding_leg_enabled(venue: Any, symbol: Any) -> bool:
+    return funding_venue_enabled(venue) and opportunity_market_enabled(venue, "Futures", symbol)
 
 
 def opportunity_payload_enabled(payload: dict[str, Any], *, funding_only: bool = False) -> bool:

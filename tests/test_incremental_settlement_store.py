@@ -75,9 +75,9 @@ def test_native_limited_archive_accumulates_and_corrects_exact_events(tmp_path, 
     })
     path = tmp_path/'native.sqlite3'
     kwargs = {'event_store_path': path}
-    first = history.leg_history_outcome('BitMart', 'ONE', **kwargs)
+    first = history.leg_history_outcome('BitMart', 'ONE/USDT:USDT', **kwargs)
     clock[0] += 24*HOUR
-    second = history.leg_history_outcome('BitMart', 'ONE', **kwargs)
+    second = history.leg_history_outcome('BitMart', 'ONE/USDT:USDT', **kwargs)
     assert len(first['entries']) == 100
     assert len(second['entries']) == 124
     assert history.realised_windows(second['entries'], now_ms=clock[0])['7d'] is None
@@ -85,8 +85,8 @@ def test_native_limited_archive_accumulates_and_corrects_exact_events(tmp_path, 
     monkeypatch.setattr(history, '_native_leg_history_outcome', lambda *a, **kw: {
         'status': 'api_error', 'entries': [], 'error_type': 'TimeoutError'
     })
-    assert history.leg_history_outcome('BitMart', 'ONE', **kwargs)['status'] == 'api_error'
-    assert len(settlement_store.read(path, 'BitMart', 'ONE', clock[0])) == 124
+    assert history.leg_history_outcome('BitMart', 'ONE/USDT:USDT', **kwargs)['status'] == 'api_error'
+    assert len(settlement_store.read(path, 'BitMart', 'ONE/USDT:USDT', clock[0])) == 124
 
 
 def test_retention_prunes_inactive_contracts_on_other_contract_refresh(tmp_path):

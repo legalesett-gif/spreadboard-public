@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 
 from spreadboard.fast_quotes import NATIVE_FUTURES_VENUES, NATIVE_SPOT_VENUES, VENUE_IDS
 from spreadboard import route_taxonomy
-from spreadarb.venue_policy import opportunity_venue_enabled
+from spreadarb.venue_policy import opportunity_market_enabled, opportunity_venue_enabled
 from spreadarb.market_status import native_market_asset_class, public_market_definition
 from spreadarb.api_discovery.identity import load_watchlist
 
@@ -28,12 +28,12 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_PATH = RUNTIME_DIR / "chart_market_catalog.json"
 STABLE_QUOTES = {"USD", "USDC", "USDT"}
-# Revision 2 adds native stock classification and all Hyperliquid builders.
+# Revision 3 adds native BitMart listings and correct settlement identities.
 # An mtime from an older producer cannot prove these definitions are current.
-DEFINITION_REVISION = 2
+DEFINITION_REVISION = 3
 DEFINITION_REVISION_JOBS = frozenset(
-    f"{venue}|Futures" for venue in ("Binance", "Bitget", "Bybit", "Hyperliquid")
-)
+    f"{venue}|Futures" for venue in ("Binance", "Bitget", "Bybit", "Hyperliquid", "BitMart")
+) | frozenset({"BitMart|Spot"})
 
 
 def definitions_current(path: Path | str = DEFAULT_PATH) -> bool:
@@ -176,7 +176,7 @@ def load(path: Path | str = DEFAULT_PATH) -> dict[str, Any]:
         dex_markets = dex_market_entries()
         markets = [
             item for item in payload.get("markets") or []
-            if isinstance(item, dict) and opportunity_venue_enabled(item.get("venue"))
+            if isinstance(item, dict) and opportunity_market_enabled(item.get("venue"), item.get("market_type"), item.get("symbol"))
         ]
         known = {
             (
@@ -291,6 +291,9 @@ def route_from_key(route_key: str) -> dict[str, Any] | None:
 def _load_venue(venue: str, market_type: str) -> list[dict[str, Any]]:
     import ccxt
 
+    if venue == "BitMart":
+        return _load_bitmart_venue(market_type)
+
     if venue == "WhiteBIT":
         # WhiteBIT publishes the authoritative product type itself. Its CCXT
         # adapter currently maps ``tradfiFutures`` markets such as AAOI_PERP to
@@ -403,6 +406,47 @@ def _catalog_market_supported(market: dict[str, Any], market_type: str) -> bool:
     # contracts such as BTC/USD:BTC need different symbols, sizing, and funding
     # units and must not leak into the same chart path.
     return str(market.get("settle") or "").upper() in STABLE_QUOTES
+
+
+def _load_bitmart_venue(market_type: str) -> list[dict[str, Any]]:
+    from spreadarb.market_status import bitmart_perpetual_market
+
+    if market_type not in {"Spot", "Futures"}:
+        return []
+    url = ("https://api-cloud.bitmart.com/spot/v1/symbols/details" if market_type == "Spot"
+           else "https://api-cloud-v2.bitmart.com/contract/public/details")
+    request = Request(url, headers={"Accept": "application/json", "User-Agent": "SpreadBoard/1.0"})
+    with urlopen(request, timeout=20.0) as response:
+        payload = json.loads(response.read())
+    if not isinstance(payload, dict) or str(payload.get("code")) != "1000":
+        raise RuntimeError("bitmart_catalog_response_error")
+    items = (payload.get("data") or {}).get("symbols")
+    if not isinstance(items, list):
+        raise TypeError("bitmart_catalog_schema_error")
+    rows = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if market_type == "Futures":
+            market = bitmart_perpetual_market(item)
+            if market is None:
+                continue
+        else:
+            base = str(item.get("base_currency") or "").upper()
+            quote = str(item.get("quote_currency") or "").upper()
+            market_id = str(item.get("symbol") or "").upper()
+            if (not base or quote not in STABLE_QUOTES or item.get("trade_status") != "trading"
+                    or market_id != f"{base}_{quote}"):
+                continue
+            market = {"base": base, "quote": quote, "id": market_id,
+                      "symbol": f"{base}/{quote}", "contractSize": 1.0, "spot": True}
+        row = {"token": market["base"], "venue": "BitMart", "market_type": market_type,
+               "symbol": market["symbol"], "market_id": market["id"],
+               "quote": market["quote"], "contract_size": market["contractSize"]}
+        if native_market_asset_class("BitMart", market) == "tokenized":
+            row["asset_class"] = "tokenized"
+        rows[row["market_id"]] = row
+    return list(rows.values())
 
 
 def _load_whitebit_venue(

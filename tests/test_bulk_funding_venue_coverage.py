@@ -7,7 +7,7 @@ from spreadboard import bulk_quotes, fast_quotes
 
 def _bitmart(**changes):
     return {'symbol': 'BTCUSDT', 'base_currency': 'BTC', 'quote_currency': 'USDT',
-            'product_type': 1, 'expire_timestamp': 0, 'status': 'Trading',
+            'product_type': 1, 'expire_timestamp': 0, 'status': 'Trading', 'contract_size': '.001',
             'funding_rate': '.005', 'expected_funding_rate': '0',
             'funding_interval_hours': 4, 'funding_time': 1788652800000,
             'index_price': '79900', **changes}
@@ -112,10 +112,10 @@ def test_bitget_collects_both_linear_families_with_live_cadence(monkeypatch, una
 
 
 @pytest.mark.parametrize('quote',['USD','USDC'])
-def test_bitmart_quote_does_not_replace_catalogue_settlement(monkeypatch, quote):
+def test_bitmart_native_settlement_replaces_incorrect_legacy_convention(monkeypatch, quote):
     _source(monkeypatch,'BitMart',[_bitmart(symbol=f'BTC{quote}',quote_currency=quote,expire_timestamp=None)])
     rates=fast_quotes.FastQuoteRefresher()._bulk_funding_rates('BitMart')
-    assert set(rates)=={f'BTC/{quote}:USDT'}
+    assert set(rates)==({f'BTC/{quote}:{quote}'} if quote == 'USDC' else set())
 
 
 @pytest.mark.parametrize('rate',['NaN','Infinity','-Infinity'])
