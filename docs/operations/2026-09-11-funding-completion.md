@@ -137,3 +137,23 @@ Ordinary observation at01:47:35: 24h/7d/30d current historical coverage83.90%/81
 ### Ordinary catalogue publication verified — 02:00:15UTC
 
 Generation01:59:08 published BitMart Spot53/Futures355, both statusok, with zero USDinverse or USDC:USDT malformed symbols. Artifact worker2382325 exited. Binance756/Bitget836/Bybit826 futures jobs also succeeded. Hyperliquid job failed and retained317 cached markets, so the required global definition revision correctly remains2. This does not mean native Hyperliquid funding stopped; it is a catalogue freshness failure requiring a fresh diagnostic. Do not mark revision3 acceptance complete or silently lower the required-job gate.
+
+
+## Compact prior-index candidate — September 11 02:23UTC
+
+Candidate `f69b476` / source `a97d900e6117e8a0` is committed locally, not deployed. Production remains `a886b08` / `06e1c30be5a20324`. Active discovery PID2387856 was freshly confirmed running at02:22:48UTC, elapsed1,150s; wait for its finalizer too before guarded deployment.
+
+- First read retains full DEX seeds and compact exact CEX identities/safety evidence. Even empty safety records retain duplicate-identity ordering. The second read retains full old rows only for still-listed economic identities absent from the current rebuild. Prices, metadata, warnings and missing-route continuity are preserved.
+- Both reads bind to the same checksum-verified immutable generation. Discarded fields still undergo numeric validation; changed/corrupt second-pass data refuses publication. Source-signature validation runs after the continuity pass.
+- Index cleanup previously counted the pointer as a retained generation, effectively keeping only one data file. It now retains two real generations, preserving a reader's pinned file across one publication. This uses an additional old artifact on disk; it does not retain that full generation in process memory.
+- Full public-data comparison used the captured215,263-route index and a deterministic incomplete current cut. Both paths produced215,263 equal output rows/digest666a3b79f47e1eb880a6b05a656c480b3c3032c9a22da4207e6e8724487b530f. Baseline peakRSS1,128,087,552bytes/151.92s; candidate866,598,912bytes/149.30s. Saved249.375MiB (23.18%); runtime difference is small and not a production CPU claim.
+- Full frozen-source suite:2,899 passed in195.32s, actual exit0; Ruff no new findings(502 known). Five deliberately injected faults were caught: missing safety evidence, bypassed compact callsite, skipped numeric validation, mixed generation selection, and swallowed continuity-read failure.
+- Evidence: `rebuild-{full,compact}-profile.json`, `compact-index-mutations.json`, `pytest-compact-index-release.txt`. Required next checks remain ordinary deployed worker peaks/CPU, unchanged current priced-route continuity, and safe cap decisions. No limits changed here.
+
+### Additional fresh checks
+
+The production Hyperliquid catalogue function succeeded with317 markets in13.17s after the earlier failed job; this points to a transient failure. The published revision remains2 until a successful ordinary refresh; do not force the revision. Evidence: `hyperliquid-catalog-production-diagnostic.json`.
+
+At02:18:57 the live funding file contained355 BitMart contracts, exactBTC/USDC:USDC and zero malformed aliases. At02:20:18 its settled-history entry was statusok with all three windows present and zero malformed BitMart history keys. At02:22 the public book store held24,398 books, each one level per side, so reducing stored book depth is not a measured useful memory fix and was not attempted.
+
+The single finite observer is still running. Final acceptance must begin after final source/caps and warm readiness, avoiding deployment startup samples (the latest generation currently includes a priced=0 startup sample). Preserve earlier samples as chronology; reset/extend the same observer for the final clean window rather than treating this short generation as an hour/48h pass.
