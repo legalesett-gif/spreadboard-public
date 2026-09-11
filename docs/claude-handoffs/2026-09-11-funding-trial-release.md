@@ -1,4 +1,6 @@
-# SpreadBoard funding and trial continuation
+# SpreadBoard funding and trial continuation — owned in this chat
+
+The user confirmed there will be no Claude. Codex owns all remaining work here. The active checklist is [the completion record](../operations/2026-09-11-funding-completion.md); dated evidence below is historical.
 
 ## Work location and safety
 

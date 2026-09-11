@@ -1,9 +1,9 @@
 # Funding correctness release: evidence and acceptance
 
 Worktree: `tmp/spreadboard-exchanges-trial`, branch `codex/exchanges-funding-trial-20260910`.
-This document is a work-in-progress record, not a deployment acceptance statement.
+This document is chronological evidence. Current status and remaining work are owned by Codex in this chat: see [completion record](2026-09-11-funding-completion.md). Statements below about pending deployment, unobserved ledger writes and Claude follow-up describe earlier checkpoints, not current state.
 
-## Confirmed causes
+## Confirmed causes at the initial September 10 investigation
 
 - Production web and collector run different source generations. The web currently lacks already-written settlement, Hyperliquid and live-row coherence fixes. Merged both source lines into this candidate, preserving newer Portfolio changes.
 - Native ONG schedules at 2026-09-10 22:50–22:55 UTC: Binance, BingX and XT hourly. The website displayed 8h. Native schedule metadata must outrank generic defaults. XT's bulk `collection_internal` was omitted; Phemex's metadata `fundingInterval` uses seconds.
@@ -28,7 +28,7 @@ Evidence: `output/release-20260910/ong-native.json`, `ong-settled-audit.json`, `
 
 The first live parser audit covered 20 enabled venue labels, including spot-only labels with zero funding. Saved in `output/release-20260910/venue-parser-audit.json`. It exposed assumed schedules on Binance/Aster/Phemex, XT schedule omission, and an unsupported 24h MEXC metadata value. A parser returning rows is not proof that every field is correct; independent semantics checks and regressions remain necessary. Hyperliquid's base CCXT funding call does not cover builders: the native all-builder bulk lane must be verified separately.
 
-## Acceptance still required
+## Acceptance checklist at the initial candidate
 
 - Final full pytest and unchanged Ruff ratchet must pass; no failed gate may be masked.
 - Native public all-builder Hyperliquid read, final venue schedule audit, rolling window expiry and mixed-cadence gap checks.
@@ -61,4 +61,4 @@ The first live parser audit covered 20 enabled venue labels, including spot-only
 
 Commit `d349e95` deployed successfully to both services, source digest `4c532517549fed61`; deployment exit 0 and health 200. Full tests: 2864 passed; no new Ruff findings. Lossless packed funding catalogues now retain allowed routes across venue-policy changes without waiting for a whole rebuild.
 
-Final health still reports incomplete historical coverage: 3116/9400 current 24h, 2992/9400 current 7d and 2576/9400 current 30d legs. ONG production showed consistent projected group values and an explicit unavailable Gate 30d gap. Incremental SQLite production writes have not yet been observed; native BitMart also needs equivalent storage integration. The 48h stability and normal-backup acceptance remain open. See the Claude handover for concrete follow-ups.
+Final health still reports incomplete historical coverage: 3116/9400 current 24h, 2992/9400 current 7d and 2576/9400 current 30d legs. ONG production showed consistent projected group values and an explicit unavailable Gate 30d gap. Incremental SQLite production writes have not yet been observed; native BitMart also needs equivalent storage integration. The 48h stability and normal-backup acceptance remain open. This was the earlier checkpoint; the current completion record above supersedes these open items.
