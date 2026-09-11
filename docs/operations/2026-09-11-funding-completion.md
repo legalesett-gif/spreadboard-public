@@ -4,7 +4,7 @@ Owner: Codex in the current chat. There is no external Claude handoff. The older
 
 ## Latest verified deployment
 
-Both services run56362cd/2dcdb127627ba3db, guarded deployment exit0, exact source matches and warm health/free200 (209066priced routes). Initial deep-archive ordering fix deployed after2922tests204.44s and canonical Ruff500/no new. Ordinary first cycle cleared20deep checks; BitMart197 exposed a separate empty-native-result classification bug, now fixed and fully tested locally but NOT deployed during active discovery. Candidate2923tests191.93s; canonical Ruff500/no new; native old-archive call-site mutant fails. Observer2494056 restarted warm04:44:47UTC, same finite49h/50h unit. Discovery2497121 freshly confirmed live; preserve it and its finalizer. App3584/collector4096/accounting512MiB unchanged. Memory/caps, final hour/48h and two normal backups remain open; next backup06:21:05UTC. No trading, external messages, alerts or recurring-task activation.
+Both services run56362cd/2dcdb127627ba3db, guarded deployment exit0, exact source matches and warm health/free200 (209066priced routes). Initial deep-archive ordering fix deployed after2922tests204.44s and canonical Ruff500/no new. Ordinary first cycle cleared20deep checks; BitMart197 exposed a separate empty-native-result classification bug, now fixed and fully tested locally but NOT deployed during active discovery. Candidatece8f3c4:2923tests191.93s; canonical Ruff500/no new; native old-archive call-site mutant fails. Observer2494056 restarted warm04:44:47UTC, same finite49h/50h unit. Discovery2497121 freshly confirmed live; preserve it and its finalizer. App3584/collector4096/accounting512MiB unchanged. Memory/caps, final hour/48h and two normal backups remain open; next backup06:21:05UTC. No trading, external messages, alerts or recurring-task activation.
 
 ## Requirement-by-requirement status
 
@@ -290,3 +290,9 @@ BitMart remaining197 were actually refreshed, but native API returned only old r
 Candidate aligns the native wrapper with the existing CCXT outcome: successful response with no retained usable events becomes no_history_rows, never an invented zero. Actual native parser/store/build regression and original-code mutation verify the persisted classification and deep-pending count.64 targeted tests pass; full2923tests191.93s, canonical Ruff500known/no new. Source unchanged during final gates; generated tracked data preserved/restored.
 
 Official endpoint contract: https://developer-pro.bitmart.com/en/futuresv2/#get-funding-rate-history (maximum100, supportedlimit10); actual dated public samples are recorded inbitmart-old-native-archive-evidence.json. Candidate awaits guarded deployment after discovery and finalization finish. Do not rewrite retained histories or manually flip classification flags.
+
+
+## Live pressure path and protected scan —04:54UTC
+
+Fresh04:54UTC: discovery2497121 and observer2494056 live; both containers healthy/OOMfalse/restarts0. Pressure-triggered allocator-only trims observed04:50:27(2.596→2.159GiB,71ms) and04:50:51(2.556→2.422GiB,132ms),24.2s apart, confirming the bounded higher-pressure path executes. Clean9.72minute segment:five priced samples208817–209367, no endpoint failures; anonymous peaksweb2650.3MiB,collector3110.2MiB,accounting267.9MiB. Full discovery/finalizer and safe caps remain unproven; no deployment or cap change during the active scan.
+Evidence:native-empty-deferred-live.txt and latest-acceptance.json.
