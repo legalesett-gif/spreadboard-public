@@ -38,7 +38,8 @@ class _DigestReader:
 def _shared_fields(value: Any, keys: dict[str, str]) -> Any:
     # Streaming parsers otherwise allocate every repeated field name anew.
     # Keep only a bounded per-load pool, returning ordinary dicts and lists.
-    if isinstance(value, dict):
+    kind = type(value)
+    if kind is dict:
         result = {}
         for key, item in value.items():
             shared = keys.get(key)
@@ -48,14 +49,14 @@ def _shared_fields(value: Any, keys: dict[str, str]) -> Any:
                     keys[key] = key
             result[shared] = _shared_fields(item, keys)
         return result
-    if isinstance(value, list):
+    if kind is list:
         return [_shared_fields(item, keys) for item in value]
-    if isinstance(value, Decimal):
+    if kind is Decimal:
         number = float(value)
         if not math.isfinite(number):
             raise ValueError("nonfinite_index_number")
         return number
-    if isinstance(value, int) and not -(2**63) <= value < 2**64:
+    if kind is int and not -(2**63) <= value < 2**64:
         raise ValueError("index_integer_out_of_range")
     return value
 
@@ -77,16 +78,21 @@ def _shared_route_values(row: dict[str, Any], values: dict[str, str]) -> dict[st
 
 def _validate_numbers(value: Any) -> None:
     """Validate discarded fields without allocating a normalized copy."""
-    if isinstance(value, dict):
-        for item in value.values():
-            _validate_numbers(item)
-    elif isinstance(value, list):
-        for item in value:
-            _validate_numbers(item)
-    elif isinstance(value, Decimal) and not math.isfinite(float(value)):
-        raise ValueError("nonfinite_index_number")
-    elif isinstance(value, int) and not -(2**63) <= value < 2**64:
-        raise ValueError("index_integer_out_of_range")
+    # ijson produces these exact built-in types (and Decimal), not arbitrary
+    # subclasses. A per-row stack avoids a Python call and repeated isinstance
+    # dispatch for every scalar in a large discarded payload.
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        kind = type(item)
+        if kind is dict:
+            pending.extend(item.values())
+        elif kind is list:
+            pending.extend(item)
+        elif kind is Decimal and not math.isfinite(float(item)):
+            raise ValueError("nonfinite_index_number")
+        elif kind is int and not -(2**63) <= item < 2**64:
+            raise ValueError("index_integer_out_of_range")
 
 
 def read_index(

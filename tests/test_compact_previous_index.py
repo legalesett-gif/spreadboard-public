@@ -80,8 +80,12 @@ def test_pinned_selection_does_not_follow_new_pointer_and_validates_skipped_byte
     assert store.live_route_index(generation=pinned, select_row=select) is None
 
 
-def test_selected_reader_still_rejects_invalid_numeric_data(tmp_path):
-    raw = json.dumps({'skipped': {'overflow': 2**80}}).encode()
+@pytest.mark.parametrize('raw', [
+    json.dumps({'skipped': {'overflow': 2**80}}).encode(),
+    json.dumps({'skipped': {'nested': [{'overflow': -(2**63)-1}]}}).encode(),
+    b'{"skipped":{"nested":[{"overflow":1e9999}]}}',
+])
+def test_selected_reader_still_rejects_invalid_numeric_data(tmp_path, raw):
     path = tmp_path / 'index.json'
     path.write_bytes(raw)
     assert streaming_index.read_index(path, expected_bytes=len(raw), expected_sha256=hashlib.sha256(raw).hexdigest(),
@@ -102,6 +106,25 @@ def test_second_pass_failure_does_not_publish_candidate(tmp_path, monkeypatch):
         return {'fresh': route('fresh')}, {}
     monkeypatch.setattr(worker, '_current_generation_rows', fresh)
     with pytest.raises(RuntimeError, match='previous_index_changed'):
+        worker.build(board, tmp_path)
+    assert store.live_route_pointer_path.read_bytes() == pointer
+
+
+def test_first_pass_corruption_cannot_discard_prior_safety(tmp_path, monkeypatch):
+    store = materialized_views.Store(tmp_path)
+    board = tmp_path / 'board'
+    signature = {'board_path': str(board)}
+    store.write_live_route_index({'old': {**route(), 'identity_warning': True}},
+                                 source_signature=signature)
+    pointer = store.live_route_pointer_path.read_bytes()
+    generation = store.live_route_index_status()
+    path = tmp_path / generation['file']
+    path.write_bytes(path.read_bytes().replace(b'Mexc', b'Gate'))
+    monkeypatch.setattr(worker, 'source_signature', lambda _: signature)
+    monkeypatch.setattr(worker.api_spreads, 'load_public_route_index',
+                        lambda: ({'new': route('new')}, {}))
+    monkeypatch.setattr(worker.coverage_reconciliation, 'record_book_coverage', lambda _: {})
+    with pytest.raises(RuntimeError, match='previous_index_unavailable_for_safety_read'):
         worker.build(board, tmp_path)
     assert store.live_route_pointer_path.read_bytes() == pointer
 

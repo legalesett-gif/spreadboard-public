@@ -355,7 +355,12 @@ def build(board_path: Path, output_root: Path) -> dict[str, Any]:
         previous_rows = store.live_route_index(
             board_path=board_path, generation=previous_meta,
             select_row=_prior_rebuild_evidence,
-        ) or {}
+        )
+        if previous_rows is None:
+            # A known generation may contain conservative identity evidence.
+            # An unreadable artifact is not an empty history: publishing a
+            # fresh candidate here could silently discard those restrictions.
+            raise RuntimeError("previous_index_unavailable_for_safety_read")
     same_structural_generation = bool(
         previous_rows and previous_meta.get("source_signature") == initial
     )
