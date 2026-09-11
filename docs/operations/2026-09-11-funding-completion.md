@@ -1,11 +1,11 @@
 # SpreadBoard completion and continuity record
 
-Updated: 11 September 2026, 05:36 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
+Updated: 11 September 2026, 05:40 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
 
 ## Current release
 
 - **Production:** source candidate `56adbe1` (docs-only HEAD `2051ed7`), source digest `4430d9f68e5e62f7`, verified in web and collector. The guarded retry exited 0 after finalization finished. `/api/health` and `/free` returned 200 with a warm index of 209,293 priced routes out of 215,488 structural routes.
-- **Release gates:** 2,924 tests passed in 217.59 seconds; canonical Ruff reported 500 known findings and none new. Native empty-history correction `ce8f3c4` is deployed; ordinary worker classification still needs verification.
+- **Release gates:** 2,924 tests passed in 217.59 seconds; canonical Ruff reported 500 known findings and none new. Native empty-history correction `ce8f3c4` is deployed; ordinary worker recovery is verified in progress (197→144 pending); completion remains open.
 - **Live processes checked at 05:36 UTC:** both application containers healthy, zero OOM kills/restarts. The same finite observer restarted warm at 05:36:27 UTC, PID `2526836`; no duplicate observer or recurring automation was created.
 - **Working location:** `tmp/spreadboard-exchanges-trial`, branch `codex/exchanges-funding-trial-20260910`. Use this isolated worktree; preserve unrelated root-worktree changes.
 
@@ -28,7 +28,7 @@ Updated: 11 September 2026, 05:36 UTC. Owner: Codex in this chat. The full task 
 
 ## Open acceptance gates
 
-1. **Verify ordinary worker recovery after the deployed native-history fix.** Deployment, source parity, warm priced routes and HTTP checks passed. Verify ordinary workers classify empty recent archives correctly; never manually change history flags. The first warm health sample still showed 197 pending checks.
+1. **Verify ordinary worker recovery after the deployed native-history fix.** Deployment, source parity, warm priced routes and HTTP checks passed. Verify ordinary workers classify empty recent archives correctly; never manually change history flags. At 05:40 UTC, ordinary workers had reduced pending checks from 197 to 144; BitMart had 58 `no_history_rows` classifications. Coverage remained 96.74% / 94.0% / 80.55% for 24h / 7d / 30d.
 2. **Finish ordinary-load memory measurements and safely lower limits.** Current limits are web 3,584 MiB, collector 4,096 MiB and accounting 512 MiB. Targets are 3,072 / 3,584 / 512 MiB, plus Caddy 192 MiB: 7,360 MiB total against about 7,941 MiB physical RAM. Accounting is already reduced. Full discovery, finalization, index publication and normal worker overlap must fit before reducing the other limits.
 3. **Verify 30 priced-route samples over an hour, within ±10%, without deployment contamination.** The latest clean window is too short. The analyzer separates container, observer and cap generations.
 4. **Complete the final 48-hour reliability window.** `/api/health` and `/free` must return 200 on a five-minute cadence; no unhealthy period may exceed 90 seconds; both cgroups must have zero OOM kills. Inspect kernel OOM records for the same period. A reset counter or short observation does not satisfy this gate.
@@ -40,7 +40,7 @@ The pressure cleanup returns already-freed allocator memory, preserving live cac
 
 Production observed allocator-only trims at 04:50:27 and 04:50:51, 24.2 seconds apart: 2.596→2.159 GiB in 71 ms, then 2.556→2.422 GiB in 132 ms. This verifies that the new pressure path runs. It does not by itself prove the final lower cap is safe.
 
-The pre-release 05:29 snapshot covered 44.98 clean minutes: 23 priced samples ranged from 208,817 to 209,649, with no endpoint failures. Anonymous memory peaks were web 2,976.6 MiB, collector 3,353.1 MiB and accounting 272.6 MiB. The collector peak overlapped discovery, market evidence, settlement and quote workers. The later finalizer completed before deployment; its full observations still need to be collected. No lower web/collector limit has been certified.
+The pre-release 05:29 snapshot covered 44.98 clean minutes: 23 priced samples ranged from 208,817 to 209,649, with no endpoint failures. Anonymous memory peaks were web 2,976.6 MiB, collector 3,353.1 MiB and accounting 272.6 MiB. The collector peak overlapped discovery, market evidence, settlement and quote workers. The completed finalizer observations were collected and did not exceed these anonymous-memory peaks. Evidence: `complete-cycle-peaks.json`. No lower web/collector limit has been certified.
 
 Process-level evidence records a web RSS high-water mark of 3,086 MiB. The collector peak coincided with the materialized-view builder, settlement worker and quote workers; the builder’s recorded RSS high-water mark was 2,054.2 MiB. RSS and cgroup anonymous memory are distinct measurements. Neither a sampled partial-cycle peak nor a successful trim certifies the proposed lower limits. See `output/continuation-20260911/ordinary-peak-processes.json`.
 
