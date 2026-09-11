@@ -1,12 +1,12 @@
 # SpreadBoard completion and continuity record
 
-Updated: 11 September 2026, 05:40 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
+Updated: 11 September 2026, 05:54 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
 
 ## Current release
 
-- **Production:** source candidate `56adbe1` (docs-only HEAD `2051ed7`), source digest `4430d9f68e5e62f7`, verified in web and collector. The guarded retry exited 0 after finalization finished. `/api/health` and `/free` returned 200 with a warm index of 209,293 priced routes out of 215,488 structural routes.
-- **Release gates:** 2,924 tests passed in 217.59 seconds; canonical Ruff reported 500 known findings and none new. Native empty-history correction `ce8f3c4` is deployed; ordinary worker recovery is verified in progress (197→144 pending); completion remains open.
-- **Live processes checked at 05:36 UTC:** both application containers healthy, zero OOM kills/restarts. The same finite observer restarted warm at 05:36:27 UTC, PID `2526836`; no duplicate observer or recurring automation was created.
+- **Production:** `c8af1eb`, source digest `10ec5f99f3b8e3fd`, verified in web and collector. Guarded deployment exited 0. Warm health at 05:53:41 UTC returned 200 with 209,072 priced routes out of 215,309; `/free` returned 200 during release verification.
+- **Release gates:** 2,925 tests passed in 251.12 seconds; canonical Ruff reported 500 known findings and none new. The new change shares identical immutable lookup/row identifiers, eliminating 69,988,872 bytes of duplicate strings on the 215,263-route profiling artifact. It changes no route values or coverage. Focused 39-test suite and original-code mutant checked.
+- **Live processes checked at 05:54 UTC:** both application containers healthy, zero OOM kills/restarts. The same finite observer restarted warm at 05:54:01 UTC, PID `2538662`; no duplicate observer or recurring automation was created. Native-history recovery remains in progress: pending checks 197→105.
 - **Working location:** `tmp/spreadboard-exchanges-trial`, branch `codex/exchanges-funding-trial-20260910`. Use this isolated worktree; preserve unrelated root-worktree changes.
 
 ## Requirements and evidence
@@ -28,7 +28,7 @@ Updated: 11 September 2026, 05:40 UTC. Owner: Codex in this chat. The full task 
 
 ## Open acceptance gates
 
-1. **Verify ordinary worker recovery after the deployed native-history fix.** Deployment, source parity, warm priced routes and HTTP checks passed. Verify ordinary workers classify empty recent archives correctly; never manually change history flags. At 05:40 UTC, ordinary workers had reduced pending checks from 197 to 144; BitMart had 58 `no_history_rows` classifications. Coverage remained 96.74% / 94.0% / 80.55% for 24h / 7d / 30d.
+1. **Verify ordinary worker recovery after the deployed native-history fix.** Deployment, source parity, warm priced routes and HTTP checks passed. Verify ordinary workers classify empty recent archives correctly; never manually change history flags. At 05:53 UTC, ordinary workers had reduced pending checks from 197 to 105. Exact unsupported archives remain blank.
 2. **Finish ordinary-load memory measurements and safely lower limits.** Current limits are web 3,584 MiB, collector 4,096 MiB and accounting 512 MiB. Targets are 3,072 / 3,584 / 512 MiB, plus Caddy 192 MiB: 7,360 MiB total against about 7,941 MiB physical RAM. Accounting is already reduced. Full discovery, finalization, index publication and normal worker overlap must fit before reducing the other limits.
 3. **Verify 30 priced-route samples over an hour, within ±10%, without deployment contamination.** The latest clean window is too short. The analyzer separates container, observer and cap generations.
 4. **Complete the final 48-hour reliability window.** `/api/health` and `/free` must return 200 on a five-minute cadence; no unhealthy period may exceed 90 seconds; both cgroups must have zero OOM kills. Inspect kernel OOM records for the same period. A reset counter or short observation does not satisfy this gate.
@@ -82,3 +82,5 @@ Paths below are relative to the isolated worktree:
 - `output/continuation-20260911/latest-acceptance.json` and `samples.jsonl`: current observation report and raw chronology.
 - `output/continuation-20260911/native-empty-deferred-live.txt`: active scan, container health and observed pressure trims.
 - [Chronological release journal](2026-09-11-funding-release-journal.md): earlier changes, failed approaches, measurements, release gates and corrections.
+
+Latest release evidence: `output/continuation-20260911/route-key-sharing-full-tests.txt`, `route-key-sharing-ruff.txt`, `route-key-sharing-mutant.txt`, `route-key-duplication-profile.json`, `route-key-sharing-profile.json`, `deploy-route-key-sharing.txt`, and `health-route-key-sharing-warm.json`. Profile RSS measurements are machine/load-specific and do not certify production caps. The 67 MiB duplicate-string measurement is direct; do not attribute the entire observed RSS difference to it.
