@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
 import os
+from datetime import datetime, timezone
 
 import pytest
 
@@ -330,7 +330,7 @@ def test_whitebit_catalog_uses_first_party_product_types() -> None:
         "Spot", fetcher=lambda _url: definitions
     )
     future_rows = chart_catalog._load_whitebit_venue(
-        "Futures", fetcher=lambda _url: futures
+        "Futures", fetcher=lambda url: definitions if url.endswith("/markets") else futures
     )
 
     assert [row["market_id"] for row in spot_rows] == ["BTC_USDT"]
@@ -343,6 +343,7 @@ def test_whitebit_catalog_uses_first_party_product_types() -> None:
             "market_id": "AAOI_PERP",
             "quote": "USDT",
             "contract_size": 1.0,
+            "asset_class": "tokenized",
         }
     ]
 

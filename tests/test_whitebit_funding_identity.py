@@ -35,7 +35,9 @@ def test_native_perpetual_identity_survives_real_ccxt_into_cache_and_carry(monke
     client = _client(monkeypatch, [row])
     # Reproduce the adapter bug: it labels a tradfi perpetual as a spot pair.
     assert client.fetch_funding_rates()[f'AAPL/{quote}']['symbol'] == f'AAPL/{quote}'
-    catalogue = chart_catalog._load_whitebit_venue('Futures', fetcher=lambda _url: {'result': [row]})
+    catalogue = chart_catalog._load_whitebit_venue(
+        'Futures', fetcher=lambda url: [m['info'] for group in client.markets_by_id.values() for m in group]
+        if url.endswith('/markets') else {'result': [row]})
     symbol = catalogue[0]['symbol']
     path = tmp_path / 'funding.json'
     report = bulk_quotes.sweep_funding(['WhiteBIT'], cache_path=path)

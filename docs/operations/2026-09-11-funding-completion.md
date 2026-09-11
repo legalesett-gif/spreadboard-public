@@ -225,3 +225,14 @@ Fresh read of ordinary catalogue (published02:52:45UTC) found2,242 distinct futu
 ## Ordinary partial-expiry recovery — September11 03:38UTC
 
 Fresh production health after the normal settlement worker:all9,406 active catalogue contracts attempted/classified, zero retryable errors, and zero overdue24h/7d/30d windows. Current-window catch-up is now true. Available windows:9,008daily (95.77%),8,727seven-day (92.78%),7,511thirty-day (79.85%);7,473contracts have all periods.210deep-history checks remain pending, so history_catch_up_complete is still false. This is observed ordinary recovery after the queue fix; archive completeness and final stability/caps remain separate open gates. Observer2448898 and settlement worker2447722 were freshly confirmed active.
+
+
+## WhiteBIT native history audit — September11 04:09UTC
+
+Active-catalogue classification audit found93 WhiteBIT contracts labelled symbol_not_indexed. They are native tradfiFutures, but installed CCXT4.5.71 parses them as spot and derivative-only pruning removes them. Thus100% source classification was not proof of correct archive coverage. The candidate funding-only parser preserves the exact native ID and raw info while recognizing explicitly declared perpetuals; ordinary spot pairs remain pruned. Native catalogue revision4 also propagates tokenized identity classification and requires successful WhiteBIT spot/futures definition jobs.
+
+- Fresh public candidate audit:398 native futures,398 retained history-client futures, zero missing exact symbols,93 tokenized. AAOI/AAPL each returned93 real settlements. AAOI24h−0.03639%,7d−0.32557%,30d+0.35024%; AAPL24h+0.03%,7d−0.0014%,30d+0.59851%. These are dated samples, not permanent rates.
+- WhiteBIT delistedAt is an announced epoch-second cutoff. An initial candidate incorrectly rejected any announcement; corrected before deployment. ICX remains included while tradesEnabled=true and its cutoff is future. Both spot/futures reject elapsed or malformed cutoffs. Invalid native source responses refuse publication rather than publishing an empty catalogue.
+-62 focused tests pass. Four injected faults were detected: missing history-parser hook, missing native classification/admission, old definition revision, and premature announced-delisting exclusion. Final full suite:2,920passed205.09s, exit0; no new Ruff findings in changed files (503 existing repository findings). This candidate is not yet deployed.
+- Official references: https://docs.whitebit.com/api-reference/market-data/funding-history and https://docs.whitebit.com/api-reference/market-data/market-info . Settlements use fundingTime, not earlier rateCalculatedTime.
+- Acceptance analyzer now rejects invalid/missing memory/CPU samples, decreasing CPU counters, and any observed OOM/restart even if a later sample reports zero.17 synthetic cases pass. This validates evidence handling, not48h production acceptance.

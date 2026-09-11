@@ -2,38 +2,37 @@
 
 from __future__ import annotations
 
-from spreadarb.public_clients import configure_public_market_client
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
 import base64
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime, timezone
+from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
-from spreadboard.fast_quotes import NATIVE_FUTURES_VENUES, NATIVE_SPOT_VENUES, VENUE_IDS
-from spreadboard import route_taxonomy
-from spreadarb.venue_policy import opportunity_market_enabled, opportunity_venue_enabled
 from spreadarb.market_status import native_market_asset_class, public_market_definition
-from spreadarb.api_discovery.identity import load_watchlist
+from spreadarb.public_clients import configure_public_market_client
+from spreadarb.venue_policy import opportunity_market_enabled, opportunity_venue_enabled
 
+from spreadarb.api_discovery.identity import load_watchlist
+from spreadboard import route_taxonomy
+from spreadboard.fast_quotes import NATIVE_FUTURES_VENUES, NATIVE_SPOT_VENUES, VENUE_IDS
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = Path(os.environ.get("SPREADBOARD_DATA_DIR", str(ROOT / "data")))
 DEFAULT_PATH = RUNTIME_DIR / "chart_market_catalog.json"
 STABLE_QUOTES = {"USD", "USDC", "USDT"}
-# Revision 3 adds native BitMart listings and correct settlement identities.
+# Revision 4 carries WhiteBIT's native traditional-finance classification.
 # An mtime from an older producer cannot prove these definitions are current.
-DEFINITION_REVISION = 3
+DEFINITION_REVISION = 4
 DEFINITION_REVISION_JOBS = frozenset(
     f"{venue}|Futures" for venue in ("Binance", "Bitget", "Bybit", "Hyperliquid", "BitMart")
-) | frozenset({"BitMart|Spot"})
+) | frozenset({"BitMart|Spot", "WhiteBIT|Futures", "WhiteBIT|Spot"})
 
 
 def definitions_current(path: Path | str = DEFAULT_PATH) -> bool:
@@ -449,6 +448,20 @@ def _load_bitmart_venue(market_type: str) -> list[dict[str, Any]]:
     return list(rows.values())
 
 
+def _whitebit_trading_enabled(definition: dict[str, Any]) -> bool:
+    if definition.get("tradesEnabled") is not True:
+        return False
+    cutoff = definition.get("delistedAt")
+    if cutoff is None:
+        return True
+    try:
+        # WhiteBIT publishes an announced cutoff in epoch seconds. A future
+        # announcement is not a closed market; malformed cutoffs fail closed.
+        return datetime.fromtimestamp(float(cutoff), tz=UTC) > datetime.now(tz=UTC)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return False
+
+
 def _load_whitebit_venue(
     market_type: str,
     *,
@@ -468,7 +481,9 @@ def _load_whitebit_venue(
     rows: list[dict[str, Any]] = []
     if market_type == "Spot":
         payload = get_json("https://whitebit.com/api/v4/public/markets")
-        for item in payload if isinstance(payload, list) else []:
+        if not isinstance(payload, list):
+            raise TypeError("whitebit_market_definitions_unavailable")
+        for item in payload:
             if not isinstance(item, dict):
                 continue
             quote = str(item.get("money") or "").upper()
@@ -476,8 +491,7 @@ def _load_whitebit_venue(
             market_id = str(item.get("name") or "").upper()
             if (
                 str(item.get("type") or "").casefold() != "spot"
-                or item.get("tradesEnabled") is not True
-                or item.get("delistedAt") is not None
+                or not _whitebit_trading_enabled(item)
                 or quote not in STABLE_QUOTES
                 or not token
                 or not market_id
@@ -498,9 +512,16 @@ def _load_whitebit_venue(
 
     if market_type != "Futures":
         return []
+    definitions = get_json("https://whitebit.com/api/v4/public/markets")
+    if not isinstance(definitions, list):
+        raise TypeError("whitebit_market_definitions_unavailable")
+    by_id = {str(item.get("name") or "").upper(): item
+             for item in definitions if isinstance(item, dict)}
     payload = get_json("https://whitebit.com/api/v4/public/futures")
     futures = payload.get("result") if isinstance(payload, dict) else payload
-    for item in futures if isinstance(futures, list) else []:
+    if not isinstance(futures, list):
+        raise TypeError("whitebit_futures_unavailable")
+    for item in futures:
         if not isinstance(item, dict):
             continue
         quote = str(item.get("money_currency") or "").upper()
@@ -513,6 +534,12 @@ def _load_whitebit_venue(
             or not market_id.endswith("_PERP")
         ):
             continue
+        definition = by_id.get(market_id)
+        if definition is None:
+            raise ValueError("whitebit_perpetual_definition_missing")
+        if (definition.get("type") not in {"futures", "tradfiFutures"}
+                or not _whitebit_trading_enabled(definition)):
+            continue
         rows.append(
             {
                 "token": token,
@@ -522,6 +549,8 @@ def _load_whitebit_venue(
                 "market_id": market_id,
                 "quote": quote,
                 "contract_size": 1.0,
+                **({"asset_class": "tokenized"}
+                   if definition.get("type") == "tradfiFutures" else {}),
             }
         )
     return rows

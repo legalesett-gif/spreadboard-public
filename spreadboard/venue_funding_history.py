@@ -733,6 +733,8 @@ def _load_client(exchange_id: str) -> Any:
             from spreadarb.public_clients import configure_public_market_client
 
             configure_public_market_client(client, "Hyperliquid" if exchange_id == "hyperliquid" else exchange_id)
+            if exchange_id == "whitebit":
+                _configure_whitebit_history_parser(client)
             client.load_markets()
             _discard_spot_markets(client)
             break
@@ -748,6 +750,25 @@ def _load_client(exchange_id: str) -> Any:
         _CLIENT_ERRORS.pop(exchange_id, None)
         _CLIENT_FAILURE_AT.pop(exchange_id, None)
     return client
+
+
+def _configure_whitebit_history_parser(client: Any) -> None:
+    """Correct the declared derivative type in this funding-only client.
+
+    CCXT currently parses WhiteBIT's tradfiFutures as spot, which then vanishes
+    during derivative-only pruning. Keep the original native information and
+    exact market ID; never reinterpret an ordinary spot pair as a perpetual.
+    """
+    parse = client.parse_market
+
+    def parse_history_market(market):
+        if market.get("type") == "tradfiFutures" and str(market.get("name") or "").endswith("_PERP"):
+            result = parse({**market, "type": "futures"})
+            result["info"] = market
+            return result
+        return parse(market)
+
+    client.parse_market = parse_history_market
 
 
 def _status_is_classified(status: dict[str, Any] | None) -> bool:
