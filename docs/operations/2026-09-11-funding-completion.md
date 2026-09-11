@@ -1,12 +1,12 @@
 # SpreadBoard completion and continuity record
 
-Updated: 11 September 2026, 05:18 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
+Updated: 11 September 2026, 05:36 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
 
 ## Current release
 
-- **Production:** `56362cd`, source digest `2dcdb127627ba3db`, verified in both web and collector. Guarded deployment exited successfully; `/api/health` and `/free` returned 200 after warm-up. The warm index contained 209,066 priced routes.
-- **Ready for deployment:** `56adbe1`, source digest `4430d9f68e5e62f7`, which includes `ce8f3c4` and classifies native history correctly when all returned settlements fall outside the retained window. It is now bundled with the versioned acceptance CLI. The combined candidate has passed 2,924 tests and the canonical Ruff ratchet, with 500 known findings and none new. Deployment is deferred while discovery and its finalizer run.
-- **Live processes checked at 05:18 UTC:** discovery PID `2497121`; sole finite observer PID `2494056`, unit `spreadboard-funding-acceptance-20260911.service`. Both application containers were healthy, with zero OOM kills and restart counts.
+- **Production:** source candidate `56adbe1` (docs-only HEAD `2051ed7`), source digest `4430d9f68e5e62f7`, verified in web and collector. The guarded retry exited 0 after finalization finished. `/api/health` and `/free` returned 200 with a warm index of 209,293 priced routes out of 215,488 structural routes.
+- **Release gates:** 2,924 tests passed in 217.59 seconds; canonical Ruff reported 500 known findings and none new. Native empty-history correction `ce8f3c4` is deployed; ordinary worker classification still needs verification.
+- **Live processes checked at 05:36 UTC:** both application containers healthy, zero OOM kills/restarts. The same finite observer restarted warm at 05:36:27 UTC, PID `2526836`; no duplicate observer or recurring automation was created.
 - **Working location:** `tmp/spreadboard-exchanges-trial`, branch `codex/exchanges-funding-trial-20260910`. Use this isolated worktree; preserve unrelated root-worktree changes.
 
 ## Requirements and evidence
@@ -19,7 +19,7 @@ Updated: 11 September 2026, 05:18 UTC. Owner: Codex in this chat. The full task 
 | Correct current funding | Native projected rates, settlement cadence, explicit zero, missing data and expiry handling are separate from historical funding. Fixes apply across venues. | A projection is not a promised settlement. |
 | Correct 24h, 7d and 30d funding | Rolling totals use exact settlements in an incremental SQLite ledger. Audit checked 25,606 unexpired cached totals across 15 venues: zero arithmetic mismatches or missing boundaries. | This proves aggregation against the ledger, not independent verification of every exchange event. Short, gapped or unavailable archives remain blank. |
 | WhiteBIT history and identity | Ordinary catalogue revision 4: 398 futures, 487 spot markets, 93 tokenized futures. All 398 futures had histories at the 04:33 UTC check. Announced future delistings remain visible until their cutoff. | Current rates and historical totals retain their own signs and time periods. |
-| Complete archive checking | Overdue periods are prioritized; initial deep checks follow before already-current maintenance. First normal cycle cleared 20 delayed checks. | BitMart’s 197 remaining checks exposed the empty-native-result bug fixed in the pending release. |
+| Complete archive checking | Overdue periods are prioritized; initial deep checks follow before already-current maintenance. First normal cycle cleared 20 delayed checks. | BitMart’s 197 remaining checks exposed the empty-native-result bug now deployed; ordinary worker recovery remains to be verified. |
 | Relevant markets and resource use | 03:36 UTC catalogue audit: 2,242 futures labels across 9,738 contracts; 4,436 spot labels across 12,353 contracts. No duplicate exact venue/type/symbol keys. | Labels are not independently verified unique underlyings. Legitimate cross-exchange contracts must remain available for pairing. |
 | Seven-day full-access trial | Verified Telegram linking required. Persistent, atomic email and Telegram claims prevent reuse; Gmail aliases normalized; paid access preserved. Local HTTP tests verify access before activation, during trial and after expiry across protected features. Production schema and live signup copy checked. | Real Telegram activation was simulated locally; no live identity was activated or message sent by this task. Multiple distinct identities cannot be ruled out entirely. |
 | Telegram advertisement | [Revised draft](../marketing/2026-09-11-seven-day-trial-telegram-draft.md) prepared. | Unsent. Its publication gate remains explicit. |
@@ -28,7 +28,7 @@ Updated: 11 September 2026, 05:18 UTC. Owner: Codex in this chat. The full task 
 
 ## Open acceptance gates
 
-1. **Deploy and verify `56adbe1` after the active discovery/finalizer completes.** Run the guarded deployment from the isolated worktree, check actual exit status, both source digests, warm priced routes and HTTP responses. Verify ordinary workers classify empty recent archives correctly; never manually change history flags.
+1. **Verify ordinary worker recovery after the deployed native-history fix.** Deployment, source parity, warm priced routes and HTTP checks passed. Verify ordinary workers classify empty recent archives correctly; never manually change history flags. The first warm health sample still showed 197 pending checks.
 2. **Finish ordinary-load memory measurements and safely lower limits.** Current limits are web 3,584 MiB, collector 4,096 MiB and accounting 512 MiB. Targets are 3,072 / 3,584 / 512 MiB, plus Caddy 192 MiB: 7,360 MiB total against about 7,941 MiB physical RAM. Accounting is already reduced. Full discovery, finalization, index publication and normal worker overlap must fit before reducing the other limits.
 3. **Verify 30 priced-route samples over an hour, within ±10%, without deployment contamination.** The latest clean window is too short. The analyzer separates container, observer and cap generations.
 4. **Complete the final 48-hour reliability window.** `/api/health` and `/free` must return 200 on a five-minute cadence; no unhealthy period may exceed 90 seconds; both cgroups must have zero OOM kills. Inspect kernel OOM records for the same period. A reset counter or short observation does not satisfy this gate.
@@ -40,11 +40,11 @@ The pressure cleanup returns already-freed allocator memory, preserving live cac
 
 Production observed allocator-only trims at 04:50:27 and 04:50:51, 24.2 seconds apart: 2.596→2.159 GiB in 71 ms, then 2.556→2.422 GiB in 132 ms. This verifies that the new pressure path runs. It does not by itself prove the final lower cap is safe.
 
-The 05:13 snapshot covered 28.35 minutes: 15 priced samples ranged from 208,817 to 209,649, with no endpoint failures. Anonymous memory peaks were web 2,976.6 MiB, collector 3,110.2 MiB and accounting 272.6 MiB. Discovery was still running, so final peaks remain unknown.
+The pre-release 05:29 snapshot covered 44.98 clean minutes: 23 priced samples ranged from 208,817 to 209,649, with no endpoint failures. Anonymous memory peaks were web 2,976.6 MiB, collector 3,353.1 MiB and accounting 272.6 MiB. The collector peak overlapped discovery, market evidence, settlement and quote workers. The later finalizer completed before deployment; its full observations still need to be collected. No lower web/collector limit has been certified.
 
 Process-level evidence records a web RSS high-water mark of 3,086 MiB. The collector peak coincided with the materialized-view builder, settlement worker and quote workers; the builder’s recorded RSS high-water mark was 2,054.2 MiB. RSS and cgroup anonymous memory are distinct measurements. Neither a sampled partial-cycle peak nor a successful trim certifies the proposed lower limits. See `output/continuation-20260911/ordinary-peak-processes.json`.
 
-## Pending native-history correction
+## Deployed native-history correction
 
 Fresh BitMart history requests at supported limits 100 and 10 returned the same July-only latest settlements for sampled AAOI and 1000CHEEMS contracts, while BTC returned current September settlements. Current projected-rate metadata remains separate. The 32-day event store correctly discarded the old rows, but the native wrapper retained `ok` with no usable entries, creating endless deep-pending classifications.
 
@@ -76,7 +76,9 @@ Paths below are relative to the isolated worktree:
 - `output/continuation-20260911/bitmart-old-native-archive-evidence.json`: dated native history/projection samples.
 - `output/continuation-20260911/all-venue-ledger-audit.json`: 25,606 aggregate checks across 15 venues.
 - `output/continuation-20260911/whitebit-ordinary-recovery.json`: native catalogue revision and coverage.
-- `output/continuation-20260911/deploy-deep-priority.txt`: current production release verification.
+- `output/continuation-20260911/deploy-native-empty-retry.txt`: current production release verification; first attempt safely refused during finalization.
+- `output/continuation-20260911/health-native-empty.json`: warm live health evidence.
+- `output/continuation-20260911/live-filtered-export-verification.json`: parsed live download evidence.
 - `output/continuation-20260911/latest-acceptance.json` and `samples.jsonl`: current observation report and raw chronology.
 - `output/continuation-20260911/native-empty-deferred-live.txt`: active scan, container health and observed pressure trims.
 - [Chronological release journal](2026-09-11-funding-release-journal.md): earlier changes, failed approaches, measurements, release gates and corrections.
