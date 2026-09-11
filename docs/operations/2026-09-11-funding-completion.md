@@ -180,3 +180,11 @@ A prior web cleanup reduced RSS from2.598GiB to2.090GiB in1.787s. The deployed m
 - Acceptance analyzer now separates observer, container and cap generations, checks an actual30-sample hour, endpoint/host gaps, unhealthy bounds and valid runtime fields. Eleven synthetic cases passed, including rejection of OOM, missing samples, deployment/startup contamination and short windows. This verifies the reporting logic, not production acceptance.
 - Single observer remains active. Final48h must follow final source/caps and warm readiness; extend/reset this same finite unit when ready. Normal backup timer next06:21:05UTC; catch-up exit01:56:59 is not a normal firing.
 - Evidence: deploy-compact-and-allocator.txt (initial verification failure retained), allocator-cadence-tests.txt, pytest-allocator-cadence-release.txt, acceptance-summary-checks.json, samples.jsonl.
+
+
+## Ordinary refresh and observation restart — September11 03:00UTC
+
+- Published catalogue02:52:45UTC is now definition_revision3: Hyperliquid futures317, BitMart futures355/spot53, all statusok. The earlier retained revision2 is superseded by an ordinary successful refresh.
+- Production allocator-only cleanup observed: gc_ran=false, RSS2.292→2.235GiB, total122ms, allocator18ms. Full-GC behaviour remains separately scheduled.
+- The same finite read-only observer was restarted after warm readiness (PID2422505, active), preserving append-only chronology. It now runs49h with a50h service deadline so a complete48h sample span is possible. This also restores two-minute first-hour route sampling. It is not a recurring Codex automation. Final cap changes would require another clean configuration window.
+- At02:59:01 history cache had9,505ok,2ok_cached,225symbol_not_indexed,73no_history_rows,76market_paused statuses. Deep pending (whole retained cache, not active-catalog denominator): BitMart197, Bingx46, Kraken Futures2. Do not count venue-unavailable or too-young archives as invented complete histories.
