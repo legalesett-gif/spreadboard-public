@@ -2,6 +2,27 @@
 
 Owner: Codex in the current chat. There is no external Claude handoff. The older handover remains a linked chronology; this checklist controls the continuation.
 
+## Latest verified deployment
+
+`a6e4ff2`, source digest `3209e2e14790ee10`, verified in both app and collector. Deployment exit 0, health 200. Full suite: 2,879 passed in 179.28s, no new Ruff findings (502 known). Ordinary observation restarted on the same finite unit at September 11 00:51:07 UTC, PID 2340559. Older checkpoints below are chronological.
+
+## Requirement-by-requirement status
+
+| Requirement | Evidence and remaining acceptance |
+| --- | --- |
+| Venue policy | Live controls exclude HTX/Ourbit; CoinEx/Phemex funding-only exclusions preserve price collection. Native/public parser regressions pass. |
+| Hyperliquid and builders | Native discovery covers all advertised builder namespaces; live funding shows builder routes. OPENAI Markets contains exact io:OAI routes with identity guards. Ordinary history worker recovered IO-OAI 24h/7d; its short archive cannot supply 30d. |
+| Exchange filters | Live either-leg exclusions changed results and leader; period/farm navigation preserved selections. Export acknowledgement observed; exported content is covered by regressions, not a separately parsed live download. |
+| Current and settled funding | Shared schedule/sign/missing-value fixes deployed. 2,777 published windows across 15 venues match ledger sums; missing/expired/gapped windows remain unavailable. Full-universe current historical catch-up remains open. |
+| Relevant and nonduplicate markets | No repeated native contract IDs within any venue's futures catalogue. BitMart's 1,215 native entries comprise 359 trading and 856 delisted; catalogue retains exactly 359. Negative-rate legs remain necessary for positive net pairs. |
+| Seven-day full trial | Telegram identity and email claims are atomic and persistent; live registration terms verified. Local HTTP checks prove entitlement before/during/after trial on four protected pages. Native Telegram callback was simulated locally, not exercised through a real live identity. |
+| Telegram advertisement | Draft written; no channel message sent. |
+| Spread continuity | OPENAI builder pairing verified; latest-generation route samples narrowly bounded so far. Required 30-sample hour remains open. No weakened quote/identity gates. |
+| Memory budget | Funding-only client retention/concurrent construction reduction measured locally and tested. Production savings and ordinary rebuild peaks must be measured before caps change. Web anonymous memory reached about 3,001 MiB, making an immediate 3,072 MiB cap unsafe. |
+| Backup | Stale lock recovered, bounded stale-only retry and persistent cache/four-hour deadline installed. Catch-up upload still active; two normal successful timer runs remain open. |
+| 48h reliability | One finite read-only observer; same unit resets only after a new deployed generation. No short sample or reset OOM flag counts as 48h acceptance. |
+| Continuity record | This document and linked chronology remain owned by Codex in this chat. No external Claude dependency. |
+
 ## Completed acceptance checks
 
 - Production funding controls omit HTX, Ourbit, CoinEx and Phemex. CoinEx/Phemex prices remain enabled.
@@ -47,3 +68,12 @@ The remaining duration-dependent gates are a current-release 30-sample hour with
 ### Ordinary worker verification, 00:38:45 UTC
 
 The deployed worker recovered Hyperliquid `IO-OAI/USDC:USDC` from its stale missing-symbol classification: 203 actual events, 24h/7d available and 30d unavailable. BitMart `BTC/USDT:USDT` has 96 stored events and all three complete periods. Ledger total reached 527,586 events. This closes native incremental-write and newly indexed demanded-contract recovery checks; it does not imply a complete 30-day archive for recently listed instruments or full-universe current coverage.
+
+
+## Funding-worker memory correction — September 11 00:51 UTC
+
+- One per-venue initialization lock prevents simultaneous first history requests from loading duplicate full catalogues. Only the initialization is serialized; bounded history-fetch concurrency is retained.
+- Funding-only clients remove spot entries from both symbol and native-ID lookup maps. Derivative objects, IDs, currency metadata and history request semantics remain unchanged; public price/spot clients are unaffected.
+- Live local Bitget profile: 2,636 definitions to856 derivatives, traced retained allocations32,240,411 to21,487,005bytes (10,753,406bytes released). Derivative JSON digests and native BTC funding-history responses matched exactly. This is a local retained-heap result, not a claimed production RSS saving.
+- Removing either pruning or singleton initialization failed the real client-construction regression. Full suite passed2,879 tests; Ruff no new findings. Evidence: `output/continuation-20260911/{client-memory-profile-exact.json,pytest-client-memory-release.txt,mutant-client_spot_retention.txt,mutant-client_duplicate_load.txt,deploy-client-memory.txt}`.
+- Prior live web anonymous peak3,001MiB leaves inadequate margin for a3,072MiB cap. Collector ordinary materialization overlapped history collection near its4GiB cgroup limit, with substantial file cache. Next action is ordinary-cycle measurement on the new source before choosing caps, not another speculative release.
