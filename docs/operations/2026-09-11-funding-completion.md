@@ -4,7 +4,7 @@ Owner: Codex in the current chat. There is no external Claude handoff. The older
 
 ## Latest verified deployment
 
-Both web and collector now run `9691957`, digest `ddb5f720582fbaf5`, verified by guarded deployment exit0, health200 and both exact source matches. At03:22–03:23UTC both containers were healthy with zero OOM/restart counts; free200 and warm query index ready with209,034 current priced routes of215,309 structural rows. Final suite:2,903 passed in211.44s, exit0; Ruff unchanged502. The initial prior-index safety read now refuses publication on validation failure, and numeric validation has lower measured local CPU cost without removing checks. Production deadline reliability and lower app/collector caps remain unproven. The same finite observer was restarted after warm readiness (PID2439207),49h duration/50h deadline, preserving chronology. Final hour/48h/two-normal-backup acceptance remains open.
+Both web and collector now run `bf80fc3`, digest `40f3266ece81b408`, verified by guarded deployment exit0, health200 and exact source matches. At03:36UTC both containers were healthy with zero OOM/restart counts; free200 and warm query index ready with209,077 current priced routes of215,327 structural rows. Final suite:2,905 passed in191.62s, exit0; Ruff unchanged502. Background history now prioritizes any expired supported period, including live schedule changes, instead of treating a partly expired contract as current. Earlier reader safety/CPU fixes remain included. Lower app/collector caps and final runtime acceptance remain unproven. Same finite observer restarted warm, PID2448898,49h/50h deadline, preserving chronology. Final hour/48h/two-normal-backup acceptance remains open.
 
 ## Requirement-by-requirement status
 
@@ -208,3 +208,15 @@ At03:03:11, the warm observer had five minutes: priced209,037–209,372 across t
 - Previous web allocator-only cleanup2.602→2.029GiB in107ms further supports allocator retention as a mechanism. No remaining cap was lowered.
 - Same observer nowPID2439207 after warm readiness; no duplicate observer/recurring task. Normal backup next06:21:05UTC remains pending.
 - Evidence: compact-rebuild-cpu.prof, numeric-validation-paired.json, compact-iterative-profile.json, mutant-first-read-safety.txt, pytest-iterative-reader-release.txt, deploy-iterative-reader.txt.
+
+
+## Contract counts and partial-period refresh — September11 03:36UTC
+
+Fresh read of ordinary catalogue (published02:52:45UTC) found2,242 distinct futures token labels across9,738 venue contracts and4,436 spot labels across12,353 venue contracts, excluding OKX DEX. Both categories have zero duplicate exact venue/type/symbol keys. These label counts are broadly comparable to the user's quoted2,534/4,370; larger contract counts include legitimate cross-exchange listings. Labels are not a claim of independently verified unique underlying identities.
+
+- Read-only overdue-window audit applied the deployed expiry/due functions to the retained cache. All206 overdue retained-cache records were refresh-due; many are retired/outside the active catalogue. The remaining active partial windows exposed an ordering gap: staleness sorting used the next still-valid period, so a valid daily total could delay an expired seven-day total.
+- The background queue now puts previously supported expired periods before known-empty and wholly current archives and applies the same live settlement-schedule tightening as the reader. Calculation, sign, completeness gates, fetch budgets and concurrency remain unchanged. Two actual-build regressions fail with the original source;59 focused tests pass.
+- Full suite2,905passed191.62s exit0; Ruff no new findings502 after fixing an import-order issue in the new test. Eight test-generated tracked data files were preserved/restored; no production source changed during the full run.
+- Previous reader release completed an ordinary structural build:215,327 routes,132.654s child time (258.0s total including heavy-slot wait). Bounded process samples observed VmHWM1,066,872KiB; sampling ended before process exit, so this is not a certified final per-process peak. The earlier timeout does not recur in this one observed successful build; sustained timing still needs measurement.
+- Deployedbf80fc3/40f3266ece81b408 to both services; source/health/free/warm-index checks passed. Same finite observer restarted warm asPID2448898. No cap reduction or recurring automation creation.
+- Evidence: overdue-window-audit.json, mutant-partial-expiry-priority.txt, partial-expiry-targeted.txt, pytest-partial-expiry-release.txt, deploy-partial-expiry.txt, iterative-worker-memory.jsonl. Next: verify ordinary clearing of partial expiries, complete ordinary memory/load cycles and final acceptance gates.
