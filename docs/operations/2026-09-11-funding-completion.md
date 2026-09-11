@@ -41,7 +41,7 @@ Both web and collector now run `0852327`, source digest `a0c51127cc386193`, inde
 - Sep8 backup history showed upload success after 1h51m followed by timeout during integrity checking. The service deadline becomes four hours, below its six-hour schedule; integrity checks remain required.
 - Repository-index cache persists between runs and is excluded from snapshots. SQLite backup handles close before uploads.
 
-## Release and observation
+## Historical release checkpoint (superseded by latest deployment above)
 
 Commit e901d49 is deployed to app and collector; both source digests verified as 63ebb53a5a833b53, deployment exit 0. Final frozen-source suite: 2,875 passed in 202.50s. Ruff has no new findings (502 known); seven deliberate fault mutations were detected. The backup unit passed systemd validation and is installed with the four-hour deadline; the active upload was not interrupted. The current offsite backup upload is active and encountering shared Google Drive project-quota retries; do not call it successful until upload, retention and integrity checking exit successfully.
 
@@ -188,3 +188,10 @@ A prior web cleanup reduced RSS from2.598GiB to2.090GiB in1.787s. The deployed m
 - Production allocator-only cleanup observed: gc_ran=false, RSS2.292→2.235GiB, total122ms, allocator18ms. Full-GC behaviour remains separately scheduled.
 - The same finite read-only observer was restarted after warm readiness (PID2422505, active), preserving append-only chronology. It now runs49h with a50h service deadline so a complete48h sample span is possible. This also restores two-minute first-hour route sampling. It is not a recurring Codex automation. Final cap changes would require another clean configuration window.
 - At02:59:01 history cache had9,505ok,2ok_cached,225symbol_not_indexed,73no_history_rows,76market_paused statuses. Deep pending (whole retained cache, not active-catalog denominator): BitMart197, Bingx46, Kraken Futures2. Do not count venue-unavailable or too-young archives as invented complete histories.
+
+
+## Rebuild deadline finding — September11 03:05UTC
+
+The first bounded process measurement was not a successful publication: worker2423547 reached its180s deadline and the supervisor retained the prior complete generation. Sampled VmHWM was1,019,772KiB (995.9MiB), but this cannot certify completed-build memory or CPU. Earlier in the same release an ordinary full-discovery build successfully published215,330 rows (child139.121s; total227.2s includes heavy-slot wait), so publication is possible but not reliably within the current deadline. No cap reduction is justified yet. A local cProfile of the captured public-index comparison is running to identify CPU cost before another implementation decision.
+
+At03:03:11, the warm observer had five minutes: priced209,037–209,372 across three samples, no endpoint/OOM/restart failures; anonymous peaks web2321.8MiB, collector2531.3MiB. These are short samples, not acceptance. Hourly funding rollover left813/835/719 stored windows overdue for24h/7d/30d respectively; collection must catch up rather than exposing expired totals.
