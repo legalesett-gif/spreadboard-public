@@ -41,7 +41,7 @@ def test_memory_watchdog_releases_only_expired_rows_at_role_ttl(monkeypatch, rol
     assert "rows_expired=1" in lines[0]
 
 
-@pytest.mark.parametrize("role,rss,expected", [("web", 2.8, 4), ("web", 1.8, 0), ("collector", 2.8, 0)])
+@pytest.mark.parametrize("role,rss,expected", [("web", 2.8, 11), ("web", 2.3, 4), ("web", 1.8, 0), ("collector", 2.8, 0)])
 def test_web_trim_is_bounded_and_preserves_live_caches(monkeypatch, role, rss, expected):
     monkeypatch.setenv("SPREADBOARD_SERVICE_ROLE", role)
     api = service.api_spreads
@@ -65,7 +65,10 @@ def test_web_trim_is_bounded_and_preserves_live_caches(monkeypatch, role, rss, e
     service.MemoryWatchdog(Ticks()).run()
     assert len(trimmed) == expected
     if expected:
-        assert trimmed == [(20, True), (80, False), (140, False), (200, True)]
+        if rss >= 2.5:
+            assert trimmed == [(at, at in (20, 200)) for at in range(20, 221, 20)]
+        else:
+            assert trimmed == [(20, True), (80, False), (140, False), (200, True)]
         assert sum("allocator trim before=" in x and "after=" in x for x in lines) == expected
     assert api._ROW_CACHE is rows and "row" in rows
     assert api._LAST_GOOD_LIVE_BOOKS is books and "book" in books

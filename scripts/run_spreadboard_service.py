@@ -4130,13 +4130,20 @@ class MemoryWatchdog(threading.Thread):
                 now = time.monotonic()
                 if (
                     _service_role() == "web" and before >= 2.0
-                    and now - self.last_web_trim_at >= 60.0
+                    and (
+                        now - self.last_web_trim_at >= 60.0
+                        or (before >= 2.5 and now - self.last_web_trim_at >= 20.0)
+                    )
                 ):
                     self.last_web_trim_at = now
                     # Keep the original full-GC cadence. Measured GC took
                     # 1.55s with no RSS change; glibc alone returned 0.3GiB in
                     # 43ms. Return freed arenas sooner without repeating the
-                    # full heap walk or evicting any live rows/books.
+                    # full heap walk or evicting any live rows/books. At higher
+                    # pressure, do not retain freed arenas for a full minute:
+                    # observed trimming returned 0.819GiB in 145ms while the
+                    # live working set stayed near 2.1GiB. Still bound trims to
+                    # 20s and preserve the 180s full-GC schedule.
                     collect = now - self.last_web_gc_at >= 180.0
                     if collect:
                         self.last_web_gc_at = now
