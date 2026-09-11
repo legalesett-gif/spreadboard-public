@@ -1,6 +1,6 @@
 # SpreadBoard completion and continuity record
 
-Updated: 11 September 2026, 05:54 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
+Updated: 11 September 2026, 06:22 UTC. Owner: Codex in this chat. The full task remains active; no external Claude continuation is required.
 
 ## Current release
 
@@ -28,11 +28,11 @@ Updated: 11 September 2026, 05:54 UTC. Owner: Codex in this chat. The full task 
 
 ## Open acceptance gates
 
-1. **Verify ordinary worker recovery after the deployed native-history fix.** Deployment, source parity, warm priced routes and HTTP checks passed. Verify ordinary workers classify empty recent archives correctly; never manually change history flags. At 05:53 UTC, ordinary workers had reduced pending checks from 197 to 105. Exact unsupported archives remain blank.
+1. **Verify ordinary worker recovery after the deployed native-history fix.** Deployment, source parity, warm priced routes and HTTP checks passed. Verify ordinary workers classify empty recent archives correctly; never manually change history flags. At 06:22 UTC, ordinary workers had reduced pending checks from 197 to 25. The 06:00 hourly rollover recovered to zero overdue daily/weekly/monthly windows with zero retryable errors. Exact unsupported archives remain blank.
 2. **Finish ordinary-load memory measurements and safely lower limits.** Current limits are web 3,584 MiB, collector 4,096 MiB and accounting 512 MiB. Targets are 3,072 / 3,584 / 512 MiB, plus Caddy 192 MiB: 7,360 MiB total against about 7,941 MiB physical RAM. Accounting is already reduced. Full discovery, finalization, index publication and normal worker overlap must fit before reducing the other limits.
 3. **Verify 30 priced-route samples over an hour, within ±10%, without deployment contamination.** The latest clean window is too short. The analyzer separates container, observer and cap generations.
 4. **Complete the final 48-hour reliability window.** `/api/health` and `/free` must return 200 on a five-minute cadence; no unhealthy period may exceed 90 seconds; both cgroups must have zero OOM kills. Inspect kernel OOM records for the same period. A reset counter or short observation does not satisfy this gate.
-5. **Verify two normal backup timer successes.** The catch-up run completed at 01:56:59 UTC, exit 0, snapshot `3e19180c`; all 172 selected data packs passed integrity checks. It is not one of the two normal runs. Next scheduled firing was freshly confirmed as 06:21:05 UTC. Inspect actual start, completion and exit status for each normal invocation.
+5. **Verify two normal backup timer successes.** The catch-up run completed at 01:56:59 UTC, exit 0, snapshot `3e19180c`; all 172 selected data packs passed integrity checks. It is not one of the two normal runs. First normal timer run started at 06:21:17 UTC, PID `2555410`; it was still running at 06:22 with no exit timestamp. Do not count it until completion and actual successful exit. Inspect actual start, completion and exit status for each normal invocation.
 
 ## Latest measured memory behavior
 
