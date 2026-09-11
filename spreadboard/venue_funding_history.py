@@ -1117,6 +1117,15 @@ def build(
             return (0, min(expired))
         if next_expiry is None:
             return (1, 0)
+        if (
+            str((status or {}).get("status") or "") in {"ok", "ok_cached"}
+            and not (status or {}).get("deep_history_checked_at")
+            and any(values.get(label) is None for label in ("1d", "7d", "30d"))
+        ):
+            # A valid daily total must not postpone the first deeper archive
+            # check until its next settlement. The existing page budget makes
+            # this one deep pass; checked short archives return to rotation.
+            return (1, 0)
         return (2, int(next_expiry))
 
     background = [item for item in ordered[start:] + ordered[:start] if item not in leading]

@@ -20,7 +20,7 @@ def test_partial_expiry_precedes_empty_and_current_archives(tmp_path, monkeypatc
                 'earliest_event_at': latest - days * day + 4 * hour,
                 'inferred_interval_hours': 4}
     statuses = {
-        keys['CURRENT']: {'status': 'ok', 'window_details': {'1d': detail(1, now - 3 * hour)}},
+        keys['CURRENT']: {'status': 'ok', 'deep_history_checked_at': 'already checked', 'window_details': {'1d': detail(1, now - 3 * hour)}},
         keys['EMPTY']: {'status': 'no_history_rows'},
         keys['PARTIAL']: {'status': 'ok', 'window_details': {
             '1d': detail(1, now - hour), '7d': detail(7, now - hour)}},

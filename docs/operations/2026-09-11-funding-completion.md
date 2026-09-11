@@ -272,3 +272,10 @@ Funding availability at the fresh health sample:9131daily97.06%,8874seven-day94.
 The analyzer’s first4.08minute clean segment showed3priced samples208742–209046, no endpoint/OOM/restart failures, anonymous peaksweb2674.8MiB/collector2108.7MiB/accounting268.0MiB. No cap change is justified by that short startup segment. Ordinary allocator trims have been observed, but the new higher-pressure cadence still needs an actual load cycle.
 
 Evidence:all-venue-ledger-audit.json, health-after-whitebit-recovery.json, recovery-live-processes.txt, latest-acceptance.json. Next ordinary discovery is due around04:44UTC from persisted snapshot timing; observe its real process and finalizer without forcing or restarting.
+
+
+## Initial deep-archive scheduling —04:37UTC
+
+Fresh queue evidence confirms217 active contracts await an initial deeper archive check (BitMart197/Bingx12/WhiteBIT8). For example Bingx NCSIB2002USD retained a valid24h total but no7d/30d, last attempted01:56:55, next valid-window expiry08:00. Background ordering placed it behind already-current contracts with earlier next settlements even though its existing page budget would request a deeper check.
+
+The candidate preserves overdue-window priority, then gives successful incomplete archives with no prior deep check one bounded pass before already-current archives. Existing fetch/page/concurrency budgets and all completeness checks remain unchanged. Checked short archives return to normal rotation; the change does not manufacture unsupported30d history.60 focused tests pass and the original queue mutation fails the actual build-call-site test. Canonical Ruff ratchet passes500known; full required suite2,922passed204.44s, actual exit0, before deployment.
