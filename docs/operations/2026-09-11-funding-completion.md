@@ -4,7 +4,7 @@ Owner: Codex in the current chat. There is no external Claude handoff. The older
 
 ## Latest verified deployment
 
-`a6e4ff2`, source digest `3209e2e14790ee10`, verified in both app and collector. Deployment exit 0, health 200. Full suite: 2,879 passed in 179.28s, no new Ruff findings (502 known). Ordinary observation restarted on the same finite unit at September 11 00:51:07 UTC, PID 2340559. Older checkpoints below are chronological.
+`2e8efc1` is deployed to web only, digest `3e05419421b6939f`, deployment exit 0 and health 200. Collector remains on `a6e4ff2` / `3209e2e14790ee10` while its active discovery scan completes. This is an intentional phased release; source parity is still open. Full candidate suite: 2,888 passed in 174.78s, no new Ruff findings (502 known), nine injected faults detected. The same finite observer remains active; reset/extend its final window only after the collector and cap configuration are settled. Older checkpoints below are chronological.
 
 ## Requirement-by-requirement status
 
@@ -14,12 +14,12 @@ Owner: Codex in the current chat. There is no external Claude handoff. The older
 | Hyperliquid and builders | Native discovery covers all advertised builder namespaces; live funding shows builder routes. OPENAI Markets contains exact io:OAI routes with identity guards. Ordinary history worker recovered IO-OAI 24h/7d; its short archive cannot supply 30d. |
 | Exchange filters | Live either-leg exclusions changed results and leader; period/farm navigation preserved selections. Export acknowledgement observed; exported content is covered by regressions, not a separately parsed live download. |
 | Current and settled funding | Shared schedule/sign/missing-value fixes deployed. 2,777 published windows across 15 venues match ledger sums; missing/expired/gapped windows remain unavailable. Full-universe current historical catch-up remains open. |
-| Relevant and nonduplicate markets | No repeated native contract IDs within any venue's futures catalogue. BitMart's 1,215 native entries comprise 359 trading and 856 delisted; catalogue retains exactly 359. Negative-rate legs remain necessary for positive net pairs. |
+| Relevant and nonduplicate markets | No repeated native contract IDs within any venue's futures catalogue. The earlier BitMart count-only assessment was insufficient: 359 trading includes four unsupported inverse USD contracts. Native catalogue correction retains 355 linear futures and 53 stable-quote spot markets with exact USDC settlement; collector deployment remains pending. Negative-rate legs remain necessary for positive net pairs. |
 | Seven-day full trial | Telegram identity and email claims are atomic and persistent; live registration terms verified. Local HTTP checks prove entitlement before/during/after trial on four protected pages. Native Telegram callback was simulated locally, not exercised through a real live identity. |
 | Telegram advertisement | Draft written; no channel message sent. |
 | Spread continuity | OPENAI builder pairing verified; latest-generation route samples narrowly bounded so far. Required 30-sample hour remains open. No weakened quote/identity gates. |
 | Memory budget | Accounting cap reduced in place from 768 to 512 MiB after a 290 MiB lifetime peak over nearly 26h. Web/collector caps remain outstanding. Funding-only client retention/concurrent construction reduction measured locally and tested. Production savings and ordinary rebuild peaks must be measured before caps change. Web anonymous memory reached about 3,001 MiB, making an immediate 3,072 MiB cap unsafe. |
-| Backup | Stale lock recovered, bounded stale-only retry and persistent cache/four-hour deadline installed. Catch-up upload still active; two normal successful timer runs remain open. |
+| Backup | Stale lock recovered, bounded stale-only retry and persistent cache/four-hour deadline installed. Catch-up snapshot `3e19180c` saved (22.818 GiB, 7,742 files, upload 1:26:24); integrity checking is active and no terminal exit is recorded. Two normal successful timer runs remain open. |
 | 48h reliability | One finite read-only observer; same unit resets only after a new deployed generation. No short sample or reset OOM flag counts as 48h acceptance. |
 | Continuity record | This document and linked chronology remain owned by Codex in this chat. No external Claude dependency. |
 
@@ -99,3 +99,18 @@ Commit `03dd62d` changes the persistent accounting limit to 512 MiB. Fresh prefl
 - Persistent production Compose SHA256: `7416a768f6342be8dab164f2b4f79d8b77cb3b3956db80c56491d672ac7010f8`. Before-copy retained under `/opt/spreadboard/backups/funding-continuation-20260911/compose.before-accounting-cap.yml`.
 - Evidence: `output/continuation-20260911/accounting-cap-change.json`. Total declared container RAM is now 8,384 MiB; this first reduction alone does not close the host overcommit requirement.
 - The acceptance summarizer now tracks stable memory configuration separately from stable container/source generation. Final 48h acceptance must cover the final cap configuration; retain existing evidence and reset/extend the single finite observer only when the remaining cap decisions are final.
+
+
+## Native BitMart identity correction — September 11 01:40 UTC
+
+The prior native-count comparison proved no duplicate IDs, but did not prove contract semantics. Installed CCXT 4.5.71 has no BitMart adapter, so catalogue refresh failed and retained legacy definitions. Direct native APIs work. Of 359 trading futures, four USD contracts are inverse/coin-margined; USDC contracts settle in USDC rather than the old USDT assumption.
+
+- Native catalogue now requires trading status, perpetual product type, no expiry, exact ID/base/quote match, positive finite size, and USDT/USDC linear settlement. It produces 355 futures and 53 supported spot markets. TradFi metadata remains classified explicitly.
+- Shared policy rejects inverse and malformed cached aliases at opportunity, funding, catalogue and historical-reader boundaries. It does not silently rewrite old identities. Native funding uses the same contract definition.
+- Catalogue definition revision 3 requires both BitMart jobs to succeed, causing an ordinary refresh after upgrade rather than accepting the stale revision.
+- Final full suite: 2,888 passed, exit 0. Nine deliberate faults across native identity, cached admission, event retention and catalogue revision failed their regressions. Native live local catalogue returned 53/355.
+- Guarded combined deployment correctly refused an active discovery scan. Web-only deployment completed with verified new digest and HTTP 200; collector deployment awaits scan/finalizer completion. At 01:40 discovery PID 2352961 had run 1,749 seconds. No scan was killed.
+- Before-release source/image rollback retained under `/opt/spreadboard/backups/funding-continuation-20260911/source-before-bitmart.tgz` and `images-before-bitmart.txt`.
+- Backup has reached snapshot/tree/blob integrity checking. Upload completion alone is not acceptance; service remains activating without a terminal exit. Existing observer PID 2340559 remains active.
+
+Evidence: `output/continuation-20260911/{bitmart-native-after.json,bitmart-mutations.json,bitmart-version-mutations.json,pytest-bitmart-final-release.txt,deploy-bitmart-web.txt}`.
