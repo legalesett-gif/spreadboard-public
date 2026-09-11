@@ -681,12 +681,39 @@ def leg_history_outcome(
 _CLIENTS: dict[str, Any] = {}
 _CLIENT_ERRORS: dict[str, str] = {}
 _CLIENT_FAILURE_AT: dict[str, float] = {}
+_CLIENT_CREATION_LOCKS: dict[str, threading.Lock] = {}
 CLIENT_RETRY_SECONDS = 60.0
 #: CCXT renamed some adapters; VENUE_IDS still carries the older names.
 _ALIASES = {"gateio": ("gate", "gateio"), "coinbaseexchange": ("coinbaseexchange", "coinbase")}
 
 
 def _client(exchange_id: str) -> Any:
+    # A venue has multiple fetch slots. Its first concurrent legs must share
+    # one market load instead of constructing competing full catalogues.
+    with _CLIENT_CREATION_LOCKS.setdefault(exchange_id, threading.Lock()):
+        return _load_client(exchange_id)
+
+
+def _discard_spot_markets(client: Any) -> None:
+    """Funding-only clients retain exact derivative definitions, never spot."""
+    markets = getattr(client, "markets", None)
+    if not isinstance(markets, dict):
+        return
+    for symbol in list(markets):
+        if markets[symbol].get("spot"):
+            del markets[symbol]
+    by_id = getattr(client, "markets_by_id", {})
+    for market_id in list(by_id):
+        retained = [market for market in by_id[market_id] if not market.get("spot")]
+        if retained:
+            by_id[market_id] = retained
+        else:
+            del by_id[market_id]
+    client.symbols = [symbol for symbol in client.symbols if symbol in markets]
+    client.ids = [market_id for market_id in getattr(client, "ids", []) if market_id in by_id]
+
+
+def _load_client(exchange_id: str) -> Any:
     if exchange_id in _CLIENTS:
         return _CLIENTS[exchange_id]
     failed_at = _CLIENT_FAILURE_AT.get(exchange_id)
@@ -705,6 +732,7 @@ def _client(exchange_id: str) -> Any:
 
             configure_public_market_client(client, "Hyperliquid" if exchange_id == "hyperliquid" else exchange_id)
             client.load_markets()
+            _discard_spot_markets(client)
             break
         except Exception as exc:  # noqa: BLE001
             _CLIENT_ERRORS[exchange_id] = type(exc).__name__

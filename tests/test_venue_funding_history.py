@@ -1187,3 +1187,50 @@ def test_demand_rechecks_expired_source_classification(tmp_path, monkeypatch, ou
     vfh.build([('A', 'ONE')], priority_legs=[('A', 'ONE')], priority_only=True,
               cache_path=path, budget_seconds=5)
     assert calls == [('A', 'ONE')]
+
+
+def test_concurrent_history_legs_share_one_derivative_only_market_load(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    import ccxt
+    venue = 'funding_test_client'
+    created = []
+    loaded = threading.Event()
+    release = threading.Event()
+    spot = {'id': 'BTCUSDT', 'symbol': 'BTC/USDT', 'spot': True}
+    swap = {'id': 'BTCUSDT', 'symbol': 'BTC/USDT:USDT', 'spot': False, 'swap': True, 'info': {'exact': 'retained'}}
+    class Client:
+        def __init__(self, config):
+            created.append(self)
+            self.markets = {'BTC/USDT': spot, 'BTC/USDT:USDT': swap}
+            self.markets_by_id = {'BTCUSDT': [spot, swap]}
+            self.symbols = list(self.markets)
+            self.ids = ['BTCUSDT']
+        def load_markets(self):
+            loaded.set()
+            assert release.wait(3)
+    monkeypatch.setattr(ccxt, venue, Client, raising=False)
+    vfh._CLIENTS.pop(venue, None)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(vfh._client, venue)
+            assert loaded.wait(3)
+            second = pool.submit(vfh._client, venue)
+            # Wait until the second task is running while the first load is held.
+            import time
+            deadline = time.monotonic() + 3
+            while not second.running() and time.monotonic() < deadline:
+                time.sleep(.001)
+            assert second.running()
+            release.set()
+            a, b = first.result(), second.result()
+        assert a is b and len(created) == 1
+        assert a.symbols == ['BTC/USDT:USDT']
+        assert a.markets == {'BTC/USDT:USDT': swap}
+        assert a.markets['BTC/USDT:USDT'] is swap
+        assert a.markets_by_id == {'BTCUSDT': [swap]}
+        assert a.markets_by_id['BTCUSDT'][0] is swap
+    finally:
+        release.set()
+        vfh._CLIENTS.pop(venue, None)
