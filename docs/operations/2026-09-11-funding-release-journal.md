@@ -316,3 +316,9 @@ The report now lives in scripts/summarize_stability_soak.py with tests/test_stab
 
 ## Ordinary peak attribution —05:18UTC
 05:18UTC verified wait: discovery2497121 liveelapsed28:28, observer2494056 active. No deployment or cap mutation. New process-level peak evidence: web recorded RSS HWM3086MiB; sampled cgroup anon2976.6MiB. Collector sampled anon3110.2MiB coincided with materialized-view/settlement/quote workers; builder recorded RSS HWM2054.2MiB. Distinguish RSS from anonymous cgroup memory; full cycle/finalizer still required before choosing limits. Latest05:13 report has15priced samples208817–209649 over28.35min, no endpoint failures. Pending56adbe1 remains ready; production56362cd unchanged.
+
+## 05:30 UTC — live export and guarded release deferral
+
+The live Funding UI was filtered to ONG with Gate and WhiteBIT excluded. The actual downloaded JSON contained 42 group routes and 42 unique route keys, exactly matching the UI count; excluded venues were absent from both legs. The first route retained negative daily/weekly and positive monthly settled totals separately from projected carry. The browser download-event wait timed out, but the page acknowledged download and the file was located and parsed successfully. Evidence: `live-filtered-funding-export.json` and `live-filtered-export-verification.json`. No browser authentication state was saved.
+
+The discovery process exited, but its publish finalizer started between the initial process check and deployment. The deployment script refused before syncing/restarting (actual exit 1); production remains unchanged. Full-cycle sampling through 05:29 reached collector anonymous memory 3,353.1 MiB during overlapping discovery, market evidence, settlements and quote workers; web peak remained 2,976.6 MiB. No cap was reduced. The clean window was 44.98 minutes with 23 priced samples, no HTTP failures, OOM kills or restarts; the hour/48-hour gates remain open.
