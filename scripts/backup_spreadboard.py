@@ -81,7 +81,8 @@ def run_backup() -> None:
         if not copied:
             raise RuntimeError("backup_source_empty")
         _run_restic(
-            [RESTIC, "backup", "--tag", "spreadboard", "--host", "spreadboard-prod", str(stage)],
+            [RESTIC, "backup", "--tag", "spreadboard", "--host", "spreadboard-prod",
+             "--group-by", "host,tags", str(stage)],
             check=True,
         )
         _run_restic(
@@ -90,6 +91,14 @@ def run_backup() -> None:
                 "forget",
                 "--tag",
                 "spreadboard",
+                "--host",
+                "spreadboard-prod",
+                # Each consistent staging copy has a new temporary path.
+                # Grouping by paths kept every snapshot in its own group and
+                # made daily/weekly/monthly retention ineffective. Scope this
+                # policy to this host/tag, including its older staged paths.
+                "--group-by",
+                "host,tags",
                 "--keep-daily",
                 RETENTION_DAILY,
                 "--keep-weekly",
