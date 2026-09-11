@@ -342,3 +342,7 @@ Measured full artifact:215263 routes each retained a distinct lookup-key string 
 Baseline local maxRSS794738688 versus changed418611200 bytes varied more than the directly measured redundant strings; report the67MiB exact allocation reduction, not the fullRSS delta as a guaranteed saving. The changed profile retained all215263rows and zero duplicate identifier strings. Artifact was an earlier production-sized captured generation, not the latest live prices.
 
 Commitc8af1eb/digest10ec5f99f3b8e3fd deployed guarded,actualexit0,source paritybothservices. First startup sample hadpriced0, so observer was not restarted until warmhealth05:53:41 returned209072priced/215309structural. Bothcontainershealthy/OOMfalse/restarts0;health/free200. Ordinarynativehistorypending197→105. Samefiniteobserver restarted05:54:01UTC,PID2538662. Caps unchanged; ordinary-load cap verification, finalhour/48h andtwo normalbackups remainopen,next06:21:05UTC.
+
+## 06:03 UTC — normal hourly rollover observed
+
+No source/cap changes. At06:00:47, current availability excluded919 daily/939weekly/812monthly expired windows; HTTP200 and208995priced routes remained. The ordinary settlement worker PID2542831 was freshly live at06:02. By06:03:26 overdue counts fell to701/706/597, with zero retryable provider errors; recovery remains in progress. Deep-history pending83. The sole observer2538662 remains active. Evidence: `hourly-rollover-0600.json` and `hourly-rollover-recovery.json`. This verifies expiry/catch-up progression, not completed rollover or48h acceptance.
