@@ -5,7 +5,7 @@ Updated: 11 September 2026, 05:00 UTC. Owner: Codex in this chat. The full task 
 ## Current release
 
 - **Production:** `56362cd`, source digest `2dcdb127627ba3db`, verified in both web and collector. Guarded deployment exited successfully; `/api/health` and `/free` returned 200 after warm-up. The warm index contained 209,066 priced routes.
-- **Ready for deployment:** `ce8f3c4`, which classifies native history correctly when all returned settlements fall outside the retained window. It has passed 2,923 tests and the canonical Ruff ratchet, with 500 known findings and none new. Deployment is deferred while discovery and its finalizer run.
+- **Ready for deployment:** `ce8f3c4`, which classifies native history correctly when all returned settlements fall outside the retained window. It is now bundled with the versioned acceptance CLI. The combined candidate has passed 2,924 tests and the canonical Ruff ratchet, with 500 known findings and none new. Deployment is deferred while discovery and its finalizer run.
 - **Live processes checked at 05:00 UTC:** discovery PID `2497121`; sole finite observer PID `2494056`, unit `spreadboard-funding-acceptance-20260911.service`. Both application containers were healthy, with zero OOM kills and restart counts.
 - **Working location:** `tmp/spreadboard-exchanges-trial`, branch `codex/exchanges-funding-trial-20260910`. Use this isolated worktree; preserve unrelated root-worktree changes.
 
@@ -59,7 +59,7 @@ uv run --frozen --with ruff python scripts/ruff_ratchet.py
 
 Deploy with `./scripts/deploy_production.sh app collector`; do not force past discovery/finalization. Preserve test-generated data as evidence before restoring only those tracked files from HEAD. Never reset, clean or deploy the unrelated root worktree.
 
-After the final release is warm, restart the **same** finite observer if needed to obtain the full clean window. Its current run is 49 hours with a 50-hour service deadline. Preserve the append-only samples at `/opt/spreadboard/runtime/stability/20260911-funding-acceptance/samples.jsonl`; do not create another observer or recurring Codex task. The reporting analyzer has 22 synthetic checks, including missing identities, invalid counters, gaps and deployment boundaries.
+After the final release is warm, restart the **same** finite observer if needed to obtain the full clean window. Its current run is 49 hours with a 50-hour service deadline. Preserve the append-only samples at `/opt/spreadboard/runtime/stability/20260911-funding-acceptance/samples.jsonl`; do not create another observer or recurring Codex task. The versioned reporting CLI, `scripts/summarize_stability_soak.py`, has 30 synthetic evidence scenarios, including required-container scope, missing identities, invalid counters, gaps and deployment boundaries. Run it with `uv run --frozen python scripts/summarize_stability_soak.py PATH_TO_SAMPLES.jsonl`. It matched the previous report exactly on real observations.
 
 No trading, transfers, borrowing, repayment, conversion, withdrawals or external messages are authorized here. Pushover remains off; the recurring Codex automation remains paused. Preserve market identity, accuracy, funding, freshness and subscription limits. Do not increase RAM or spend.
 
@@ -67,7 +67,8 @@ No trading, transfers, borrowing, repayment, conversion, withdrawals or external
 
 Paths below are relative to the isolated worktree:
 
-- `output/continuation-20260911/native-empty-full-tests.txt`: 2,923 passed in 191.93 seconds, exit 0.
+- `output/continuation-20260911/versioned-report-full-tests.txt`: combined candidate, 2,924 passed in 217.59 seconds, exit 0.
+- `output/continuation-20260911/versioned-report-parity.json`: exact report parity on real observations.
 - `output/continuation-20260911/native-empty-ruff-ratchet.txt`: no new findings, 500 known.
 - `output/continuation-20260911/mutant-native-empty.txt`: original-code failure.
 - `output/continuation-20260911/bitmart-old-native-archive-evidence.json`: dated native history/projection samples.

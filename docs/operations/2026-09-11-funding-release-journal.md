@@ -304,3 +304,7 @@ Evidence:native-empty-deferred-live.txt and latest-acceptance.json.
 
 ## Completion record consolidated —05:00UTC
 The current checklist now separates production56362cd from ready-but-undeployedce8f3c4, product evidence, remaining acceptance gates and exact release procedure. Earlier snapshots remain in this journal. Advertisement remains unsent; duplicate-trial wording now specifically refers to reuse of the same Telegram identity. Links/evidence paths checked. Fresh observer2494056 and discovery2497121 remained live (scan elapsed10:56); both containers healthy/OOMfalse/restarts0. No deployment or cap change during this interval.
+
+
+## Versioned acceptance CLI —05:10UTC
+The report now lives in scripts/summarize_stability_soak.py with tests/test_stability_acceptance_summary.py. It requires all three monitored containers with distinct identities, rejects boolean/nonfinite route counts, and handles absent latest health/counters without falsely passing or crashing.30 evidence scenarios pass; removing required-container scope fails the regression. Real-file outputs match the earlier session report exactly. Combined candidate full required suite2924passed217.59s, exit0; canonical Ruff500known/no new. Native empty-history fix remains included and undeployed while discovery2497121 runs. No server observer or production behavior changed this interval.
