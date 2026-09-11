@@ -1079,13 +1079,24 @@ def build(
         """
 
         key = f"{item[0]}|{item[1]}"
-        _current, next_expiry = _current_leg_windows(
-            windows.get(key), leg_status.get(key), now_ms=now_ms
+        values = windows.get(key) or {}
+        status = leg_status.get(key)
+        current, next_expiry = _current_leg_windows(
+            values, status, now_ms=now_ms, live_leg=live_legs.get(key),
         )
+        expired = [
+            _window_expiry_ms(status, label) or 0
+            for label in ("1d", "7d", "30d")
+            if values.get(label) is not None and current.get(label) is None
+        ]
+        if expired:
+            # A fresh 24h total cannot hide an expired 7d/30d total. Repair
+            # previously supported windows before polling known-empty archives
+            # or refreshing a contract whose every supported period is current.
+            return (0, min(expired))
         if next_expiry is None:
-            # Nothing current to lose: it is already blank, so refresh it early.
-            return (0, 0)
-        return (1, int(next_expiry))
+            return (1, 0)
+        return (2, int(next_expiry))
 
     background = [item for item in ordered[start:] + ordered[:start] if item not in leading]
     background.sort(key=_staleness)
