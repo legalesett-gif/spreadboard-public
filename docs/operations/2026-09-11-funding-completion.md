@@ -4,7 +4,7 @@ Owner: Codex in the current chat. There is no external Claude handoff. The older
 
 ## Latest verified deployment
 
-Both web and collector now run `0852327`, source digest `a0c51127cc386193`, independently verified at02:53–02:54UTC with health200/free200 and healthy containers. The guarded deployment recreated both services but its initial startup health probe timed out; it did not report success. Subsequent fresh checks establish recovery and exact source parity, not uninterrupted deployment availability. Full frozen-source suite:2,900 passed in191.81s, exit0; Ruff unchanged. The compact prior-index producer and allocator-only60s/full-GC180s cadence are now deployed. App/collector memory limits remain unchanged pending ordinary-cycle measurements. Final hour/48h/two-normal-backup acceptance remains open.
+Both web and collector now run `9691957`, digest `ddb5f720582fbaf5`, verified by guarded deployment exit0, health200 and both exact source matches. At03:22–03:23UTC both containers were healthy with zero OOM/restart counts; free200 and warm query index ready with209,034 current priced routes of215,309 structural rows. Final suite:2,903 passed in211.44s, exit0; Ruff unchanged502. The initial prior-index safety read now refuses publication on validation failure, and numeric validation has lower measured local CPU cost without removing checks. Production deadline reliability and lower app/collector caps remain unproven. The same finite observer was restarted after warm readiness (PID2439207),49h duration/50h deadline, preserving chronology. Final hour/48h/two-normal-backup acceptance remains open.
 
 ## Requirement-by-requirement status
 
@@ -195,3 +195,16 @@ A prior web cleanup reduced RSS from2.598GiB to2.090GiB in1.787s. The deployed m
 The first bounded process measurement was not a successful publication: worker2423547 reached its180s deadline and the supervisor retained the prior complete generation. Sampled VmHWM was1,019,772KiB (995.9MiB), but this cannot certify completed-build memory or CPU. Earlier in the same release an ordinary full-discovery build successfully published215,330 rows (child139.121s; total227.2s includes heavy-slot wait), so publication is possible but not reliably within the current deadline. No cap reduction is justified yet. A local cProfile of the captured public-index comparison is running to identify CPU cost before another implementation decision.
 
 At03:03:11, the warm observer had five minutes: priced209,037–209,372 across three samples, no endpoint/OOM/restart failures; anonymous peaks web2321.8MiB, collector2531.3MiB. These are short samples, not acceptance. Hourly funding rollover left813/835/719 stored windows overdue for24h/7d/30d respectively; collection must catch up rather than exposing expired totals.
+
+
+## Reader safety and CPU release — September11 03:23UTC
+
+- Found an initial-read failure path that converted an unreadable known generation to empty history. It now refuses publication so previously recorded identity restrictions cannot silently disappear. A same-length corrupted-artifact regression fails when the guard is removed; the pointer is preserved.
+- cProfile of the captured215,263-row retention comparison attributed123.98s cumulative to recursive numeric validation and66.00s to normalized shared-field copies, within a361.33s instrumented run. Profiling overhead means these are attribution evidence, not normal production latency.
+- Parser-owned numeric validation now uses a per-row stack and exact JSON/Decimal types; normalization avoids repeated type dispatch. All skipped fields, integer bounds, finite-number checks and whole-file checksum validation remain.38 focused tests pass, including nested integer and decimal overflow.
+- Paired5,000-row numeric-validation CPU times: baseline0.260/0.236s, candidate0.183/0.122s. Full-size candidate output remains215,263 rows with identicalSHA666a3b79f47e1eb880a6b05a656c480b3c3032c9a22da4207e6e8724487b530f. Candidate whole-run232.31s/peak689,733,632bytes ran amid variable local load; do not compare that wall time or peak directly to earlier runs as delivered savings.
+- Earlier first-guard-only suite2901passed234.08s is superseded by final frozen candidate2903passed211.44s. Eight test-generated tracked data files were preserved and restored; source stayed frozen for final gates.
+- Deployed9691957/ddb5f720582fbaf5 to both services; guarded script exit0 and digest matches. Previous release recovered from the observed timeout and published215,309 rows in116.478s child time before this deploy. Thus timeouts were intermittent, not permanent failure; their absence on the new release must still be measured.
+- Previous web allocator-only cleanup2.602→2.029GiB in107ms further supports allocator retention as a mechanism. No remaining cap was lowered.
+- Same observer nowPID2439207 after warm readiness; no duplicate observer/recurring task. Normal backup next06:21:05UTC remains pending.
+- Evidence: compact-rebuild-cpu.prof, numeric-validation-paired.json, compact-iterative-profile.json, mutant-first-read-safety.txt, pytest-iterative-reader-release.txt, deploy-iterative-reader.txt.
