@@ -346,3 +346,9 @@ Commitc8af1eb/digest10ec5f99f3b8e3fd deployed guarded,actualexit0,source parityb
 ## 06:03 UTC — normal hourly rollover observed
 
 No source/cap changes. At06:00:47, current availability excluded919 daily/939weekly/812monthly expired windows; HTTP200 and208995priced routes remained. The ordinary settlement worker PID2542831 was freshly live at06:02. By06:03:26 overdue counts fell to701/706/597, with zero retryable provider errors; recovery remains in progress. Deep-history pending83. The sole observer2538662 remains active. Evidence: `hourly-rollover-0600.json` and `hourly-rollover-recovery.json`. This verifies expiry/catch-up progression, not completed rollover or48h acceptance.
+
+## 06:17 UTC — generation reuse experiment rejected
+
+Normal web anonymous peak reached2995.1MiB by06:09, so proposed3072MiB cap is still not certified. A sampled numeric-duplication profile found971352 repeated float bytes across5007 sample rows; projected savings alone were modest. Local two-generation experiments retained identical values across215263rows. Baseline peakRSS838434816bytes/109.67s versus reuse898023424bytes/113.93s did not demonstrate lower peak resident memory. Do not deploy this experiment or claim383323303 shared scalar occurrence bytes as unique memory saved: repeated shared values are counted per occurrence. The process-local prototype changed no repository or production code. Evidence: `numeric-duplication-profile.json`, `profile_generation_reuse.py`, `generation-reuse-baseline.json`, `generation-reuse-candidate.json`. Production remainsc8af1eb/digest10ec5f99f3b8e3fd.
+
+Fresh06:16 check: normal historypending41, observer2538662 active, normal backup not yet started(next06:21:05UTC). No cap/source/observer changes.
