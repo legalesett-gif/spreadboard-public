@@ -4,7 +4,7 @@ Owner: Codex in the current chat. There is no external Claude handoff. The older
 
 ## Latest verified deployment
 
-`2e8efc1` is deployed to web only, digest `3e05419421b6939f`, deployment exit 0 and health 200. Collector remains on `a6e4ff2` / `3209e2e14790ee10` while its active discovery scan completes. This is an intentional phased release; source parity is still open. Full candidate suite: 2,888 passed in 174.78s, no new Ruff findings (502 known), nine injected faults detected. The same finite observer remains active; reset/extend its final window only after the collector and cap configuration are settled. Older checkpoints below are chronological.
+`a886b08`, source digest `06e1c30be5a20324`, is verified in both app and collector. Guarded deployment completed after the scan ended, exit0/health200/no OOM or restart-count increments. Full suite:2,889 passed in171.06s, no new Ruff findings(502 known). Native BitMart catalogue publication is still awaiting its ordinary worker; old malformed entries are rejected at read boundaries. Catch-up backup exited successfully at01:56:59UTC with integrity checks passed. Two normal timer firings, remaining memory reductions and full duration acceptance remain open. The single finite observer continues; extend/reset its final window after remaining source/cap decisions. Older checkpoints below are chronological.
 
 ## Requirement-by-requirement status
 
@@ -14,12 +14,12 @@ Owner: Codex in the current chat. There is no external Claude handoff. The older
 | Hyperliquid and builders | Native discovery covers all advertised builder namespaces; live funding shows builder routes. OPENAI Markets contains exact io:OAI routes with identity guards. Ordinary history worker recovered IO-OAI 24h/7d; its short archive cannot supply 30d. |
 | Exchange filters | Live either-leg exclusions changed results and leader; period/farm navigation preserved selections. Export acknowledgement observed; exported content is covered by regressions, not a separately parsed live download. |
 | Current and settled funding | Shared schedule/sign/missing-value fixes deployed. 2,777 published windows across 15 venues match ledger sums; missing/expired/gapped windows remain unavailable. Full-universe current historical catch-up remains open. |
-| Relevant and nonduplicate markets | No repeated native contract IDs within any venue's futures catalogue. The earlier BitMart count-only assessment was insufficient: 359 trading includes four unsupported inverse USD contracts. Native catalogue correction retains 355 linear futures and 53 stable-quote spot markets with exact USDC settlement; collector deployment remains pending. Negative-rate legs remain necessary for positive net pairs. |
+| Relevant and nonduplicate markets | No repeated native contract IDs within any venue's futures catalogue. The earlier BitMart count-only assessment was insufficient: 359 trading includes four unsupported inverse USD contracts. Native catalogue correction retains 355 linear futures and 53 stable-quote spot markets with exact USDC settlement; collector source is deployed; ordinary catalogue publication remains pending. Negative-rate legs remain necessary for positive net pairs. |
 | Seven-day full trial | Telegram identity and email claims are atomic and persistent; live registration terms verified. Local HTTP checks prove entitlement before/during/after trial on four protected pages. Native Telegram callback was simulated locally, not exercised through a real live identity. |
 | Telegram advertisement | Draft written; no channel message sent. |
 | Spread continuity | OPENAI builder pairing verified; latest-generation route samples narrowly bounded so far. Required 30-sample hour remains open. No weakened quote/identity gates. |
 | Memory budget | Accounting cap reduced in place from 768 to 512 MiB after a 290 MiB lifetime peak over nearly 26h. Web/collector caps remain outstanding. Funding-only client retention/concurrent construction reduction measured locally and tested. Production savings and ordinary rebuild peaks must be measured before caps change. Web anonymous memory reached about 3,001 MiB, making an immediate 3,072 MiB cap unsafe. |
-| Backup | Stale lock recovered, bounded stale-only retry and persistent cache/four-hour deadline installed. Catch-up snapshot `3e19180c` saved (22.818 GiB, 7,742 files, upload 1:26:24); integrity checking is active and no terminal exit is recorded. Two normal successful timer runs remain open. |
+| Backup | Stale lock recovered, bounded stale-only retry and persistent cache/four-hour deadline installed. Catch-up snapshot `3e19180c` saved (22.818 GiB, 7,742 files, upload 1:26:24); service exited successfully at01:56:59UTC after all172 selected data packs passed integrity checking. Two normal successful timer runs remain open. |
 | 48h reliability | One finite read-only observer; same unit resets only after a new deployed generation. No short sample or reset OOM flag counts as 48h acceptance. |
 | Continuity record | This document and linked chronology remain owned by Codex in this chat. No external Claude dependency. |
 
@@ -114,3 +114,21 @@ The prior native-count comparison proved no duplicate IDs, but did not prove con
 - Backup has reached snapshot/tree/blob integrity checking. Upload completion alone is not acceptance; service remains activating without a terminal exit. Existing observer PID 2340559 remains active.
 
 Evidence: `output/continuation-20260911/{bitmart-native-after.json,bitmart-mutations.json,bitmart-version-mutations.json,pytest-bitmart-final-release.txt,deploy-bitmart-web.txt}`.
+
+
+## Backup retention correction verified locally — September 11 01:53 UTC
+
+The running backup log exposed 36 separate one-snapshot retention groups because every consistent staging directory has a random temporary path. This defeats the intended seven-daily/four-weekly/three-monthly retention policy. Candidate `a886b08` groups by host/tag and restricts removal to `spreadboard-prod` plus the `spreadboard` tag; the existing calendar policy is unchanged. Backup parent selection uses the matching grouping.
+
+A disposable real restic repository exercised five differently staged historical snapshots plus unrelated hosts/tags, applied retention through `run_backup()`, verified the intended survivors and restored the newest snapshot's contents. Both deliberate regressions (path grouping and missing host restriction) failed. Full suite: 2,889 passed in 171.06s, exit 0; no new Ruff findings (502 known). Production's first dry run encountered the active backup lock; no snapshot was removed and no lock was cleared. The strictly read-only `--dry-run --no-lock` production preview then succeeded: one scoped group,11 kept including3e19180c andc7437bae,25 surplus removals proposed. Nothing was deleted. Reviewed calendar-policy survivors before starting guarded app/collector deployment; actual retention waits for the normal backup workflow.
+
+Ordinary observation at01:47:35: 24h/7d/30d current historical coverage83.90%/81.16%/70.34%; no endpoint failures in this short generation. Collector anonymous peak exceeded the proposed3584MiB cap, so no reduction is safe yet. A local copy of the public route index (215,263 rows,527,051,951 bytes) is being profiled; this adds no profiling worker to production.
+
+
+## Release and successful catch-up backup — September 11 01:59 UTC
+
+- App and collector both verify06e1c30be5a20324 after guarded deployment; no in-flight scan/finalizer was interrupted. Native BitMart catalogue artifact worker2382325 remains live (222s at01:59); do not infer publication from source parity.
+- Backup service completed at01:56:59UTC, exit0, Result=success, inactive/MainPID0. All36 snapshot trees and all172 selected data packs passed; log says no errors. This is the manual catch-up, not one of the two required normal timer firings. Total duration2:03:21 also confirms the installed longer deadline accommodated integrity checking beyond the old two-hour limit.
+- Restic noted107 unreferenced packs as noncritical. Corrected retention is deployed for future normal runs; the reviewed preview removed nothing. Service lifetime peak2.6GiB includes cache and is not a measurement of anonymous process memory; observe host/cgroup headroom during normal backups.
+- Evidence: `backup-catchup-completed.json`, `backup-retention-production-preview.json`, `deploy-bitmart-retention.txt` under the continuation output folder.
+- Local public-index profile: full previous index215,263rows,632,684,544-byte peakRSS/46.68s; prototype retaining898DEX rows plus27,139 safety-evidence entries,98,484,224-byte peakRSS/33.85s. This suggests removing the old full generation from the rebuild overlap. It is not implemented or a production saving: exact continuity, missing-route retention, identity collisions, safeguards and corruption handling must all be preserved and measured before release.
