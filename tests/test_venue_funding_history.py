@@ -588,6 +588,7 @@ def test_history_request_respects_the_strictest_public_limit() -> None:
         ("Gate", "until", 899),
         ("OKX", "after", "900"),
         ("WhiteBIT", "endDate", 1),
+        ("Kucoin Futures", "to", 899),
     ],
 )
 def test_provider_pagination_requests_an_older_second_page(
@@ -1234,3 +1235,44 @@ def test_concurrent_history_legs_share_one_derivative_only_market_load(monkeypat
     finally:
         release.set()
         vfh._CLIENTS.pop(venue, None)
+
+
+def test_kucoin_walks_back_past_its_hundred_row_cap() -> None:
+    """Kucoin returned the newest 100 rows forever, so 30d could never complete.
+
+    Measured against the live endpoint on 12 September 2026 for
+    `Kucoin Futures|0G/USDT:USDT`: the request caps at exactly 100 rows, which
+    at a 4h cadence is 16.6 days -- a 30d window needs 180 events. Kucoin had
+    no branch here, so it used the generic forward cursor (`since = cursor + 1`),
+    re-requested that same newest slice, and the repeated-page guard stopped it
+    at one page. The store held 111 of 180 events with history starting 18.4d
+    ago, and 683 Kucoin legs sat at a median depth of 18.4d while the window was
+    reported merely `insufficient_event_coverage`.
+
+    Paging backwards with `to = oldest - 1` returns 86 more rows reaching 30.9
+    days (186 events total), so this history was available the whole time.
+    """
+
+    calls: list[dict] = []
+
+    class Paged:
+        def fetch_funding_rate_history(self, _symbol, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return [
+                    {"timestamp": 900, "fundingRate": 0.001},
+                    {"timestamp": 1000, "fundingRate": 0.001},
+                ]
+            if len(calls) == 2:
+                return [{"timestamp": 800, "fundingRate": 0.001}]
+            return []
+
+    rows, _pages = vfh._history_pages(
+        Paged(), "Kucoin Futures", "ONE", since=1, now_ms=2000, max_pages=3
+    )
+
+    # A forward `since` would pin every page to the newest slice.
+    assert calls[0]["since"] is None, calls[0]
+    assert calls[1]["params"]["to"] == 899, calls[1]
+    assert calls[2]["params"]["to"] == 799, calls[2]
+    assert sorted(int(row["timestamp"]) for row in rows) == [800, 900, 1000]

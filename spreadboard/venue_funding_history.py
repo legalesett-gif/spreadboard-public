@@ -56,6 +56,14 @@ WINDOW_DAYS: tuple[int, ...] = (1, 7, 30)
 MIN_EVENT_COVERAGE = 1.0
 MAX_BOUNDARY_INTERVALS = 1.5
 MAX_INTERNAL_GAP_INTERVALS = 1.5
+#: Adapters that ignore ``since`` and return their NEWEST rows, so they must be
+#: walked backwards from the oldest row of the previous page. Listed once: these
+#: venues need both the backward cursor and the "reached the boundary" stop, and
+#: adding a venue to only one of the two leaves it silently paging forward
+#: against its newest slice forever (which is what happened to Kucoin).
+BACKWARD_PAGING_VENUES = frozenset(
+    {"Gate", "OKX", "WhiteBIT", "Mexc", "Bitget", "XT", "Kucoin Futures"}
+)
 HISTORY_PAGE_SIZE = 100
 PRIORITY_HISTORY_PAGES = 10
 
@@ -645,6 +653,16 @@ def _history_pages(
             request_since = None
             if cursor is not None:
                 params["until"] = cursor - 1
+        elif venue == "Kucoin Futures":
+            # Kucoin caps a response at 100 rows whatever range is asked for --
+            # 16.6 days at a 4h cadence, against the 180 events a 30d window
+            # needs -- and ignores ``since``. With no branch here the generic
+            # forward cursor re-requested that same newest slice and the
+            # repeated-page guard stopped at one page, leaving 683 legs at a
+            # median depth of 18.4d. Its native ``to`` bound walks backwards.
+            request_since = None
+            if cursor is not None:
+                params["to"] = cursor - 1
         elif venue == "OKX":
             request_since = None
             if cursor is not None:
@@ -677,9 +695,9 @@ def _history_pages(
         fingerprints.add(fingerprint)
         pages += 1
         rows.extend(page)
-        if venue in {"Gate", "OKX", "WhiteBIT", "Mexc", "Bitget", "XT"} and timestamps[0] <= since:
+        if venue in BACKWARD_PAGING_VENUES and timestamps[0] <= since:
             break
-        if venue in {"Gate", "OKX", "WhiteBIT", "Mexc", "Bitget", "XT"}:
+        if venue in BACKWARD_PAGING_VENUES:
             if venue == "XT":
                 oldest = min(
                     page,
