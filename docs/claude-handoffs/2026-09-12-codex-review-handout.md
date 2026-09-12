@@ -259,14 +259,49 @@ as a hint and verify the source digest. **This is a review-integrity hazard.**
 
 ### 4.2 Funding readability — NOT fixed
 
-Desktop values still truncate with ellipses. Established only: the strip renders
-via `render_funding_windows` (`server.py` ~10679–10736); live updates target
-`.funding-window.current strong` (~7778); a mobile-only override at ~21885
-already sets `overflow: visible; text-overflow: clip`, which implies a broader
-clipping rule applies at wider viewports. **No `text-overflow` rule targets
-`.funding-window strong` directly — the clip is inherited and must be identified
-from computed style in the live DOM.** Needs authenticated browser work at
-390px / 1440px / laptop width. I deliberately created **no disposable user**.
+**The leading hypothesis is false, and I can show it from the stylesheet the site
+actually serves.** I fetched the public `https://spreadarbitrage.ink/assets/app.css`
+(200, 228,268 bytes) and enumerated every rule — including inside every
+`@media` block — that sets `overflow` or `text-overflow` and could match
+`.funding-window strong`.
+
+**Exactly one rule matches, and it is the mobile override itself:**
+
+```
+@media (max-width: 960px)
+  .funding-token-group > summary .funding-realised .funding-window strong
+      overflow: visible; text-overflow: clip;
+```
+
+So **nothing applies `text-overflow: ellipsis` to a funding value at any
+viewport.** The governing rules are:
+
+```
+.funding-window-strip { display:grid; grid-template-columns:repeat(4,minmax(0,1fr));
+                        width:100%; min-width:0 }
+.funding-window       { display:flex; flex-direction:column; min-width:0 }
+.funding-window strong{ font-size:11px; font-variant-numeric:tabular-nums }
+```
+
+`white-space` is never set on `strong`, so it defaults to `normal`: with
+`minmax(0,1fr)` columns a long value **wraps**, it does not ellipsise. The
+max-width:960px override is therefore defensive and currently a no-op.
+
+**What this means for the fix.** Chasing an inherited ellipsis rule is wasted
+effort — there isn't one. The remaining candidates for what the screenshot showed,
+in order of likelihood:
+
+1. The ellipses were on a **neighbouring element**, not the value.
+   `.funding-token-cell span` *does* carry
+   `overflow:hidden; text-overflow:ellipsis; white-space:nowrap` (server.py
+   ~20609) and sits next to the strip — a truncated token name is the obvious
+   candidate.
+2. Wrapped values inside 1/4-width grid cells read as clipped at a glance.
+
+**Still needs the live DOM** to confirm which element truncated, but the search
+space is now one check rather than a CSS hunt. I created **no disposable user**;
+`/funding` redirects to Sign in and `/free` carries no funding strip
+(`document.querySelectorAll('.funding-window').length === 0`, measured).
 
 ### 4.3 Filter paths and streamed settled cells — NOT verified
 
