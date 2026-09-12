@@ -141,7 +141,9 @@ def test_backup_retries_transient_repository_probe_before_staging(monkeypatch, t
         return SimpleNamespace(returncode=0, stdout="[]", stderr="")
     monkeypatch.setattr(backup_spreadboard.subprocess, "run", run)
     backup_spreadboard.run_backup()
-    assert [x[1] for x in calls] == ["snapshots", "snapshots", "backup", "forget", "check"]
+    assert [x[1] for x in calls] == [
+        "snapshots", "snapshots", "backup", "unlock", "forget", "check"
+    ]
     assert sleeps == [10]
     assert "private-fixture-value" not in capsys.readouterr().out
 
@@ -185,7 +187,10 @@ def test_actual_rclone_backup_paces_every_phase_and_allows_connection_window(mon
         return SimpleNamespace(returncode=0, stdout="[]", stderr="")
     monkeypatch.setattr(backup_spreadboard.subprocess, "run", run)
     backup_spreadboard.run_backup()
-    assert [command[1] for command, _ in calls] == ["snapshots", "backup", "forget", "check"]
+    # The stale-lock sweep is a phase too, and must carry the same pacing.
+    assert [command[1] for command, _ in calls] == [
+        "snapshots", "backup", "unlock", "forget", "check"
+    ]
 
 
 def test_non_rclone_commands_and_operator_pacing_are_preserved(monkeypatch):
@@ -193,7 +198,10 @@ def test_non_rclone_commands_and_operator_pacing_are_preserved(monkeypatch):
     monkeypatch.setattr(backup_spreadboard.subprocess, "run", lambda command, **kwargs: calls.append((command, kwargs)))
     monkeypatch.setenv("RESTIC_REPOSITORY", "s3:fixture")
     backup_spreadboard._run_restic(["restic", "snapshots"], timeout=120)
-    assert calls[-1] == (["restic", "snapshots"], {"timeout": 120, "check": False})
+    assert calls[-1] == (
+        ["restic", "snapshots", "--retry-lock", backup_spreadboard.LOCK_RETRY],
+        {"timeout": 120, "check": False},
+    )
     monkeypatch.setenv("RESTIC_REPOSITORY", "rclone:fixture:backup")
     monkeypatch.setenv("RCLONE_TPSLIMIT", "1")
     backup_spreadboard._run_restic(["restic", "check"])
@@ -246,3 +254,59 @@ def test_persistent_repository_cache_is_never_backed_up_recursively(tmp_path):
     assert backup_spreadboard._excluded(path, root)
     unit = (ROOT/'deploy'/'spreadboard-backup.service').read_text()
     assert 'RESTIC_CACHE_DIR=/opt/spreadboard/runtime/restic-cache' in unit
+
+
+def _retention_calls(monkeypatch, tmp_path):
+    calls = []
+    source = tmp_path / "runtime"
+    source.mkdir()
+    monkeypatch.setattr(backup_spreadboard, "RUNTIME_DIR", source)
+    monkeypatch.setattr(backup_spreadboard, "_require_restic_configuration", lambda: None)
+    monkeypatch.setattr(backup_spreadboard.time, "sleep", lambda *_a: None)
+    monkeypatch.setattr(backup_spreadboard, "stage_snapshot", lambda *a: [Path("evidence.json")])
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(backup_spreadboard.subprocess, "run", run)
+    backup_spreadboard.run_backup()
+    return calls
+
+
+def test_retention_clears_a_stale_lock_before_pruning(monkeypatch, tmp_path) -> None:
+    """The 37h stale lock that failed the 12 September 18:18 UTC run.
+
+    `_ensure_repository` already unlocks, but only when its probe is blocked --
+    and the probe is `restic snapshots`, which takes a NON-exclusive lock. A
+    stale lock that blocks only exclusive operations passes the probe and then
+    kills `forget --prune`, discarding a snapshot that was already saved
+    (`fe52e857`, 7,915 files, 24.974 GiB). Retention had never once completed.
+    """
+
+    verbs = [command[1] for command in _retention_calls(monkeypatch, tmp_path)]
+
+    assert verbs == ["snapshots", "backup", "unlock", "forget", "check"], verbs
+
+
+def test_the_stale_lock_sweep_never_removes_a_live_lock(monkeypatch, tmp_path) -> None:
+    """restic's default unlock is age/owner checked; --remove-all is not."""
+
+    for command in _retention_calls(monkeypatch, tmp_path):
+        if command[1] == "unlock":
+            assert "--remove-all" not in command, command
+
+
+def test_retention_waits_for_a_concurrent_run_instead_of_failing_at_zero(
+    monkeypatch, tmp_path
+) -> None:
+    """The log read 'waiting up to 0s for the lock' -- no retry at all."""
+
+    forget = next(
+        command
+        for command in _retention_calls(monkeypatch, tmp_path)
+        if command[1] == "forget"
+    )
+
+    assert "--retry-lock" in forget, forget
+    assert forget[forget.index("--retry-lock") + 1] == backup_spreadboard.LOCK_RETRY
