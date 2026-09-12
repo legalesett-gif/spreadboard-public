@@ -3352,6 +3352,7 @@ def _merge_complete_funding_page(
             "window",
             "window_value_kind",
             "window_duration_days",
+            "short_history_policy",
             "now_is_independent",
             "matching_token_count",
             "matching_route_count",
@@ -7702,6 +7703,7 @@ def render_board_stream_script(
     (function(){
       if (!window.EventSource) return;
       let source = null;
+      let sessionExpired = false;
       const pct = (value, digits) => {
         if (value === null || value === undefined || value === "") return null;
         const number = Number(value);
@@ -7715,6 +7717,7 @@ def render_board_stream_script(
         node.classList.add("live-tick");
       };
       const connect = () => {
+        if (sessionExpired) return;
         if (source) source.close();
         source = new EventSource("__ENDPOINT____SUFFIX__");
         source.addEventListener("board", (event) => {
@@ -7853,6 +7856,10 @@ def render_board_stream_script(
         source.close();
         source = null;
       };
+      document.addEventListener("spreadboard:session-expired", () => {
+        sessionExpired = true;
+        disconnect();
+      });
       // Chrome may keep the old document in its back/forward cache while a
       // member moves between tabs. EventSource is not useful there, and an
       // unclosed one leaves the server repricing an invisible page. Close it
@@ -10639,9 +10646,8 @@ def render_funding_windows(
     """Current projected carry plus exact realised 1d/7d/30d route totals.
 
     ``Now`` is explicitly a 24-hour projection from the live rate. Historical
-    windows use only exact venue settlement events. A window whose full cadence
-    cannot be proven shows a dash rather than a partial value or a synthetic
-    zero.
+    windows use only exact venue settlement events. Shorter verified history
+    is labelled with its actual duration, never represented as a full window.
     """
     del route_key  # Retained for renderer-call compatibility.
     route = route or {}
@@ -10688,10 +10694,27 @@ def render_funding_windows(
         )
     display_labels = {"1d": "24h", "7d": "7d", "30d": "30d"}
     current_windows = venue_funding_history.route_windows(route)
+    from spreadboard import funding_available_history
+
+    available = funding_available_history.route_windows(route)
     last_complete = venue_funding_history.route_windows_last_complete(route)
     for label in ("1d", "7d", "30d"):
         value = _float_or_none(current_windows.get(label))
         if value is None:
+            partial = available.get(label) or {}
+            partial_value = _float_or_none(partial.get("net"))
+            if partial_value is not None:
+                tone = "positive" if partial_value > 0 else "negative" if partial_value < 0 else "flat"
+                duration = float(partial["duration_days"])
+                start = datetime.fromtimestamp(partial["first_settlement_ms"] / 1000, tz=UTC).strftime("%d %b %Y %H:%M UTC")
+                title = f"Settled since the first verified settlement ({start}), not a full {display_labels[label]} return or a verified listing date. Both funding legs use the same period."
+                cells.append(
+                    f'<span class="funding-window partial {tone}" title="{h(title)}">'
+                    f'<em>Up to {display_labels[label]} settled</em>'
+                    f'<strong>{fmt_signed_pct(partial_value, digits=2)}</strong>'
+                    f'<small>{duration:.1f}d available</small></span>'
+                )
+                continue
             stale = last_complete.get(label) if isinstance(last_complete, dict) else None
             stale_value = _float_or_none((stale or {}).get("net"))
             if stale_value is not None:
@@ -10729,7 +10752,7 @@ def render_funding_windows(
                 f"<strong>{fmt_signed_pct(value, digits=2)}</strong></span>"
             )
     strip_title = (
-        "Now is projected 24-hour carry at the live rate; 24h, 7d and 30d are exact settled totals. "
+        "Now is projected 24-hour carry at the live rate; historical values are exact settled totals. Shorter history is labelled with its actual duration. "
         + coverage_title
     )
     title = "" if compact else f' title="{h(strip_title)}"'
@@ -10747,7 +10770,7 @@ def funding_rank_value(row: dict[str, Any], selected_window: str = "now") -> flo
     """
     window = str(selected_window or "now").casefold()
     if window != "now":
-        return _float_or_none(funding_radar.window_value(row, window))
+        return _float_or_none(funding_radar.display_window_value(row, window))
     for key in ("funding_daily_pct", "funding_projected_24h_pct"):
         value = _float_or_none(row.get(key))
         if value is not None:
@@ -10758,6 +10781,9 @@ def funding_rank_value(row: dict[str, Any], selected_window: str = "now") -> flo
 def funding_rank_basis(row: dict[str, Any], selected_window: str = "now") -> str:
     window = str(selected_window or "now").casefold()
     if window != "now":
+        partial = (row.get("settled_funding_available") or {}).get(window) or {}
+        if partial and funding_radar.window_value(row, window) is None:
+            return f"settled over {float(partial['duration_days']):.1f}d available (up to {window})"
         return f"settled {'24h' if window == '1d' else window} aggregate total"
     if any(
         _float_or_none(row.get(key)) is not None
@@ -10765,6 +10791,14 @@ def funding_rank_basis(row: dict[str, Any], selected_window: str = "now") -> str
     ):
         return "24h at current rate"
     return "funding unavailable"
+
+
+def funding_metric_label(row: dict[str, Any], window: str) -> str:
+    if window == "now":
+        return "Net now / 24h"
+    partial = (row.get("settled_funding_available") or {}).get(window)
+    period = "24h" if window == "1d" else window
+    return f"Settled up to {period}" if partial else f"Settled {period} total"
 
 
 def _historical_funding_page(
@@ -10823,7 +10857,7 @@ def _historical_funding_page(
         identity = catalog_pairs.route_identity(route)
         if identity in routes_by_identity:
             continue
-        value = funding_radar.window_value(route, window)
+        value = funding_radar.display_window_value(route, window)
         exact_symbol_detail = bool(
             wanted_symbol and str(route.get("token") or "").upper() == wanted_symbol
         )
@@ -10841,7 +10875,7 @@ def _historical_funding_page(
     grouped: dict[str, list[tuple[float | None, dict[str, Any]]]] = {}
     for route in routes_by_identity.values():
         token = str(route.get("token") or "").upper()
-        value = funding_radar.window_value(route, window)
+        value = funding_radar.display_window_value(route, window)
         # Negative or incomplete selected-window routes must not inflate the
         # breadth shown in a positive carry ranking, whether live or retained.
         if (
@@ -11181,7 +11215,7 @@ def render_funding_page(
         <div class="panel-head flat terminal-table-title">
           <div>
             <h2>{h(dict(tabs).get(selected_farm))} Farms</h2>
-            <p>Positive net values mean the displayed long-short pair receives funding under the exchange sign convention. Ranking uses the complete pair catalogue before this token page is sliced.</p>
+            <p>Positive net values mean the displayed long-short pair receives funding under the exchange sign convention. Ranking uses the complete pair catalogue before this token page is sliced. If less history is available, the settled total since the first verified settlement is included and labelled with its actual duration. It is not projected to a full period; futures-futures legs use the same dates.</p>
           </div>
           {render_json_export_control("/api/spreads?" + urlencode(_query_with(funding_query, limit=page_limit, offset=page_offset, export=1)))}
         </div>
@@ -11271,13 +11305,7 @@ def render_funding_token_group(
     )
     if best.get("requires_existing_spot_inventory"):
         status_badge += '<span class="funding-inventory-badge">Short-spot inventory required</span>'
-    metric_label = (
-        "Net now / 24h"
-        if selected_window == "now"
-        else "Settled 24h total"
-        if selected_window == "1d"
-        else f"Settled {selected_window} total"
-    )
+    metric_label = funding_metric_label(best, selected_window)
     routes = list(group.get("routes") or [])
     visible_routes = routes
     if route_limit is not None:
@@ -11348,13 +11376,7 @@ def render_funding_pair(row: dict[str, Any], *, selected_window: str = "now") ->
         if row.get("requires_existing_spot_inventory")
         else ""
     )
-    metric_label = (
-        "Net now / 24h"
-        if selected_window == "now"
-        else "Settled 24h total"
-        if selected_window == "1d"
-        else f"Settled {selected_window} total"
-    )
+    metric_label = funding_metric_label(row, selected_window)
     chart_key = _chart_link_route_key(row)
     return f"""
     <article class="funding-pair-row {"historical-radar" if historical else ""}" data-route-key="{h(row.get("route_key") or "")}">
@@ -19663,8 +19685,33 @@ def render_auto_refresh_script() -> str:
   const label = pill.querySelector("#autoRefreshStatus");
   const toggle = pill.querySelector("#autoRefreshToggle");
   let remaining = seconds;
-  let paused = forceRunning ? false : localStorage.getItem(pauseKey) === "1";
+  // A silent page has no Resume control. A pause saved on another page must
+  // not freeze its settled windows forever while SSE still says "live".
+  let paused = (forceRunning || silent) ? false : localStorage.getItem(pauseKey) === "1";
   let refreshPending = false;
+  let sessionExpired = false;
+  let refreshNotice = null;
+
+  function showRefreshNotice(expired) {
+    if (!refreshNotice) {
+      refreshNotice = document.createElement("aside");
+      refreshNotice.setAttribute("role", "status");
+      refreshNotice.className = "auto-refresh-notice";
+      const content = document.querySelector("[data-refresh]");
+      if (content) content.before(refreshNotice);
+      else document.body.appendChild(refreshNotice);
+    }
+    refreshNotice.textContent = expired
+      ? "Session expired. Displayed figures are no longer updating. "
+      : "Data update failed. Displayed figures may be out of date. Retrying.";
+    if (expired) {
+      const login = document.createElement("a");
+      login.href = "/login?next=" + encodeURIComponent(location.pathname + location.search);
+      login.textContent = "Sign in again";
+      refreshNotice.appendChild(login);
+      document.dispatchEvent(new CustomEvent("spreadboard:session-expired"));
+    }
+  }
 
   function editableActive() {
     const active = document.activeElement;
@@ -19688,15 +19735,25 @@ def render_auto_refresh_script() -> str:
   });
 
   async function refreshInPlace() {
-    if (refreshPending) return;
+    if (refreshPending || sessionExpired) return;
     refreshPending = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
     try {
-      const response = await fetch(location.href, { headers: { "X-Requested-With": "fetch" } });
-      if (!response.ok) return;
+      const response = await fetch(location.href, { cache: "no-store", signal: controller.signal, headers: { "X-Requested-With": "fetch" } });
+      const loginRedirect = response.redirected && new URL(response.url, location.href).pathname === "/login";
+      if (response.status === 401 || loginRedirect) {
+        sessionExpired = true;
+        showRefreshNotice(true);
+        return;
+      }
+      if (!response.ok) throw new Error("refresh_failed");
       const parsed = new DOMParser().parseFromString(await response.text(), "text/html");
       const next = parsed.querySelector("[data-refresh]");
       const current = document.querySelector("[data-refresh]");
       if (next && current) {
+        refreshNotice?.remove();
+        refreshNotice = null;
         // DOMParser-created scripts are intentionally inert. Replacing a live
         // form or dialog with its parsed twin would therefore leave controls
         // that look normal but have no event handlers. Pages mark stable
@@ -19739,10 +19796,11 @@ def render_auto_refresh_script() -> str:
         // times a minute even though SSE already streamed every price.
         seconds = refreshSeconds(next);
         remaining = seconds;
-      }
+      } else throw new Error("missing_refresh_content");
     } catch (error) {
-      // A failed refresh is a missed tick, not a reason to disturb the page.
+      showRefreshNotice(false);
     } finally {
+      clearTimeout(timeout);
       refreshPending = false;
     }
   }
@@ -19750,10 +19808,13 @@ def render_auto_refresh_script() -> str:
   // A deterministic hook lets diagnostics exercise the exact production
   // refresh path without waiting for the five-minute structural cadence.
   document.addEventListener("spreadboard:refresh-now", refreshInPlace);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !paused && !editableActive()) refreshInPlace();
+  });
 
   render();
   setInterval(() => {
-    if (paused || document.hidden || editableActive()) return;
+    if (sessionExpired || paused || document.hidden || editableActive()) return;
     remaining -= 1;
     if (remaining <= 0) {
       label.textContent = "Refreshing";
@@ -20860,6 +20921,8 @@ main { max-width: none; margin: 0; padding: 32px 24px 0; }
 .auto-refresh-pill button { min-height: 24px; border: 0; border-radius: 999px; padding: 0 8px; background: var(--dark); color: white; cursor: pointer; font-size: 10px; font-weight: 900; }
 .auto-refresh-pill.paused { background: #fff8f0; border-color: rgba(191,125,0,.28); }
 .auto-refresh-pill.paused button { background: var(--accent); color: var(--accent-ink); }
+.auto-refresh-notice { margin: 12px 0; padding: 12px; border: 1px solid var(--terminal-line); background: var(--terminal-panel-2); color: var(--terminal-text); overflow-wrap: anywhere; }
+.auto-refresh-notice a { text-decoration: underline; }
 .header-actions .auto-refresh-pill { margin: 0; width: auto; max-width: none; min-height: 34px; padding: 0 4px 0 8px; border-radius: 2px; background: transparent; box-shadow: none; backdrop-filter: none; }
 .header-actions .auto-refresh-pill span { min-width: 58px; }
 .header-actions .auto-refresh-pill button { border: 1px solid var(--terminal-line); border-radius: 2px; background: var(--terminal-panel-2); color: var(--terminal-text); }

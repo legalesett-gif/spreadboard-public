@@ -68,6 +68,34 @@ HISTORY_PAGE_SIZE = 100
 PRIORITY_HISTORY_PAGES = 10
 
 
+def _history_symbol(venue: str, symbol: str, available: Any) -> str | None:
+    """Resolve a native HIP-3 name only to a unique indexed contract.
+
+    The native discovery lane uses para:ANSEM while CCXT uses
+    PARA-ANSEM/USDC:USDC. Never join on ANSEM alone, guess collateral, or
+    substitute another builder's contract. Canonical input remains exact.
+    """
+    if venue != "Hyperliquid" or "/" in symbol or ":" not in symbol:
+        return symbol
+    from spreadboard.fast_quotes import _hyperliquid_coin
+
+    coin = _hyperliquid_coin(symbol)
+    matches = [candidate for candidate in available
+               if "/" in candidate
+               and _hyperliquid_coin(candidate.split("/", 1)[0]) == coin]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _history_key(venue: str, symbol: str, legs: dict[str, Any]) -> str | None:
+    if venue != "Hyperliquid" or "/" in symbol or ":" not in symbol:
+        return f"{venue}|{symbol}"
+    prefix = venue + "|"
+    resolved = _history_symbol(venue, symbol, (
+        key[len(prefix):] for key in legs if key.startswith(prefix)
+    ))
+    return f"{venue}|{resolved}" if resolved else None
+
+
 def _recorded_completeness_failure(detail: dict[str, Any]) -> str | None:
     """Recheck old cached evidence; a prior complete flag cannot excuse gaps."""
     try:
@@ -177,6 +205,7 @@ def _current_leg_windows(
 def realised_window_details(
     entries: list[dict[str, Any]], *, now_ms: int | None = None,
     source_range: dict[str, Any] | None = None,
+    window_days: tuple[int | float, ...] = WINDOW_DAYS,
 ) -> dict[str, Any]:
     """Validate and sum exact settlements for trailing 1d/7d/30d windows.
 
@@ -206,11 +235,11 @@ def realised_window_details(
             discarded_duplicates += 1
         by_timestamp[timestamp] = rate
     stamped = sorted(by_timestamp.items())
-    output: dict[str, float | None] = {f"{days}d": None for days in WINDOW_DAYS}
+    output: dict[str, float | None] = {f"{days}d": None for days in window_days}
     windows: dict[str, dict[str, Any]] = {}
-    for days in WINDOW_DAYS:
+    for days in window_days:
         label = f"{days}d"
-        window_ms = days * 86_400_000
+        window_ms = round(days * 86_400_000)
         since = now - window_ms
         points = [(timestamp, rate) for timestamp, rate in stamped if since < timestamp <= now]
         diffs = [
@@ -797,7 +826,8 @@ def leg_history_outcome(
             }
         if not getattr(client, "has", {}).get("fetchFundingRateHistory"):
             return {"status": "unsupported_history_api", "entries": []}
-        if symbol not in getattr(client, "symbols", []) or []:
+        symbol = _history_symbol(venue, symbol, getattr(client, "symbols", []) or [])
+        if not symbol or symbol not in (getattr(client, "symbols", []) or []):
             return {"status": "symbol_not_indexed", "entries": []}
         now_ms = int(time.time() * 1000)
         # One extra day lets the completeness validator infer the cadence at
@@ -1682,7 +1712,7 @@ def route_history_status(route: dict[str, Any]) -> dict[str, Any]:
         if str(route.get(f"{side}_market_type") or "").casefold() != "futures":
             sides[side] = {"status": "not_applicable", "available_windows": 3}
             continue
-        key = f"{venue}|{symbol}"
+        key = _history_key(venue, symbol, current_legs)
         status = dict(_CACHE["leg_status"].get(key) or {})
         values = current_legs.get(key) or {}
         details = {
@@ -1806,7 +1836,7 @@ def route_windows_last_complete(
         if not is_futures:
             sides[side] = {label: 0.0 for label in (f"{d}d" for d in WINDOW_DAYS)}
             continue
-        key = f"{venue}|{route.get(f'{side}_market_symbol')}"
+        key = _history_key(venue, str(route.get(f'{side}_market_symbol') or ""), legs)
         detail = ((status.get(key) or {}).get("window_details") or {})
         sides[side] = {label: value if (detail.get(label) or {}).get("complete")
                        and not _recorded_completeness_failure(detail[label]) else None
@@ -1890,7 +1920,7 @@ def route_windows(
         if not is_futures:
             sides[side] = {label: 0.0 for label in net}
             continue
-        key = f"{route.get(f'{side}_venue')}|{route.get(f'{side}_market_symbol')}"
+        key = _history_key(venue, str(route.get(f'{side}_market_symbol') or ""), exact_legs)
         sides[side] = exact_legs.get(key)
     if sides["long"] is None or sides["short"] is None:
         return net

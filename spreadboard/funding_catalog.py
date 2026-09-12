@@ -864,6 +864,13 @@ def _window_value(
     return funding_radar.window_value(route, label, exact_legs=exact_legs)
 
 
+def _display_window_value(route, label, *, exact_legs=None):
+    value = _window_value(route, label, exact_legs=exact_legs)
+    if value is not None:
+        return value
+    return funding_radar.display_window_value(route, label, exact_legs=exact_legs)
+
+
 def _resident_live_overlay(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Merge ten-second books/carry into a durable structural catalogue."""
 
@@ -1214,11 +1221,15 @@ def page(
             # windows deliberately remain ``None`` rather than being filled
             # from the current rate or a partial history sample.
             route["settled_funding_windows"] = dict(windows)
-            for label, window_value in windows.items():
+            display_windows = {
+                label: value if value is not None else _display_window_value(route, label, exact_legs=exact_legs)
+                for label, value in windows.items()
+            }
+            for label, window_value in display_windows.items():
                 if window_value is not None and window_value > 0 and tokenized_assets.claim_stock_pair(seen_stock_windows[label], route):
                     window_routes[label] += 1
                     window_tokens[label].add(token)
-            value = windows[selected_window]
+            value = display_windows[selected_window]
             if not exact_symbol_detail and (value is None or value <= 0):
                 continue
         if not tokenized_assets.claim_stock_pair(seen_stock_pairs, route):
@@ -1268,6 +1279,9 @@ def page(
                     )
                     for label in history_labels
                 }
+                route["settled_funding_available"] = funding_radar.available_windows(
+                    route, exact_legs=visible_exact_legs,
+                )
     return {
         "ok": bool(visible),
         "mode": "complete_funding_catalogue_ranked_before_pagination",
@@ -1282,6 +1296,7 @@ def page(
             if selected_window == "now"
             else {"1d": 1, "7d": 7, "30d": 30}[selected_window]
         ),
+        "short_history_policy": "verified_available_period_v1",
         "now_is_independent": True,
         "exact_symbol_detail": exact_symbol_detail,
         "groups": visible,
@@ -1372,13 +1387,21 @@ def build_navigation_pages(
             label: _window_value(route, label, exact_legs=exact_legs)
             for label in windows[1:]
         }
+        # Separate disclosed partial periods from strict full-window numbers.
+        # Freeze both in this generation so rank, headline and export agree.
+        available = funding_radar.available_windows(route, exact_legs=exact_legs)
+        display_windows = {
+            label: value if value is not None else _number((available.get(label) or {}).get("net"))
+            for label, value in realised.items()
+        }
         # Preserve the exact generation used for ranking so rendering and the
         # selected headline cannot disagree during an atomic archive handoff.
         route["funding_navigation_windows"] = dict(realised)
         route["settled_funding_windows"] = dict(realised)
+        route["settled_funding_available"] = available
         if not route.get("radar_historical") and current_value is not None and current_value > 0:
             keep(kind, "now", token, current_value, route)
-        for label, value in realised.items():
+        for label, value in display_windows.items():
             if value is None or value <= 0:
                 continue
             if keep(kind, label, token, value, route):
@@ -1431,6 +1454,7 @@ def build_navigation_pages(
                     else {"1d": 1, "7d": 7, "30d": 30}[window]
                 ),
                 "now_is_independent": True,
+                "short_history_policy": "verified_available_period_v1",
                 "exact_symbol_detail": False,
                 "groups": visible,
                 "rows": [

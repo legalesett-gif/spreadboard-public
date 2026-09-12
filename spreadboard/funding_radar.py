@@ -359,3 +359,22 @@ def window_value(
         )
     radar = route.get("radar_windows") if isinstance(route.get("radar_windows"), dict) else {}
     return _float_or_none(radar.get(label))
+
+
+def available_windows(route: dict[str, Any], *, exact_legs=None) -> dict[str, Any]:
+    """Member-facing shorter periods; never replace strict full-window features."""
+    if "funding_navigation_windows" in route:
+        return route.get("settled_funding_available") or {}
+    from spreadboard import funding_available_history
+
+    return funding_available_history.route_windows(route, legs=exact_legs)
+
+
+def display_window_value(route: dict[str, Any], label: str, *, exact_legs=None) -> float | None:
+    value = (window_value(route, label) if exact_legs is None
+             else window_value(route, label, exact_legs=exact_legs))
+    if value is not None:
+        return value
+    available = available_windows(route, exact_legs=exact_legs)
+    route["settled_funding_available"] = available
+    return _float_or_none((available.get(label) or {}).get("net"))

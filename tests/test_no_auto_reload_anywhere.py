@@ -120,7 +120,7 @@ def test_a_slow_structural_refresh_cannot_overlap_the_next_tick() -> None:
     source = _script()
 
     assert "let refreshPending = false" in source
-    assert "if (refreshPending) return" in source
+    assert "if (refreshPending || sessionExpired) return" in source
     assert "refreshPending = true" in source
     assert "refreshPending = false" in source
 

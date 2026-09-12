@@ -38,6 +38,7 @@ def _signature(path: Path | str) -> list[int] | None:
 
 def source_signature(board_path: Path) -> dict[str, Any]:
     return {
+        "short_history_policy": "verified_available_period_v1",
         "board_path": str(board_path.resolve()),
         "complete_catalog": _signature(funding_catalog.DEFAULT_CACHE_PATH),
         "current_funding": _signature(bulk_quotes.FUNDING_CACHE_PATH),
