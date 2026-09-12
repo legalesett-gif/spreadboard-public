@@ -102,6 +102,12 @@ def test_the_funding_lane_can_be_ranked_on_a_realised_window() -> None:
     from spreadboard.server import FUNDING_RANK_TABS
 
     assert [value for value, _ in FUNDING_RANK_TABS] == ["now", "1d", "7d", "30d"]
+    assert [label for _, label in FUNDING_RANK_TABS] == [
+        "Live 24h estimate",
+        "Settled 24h",
+        "Settled 7d",
+        "Settled 30d",
+    ]
 
 
 def test_a_group_with_no_settled_figure_sorts_last(monkeypatch) -> None:

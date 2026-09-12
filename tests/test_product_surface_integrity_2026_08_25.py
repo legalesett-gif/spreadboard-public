@@ -286,17 +286,16 @@ def test_expanded_funding_pair_shows_now_and_exact_settled_windows(monkeypatch) 
 
     html = server.render_funding_pair(route)
 
-    assert "Now est. / settled history" in html
-    assert "Now is projected 24-hour carry" in html
+    assert "Live 24h estimate / settled totals" in html
+    assert "<em>Now est.</em>" in html
     assert "+0.120%" in html
     assert "data-live-funding" in html
-    assert "<em>24h</em>" in html
+    assert "<em>24h settled</em>" in html
     assert "+0.07%" in html
-    assert "<em>7d</em>" in html
+    assert "<em>7d settled</em>" in html
     assert "+0.69%" in html
-    assert "<em>30d</em>" in html
-    assert "30d cadence incomplete." in html
-    assert "<em>30d</em><strong>—</strong>" in html
+    assert "<em>30d settled</em>" in html
+    assert "<em>30d settled</em><strong>—</strong>" in html
 
 
 def test_funding_materialization_keeps_counts_but_only_html_preview() -> None:

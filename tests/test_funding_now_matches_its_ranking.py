@@ -66,6 +66,53 @@ def test_now_child_row_shows_the_current_projection_too() -> None:
     assert "+2.371%" not in html
 
 
+def test_now_child_labels_every_historical_value_as_settled(monkeypatch) -> None:
+    monkeypatch.setattr(
+        server.venue_funding_history,
+        "route_windows",
+        lambda _route: {"1d": 0.11, "7d": 0.72, "30d": 2.31},
+    )
+    monkeypatch.setattr(
+        server.venue_funding_history,
+        "route_windows_last_complete",
+        lambda _route: {},
+    )
+
+    html = server.render_funding_pair(_route())
+
+    assert "Live 24h estimate / settled totals" in html
+    assert "<em>Now est.</em>" in html
+    assert "<em>24h settled</em><strong>+0.11%</strong>" in html
+    assert "<em>7d settled</em><strong>+0.72%</strong>" in html
+    assert "<em>30d settled</em><strong>+2.31%</strong>" in html
+
+
+def test_expired_now_page_window_uses_only_stamped_last_complete_settlement(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        server.venue_funding_history,
+        "route_windows",
+        lambda _route: {"1d": None, "7d": None, "30d": None},
+    )
+    monkeypatch.setattr(
+        server.venue_funding_history,
+        "route_windows_last_complete",
+        lambda _route: {
+            "1d": {"net": 0.42, "asof_ms": 1_788_000_000_000},
+        },
+    )
+
+    html = server.render_funding_pair(_route(funding_projected_24h_pct=9.99))
+
+    assert "<em>24h settled</em><strong>+0.42%</strong>" in html
+    assert "funding-window stale positive" in html
+    assert "as of" in html and "UTC" in html
+    assert "<em>7d settled</em><strong>—</strong>" in html
+    assert "<em>30d settled</em><strong>—</strong>" in html
+    assert "<em>24h settled</em><strong>+9.99%" not in html
+
+
 def test_a_historical_tab_shows_the_exact_window_it_ranked() -> None:
     html = server.render_funding_token_group(_group(), selected_window="7d")
 
@@ -73,7 +120,7 @@ def test_a_historical_tab_shows_the_exact_window_it_ranked() -> None:
     assert "settled 7d" in html
     assert "Settled 7d" in html
     assert "<span>Net 24h</span>" not in html
-    assert "Now projected" in html
+    assert "Live 24h estimate" in html
     assert "+3.301%" in html
     assert "7d settled" in html
 
@@ -122,7 +169,7 @@ def test_the_page_passes_its_selected_window_into_every_row(
 
     assert "Settled 7d" in html
     assert "+9.060%" in html
-    assert "Now projected" in html
+    assert "Live 24h estimate" in html
     assert "+3.301%" in html
     assert "radar routes" in html
     assert "Funding pairs" in html

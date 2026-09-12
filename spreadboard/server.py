@@ -10616,10 +10616,10 @@ def render_signals_page(
 #: How the funding lanes can be ranked: the live rate, or what each window
 #: actually paid.
 FUNDING_RANK_TABS: tuple[tuple[str, str], ...] = (
-    ("now", "Now"),
-    ("1d", "24h total"),
-    ("7d", "7d total"),
-    ("30d", "30d total"),
+    ("now", "Live 24h estimate"),
+    ("1d", "Settled 24h"),
+    ("7d", "Settled 7d"),
+    ("30d", "Settled 30d"),
 )
 
 # The complete funding catalogue can contain thousands of economic pairs on a
@@ -10657,7 +10657,7 @@ def render_funding_windows(
         )
     )
     cells = []
-    current_label = "Now" if compact else "Now projected"
+    current_label = "Now est." if compact else "Live 24h estimate"
     # A precomputed navigation generation can be a few minutes old while its
     # successor ranks the full catalogue. Expanded route evidence must not
     # inherit that lag: Now comes from the latest exact-leg funding sweep and
@@ -10688,26 +10688,52 @@ def render_funding_windows(
         )
     display_labels = {"1d": "24h", "7d": "7d", "30d": "30d"}
     current_windows = venue_funding_history.route_windows(route)
+    last_complete = venue_funding_history.route_windows_last_complete(route)
     for label in ("1d", "7d", "30d"):
         value = _float_or_none(current_windows.get(label))
         if value is None:
+            stale = last_complete.get(label) if isinstance(last_complete, dict) else None
+            stale_value = _float_or_none((stale or {}).get("net"))
+            if stale_value is not None:
+                tone = (
+                    "positive"
+                    if stale_value > 0
+                    else "negative"
+                    if stale_value < 0
+                    else "flat"
+                )
+                stamp = _as_of_label((stale or {}).get("asof_ms"))
+                stale_title = (
+                    f' title="Exact settled total {h(stamp)}; the current rolling window is still refreshing."'
+                    if not compact
+                    else ""
+                )
+                cells.append(
+                    f'<span class="funding-window stale {tone}"{stale_title}>'
+                    f'<em>{display_labels[label]} settled</em>'
+                    f'<strong>{fmt_signed_pct(stale_value, digits=2)}</strong>'
+                    f'<small>{h(stamp)}</small></span>'
+                )
+                continue
             window_title = (coverage.get("window_notes") or {}).get(
                 label, coverage_title
             )
+            title = f' title="{h(window_title)}"' if not compact else ""
             cells.append(
-                f'<span class="funding-window unknown"{f" title=\"{h(window_title)}\"" if not compact else ""}><em>{display_labels[label]}{"" if compact else " settled"}</em><strong>—</strong></span>'
+                f'<span class="funding-window unknown"{title}><em>{display_labels[label]} settled</em><strong>—</strong></span>'
             )
         else:
             tone = "positive" if value > 0 else "negative" if value < 0 else "flat"
             cells.append(
-                f'<span class="funding-window {tone}"><em>{display_labels[label]}{"" if compact else " settled"}</em>'
+                f'<span class="funding-window {tone}"><em>{display_labels[label]} settled</em>'
                 f"<strong>{fmt_signed_pct(value, digits=2)}</strong></span>"
             )
     strip_title = (
         "Now is projected 24-hour carry at the live rate; 24h, 7d and 30d are exact settled totals. "
         + coverage_title
     )
-    return f'<div class="funding-window-strip{" compact" if compact else ""}" title="{h(strip_title)}">{"".join(cells)}</div>'
+    title = "" if compact else f' title="{h(strip_title)}"'
+    return f'<div class="funding-window-strip{" compact" if compact else ""}"{title}>{"".join(cells)}</div>'
 
 
 def funding_rank_value(row: dict[str, Any], selected_window: str = "now") -> float | None:
@@ -11101,12 +11127,16 @@ def render_funding_page(
         )
     }
       </nav>
-      <nav class="funding-window-tabs" aria-label="Rank by">
-        <span>Rank by</span>
+      <nav class="funding-window-tabs" aria-label="Funding period filter">
+        <span>Filter this list by</span>
         {
         "".join(
-            f'<a class="{"active" if value == selected_window else ""}" '
-            f'href="{h(funding_page_href(offset=0, rank=value))}">{h(label)}</a>'
+            '<a class="{}" {}href="{}">{}</a>'.format(
+                "active" if value == selected_window else "",
+                'aria-current="page" ' if value == selected_window else "",
+                h(funding_page_href(offset=0, rank=value)),
+                h(label),
+            )
             for value, label in FUNDING_RANK_TABS
         )
     }
@@ -11276,7 +11306,7 @@ def render_funding_token_group(
         <div><span>{h(metric_label)}</span><strong{funding_live_hook}>{fmt_signed_pct(funding_24h, digits=3)}</strong><em{" data-live-funding-basis" if funding_live_hook else ""}>{h(funding_basis)}</em></div>
         <div><span>Payouts</span><strong data-live-funding-cadence>{h(funding_cadence_pair(best))}</strong></div>
         <div><span>{"Last basis" if historical else "Entry basis" if basis_current else "Basis refreshing"}</span><strong data-live-spread>{fmt_pct(best.get("executable_spread_pct"))}</strong></div>
-        <div class="funding-realised"><span>Funding returns</span>{render_funding_windows(best, best.get("route_key"))}</div>
+        <div class="funding-realised"><span>Live estimate and settled returns</span>{render_funding_windows(best, best.get("route_key"))}</div>
         <div><span>Pairs</span><strong>{h(group.get("route_count") or 0)}</strong></div>
         <span class="funding-chevron" aria-hidden="true">⌄</span>
       </summary>
@@ -11334,7 +11364,7 @@ def render_funding_pair(row: dict[str, Any], *, selected_window: str = "now") ->
       <div><span>{"Last basis / VWAP" if historical else "Basis / VWAP" if basis_current else "Basis refreshing"}</span><strong data-live-spread>{fmt_pct(row.get("executable_spread_pct"))}</strong><em>{fmt_pct(row.get("depth_weighted_spread_pct"))}</em></div>
       <div><span>{"Last opportunity seen" if historical else "Price quote age"}</span><strong>{fmt_age(row.get("radar_last_seen_age_min") if historical else row.get("age_min"))}</strong></div>
       <div class="route-actions">{"" if historical else render_alert_draft_button(row, alert_type="funding", compact=True)}{"" if historical else f'<a href="/pair/{h(board.route_key_url(str(row.get("route_key") or "")))}">Details</a>'}<a href="/charts?route_key={h(board.route_key_url(chart_key))}">Chart</a></div>
-      <div class="funding-pair-returns"><span>Now est. / settled history</span>{render_funding_windows(row, row.get("route_key"), compact=True)}</div>
+      <div class="funding-pair-returns"><span>Live 24h estimate / settled totals</span>{render_funding_windows(row, row.get("route_key"), compact=True)}</div>
     </article>
     """
 
@@ -20226,6 +20256,8 @@ main { max-width: none; margin: 0; padding: 32px 24px 0; }
   background: rgba(255,255,255,0.04); line-height: 1.15; min-width: 0; }
 .funding-window em { font-size: 9px; font-style: normal; opacity: 0.6; letter-spacing: 0.04em; }
 .funding-window strong { font-size: 11px; font-variant-numeric: tabular-nums; }
+.funding-window small { font-size: 8px; color: var(--terminal-muted); white-space: nowrap; }
+.funding-window.stale { border-bottom: 1px dotted var(--terminal-muted); }
 .funding-window.positive strong { color: #4ade80; }
 .funding-window.negative strong { color: #f87171; }
 .funding-window.unknown strong { opacity: 0.45; }

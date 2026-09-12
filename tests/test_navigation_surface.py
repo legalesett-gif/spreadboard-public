@@ -155,9 +155,9 @@ def test_pair_page_has_one_main_landmark(monkeypatch) -> None:
     assert html.count("<main") == 1
     assert '<div class="pair-main">' in html
     assert "Route returns" in html
-    assert "<em>24h</em><strong>+0.12%</strong>" in html
-    assert "<em>7d</em><strong>+0.54%</strong>" in html
-    assert "<em>30d</em><strong>—</strong>" in html
+    assert "<em>24h settled</em><strong>+0.12%</strong>" in html
+    assert "<em>7d settled</em><strong>+0.54%</strong>" in html
+    assert "<em>30d settled</em><strong>—</strong>" in html
     assert demanded == [("Bybit", "ONG/USDT:USDT")]
     assert ".pair-cockpit .route-alert-btn" in server.APP_CSS
     assert ".pair-cockpit .route-alert-btn:hover" in server.APP_CSS
