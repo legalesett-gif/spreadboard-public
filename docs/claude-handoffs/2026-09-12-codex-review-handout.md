@@ -158,6 +158,21 @@ test still failed, which is how the second half surfaced.
 | 30d completeness | 80.4% | **82.0%** |
 | `insufficient_event_coverage` (30d) | 1,346 | **1,185** |
 
+Product-level confirmation, Kucoin legs holding a **complete** 30d window:
+
+| time (UTC) | complete / 683 | |
+|---|---:|---:|
+| 22:28 | 583 | 85.4% |
+| 22:49 | 583 | 85.4% |
+| 22:53 | **633** | **92.7%** |
+| 22:57 | 633 | 92.7% |
+
+Rising monotonically as the refresh cycles through the remaining legs; the
+stragglers still show the pre-fix signature exactly (111/180 events, 18.4d depth)
+and fill in on subsequent passes, so expect this to continue toward the cohort
+that is genuinely younger than 30 days. Worth re-checking on review: if it
+plateaus well below ~97%, something else is also capping those legs.
+
 ### The remaining 30d gap is mostly genuine — please sanity-check this
 
 Classified before the fix: of 1,346, **1,112** had history starting <29 days ago
