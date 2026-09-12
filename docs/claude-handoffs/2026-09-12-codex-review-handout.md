@@ -372,6 +372,20 @@ completeness has not moved off zero.
 
 ### 4.8 Coverage / subscriber journeys — spot checks only
 
+**Your venue retirement is verified effective in live data**, not just in the
+source. Policy reads `excluded_opportunity = ['htx','huobi','ourbit','phemex']`,
+`excluded_funding = ['coinex','phemex']`, and the funding catalogue carries legs
+from exactly 15 venues with **none** of the retired ones present:
+
+```
+Bingx 1226  Mexc 1178  Gate 1007  Bitget 842  Bybit 832  Binance 759
+XT 723  Kucoin Futures 685  Aster 564  OKX 464  Hyperliquid 432
+WhiteBIT 398  BitMart 355  Kraken Futures 284  Coinbase International 150
+```
+
+No Phemex, HTX, Huobi, Ourbit or CoinEx leg survives. Price coverage retention
+for CoinEx was not separately re-verified.
+
 Portfolio rows intact and unmerged: 50 FATCOIN, 49 ANSEM, 48 ESPORTS, 47 OPENAI,
 44 SKHX/SKHYNIX open; 46/45/43 closed. FATCOIN #50 from the ~18:51 task present;
 no DB reversion. **No browser journeys, no alert-delivery test, no UACryptoInvest
