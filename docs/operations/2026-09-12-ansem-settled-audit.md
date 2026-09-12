@@ -102,3 +102,26 @@ over11.2942days. MEXC full30d2.6924% unchanged. Three-route cold check took0.358
 - Strict full30d remains unavailable for shorter history; the separately labelled
   available-period value is now intentionally included in the display/ranking.
   No model, trades, notifications or subscriber accounting enabled.
+
+## Release evidence
+
+Source `8282617` committed/pushed and deployed once to app+collector with the
+discovery guard clear at both boundaries. Source fingerprint `f5be5e7a72b1d7a9`
+matches both containers; health200, restart counters0, OOMfalse. Preserves the
+later Claude documentation commits, including `2e9cae3`. Runtime/test artifacts
+were neither committed nor shipped.
+
+Authenticated steady-state ANSEM API checks for30d/Now/24h/7d returned in
+0.624/0.405/1.030/0.481seconds. Every response contains strict24h0.34770695%,
+7d3.70983312%, strict30dnull, and separate30d-available16.63613333% /440events /
+18.3067days. Funding30d HTML Futures-Spot/Futures-Futures returned200 in4.304 /
+0.420seconds (99/101KB), contained9/7 labelled shorter-period cells and no
+invalid numeric text. New session-expiry notice code present. Both disposable
+audit users/sessions removed; DBquick_check=ok, foreign-key violations0.
+
+The first immediate post-restart Now request timed out at60seconds. One bounded
+retry then passed all checks above. Existing cold-start/catalogue warm-up latency
+is NOT solved by this release. At23:26UTC the last valid navigation generation
+was still the pre-release one; targeted/current API and HTML are updated, but
+publication of the new all-token background ranking still needs its first
+collector generation. No extra restart or unsupervised heavy worker was forced.
