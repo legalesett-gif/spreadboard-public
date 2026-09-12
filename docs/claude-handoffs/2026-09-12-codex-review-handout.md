@@ -91,12 +91,29 @@ retries — quota-bound but progressing. Consequences:
 - **Restore proof: NOT performed.** Restore needs a lock the repack holds
   exclusively.
 
-**Next actions.** When `ps -p 3829220` is gone and `/root/prune_once.log` shows
-`EXIT=0`: confirm 11 snapshots remain; let 00:17:57 UTC and the following run
-complete, requiring `ExecMainStatus=0` twice; then restore the newest snapshot
-into an **isolated** directory and run `PRAGMA integrity_check` and
-`PRAGMA foreign_key_check` on each restored SQLite database. **Never restore over
-production.**
+**This is now automated — nothing to run by hand.** `/root/verify_backup.sh`
+(confirmed alive as **PID 3926997** at 23:19 UTC, logging to
+`/root/backup_verify.log`) is waiting on the repack under `setsid`, and will then:
+list the remaining snapshots, restore the newest into an **isolated**
+`/root/restore-test-<ts>/`, and run `PRAGMA integrity_check` plus
+`PRAGMA foreign_key_check` on every restored SQLite database, printing
+`ALL DATABASES VERIFIED` or naming each failure. It never restores over
+production and never deletes a snapshot.
+
+**Read `/root/backup_verify.log` first on review.** Status at 23:19 UTC: repack
+still running at **3h20m**, 1.2% CPU, purely Google-Drive-quota-throttled
+(`rateLimitExceeded` with successful retries), so it is progressing, not stuck.
+
+**Still to confirm by hand:** two consecutive ordinary timer invocations at
+`ExecMainStatus=0`.
+
+**A deliberate choice you may want to revisit:** I left the timer **active** even
+though the 00:17:57 UTC run will collide with the repack's exclusive lock. With
+`--retry-lock` that run waits and then fails cleanly instead of thrashing, and the
+following run should succeed once the repack is done. Masking the timer would
+have avoided one failed unit, but it would leave backups disabled if nobody
+restored it — a self-healing failure beat a manual state that depends on memory.
+A valid snapshot (`fe52e857`, 18:20 UTC) is retained meanwhile.
 
 *Note for you:* I stopped the timer at ~20:26 to prevent the 00:21 run colliding
 with the mid-repack exclusive lock, and **restarted it after the release**. It is
