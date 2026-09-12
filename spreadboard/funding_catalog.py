@@ -30,6 +30,7 @@ from spreadboard import (
     chart_catalog,
     funding_radar,
     streaming_index,
+    token_metadata,
     tokenized_assets,
     venue_funding_history,
 )
@@ -958,7 +959,8 @@ def _iter_routes(
     payloads: dict[str, dict[str, Any]] | None = None,
 ) -> Iterator[dict[str, Any]]:
     selected_payloads = payloads if payloads is not None else _complete_payloads()
-    wanted_symbol = str(symbol or "").strip().upper()
+    wanted_symbol = token_metadata.resolve_search_symbol(symbol, selected_payloads)
+    symbol = wanted_symbol
     if wanted_symbol and wanted_symbol not in selected_payloads:
         # The catalogue expands the tokens that can reach a visible page, so a
         # token nobody could have ranked into one is absent by design. Opening
@@ -1068,7 +1070,7 @@ def _group(
     route_kinds = sorted({str(route.get("route_kind") or "") for route in rows})
     group = {
         "token": token,
-        "token_name": best.get("token_name"),
+        "token_name": best.get("token_name") or token_metadata.DISPLAY_NAME_OVERRIDES.get(token),
         "href": best.get("href") or f"/token/{token}",
         "coverage_mode": "complete_funding_catalogue",
         "venues": venues,
@@ -1133,7 +1135,8 @@ def page(
             "offset": max(0, int(offset or 0)),
             "limit": max(1, min(500, int(limit or 25))),
         }
-    wanted_symbol = str(symbol or "").strip().upper()
+    wanted_symbol = token_metadata.resolve_search_symbol(symbol, payloads)
+    symbol = wanted_symbol
     exact_symbol_detail = bool(wanted_symbol and wanted_symbol in payloads)
     rows = _iter_routes(
         route_kind=route_kind,

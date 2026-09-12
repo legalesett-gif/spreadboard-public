@@ -57,11 +57,26 @@ PREFERRED_IDS = {
 }
 
 DISPLAY_NAME_OVERRIDES = {
+    "龙虾": "Lobster",
     "AIGENSYN": "Gensyn",
     "SLEEPLESSAI": "Sleepless AI",
     "TSLL": "Direxion Daily TSLA Bull 2X ETF",
     "TSTBSC": "Test Token (BSC)",
 }
+
+
+def resolve_search_symbol(value: str | None, available_tokens: Any) -> str:
+    """Resolve a unique display name for search, never for economic identity.
+
+    An actual ticker always wins over another asset's English nickname.
+    Exchange symbols, route keys and identity registries remain unchanged.
+    """
+    wanted = str(value or "").strip().upper()
+    if wanted in available_tokens:
+        return wanted
+    matches = [token for token, name in DISPLAY_NAME_OVERRIDES.items()
+               if name.upper() == wanted and token in available_tokens]
+    return matches[0] if len(matches) == 1 else wanted
 
 
 def load_token_metadata(path: Path | str = DEFAULT_CACHE_PATH) -> dict[str, dict[str, Any]]:

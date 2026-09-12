@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 import ccxt
 
 from spreadboard import route_taxonomy
+from spreadarb.venue_policy import opportunity_venue_enabled
 from spreadarb.market_status import market_open_for_opportunities, native_market_asset_class, public_market_definition
 
 from spreadarb.api_discovery.attestations import ExecutorAttestationRegistry, route_key
@@ -670,7 +671,8 @@ class CexCcxtSource:
         collect_funding: bool = False,
     ) -> None:
         self.name = name
-        self.venues = dict(venues)
+        self.venues = {venue: adapter for venue, adapter in venues.items()
+                       if opportunity_venue_enabled(venue)}
         self.market_type = market_type
         self.source_kind = source_kind
         self.include_reference_quotes = include_reference_quotes

@@ -135,7 +135,7 @@ def test_demand_tail_keeps_a_rotating_priority_turn(tmp_path, monkeypatch):
     assert rotating[0]['budget_seconds'] == 90
 
 
-@pytest.mark.parametrize('venue', ['CoinEx','Phemex'])
+@pytest.mark.parametrize('venue', ['CoinEx'])
 def test_funding_retirement_preserves_price_coverage_and_rejects_old_payload(venue):
     from spreadarb.venue_policy import funding_venue_enabled, opportunity_payload_enabled
 

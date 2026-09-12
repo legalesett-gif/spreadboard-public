@@ -19,7 +19,7 @@ import os
 import threading
 import time
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from itertools import pairwise
 from pathlib import Path
@@ -972,11 +972,12 @@ def _fetch_outcomes_in_batches(
     deadline: float,
     workers: int | None = None,
 ):
-    """Yield ``(venue, symbol, page_budget, outcome)`` preserving ``items`` order.
+    """Launch oldest-due work first without a slow venue idling the whole pool.
 
-    Results are yielded in the caller's priority order so the existing
-    staleness ordering still decides who gets refreshed when the budget runs
-    out. Only the waiting is shared.
+    Keep the same global and per-venue bounds. Apply completed exact records
+    immediately; a slow request must not prevent unrelated venues progressing.
+    No new requests start after the deadline. Already-started bounded requests
+    are drained so their successfully fetched settlements are not discarded.
     """
 
     # Resolved at call time, not bound as a default: a default argument would
@@ -984,23 +985,29 @@ def _fetch_outcomes_in_batches(
     # that adjusts it.
     workers = max(1, int(workers if workers is not None else FUNDING_HISTORY_FETCH_WORKERS))
     per_venue = max(1, int(FUNDING_HISTORY_PER_VENUE))
-    venue_guards: dict[str, threading.Semaphore] = {}
-
-    def _run(item: tuple[str, str]) -> tuple[tuple[str, str], int, dict[str, Any]]:
-        venue, symbol = item
-        budget = page_budget_for(venue, symbol)
-        guard = venue_guards.setdefault(venue, threading.Semaphore(per_venue))
-        with guard:
-            return item, budget, _fetch_leg_outcome(venue, symbol, budget)
-
+    pending = list(items)
+    active: dict[str, int] = {}
+    in_flight: dict[Any, tuple[str, str, int]] = {}
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for chunk in _venue_diverse_chunks(items, workers, per_venue):
-            if time.monotonic() >= deadline:
-                return
-            futures = [pool.submit(_run, item) for item in chunk]
-            for future in futures:
+        while pending or in_flight:
+            while len(in_flight) < workers and time.monotonic() < deadline:
+                index = next((i for i, item in enumerate(pending)
+                              if active.get(item[0], 0) < per_venue), None)
+                if index is None:
+                    break
+                venue, symbol = pending.pop(index)
+                budget = page_budget_for(venue, symbol)
+                active[venue] = active.get(venue, 0) + 1
+                future = pool.submit(_fetch_leg_outcome, venue, symbol, budget)
+                in_flight[future] = (venue, symbol, budget)
+            if not in_flight:
+                break
+            done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+            for future in done:
+                venue, symbol, budget = in_flight.pop(future)
+                active[venue] -= 1
                 try:
-                    (venue, symbol), budget, outcome = future.result()
+                    outcome = future.result()
                 except Exception:  # noqa: BLE001, S112 - leg misses this sweep.
                     continue
                 yield venue, symbol, budget, outcome
@@ -1154,8 +1161,6 @@ def build(
     for venue, symbol, page_budget, outcome in _fetch_outcomes_in_batches(
         rotated, page_budget_for=_page_budget_for, deadline=deadline
     ):
-        if time.monotonic() >= deadline:
-            break
         attempted += 1
         is_priority = (venue, symbol) in priority_set
         if is_priority:

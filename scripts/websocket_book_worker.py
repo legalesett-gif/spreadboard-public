@@ -26,6 +26,7 @@ import ccxt.pro as ccxtpro  # noqa: E402
 from aiohttp import ClientConnectionResetError  # noqa: E402
 
 from spreadboard.fast_quotes import VENUE_IDS  # noqa: E402
+from spreadarb.venue_policy import opportunity_venue_enabled
 from spreadboard import accounts  # noqa: E402
 from spreadboard.live_book_cache import LiveBookStore  # noqa: E402
 
@@ -609,7 +610,7 @@ def _board_leg_key(route: dict[str, Any], side: str) -> LegKey | None:
     venue = str(route.get(f"{side}_venue") or "")
     market_type = str(route.get(f"{side}_market_type") or "")
     symbol = str(route.get(f"{side}_market_symbol") or "")
-    if venue not in VENUE_IDS or market_type not in {"Spot", "Futures"} or not symbol:
+    if not opportunity_venue_enabled(venue) or venue not in VENUE_IDS or market_type not in {"Spot", "Futures"} or not symbol:
         return None
     return (venue, market_type, symbol)
 
@@ -617,7 +618,7 @@ def _board_leg_key(route: dict[str, Any], side: str) -> LegKey | None:
 def _leg_key(row: dict[str, Any], side: str) -> LegKey | None:
     venue = str(row.get(f"{side}_venue") or "")
     market_type = str(row.get(f"{side}_market_type") or "")
-    if venue not in VENUE_IDS or market_type not in {"Spot", "Futures"}:
+    if not opportunity_venue_enabled(venue) or venue not in VENUE_IDS or market_type not in {"Spot", "Futures"}:
         return None
     notes = row.get("notes") if isinstance(row.get("notes"), dict) else {}
     route_inputs = notes.get("route_inputs") if isinstance(notes.get("route_inputs"), dict) else {}

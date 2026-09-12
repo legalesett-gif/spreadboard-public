@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-EXCLUDED_OPPORTUNITY_VENUES = frozenset({"ourbit", "htx", "huobi"})
+EXCLUDED_OPPORTUNITY_VENUES = frozenset({"ourbit", "htx", "huobi", "phemex"})
 
 
 EXCLUDED_FUNDING_VENUES = frozenset({"coinex", "phemex"})

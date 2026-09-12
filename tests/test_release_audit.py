@@ -1799,8 +1799,9 @@ def test_validated_reference_venues_are_enabled() -> None:
     spot = sources.default_enabled_cex_source().venues
     futures = sources.default_enabled_cex_futures_source().venues
 
-    assert {"HTX", "Phemex", "CoinEx", "WhiteBIT", "BitMart", "XT"} <= set(spot)
-    assert {"HTX", "Phemex", "CoinEx", "WhiteBIT", "BitMart", "XT"} <= set(futures)
+    assert {"CoinEx", "WhiteBIT", "BitMart", "XT"} <= set(spot)
+    assert {"CoinEx", "WhiteBIT", "BitMart", "XT"} <= set(futures)
+    assert not {"HTX", "Phemex"} & (set(spot) | set(futures))
     # Upbit was previously excluded, most likely because Korean venues carry a
     # persistent local premium that is not arbitrageable across capital
     # controls. Re-enabled 2026-08-01 by operator request for venue parity with

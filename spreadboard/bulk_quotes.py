@@ -30,7 +30,7 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 from spreadarb.public_clients import configure_public_market_client
-from spreadarb.venue_policy import funding_venue_enabled
+from spreadarb.venue_policy import funding_venue_enabled, opportunity_venue_enabled
 
 from spreadboard import fair_price, live_book_cache
 from spreadboard.fast_quotes import VENUE_IDS
@@ -662,7 +662,7 @@ def sweep_venue(
     when `fair_price_rows` is given. The tickers are already in hand, so that
     signal costs nothing beyond reading two more fields.
     """
-    if venue in SKIP_VENUES:
+    if venue in SKIP_VENUES or not opportunity_venue_enabled(venue):
         return 0
     if venue == "Aster" and client_factory is None:
         # The native response is complete and materially broader than the CCXT
@@ -828,6 +828,7 @@ def sweep(
         if venues is not None
         else sorted(venue for venue in VENUE_IDS if venue != "Aster")
     )
+    ordered = [venue for venue in ordered if opportunity_venue_enabled(venue)]
     start = _load_cursor(len(ordered))
     rotation = ordered[start:] + ordered[:start]
     position = start

@@ -54,13 +54,44 @@ def test_policy_excludes_only_ourbit_on_either_leg_and_all_product_types(side, k
 def test_discovery_preserves_every_other_existing_venue():
     assert set(sources.default_enabled_cex_source().venues) == {
         "Binance", "Bybit", "Bitget", "OKX", "Gate", "Mexc", "Kucoin", "Bingx",
-        "Coinbase", "Kraken", "HTX", "Phemex", "CoinEx", "WhiteBIT", "BitMart", "XT", "Upbit",
+        "Coinbase", "Kraken", "CoinEx", "WhiteBIT", "BitMart", "XT", "Upbit",
     }
     assert set(sources.default_enabled_cex_futures_source().venues) == {
         "Binance", "Bybit", "Bitget", "OKX", "Gate", "Mexc", "Kucoin Futures", "Bingx",
-        "Kraken Futures", "Coinbase International", "HTX", "Phemex", "CoinEx", "WhiteBIT",
+        "Kraken Futures", "Coinbase International", "CoinEx", "WhiteBIT",
         "BitMart", "XT", "Lighter",
     }
+
+
+@pytest.mark.parametrize("venue", ["Phemex", "HTX", "huobi", " PHEMEX "])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_retired_venues_cannot_be_collected_streamed_or_restored(venue, side, monkeypatch):
+    from scripts import websocket_book_worker
+
+    retired = route(**{side: venue})
+    assert not venue_policy.opportunity_route_enabled(retired)
+    assert not venue_policy.funding_route_enabled(retired)
+    assert not venue_policy.opportunity_payload_enabled({"rows": [retired]})
+    source = sources.CexCcxtSource(venues={venue: "unused", "Gate": "gateio"})
+    assert source.venues == {"Gate": "gateio"}
+    assert websocket_book_worker._board_leg_key(retired, side) is None
+    assert websocket_book_worker._leg_key(retired, side) is None
+    def forbidden(*args, **kwargs):
+        raise AssertionError("retired public venue made a provider call")
+    monkeypatch.setattr(bulk_quotes, "_client", forbidden)
+    assert bulk_quotes.sweep_venue(venue, store=SimpleNamespace()) == 0
+
+
+@pytest.mark.parametrize("venue", ["Phemex", "HTX"])
+def test_retired_leader_is_removed_before_ranking(venue, monkeypatch):
+    kept = route("KEPT", long="Mexc", short="Gate", spread=1.0)
+    retired = route("HIGH", long=venue, spread=50.0)
+    universe = warm_query_projection.LiveRouteUniverse()
+    universe.install({r["route_key"]: r for r in [retired, kept]})
+    monkeypatch.setattr(warm_query_projection, "LIVE_UNIVERSE", universe)
+    monkeypatch.setattr(api_spreads, "attach_funding_history", lambda _: None)
+    result = warm_query_projection.project({}, template={"ok": True}, limit=1, offset=0)
+    assert [g["token"] for g in result["groups"]] == ["KEPT"]
 
 
 def test_catalogue_read_removes_old_ourbit_markets_without_mutating_other_markets(tmp_path, monkeypatch):
