@@ -28,13 +28,15 @@ around the refusal.) I scanned `4959b5a..HEAD` for credential patterns — the o
 matches are the words "secret"/"token" appearing in prose inside these handoff
 documents. No keys.
 
-### Production state at 22:30 UTC
+### Production state at 23:50 UTC
 
 | | |
 |---|---|
-| Marker `/opt/spreadboard/app/.deployed_revision` | `f898e78` (I set it by hand — see §4.1) |
-| `app-app-1`, `app-collector-1` | started 2026-09-12T22:16:04Z, both `healthy`, restarts 0 |
-| `https://spreadarbitrage.ink/api/health` | 200 in 0.084s |
+| Marker `/opt/spreadboard/app/.deployed_revision` | **`8282617`** — your 23:22:34 release; I have **not** deployed since |
+| `app-app-1`, `app-collector-1` | started 2026-09-12T23:22:34Z, both `healthy` |
+| My Kucoin fix live under `8282617` | `BACKWARD_PAGING_VENUES` contains `Kucoin Futures` — verified in the collector |
+| My backup fix live under `8282617` | `--retry-lock` present in the host script — verified |
+| `https://spreadarbitrage.ink/api/health` | 200 in 0.220s |
 | Phemex retirement | **live** (`EXCLUDED_OPPORTUNITY_VENUES` includes `phemex`) — your release, intact |
 | Backup timer | `active`, next **Sun 2026-09-13 00:17:57 UTC** |
 
@@ -334,15 +336,33 @@ Observer PID 2617599 (`--hours 49`) left running; no duplicate started. Samples:
 start after the final release. Memory limits **unchanged**; the proposed
 3,072/3,584/512 reduction stays uncertified — I produced no headroom evidence.
 
-### 4.6 Affiliates — verified, nothing built
+### 4.6 Affiliates — audited against the code; two gaps flagged
 
-`affiliate_partners`, `affiliate_clicks`, `affiliate_attributions`,
-`affiliate_commissions`, `affiliate_payout_batches` — **all 0 rows**, matching the
-17:22 check. Onboarding pack, commission-basis audit and the
-$149→$119.20→$59.60 worked example were **not** produced. No influencer record,
-no email.
+All five tables **0 rows**, matching the 17:22 check. Nothing was rebuilt — the
+pack already existed (`docs/affiliate-partner-agreement-draft.md`,
+`docs/affiliate/affiliate-outreach-email.md`, plus a built .docx/.pdf).
 
-### 4.7 ML — not run
+Full audit written to **`docs/affiliate/2026-09-13-commission-basis-verification.md`**.
+Headlines: the commission base is the **collected** amount
+(`base = max(0, list - discount)`), so $149 → buyer $119.20 / partner **$59.60**,
+renewal $149 → **$74.50** — computed by calling the real code, and the agreement
+draft §3.1/§4.1/§5.2 already matches it. Idempotency holds via
+`affiliate_commissions.invoice_id NOT NULL UNIQUE` + `INSERT OR IGNORE`; the
+discount is first-month-only with open-invoice reservation; attribution is
+first-touch and durable.
+
+**Two gaps flagged, deliberately NOT changed** (they touch earned liabilities):
+no self-referral guard in `attach_registration`, and `void_commission` refuses
+anything past `pending`, so a refund after payout has no reversal path. Neither is
+exploitable today — no partners, no commissions.
+
+**Owner input still required:** Provider legal name + registered address (the
+draft's `[FULL LEGAL NAME]` / `[REGISTERED ADDRESS]`), and from the influencer a
+USDT wallet **with network** — payouts are Arbitrum One only. Note the
+"always USDT" rule is an *affiliate payout* policy; checkout legitimately accepts
+USDC and USDT and should not be narrowed. No email sent, no partner created.
+
+### 4.7 ML — measured; one gate can never clear by waiting
 
 **Now run** — load had fallen to 3.83 (from 7.32), so I ran it read-only at
 23:28 UTC. Exit 0; site health immediately after was **200 in 0.220s**, load
