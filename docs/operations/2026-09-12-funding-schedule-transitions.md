@@ -22,6 +22,10 @@ Transition/missing-payment/expiry/cache/native-metadata/journal regression matri
 
 Fresh native Aster history replay with new code preserves gross settled30d totals: ESPORTS8.562355%, SIREN6.654209%, 龙虾11.023827%. Figures are dated observations, not projected returns or executable profit.
 
+Post-deploy publication:166 legs processed with cadence version2; legacy mixed windows pending535→376 (48/198/130 for1d/7d/30d). Live Lobster30d API200 in6.55s,20 routes,11.012251% after old hourly settlements rolled out. SIREN Funding HTML200 in3.92s,133163 bytes with settled labels. First SIREN7d API timed out35s while warming; startup latency remains open. Disposable audit users/sessions removed.
+
+One bounded steady-state SIREN7d retry passed in0.56s,32 routes,1.975% gross settled. Stop repeated polling; leave normal collection running. This does not erase the first-request timeout or certify global coverage.
+
 ## Limitations and next checks
 
 Observed sustained event spacing is not the same as an exchange-provided historical schedule version. A provider that systematically omits events can imitate a different schedule; this cannot be certified away with local tests. Maintain source provenance, explicit gaps and direct reconciliation. No claim of universal all-venue historical effective-time proof. A very recent ambiguous transition can temporarily remain unavailable pending confirming events/full history. Broader historical coverage and legacy filter work from the previous release remain open.
