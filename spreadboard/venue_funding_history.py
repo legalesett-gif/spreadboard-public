@@ -72,7 +72,7 @@ def _recorded_completeness_failure(detail: dict[str, Any]) -> str | None:
                 return "insufficient_event_coverage"
         if detail.get("max_gap_hours") is not None:
             gap = float(detail["max_gap_hours"])
-            interval = float(detail.get("inferred_interval_hours") or 0)
+            interval = float(detail.get("max_expected_interval_hours") or detail.get("inferred_interval_hours") or 0)
             if not math.isfinite(gap) or not math.isfinite(interval) or interval <= 0:
                 return "settlement_cadence_unresolved"
             if gap > interval * MAX_INTERNAL_GAP_INTERVALS:
@@ -150,7 +150,8 @@ def _current_leg_windows(
 
 
 def realised_window_details(
-    entries: list[dict[str, Any]], *, now_ms: int | None = None
+    entries: list[dict[str, Any]], *, now_ms: int | None = None,
+    source_range: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate and sum exact settlements for trailing 1d/7d/30d windows.
 
@@ -228,6 +229,22 @@ def realised_window_details(
             and end_gap <= interval_ms * MAX_BOUNDARY_INTERVALS
             and (max_gap is None or max_gap <= interval_ms * MAX_INTERNAL_GAP_INTERVALS)
         )
+        completeness_basis = "inferred_single_cadence"
+        max_expected_interval_hours = None
+        # Aster's bounded, untruncated endpoint enumerates all payments in an
+        # explicit range. A single median/percentile cadence cannot validate
+        # its 1h -> 4h changes: 680 actual payments need not be 720 payments.
+        # Require both exhaustive source evidence and sustained cadence runs;
+        # a lone missing payment or an unbounded/partial page cannot pass.
+        if not complete and source_range and points:
+            mixed = _exhaustive_cadence_evidence(stamped, since, now, source_range)
+            if mixed is not None:
+                complete = True
+                completeness_basis = "exhaustive_provider_range_with_cadence_runs"
+                interval_ms, max_interval_ms = mixed
+                max_expected_interval_hours = max_interval_ms / 3_600_000
+                expected = len(points)
+                coverage_pct = 100.0
         if complete:
             incomplete_reason = None
         elif not points:
@@ -246,6 +263,8 @@ def realised_window_details(
             output[label] = sum(rate for _timestamp, rate in points) * 100.0
         windows[label] = {
             "complete": complete,
+            "completeness_basis": completeness_basis,
+            "max_expected_interval_hours": max_expected_interval_hours,
             "incomplete_reason": incomplete_reason,
             "event_count": len(points),
             "expected_event_count": expected,
@@ -267,6 +286,55 @@ def realised_window_details(
         "discarded_future_count": discarded_future,
         "discarded_duplicate_count": discarded_duplicates,
     }
+
+
+def _exhaustive_cadence_evidence(stamped, since, now, proof):
+    """Validate mixed schedules only inside an exhaustively returned range."""
+    if proof.get("method") != "aster_bounded_range_v1":
+        return None
+    if int(proof.get("start_ms") or now) > since or int(proof.get("end_ms") or 0) < now:
+        return None
+    if len(stamped) != int(proof.get("event_count") or 0) or len(stamped) < 4:
+        return None
+    gaps = [right[0] - left[0] for left, right in pairwise(stamped)]
+    periods = []
+    for gap in gaps:
+        candidates = [hours * 3_600_000 for hours in range(1, 9)
+                      if abs(gap - hours * 3_600_000) <= 15_000]
+        if len(candidates) != 1:
+            return None
+        periods.append(candidates[0])
+    runs = []
+    for period in periods:
+        if runs and runs[-1][0] == period:
+            runs[-1][1] += 1
+        else:
+            runs.append([period, 1])
+    if len(runs) < 2:
+        return None
+    cursor = 0
+    standard = {hours * 3_600_000 for hours in (1, 2, 4, 8)}
+    for index, (period, count) in enumerate(runs):
+        if count >= 3 and period in standard:
+            cursor += count
+            continue
+        # A scheduled 1h -> 4h transition can have a 2h/3h bridge to the
+        # next four-hour UTC boundary. It is not a repeated new schedule.
+        # Require different sustained regimes on both sides and exact new
+        # boundary alignment. An isolated 2h gap inside 1h data still fails.
+        if not (count == 1 and 0 < index < len(runs) - 1):
+            return None
+        before, after = runs[index - 1], runs[index + 1]
+        boundary = stamped[cursor + 1][0] % after[0]
+        if not (before[1] >= 3 and after[1] >= 3 and before[0] != after[0]
+                and before[0] in standard and after[0] in standard
+                and period < max(before[0], after[0])
+                and min(boundary, after[0] - boundary) <= 15_000):
+            return None
+        cursor += count
+    if stamped[0][0] > since or now - stamped[-1][0] >= periods[-1]:
+        return None
+    return periods[-1], max(periods)
 
 
 def realised_windows(
@@ -395,7 +463,37 @@ def _ourbit_history(symbol: str, *, days: int, max_pages: int) -> dict[str, Any]
 #: Venues CCXT cannot give settled history for, each with the reader for its own
 #: endpoint. A venue earns a place here when it carries board rows that would
 #: otherwise show no funding at all.
+def _aster_history(symbol: str, *, days: int, max_pages: int) -> dict[str, Any]:
+    """Exhaustive bounded public history; no inference that a full page is all."""
+    from urllib.parse import urlencode
+
+    del max_pages
+    now = int(time.time() * 1000)
+    start = now - (days + 1) * 86_400_000
+    native = symbol.split(":")[0].replace("/", "")
+    try:
+        payload = _fetch_json("https://fapi.asterdex.com/fapi/v1/fundingRate?" + urlencode(
+            {"symbol": native, "startTime": start, "endTime": now, "limit": 1000}
+        ))
+        if not isinstance(payload, list) or len(payload) >= 1000:
+            return {"status": "api_error", "entries": [], "error_type": "UnprovenAsterRange"}
+        entries = [{"timestamp": int(row["fundingTime"]), "fundingRate": float(row["fundingRate"])}
+                   for row in payload if row.get("symbol") == native]
+        if len(entries) != len(payload) or any(not math.isfinite(row["fundingRate"]) or
+                not start <= row["timestamp"] <= now for row in entries):
+            return {"status": "api_error", "entries": [], "error_type": "InvalidAsterRange"}
+        timestamps = [row["timestamp"] for row in entries]
+        if timestamps != sorted(set(timestamps)):
+            return {"status": "api_error", "entries": [], "error_type": "AmbiguousAsterRange"}
+        return {"status": "ok" if entries else "no_history_rows", "entries": entries, "pages": 1,
+                "source_range": {"method": "aster_bounded_range_v1", "start_ms": start,
+                                 "end_ms": now, "event_count": len(entries)}}
+    except Exception as exc:  # noqa: BLE001 - one public provider cannot stop other venues.
+        return {"status": "api_error", "entries": [], "error_type": type(exc).__name__}
+
+
 NATIVE_HISTORY = {
+    "Aster": _aster_history,
     "BitMart": _bitmart_history,
     "Ourbit": _ourbit_history,
 }
@@ -596,7 +694,7 @@ def leg_history_outcome(
     """Return rows plus a truthful, retry-aware source classification."""
     if not opportunity_market_enabled(venue, "Futures", symbol):
         return {"status": "symbol_not_indexed", "entries": []}
-    if venue in NATIVE_HISTORY:
+    if venue in NATIVE_HISTORY and (venue != "Aster" or client_factory is None):
         outcome = _native_leg_history_outcome(
             venue, symbol, days=days, max_pages=max_pages
         )
@@ -607,9 +705,11 @@ def leg_history_outcome(
 
             store_path = Path(event_store_path) if event_store_path is not None else RUNTIME_DIR / "funding_settlements.sqlite3"
             try:
-                outcome["entries"] = settlement_store.merge(
+                retained = settlement_store.merge(
                     store_path, venue, symbol, outcome["entries"], int(time.time() * 1000)
                 )
+                if not outcome.get("source_range"):
+                    outcome["entries"] = retained
             except Exception as exc:  # noqa: BLE001 - preserve truthful storage failure.
                 return {"status": "api_error", "entries": [], "error_type": type(exc).__name__}
         if outcome.get("status") == "ok" and not outcome.get("entries"):
@@ -1169,7 +1269,11 @@ def build(
         entries = list(outcome.get("entries") or [])
         outcome_status = str(outcome.get("status") or "api_error")
         if entries:
-            details = realised_window_details(entries)
+            source_range = outcome.get("source_range")
+            details = realised_window_details(
+                entries, now_ms=source_range.get("end_ms") if source_range else None,
+                source_range=source_range,
+            )
             windows[key] = details["windows"]
             leg_updated_at[key] = refreshed_at
             leg_status[key] = {
