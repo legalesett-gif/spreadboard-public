@@ -270,10 +270,25 @@ no email.
 
 ### 4.7 ML — not run
 
-`scripts/research_ml_readiness.py` deliberately not executed: it is
-resource-heavy and a 27.5 GiB repack was saturating the backup path. No gate
-weakened, nothing trained. Last known blocker (exact lifecycle-cost completeness
-0% vs required 80%) unchanged.
+`scripts/research_ml_readiness.py` deliberately **not executed**, with measured
+justification rather than caution: at 22:33 UTC the host showed
+`load average: 7.32, 6.35, 5.73` on 4 vCPU with 203 MB free (2,530 MB
+available). The repack was consuming only 1.3% CPU, so that load is the collector
+working after the 22:16 restart. The handoff says heavy read-only audits must not
+compete with backup/finalisation, and this is exactly that condition.
+
+No gate weakened, nothing trained, no labels fabricated. Last known blocker
+(exact lifecycle-cost completeness 0% against a required 80%) is unchanged by
+anything in this session.
+
+**Next action** — run when load is below ~4 and no backup is active:
+
+```bash
+ssh -i ~/.ssh/spreadboard_digitalocean root@178.128.126.204 \
+  'docker exec app-app-1 /app/.venv/bin/python /app/scripts/research_ml_readiness.py'
+```
+
+Refresh the worker and schema/version first, and exclude all 5,832 v4 rows.
 
 ### 4.8 Coverage / subscriber journeys — spot checks only
 
