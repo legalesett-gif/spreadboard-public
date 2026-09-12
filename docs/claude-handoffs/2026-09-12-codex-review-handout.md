@@ -173,6 +173,38 @@ fixable venue.
 
 ---
 
+## 3a. Rollover recovery has a measured bound — and the "problem" is normal
+
+Task A asked for measured rollover recovery with an explicit acceptable bound,
+without running a global rebuild. I ran none. Extracted from the 679 funding
+samples in the existing soak series (post-warmup, i.e. after the run first
+reached overdue=0):
+
+| | |
+|---|---:|
+| Spells with 30d overdue > 0 | ~30, one per hour |
+| Typical recovery | **0.17 – 0.50 h** |
+| **Worst case recovery** | **1.33 h** |
+| Spells that failed to recover | **0** |
+| Final state | 30d coverage **84.95%**, overdue **0/0/0** |
+
+The shape is unambiguous: overdue jumps at the top of almost every hour (`XX:01`)
+as rolling windows expire, then returns to zero within ~20 minutes. Deeper spikes
+(peak overdue 4,097–7,499) line up with discovery generation changes and still
+recovered inside 0.92h.
+
+**This reframes the handoff's premise.** The "recurring expiry/recovery problem"
+is ordinary bounded rollover, not a defect. The alarming 19:04 UTC reading
+(88.74 / 85.04 / 73.03%, overdue 766 / 849 / 663) was sampled **three minutes
+after the 19:01 expiry spike** — mid-recovery. Compare the same metrics at 22:40:
+**96.89 / 95.16 / 84.95%, overdue 0 / 0 / 0**, with
+`current_window_catch_up_complete: true` and `deep_history_pending_leg_count: 0`.
+
+Proposed acceptance bound for review: **30d overdue must return to 0 within 2h of
+any expiry spike**, which the measured 1.33h worst case satisfies. Sampling
+completeness within ~20 minutes of the hour boundary will always look degraded
+and should not be treated as a fault.
+
 ## 4. Outstanding work, with next actions
 
 ### 4.1 `.deployed_revision` is written by nothing (confirmed)
