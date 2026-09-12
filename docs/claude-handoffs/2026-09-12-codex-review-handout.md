@@ -159,9 +159,17 @@ events missing (retryable). Of the 468 `no_window_detail`: 299 `no_history_rows`
 **So genuine retryable lag was ~255 legs (2.6%), and 30d completeness has a real
 ceiling well under 100%.** Do not tune toward 100%.
 
-**Other venues to check with the same method I used** (request a page, then
-re-request with `to/until = oldest-1`; if older rows come back, our cursor is
-wrong): every venue in the generic branch. I only proved Kucoin.
+**I then swept every other venue** with the same method (request a page, then
+re-request with `to/until = oldest-1`; if older rows come back, the cursor was
+ours to send). After the fix all 15 venues show a median history depth of
+29.9–30.0d except **BitMart at 25.8d** (96 legs), so I checked BitMart directly:
+`end_time`, `endTime`, `before` and `to` all return the identical newest 100
+rows. BitMart genuinely offers no backward pagination, exactly as the existing
+comment in `_bitmart_history` says. At its 8h cadence 100 rows is 33.3 days, so
+30d is covered; the 25.8d median is sub-8h-cadence markets, which only fill in by
+accumulating successive reads — already what the code does. **No fix available
+and none needed; correctly classified as unavailable.** Kucoin was the only
+fixable venue.
 
 ---
 
@@ -280,6 +288,8 @@ delete after review: `/root/prune_once.sh`, `/root/prune_once.log`, and probes
 1. That the 30d ceiling is genuinely <100% because 1,112 markets are younger than
    30 days — I may have misclassified some as young when they are backfill gaps,
    exactly as I initially did for Kucoin.
-2. Whether other generic-branch venues have the same unsent-cursor problem.
+2. ~~Whether other generic-branch venues have the same unsent-cursor problem.~~
+   **Checked and closed** — see §3: Kucoin was the only one; BitMart's shortfall
+   is a genuine venue limit.
 3. Whether suppressing retention failure separately from snapshot success is
    wanted, or whether loud failure is preferred (I left it loud).
