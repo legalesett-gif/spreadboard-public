@@ -18,7 +18,7 @@ Fresh production on source61448a7 was healthy. Aster's public `fundingInfo` repo
 
 ## Verification
 
-Transition/missing-payment/expiry/cache/native-metadata/journal regression matrix added. Focused runs133,66 and44 tests passed; Ruff0 new (500 baseline). Full suite and production deployment pending at initial document creation.
+Transition/missing-payment/expiry/cache/native-metadata/journal regression matrix added. Full suite2969 passed;143 final focused tests passed; Ruff0 new (500 baseline). Source34458f2 deployed app+collector, matching19115970ac1878b5 digests, health200, zero restart counters/OOM. Deployed4h→1h reproduction reports1h tail and rejects missing hourly payment. Live schedule journal initialized with0 observed changes.
 
 Fresh native Aster history replay with new code preserves gross settled30d totals: ESPORTS8.562355%, SIREN6.654209%, 龙虾11.023827%. Figures are dated observations, not projected returns or executable profit.
 
