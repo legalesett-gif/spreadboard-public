@@ -22,7 +22,7 @@ def proof(rows):
 
 def test_exhaustive_mixed_schedule_keeps_actual_30_day_payments():
     rows = events()
-    assert history.realised_window_details(rows, now_ms=NOW)["windows"]["30d"] is None
+    assert history.realised_window_details(rows, now_ms=NOW)["window_details"]["30d"]["completeness_basis"] == "observed_segmented_cadence"
     result = history.realised_window_details(rows, now_ms=NOW, source_range=proof(rows))
     expected = sum(r["fundingRate"] for r in rows if NOW - 30 * 24 * HOUR < r["timestamp"] <= NOW) * 100
     assert result["windows"]["30d"] == expected

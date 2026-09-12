@@ -70,6 +70,8 @@ def _recorded_completeness_failure(detail: dict[str, Any]) -> str | None:
                 return "settlement_cadence_unresolved"
             if count < expected:
                 return "insufficient_event_coverage"
+            if count > expected and detail.get("cadence_validation_version") != 2:
+                return "mixed_cadence_revalidation_required"
         if detail.get("max_gap_hours") is not None:
             gap = float(detail["max_gap_hours"])
             interval = float(detail.get("max_expected_interval_hours") or detail.get("inferred_interval_hours") or 0)
@@ -123,7 +125,7 @@ def _current_leg_windows(
         value = source.get(label)
         expiry = _window_expiry_ms(status, label)
         detail = ((status or {}).get("window_details") or {}).get(label) or {}
-        if live_leg and expiry is not None:
+        if live_leg and not live_leg.get("interval_assumed") and expiry is not None:
             try:
                 live_next_ms = int(live_leg["next_funding_ts_us"]) // 1000
                 live_interval_ms = int(float(live_leg["interval_hours"]) * 3_600_000)
@@ -137,7 +139,22 @@ def _current_leg_windows(
                 # otherwise it expires at the earlier of both schedules.
                 if live_interval_ms > 0 and live_next_ms > exact_latest_ms:
                     last_scheduled_ms = live_next_ms - live_interval_ms
-                    if exact_latest_ms < last_scheduled_ms:
+                    proof = (status or {}).get("source_range") or {}
+                    # A slower published schedule may extend the next due
+                    # time only after an exhaustive read crossed the old due
+                    # time and proved there was no omitted payment. Merely
+                    # seeing a larger current interval is not sufficient.
+                    try:
+                        checked_past_due = (proof.get("method") == "aster_bounded_range_v1"
+                                            and expiry <= int(proof["end_ms"]) <= now_ms)
+                    except (KeyError, TypeError, ValueError, OverflowError):
+                        checked_past_due = False
+                    if checked_past_due and last_scheduled_ms <= exact_latest_ms:
+                        expiry = live_next_ms
+                        if detail.get("earliest_event_at"):
+                            expiry = min(expiry, int(detail["earliest_event_at"]) +
+                                         int(label.removesuffix("d")) * 86_400_000)
+                    elif exact_latest_ms < last_scheduled_ms:
                         expiry = min(expiry, last_scheduled_ms)
                     else:
                         expiry = min(expiry, live_next_ms)
@@ -193,10 +210,9 @@ def realised_window_details(
             for previous, current in pairwise(points)
             if current[0] > previous[0]
         ]
-        # Funding cadence can tighten temporarily (for example 4h -> 2h) for
-        # volatile contracts. The 90th-percentile ordinary gap represents the
-        # slow schedule and avoids declaring a complete mixed-cadence series
-        # incomplete merely because it also paid more frequently.
+        # A slow whole-window percentile is only a diagnostic baseline.
+        # Mixed histories below must validate every cadence run independently;
+        # extra hourly rows cannot compensate for a missing hourly payment.
         ordered_diffs = sorted(diffs)
         interval_ms = (
             int(ordered_diffs[min(len(ordered_diffs) - 1, math.ceil(len(ordered_diffs) * 0.9) - 1)])
@@ -231,20 +247,31 @@ def realised_window_details(
         )
         completeness_basis = "inferred_single_cadence"
         max_expected_interval_hours = None
-        # Aster's bounded, untruncated endpoint enumerates all payments in an
-        # explicit range. A single median/percentile cadence cannot validate
-        # its 1h -> 4h changes: 680 actual payments need not be 720 payments.
-        # Require both exhaustive source evidence and sustained cadence runs;
-        # a lone missing payment or an unbounded/partial page cannot pass.
-        if not complete and source_range and points:
-            mixed = _exhaustive_cadence_evidence(stamped, since, now, source_range)
+        cadence_segments = []
+        # Include a small predecessor context to verify the old boundary and
+        # identify the first regime without letting unrelated older gaps spoil
+        # an otherwise complete short window.
+        context = [point for point in stamped if point[0] <= since][-4:] + points
+        from spreadboard import funding_interval
+
+        periods = {funding_interval.normalise((b[0] - a[0]) / 3_600_000)
+                   for a, b in pairwise(context)}
+        if len(periods) > 1:
+            mixed = _cadence_evidence(context, since, now, source_range, len(stamped))
+            complete = False
             if mixed is not None:
                 complete = True
-                completeness_basis = "exhaustive_provider_range_with_cadence_runs"
-                interval_ms, max_interval_ms = mixed
+                completeness_basis = ("exhaustive_provider_range_with_cadence_runs"
+                                      if source_range else "observed_segmented_cadence")
+                interval_ms, max_interval_ms, cadence_segments = mixed
                 max_expected_interval_hours = max_interval_ms / 3_600_000
                 expected = len(points)
                 coverage_pct = 100.0
+        elif diffs:
+            # Expiry follows the tail, never the slow percentile of the past.
+            tail = funding_interval.normalise(diffs[-1] / 3_600_000)
+            if tail:
+                interval_ms = int(tail * 3_600_000)
         if complete:
             incomplete_reason = None
         elif not points:
@@ -263,6 +290,8 @@ def realised_window_details(
             output[label] = sum(rate for _timestamp, rate in points) * 100.0
         windows[label] = {
             "complete": complete,
+            "cadence_validation_version": 2,
+            "cadence_segments": cadence_segments,
             "completeness_basis": completeness_basis,
             "max_expected_interval_hours": max_expected_interval_hours,
             "incomplete_reason": incomplete_reason,
@@ -288,18 +317,30 @@ def realised_window_details(
     }
 
 
-def _exhaustive_cadence_evidence(stamped, since, now, proof):
-    """Validate mixed schedules only inside an exhaustively returned range."""
-    if proof.get("method") != "aster_bounded_range_v1":
-        return None
-    if int(proof.get("start_ms") or now) > since or int(proof.get("end_ms") or 0) < now:
-        return None
-    if len(stamped) != int(proof.get("event_count") or 0) or len(stamped) < 4:
+def _cadence_evidence(stamped, since, now, proof, source_count):
+    """Observed regimes are not exchange-announced effective-time proof.
+
+    Require sustained runs in BOTH directions and check each gap. Transition
+    bridges additionally need an exhaustive native response. Never label a
+    missing payment as a new one-event regime.
+    """
+    exhaustive = False
+    if proof:
+        try:
+            exhaustive = (proof.get("method") == "aster_bounded_range_v1"
+                          and int(proof["start_ms"]) <= since
+                          and int(proof["end_ms"]) >= now
+                          and source_count == int(proof["event_count"]))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if not exhaustive:
+            return None
+    if len(stamped) < 4:
         return None
     gaps = [right[0] - left[0] for left, right in pairwise(stamped)]
     periods = []
     for gap in gaps:
-        candidates = [hours * 3_600_000 for hours in range(1, 9)
+        candidates = [hours * 3_600_000 for hours in range(1, 13)
                       if abs(gap - hours * 3_600_000) <= 15_000]
         if len(candidates) != 1:
             return None
@@ -313,16 +354,21 @@ def _exhaustive_cadence_evidence(stamped, since, now, proof):
     if len(runs) < 2:
         return None
     cursor = 0
-    standard = {hours * 3_600_000 for hours in (1, 2, 4, 8)}
+    standard = {hours * 3_600_000 for hours in (1, 2, 4, 6, 8, 12)}
+    segments = []
     for index, (period, count) in enumerate(runs):
         if count >= 3 and period in standard:
+            segments.append({"interval_hours": period / 3_600_000,
+                             "from_event_at": stamped[cursor][0],
+                             "through_event_at": stamped[cursor + count][0],
+                             "observed_gaps": count})
             cursor += count
             continue
         # A scheduled 1h -> 4h transition can have a 2h/3h bridge to the
         # next four-hour UTC boundary. It is not a repeated new schedule.
         # Require different sustained regimes on both sides and exact new
         # boundary alignment. An isolated 2h gap inside 1h data still fails.
-        if not (count == 1 and 0 < index < len(runs) - 1):
+        if not (exhaustive and count == 1 and 0 < index < len(runs) - 1):
             return None
         before, after = runs[index - 1], runs[index + 1]
         boundary = stamped[cursor + 1][0] % after[0]
@@ -332,9 +378,9 @@ def _exhaustive_cadence_evidence(stamped, since, now, proof):
                 and min(boundary, after[0] - boundary) <= 15_000):
             return None
         cursor += count
-    if stamped[0][0] > since or now - stamped[-1][0] >= periods[-1]:
+    if stamped[0][0] - since > periods[0] or now - stamped[-1][0] >= periods[-1]:
         return None
-    return periods[-1], max(periods)
+    return periods[-1], max(periods), segments
 
 
 def realised_windows(
@@ -950,6 +996,9 @@ def _priority_refresh_due(
             return True
     if outcome != "ok":
         return False
+    if any(_recorded_completeness_failure(detail) for detail in
+           ((status or {}).get("window_details") or {}).values() if detail.get("complete")):
+        return True
     if live_leg:
         # The public reader can expire a total before the old inferred
         # cadence when a venue switches to more frequent settlements. Queue
@@ -1294,6 +1343,7 @@ def build(
                 "oldest_event_at": details["oldest_event_at"],
                 "latest_event_at": details["latest_event_at"],
                 "window_details": details["window_details"],
+                "source_range": source_range,
                 "discarded_invalid_count": details["discarded_invalid_count"],
                 "discarded_future_count": details["discarded_future_count"],
                 "discarded_duplicate_count": details["discarded_duplicate_count"],
@@ -1312,6 +1362,7 @@ def build(
                         "oldest_event_at",
                         "latest_event_at",
                         "window_details",
+                        "source_range",
                         "discarded_invalid_count",
                         "discarded_future_count",
                         "discarded_duplicate_count",
@@ -1647,6 +1698,7 @@ def route_history_status(route: dict[str, Any]) -> dict[str, Any]:
         "latest_settlement_too_old": "has not exposed a recent enough settlement",
         "internal_settlement_gap": "contains a gap larger than the venue's ordinary funding cadence",
         "settlement_refresh_overdue": "is awaiting the next exact settlement refresh",
+        "mixed_cadence_revalidation_required": "is rechecking each settlement interval after a schedule change",
     }
     for label in ("1d", "7d", "30d"):
         gaps: list[str] = []
@@ -1737,8 +1789,10 @@ def route_windows_last_complete(
             sides[side] = {label: 0.0 for label in (f"{d}d" for d in WINDOW_DAYS)}
             continue
         key = f"{venue}|{route.get(f'{side}_market_symbol')}"
-        sides[side] = legs.get(key)
         detail = ((status.get(key) or {}).get("window_details") or {})
+        sides[side] = {label: value if (detail.get(label) or {}).get("complete")
+                       and not _recorded_completeness_failure(detail[label]) else None
+                       for label, value in (legs.get(key) or {}).items()}
         for label in (f"{d}d" for d in WINDOW_DAYS):
             latest = (detail.get(label) or {}).get("latest_event_at")
             try:

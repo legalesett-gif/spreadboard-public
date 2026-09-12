@@ -958,6 +958,12 @@ def sweep_funding(
     rates: dict[str, dict[str, Any]] = {}
     leg_updated_at: dict[str, float] = {}
     path = Path(cache_path)
+    # Evidence log only: observed_at is detection time, NOT a claimed exchange
+    # effective time. Keep bounded public metadata, never account information.
+    try:
+        schedule_previous = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        schedule_previous = {}
     if merge_existing:
         try:
             previous = json.loads(path.read_text(encoding="utf-8"))
@@ -1020,6 +1026,7 @@ def sweep_funding(
         "updated_at": datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat(),
         "legs": rates,
         "leg_updated_at": leg_updated_at,
+        "schedule_changes": _schedule_changes(schedule_previous, rates, leg_updated_at),
     }
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload_out, separators=(",", ":")), encoding="utf-8")
@@ -1034,6 +1041,24 @@ def sweep_funding(
 
 _FUNDING_CACHE: dict[str, Any] = {"stamp": None, "legs": {}, "health": {}}
 _FUNDING_SOURCE_CACHE: dict[str, Any] = {"signature": None, "payloads": []}
+
+
+def _schedule_changes(previous, rates, observed_at):
+    """Bounded journal of verified-input interval changes in either direction."""
+    changes = list(previous.get("schedule_changes") or [])[-1000:]
+    for key, entry in rates.items():
+        old = (previous.get("legs") or {}).get(key) or {}
+        before, after = _float(old.get("interval_hours")), _float(entry.get("interval_hours"))
+        if (old.get("interval_assumed") or entry.get("interval_assumed")
+                or not before or not after or before == after):
+            continue
+        changes.append({"leg": key, "previous_interval_hours": before,
+                        "interval_hours": after, "observed_at": observed_at.get(key),
+                        "previous_observed_at": (previous.get("leg_updated_at") or {}).get(key),
+                        "next_funding_ts_us": entry.get("next_funding_ts_us"),
+                        "source": entry.get("interval_source") or "provider_adapter",
+                        "effective_at": None})
+    return changes[-1000:]
 
 
 def _funding_key_enabled(key: str) -> bool:
@@ -1067,6 +1092,8 @@ def _funding_entry(fields: dict[str, Any]) -> dict[str, Any]:
             entry["interval_assumed"] = bool(fields["funding_interval_assumed"])
     if fields.get("next_funding_ts_us") is not None:
         entry["next_funding_ts_us"] = fields["next_funding_ts_us"]
+    if fields.get("funding_interval_source"):
+        entry["interval_source"] = fields["funding_interval_source"]
     return entry
 
 

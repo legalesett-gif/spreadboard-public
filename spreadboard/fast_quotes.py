@@ -574,7 +574,7 @@ class FastQuoteRefresher:
                 interval = (interval_overrides or {}).get(str(market.get("id") or "").upper())
                 if not interval:
                     interval = _market_interval_hours(market)
-            if interval_overrides is None:
+            if interval_overrides is None or (venue == "Aster" and native_interval is None):
                 interval = None
             fields = _funding_fields(
                 item.get("nextFundingRate") if venue == "CoinEx" else item.get("fundingRate"),
@@ -587,6 +587,11 @@ class FastQuoteRefresher:
                 next_funding_ms=(item.get("nextFundingTimestamp") if venue == "CoinEx" else item.get("fundingTimestamp") or item.get("nextFundingTimestamp")),
             )
             if fields:
+                if venue in {"Aster", "Binance"}:
+                    fields["funding_interval_source"] = (
+                        "provider_funding_info" if native_interval is not None
+                        else "unresolved" if not interval
+                        else "provider_default_unadjusted")
                 rates[symbol] = fields
         # A venue that answers with nothing is indistinguishable from one that
         # cannot answer at all, and both leave the legs frozen at scan time.
@@ -607,14 +612,18 @@ class FastQuoteRefresher:
             payload = _json_url(f"https://{host}/fapi/v1/fundingInfo")
         except Exception:  # noqa: BLE001 - an unverified schedule cannot support a projection.
             return None
+        if not isinstance(payload, list):
+            return None
         result: dict[str, float] = {}
         for item in payload if isinstance(payload, list) else []:
             if not isinstance(item, dict):
-                continue
+                return None
             symbol = str(item.get("symbol") or "").upper()
             interval = _optional_number(item.get("fundingIntervalHours"))
-            if symbol and interval is not None and interval > 0:
+            if symbol and interval is not None and math.isfinite(interval) and interval > 0:
                 result[symbol] = interval
+            else:
+                return None
         return result
 
     def refresh(
