@@ -125,3 +125,12 @@ is NOT solved by this release. At23:26UTC the last valid navigation generation
 was still the pre-release one; targeted/current API and HTML are updated, but
 publication of the new all-token background ranking still needs its first
 collector generation. No extra restart or unsupervised heavy worker was forced.
+
+Bounded closeout check at23:36UTC: route-index publication completed and the
+supervised token-ranking worker was active. Funding navigation still retained
+the old policy (ANSEM rank318 /2.6924% full-history MEXC leader, rather than the
+new16.6361% shorter-history Hyperliquid leader). **Do not call global-ranking
+acceptance complete.** Targeted `/funding?farm=futures-spot&rank=30d&q=ANSEM`
+already passes. Next safe check: verify the first new-policy supervised
+navigation generation, all12lanes and ANSEM's new best value. Do not add an
+uncoordinated worker: host has7.9GiB RAM, collector/app already use severalGiB.
