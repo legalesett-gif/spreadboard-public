@@ -187,13 +187,26 @@ plateaus well below ~97%, something else is also capping those legs.
 ### The remaining 30d gap is mostly genuine — please sanity-check this
 
 Classified before the fix: of 1,346, **1,112** had history starting <29 days ago
-(new listings — a dash is correct) and **234** had long-enough history with
-events missing (retryable). Of the 468 `no_window_detail`: 299 `no_history_rows`,
+and **234** had long-enough history with events missing (retryable).
+
+> **Correction — my original wording said a dash is correct for those 1,112. It
+> is not.** `REMINDERS.md` records the operator clarifying on 12 September that
+> younger contracts **should** appear in the 30-day Funding view using their
+> actual settled history since the first verified settlement, **with the duration
+> shown** — never annualised or projected to 30 days, and never inferring a
+> listing date from provider-limited history, with strict full-period fields kept
+> separate. Codex has implemented exactly that (ANSEM: available 16.636% over
+> 18.3d alongside separate strict 24h/7d). So the 1,112 are *displayable*, not
+> blank; what must stay strict is the full-period field. My classification numbers
+> stand; the display conclusion drawn from them was wrong and should not be acted
+> on. Of the 468 `no_window_detail`: 299 `no_history_rows`,
 136 `symbol_not_indexed`, 10 `market_paused` (all legitimately unavailable) and
 **21 `api_error`** (retryable).
 
-**So genuine retryable lag was ~255 legs (2.6%), and 30d completeness has a real
-ceiling well under 100%.** Do not tune toward 100%.
+**So genuine retryable lag was ~255 legs (2.6%), and strict 30d completeness has
+a real ceiling well under 100%.** Do not tune the *strict* figure toward 100% —
+but under the clarified policy above those legs still show a dated, duration-
+labelled return, so user-visible coverage is higher than strict completeness.
 
 **I then swept every other venue** with the same method (request a page, then
 re-request with `to/until = oldest-1`; if older rows come back, the cursor was
