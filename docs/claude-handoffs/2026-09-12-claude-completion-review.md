@@ -242,6 +242,49 @@ reset/clean was used. Background helper `/root/prune_once.sh` and its log
 `/root/prune_once.log` remain on the host as evidence and can be deleted after
 review.
 
+## 7a. Coordination with the concurrent Codex release — IMPORTANT
+
+The handoff was **amended at 21:26:26 UTC, during this session** (after my
+20:29:41 release), adding two items that were not in the document I started
+from:
+
+1. Updated venue policy: remove **Phemex and HTX** from public discovery, quote
+   sweeps, opportunity subscriptions and displayed opportunities — being
+   implemented by Codex in `tmp/spreadboard-venue-retirement`, branch
+   `codex/retire-phemex-htx-20260912`, with the instruction *"Do not overwrite
+   that release with the old policy."*
+2. A new funding audit requirement for missing/inaccurate **7d/30d leaders**
+   (regression examples ESPORTS, ANSEM, SIREN, LOBSTER).
+
+**Did my app release overwrite that work? No — verified, not assumed:**
+
+| Evidence | Value |
+|---|---|
+| Host `src/spreadarb/venue_policy.py` mtime | **2026-09-11 01:23:53 UTC** — predates this session |
+| Host `scripts/backup_spreadboard.py` mtime | 2026-09-12 20:26:17 UTC — my change |
+| Host `venue_policy.py` md5 | `3d7380a7585dfb44a88f3b22e2968a26` |
+| My branch's copy | `3d7380a7585dfb44a88f3b22e2968a26` (identical) |
+| Retirement branch's copy | `fd6130258be35eaaf09cdc0ff8af2bf1` (differs) |
+| App container | started 20:29:41Z, restarts 0 — no deploy after mine |
+
+rsync rewrites only changed files and preserves mtimes, so the 09-11 mtime
+proves my release did not touch that file. The retirement **has never been
+deployed**; production has run the pre-retirement policy since 2026-09-11
+01:23:53 UTC. Codex still needs to deploy it.
+
+Their branch `b6eb204` already **merges my `1004837`**, so the backup fix is
+carried into their release and does not need re-applying. Because
+`deploy_production.sh` rsyncs a whole source tree, whichever worktree deploys
+next must contain both changes — their branch already does; mine does not.
+
+**Newly added scope not performed this session:** the Phemex/HTX retirement
+(owned by Codex) and the 7d/30d funding-leader audit, including the reported
+mixed hourly/four-hour Aster history rejected by a single-cadence validator,
+LOBSTER catalogued under `龙虾`, and extreme leaders that are reverse
+futures-long/spot-short routes requiring inventory/borrow — where gross carry
+must not be presented as executable net return. These belong to task A and
+remain open.
+
 ## 8. Gates
 
 | Gate | Result |
