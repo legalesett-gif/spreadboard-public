@@ -337,25 +337,44 @@ no email.
 
 ### 4.7 ML — not run
 
-`scripts/research_ml_readiness.py` deliberately **not executed**, with measured
-justification rather than caution: at 22:33 UTC the host showed
-`load average: 7.32, 6.35, 5.73` on 4 vCPU with 203 MB free (2,530 MB
-available). The repack was consuming only 1.3% CPU, so that load is the collector
-working after the 22:16 restart. The handoff says heavy read-only audits must not
-compete with backup/finalisation, and this is exactly that condition.
+**Now run** — load had fallen to 3.83 (from 7.32), so I ran it read-only at
+23:28 UTC. Exit 0; site health immediately after was **200 in 0.220s**, load
+peaked at 5.44 and settled. Fresh gate state:
 
-No gate weakened, nothing trained, no labels fabricated. Last known blocker
-(exact lifecycle-cost completeness 0% against a required 80%) is unchanged by
-anything in this session.
+| Gate | Actual | Required | |
+|---|---:|---:|:--|
+| `version_selected` | v5 (115,686 obs) | — | PASS — v4's 5,832 excluded as instructed |
+| `outcomes` | 60,451 | 5,000 | PASS |
+| `routes` | 4,874 | 100 | PASS |
+| `funding_class_balance` | 0.2095 | 0.10 | PASS |
+| `spread_class_balance` | 0.3458 | 0.10 | PASS |
+| `feature_leakage_scan` | — | — | PASS |
+| **`span_days`** | **29.21** | 30.0 | **FAIL** |
+| **`cost_complete_fraction`** | **0.0** | 0.8 | **FAIL** |
+| `candidate_present` | false | — | FAIL — `no_candidate_model` |
 
-**Next action** — run when load is below ~4 and no backup is active:
+`mode: shadow_only`, `model_configured: false`,
+`activation_exclusion: public_market_only_no_identity_or_exact_account_costs`.
+The purged chronological 60/20/20 split with a 24h embargo reports `valid: true`
+(train 44,725 / calibration 6,623 / test 6,630, purged 2,473), and baselines are
+recorded (funding Brier 0.4167, spread Brier 0.2615).
 
-```bash
-ssh -i ~/.ssh/spreadboard_digitalocean root@178.128.126.204 \
-  'docker exec app-app-1 /app/.venv/bin/python /app/scripts/research_ml_readiness.py'
-```
+**Two distinct blockers, and only one is a waiting game.**
 
-Refresh the worker and schema/version first, and exclude all 5,832 v4 rows.
+- `span_days` 29.21/30 clears itself in under a day of continued collection.
+- **`cost_complete_fraction` is exactly 0.0** — not low, *zero*. No observation
+  carries exact lifecycle costs, so this will never clear by waiting. The gate
+  wants real observed fee/slippage/borrow inputs, and the only source of exact
+  execution cost in this system is the operator's own private fills (the
+  portfolio positions carry actual fees). Wiring private execution costs into a
+  research dataset is a design and privacy decision for the owner, not a missing
+  function — and the handoff itself notes public historical backfill cannot prove
+  private execution costs. **I did not fabricate a cost, weaken the gate, or
+  train anything.**
+
+Compared with the earlier 17:20 UTC read (114,584 obs / 60,039 labels / 4,869
+routes / 28.96 days / cost 0%), collection is advancing normally and cost
+completeness has not moved off zero.
 
 ### 4.8 Coverage / subscriber journeys — spot checks only
 
