@@ -77,7 +77,7 @@ push notification, partner creation, or payout is authorized by this review.
 | Work package | Verdict / remaining action |
 |---|---|
 | Funding data | KuCoin correction retained; global shorter-history publication verified. Unknown start of retained history is NOT proof of listing date. Full windows and labelled available periods remain separate. Remaining provider failures/backfill gaps need source-specific evidence. |
-| Funding browser | Numeric clipping reproduced and repaired in source; live post-release acceptance is recorded below. Global Now latency remains a separate gate until measured passing. Four actual initial/update filter paths must be checked, not inferred from tests. |
+| Funding browser | Numeric clipping repaired and live-verified at1440/1280/390px. All four Futures–Spot period paths passed initial and structural refresh checks; one actual Now SSE event left historical values unchanged. Historical navigation1.2–2.7s; Now11.3s remains a performance gap, even though the timeout did not recur. Other farm/browser combinations and broader journeys remain separately scoped. |
 | Rollover | Recorded recovery is useful, but a proposed two-hour recovery limit is not an accepted freshness SLO for this product. Distinguish current-rate age, exact rolling settlement expiry, ranking generation age, and visibly dated fallback. Do not relabel a lagging window as current. |
 | Backups | Existing encrypted free-tier prune still progressing under provider quota; restore must wait. Two ordinary successful timer runs and successful isolated production restore are NOT yet proved. Preserve last valid snapshots and active timer. |
 | Stability | Repeated releases split the observation. No 48h clean window certified; retain the existing finite observer and its generation boundaries. No memory-cap reduction without overlap/peak evidence. |
@@ -98,6 +98,34 @@ not just mocked command tests. Full-suite, deployed service identities and
 post-release browser results are appended after verification. A running
 production restore job must never be described as completed proof.
 
+Release `7af2d0f` was pushed and deployed **app only**. Full suite: **3,024
+passed in245.76s**, Ruff:0new/500known, shell syntax and diff checks passed.
+An earlier run had3,023passed and one lint-ratchet failure (unused import left
+by autofix); that import was removed and the entire suite rerun successfully.
+The eight known test-generated tracked runtime fixtures were restored to the
+recorded clean pre-test baseline; no runtime data was deployed.
+
+App source fingerprint `f23a7b6969e15be5`, health200, OOMfalse/restart0; collector
+was deliberately **not recreated** and retains `8282617` /
+`f5be5e7a72b1d7a9`. The automated receipt records the app release. The
+collector entry was seeded only after an independent live digest/health check,
+so it is not falsely labelled with the newer app revision.
+
+The unsafe waiting verifier PID3926997 was stopped only after checking its
+exact command and that it had not begun a restore. Existing prune PID3829220
+and the backup timer were left intact. Replacement systemd unit
+`spreadboard-restore-verification.service`, PID3993389 at startup, is active
+with status `waiting_for_existing_prune`; six-hour wait, six-hour restore,
+fourteen-hour service maximum, private output directory and sanitized logs.
+**Active/Result=success is not completed restore proof.** Check its final
+exit and `status=verified` evidence, then the next two ordinary timer results.
+
+Rollback: prefer a new targeted revert, not the old handout's hard-coded
+marker write. For display rollback, revert the four CSS additions only and
+run the protected app-only deployment. Preserve the safer backup verifier,
+retained funding history and private accounting. Always verify source digests
+and the per-service receipt after any rollback.
+
 Additional bounded checks before release:
 
 - Read-only SQLite aggregate independently reconfirmed v5: 115,747 observations,
@@ -112,3 +140,26 @@ Additional bounded checks before release:
   optional encrypted read-only account connections before sending; its blanket
   claim that the product never connects to customer exchanges is too broad.
   The commercial examples and existing draft files are not a launch clearance.
+
+## Post-release browser acceptance — September13 00:03–00:04UTC
+
+- Authenticated real Chromium, production HTTPS, no application responses
+  mocked. A listener observed an actual SSE event; diagnostics also invoked
+  the application's own structural-refresh event and awaited completion.
+- Futures–Spot global30d: HTTP200 in2.735s; 100/100 summary numbers readable
+  initially, after refresh and expanded at1440,1280,390px. No page overflow.
+- GlobalNow: HTTP200 in11.301s; 92/92 numbers readable initially and after
+  refresh. One actual board event observed; zero historical-cell mutations.
+- Global1d: HTTP200 in1.861s; global7d: HTTP200 in1.162s. Both initial and
+  refreshed cells retain one live estimate plus three clearly settled windows;
+  no NaN/undefined/Infinity and no clipped values.
+- No browser page errors or refresh notices. Both baseline and final audit
+  identities/sessions deleted; quick_check=ok and foreign-key violations=0.
+- Screenshots visually inspected, not merely captured. Final evidence:
+  `output/review-2026-09-13/post-release/browser-evidence.json` and
+  `funding-1440.png`, `funding-1280.png`, `funding-390.png` under the project
+  root. The baseline is in the parent evidence directory for comparison.
+- This closes the reported numeric clipping and this four-filter browser
+  regression matrix. It does **not** certify all historical figures at every
+  venue, full subscriber journeys, sub-second Now navigation, 48h stability,
+  two ordinary backup successes, or production restore completion.
