@@ -15,6 +15,7 @@ open, each with a concrete blocker and next action. **No item is marked "done".*
 |---|---|---|
 | `1004837` | Let a locked repository wait instead of losing the backup | `scripts/backup_spreadboard.py`, `tests/test_backup_spreadboard.py` |
 | `f898e78` | Page Kucoin funding history backwards past its 100-row cap | `spreadboard/venue_funding_history.py`, `tests/test_venue_funding_history.py` |
+| `74fca61` | Bound retention so one prune cannot monopolise the repository | `scripts/backup_spreadboard.py`, `tests/test_backup_spreadboard.py` |
 | `33413ea`, `6d1f631` | review-packet docs | docs only |
 
 Branch now also contains **your** `6f4f5d7`, `3a36941`, `34458f2` and the merge
@@ -277,6 +278,51 @@ Proposed acceptance bound for review: **30d overdue must return to 0 within 2h o
 any expiry spike**, which the measured 1.33h worst case satisfies. Sampling
 completeness within ~20 minutes of the hour boundary will always look degraded
 and should not be treated as a fault.
+
+## 3b. Fix 3 — the backlog prune could never finish, and it blocks everything
+
+Measured after the fact, and it changes the backup picture materially.
+
+Applying the 7/4/3 policy for the first time queued a repack of **305,784 blobs /
+27.518 GiB**. I measured its actual throughput from `/proc/<pid>/io`: **+49 KB of
+restic writes in 45 s**, and 644 MB written in 4h43m — about **38 KB/s** against
+Google Drive at `RCLONE_TPSLIMIT=4`. At that rate the repack alone needs roughly
+**nine days**, and it holds the repository's **exclusive** lock throughout.
+
+That is why the 00:18 timer run sat in its retry ladder, and why the restore
+proof cannot run: both need a lock the repack will not release.
+
+**Cause:** restic's default `--max-unused 5%` forces aggressive repacking of
+partially-used packs. **Fix (`74fca61`):** tolerate `--max-unused 30%` and bound
+`--max-repack-size 64M` per run, both env-overridable. Retention then deletes
+fully-unused packs cheaply and progresses inside one timer window. The policy
+itself is unchanged — still 7 daily / 4 weekly / 3 monthly. Drive has 21 GiB free
+of 100 GiB, so waste is far cheaper than a stalled backup.
+
+**Not deployed.** Codex released `8282617` at 23:22 and `REMINDERS.md` says not to
+force another restart or heavy child, so I committed and pushed only. **This needs
+to ride your next release.**
+
+### One action I could not take — owner decision required
+
+The currently running repack (**PID 3829220**, 4h43m+) should be stopped: it
+cannot finish, and while it lives no backup or restore can complete. I attempted
+a graceful `kill -INT` and the sandbox permission classifier refused it. I did not
+work around that.
+
+```bash
+# Graceful stop; restic finishes its current pack and releases the lock.
+ssh -i ~/.ssh/spreadboard_digitalocean root@178.128.126.204 'kill -INT 3829220'
+# Confirm the lock is gone, then the 06:18 run (or `systemctl start
+# spreadboard-backup.service`) should complete, and /root/verify_backup.sh
+# will perform the restore proof on its own.
+```
+
+Interrupting a restic prune is safe by design — it repacks before deleting, so an
+interrupted run leaves extra unreferenced packs but a consistent repository, and
+the next bounded prune reclaims them. **Do not use `--unsafe-recover-no-free-space`.**
+If you would rather not interrupt it, the alternative is to leave backups
+unable to complete for roughly nine days, which I do not recommend.
 
 ## 4. Outstanding work, with next actions
 
