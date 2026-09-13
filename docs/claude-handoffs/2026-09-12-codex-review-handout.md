@@ -100,8 +100,30 @@ production and never deletes a snapshot.
 still running at **3h20m**, 1.2% CPU, purely Google-Drive-quota-throttled
 (`rateLimitExceeded` with successful retries), so it is progressing, not stuck.
 
+### The `--retry-lock` fix is confirmed working in production
+
+The 00:17:57 timer fired on schedule and, at 00:41 UTC, is **still running** —
+which is the point. Journal:
+
+```
+Sep 13 00:18:04  Starting spreadboard-backup.service ...
+Sep 13 00:34:43  backup repository probe attempt=1 status=backend_locked
+```
+
+The probe waited **16 minutes 39 seconds** for the lock before reporting
+`backend_locked`, against the old behaviour of `waiting up to 0s for the lock`
+followed by immediate failure. `ActiveState=activating`, `SubState=start`, no
+`ExecMainExitTimestamp`. The bounded retry ladder (3 attempts, 15m lock wait
+each) is doing exactly what it was written to do.
+
+This run will still ultimately fail, because the backlog repack legitimately
+holds the exclusive lock (4h43m at 00:41 UTC) — that is correct behaviour, not a
+regression. The mechanism is proven; what is unproven is a *green* run, which
+needs the repack to end first.
+
 **Still to confirm by hand:** two consecutive ordinary timer invocations at
-`ExecMainStatus=0`.
+`ExecMainStatus=0`. The next firing is ~06:18 UTC; it will succeed only if the
+repack has finished by then.
 
 **A deliberate choice you may want to revisit:** I left the timer **active** even
 though the 00:17:57 UTC run will collide with the repack's exclusive lock. With
