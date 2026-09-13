@@ -326,3 +326,38 @@ def test_invalid_lock_retry_does_not_launch_restic(monkeypatch, duration):
     monkeypatch.setattr(backup_spreadboard.subprocess, "run", lambda *a, **kw: pytest.fail("launched"))
     with pytest.raises(ValueError):
         backup_spreadboard._run_restic(["restic", "snapshots", "--retry-lock", duration], timeout=120)
+
+
+def test_retention_is_bounded_so_one_run_cannot_monopolise_the_lock(
+    monkeypatch, tmp_path
+) -> None:
+    """Measured: the unbounded backlog prune could not finish in ~9 days.
+
+    Applying the 7/4/3 policy for the first time queued a repack of 305,784
+    blobs / 27.518 GiB. Against Google Drive at `RCLONE_TPSLIMIT=4` it averaged
+    **38 KB/s** (644 MB written in 4h43m, measured from /proc io counters), so
+    the repack alone needed roughly nine days -- and it holds the repository's
+    EXCLUSIVE lock throughout, which blocks every subsequent backup and any
+    restore.
+
+    restic's default `--max-unused 5%` is what forces that aggressive repacking.
+    Tolerating more waste lets retention delete fully-unused packs cheaply, and
+    bounding `--max-repack-size` keeps any remaining repack inside one timer
+    window so retention makes steady progress instead of never completing.
+    Drive had 21 GiB free of 100 GiB, so waste is much cheaper than a stalled
+    backup.
+    """
+
+    forget = next(
+        command
+        for command in _retention_calls(monkeypatch, tmp_path)
+        if command[1] == "forget"
+    )
+
+    assert "--max-unused" in forget, forget
+    assert forget[forget.index("--max-unused") + 1] == backup_spreadboard.PRUNE_MAX_UNUSED
+    assert "--max-repack-size" in forget, forget
+    assert (
+        forget[forget.index("--max-repack-size") + 1]
+        == backup_spreadboard.PRUNE_MAX_REPACK
+    )
