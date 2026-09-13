@@ -303,6 +303,42 @@ of 100 GiB, so waste is far cheaper than a stalled backup.
 force another restart or heavy child, so I committed and pushed only. **This needs
 to ride your next release.**
 
+### 3c. The backup code path IS proven end to end — against a local repo
+
+Since the Drive repository is locked by the repack, I proved the mechanism the
+only way available: running the **real `backup_spreadboard.py`** against a local
+restic repository on the host, touching neither the Drive repo nor its lock.
+Source was two purpose-built SQLite databases (one with a real foreign-key
+relationship, 500 + 2,000 rows) plus an operational JSON file, with the new bounds
+forced on via `SPREADBOARD_BACKUP_MAX_UNUSED=30%` and
+`SPREADBOARD_BACKUP_MAX_REPACK=64M`.
+
+```
+RUN1_EXIT=0          # init + stage + backup + unlock + bounded forget + check
+RUN2_EXIT=0          # second ordinary invocation, also green
+restic check  ->  "no errors were found"
+RESTORE_EXIT=0       # 8 files / 76.076 KiB into an isolated directory
+  OK  accounts.sqlite3   integrity=ok fk=0 rows={'users': 2, 'positions': 500}
+  OK  settlements.db     integrity=ok fk=0 rows={'events': 2000}
+RESULT: ALL RESTORED DATABASES VERIFIED
+```
+
+Retention grouped correctly (`daily/weekly/monthly` reasons on both snapshots,
+kept under the same 7/4/3 policy), so the `--group-by host,tags` behaviour and the
+new `--max-unused` / `--max-repack-size` bounds are all exercised and green.
+
+**What this does and does not establish.** It proves the code path end to end —
+consistent SQLite staging, snapshot, stale-lock sweep, bounded retention, repo
+check, restore, and integrity plus FK verification of the restored databases — and
+it satisfies "two consecutive ordinary invocations at exit 0" **for the script**.
+It does **not** verify the contents of the production Drive repository; that still
+needs the repack stopped, after which `/root/verify_backup.sh` does it
+automatically. Treat this as mechanism proof, not as the production restore
+certificate.
+
+Self-test repo left at `/root/bk-selftest/repo` and script at `/root/selftest.sh`;
+both safe to delete. Source and restored trees were removed by the script.
+
 ### One action I could not take — owner decision required
 
 The currently running repack (**PID 3829220**, 4h43m+) should be stopped: it
