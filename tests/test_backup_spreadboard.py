@@ -158,7 +158,7 @@ def test_repository_probe_exhaustion_is_bounded_and_cannot_stage(monkeypatch, tm
     monkeypatch.setattr(backup_spreadboard, "stage_snapshot", lambda *a: pytest.fail("staged after failed repository probe"))
     def run(command, **kwargs):
         calls.append(command)
-        assert command[1] == "snapshots" and kwargs["timeout"] == 120
+        assert command[1] == "snapshots" and kwargs["timeout"] == 1020
         if timeout:
             raise subprocess.TimeoutExpired(command, 120)
         return SimpleNamespace(returncode=1, stdout="", stderr="read-only file system private-fixture-value")
@@ -183,7 +183,7 @@ def test_actual_rclone_backup_paces_every_phase_and_allows_connection_window(mon
         assert kwargs["env"]["RCLONE_TPSLIMIT"] == "4"
         assert kwargs["env"]["RCLONE_TPSLIMIT_BURST"] == "1"
         if command[1] == "snapshots":
-            assert kwargs["timeout"] == 360
+            assert kwargs["timeout"] == 1260
         return SimpleNamespace(returncode=0, stdout="[]", stderr="")
     monkeypatch.setattr(backup_spreadboard.subprocess, "run", run)
     backup_spreadboard.run_backup()
@@ -200,7 +200,7 @@ def test_non_rclone_commands_and_operator_pacing_are_preserved(monkeypatch):
     backup_spreadboard._run_restic(["restic", "snapshots"], timeout=120)
     assert calls[-1] == (
         ["restic", "snapshots", "--retry-lock", backup_spreadboard.LOCK_RETRY],
-        {"timeout": 120, "check": False},
+        {"timeout": 1020, "check": False},
     )
     monkeypatch.setenv("RESTIC_REPOSITORY", "rclone:fixture:backup")
     monkeypatch.setenv("RCLONE_TPSLIMIT", "1")
@@ -310,3 +310,19 @@ def test_retention_waits_for_a_concurrent_run_instead_of_failing_at_zero(
 
     assert "--retry-lock" in forget, forget
     assert forget[forget.index("--retry-lock") + 1] == backup_spreadboard.LOCK_RETRY
+
+
+@pytest.mark.parametrize("duration,seconds", [("0s", 0), ("15m", 900), ("1h", 3600), ("1m30s", 90)])
+def test_explicit_lock_retry_keeps_an_operation_timeout_after_wait(monkeypatch, duration, seconds):
+    calls = []
+    monkeypatch.setenv("RESTIC_REPOSITORY", "rclone:fixture")
+    monkeypatch.setattr(backup_spreadboard.subprocess, "run", lambda cmd, **kw: calls.append(kw))
+    backup_spreadboard._run_restic(["restic", "snapshots", "--retry-lock", duration], timeout=120)
+    assert calls[0]["timeout"] == 360 + seconds
+
+
+@pytest.mark.parametrize("duration", ["forever", "-1m", "2h", "15mgarbage"])
+def test_invalid_lock_retry_does_not_launch_restic(monkeypatch, duration):
+    monkeypatch.setattr(backup_spreadboard.subprocess, "run", lambda *a, **kw: pytest.fail("launched"))
+    with pytest.raises(ValueError):
+        backup_spreadboard._run_restic(["restic", "snapshots", "--retry-lock", duration], timeout=120)

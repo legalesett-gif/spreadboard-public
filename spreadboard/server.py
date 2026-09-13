@@ -21796,6 +21796,9 @@ pre { background: var(--dark); color: white; padding: 14px; border-radius: 8px; 
 .funding-token-group > summary > div:not(.asset-identity) { display: grid; gap: 3px; min-width: 0; }
 .funding-token-group > summary > div:not(.asset-identity) span { color: var(--terminal-muted); font-size: 9px; text-transform: uppercase; }
 .funding-token-group > summary > div:not(.asset-identity) strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.funding-token-group > summary .funding-window-strip { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.funding-token-group > summary .funding-realised .funding-window strong,
+.funding-pair-row .funding-window strong { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; font-size: 11px; }
 .funding-pair-list { border-top: 1px solid var(--terminal-line); }
 .funding-pair-overflow { margin: 0; padding: 9px 12px; border-top: 1px solid var(--terminal-line); color: var(--terminal-muted); font-size: 10px; }
 .funding-pair-row { display: grid; grid-template-columns: minmax(150px,1fr) minmax(150px,1fr) 110px 110px 80px 130px; gap: 10px; align-items: center; min-height: 66px; padding: 8px 12px; border-top: 1px solid var(--terminal-line); background: var(--terminal-panel-2); }
@@ -21944,6 +21947,7 @@ pre { background: var(--dark); color: white; padding: 14px; border-radius: 8px; 
   .funding-token-group > summary { grid-template-columns: repeat(2, minmax(0, 1fr)); min-height: 0; }
   .funding-token-group > summary .asset-identity { grid-column: 1 / -1; }
   .funding-token-group > summary .funding-realised { grid-column: 1 / -1; }
+  .funding-token-group > summary .funding-window-strip { grid-template-columns: repeat(4,minmax(0,1fr)); }
   .funding-token-group > summary .funding-realised .funding-window { padding-inline: 4px; }
   .funding-token-group > summary .funding-realised .funding-window strong { overflow: visible; text-overflow: clip; }
   .funding-chevron { grid-column: 1 / -1; justify-self: end; }

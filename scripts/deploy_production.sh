@@ -38,6 +38,19 @@ if [[ ${#SERVICES[@]} -eq 0 ]]; then
   exit 2
 fi
 
+for service in "${SERVICES[@]}"; do
+  case "$service" in app|collector|accounting-worker) ;; *)
+    echo "unsupported verified service: $service" >&2; exit 2 ;; esac
+done
+# Bind this operation to its starting source. Never label dirty source as an
+# exact commit or silently record a different checkout after a long build.
+revision=$(git -C "$REPO_ROOT" rev-parse HEAD)
+want=$(cd "$REPO_ROOT" && python3 scripts/source_digest.py .)
+dirty=0
+if [[ -n "$(git -C "$REPO_ROOT" status --porcelain -- spreadboard src scripts pyproject.toml uv.lock Dockerfile "$COMPOSE" data/api_discovery_watchlist.json data/api_discovery_identity_registry.json data/api_discovery_executor_attestations.json data/token_metadata_seed.json)" ]]; then
+  dirty=1
+fi
+
 ssh_do() { ssh -i "$KEY" -o ConnectTimeout=60 "$HOST" "$@"; }
 
 scan_running() {
@@ -118,8 +131,14 @@ ssh_do 'docker inspect app-app-1 app-collector-1 --format "{{.Name}} oom={{.Stat
 [[ "$code" == "200" ]] || { echo "health check failed" >&2; exit 1; }
 
 # A 200 only says something is serving. This says it is serving THIS source.
-want=$(cd "$REPO_ROOT" && python3 scripts/source_digest.py .)
+[[ "$(cd "$REPO_ROOT" && python3 scripts/source_digest.py .)" == "$want" && "$(git -C "$REPO_ROOT" rev-parse HEAD)" == "$revision" ]] || {
+  echo "REFUSING to record success: local source changed during deployment." >&2; exit 1;
+}
 for service in "${SERVICES[@]}"; do
+  state=$(ssh_do "docker inspect app-${service}-1 --format '{{.State.Running}} {{.State.OOMKilled}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}'" | tr -d '\r')
+  [[ "$state" == "true false healthy" ]] || {
+    echo "REFUSING to record success: $service is not healthy and OOM-free." >&2; exit 1;
+  }
   got=$(ssh_do "docker exec app-${service}-1 python /app/scripts/source_digest.py /app" 2>/dev/null | tr -d '[:space:]')
   echo "source $service: want=$want got=$got"
   [[ "$got" == "$want" ]] || {
@@ -127,4 +146,7 @@ for service in "${SERVICES[@]}"; do
     exit 1
   }
 done
+# Only after ALL requested services pass. Partial/failed deployments keep the
+# last verified receipt; untouched services retain their own recorded version.
+ssh_do "python3 $APP_DIR/scripts/record_deployment.py --root $APP_DIR --revision $revision --digest $want --dirty $dirty ${SERVICES[*]}"
 echo "==> deploy OK"

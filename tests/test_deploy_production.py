@@ -14,7 +14,8 @@ def _fake_command(path: Path, body: str) -> None:
 
 
 def _run_deploy(
-    tmp_path: Path, *services: str, late_scan: bool = False
+    tmp_path: Path, *services: str, late_scan: bool = False,
+    health: str = "200", state: str = "true false healthy", mismatch: bool = False
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -29,12 +30,13 @@ case "$*" in
       touch "$FAKE_SSH_LOG.seen"; printf '0\\n'
     else printf '1\\n'; fi ;;
   *"RestartCount"*) printf '0,0\\n' ;;
+  *"State.Running"*) printf '%s\\n' "$FAKE_STATE" ;;
   *"source_digest.py"*) printf '%s\\n' "$FAKE_SOURCE_DIGEST" ;;
 esac
 """.strip(),
     )
     _fake_command(bin_dir / "rsync", ":")
-    _fake_command(bin_dir / "curl", "printf '200'")
+    _fake_command(bin_dir / "curl", "printf '%s' \"$FAKE_HEALTH\"")
     _fake_command(bin_dir / "sleep", ":")
     digest = subprocess.run(
         ["python3", str(ROOT / "scripts" / "source_digest.py"), str(ROOT)],
@@ -47,7 +49,9 @@ esac
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "FAKE_SSH_LOG": str(ssh_log),
         "FAKE_LATE_SCAN": "1" if late_scan else "0",
-        "FAKE_SOURCE_DIGEST": digest,
+        "FAKE_SOURCE_DIGEST": "wrong" if mismatch else digest,
+        "FAKE_HEALTH": health,
+        "FAKE_STATE": state,
     }
     result = subprocess.run(
         ["bash", str(SCRIPT), *services],
@@ -82,3 +86,28 @@ def test_collector_is_not_recreated_if_discovery_starts_during_build(tmp_path):
     assert "started during the build" in result.stderr
     assert " build collector" in log
     assert "up -d" not in log
+
+
+def test_success_writes_receipt_only_after_source_verification(tmp_path):
+    result, log = _run_deploy(tmp_path, "app")
+    assert result.returncode == 0, result.stderr
+    assert log.index("source_digest.py") < log.index("record_deployment.py")
+    assert "--revision " in log and "--digest " in log
+
+
+def test_source_mismatch_cannot_advance_marker(tmp_path):
+    result, log = _run_deploy(tmp_path, "app", mismatch=True)
+    assert result.returncode != 0
+    assert "record_deployment.py" not in log
+
+
+def test_unhealthy_container_cannot_advance_marker(tmp_path):
+    result, log = _run_deploy(tmp_path, "app", state="true false unhealthy")
+    assert result.returncode != 0
+    assert "record_deployment.py" not in log
+
+
+def test_failed_endpoint_cannot_advance_marker(tmp_path):
+    result, log = _run_deploy(tmp_path, "app", health="503")
+    assert result.returncode != 0
+    assert "record_deployment.py" not in log

@@ -171,3 +171,16 @@ def test_funding_windows_have_four_cells_and_an_explicit_summary_column() -> Non
         ".funding-realised .funding-window strong { overflow: visible; text-overflow: clip; }"
     ) in server.APP_CSS
     assert "/assets/app.css" in page
+
+
+def test_funding_number_readability_is_not_only_a_mobile_override():
+    from spreadboard import server
+
+    css = server.APP_CSS
+    broad = ".funding-token-group > summary > div:not(.asset-identity) strong"
+    override = ".funding-token-group > summary .funding-realised .funding-window strong,"
+    assert css.index(broad) < css.index(override)
+    # The desktop strip needs two readable columns; mobile's full-width strip
+    # can retain four. A zero page-overflow assertion missed clipped numbers.
+    assert ".funding-token-group > summary .funding-window-strip { grid-template-columns: repeat(2,minmax(0,1fr)); }" in css
+    assert ".funding-pair-row .funding-window strong { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; font-size: 11px; }" in css

@@ -7,6 +7,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -32,6 +33,18 @@ MAX_COPIED_FILE_BYTES = int(
 )
 
 
+def _lock_retry_seconds(value: str) -> float:
+    """Parse the bounded s/m/h durations accepted by our operator setting."""
+    parts = re.findall(r"(\d+(?:\.\d+)?)(ms|s|m|h)", value)
+    if not parts or "".join(number + unit for number, unit in parts) != value:
+        raise ValueError("invalid_backup_lock_retry_duration")
+    seconds = sum(float(number) * {"ms": .001, "s": 1, "m": 60, "h": 3600}[unit]
+                  for number, unit in parts)
+    if not 0 <= seconds <= 3600:
+        raise ValueError("backup_lock_retry_exceeds_one_hour")
+    return seconds
+
+
 def _run_restic(command: list[str], **kwargs):
     """Pace the rclone backend without changing other repository backends."""
     # Retention repacking holds an EXCLUSIVE lock that can last hours, and the
@@ -51,6 +64,11 @@ def _run_restic(command: list[str], **kwargs):
         # the bounded repository probe kills it at the former two minutes.
         if "timeout" in kwargs:
             kwargs["timeout"] = max(360, kwargs["timeout"])
+    if "timeout" in kwargs and "--retry-lock" in command:
+        # A 120s (or rclone 360s) subprocess timeout previously killed restic
+        # inside its advertised 15m lock wait. Budget both phases, not max().
+        retry = command[command.index("--retry-lock") + 1]
+        kwargs["timeout"] += _lock_retry_seconds(retry)
     return subprocess.run(command, check=kwargs.pop("check", False), **kwargs)
 
 
