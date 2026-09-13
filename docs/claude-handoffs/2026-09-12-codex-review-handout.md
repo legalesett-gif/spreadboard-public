@@ -431,14 +431,37 @@ were paid, so the profitable side is futures-long/spot-short, which needs
 inventory or borrow. **Whether the UI presents that gross carry as executable net
 return is unverified** — it needs the rendered page, not the store.
 
-### 4.5 Stability acceptance — cannot be certified
+### 4.5 Stability — one criterion already passes; duration cannot
 
-Observer PID 2617599 (`--hours 49`) left running; no duplicate started. Samples:
+Observer PID 2617599 (`--hours 49`) **left running**, no duplicate started;
+elapsed 40h44m at 00:52 UTC, **13,291 samples** in
 `/opt/spreadboard/runtime/stability/20260911-funding-acceptance/samples.jsonl`.
-**Generation boundaries today: 17:08:42, 20:29:41 (mine), 21:04:37 (yours),
-22:16:04 (mine).** No 48h clean window exists. A clean finite observation must
-start after the final release. Memory limits **unchanged**; the proposed
-3,072/3,584/512 reduction stays uncertified — I produced no headroom evidence.
+Summary via the project's own `summarize_stability_soak.py`:
+
+| Metric | Value | Reading |
+|---|---:|---|
+| `max_deviation_from_median_pct` | **0.156** | **Comfortably inside the ±10% acceptance** |
+| `priced_min` / `priced_max` | 204,242 / 204,696 | route counts essentially flat |
+| `max_host_gap_seconds` | 15.62 | sampling is dense, no blind spots |
+| `host_samples` | 196 | |
+| `priced_samples` | 9 | **below the 30 needed for the hour evidence** |
+| `stable_configuration_minutes` | 49.68 | reset by the 23:22 release |
+| `route_hour_pass` | False | consequence of the 9 samples |
+| `duration_48h_reached` / `runtime_48h_pass` | False | consequence of the release boundaries |
+
+So the *substance* of the route-stability criterion is already met — deviation
+0.156% against an allowed 10% — and what fails is **duration and sample count**,
+both purely consequences of today's four release boundaries (17:08:42, 20:29:41,
+21:04:37, 23:22:34).
+
+**I deliberately did not start a replacement observation.** `74fca61` (bounded
+retention) still has to be released, and that release will create another boundary
+and invalidate any window started now. The clean finite observation should begin
+**after the release that carries `74fca61`**, not before — starting one tonight
+would only manufacture evidence that the next deploy throws away.
+
+Memory limits **unchanged**; the proposed 3,072/3,584/512 reduction stays
+uncertified, as I produced no headroom evidence.
 
 ### 4.6 Affiliates — audited against the code; two gaps flagged
 
